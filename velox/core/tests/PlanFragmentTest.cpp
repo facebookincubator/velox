@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
@@ -387,13 +388,75 @@ TEST_F(PlanFragmentTest, transportTypeDefaults) {
 
 TEST_F(PlanFragmentTest, transportTypeSetAndGet) {
   PlanFragment planFragment{valueNode_};
-  planFragment.inputTransportTypes["exchange1"] = TransportKind::kUcx;
-  planFragment.inputTransportTypes["exchange2"] = TransportKind::kHttp;
-  planFragment.outputTransportTypes["output1"] = TransportKind::kUcx;
+  planFragment.inputTransportTypes["exchange1"] =
+      std::string{TransportKind::kUcx};
+  planFragment.inputTransportTypes["exchange2"] =
+      std::string{TransportKind::kHttp};
+  planFragment.outputTransportTypes["output1"] =
+      std::string{TransportKind::kUcx};
 
   EXPECT_EQ(planFragment.inputTransportType("exchange1"), TransportKind::kUcx);
   EXPECT_EQ(planFragment.inputTransportType("exchange2"), TransportKind::kHttp);
   EXPECT_EQ(planFragment.outputTransportType("output1"), TransportKind::kUcx);
   // Unset node defaults to kHttp.
   EXPECT_EQ(planFragment.outputTransportType("output2"), TransportKind::kHttp);
+}
+
+TEST_F(PlanFragmentTest, validateTransportTypesValidNodes) {
+  // 'plan' is PartitionedOutput(Exchange): the root is the PartitionedOutput
+  // node and its only source is the Exchange node.
+  auto plan = PlanBuilder()
+                  .exchange(rowType_, "Presto")
+                  .partitionedOutput({"c0"}, 4)
+                  .planNode();
+  const auto& exchangeNode = plan->sources().front();
+  PlanFragment planFragment{plan};
+  planFragment.inputTransportTypes[exchangeNode->id()] =
+      std::string{TransportKind::kUcx};
+  planFragment.outputTransportTypes[plan->id()] =
+      std::string{TransportKind::kUcx};
+
+  EXPECT_NO_THROW(planFragment.validateTransportTypes());
+}
+
+TEST_F(PlanFragmentTest, validateTransportTypesMergeExchangeIsValidInput) {
+  // MergeExchangeNode derives from ExchangeNode, so it is a valid input node.
+  auto plan =
+      PlanBuilder().mergeExchange(rowType_, {"c0"}, "Presto").planNode();
+  PlanFragment planFragment{plan};
+  planFragment.inputTransportTypes[plan->id()] =
+      std::string{TransportKind::kUcx};
+
+  EXPECT_NO_THROW(planFragment.validateTransportTypes());
+}
+
+TEST_F(PlanFragmentTest, validateTransportTypesUnknownNodeId) {
+  auto plan = PlanBuilder().exchange(rowType_, "Presto").planNode();
+  PlanFragment planFragment{plan};
+  planFragment.inputTransportTypes["nonexistent"] =
+      std::string{TransportKind::kUcx};
+
+  VELOX_ASSERT_THROW(
+      planFragment.validateTransportTypes(),
+      "Transport type set for unknown plan node ID: nonexistent");
+}
+
+TEST_F(PlanFragmentTest, validateTransportTypesWrongNodeType) {
+  // The root is a ValuesNode, which is neither an Exchange nor a
+  // PartitionedOutput node.
+  PlanFragment planFragment{valueNode_};
+  planFragment.inputTransportTypes[valueNode_->id()] =
+      std::string{TransportKind::kUcx};
+
+  VELOX_ASSERT_THROW(
+      planFragment.validateTransportTypes(),
+      "Transport type can only be set on Exchange nodes");
+
+  planFragment.inputTransportTypes.clear();
+  planFragment.outputTransportTypes[valueNode_->id()] =
+      std::string{TransportKind::kUcx};
+
+  VELOX_ASSERT_THROW(
+      planFragment.validateTransportTypes(),
+      "Transport type can only be set on PartitionedOutput nodes");
 }

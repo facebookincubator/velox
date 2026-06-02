@@ -137,5 +137,4 @@ TEST_F(QueryCtxTest, builderReleaseCallbacks) {
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "builder_test_query_id");
 }
-
 } // namespace facebook::velox::core::test

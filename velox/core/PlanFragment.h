@@ -16,6 +16,7 @@
 #pragma once
 #include <folly/container/F14Map.h>
 #include <memory>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 #include "velox/core/PlanNode.h"
@@ -31,9 +32,9 @@ class QueryConfig;
 /// may define additional identifiers without modifying this header.
 struct TransportKind {
   /// Standard HTTP/HTTPS-based Presto exchange protocol.
-  inline static const std::string kHttp{"HTTP"};
+  static constexpr std::string_view kHttp{"HTTP"};
   /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
-  inline static const std::string kUcx{"UCX"};
+  static constexpr std::string_view kUcx{"UCX"};
 };
 
 /// Gives hints on how to execute the fragment of a plan.
@@ -68,17 +69,17 @@ struct PlanFragment {
 
   /// Returns the transport type for a specific Exchange (input) node.
   /// Defaults to TransportKind::kHttp if the node ID is not in the map.
-  std::string inputTransportType(const PlanNodeId& planNodeId) const {
-    auto it = inputTransportTypes.find(planNodeId);
-    return it != inputTransportTypes.end() ? it->second : TransportKind::kHttp;
-  }
+  std::string_view inputTransportType(const PlanNodeId& planNodeId) const;
 
   /// Returns the transport type for a specific PartitionedOutput node.
   /// Defaults to TransportKind::kHttp if the node ID is not in the map.
-  std::string outputTransportType(const PlanNodeId& planNodeId) const {
-    auto it = outputTransportTypes.find(planNodeId);
-    return it != outputTransportTypes.end() ? it->second : TransportKind::kHttp;
-  }
+  std::string_view outputTransportType(const PlanNodeId& planNodeId) const;
+
+  /// Validates that every node ID in inputTransportTypes refers to an Exchange
+  /// node and every node ID in outputTransportTypes refers to a
+  /// PartitionedOutput node in this fragment. Throws if a node ID is not found
+  /// in the plan tree or refers to a node of the wrong type.
+  void validateTransportTypes() const;
 
   /// Returns true if the fragment uses grouped execution strategy meaning that
   /// at least one pipeline has a leaf node that should run grouped execution.

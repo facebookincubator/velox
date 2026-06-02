@@ -18,6 +18,52 @@
 
 namespace facebook::velox::core {
 
+std::string_view PlanFragment::inputTransportType(
+    const PlanNodeId& planNodeId) const {
+  auto it = inputTransportTypes.find(planNodeId);
+  return it != inputTransportTypes.end() ? std::string_view{it->second}
+                                         : TransportKind::kHttp;
+}
+
+std::string_view PlanFragment::outputTransportType(
+    const PlanNodeId& planNodeId) const {
+  auto it = outputTransportTypes.find(planNodeId);
+  return it != outputTransportTypes.end() ? std::string_view{it->second}
+                                          : TransportKind::kHttp;
+}
+
+namespace {
+// Checks that every node ID in 'transportTypes' refers to a node of type TNode
+// in the plan tree rooted at 'root'. 'expectedNodeType' names TNode for error
+// messages.
+template <typename TNode>
+void validateTransportNodeTypes(
+    const PlanNode* root,
+    const folly::F14FastMap<PlanNodeId, std::string>& transportTypes,
+    std::string_view expectedNodeType) {
+  for (const auto& entry : transportTypes) {
+    const auto& planNodeId = entry.first;
+    const auto* node = PlanNode::findNodeById(root, planNodeId);
+    VELOX_USER_CHECK_NOT_NULL(
+        node, "Transport type set for unknown plan node ID: {}", planNodeId);
+    VELOX_USER_CHECK(
+        node->is<TNode>(),
+        "Transport type can only be set on {} nodes, but node '{}' is of "
+        "type {}",
+        expectedNodeType,
+        planNodeId,
+        node->name());
+  }
+}
+} // namespace
+
+void PlanFragment::validateTransportTypes() const {
+  validateTransportNodeTypes<ExchangeNode>(
+      planNode.get(), inputTransportTypes, "Exchange");
+  validateTransportNodeTypes<PartitionedOutputNode>(
+      planNode.get(), outputTransportTypes, "PartitionedOutput");
+}
+
 bool PlanFragment::canSpill(const QueryConfig& queryConfig) const {
   if (not queryConfig.spillEnabled()) {
     return false;
