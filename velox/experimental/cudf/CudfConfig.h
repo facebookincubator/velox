@@ -50,6 +50,7 @@ struct CudfConfig {
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
+  static constexpr const char* kCudfGpuTimingEnabled{"cudf.gpu_timing_enabled"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -131,6 +132,9 @@ struct CudfConfig {
   /// "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns"
   /// (nanoseconds).
   cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+
+  /// For profiling only; adds per-operator CUDA event overhead.
+  bool gpuTimingEnabled{false};
 };
 
 } // namespace facebook::velox::cudf_velox

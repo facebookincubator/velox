@@ -1409,6 +1409,10 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.
+   * - cudf.gpu_timing_enabled
+     - bool
+     - false
+     - If true, report per-operator GPU wall time via the ``gpuWallTimeNanos`` runtime stat, measured using CUDA events. In benchmarks, use ``-include_custom_stats`` to display.
    * - cudf.debug_enabled
      - bool
      - false
