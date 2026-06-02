@@ -53,6 +53,13 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
         fmt::format("regexp_extract(c0, '{}')", pattern), str);
   }
 
+  std::optional<int32_t> regexpInstr(
+      std::optional<std::string> str,
+      std::string pattern) {
+    return evaluateOnce<int32_t>(
+        fmt::format("regexp_instr(c0, '{}')", pattern), std::move(str));
+  }
+
   std::string testRegexpReplace(
       const std::optional<std::string>& input,
       const std::string& pattern,
@@ -323,6 +330,55 @@ TEST_F(RegexFunctionsTest, regexpReplaceWithEmptyString) {
   std::string output = "bc";
   auto result = testRegexpReplace("abc", "a", "");
   EXPECT_EQ(result, output);
+}
+
+// Verifies the handling of backslash escapes in regexp_replace's replacement
+// argument. Three families are covered in a single table:
+//   1. Two-byte literal '\\X' (e.g. '\\n', '\\b', '\\f', '\\r', '\\t') is
+//      preserved verbatim, so a matched control byte is rewritten to a
+//      literal backslash plus letter. Inputs include a multibyte UTF-8
+//      character to confirm surrounding bytes do not affect the result.
+//   2. Replacement of the form '\\X' where X is neither a digit nor '\\'
+//      drops the leading backslash and produces literal X, matching
+//      java.util.regex semantics (e.g. '\\{' -> '{', '\\$' -> '$').
+//
+// Patterns use the explicit hex form '\\x08' for backspace because RE2
+// interprets '\\b' in patterns as a word boundary anchor; the other letter
+// escapes ('\\f', '\\r', '\\t') match the corresponding control bytes
+// directly.
+TEST_F(RegexFunctionsTest, regexpReplaceBackslashEscapes) {
+  auto result = testingRegexpReplaceRows(
+      {"A\nB",
+       "A\nB\nC",
+       "\xE5\x9B\xBD\nA",
+       "A\bB",
+       "A\fB",
+       "A\rB",
+       "A\tB",
+       "[{}]",
+       "a$b"},
+      {"\\n", "\\n", "\\n", "\\x08", "\\f", "\\r", "\\t", "\\[\\{", "\\$"},
+      {"\\\\n",
+       "\\\\n",
+       "\\\\n",
+       "\\\\b",
+       "\\\\f",
+       "\\\\r",
+       "\\\\t",
+       "\\{",
+       "#"});
+  auto expected = convertOutput(
+      {"A\\nB",
+       "A\\nB\\nC",
+       "\xE5\x9B\xBD\\nA",
+       "A\\bB",
+       "A\\fB",
+       "A\\rB",
+       "A\\tB",
+       "{}]",
+       "a#b"},
+      1);
+  assertEqualVectors(result, expected);
 }
 
 TEST_F(RegexFunctionsTest, regexpReplacePosition) {
@@ -613,6 +669,103 @@ TEST_F(RegexFunctionsTest, regexpReplacePreprocess) {
       testRegexpReplace("123", "(?<digit>(?<nest>\\d))", ".${nest}"), ".1.2.3");
   EXPECT_EQ(testRegexpReplace("[{}]", "\\[\\{", "\\{"), "{}]");
   EXPECT_EQ(testRegexpReplace("[{}]", "\\}\\]", "\\}"), "[{}");
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrBasic) {
+  // Basic match at start.
+  EXPECT_EQ(regexpInstr("hello world", "world"), 7);
+  // Match at position 1.
+  EXPECT_EQ(regexpInstr("hello", "h"), 1);
+  // No match.
+  EXPECT_EQ(regexpInstr("hello", "xyz"), 0);
+  // Regex pattern.
+  EXPECT_EQ(regexpInstr("abc123def", "[0-9]+"), 4);
+  // Empty string input.
+  EXPECT_EQ(regexpInstr("", "a"), 0);
+  // Match with empty pattern (matches at start).
+  EXPECT_EQ(regexpInstr("hello", ""), 1);
+  // Null input.
+  EXPECT_EQ(regexpInstr(std::nullopt, "a"), std::nullopt);
+  // Verify FIRST match is returned when multiple matches exist.
+  EXPECT_EQ(regexpInstr("abcabc", "abc"), 1);
+  EXPECT_EQ(regexpInstr("xxabcxxabc", "abc"), 3);
+  // Pattern with capturing groups — still returns position of whole match.
+  EXPECT_EQ(regexpInstr("foo123bar", "(\\d+)"), 4);
+  EXPECT_EQ(regexpInstr("hello world", "(wor)(ld)"), 7);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrUnicode) {
+  // Unicode: each character is multi-byte but position should be
+  // character-based.
+  // \xC3\xA9 = é, \xC3\xA8 = è, \xC3\xA0 = à (each 2 bytes, 1 char).
+  EXPECT_EQ(regexpInstr("\xC3\xA9\xC3\xA8\xC3\xA0", "\xC3\xA0"), 3);
+  // 4-byte UTF-8 characters (emoji): 🌍🌎🌏 each is 4 bytes.
+  EXPECT_EQ(
+      regexpInstr(
+          "\xF0\x9F\x8C\x8D\xF0\x9F\x8C\x8E\xF0\x9F\x8C\x8F",
+          "\xF0\x9F\x8C\x8F"),
+      3);
+  // Mixed ASCII and multi-byte: "aéb" — match 'b' at char pos 3.
+  EXPECT_EQ(
+      regexpInstr(
+          "a\xC3\xA9"
+          "b",
+          "b"),
+      3);
+  // 3-byte UTF-8 characters: Chinese chars.
+  EXPECT_EQ(
+      regexpInstr(
+          "\xE4\xB8\xAD\xE6\x96\x87\xE6\xB5\x8B\xE8\xAF\x95", "\xE6\xB5\x8B"),
+      3);
+  // Mixed multi-byte with regex metacharacters.
+  EXPECT_EQ(regexpInstr("\xC3\xA9\xC3\xA8.test", "\\."), 3);
+  // Single character match at the very start (ASCII fast path).
+  EXPECT_EQ(regexpInstr("ascii", "a"), 1);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrDynamicPattern) {
+  // Test with non-constant (dynamic) pattern using two column inputs.
+  auto strings =
+      makeFlatVector({"hello world"_sv, "abc123"_sv, "test"_sv, "foo bar"_sv});
+  auto patterns = makeFlatVector({"world"_sv, "[0-9]+"_sv, "xyz"_sv, "bar"_sv});
+  auto result =
+      evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns}));
+  auto expected = makeFlatVector<int32_t>({7, 4, 0, 5});
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrInvalidPattern) {
+  // Invalid regex pattern should throw (constant pattern path).
+  VELOX_ASSERT_THROW(
+      regexpInstr("hello", "[invalid"), "Invalid regular expression");
+
+  // Invalid regex pattern with dynamic (non-constant) pattern column.
+  auto strings = makeFlatVector({"hello"_sv});
+  auto patterns = makeFlatVector({"[invalid"_sv});
+  VELOX_ASSERT_THROW(
+      evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns})),
+      "invalid regular expression");
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrNullPattern) {
+  // NULL pattern should return NULL.
+  auto strings = makeFlatVector({"hello"_sv, "world"_sv});
+  auto patterns =
+      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt});
+  auto result =
+      evaluate("regexp_instr(c0, c1)", makeRowVector({strings, patterns}));
+  auto expected = makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt});
+  velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(RegexFunctionsTest, regexpInstrMultipleMatches) {
+  // Always returns position of FIRST match.
+  EXPECT_EQ(regexpInstr("aaa", "a"), 1);
+  EXPECT_EQ(regexpInstr("baa", "a"), 2);
+  EXPECT_EQ(regexpInstr("abab", "ab"), 1);
+  EXPECT_EQ(regexpInstr("xyzabcxyzabc", "abc"), 4);
+  // Overlapping potential matches — first one wins.
+  EXPECT_EQ(regexpInstr("aaaa", "aa"), 1);
 }
 
 } // namespace

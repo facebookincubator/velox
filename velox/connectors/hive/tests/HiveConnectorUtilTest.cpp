@@ -153,16 +153,19 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     expectedSerDe = SerDeOptions{};
   };
 
-  auto checkUseColumnNamesForColumnMapping = [&]() {
+  auto checkColumnMappingMode = [&]() {
+    auto expectedMappingMode = dwio::common::ColumnMappingMode::kPosition;
     if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
-      EXPECT_EQ(
-          readerOptions.useColumnNamesForColumnMapping(),
-          hiveConfig->isOrcUseColumnNames(&sessionProperties));
+      expectedMappingMode = hiveConfig->isOrcUseColumnNames(&sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
     } else if (fileFormat == FileFormat::PARQUET) {
-      EXPECT_EQ(
-          readerOptions.useColumnNamesForColumnMapping(),
-          hiveConfig->isParquetUseColumnNames(&sessionProperties));
+      expectedMappingMode =
+          hiveConfig->isParquetUseColumnNames(&sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
     }
+    EXPECT_EQ(readerOptions.columnMappingMode(), expectedMappingMode);
   };
 
   // Default.
@@ -180,7 +183,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
-  checkUseColumnNamesForColumnMapping();
+  checkColumnMappingMode();
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
@@ -301,10 +304,10 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_TRUE(readerOptions.cacheMetadata());
   clearDynamicParameters(FileFormat::ORC);
   performConfigure();
-  checkUseColumnNamesForColumnMapping();
+  checkColumnMappingMode();
   clearDynamicParameters(FileFormat::PARQUET);
   performConfigure();
-  checkUseColumnNamesForColumnMapping();
+  checkColumnMappingMode();
 }
 
 TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {

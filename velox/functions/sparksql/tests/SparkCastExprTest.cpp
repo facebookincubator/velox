@@ -16,10 +16,13 @@
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
+
 namespace facebook::velox::test {
 namespace {
 
@@ -33,7 +36,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
 
   void setAnsiSupport(bool value) {
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, std::to_string(value)}});
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          std::to_string(value)}});
   }
 
   void testBoolToTimestamp() {
@@ -1094,7 +1098,7 @@ TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
 TEST_F(SparkCastExprTestAnsiOn, testInvalidDate) {
   auto expected = [](const std::string& v) {
     return fmt::format(
-        "Cannot cast VARCHAR '{}' to DATE.  Unable to parse date value: \"{}\". "
+        "Cannot cast VARCHAR '{}' to DATE. Unable to parse date value: \"{}\". "
         "Valid date string patterns include ([y]y*, [y]y*-[m]m*, "
         "[y]y*-[m]m*-[d]d*, [y]y*-[m]m*-[d]d* *, "
         "[y]y*-[m]m*-[d]d*T*), and any pattern prefixed with [+-]",

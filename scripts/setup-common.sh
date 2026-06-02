@@ -80,7 +80,16 @@ function install_mvfst {
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
-  cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  # Apple Clang's libc++ no longer defines _LIBCPP_HAS_NO_ASAN (renamed to
+  # _LIBCPP_INSTRUMENTED_WITH_ASAN), so folly's UninitializedMemoryHacks.h
+  # causing undefined symbol. This is fixed in the latest FBOS versions and
+  # can be removed on FBOS upgrade.
+  local FBTHRIFT_EXTRA_CXXFLAGS=""
+  if [[ "$(uname)" == "Darwin" ]]; then
+    FBTHRIFT_EXTRA_CXXFLAGS=" -D_LIBCPP_HAS_NO_ASAN"
+  fi
+  EXTRA_PKG_CXXFLAGS="$FBTHRIFT_EXTRA_CXXFLAGS" \
+    cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_duckdb {

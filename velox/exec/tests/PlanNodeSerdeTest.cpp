@@ -56,6 +56,7 @@ class PlanNodeSerdeTest : public testing::Test,
             {3, 4, 5},
             {},
         }),
+        makeFlatVector<bool>({false, true, true}),
     })};
   }
 
@@ -171,11 +172,22 @@ TEST_F(PlanNodeSerdeTest, assignUniqueId) {
 }
 
 TEST_F(PlanNodeSerdeTest, markDistinct) {
-  auto plan = PlanBuilder()
-                  .values({data_})
-                  .markDistinct("marker", {"c0", "c1", "c2"})
-                  .planNode();
-  testSerde(plan);
+  {
+    SCOPED_TRACE("single-marker");
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .markDistinct("marker", {"c0", "c1", "c2"})
+                    .planNode();
+    testSerde(plan);
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .markDistinct({"m0", "m1", "m2"}, {"c0"}, {"c2", "c4"})
+                    .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, enforceDistinct) {
