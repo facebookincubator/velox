@@ -1,0 +1,244 @@
+========= COMPUTE-SANITIZER
+========= Invalid __global__ read of size 4 bytes
+=========     at void cub::detail::for_each::static_kernel<cub::detail::for_each::policy_selector, int, cub::DeviceFor::__op_wrapper_t<int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals>, cuda::__4::counting_iterator<int, long>>>(T2, T3)+0x8dfd0
+=========     by thread (0,0,0) in block (0,0,0)
+=========     Access at 0x756a22400400 is out of bounds
+=========     and is inside the nearest allocation at 0x756a22400400 of size 1 bytes
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuLaunchKernel [0x3654da] in libcuda.so.1
+=========         Host Frame:  [0x141f8] in libcudart.so.12
+=========         Host Frame: cudaLaunchKernel [0x7d09d] in libcudart.so.12
+=========         Host Frame: cuda::__4::counting_iterator<int, long> thrust::for_each_n<thrust::detail::execute_with_allocator<rmm::mr::thrust_allocator<char>, thrust::cuda_cub::execute_on_stream_nosync_base>, cuda::__4::counting_iterator<int, long>, int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals> >(thrust::detail::execution_policy_base<thrust::detail::execute_with_allocator<rmm::mr::thrust_allocator<char>, thrust::cuda_cub::execute_on_stream_nosync_base> > const&, cuda::__4::counting_iterator<int, long>, int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals>) [0x80c588] in libcudf.so
+=========         Host Frame: void cudf::binops::compiled::apply_binary_op<cudf::binops::compiled::ops::NullEquals>(cudf::mutable_column_view&, cudf::column_view const&, cudf::column_view const&, bool, bool, rmm::cuda_stream_view) [0x80d44d] in libcudf.so
+=========         Host Frame: cudf::binops::compiled::binary_operation(cudf::mutable_column_view&, cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, rmm::cuda_stream_view) [0x86632b] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83b0] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Invalid __global__ read of size 4 bytes
+=========     at void cub::detail::for_each::static_kernel<cub::detail::for_each::policy_selector, int, cub::DeviceFor::__op_wrapper_t<int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals>, cuda::__4::counting_iterator<int, long>>>(T2, T3)+0x8dfd0
+=========     by thread (1,0,0) in block (0,0,0)
+=========     Access at 0x756a22400400 is out of bounds
+=========     and is inside the nearest allocation at 0x756a22400400 of size 1 bytes
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuLaunchKernel [0x3654da] in libcuda.so.1
+=========         Host Frame:  [0x141f8] in libcudart.so.12
+=========         Host Frame: cudaLaunchKernel [0x7d09d] in libcudart.so.12
+=========         Host Frame: cuda::__4::counting_iterator<int, long> thrust::for_each_n<thrust::detail::execute_with_allocator<rmm::mr::thrust_allocator<char>, thrust::cuda_cub::execute_on_stream_nosync_base>, cuda::__4::counting_iterator<int, long>, int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals> >(thrust::detail::execution_policy_base<thrust::detail::execute_with_allocator<rmm::mr::thrust_allocator<char>, thrust::cuda_cub::execute_on_stream_nosync_base> > const&, cuda::__4::counting_iterator<int, long>, int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals>) [0x80c588] in libcudf.so
+=========         Host Frame: void cudf::binops::compiled::apply_binary_op<cudf::binops::compiled::ops::NullEquals>(cudf::mutable_column_view&, cudf::column_view const&, cudf::column_view const&, bool, bool, rmm::cuda_stream_view) [0x80d44d] in libcudf.so
+=========         Host Frame: cudf::binops::compiled::binary_operation(cudf::mutable_column_view&, cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, rmm::cuda_stream_view) [0x86632b] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83b0] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Invalid __global__ read of size 4 bytes
+=========     at void cub::detail::for_each::static_kernel<cub::detail::for_each::policy_selector, int, cub::DeviceFor::__op_wrapper_t<int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals>, cuda::__4::counting_iterator<int, long>>>(T2, T3)+0x8dfd0
+=========     by thread (2,0,0) in block (0,0,0)
+=========     Access at 0x756a22400400 is out of bounds
+=========     and is inside the nearest allocation at 0x756a22400400 of size 1 bytes
+=========     Saved host backtrace up to driver entry point at kernel launch time
+=========         Host Frame: cuLaunchKernel [0x3654da] in libcuda.so.1
+=========         Host Frame:  [0x141f8] in libcudart.so.12
+=========         Host Frame: cudaLaunchKernel [0x7d09d] in libcudart.so.12
+=========         Host Frame: cuda::__4::counting_iterator<int, long> thrust::for_each_n<thrust::detail::execute_with_allocator<rmm::mr::thrust_allocator<char>, thrust::cuda_cub::execute_on_stream_nosync_base>, cuda::__4::counting_iterator<int, long>, int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals> >(thrust::detail::execution_policy_base<thrust::detail::execute_with_allocator<rmm::mr::thrust_allocator<char>, thrust::cuda_cub::execute_on_stream_nosync_base> > const&, cuda::__4::counting_iterator<int, long>, int, cudf::binops::compiled::binary_op_device_dispatcher<cudf::binops::compiled::ops::NullEquals>) [0x80c588] in libcudf.so
+=========         Host Frame: void cudf::binops::compiled::apply_binary_op<cudf::binops::compiled::ops::NullEquals>(cudf::mutable_column_view&, cudf::column_view const&, cudf::column_view const&, bool, bool, rmm::cuda_stream_view) [0x80d44d] in libcudf.so
+=========         Host Frame: cudf::binops::compiled::binary_operation(cudf::mutable_column_view&, cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, rmm::cuda_stream_view) [0x86632b] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83b0] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaLaunchKernel.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96de41] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaStreamGetId.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long) [clone .isra.0] [0x38ce411] in libcudf.so
+=========         Host Frame: cudf::detail::host_vector<int> cudf::detail::make_pinned_vector_async<int>(unsigned long, rmm::cuda_stream_view) [0x97857d] in libcudf.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96dbcf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaEventCreateWithFlags.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long) [clone .isra.0] [0x38ce855] in libcudf.so
+=========         Host Frame: cudf::detail::host_vector<int> cudf::detail::make_pinned_vector_async<int>(unsigned long, rmm::cuda_stream_view) [0x97857d] in libcudf.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96dbcf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaStreamWaitEvent.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: auto rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::get_block_from_other_stream(unsigned long, rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::stream_event_pair, rmm::mr::detail::coalescing_free_list&, bool)::{lambda(auto:1)#1}::operator()<std::_Rb_tree_iterator<std::pair<rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::stream_event_pair const, rmm::mr::detail::coalescing_free_list> > >(std::_Rb_tree_iterator<std::pair<rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::stream_event_pair const, rmm::mr::detail::coalescing_free_list> >) const [0x38d02e2] in libcudf.so
+=========         Host Frame: cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long) [clone .isra.0] [0x38ce1af] in libcudf.so
+=========         Host Frame: cudf::detail::host_vector<int> cudf::detail::make_pinned_vector_async<int>(unsigned long, rmm::cuda_stream_view) [0x97857d] in libcudf.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96dbcf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaGetLastError.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: auto rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::get_block_from_other_stream(unsigned long, rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::stream_event_pair, rmm::mr::detail::coalescing_free_list&, bool)::{lambda(auto:1)#1}::operator()<std::_Rb_tree_iterator<std::pair<rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::stream_event_pair const, rmm::mr::detail::coalescing_free_list> > >(std::_Rb_tree_iterator<std::pair<rmm::mr::detail::stream_ordered_memory_resource<rmm::mr::detail::pool_memory_resource_impl, rmm::mr::detail::coalescing_free_list>::stream_event_pair const, rmm::mr::detail::coalescing_free_list> >) const [0x38d078f] in libcudf.so
+=========         Host Frame: cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long) [clone .isra.0] [0x38ce1af] in libcudf.so
+=========         Host Frame: cudf::detail::host_vector<int> cudf::detail::make_pinned_vector_async<int>(unsigned long, rmm::cuda_stream_view) [0x97857d] in libcudf.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96dbcf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaHostAlloc.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: rmm::mr::pinned_host_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long)::{lambda(unsigned long)#1}::operator()(unsigned long) const [clone .isra.0] [0x38c94c4] in libcudf.so
+=========         Host Frame: cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long) [clone .isra.0] [clone .cold] [0x4f03c6] in libcudf.so
+=========         Host Frame: cudf::detail::host_vector<int> cudf::detail::make_pinned_vector_async<int>(unsigned long, rmm::cuda_stream_view) [0x97857d] in libcudf.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96dbcf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaGetLastError.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: rmm::mr::pinned_host_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long)::{lambda(unsigned long)#1}::operator()(unsigned long) const [clone .isra.0] [0x38c94ec] in libcudf.so
+=========         Host Frame: cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource::allocate(cuda::__4::stream_ref, unsigned long, unsigned long) [clone .isra.0] [clone .cold] [0x4f03c6] in libcudf.so
+=========         Host Frame: cudf::detail::host_vector<int> cudf::detail::make_pinned_vector_async<int>(unsigned long, rmm::cuda_stream_view) [0x97857d] in libcudf.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [0x96dbcf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [clone .cold] [0x2aee29] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: cudf::detail::(anonymous namespace)::batch_count_set_bits(cudf::host_span<unsigned int const* const, 18446744073709551615ul>, int, int, rmm::cuda_stream_view) [clone .cold] [0x2aeddf] in libcudf.so
+=========         Host Frame: cudf::detail::count_set_bits(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96dfc0] in libcudf.so
+=========         Host Frame: cudf::detail::null_count(unsigned int const*, int, int, rmm::cuda_stream_view) [0x96e293] in libcudf.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a83cd] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> >::~unique_ptr() [0x1406a] in cudf_nullmax_scalar_repro
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a86cf] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> >::~unique_ptr() [0x14073] in cudf_nullmax_scalar_repro
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> > cudf::binops::compiled::binary_operation<cudf::column_view, cudf::scalar>(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x7a86cf] in libcudf.so
+=========         Host Frame: cudf::binary_operation(cudf::column_view const&, cudf::scalar const&, cudf::binary_operator, cudf::data_type, rmm::cuda_stream_view, cuda::mr::__4::__version_bump_ver4_::resource_ref<cuda::mr::__4::device_accessible>) [0x79db6d] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [0xa4a9] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: cudf::fixed_point_scalar<numeric::fixed_point<long, (numeric::Radix)10> >::~fixed_point_scalar() [0x2f43dee] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [clone .cold] [0x782f] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaStreamGetId.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource>(cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0x38cd32f] in libcudf.so
+=========         Host Frame: cudf::fixed_point_scalar<numeric::fixed_point<long, (numeric::Radix)10> >::~fixed_point_scalar() [0x2f43e7a] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [clone .cold] [0x782f] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaEventRecord.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource>(cudf::(anonymous namespace)::pinned_pool_with_fallback_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0x38cd2ba] in libcudf.so
+=========         Host Frame: cudf::fixed_point_scalar<numeric::fixed_point<long, (numeric::Radix)10> >::~fixed_point_scalar() [0x2f43e7a] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [clone .cold] [0x782f] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: cudf::fixed_point_scalar<numeric::fixed_point<long, (numeric::Radix)10> >::~fixed_point_scalar() [0x2f43e11] in libcudf.so
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [clone .cold] [0x782f] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> >::~unique_ptr() [0x1406a] in cudf_nullmax_scalar_repro
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [clone .cold] [0x783b] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+========= Program hit cudaErrorLaunchFailure (error 719) due to "unspecified launch failure" on CUDA API call to cudaFree.
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: void cuda::__4::__override_fn_<rmm::mr::cuda_memory_resource, &(decltype (({parm#1}.deallocate)({parm#2}, {parm#3}, {parm#4}, {parm#5})) cuda::mr::__4::__deallocate_async<rmm::mr::cuda_memory_resource>(rmm::mr::cuda_memory_resource&, cuda::__4::stream_ref, void*, unsigned long, unsigned long)), void, false, false, cuda::__4::stream_ref, void*, unsigned long, unsigned long>(cuda::std::__4::conditional<false, void const, void>::type*, cuda::__4::stream_ref, void*, unsigned long, unsigned long) [0xa88b] in cudf_nullmax_scalar_repro
+=========         Host Frame: rmm::device_buffer::deallocate_async() [0x1ed2a] in librmm.so
+=========         Host Frame: rmm::device_buffer::~device_buffer() [0x1ee28] in librmm.so
+=========         Host Frame: std::unique_ptr<cudf::column, std::default_delete<cudf::column> >::~unique_ptr() [0x14073] in cudf_nullmax_scalar_repro
+=========         Host Frame: (anonymous namespace)::run_case(char const*, cudf::binary_operator, bool) [clone .cold] [0x783b] in cudf_nullmax_scalar_repro
+=========         Host Frame: main [0x8325] in cudf_nullmax_scalar_repro
+========= 
+cudf null-aware column-vs-scalar fixed_point repro
+CUDA device: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (device 0)
+
+=== NULL_EQUALS column vs scalar ===
+Expected: compute-sanitizer OOB read when is_valid() touches scalar bool validity as bitmask
+Fatal: std::bad_alloc: CUDA error (failed to allocate 268 bytes) at: /opt/velox-build/release/_deps/rmm-src/cpp/include/rmm/mr/pinned_host_memory_resource.hpp:73: cudaErrorLaunchFailure unspecified launch failure
+========= Target application returned an error
+========= ERROR SUMMARY: 20 errors

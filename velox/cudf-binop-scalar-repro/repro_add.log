@@ -1,0 +1,11 @@
+========= COMPUTE-SANITIZER
+cudf null-aware column-vs-scalar fixed_point repro
+CUDA device: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (device 0)
+
+=== ADD column vs scalar (control) ===
+Expected: clean under compute-sanitizer (control)
+Host-visible completion: 3 rows, type 26
+
+All selected cases finished on the host.
+Re-run under: compute-sanitizer --tool memcheck /opt/velox-build/release/velox/cudf-binop-scalar-repro/cudf_nullmax_scalar_repro
+========= ERROR SUMMARY: 0 errors
