@@ -128,6 +128,7 @@ get_version() {
 }
 
 get_ucxx_version() {
+  # UCXX uses its own library version instead of the cuDF release version.
   local ref=$1
   local response
   response=$(fetch_github_api "repos/rapidsai/ucxx/contents/VERSION?ref=${ref}") || return 1
@@ -141,6 +142,7 @@ get_ucxx_branch() {
   local branch=$1 version=$2
   if [[ $branch =~ ^release/ ]]; then
     local ucxx_version
+    # This maps from cuDF release branches (YY.MM) to the corresponding UCXX version.
     ucxx_version=$(curl -sL --max-time 30 "https://version.gpuci.io/rapids/${version}") || return 1
     echo "release/${ucxx_version}"
   else
