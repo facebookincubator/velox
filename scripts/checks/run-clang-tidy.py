@@ -53,6 +53,7 @@ def git_changed_lines(commit):
             if (
                 "cudf/" not in matched_file
                 and "wave/" not in matched_file
+                and "ucx-exchange/" not in matched_file
                 and not matched_file.endswith("-inl.h")
             ):
                 file = matched_file
@@ -83,7 +84,11 @@ def tidy(args):
 
     # Exclude files in cudf, wave, and torchwave directories
     # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
-    files = [file for file in files if "cudf/" not in file and "wave/" not in file]
+    files = [
+        file
+        for file in files
+        if "cudf/" not in file and "wave/" not in file and "ucx-exchange/" not in file
+    ]
 
     # Exclude *-inl.h files: they are designed to be included from their
     # corresponding header and cannot be compiled as standalone translation
