@@ -145,7 +145,8 @@ class ReadFileInputStream final : public InputStream {
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
       velox::IoStats* ioStats = nullptr,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {});
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      bool cacheable = false);
 
   ~ReadFileInputStream() override = default;
 
@@ -178,6 +179,10 @@ class ReadFileInputStream final : public InputStream {
 
   const std::shared_ptr<velox::ReadFile>& getReadFile() const {
     return readFile_;
+  }
+
+  const FileIoContext& fileIoContext() const {
+    return fileIoContext_;
   }
 
  private:

@@ -443,6 +443,89 @@ TEST_P(MemoryPoolTest, usedBytes) {
   ASSERT_EQ(root->usedBytes(), 0);
 }
 
+TEST_P(MemoryPoolTest, reportExternalAllocation) {
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool();
+  auto child =
+      root->addLeafChild("reportExternalAllocation", isLeafThreadSafe_);
+
+  const int64_t kReportSize{1L * MB};
+  const auto initialStats = child->stats();
+  ASSERT_EQ(child->usedBytes(), 0);
+  ASSERT_EQ(initialStats.numExternalAllocs, 0);
+  ASSERT_EQ(initialStats.numExternalFrees, 0);
+  ASSERT_EQ(initialStats.cumulativeExternalBytes, 0);
+
+  // reportExternalAllocation does not allocate memory but should account for
+  // it in usedBytes/reservedBytes and bump the external-allocation stats.
+  // It must not increment numAllocs (reserved for real pool allocations).
+  child->reportExternalAllocation(kReportSize);
+  ASSERT_EQ(child->usedBytes(), kReportSize);
+  ASSERT_GE(child->reservedBytes(), kReportSize);
+  auto stats = child->stats();
+  ASSERT_EQ(stats.numAllocs, initialStats.numAllocs);
+  ASSERT_EQ(stats.numExternalAllocs, 1);
+  ASSERT_EQ(stats.cumulativeExternalBytes, kReportSize);
+  ASSERT_EQ(stats.peakBytes, kReportSize);
+
+  // A paired reportExternalFree of the same size returns the pool to its
+  // original bookkeeping state and bumps the external-free stat without
+  // touching numFrees. peak stays at its max. cumulativeExternalBytes is a
+  // running total of all external allocations and never decreases.
+  child->reportExternalFree(kReportSize);
+  ASSERT_EQ(child->usedBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
+  stats = child->stats();
+  ASSERT_EQ(stats.numFrees, initialStats.numFrees);
+  ASSERT_EQ(stats.numExternalFrees, 1);
+  ASSERT_EQ(stats.cumulativeExternalBytes, kReportSize);
+  ASSERT_EQ(stats.peakBytes, kReportSize);
+}
+
+TEST_P(MemoryPoolTest, reportExternalAllocationCapacityExceeded) {
+  const uint64_t kMaxCap = 128L * MB;
+  MemoryManager::Options options;
+  options.allocatorCapacity = kMaxCap;
+  options.arbitratorCapacity = kMaxCap;
+  options.extraArbitratorConfigs = {
+      {std::string(SharedArbitrator::ExtraConfig::kReservedCapacity),
+       folly::to<std::string>(kMaxCap / 2) + "B"}};
+  setupMemory(options);
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool("reportExternalCap", kMaxCap);
+  auto pool = root->addLeafChild("reportExternalCap", isLeafThreadSafe_);
+
+  // Reporting more than the pool's capacity must trip the same memory-cap
+  // path that allocate() does, leaving usage at zero.
+  VELOX_ASSERT_THROW(
+      pool->reportExternalAllocation(static_cast<int64_t>(kMaxCap) + 1L * MB),
+      "Exceeded memory pool capacity");
+  ASSERT_EQ(pool->usedBytes(), 0);
+  ASSERT_EQ(pool->reservedBytes(), 0);
+}
+
+TEST_P(MemoryPoolTest, reportExternalAllocationRejectsNonPositiveSize) {
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool();
+  auto child =
+      root->addLeafChild("reportExternalNonPositive", isLeafThreadSafe_);
+
+  VELOX_ASSERT_THROW(
+      child->reportExternalAllocation(0),
+      "(0 vs. 0) reportExternalAllocation requires positive size");
+  VELOX_ASSERT_THROW(
+      child->reportExternalAllocation(-1),
+      "(-1 vs. 0) reportExternalAllocation requires positive size");
+  VELOX_ASSERT_THROW(
+      child->reportExternalFree(0),
+      "(0 vs. 0) reportExternalFree requires positive size");
+  VELOX_ASSERT_THROW(
+      child->reportExternalFree(-1),
+      "(-1 vs. 0) reportExternalFree requires positive size");
+  ASSERT_EQ(child->usedBytes(), 0);
+  ASSERT_EQ(child->reservedBytes(), 0);
+}
+
 TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
   gflags::FlagSaver flagSaver;
   testing::FLAGS_gtest_death_test_style = "fast";
@@ -691,7 +774,7 @@ TEST_P(MemoryPoolTest, alignmentCheck) {
       0,
       MemoryAllocator::kMinAlignment,
       MemoryAllocator::kMinAlignment * 2,
-      MemoryAllocator::kMaxAlignment};
+      MemoryAllocator::kDefaultAlignment};
   for (const auto& alignment : alignments) {
     SCOPED_TRACE(fmt::format("alignment:{}", alignment));
     MemoryManager::Options options;
@@ -764,7 +847,9 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
                     "capacity 256.00MB capacity 256.00MB used 0B available 0B "
                     "reservation [used 0B, reserved 0B, min 0B] counters [allocs "
-                    "1, frees 0, reserves 0, releases 0, collisions 0])> Failed to"
+                    "1, frees 0, reserves 0, releases 0, collisions 0, "
+                    "external-allocs 0, external-frees 0, cumulative-external "
+                    "0B])> Failed to"
                     " evict from cache state: AsyncDataCache:\nCache size: 0B "
                     "tinySize: 0B large size: 0B\nCache entries: 0 read pins: "
                     "0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n "
@@ -782,7 +867,9 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
                     "capacity 256.00MB capacity 256.00MB used 0B available 0B "
                     "reservation [used 0B, reserved 0B, min 0B] counters [allocs "
-                    "1, frees 0, reserves 0, releases 0, collisions 0])> "
+                    "1, frees 0, reserves 0, releases 0, collisions 0, "
+                    "external-allocs 0, external-frees 0, cumulative-external "
+                    "0B])> "
                     "Exceeded memory allocator limit when allocating 32769 "
                     "new pages for total allocation of 32769 pages, the memory"
                     " allocator capacity is 32768 pages, the allocated pages is 32769",
@@ -798,7 +885,9 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "parent[MemoryCapExceptions] MALLOC track-usage {}]"
                     "<max capacity 256.00MB capacity 256.00MB used 0B available "
                     "0B reservation [used 0B, reserved 0B, min 0B] counters "
-                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0])>"
+                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0, "
+                    "external-allocs 0, external-frees 0, cumulative-external "
+                    "0B])>"
                     " Failed to evict from cache state: AsyncDataCache:\nCache "
                     "size: 0B tinySize: 0B large size: 0B\nCache entries: 0 "
                     "read pins: 0 write pins: 0 pinned shared: 0B pinned "
@@ -816,7 +905,9 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
                     "parent[MemoryCapExceptions] MALLOC track-usage {}]"
                     "<max capacity 256.00MB capacity 256.00MB used 0B available "
                     "0B reservation [used 0B, reserved 0B, min 0B] counters "
-                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0])>"
+                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0, "
+                    "external-allocs 0, external-frees 0, cumulative-external "
+                    "0B])>"
                     " Failed to allocateBytes 128.00MB: Exceeded memory "
                     "allocator limit of 128.00MB",
                     isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
@@ -833,7 +924,7 @@ TEST(MemoryPoolTest, GetAlignment) {
     MemoryManager::Options options;
     options.allocatorCapacity = kMaxMemory;
     EXPECT_EQ(
-        MemoryAllocator::kMaxAlignment,
+        MemoryAllocator::kDefaultAlignment,
         MemoryManager{options}.addRootPool()->alignment());
   }
   {
@@ -843,6 +934,56 @@ TEST(MemoryPoolTest, GetAlignment) {
     MemoryManager manager{options};
     EXPECT_EQ(64, manager.addRootPool()->alignment());
   }
+}
+
+TEST(MemoryPoolTest, allocateAligned) {
+  MemoryManager::testingSetInstance({});
+  auto pool = memoryManager()->addLeafPool("allocateAlignedTest");
+
+  struct TestCase {
+    int64_t size;
+    uint32_t alignment;
+    std::string debugString() const {
+      return fmt::format("size={}, alignment={}", size, alignment);
+    }
+  };
+  std::vector<TestCase> testCases = {
+      {4'096, 4'096},
+      {8'192, 4'096},
+      {4'096, 128},
+      {1'024, 512},
+      {16'384, 4'096},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    auto* buffer = pool->allocateAligned(testCase.size, testCase.alignment);
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(buffer) % testCase.alignment, 0);
+    std::memset(buffer, 0x42, testCase.size);
+    pool->freeAligned(buffer, testCase.size, testCase.alignment);
+  }
+}
+
+TEST(MemoryPoolTest, allocateAlignedInvalidAlignment) {
+  MemoryManager::testingSetInstance({});
+  auto pool = memoryManager()->addLeafPool("allocateAlignedInvalidTest");
+
+  VELOX_ASSERT_THROW(pool->allocateAligned(4'096, 3), "power of two");
+  VELOX_ASSERT_THROW(pool->allocateAligned(0, 4'096), "");
+}
+
+TEST(MemoryPoolTest, allocateAlignedTracksUsage) {
+  MemoryManager::testingSetInstance({});
+  auto root =
+      memoryManager()->addRootPool("allocateAlignedUsageRoot", kMaxMemory);
+  auto pool = root->addLeafChild("allocateAlignedUsageTest");
+
+  const auto statsBefore = pool->stats();
+  auto* buffer = pool->allocateAligned(4'096, 4'096);
+  EXPECT_GT(pool->stats().numAllocs, statsBefore.numAllocs);
+  pool->freeAligned(buffer, 4'096, 4'096);
+  EXPECT_GT(pool->stats().numFrees, statsBefore.numFrees);
 }
 
 TEST_P(MemoryPoolTest, MemoryManagerGlobalCap) {
@@ -1060,6 +1201,22 @@ TEST_P(MemoryPoolTest, allocatorOverflow) {
   StlAllocator<int64_t> alloc(pool);
   EXPECT_THROW(alloc.allocate(1ULL << 62), VeloxException);
   EXPECT_THROW(alloc.deallocate(nullptr, 1ULL << 62), VeloxException);
+}
+
+TEST_P(MemoryPoolTest, allocatorSwap) {
+  MemoryManager& manager = *getMemoryManager();
+  auto root = manager.addRootPool("swapRoot");
+  auto leaf1 = root->addLeafChild("leaf1");
+  auto leaf2 = root->addLeafChild("leaf2");
+
+  StlAllocator<int64_t> alloc1(*leaf1);
+  StlAllocator<int64_t> alloc2(*leaf2);
+  ASSERT_EQ(alloc1.pool, leaf1.get());
+  ASSERT_EQ(alloc2.pool, leaf2.get());
+
+  std::swap(alloc1, alloc2);
+  EXPECT_EQ(alloc1.pool, leaf2.get());
+  EXPECT_EQ(alloc2.pool, leaf1.get());
 }
 
 TEST_P(MemoryPoolTest, contiguousAllocate) {
@@ -3229,13 +3386,13 @@ TEST_P(MemoryPoolTest, usageTrackerOptionTest) {
   ASSERT_EQ(
       child->toString(),
       fmt::format(
-          "Memory Pool[usageTrackerOptionTest LEAF root[usageTrackerOptionTest] parent[usageTrackerOptionTest] {} track-usage {}]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[usageTrackerOptionTest LEAF root[usageTrackerOptionTest] parent[usageTrackerOptionTest] {} track-usage {}]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0, external-allocs 0, external-frees 0, cumulative-external 0B])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       root->toString(),
       fmt::format(
-          "Memory Pool[usageTrackerOptionTest AGGREGATE root[usageTrackerOptionTest] parent[null] {} track-usage thread-safe]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[usageTrackerOptionTest AGGREGATE root[usageTrackerOptionTest] parent[null] {} track-usage thread-safe]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0, external-allocs 0, external-frees 0, cumulative-external 0B])>",
           useMmap_ ? "MMAP" : "MALLOC"));
 }
 
@@ -3252,54 +3409,54 @@ TEST_P(MemoryPoolTest, statsAndToString) {
   void* buf1 = leafChild1->allocate(bufferSize);
   ASSERT_EQ(
       leafChild1->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       leafChild1->toString(),
       fmt::format(
-          "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<max capacity 4.00GB capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<max capacity 4.00GB capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0, external-allocs 0, external-frees 0, cumulative-external 0B])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       leafChild2->stats().toString(),
-      "usedBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       leafChild1->toString(),
       fmt::format(
-          "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<max capacity 4.00GB capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<max capacity 4.00GB capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0, external-allocs 0, external-frees 0, cumulative-external 0B])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       aggregateChild->stats().toString(),
-      "usedBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:0B reservedBytes:0B peakBytes:0B cumulativeBytes:0B numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       root->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   void* buf2 = leafChild2->allocate(bufferSize);
   ASSERT_EQ(
       leafChild1->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       leafChild2->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       aggregateChild->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       root->stats().toString(),
-      "usedBytes:2.00KB reservedBytes:2.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:2.00KB reservedBytes:2.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   leafChild1->free(buf1, bufferSize);
   ASSERT_EQ(
       leafChild1->stats().toString(),
-      "usedBytes:0B reservedBytes:0B peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:1 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:0B reservedBytes:0B peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:1 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       leafChild2->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00KB cumulativeBytes:1.00KB numAllocs:1 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       aggregateChild->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:1.00MB cumulativeBytes:1.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   ASSERT_EQ(
       root->stats().toString(),
-      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0");
+      "usedBytes:1.00KB reservedBytes:1.00MB peakBytes:2.00MB cumulativeBytes:2.00MB numAllocs:0 numFrees:0 numReserves:0 numReleases:0 numShrinks:0 numReclaims:0 numCollisions:0 numCapacityGrowths:0 numExternalAllocs:0 numExternalFrees:0 cumulativeExternalBytes:0B");
   leafChild2->free(buf2, bufferSize);
   std::vector<void*> bufs;
   for (int i = 0; i < 10; ++i) {

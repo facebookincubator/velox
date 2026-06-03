@@ -16,7 +16,24 @@
 
 #include "velox/dwio/common/Options.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::dwio::common {
+
+namespace {
+
+const auto& columnMappingModeNames() {
+  static const folly::F14FastMap<ColumnMappingMode, std::string_view> kNames = {
+      {ColumnMappingMode::kPosition, "POSITION"},
+      {ColumnMappingMode::kName, "NAME"},
+      {ColumnMappingMode::kParquetFieldId, "PARQUET_FIELD_ID"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(ColumnMappingMode, columnMappingModeNames);
 
 FileFormat toFileFormat(std::string_view s) {
   if (s == "dwrf") {
@@ -39,6 +56,12 @@ FileFormat toFileFormat(std::string_view s) {
     return FileFormat::ORC;
   } else if (s == "sst") {
     return FileFormat::SST;
+  } else if (s == "flux") {
+    return FileFormat::FLUX;
+  } else if (s == "avro") {
+    return FileFormat::AVRO;
+  } else if (s == "puffin") {
+    return FileFormat::PUFFIN;
   }
   return FileFormat::UNKNOWN;
 }
@@ -65,6 +88,12 @@ std::string_view toString(FileFormat fmt) {
       return "orc";
     case FileFormat::SST:
       return "sst";
+    case FileFormat::FLUX:
+      return "flux";
+    case FileFormat::AVRO:
+      return "avro";
+    case FileFormat::PUFFIN:
+      return "puffin";
     default:
       return "unknown";
   }
@@ -72,8 +101,7 @@ std::string_view toString(FileFormat fmt) {
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
-  columnReaderOptions.useColumnNamesForColumnMapping_ =
-      options.useColumnNamesForColumnMapping();
+  columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
   return columnReaderOptions;
 }
 

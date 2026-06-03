@@ -746,6 +746,21 @@ class BaseVector {
     return vector ? vector : create(type, 0, pool);
   }
 
+  /// Creates a vector matching the structure of a source vector, preserving
+  /// FLAT_MAP encoding where the source uses it. For nested types (ROW, ARRAY,
+  /// MAP), it recursively handles children to preserve encoding at each level.
+  /// BaseVector::create builds from type, without reference to encodings. This
+  /// will still flatten other encodings (e.g. dictionary, constant and lazy),
+  /// only preserving flat map as FlatMapVector.
+  template <typename T = BaseVector>
+  static std::shared_ptr<T> createEmptyLike(
+      const BaseVector* source,
+      vector_size_t size,
+      memory::MemoryPool* pool) {
+    return std::static_pointer_cast<T>(
+        createEmptyLikeInternal(source, size, pool));
+  }
+
   /// Set 'nulls' to be the nulls buffer of this vector. This API should not be
   /// used on ConstantVector.
   void setNulls(const BufferPtr& nulls);
@@ -815,6 +830,16 @@ class BaseVector {
   /// data stored in this vector. Returns zero if this is a lazy vector that
   /// hasn't been loaded yet.
   virtual uint64_t estimateFlatSize() const;
+
+  /// Recursively checks if a vector and all its children are reusable.
+  /// A vector is reusable only if:
+  /// 1. It has use_count == 1 (singly-referenced)
+  /// 2. It has a reusable encoding (FLAT, ARRAY, MAP, ROW)
+  /// 3. All its children are also reusable (recursively)
+  ///
+  /// This prevents bugs where reusing a vector with shared nested children
+  /// would cause corruption when prepareForReuse resets those shared children.
+  static bool recursivelyReusable(const VectorPtr& vector);
 
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
@@ -1027,6 +1052,11 @@ class BaseVector {
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
+
+  static VectorPtr createEmptyLikeInternal(
+      const BaseVector* source,
+      vector_size_t size,
+      memory::MemoryPool* pool);
 
   friend class LazyVector;
 

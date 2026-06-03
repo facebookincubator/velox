@@ -228,14 +228,14 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
         if (auto result =
                 exec::ExprToSubfieldFilterParser::getInstance()
                     ->leafCallToSubfieldFilter(*inner, evaluator, true)) {
-          return std::move(result.value());
+          return std::move(result).value();
         }
       }
     } else {
       if (auto result =
               exec::ExprToSubfieldFilterParser::getInstance()
                   ->leafCallToSubfieldFilter(*call, evaluator, false)) {
-        return std::move(result.value());
+        return std::move(result).value();
       }
     }
   }
@@ -339,7 +339,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
           {name,
            std::make_shared<HiveColumnHandle>(
                hiveColumnName,
-               HiveColumnHandle::ColumnType::kRegular,
+               FileColumnHandle::ColumnType::kRegular,
                type,
                type)});
     }
@@ -386,7 +386,6 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     tableHandle_ = std::make_shared<HiveTableHandle>(
         connectorId_,
         tableName_,
-        true,
         std::move(subfieldFiltersMap_),
         remainingFilterExpr,
         dataColumns_,
@@ -428,8 +427,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           std::make_shared<connector::hive::HiveColumnHandle>(
               column,
               isPartitionKey
-                  ? connector::hive::HiveColumnHandle::ColumnType::kPartitionKey
-                  : connector::hive::HiveColumnHandle::ColumnType::kRegular,
+                  ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
+                  : connector::hive::FileColumnHandle::ColumnType::kRegular,
               outputType->childAt(i),
               outputType->childAt(i)));
     }
@@ -520,7 +519,7 @@ PlanBuilder& PlanBuilder::traceScan(
 
 PlanBuilder& PlanBuilder::exchange(
     const RowTypePtr& outputType,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ = std::make_shared<core::ExchangeNode>(
       nextPlanNodeId(), outputType, serdeKind);
@@ -560,7 +559,7 @@ parseOrderByClauses(
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
     const std::vector<std::string>& keys,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NULL(planNode_, "MergeExchange must be the source node");
   auto [sortingKeys, sortingOrders] =
       parseOrderByClauses(keys, outputType, pool_);
@@ -840,51 +839,56 @@ const core::TableWriteNodePtr findTableWrite(const core::PlanNodePtr planNode) {
 }
 } // namespace
 
-PlanBuilder& PlanBuilder::tableWriteMerge() {
+PlanBuilder& PlanBuilder::tableWriteMerge(core::AggregationNode::Step step) {
   VELOX_CHECK_NOT_NULL(planNode_, "TableWriteMerge cannot be the source node");
   auto writer = findTableWrite(planNode_);
   VELOX_CHECK_NOT_NULL(
-      writer, "TableWriteMerge can only be added after TableWrite node");
+      writer, "TableWriteMerge requires a TableWrite node in the plan tree");
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
   if (writer->hasColumnStatsSpec()) {
-    const auto writerSpec = writer->columnStatsSpec().value();
-    VELOX_CHECK_EQ(
-        writerSpec.aggregationStep, core::AggregationNode::Step::kPartial);
-    std::vector<std::vector<TypePtr>> aggregateRawInputs;
-    const auto numAggregates = writerSpec.aggregates.size();
-    aggregateRawInputs.reserve(numAggregates);
-    for (const auto& aggregate : writerSpec.aggregates) {
-      aggregateRawInputs.push_back(aggregate.rawInputTypes);
-    }
+    const auto& writerSpec = writer->columnStatsSpec().value();
     const auto& inputType = planNode_->outputType();
+    const auto numAggregates = writerSpec.aggregates.size();
 
     std::vector<std::string> aggregateNames;
     aggregateNames.reserve(numAggregates);
     std::vector<core::AggregationNode::Aggregate> aggregates;
     aggregates.reserve(numAggregates);
-    for (int i = 0; i < numAggregates; ++i) {
-      core::AggregationNode::Aggregate aggregate = writerSpec.aggregates[i];
+    for (size_t i = 0; i < numAggregates; ++i) {
+      auto aggregate = writerSpec.aggregates[i];
       aggregate.call = std::make_shared<core::CallTypedExpr>(
           aggregate.call->type(),
           aggregate.call->name(),
           field(inputType, writerSpec.aggregateNames[i]));
       aggregates.push_back(std::move(aggregate));
-      aggregateNames.push_back(fmt::format("a{}", i));
+      aggregateNames.push_back(writerSpec.aggregateNames[i]);
     }
     columnStatsSpec = core::ColumnStatsSpec{
         writerSpec.groupingKeys,
-        core::AggregationNode::Step::kIntermediate,
+        step,
         std::move(aggregateNames),
         std::move(aggregates)};
   }
 
+  auto outputType = TableWriteTraits::outputType(columnStatsSpec);
   planNode_ = std::make_shared<core::TableWriteMergeNode>(
       nextPlanNodeId(),
-      TableWriteTraits::outputType(columnStatsSpec),
-      columnStatsSpec,
+      std::move(outputType),
+      std::move(columnStatsSpec),
       planNode_);
-  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::tableWriteMerge(
+    core::ColumnStatsSpec columnStatsSpec) {
+  VELOX_CHECK_NOT_NULL(planNode_, "TableWriteMerge cannot be the source node");
+  auto outputType = TableWriteTraits::outputType(columnStatsSpec);
+  planNode_ = std::make_shared<core::TableWriteMergeNode>(
+      nextPlanNodeId(),
+      std::move(outputType),
+      std::move(columnStatsSpec),
+      planNode_);
   return *this;
 }
 
@@ -938,8 +942,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->ignoreNullKeys(),
       partialAggNode->noGroupsSpanBatches(),
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   return aggregationNode;
 }
 
@@ -1030,12 +1033,17 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
       resolver.setRawInputTypes(rawInputTypes[i]);
     }
 
-    auto untypedExpr = duckdb::parseAggregateExpr(aggregate, options);
+    auto aggCall = duckdb::parseAggregateExpr(aggregate, options);
+
+    // Build a plain CallExpr for type resolution (AggregateCallExpr carries
+    // options that CallTypedExpr doesn't need).
+    auto plainCall = std::make_shared<core::CallExpr>(
+        aggCall->name(), aggCall->inputs(), std::nullopt);
 
     core::AggregationNode::Aggregate agg;
 
     agg.call = std::dynamic_pointer_cast<const core::CallTypedExpr>(
-        inferTypes(untypedExpr.expr));
+        inferTypes(plainCall));
 
     if (step == core::AggregationNode::Step::kPartial ||
         step == core::AggregationNode::Step::kSingle) {
@@ -1046,10 +1054,10 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
       agg.rawInputTypes = rawInputTypes[i];
     }
 
-    if (untypedExpr.maskExpr != nullptr) {
+    if (aggCall->filter() != nullptr) {
       auto maskExpr =
           std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-              inferTypes(untypedExpr.maskExpr));
+              inferTypes(aggCall->filter()));
       VELOX_CHECK_NOT_NULL(
           maskExpr,
           "FILTER clause must use a column name, not an expression: {}",
@@ -1064,9 +1072,9 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
       agg.mask = field(masks[i]);
     }
 
-    agg.distinct = untypedExpr.distinct;
+    agg.distinct = aggCall->isDistinct();
 
-    if (!untypedExpr.orderBy.empty()) {
+    if (!aggCall->orderBy().empty()) {
       auto* entry = exec::getAggregateFunctionEntry(agg.call->name());
       const auto& metadata = entry->metadata;
       if (metadata.orderSensitive) {
@@ -1076,25 +1084,25 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
             "into partial and final: {}.",
             aggregate);
       }
-    }
 
-    for (const auto& orderBy : untypedExpr.orderBy) {
-      auto sortingKey =
-          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
-              inferTypes(orderBy.expr));
-      VELOX_CHECK_NOT_NULL(
-          sortingKey,
-          "ORDER BY clause must use a column name, not an expression: {}",
-          aggregate);
+      for (const auto& orderBy : aggCall->orderBy()) {
+        auto sortingKey =
+            std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+                inferTypes(orderBy.expr));
+        VELOX_CHECK_NOT_NULL(
+            sortingKey,
+            "ORDER BY clause must use a column name, not an expression: {}",
+            aggregate);
 
-      agg.sortingKeys.push_back(sortingKey);
-      agg.sortingOrders.emplace_back(orderBy.ascending, orderBy.nullsFirst);
+        agg.sortingKeys.push_back(sortingKey);
+        agg.sortingOrders.emplace_back(orderBy.ascending, orderBy.nullsFirst);
+      }
     }
 
     aggs.emplace_back(agg);
 
-    if (untypedExpr.expr->alias().has_value()) {
-      names.push_back(untypedExpr.expr->alias().value());
+    if (aggCall->alias().has_value()) {
+      names.push_back(aggCall->alias().value());
     } else {
       names.push_back(fmt::format("a{}", i));
     }
@@ -1144,8 +1152,7 @@ PlanBuilder& PlanBuilder::aggregation(
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1169,8 +1176,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       ignoreNullKeys,
       noGroupsSpanBatches,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1448,7 +1454,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<std::string>& keys,
     int numPartitions,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   return partitionedOutput(keys, numPartitions, false, outputLayout, serdeKind);
 }
 
@@ -1457,7 +1463,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     int numPartitions,
     bool replicateNullsAndAny,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
 
@@ -1477,7 +1483,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     bool replicateNullsAndAny,
     core::PartitionFunctionSpecPtr partitionFunctionSpec,
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1499,7 +1505,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
 
 PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1513,7 +1519,7 @@ PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
 
 PlanBuilder& PlanBuilder::partitionedOutputArbitrary(
     const std::vector<std::string>& outputLayout,
-    VectorSerde::Kind serdeKind) {
+    std::string serdeKind) {
   VELOX_CHECK_NOT_NULL(
       planNode_, "PartitionedOutput cannot be the source node");
   auto outputType = outputLayout.empty()
@@ -1548,6 +1554,10 @@ PlanBuilder& PlanBuilder::localPartition(const std::vector<std::string>& keys) {
       pool_);
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
+}
+
+PlanBuilder& PlanBuilder::localGather() {
+  return localPartition(std::vector<std::string>{});
 }
 
 PlanBuilder& PlanBuilder::scaleWriterlocalPartition(
@@ -1716,7 +1726,8 @@ PlanBuilder& PlanBuilder::hashJoin(
     const std::string& filter,
     const std::vector<std::string>& outputLayout,
     core::JoinType joinType,
-    bool nullAware) {
+    bool nullAware,
+    bool nullAsValue) {
   VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
 
@@ -1757,7 +1768,9 @@ PlanBuilder& PlanBuilder::hashJoin(
       std::move(filterExpr),
       std::move(planNode_),
       build,
-      outputType);
+      outputType,
+      /*useHashTableCache=*/false,
+      nullAsValue);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -2167,24 +2180,21 @@ PlanBuilder& PlanBuilder::unnest(
 
 namespace {
 std::string throwWindowFunctionDoesntExist(const std::string& name) {
-  std::stringstream error;
-  error << "Window function doesn't exist: " << name << ".";
   if (exec::windowFunctions().empty()) {
-    error << " Registry of window functions is empty. "
-             "Make sure to register some window functions.";
+    VELOX_USER_FAIL(
+        "Registry of window functions is empty. Make sure to register some window functions.");
   }
-  VELOX_USER_FAIL(error.str());
+  VELOX_USER_FAIL("Window function doesn't exist: {}.", name);
 }
 
 std::string throwWindowFunctionSignatureNotSupported(
     const std::string& name,
     const std::vector<TypePtr>& types,
     const std::vector<FunctionSignaturePtr>& signatures) {
-  std::stringstream error;
-  error << "Window function signature is not supported: "
-        << toString(name, types)
-        << ". Supported signatures: " << toString(signatures) << ".";
-  VELOX_USER_FAIL(error.str());
+  VELOX_USER_FAIL(
+      "Window function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, types),
+      toString(signatures));
 }
 
 TypePtr resolveWindowType(
@@ -2193,7 +2203,8 @@ TypePtr resolveWindowType(
     bool nullOnFailure) {
   if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
     for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, inputTypes);
+      exec::SignatureBinder binder(
+          *signature, inputTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(signature->returnType());
       }
@@ -2246,48 +2257,51 @@ class WindowTypeResolver {
 };
 
 const core::WindowNode::Frame createWindowFrame(
-    const duckdb::IExprWindowFrame& windowFrame,
+    const core::WindowCallExpr& windowCall,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
-  core::WindowNode::Frame frame;
-  frame.type = (windowFrame.type == duckdb::WindowType::kRows)
-      ? core::WindowNode::WindowType::kRows
-      : core::WindowNode::WindowType::kRange;
-
-  auto boundTypeConversion =
-      [](duckdb::BoundType boundType) -> core::WindowNode::BoundType {
+  auto boundTypeConversion = [](core::WindowCallExpr::BoundType boundType)
+      -> core::WindowNode::BoundType {
     switch (boundType) {
-      case duckdb::BoundType::kCurrentRow:
+      case core::WindowCallExpr::BoundType::kCurrentRow:
         return core::WindowNode::BoundType::kCurrentRow;
-      case duckdb::BoundType::kFollowing:
+      case core::WindowCallExpr::BoundType::kFollowing:
         return core::WindowNode::BoundType::kFollowing;
-      case duckdb::BoundType::kPreceding:
+      case core::WindowCallExpr::BoundType::kPreceding:
         return core::WindowNode::BoundType::kPreceding;
-      case duckdb::BoundType::kUnboundedFollowing:
+      case core::WindowCallExpr::BoundType::kUnboundedFollowing:
         return core::WindowNode::BoundType::kUnboundedFollowing;
-      case duckdb::BoundType::kUnboundedPreceding:
+      case core::WindowCallExpr::BoundType::kUnboundedPreceding:
         return core::WindowNode::BoundType::kUnboundedPreceding;
     }
     VELOX_UNREACHABLE();
   };
-  frame.startType = boundTypeConversion(windowFrame.startType);
-  frame.startValue = windowFrame.startValue
-      ? core::Expressions::inferTypes(windowFrame.startValue, inputRow, pool)
+
+  core::WindowNode::Frame frame;
+  const auto& windowFrame = windowCall.frame();
+  VELOX_CHECK(windowFrame.has_value(), "Window frame must be specified");
+
+  frame.type = (windowFrame->type == core::WindowCallExpr::WindowType::kRows)
+      ? core::WindowNode::WindowType::kRows
+      : core::WindowNode::WindowType::kRange;
+  frame.startType = boundTypeConversion(windowFrame->startType);
+  frame.startValue = windowFrame->startValue
+      ? core::Expressions::inferTypes(windowFrame->startValue, inputRow, pool)
       : nullptr;
-  frame.endType = boundTypeConversion(windowFrame.endType);
-  frame.endValue = windowFrame.endValue
-      ? core::Expressions::inferTypes(windowFrame.endValue, inputRow, pool)
+  frame.endType = boundTypeConversion(windowFrame->endType);
+  frame.endValue = windowFrame->endValue
+      ? core::Expressions::inferTypes(windowFrame->endValue, inputRow, pool)
       : nullptr;
   return frame;
 }
 
 std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
-    const duckdb::IExprWindowFunction& windowExpr,
+    const core::WindowCallExpr& windowCall,
     const std::string& windowString,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
   std::vector<core::FieldAccessTypedExprPtr> partitionKeys;
-  for (const auto& partitionKey : windowExpr.partitionBy) {
+  for (const auto& partitionKey : windowCall.partitionKeys()) {
     auto typedExpr =
         core::Expressions::inferTypes(partitionKey, inputRow, pool);
     auto typedPartitionKey =
@@ -2305,14 +2319,14 @@ std::pair<
     std::vector<core::FieldAccessTypedExprPtr>,
     std::vector<core::SortOrder>>
 parseOrderByKeys(
-    const duckdb::IExprWindowFunction& windowExpr,
+    const core::WindowCallExpr& windowCall,
     const std::string& windowString,
     const TypePtr& inputRow,
     memory::MemoryPool* pool) {
   std::vector<core::FieldAccessTypedExprPtr> sortingKeys;
   std::vector<core::SortOrder> sortingOrders;
 
-  for (const auto& orderBy : windowExpr.orderBy) {
+  for (const auto& orderBy : windowCall.orderByKeys()) {
     auto typedExpr =
         core::Expressions::inferTypes(orderBy.expr, inputRow, pool);
     auto sortingKey =
@@ -2376,33 +2390,34 @@ PlanBuilder& PlanBuilder::window(
 
   auto errorOnMismatch = [&](const std::string& windowString,
                              const std::string& mismatchTypeString) -> void {
-    std::stringstream error;
-    error << "Window function invocations " << windowString << " and "
-          << windowFunctions[0] << " do not match " << mismatchTypeString
-          << " clauses.";
-    VELOX_USER_FAIL(error.str());
+    VELOX_USER_FAIL(
+        "Window function invocations {} and {} do not match {} clauses.",
+        windowString,
+        windowFunctions[0],
+        mismatchTypeString);
   };
 
   WindowTypeResolver windowResolver;
   facebook::velox::duckdb::ParseOptions options;
   options.parseIntegerAsBigint = options_.parseIntegerAsBigint;
   for (const auto& windowString : windowFunctions) {
-    const auto& windowExpr = duckdb::parseWindowExpr(windowString, options);
+    auto windowExprPtr = duckdb::parseWindowExpr(windowString, options);
+    auto* windowCall = windowExprPtr->as<core::WindowCallExpr>();
     // All window function SQL strings in the list are expected to have the same
     // PARTITION BY and ORDER BY clauses. Validate this assumption.
     if (first) {
       partitionKeys =
-          parsePartitionKeys(windowExpr, windowString, inputType, pool_);
+          parsePartitionKeys(*windowCall, windowString, inputType, pool_);
       auto sortPair =
-          parseOrderByKeys(windowExpr, windowString, inputType, pool_);
+          parseOrderByKeys(*windowCall, windowString, inputType, pool_);
       sortingKeys = sortPair.first;
       sortingOrders = sortPair.second;
       first = false;
     } else {
       auto latestPartitionKeys =
-          parsePartitionKeys(windowExpr, windowString, inputType, pool_);
+          parsePartitionKeys(*windowCall, windowString, inputType, pool_);
       auto [latestSortingKeys, latestSortingOrders] =
-          parseOrderByKeys(windowExpr, windowString, inputType, pool_);
+          parseOrderByKeys(*windowCall, windowString, inputType, pool_);
 
       if (!equalFieldAccessTypedExprPtrList(
               partitionKeys, latestPartitionKeys)) {
@@ -2418,15 +2433,19 @@ PlanBuilder& PlanBuilder::window(
       }
     }
 
-    auto windowCall = std::dynamic_pointer_cast<const core::CallTypedExpr>(
+    // Build a plain CallExpr for type resolution (WindowCallExpr carries
+    // partition/order metadata that CallTypedExpr doesn't need).
+    auto plainCall = std::make_shared<core::CallExpr>(
+        windowCall->name(), windowCall->inputs(), std::nullopt);
+    auto typedCall = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         core::Expressions::inferTypes(
-            windowExpr.functionCall, planNode_->outputType(), pool_));
+            plainCall, planNode_->outputType(), pool_));
     windowNodeFunctions.push_back(
-        {std::move(windowCall),
-         createWindowFrame(windowExpr.frame, planNode_->outputType(), pool_),
-         windowExpr.ignoreNulls});
-    if (windowExpr.functionCall->alias().has_value()) {
-      windowNames.push_back(windowExpr.functionCall->alias().value());
+        {std::move(typedCall),
+         createWindowFrame(*windowCall, planNode_->outputType(), pool_),
+         windowCall->isIgnoreNulls()});
+    if (windowExprPtr->alias().has_value()) {
+      windowNames.push_back(windowExprPtr->alias().value());
     } else {
       windowNames.push_back(fmt::format("w{}", i++));
     }
@@ -2509,13 +2528,33 @@ PlanBuilder& PlanBuilder::topNRowNumber(
 }
 
 PlanBuilder& PlanBuilder::markDistinct(
-    std::string markerKey,
+    std::string markerName,
     const std::vector<std::string>& distinctKeys) {
   VELOX_CHECK_NOT_NULL(planNode_, "MarkDistinct cannot be the source node");
   planNode_ = std::make_shared<core::MarkDistinctNode>(
       nextPlanNodeId(),
-      std::move(markerKey),
+      std::move(markerName),
       fields(planNode_->outputType(), distinctKeys),
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::markDistinct(
+    std::vector<std::string> markerNames,
+    const std::vector<std::string>& distinctKeys,
+    const std::vector<std::string>& maskNames) {
+  VELOX_CHECK_NOT_NULL(planNode_, "MarkDistinct cannot be the source node");
+  VELOX_CHECK_EQ(
+      markerNames.size(),
+      maskNames.size() + 1,
+      "Number of marker names must be one more than mask names");
+  auto inputType = planNode_->outputType();
+  planNode_ = std::make_shared<core::MarkDistinctNode>(
+      nextPlanNodeId(),
+      std::move(markerNames),
+      fields(inputType, distinctKeys),
+      fields(inputType, maskNames),
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
@@ -2540,6 +2579,28 @@ PlanBuilder& PlanBuilder::streamingEnforceDistinct(
     const std::vector<std::string>& distinctKeys,
     std::string errorMessage) {
   return enforceDistinct(distinctKeys, std::move(errorMessage), distinctKeys);
+}
+
+PlanBuilder& PlanBuilder::markSorted(
+    const std::string& markerKey,
+    const std::vector<std::string>& sortingKeys,
+    const std::vector<core::SortOrder>& sortingOrders) {
+  VELOX_CHECK_NOT_NULL(planNode_, "MarkSorted cannot be the source node");
+  VELOX_CHECK_EQ(sortingKeys.size(), sortingOrders.size());
+
+  std::vector<core::FieldAccessTypedExprPtr> keyExprs;
+  for (const auto& key : sortingKeys) {
+    keyExprs.push_back(field(planNode_->outputType(), key));
+  }
+
+  planNode_ = core::MarkSortedNode::Builder()
+                  .id(nextPlanNodeId())
+                  .markerName(markerKey)
+                  .sortingKeys(keyExprs)
+                  .sortingOrders(sortingOrders)
+                  .source(planNode_)
+                  .build();
+  return *this;
 }
 
 core::PlanNodeId PlanBuilder::nextPlanNodeId() {
@@ -2684,6 +2745,7 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       std::move(joinConditionPtrs),
       filterExpr,
       hasMarker_,
+      splitOutput_,
       std::move(planBuilder_.planNode_),
       indexSource_,
       std::move(outputType));

@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HiveIndexSource.h"
@@ -35,6 +36,7 @@ HiveConnector::HiveConnector(
     folly::Executor* ioExecutor)
     : Connector(id, std::move(config)),
       hiveConfig_(std::make_shared<HiveConfig>(connectorConfig())),
+      configProvider_(id, connectorConfig().get()),
       fileHandleFactory_(
           hiveConfig_->isFileHandleCacheEnabled()
               ? std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
@@ -52,6 +54,10 @@ HiveConnector::HiveConnector(
     LOG(INFO) << "Hive connector " << connectorId()
               << " created with file handle cache disabled";
   }
+}
+
+const config::ConfigProvider* HiveConnector::configProvider() const {
+  return &configProvider_;
 }
 
 std::unique_ptr<DataSource> HiveConnector::createDataSource(

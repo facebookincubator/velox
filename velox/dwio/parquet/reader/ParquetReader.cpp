@@ -18,14 +18,36 @@
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 
+#include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::parquet {
 
+using dwio::common::ColumnMappingMode;
+
 namespace {
+
+/// Finds the node with the given ID in the TypeWithId tree. Uses a full
+/// traversal because Parquet's TypeWithId nodes all share the same maxId
+/// (the global max schema element index), so the maxId-based pruning used
+/// by ORC/DWRF does not work here.
+const dwio::common::TypeWithId* findNode(
+    const dwio::common::TypeWithId& root,
+    uint32_t nodeId) {
+  if (root.id() == nodeId) {
+    return &root;
+  }
+  for (auto i = 0; i < root.size(); ++i) {
+    if (auto* result = findNode(*root.childAt(i), nodeId)) {
+      return result;
+    }
+  }
+  return nullptr;
+}
 
 bool isParquetReservedKeyword(
     std::string name,
@@ -55,6 +77,63 @@ bool isCompatible(
        isCompatibleFunc(requestedType->asArray().elementType()));
 }
 
+// Checks if a decimal type has enough integer precision to hold all values
+// of the given Parquet physical int type.
+bool hasEnoughDecimalPrecision(const TypePtr& type, int32_t minIntegerDigits) {
+  if (!type->isDecimal()) {
+    return false;
+  }
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  return (precision - scale) >= minIntegerDigits;
+}
+
+// Checks if a type is compatible with an INT32 physical type.
+// INT_8, INT_16, and INT_32 are all stored as Parquet INT32.
+// 'minTypeKind' is the smallest Velox type that matches the file's
+// converted type annotation (TINYINT for INT_8, SMALLINT for INT_16,
+// INTEGER for INT_32 or unannotated INT32).
+// For decimal targets, requires precision - scale >= 10.
+// When 'allowNarrowing' is true, any integer type is accepted and the
+// value is silently truncated on overflow. When false, only same-size
+// or wider types are allowed.
+bool isInt32Compatible(
+    const TypePtr& type,
+    TypeKind minTypeKind,
+    bool allowNarrowing) {
+  static_assert(
+      TypeKind::TINYINT < TypeKind::SMALLINT &&
+          TypeKind::SMALLINT < TypeKind::INTEGER &&
+          TypeKind::INTEGER < TypeKind::BIGINT,
+      "TypeKind enum ordering mismatch");
+
+  if (type->isDecimal()) {
+    return hasEnoughDecimalPrecision(type, 10);
+  }
+
+  auto kind = type->kind();
+  switch (kind) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+      return allowNarrowing || kind >= minTypeKind;
+    case TypeKind::DOUBLE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Checks whether the given type is compatible with a Parquet INT64 source.
+// Accepts BIGINT identity mapping and Decimal targets with sufficient
+// precision (precision - scale >= 20, covering the full INT64 range).
+bool isInt64Compatible(const TypePtr& type) {
+  if (type->isDecimal()) {
+    return hasEnoughDecimalPrecision(type, 20);
+  }
+  return type->kind() == TypeKind::BIGINT;
+}
+
 } // namespace
 
 /// Metadata and options for reading Parquet.
@@ -64,7 +143,7 @@ class ReaderBase {
       std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
-  virtual ~ReaderBase() = default;
+  virtual ~ReaderBase();
 
   memory::MemoryPool& getMemoryPool() const {
     return pool_;
@@ -127,6 +206,27 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
+  /// Returns true if the deserialized Thrift footer's memory has been
+  /// reported to the memory pool. False when the footer was smaller than
+  /// the tracking threshold, so no allocation was reported.
+  bool isThriftMemoryReported() const {
+    return thriftMemoryReported_;
+  }
+
+  /// Returns the estimated footer size reported to the pool at
+  /// construction. Unchanged by later releaseThriftBytes() calls, so it
+  /// reflects the initial estimate rather than the remaining reservation.
+  /// Zero when tracking was not engaged.
+  size_t initialThriftSize() const {
+    return initialThriftSize_;
+  }
+
+  /// Releases 'bytes' from the previously reported Thrift footer memory
+  /// back to the pool and reduces the remaining tracked size accordingly.
+  /// Called when parts of the footer (e.g. cleared row group columns) are
+  /// released early, before ~ReaderBase frees the rest.
+  void releaseThriftBytes(size_t bytes);
+
  private:
   // Reads and parses file footer.
   void loadFileMetaData();
@@ -156,7 +256,7 @@ class ReaderBase {
       bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
-  const uint64_t footerEstimatedSize_;
+  const uint64_t footerSpeculativeIoSize_;
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
@@ -171,13 +271,30 @@ class ReaderBase {
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
+
+  // Whether the deserialized Thrift footer's heap footprint has been
+  // reported to 'pool_'. Set once in the constructor after a successful
+  // reportExternalAllocation, and consulted by ~ReaderBase and
+  // releaseThriftBytes to decide whether the pool needs to be notified on
+  // release.
+  bool thriftMemoryReported_{false};
+
+  // Estimated bytes of heap memory held by 'fileMetaData_' that have been
+  // reported to 'pool_' and not yet released. Decreases as row group
+  // columns are cleared early; the remainder is released by ~ReaderBase.
+  size_t thriftSize_{0};
+
+  // The value of 'thriftSize_' at construction time, captured before any
+  // releaseThriftBytes() calls shrink it. Surfaced as a runtime stat so
+  // operators can compare the estimate against actual pool usage.
+  size_t initialThriftSize_{0};
 };
 
 ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_{options.memoryPool()},
-      footerEstimatedSize_{options.footerEstimatedSize()},
+      footerSpeculativeIoSize_{options.footerSpeculativeIoSize()},
       filePreloadThreshold_{options.filePreloadThreshold()},
       options_{options},
       input_{std::move(input)},
@@ -188,12 +305,35 @@ ReaderBase::ReaderBase(
   loadFileMetaData();
   initializeSchema();
   initializeVersion();
+
+  // Report the thrift footer reservation only after all other initialization
+  // succeeds. If a step before this throws, ~ReaderBase will not run, so a
+  // reportExternalAllocation made earlier in the constructor would leak.
+  // Doing it last keeps reportExternalAllocation/reportExternalFree paired
+  // through ~ReaderBase.
+  if (thriftSize_ > 0) {
+    pool_.reportExternalAllocation(thriftSize_);
+    thriftMemoryReported_ = true;
+    initialThriftSize_ = thriftSize_;
+  }
+}
+
+ReaderBase::~ReaderBase() {
+  if (thriftMemoryReported_ && thriftSize_ > 0) {
+    pool_.reportExternalFree(thriftSize_);
+  }
+}
+
+void ReaderBase::releaseThriftBytes(size_t bytes) {
+  VELOX_CHECK_GE(thriftSize_, bytes);
+  pool_.reportExternalFree(bytes);
+  thriftSize_ -= bytes;
 }
 
 void ReaderBase::loadFileMetaData() {
   bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, footerEstimatedSize_);
-  uint64_t readSize = preloadFile ? fileLength_ : footerEstimatedSize_;
+      fileLength_ <= std::max(filePreloadThreshold_, footerSpeculativeIoSize_);
+  uint64_t readSize = preloadFile ? fileLength_ : footerSpeculativeIoSize_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -239,11 +379,17 @@ void ReaderBase::loadFileMetaData() {
       thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
   fileMetaData_->read(thriftProtocol.get());
+  if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
+    thriftSize_ = fileMetaData().estimateFileMetadataSize();
+  }
 }
 
 void ReaderBase::initializeSchema() {
   if (fileMetaData_->__isset.encryption_algorithm) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
+  }
+  if (options_.columnMappingMode() == ColumnMappingMode::kParquetFieldId) {
+    VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
   }
 
   VELOX_CHECK_GT(
@@ -326,7 +472,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (!options_.useColumnNamesForColumnMapping() && options_.fileSchema()) {
+  if (options_.columnMappingMode() != ColumnMappingMode::kName &&
+      options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
     }
@@ -372,7 +519,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (options_.useColumnNamesForColumnMapping()) {
+          if (options_.columnMappingMode() == ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);
@@ -755,10 +902,13 @@ TypePtr ReaderBase::convertType(
           schemaElement.__isset.type_length,
       "FIXED_LEN_BYTE_ARRAY requires length to be set");
 
-  static std::string_view kTypeMappingErrorFmtStr =
-      "Converted type {} is not allowed for requested type {}";
+  static constexpr const char* kTypeMappingErrorFmtStr =
+      "Converted type {} is not allowed for requested type {} for file column '{}'";
+
   const bool isRepeated = schemaElement.__isset.repetition_type &&
       schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
+  const bool allowNarrowing = options_.allowInt32Narrowing();
+
   if (schemaElement.__isset.converted_type) {
     switch (schemaElement.converted_type) {
       case thrift::ConvertedType::INT_8:
@@ -773,15 +923,14 @@ TypePtr ReaderBase::convertType(
                 isCompatible(
                     requestedType,
                     isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TINYINT ||
-                          type->kind() == TypeKind::SMALLINT ||
-                          type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::TINYINT, allowNarrowing);
                     }),
             kTypeMappingErrorFmtStr,
             "TINYINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TINYINT();
 
       case thrift::ConvertedType::INT_16:
@@ -796,14 +945,14 @@ TypePtr ReaderBase::convertType(
                 isCompatible(
                     requestedType,
                     isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::SMALLINT ||
-                          type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::SMALLINT, allowNarrowing);
                     }),
             kTypeMappingErrorFmtStr,
             "SMALLINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return SMALLINT();
 
       case thrift::ConvertedType::INT_32:
@@ -818,13 +967,14 @@ TypePtr ReaderBase::convertType(
                 isCompatible(
                     requestedType,
                     isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::INTEGER, allowNarrowing);
                     }),
             kTypeMappingErrorFmtStr,
             "INTEGER",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return INTEGER();
 
       case thrift::ConvertedType::INT_64:
@@ -832,19 +982,15 @@ TypePtr ReaderBase::convertType(
         VELOX_CHECK_EQ(
             schemaElement.type,
             thrift::Type::INT64,
-            "{} converted type can only be set for value of thrift::Type::INT32",
+            "{} converted type can only be set for value of thrift::Type::INT64",
             schemaElement.converted_type);
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return BIGINT();
 
       case thrift::ConvertedType::DATE:
@@ -860,7 +1006,8 @@ TypePtr ReaderBase::convertType(
                     [](const TypePtr& type) { return type->isDate(); }),
             kTypeMappingErrorFmtStr,
             "DATE",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return DATE();
 
       case thrift::ConvertedType::TIMESTAMP_MICROS:
@@ -879,7 +1026,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TIMESTAMP();
 
       case thrift::ConvertedType::DECIMAL: {
@@ -888,9 +1036,6 @@ TypePtr ReaderBase::convertType(
             "DECIMAL requires a length and scale specifier!");
         const auto schemaElementPrecision = schemaElement.precision;
         const auto schemaElementScale = schemaElement.scale;
-        // A long decimal requested type cannot read a value of a short decimal.
-        // As a result, the mapping from short to long decimal is currently
-        // restricted.
         auto type = DECIMAL(schemaElementPrecision, schemaElementScale);
         if (requestedType) {
           VELOX_CHECK(
@@ -900,40 +1045,26 @@ TypePtr ReaderBase::convertType(
                   [](const TypePtr& type) { return type->isDecimal(); }),
               kTypeMappingErrorFmtStr,
               "DECIMAL",
-              requestedType->toString());
-          // Reading short decimals with a long decimal requested type is not
-          // yet possible. To allow for correct interpretation of the values,
-          // the scale of the file type and requested type must match while
-          // precision may be larger.
-          if (requestedType->isShortDecimal()) {
-            VELOX_CHECK(
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [&](const TypePtr& type) {
-                      return type->isShortDecimal() &&
-                          type->asShortDecimal().precision() >=
-                          schemaElementPrecision &&
-                          type->asShortDecimal().scale() == schemaElementScale;
-                    }),
-                kTypeMappingErrorFmtStr,
-                type->toString(),
-                requestedType->toString());
-          } else {
-            VELOX_CHECK(
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [&](const TypePtr& type) {
-                      return type->isLongDecimal() &&
-                          type->asLongDecimal().precision() >=
-                          schemaElementPrecision &&
-                          type->asLongDecimal().scale() == schemaElementScale;
-                    }),
-                kTypeMappingErrorFmtStr,
-                type->toString(),
-                requestedType->toString());
-          }
+              requestedType->toString(),
+              schemaElement.name);
+          // Allow decimal widening: precision may be larger and scale may
+          // increase as long as precisionIncrease >= scaleIncrease.
+          // Short-to-long decimal crossing is handled by getDecimalValues
+          // via the upcast path.
+          VELOX_CHECK(
+              isCompatible(
+                  requestedType,
+                  isRepeated,
+                  [&](const TypePtr& type) {
+                    auto [precision, scale] = getDecimalPrecisionScale(*type);
+                    auto precisionInc = precision - schemaElementPrecision;
+                    auto scaleInc = scale - schemaElementScale;
+                    return scaleInc >= 0 && precisionInc >= scaleInc;
+                  }),
+              kTypeMappingErrorFmtStr,
+              type->toString(),
+              requestedType->toString(),
+              schemaElement.name);
         }
         return type;
       }
@@ -952,7 +1083,8 @@ TypePtr ReaderBase::convertType(
                         }),
                 kTypeMappingErrorFmtStr,
                 "VARCHAR",
-                requestedType->toString());
+                requestedType->toString(),
+                schemaElement.name);
             return VARCHAR();
           default:
             VELOX_FAIL(
@@ -973,14 +1105,49 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "VARCHAR",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return VARCHAR();
       }
+      case thrift::ConvertedType::TIME_MILLIS:
+        VELOX_CHECK_EQ(
+            schemaElement.type,
+            thrift::Type::INT32,
+            "TIME_MILLIS converted type can only be set for value of thrift::Type::INT32");
+        VELOX_CHECK(
+            !requestedType ||
+                isCompatible(
+                    requestedType,
+                    isRepeated,
+                    [](const TypePtr& type) {
+                      return type->equivalent(*TIME());
+                    }),
+            kTypeMappingErrorFmtStr,
+            "TIME",
+            requestedType->toString(),
+            schemaElement.name);
+        return TIME();
+
+      case thrift::ConvertedType::TIME_MICROS: {
+        VELOX_CHECK_EQ(
+            schemaElement.type,
+            thrift::Type::INT64,
+            "TIME_MICROS converted type can only be set for value of thrift::Type::INT64");
+        const bool isCompatibleRequestedType = !requestedType ||
+            isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
+              return type->equivalent(*TIME_MICRO_UTC());
+            });
+        VELOX_CHECK(
+            isCompatibleRequestedType,
+            kTypeMappingErrorFmtStr,
+            "TIME MICRO UTC",
+            requestedType->toString());
+        return TIME_MICRO_UTC();
+      }
+
       case thrift::ConvertedType::MAP:
       case thrift::ConvertedType::MAP_KEY_VALUE:
       case thrift::ConvertedType::LIST:
-      case thrift::ConvertedType::TIME_MILLIS:
-      case thrift::ConvertedType::TIME_MICROS:
       case thrift::ConvertedType::JSON:
       case thrift::ConvertedType::BSON:
       case thrift::ConvertedType::INTERVAL:
@@ -1002,7 +1169,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "BOOLEAN",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return BOOLEAN();
       case thrift::Type::type::INT32:
         VELOX_CHECK(
@@ -1010,13 +1178,14 @@ TypePtr ReaderBase::convertType(
                 isCompatible(
                     requestedType,
                     isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::INTEGER ||
-                          type->kind() == TypeKind::BIGINT;
+                    [&](const TypePtr& type) {
+                      return isInt32Compatible(
+                          type, TypeKind::INTEGER, allowNarrowing);
                     }),
             kTypeMappingErrorFmtStr,
             "INTEGER",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return INTEGER();
       case thrift::Type::type::INT64:
         // For Int64 Timestamp in nano precision
@@ -1032,20 +1201,17 @@ TypePtr ReaderBase::convertType(
                       }),
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
-              requestedType->toString());
+              requestedType->toString(),
+              schemaElement.name);
           return TIMESTAMP();
         }
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::BIGINT;
-                    }),
+                isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return BIGINT();
       case thrift::Type::type::INT96:
         VELOX_CHECK(
@@ -1058,7 +1224,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return TIMESTAMP(); // INT96 only maps to a timestamp
       case thrift::Type::type::FLOAT:
         VELOX_CHECK(
@@ -1072,7 +1239,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "REAL",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return REAL();
       case thrift::Type::type::DOUBLE:
         VELOX_CHECK(
@@ -1085,7 +1253,8 @@ TypePtr ReaderBase::convertType(
                     }),
             kTypeMappingErrorFmtStr,
             "DOUBLE",
-            requestedType->toString());
+            requestedType->toString(),
+            schemaElement.name);
         return DOUBLE();
       case thrift::Type::type::BYTE_ARRAY:
       case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
@@ -1103,7 +1272,8 @@ TypePtr ReaderBase::convertType(
                       [](const TypePtr& type) { return type->isVarbinary(); }),
               kTypeMappingErrorFmtStr,
               "VARBINARY",
-              requestedType->toString());
+              requestedType->toString(),
+              schemaElement.name);
           return VARBINARY();
         }
 
@@ -1242,9 +1412,11 @@ class ParquetRowReader::Impl {
     }
 
     uint64_t rowNumber = 0;
+    size_t freedThriftSize = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
       VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
-      auto fileOffset = rowGroups_[i].__isset.file_offset
+      auto fileOffset =
+          (rowGroups_[i].__isset.file_offset && rowGroups_[i].file_offset != 0)
           ? rowGroups_[i].file_offset
           : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
           ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
@@ -1267,7 +1439,19 @@ class ParquetRowReader::Impl {
           // Clear the metadata of row groups that are not read. This helps
           // reduce the memory consumption. ColumnChunks consume the most
           // memory. Skip the 0th RowGroup as it is used by estimatedRowSize().
-          rowGroups_[i].columns.clear();
+          // Measure the columns BEFORE clearing so we can release the matching
+          // amount from the pool reservation that ReaderBase reported.
+          if (readerBase_->isThriftMemoryReported()) {
+            for (const auto& column : rowGroups_[i].columns) {
+              freedThriftSize +=
+                  ColumnChunkMetaDataPtr(&column).estimateColumnMetadataSize();
+            }
+          }
+          // Swap with a fresh empty vector to actually release the buffer.
+          // operator=({}) and clear() preserve capacity, so the bytes
+          // reported as freed would still be resident; only the
+          // swap-with-empty idiom guarantees the allocation is released.
+          std::vector<thrift::ColumnChunk>().swap(rowGroups_[i].columns);
         }
         if (rowGroupInRange) {
           skippedStrides_++;
@@ -1275,6 +1459,13 @@ class ParquetRowReader::Impl {
       }
 
       rowNumber += rowGroups_[i].num_rows;
+    }
+
+    if (freedThriftSize > 0) {
+      // ReaderBase reported the full thrift footprint at construction. Release
+      // the portion we just freed by clearing skipped row groups; the
+      // remainder is released by ~ReaderBase.
+      readerBase_->releaseThriftBytes(freedThriftSize);
     }
   }
 
@@ -1336,7 +1527,8 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
-    stats.columnReaderStatistics.pageLoadTimeNs.merge(
+    stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
+    stats.columnReaderStats.pageLoadTimeNs.merge(
         columnReaderStats_.pageLoadTimeNs);
   }
 
@@ -1443,6 +1635,43 @@ ParquetReader::ParquetReader(
 
 std::optional<uint64_t> ParquetReader::numberOfRows() const {
   return readerBase_->thriftFileMetaData().num_rows;
+}
+
+std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
+    uint32_t index) const {
+  auto node = findNode(*readerBase_->schemaWithId(), index);
+  if (!node) {
+    return nullptr;
+  }
+  auto& parquetNode = static_cast<const ParquetTypeWithId&>(*node);
+  if (!parquetNode.isLeaf()) {
+    return nullptr;
+  }
+
+  auto fileMetaData = readerBase_->fileMetaData();
+  const auto numRowGroups = fileMetaData.numRowGroups();
+  if (numRowGroups == 0) {
+    return nullptr;
+  }
+
+  // Merge per-row-group statistics into file-level statistics.
+  dwio::stats::StatisticsBuilderOptions options{
+      /*stringLengthLimit=*/std::numeric_limits<uint32_t>::max()};
+  auto builder =
+      dwio::stats::StatisticsBuilder::create(*parquetNode.type(), options);
+
+  for (int i = 0; i < numRowGroups; ++i) {
+    auto rowGroup = fileMetaData.rowGroup(i);
+    auto columnChunk = rowGroup.columnChunk(parquetNode.column());
+    if (!columnChunk.hasStatistics()) {
+      return nullptr;
+    }
+    auto rowGroupStats =
+        columnChunk.getColumnStatistics(parquetNode.type(), rowGroup.numRows());
+    builder->merge(*rowGroupStats);
+  }
+
+  return builder->build();
 }
 
 const velox::RowTypePtr& ParquetReader::rowType() const {

@@ -7,7 +7,7 @@ Array Functions
     Returns whether all elements of an array match the given predicate.
 
         Returns true if all the elements match the predicate (a special case is when the array is empty);
-        Returns false if one or more elements don’t match;
+        Returns false if one or more elements don't match;
         Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.
 
@@ -17,15 +17,6 @@ Array Functions
 
         Returns true if one or more elements match the predicate;
         Returns false if none of the elements matches (a special case is when the array is empty);
-        Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
-        Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
-
-.. function:: none_match(array(T), function(T, boolean)) → boolean
-
-    Returns whether no elements of an array match the given predicate.
-
-        Returns true if none of the elements matches the predicate (a special case is when the array is empty);
-        Returns false if one or more elements match;
         Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
 
@@ -118,6 +109,13 @@ Array Functions
         SELECT array_max(ARRAY[{-1, -2, -3, nan()]); -- NaN
         SELECT array_max(ARRAY[{infinity(), nan()]); -- NaN
 
+.. function:: array_max_by(array(T), function(T, U)) -> T()
+
+    Applies the provided function to each element, and returns the element that gives the maximum value.
+    ``U`` can be any orderable type. ::
+
+        SELECT array_max_by(ARRAY ['a', 'bbb', 'cc'], x -> LENGTH(x)) -- 'bbb'
+
 .. function:: array_min(array(E)) -> E
 
     Returns the minimum value of input array.
@@ -132,13 +130,6 @@ Array Functions
         SELECT array_min(ARRAY[{-1, -2, -3, nan()]); -- -1
         SELECT array_min(ARRAY[{infinity(), nan()]); -- Infinity
 
-.. function:: array_max_by(array(T), function(T, U)) -> T()
-
-    Applies the provided function to each element, and returns the element that gives the maximum value.
-    ``U`` can be any orderable type. ::
-
-        SELECT array_max_by(ARRAY ['a', 'bbb', 'cc'], x -> LENGTH(x)) -- 'bbb'
-
 .. function:: array_min_by(array(T), function(T, U)) -> T
 
     Applies the provided function to each element, and returns the element that gives the minimum value.
@@ -149,17 +140,6 @@ Array Functions
 .. function:: array_normalize(array(E), E) -> array(E)
 
     Normalizes array ``x`` by dividing each element by the p-norm of the array. It is equivalent to ``TRANSFORM(array, v -> v / REDUCE(array, 0, (a, v) -> a + POW(ABS(v), p), a -> POW(a, 1 / p))``, but the reduce part is only executed once. Returns null if the array is null or there are null array elements. If ``p`` is 0, then the input array is returned. Only REAL and DOUBLE types are supported.
-
-.. function:: arrays_overlap(x, y) -> boolean
-
-    Tests if arrays ``x`` and ``y`` have any non-null elements in common.
-    Returns null if there are no non-null elements in common but either array contains null.
-    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
-
-.. function:: arrays_union(x, y) -> array
-
-    Returns an array of the elements in the union of x and y, without duplicates.
-    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
 
 .. function:: array_position(x, element) -> bigint
 
@@ -234,6 +214,17 @@ Array Functions
 
           SELECT array_sort_desc(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['leopard', 'mouse', 'cat']
 
+.. function:: array_split_into_chunks(array(T), sz) -> array(array(T))
+
+    Returns an array of arrays splitting the input array into chunks of given
+    length. The last chunk will be shorter than the chunk length if the array's
+    length is not an integer multiple of the chunk length. Ignores null inputs,
+    but not elements. ::
+
+        SELECT array_split_into_chunks(ARRAY [1, 2, 3, 4, 5], 2); -- [[1, 2], [3, 4], [5]]
+        SELECT array_split_into_chunks(ARRAY [1, 2, 3], 5); -- [[1, 2, 3]]
+        SELECT array_split_into_chunks(ARRAY ['a', 'b', 'c'], 2); -- [['a', 'b'], ['c']]
+
 .. function:: array_subset(array(T), array(int)) -> array(T)
 
     Returns an array containing elements from the input array at the specified 1-based indices.
@@ -246,31 +237,6 @@ Array Functions
           SELECT array_subset(ARRAY[1, NULL, 3], ARRAY[2]); -- [NULL]
           SELECT array_subset(ARRAY[1, 2, 3], ARRAY[1, 1, 2]); -- [1, 1, 2]
           SELECT array_subset(ARRAY[1, 2, 3], ARRAY[5, 0, -1]); -- []
-
-.. function:: l2_norm(array(T)) -> double
-
-    Returns the Euclidean norm (L2 norm) of an array of numeric values.
-    The L2 norm is calculated as the square root of the sum of squares of all elements: sqrt(sum(x^2)).
-    Returns 0.0 for empty arrays. Null elements are skipped in the calculation.
-    Supports integer and floating point types. ::
-
-          SELECT l2_norm(ARRAY[3, 4]); -- 5.0
-          SELECT l2_norm(ARRAY[1, 2, 2]); -- 3.0
-          SELECT l2_norm(ARRAY[3.0, 4.0]); -- 5.0
-          SELECT l2_norm(ARRAY[]); -- 0.0
-          SELECT l2_norm(ARRAY[3, NULL, 4]); -- 5.0
-
-.. function:: l2_norm(map(K, V)) -> double
-
-    Returns the Euclidean norm (L2 norm) of the values in a map.
-    The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
-    Keys are ignored; only values are used in the calculation.
-    Returns 0.0 for empty maps. Null values are skipped in the calculation.
-    Supports maps with numeric value types (integer or floating point). ::
-
-          SELECT l2_norm(MAP(ARRAY['a', 'b'], ARRAY[3, 4])); -- 5.0
-          SELECT l2_norm(MAP(ARRAY[1, 2], ARRAY[3.0, 4.0])); -- 5.0
-          SELECT l2_norm(MAP(ARRAY[], ARRAY[])); -- 0.0
 
 .. function:: array_sum(array(T)) -> bigint/double
 
@@ -286,7 +252,19 @@ Array Functions
         SELECT array_top_n(ARRAY [1, 100], 5); -- [100, 1]
         SELECT array_top_n(ARRAY ['a', 'zzz', 'zz', 'b', 'g', 'f'], 3); -- ['zzz', 'zz', 'g']
 
+.. function:: arrays_overlap(x, y) -> boolean
+
+    Tests if arrays ``x`` and ``y`` have any non-null elements in common.
+    Returns null if there are no non-null elements in common but either array contains null.
+    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
+
+.. function:: arrays_union(x, y) -> array
+
+    Returns an array of the elements in the union of x and y, without duplicates.
+    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
+
 .. function:: cardinality(x) -> bigint
+   :noindex:
 
     Returns the cardinality (size) of the array ``x``.
 
@@ -313,6 +291,33 @@ Array Functions
         SELECT contains(ARRAY[ARRAY[1, 3]], ARRAY[2, null]); -- false.
         SELECT contains(ARRAY[ARRAY[2, 3]], ARRAY[2, null]); -- failed: contains does not support arrays with elements that are null or contain null
         SELECT contains(ARRAY[ARRAY[2, null]], ARRAY[2, 1]); -- failed: contains does not support arrays with elements that are null or contain null
+
+.. function:: dot_product(array(T), array(T)) -> bigint/double
+
+    Computes the dot product of two arrays. The dot product is the sum of element-wise
+    products of corresponding elements. Both arrays must have the same length.
+    If either array is null, returns null. If arrays have different lengths, throws an error.
+    Null elements in arrays are treated as zero.
+    Returns bigint for integer arrays, double for floating-point arrays.
+    For empty integer arrays, returns 0. For empty floating-point arrays, returns NaN. ::
+
+          SELECT dot_product(ARRAY[1, 2, 3], ARRAY[4, 5, 6]); -- 32 (1*4 + 2*5 + 3*6)
+          SELECT dot_product(ARRAY[1.0, 2.0], ARRAY[3.0, 4.0]); -- 11.0 (1.0*3.0 + 2.0*4.0)
+          SELECT dot_product(ARRAY[1, NULL, 3], ARRAY[4, 5, 6]); -- 22 (1*4 + 0*5 + 3*6)
+          SELECT dot_product(ARRAY[], ARRAY[]); -- 0 for integer arrays, NaN for floating-point arrays
+          SELECT dot_product(NULL, ARRAY[1, 2, 3]); -- NULL
+
+.. function:: dot_product(map(K, V), map(K, V)) -> bigint/double
+   :noindex:
+
+    Computes the dot product of two maps. For maps, the dot product is computed by
+    multiplying values with matching keys and summing the results. Keys present in only
+    one map contribute zero to the result. If either map is null, returns null.
+    Null values in maps are treated as zero.
+    Returns bigint for integer value maps, double for floating-point value maps. ::
+
+          SELECT dot_product(MAP(ARRAY[1, 2], ARRAY[10, 20]), MAP(ARRAY[1, 2], ARRAY[3, 4])); -- 110 (10*3 + 20*4)
+          SELECT dot_product(MAP(ARRAY['a', 'b'], ARRAY[1.0, 2.0]), MAP(ARRAY['a', 'c'], ARRAY[3.0, 4.0])); -- 3.0 (only 'a' matches)
 
 .. function:: element_at(array(E), index) -> E
 
@@ -375,6 +380,32 @@ Array Functions
 
     Flattens an ``array(array(T))`` to an ``array(T)`` by concatenating the contained arrays.
 
+.. function:: l2_norm(array(T)) -> double
+
+    Returns the Euclidean norm (L2 norm) of an array of numeric values.
+    The L2 norm is calculated as the square root of the sum of squares of all elements: sqrt(sum(x^2)).
+    Returns 0.0 for empty arrays. Null elements are skipped in the calculation.
+    Supports integer and floating point types. ::
+
+          SELECT l2_norm(ARRAY[3, 4]); -- 5.0
+          SELECT l2_norm(ARRAY[1, 2, 2]); -- 3.0
+          SELECT l2_norm(ARRAY[3.0, 4.0]); -- 5.0
+          SELECT l2_norm(ARRAY[]); -- 0.0
+          SELECT l2_norm(ARRAY[3, NULL, 4]); -- 5.0
+
+.. function:: l2_norm(map(K, V)) -> double
+   :noindex:
+
+    Returns the Euclidean norm (L2 norm) of the values in a map.
+    The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
+    Keys are ignored; only values are used in the calculation.
+    Returns 0.0 for empty maps. Null values are skipped in the calculation.
+    Supports maps with numeric value types (integer or floating point). ::
+
+          SELECT l2_norm(MAP(ARRAY['a', 'b'], ARRAY[3, 4])); -- 5.0
+          SELECT l2_norm(MAP(ARRAY[1, 2], ARRAY[3.0, 4.0])); -- 5.0
+          SELECT l2_norm(MAP(ARRAY[], ARRAY[])); -- 0.0
+
 .. function:: ngrams(array(T), n) -> array(array(T))
 
     Returns `n-grams <https://en.wikipedia.org/wiki/N-gram>`_  for the array.
@@ -387,6 +418,15 @@ Array Functions
         SELECT ngrams(ARRAY['foo', 'bar', 'baz', 'foo'], 5); -- [['foo', 'bar', 'baz', 'foo']]
         SELECT ngrams(ARRAY[1, 2, 3, 4], 2); -- [[1, 2], [2, 3], [3, 4]]
         SELECT ngrams(ARRAY["foo", NULL, "bar"], 2); -- [["foo", NULL], [NULL, "bar"]]
+
+.. function:: none_match(array(T), function(T, boolean)) → boolean
+
+    Returns whether no elements of an array match the given predicate.
+
+        Returns true if none of the elements matches the predicate (a special case is when the array is empty);
+        Returns false if one or more elements match;
+        Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
+        Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
 
 .. function:: reduce(array(T), initialState S, inputFunction(S,T,S), outputFunction(S,R)) -> R
 
@@ -410,6 +450,14 @@ Array Functions
                       (s, x) -> CAST(ROW(x + s.sum, s.count + 1) AS ROW(sum DOUBLE, count INTEGER)),
                       s -> IF(s.count = 0, NULL, s.sum / s.count));
 
+.. function:: remove_nulls(x) -> array
+
+    Remove null values from an array ``array`` ::
+
+        SELECT remove_nulls(ARRAY[1, NULL, 3, NULL]); -- [1, 3]
+        SELECT remove_nulls(ARRAY[true, false, NULL]); -- [true, false]
+        SELECT remove_nulls(ARRAY[ARRAY[1, 2], NULL, ARRAY[1, NULL, 3]]); -- [[1, 2], [1, null, 3]]
+
 .. function:: repeat(element, count) -> array(E)
 
     Repeat ``element`` for ``count`` times. ``count`` cannot be negative and must be less than or equal to 10000.
@@ -417,6 +465,16 @@ Array Functions
 .. function:: reverse(array(E)) -> array(E)
 
     Returns an array which has the reversed order of the input array.
+
+.. function:: sequence(start, stop) -> array
+
+    Generate a sequence of integers from start to stop, incrementing by 1 if start is less than or equal to stop,
+    otherwise -1.
+
+.. function:: sequence(start, stop, step) -> array
+   :noindex:
+
+    Generate a sequence of integers from start to stop, incrementing by step.
 
 .. function:: shuffle(array(E)) -> array(E)
 
@@ -430,16 +488,6 @@ Array Functions
 
     Returns a subarray starting from index ``start``(or starting from the end
     if ``start`` is negative) with a length of ``length``.
-
-.. function:: sequence(start, stop) -> array
-
-    Generate a sequence of integers from start to stop, incrementing by 1 if start is less than or equal to stop,
-    otherwise -1.
-
-.. function:: sequence(start, stop, step) -> array
-   :noindex:
-
-    Generate a sequence of integers from start to stop, incrementing by step.
 
 .. function:: subscript(array(E), index) -> E
 
@@ -458,6 +506,18 @@ Array Functions
         SELECT transform(ARRAY ['x', 'abc', 'z'], x -> x || '0'); -- ['x0', 'abc0', 'z0']
         SELECT transform(ARRAY [ARRAY [1, NULL, 2], ARRAY[3, NULL]], a -> filter(a, x -> x IS NOT NULL)); -- [[1, 2], [3]]
 
+.. function:: transform_with_index(array(T), function(T,bigint,U)) -> array(U)
+
+    Returns an array that is the result of applying ``function`` to each element of ``array``.
+    The lambda function receives both the element and its 1-based index as arguments.
+    This is useful for transformations that need to know the position of each element::
+
+        SELECT transform_with_index(ARRAY [], (x, i) -> x + i); -- []
+        SELECT transform_with_index(ARRAY [5, 6, 7], (x, i) -> x * i); -- [5, 12, 21]
+        SELECT transform_with_index(ARRAY ['a', 'b', 'c'], (x, i) -> concat(x, cast(i as varchar))); -- ['a1', 'b2', 'c3']
+        SELECT transform_with_index(ARRAY [10, 20, 30], (x, i) -> i); -- [1, 2, 3]
+        SELECT transform_with_index(ARRAY [1, 2, 3], (x, i) -> if(i % 2 = 1, x, x * 2)); -- [1, 4, 3]
+
 .. function:: trim_array(x, n) -> array
 
     Remove n elements from the end of ``array``::
@@ -465,14 +525,6 @@ Array Functions
         SELECT trim_array(ARRAY[1, 2, 3, 4], 1); -- [1, 2, 3]
         SELECT trim_array(ARRAY[1, 2, 3, 4], 2); -- [1, 2]
         SELECT trim_array(ARRAY[1, 2, 3, 4], 4); -- []
-
-.. function:: remove_nulls(x) -> array
-
-    Remove null values from an array ``array`` ::
-
-        SELECT remove_nulls(ARRAY[1, NULL, 3, NULL]); -- [1, 3]
-        SELECT remove_nulls(ARRAY[true, false, NULL]); -- [true, false]
-        SELECT remove_nulls(ARRAY[ARRAY[1, 2], NULL, ARRAY[1, NULL, 3]]); -- [[1, 2], [1, null, 3]]
 
 .. function:: zip(array(T), array(U),..) -> array(row(T,U, ...))
 

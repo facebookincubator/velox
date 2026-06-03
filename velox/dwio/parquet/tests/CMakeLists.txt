@@ -19,7 +19,7 @@ set(
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
-  velox_temp_path
+  velox_test_util
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
@@ -47,3 +47,5 @@ target_link_libraries(
 )
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+velox_add_library(velox_dwio_parquet_test_base INTERFACE HEADERS ParquetTestBase.h)

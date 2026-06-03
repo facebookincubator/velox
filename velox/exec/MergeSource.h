@@ -37,11 +37,14 @@ class MergeSource {
   /// from the consumer.
   virtual BlockingReason started(ContinueFuture* future) = 0;
 
-  virtual BlockingReason next(RowVectorPtr& data, ContinueFuture* future) = 0;
+  virtual BlockingReason
+  next(RowVectorPtr& data, ContinueFuture* future, bool& drained) = 0;
 
-  virtual BlockingReason enqueue(
-      RowVectorPtr input,
-      ContinueFuture* future) = 0;
+  /// Called by the producer to enqueue more data, signal end of data (nullptr
+  /// input), or signal drain (nullptr input with drained=true) under barrier
+  /// processing.
+  virtual BlockingReason
+  enqueue(RowVectorPtr input, ContinueFuture* future, bool drained = false) = 0;
 
   virtual void close() = 0;
 

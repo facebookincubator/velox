@@ -20,6 +20,7 @@
 #include "velox/exec/TableWriter.h"
 
 using namespace facebook::velox::memory;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec::test {
 
@@ -94,7 +95,7 @@ QueryTestResult runHashJoinTask(
   QueryTestResult result;
   const auto plan = hashJoinPlan(vectors, result.planNodeId);
   if (enableSpilling) {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
@@ -139,7 +140,7 @@ QueryTestResult runAggregateTask(
   QueryTestResult result;
   const auto plan = aggregationPlan(vectors, result.planNodeId);
   if (enableSpilling) {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)
@@ -185,7 +186,7 @@ QueryTestResult runOrderByTask(
   QueryTestResult result;
   const auto plan = orderByPlan(vectors, result.planNodeId);
   if (enableSpilling) {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
@@ -230,7 +231,7 @@ QueryTestResult runRowNumberTask(
   QueryTestResult result;
   const auto plan = rowNumberPlan(vectors, result.planNodeId);
   if (enableSpilling) {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
@@ -275,7 +276,7 @@ QueryTestResult runTopNTask(
   QueryTestResult result;
   const auto plan = topNPlan(vectors, result.planNodeId);
   if (enableSpilling) {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)
@@ -325,7 +326,7 @@ QueryTestResult runWriteTask(
   const auto outputDirectory = TempDirectoryPath::create();
   auto plan = writePlan(vectors, outputDirectory->getPath(), result.planNodeId);
   if (enableSpilling) {
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     result.data =
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)

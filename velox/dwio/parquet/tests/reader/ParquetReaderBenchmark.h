@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Statistics.h"
@@ -22,12 +24,13 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
 namespace facebook::velox::parquet::test {
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 constexpr uint32_t kNumRowsPerBatch = 60000;
 constexpr uint32_t kNumBatches = 50;
@@ -104,13 +107,17 @@ class ParquetReaderBenchmark {
 
  private:
   const std::string fileName_ = "test.parquet";
-  const std::shared_ptr<facebook::velox::exec::test::TempDirectoryPath>
-      fileFolder_ = facebook::velox::exec::test::TempDirectoryPath::create();
+  const std::shared_ptr<TempDirectoryPath> fileFolder_ =
+      TempDirectoryPath::create();
   const bool disableDictionary_;
 
   std::unique_ptr<facebook::velox::test::DataSetBuilder> dataSetBuilder_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool_;
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<facebook::velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
   facebook::velox::dwio::common::RuntimeStatistics runtimeStats_;
 };

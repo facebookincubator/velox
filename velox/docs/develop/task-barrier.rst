@@ -277,7 +277,7 @@ Delivery (Entering the Barrier)
 
 * **Injection**: The ``requestBarrier`` API directly injects a BarrierSplit into
   the Task's split queue. This split is distinct from regular data splits (e.g.,
-  FileSplit).
+  FileConnectorSplit).
 * **Detection**: The Driver loop responsible for the TableScan fetches the next
   split from the queue. When it pops the BarrierSplit, it does not attempt to
   read data.
@@ -407,6 +407,18 @@ hasn't seen a "new" key to trigger the flush.
 * **Reset Accumulators**: After flushing, the accumulators are reset. This
   ensures that when the task resumes after the barrier with new splits, it
   starts fresh.
+
+Hash Aggregation
+^^^^^^^^^^^^^^^^
+
+* **Function**: Computes grouped or global aggregates using an in-memory hash
+  table instead of relying on sorted input.
+
+**Limitation**: Hash aggregation barrier support is currently intended for
+in-memory aggregation only. It's recommended to keep spill disabled when
+using task barrier with hash aggregation. Otherwise, if the task has
+spilled, ``requestBarrier()`` is not supported and will cause the subsequent
+``next()`` call to throw.
 
 Limitations
 -----------

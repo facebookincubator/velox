@@ -17,10 +17,11 @@
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/io/IoStatistics.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/dwio/text/RegisterTextWriter.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -28,6 +29,8 @@
 /// TODO: Add fuzzer test.
 
 namespace facebook::velox::text {
+using namespace facebook::velox::common::testutil;
+
 class TextWriterTest : public testing::Test,
                        public velox::test::VectorTestBase {
  public:
@@ -37,7 +40,7 @@ class TextWriterTest : public testing::Test,
     registerTextReaderFactory();
     rootPool_ = memory::memoryManager()->addRootPool("TextWriterTests");
     leafPool_ = rootPool_->addLeafChild("TextWriterTests");
-    tempPath_ = exec::test::TempDirectoryPath::create();
+    tempPath_ = TempDirectoryPath::create();
   }
 
   void TearDown() override {
@@ -62,9 +65,13 @@ class TextWriterTest : public testing::Test,
 
   constexpr static float kInf = std::numeric_limits<float>::infinity();
   constexpr static double kNaN = std::numeric_limits<double>::quiet_NaN();
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
+      std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
-  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
+  std::shared_ptr<TempDirectoryPath> tempPath_;
 };
 
 TEST_F(TextWriterTest, write) {
@@ -225,7 +232,9 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
@@ -493,7 +502,9 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
   auto input =
@@ -684,7 +695,9 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -922,7 +935,9 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1077,7 +1092,9 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1465,7 +1482,9 @@ TEST_F(
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1594,7 +1613,9 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1726,7 +1747,9 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 
@@ -1848,7 +1871,9 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
   auto readerFactory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  auto readerOptions = dwio::common::ReaderOptions(pool());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileSchema(schema);
   readerOptions.setSerDeOptions(serDeOptions);
 

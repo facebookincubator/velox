@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
+#include <azure/core/io/body_stream.hpp>
 #include <gtest/gtest.h>
 #include <atomic>
-#include <filesystem>
 #include <random>
+#include <string_view>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
@@ -30,6 +31,7 @@
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
 #include "connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 #include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsWriteFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
@@ -37,15 +39,87 @@
 #include "velox/connectors/hive/storage_adapters/abfs/tests/MockDataLakeFileClient.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/exec/tests/utils/PortUtil.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::filesystems;
+using namespace facebook::velox::common::testutil;
 using ::facebook::velox::common::Region;
 
 namespace {
 
-constexpr int kOneMB = 1 << 20;
+constexpr int kOneMB = 1'048'576;
+
+struct RecordedDownload {
+  int64_t offset{0};
+  int64_t length{0};
+};
+
+struct InMemoryReadState {
+  std::string data;
+  std::vector<RecordedDownload> downloads;
+};
+
+class InMemoryAzureBlobClient final : public AzureBlobClient {
+ public:
+  explicit InMemoryAzureBlobClient(std::shared_ptr<InMemoryReadState> state)
+      : state_(std::move(state)) {}
+
+  Azure::Response<Azure::Storage::Blobs::Models::BlobProperties> getProperties()
+      override {
+    VELOX_FAIL("Unexpected getProperties call.");
+  }
+
+  Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult> download(
+      const Azure::Storage::Blobs::DownloadBlobOptions& options) override {
+    const auto& range = options.Range.Value();
+    const auto offset = range.Offset;
+    const auto length = range.Length.Value();
+
+    VELOX_CHECK_GE(offset, 0);
+    VELOX_CHECK_GE(length, 0);
+    VELOX_CHECK_LE(offset + length, static_cast<int64_t>(state_->data.size()));
+
+    state_->downloads.push_back({offset, length});
+
+    Azure::Storage::Blobs::Models::DownloadBlobResult result;
+    result.BodyStream = std::make_unique<Azure::Core::IO::MemoryBodyStream>(
+        reinterpret_cast<const uint8_t*>(state_->data.data() + offset),
+        static_cast<size_t>(length));
+    return Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult>(
+        std::move(result), nullptr);
+  }
+
+  std::string getUrl() override {
+    return std::string{kUrl};
+  }
+
+ private:
+  static constexpr std::string_view kUrl =
+      "https://unit.blob.core.windows.net/container/test-file";
+
+  std::shared_ptr<InMemoryReadState> state_;
+};
+
+class InMemoryAzureClientProvider final : public AzureClientProvider {
+ public:
+  explicit InMemoryAzureClientProvider(std::shared_ptr<InMemoryReadState> state)
+      : state_(std::move(state)) {}
+
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    return std::make_unique<InMemoryAzureBlobClient>(state_);
+  }
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    VELOX_FAIL("Unexpected getWriteFileClient call.");
+  }
+
+ private:
+  std::shared_ptr<InMemoryReadState> state_;
+};
 
 class TestAzureClientProvider final : public AzureClientProvider {
  public:
@@ -97,22 +171,24 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   static std::string generateRandomData(int size) {
-    static const char charset[] =
+    static constexpr std::string_view kCharacters =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::mt19937 generator(std::random_device{}());
+    std::uniform_int_distribution<size_t> distribution(
+        0, kCharacters.size() - 1);
 
     std::string data(size, ' ');
 
     for (int i = 0; i < size; ++i) {
-      int index = rand() % (sizeof(charset) - 1);
-      data[i] = charset[index];
+      data[i] = kCharacters[distribution(generator)];
     }
 
     return data;
   }
 
  private:
-  static std::shared_ptr<::exec::test::TempFilePath> createFile() {
-    auto tempFile = exec::test::TempFilePath::create();
+  static std::shared_ptr<TempFilePath> createFile() {
+    auto tempFile = TempFilePath::create();
     tempFile->append("aaaaa");
     tempFile->append("bbbbb");
     tempFile->append(std::string(kOneMB, 'c'));
@@ -120,6 +196,8 @@ class AbfsFileSystemTest : public testing::Test {
     return tempFile;
   }
 };
+
+namespace {
 
 void readData(ReadFile* readFile) {
   ASSERT_EQ(readFile->size(), 15 + kOneMB);
@@ -169,6 +247,8 @@ void readData(ReadFile* readFile) {
       "ccccc");
 }
 
+} // namespace
+
 TEST_F(AbfsFileSystemTest, readFile) {
   auto readFile = abfs_->openFileForRead(azuriteServer_->fileURI());
   readData(readFile.get());
@@ -179,6 +259,74 @@ TEST_F(AbfsFileSystemTest, openFileForReadWithOptions) {
   options.fileSize = 15 + kOneMB;
   auto readFile = abfs_->openFileForRead(azuriteServer_->fileURI(), options);
   readData(readFile.get());
+}
+
+TEST(AbfsReadFileTest, preadvUsesSingleDownloadForBuffersWithGaps) {
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = "0123456789abcdefghijklmn";
+
+  registerAzureClientProviderFactory("unit", [state](const std::string&) {
+    return std::make_unique<InMemoryAzureClientProvider>(state);
+  });
+
+  AbfsReadFile readFile{
+      "abfs://container@unit.dfs.core.windows.net/test-file",
+      config::ConfigBase({})};
+  FileOptions options;
+  options.fileSize = state->data.size();
+  readFile.initialize(options);
+
+  char firstBuffer[5];
+  char secondBuffer[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(firstBuffer, sizeof(firstBuffer)),
+      folly::Range<char*>(nullptr, 7),
+      folly::Range<char*>(secondBuffer, sizeof(secondBuffer)),
+  };
+
+  ASSERT_EQ(17, readFile.preadv(2, buffers));
+  ASSERT_EQ(state->downloads.size(), 1);
+  EXPECT_EQ(state->downloads[0].offset, 2);
+  EXPECT_EQ(state->downloads[0].length, 17);
+  EXPECT_EQ(std::string_view(firstBuffer, sizeof(firstBuffer)), "23456");
+  EXPECT_EQ(std::string_view(secondBuffer, sizeof(secondBuffer)), "efghi");
+}
+
+TEST(AbfsReadFileTest, preadvUsesSingleDownloadForDefaultCoalescedGap) {
+  constexpr size_t kLeadingReadSize = 4;
+  constexpr size_t kGapSize = static_cast<size_t>(512) * 1'024;
+  constexpr size_t kTrailingReadSize = 4;
+
+  auto state = std::make_shared<InMemoryReadState>();
+  state->data = std::string(kLeadingReadSize, 'a') +
+      std::string(kGapSize, 'x') + std::string(kTrailingReadSize, 'b');
+
+  registerAzureClientProviderFactory(
+      "unit-large-gap", [state](const std::string&) {
+        return std::make_unique<InMemoryAzureClientProvider>(state);
+      });
+
+  AbfsReadFile readFile{
+      "abfs://container@unit-large-gap.dfs.core.windows.net/test-file",
+      config::ConfigBase({})};
+  FileOptions options;
+  options.fileSize = state->data.size();
+  readFile.initialize(options);
+
+  char firstBuffer[kLeadingReadSize];
+  char secondBuffer[kTrailingReadSize];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(firstBuffer, sizeof(firstBuffer)),
+      folly::Range<char*>(nullptr, kGapSize),
+      folly::Range<char*>(secondBuffer, sizeof(secondBuffer)),
+  };
+
+  ASSERT_EQ(state->data.size(), readFile.preadv(0, buffers));
+  ASSERT_EQ(state->downloads.size(), 1);
+  EXPECT_EQ(state->downloads[0].offset, 0);
+  EXPECT_EQ(state->downloads[0].length, state->data.size());
+  EXPECT_EQ(std::string_view(firstBuffer, sizeof(firstBuffer)), "aaaa");
+  EXPECT_EQ(std::string_view(secondBuffer, sizeof(secondBuffer)), "bbbb");
 }
 
 TEST_F(AbfsFileSystemTest, openFileForReadWithInvalidOptions) {
@@ -211,7 +359,7 @@ TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
       0, sleepTimesInMicroseconds.size() - 1);
   for (int i = 0; i < 10; i++) {
     auto thread = std::thread([&] {
-      int index = distribution(generator);
+      const auto index = distribution(generator);
       while (!startThreads) {
         std::this_thread::yield();
       }
@@ -243,10 +391,9 @@ TEST(AbfsWriteFileTest, openFileForWriteTest) {
       reinterpret_cast<MockDataLakeFileClient*>(mockClient.get())->path();
   AbfsWriteFile abfsWriteFile(kAbfsFile, mockClient);
   EXPECT_EQ(abfsWriteFile.size(), 0);
-  std::string dataContent = "";
+  std::string dataContent;
   uint64_t totalSize = 0;
-  std::string randomData =
-      AbfsFileSystemTest::generateRandomData(1 * 1024 * 1024);
+  std::string randomData = AbfsFileSystemTest::generateRandomData(kOneMB);
   for (int i = 0; i < 8; ++i) {
     abfsWriteFile.append(randomData);
     dataContent += randomData;
@@ -255,11 +402,11 @@ TEST(AbfsWriteFileTest, openFileForWriteTest) {
   abfsWriteFile.flush();
   EXPECT_EQ(abfsWriteFile.size(), totalSize);
 
-  randomData = AbfsFileSystemTest::generateRandomData(9 * 1024 * 1024);
+  randomData = AbfsFileSystemTest::generateRandomData(9 * kOneMB);
   dataContent += randomData;
   abfsWriteFile.append(randomData);
   totalSize += randomData.size();
-  randomData = AbfsFileSystemTest::generateRandomData(2 * 1024 * 1024);
+  randomData = AbfsFileSystemTest::generateRandomData(2 * kOneMB);
   dataContent += randomData;
   totalSize += randomData.size();
   abfsWriteFile.append(randomData);
@@ -301,7 +448,7 @@ TEST_F(AbfsFileSystemTest, clientProviderFactoryNotRegistered) {
 }
 
 TEST_F(AbfsFileSystemTest, registerAbfsFileSink) {
-  static const std::vector<std::string> paths = {
+  const std::vector<std::string> paths = {
       "abfs://test@test.dfs.core.windows.net/test",
       "abfss://test@test.dfs.core.windows.net/test"};
   std::unordered_map<std::string, std::string> config(

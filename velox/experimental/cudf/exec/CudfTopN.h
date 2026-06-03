@@ -15,14 +15,16 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::cudf_velox {
 
-class CudfTopN : public exec::Operator, public NvtxHelper {
+class CudaEvent;
+
+class CudfTopN : public CudfOperatorBase {
  public:
   CudfTopN(
       int32_t operatorId,
@@ -33,17 +35,16 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
     return !noMoreInput_;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
-  void noMoreInput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
 
  private:
   const int32_t count_; // N value of TopN
@@ -68,12 +69,12 @@ class CudfTopN : public exec::Operator, public NvtxHelper {
 
   // As the inputs are added to TopN operator, we use topNBatches_
   // (a vector of CudfVectorPtrs) to keep track of the topN rows of each input.
-  // We only update the topNBatches_ if number of batches >= 5 and number of
-  // rows in topNBatches_ >= count_. Once all inputs are available, we concat
-  // the topNBatches_ and get the topN rows.
-  // config value kCudfTopNBatchSize is maximum number of batches to hold.
+  // We only update the topNBatches_ if number of batches >= kBatchSize_
+  // and number of rows in topNBatches_ >= count_. Once all inputs are
+  // available, we concat the topNBatches_ and get the topN rows.
   std::vector<CudfVectorPtr> topNBatches_;
   int32_t kBatchSize_{5};
   bool finished_ = false;
+  std::unique_ptr<CudaEvent> cudaEvent_;
 };
 } // namespace facebook::velox::cudf_velox

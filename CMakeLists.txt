@@ -173,6 +173,7 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
+option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -210,6 +211,15 @@ endif()
 
 if(VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_BUILD_TEST_UTILS ON)
+endif()
+
+if(VELOX_ENABLE_TORCHWAVE)
+  set(VELOX_ENABLE_WAVE ON)
+  if(DEFINED ENV{TORCH_DIR})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{TORCH_DIR}")
+  endif()
+  find_package(Torch REQUIRED)
+  message(STATUS "Found Torch: ${TORCH_INSTALL_PREFIX}")
 endif()
 
 if(VELOX_ENABLE_CUDF)
@@ -479,7 +489,7 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     message(FATAL_ERROR "-DCMAKE_CUDA_ARCHITECTURES= must be set")
   endif()
   if(CMAKE_BUILD_TYPE MATCHES Debug)
-    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
+    set(VELOX_CUDA_DEBUG_FLAGS "$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
   # Suppress deprecated GPU targets warning for CUDA 12.8.x
@@ -574,9 +584,13 @@ if(NOT TARGET gflags::gflags)
 endif()
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
-  # we force glog from source to avoid issues with a system version built
-  # against another gflags version (which is likely)
-  set(glog_SOURCE BUNDLED)
+  # Allow explicit glog_SOURCE override (e.g. when system glog is built
+  # against the same gflags version as BUNDLED).
+  if(DEFINED ENV{glog_SOURCE})
+    set(glog_SOURCE $ENV{glog_SOURCE})
+  else()
+    set(glog_SOURCE BUNDLED)
+  endif()
 else()
   set(glog_SOURCE SYSTEM)
 endif()
@@ -655,6 +669,32 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
+
+  # Workaround for a missing edge in the system-installed FBThrift's
+  # exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
+  # `target_link_libraries(thriftmetadata PUBLIC ...)` block does not
+  # declare an xxhash dep on `thriftmetadata` — the conditional
+  # `if(Xxhash_FOUND) target_link_libraries(thriftmetadata PUBLIC
+  # ${Xxhash_LIBRARY})` block was added later in fbthrift mainline.
+  # Meanwhile `libthriftmetadata.a` itself does call XXH3_64bits(),
+  # so the binary needs xxhash but the exported FBThriftTargets.cmake
+  # doesn't declare it. Symptom (only with VELOX_BUILD_SHARED=ON +
+  # VELOX_MONO_LIBRARY=ON, where libvelox.so doesn't drag xxhash in
+  # incidentally): `undefined reference to symbol 'XXH3_64bits'` on
+  # any test executable that links FBThrift through velox.
+  # Tracking: https://github.com/facebook/fbthrift/issues/651,
+  # https://github.com/facebookincubator/velox/issues/13153.
+  # Remove once FB_OS_VERSION is bumped past the commit that adds the
+  # `if(Xxhash_FOUND)` block AND the velox-dev container is rebuilt
+  # against that fixed fbthrift release.
+  if(TARGET FBThrift::thriftmetadata)
+    find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
+    set_property(
+      TARGET FBThrift::thriftmetadata
+      APPEND
+      PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
+    )
+  endif()
 endif()
 
 if(VELOX_ENABLE_GCS)
@@ -670,6 +710,9 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Find Threads library
   find_package(Threads REQUIRED)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
+  # Explicitly enable folly coroutines when compiler supports them.
+  # This is required for folly::coro::AsyncGenerator to work correctly.
+  add_compile_definitions(FOLLY_HAS_COROUTINES=1)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
@@ -753,6 +796,12 @@ endif()
 if(VELOX_ENABLE_GEO)
   velox_set_source(geos)
   velox_resolve_dependency(geos)
+endif()
+
+if(VELOX_ENABLE_GEO)
+  list(PREPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules/s2geometry)
+  velox_set_source(s2geometry)
+  velox_resolve_dependency(s2geometry)
 endif()
 
 add_subdirectory(velox)

@@ -16,6 +16,9 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <snappy.h>
+#include <zstd.h>
+
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -123,7 +126,9 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
       bufferStart_ = reinterpret_cast<const char*>(buffer);
       bufferEnd_ = bufferStart_ + bufferSize;
     }
-    if (bufferEnd_ - bufferStart_ >= size) {
+    // Fall through to the AlignedBuffer copy when the stream buffer does
+    // not have kPageReadPadding trailing bytes past 'size'.
+    if (bufferEnd_ - bufferStart_ >= size + kPageReadPadding) {
       bufferStart_ += size;
       return bufferStart_ - size;
     }
@@ -143,27 +148,59 @@ const char* PageReader::decompressData(
     const char* pageData,
     uint32_t compressedSize,
     uint32_t uncompressedSize) {
-  std::unique_ptr<dwio::common::SeekableInputStream> inputStream =
-      std::make_unique<dwio::common::SeekableArrayInputStream>(
-          pageData, compressedSize, 0);
-  auto streamDebugInfo =
-      fmt::format("Page Reader: Stream {}", inputStream_->getName());
-  std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
-      dwio::common::compression::createDecompressor(
-          codec_,
-          std::move(inputStream),
-          uncompressedSize,
-          pool_,
-          getParquetDecompressionOptions(codec_),
-          streamDebugInfo,
-          nullptr,
-          true,
-          compressedSize);
-
   dwio::common::ensureCapacity<char>(
       decompressedData_, uncompressedSize, &pool_);
-  decompressedStream->readFully(
-      decompressedData_->asMutable<char>(), uncompressedSize);
+  auto* dest = decompressedData_->asMutable<char>();
+
+  switch (codec_) {
+    case common::CompressionKind::CompressionKind_SNAPPY: {
+      size_t actualUncompressedSize;
+      VELOX_CHECK(
+          snappy::GetUncompressedLength(
+              pageData, compressedSize, &actualUncompressedSize),
+          "Snappy: failed to get uncompressed length from corrupt data");
+      VELOX_CHECK_EQ(actualUncompressedSize, uncompressedSize);
+      VELOX_CHECK(
+          snappy::RawUncompress(pageData, compressedSize, dest),
+          "Snappy decompression failed");
+      break;
+    }
+    case common::CompressionKind::CompressionKind_ZSTD: {
+      thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> zstdCtx{
+          ZSTD_createDCtx(), ZSTD_freeDCtx};
+      VELOX_CHECK_NOT_NULL(zstdCtx);
+      const auto actualUncompressedSize = ZSTD_decompressDCtx(
+          zstdCtx.get(), dest, uncompressedSize, pageData, compressedSize);
+      VELOX_CHECK(
+          !ZSTD_isError(actualUncompressedSize),
+          "ZSTD decompression failed: {}",
+          ZSTD_getErrorName(actualUncompressedSize));
+      VELOX_CHECK_EQ(actualUncompressedSize, uncompressedSize);
+      break;
+    }
+    default: {
+      // Fallback to stream-based decompression for other codecs (gzip, lz4,
+      // lzo).
+      std::unique_ptr<dwio::common::SeekableInputStream> inputStream =
+          std::make_unique<dwio::common::SeekableArrayInputStream>(
+              pageData, compressedSize, 0);
+      auto streamDebugInfo =
+          fmt::format("Page Reader: Stream {}", inputStream_->getName());
+      std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
+          dwio::common::compression::createDecompressor(
+              codec_,
+              std::move(inputStream),
+              uncompressedSize,
+              pool_,
+              getParquetDecompressionOptions(codec_),
+              streamDebugInfo,
+              nullptr,
+              true,
+              compressedSize);
+      decompressedStream->readFully(dest, uncompressedSize);
+      break;
+    }
+  }
 
   return decompressedData_->as<char>();
 }
@@ -232,18 +269,42 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
       pageHeader.compressed_page_size,
       pageHeader.uncompressed_page_size);
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
+  auto remainingBytes = pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
+    VELOX_CHECK_GE(
+        remainingBytes,
+        sizeof(int32_t),
+        "Insufficient bytes for repetition level length (corrupt data page?)");
     uint32_t repeatLength = readField<int32_t>(pageData_);
+    remainingBytes -= sizeof(int32_t);
+    VELOX_CHECK_LE(
+        repeatLength,
+        remainingBytes,
+        "Repetition level length {} exceeds remaining page size {} (corrupt data page?)",
+        repeatLength,
+        remainingBytes);
     repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
         ::arrow::bit_util::NumRequiredBits(maxRepeat_));
 
     pageData_ += repeatLength;
+    remainingBytes -= repeatLength;
   }
 
   if (maxDefine_ > 0) {
+    VELOX_CHECK_GE(
+        remainingBytes,
+        sizeof(uint32_t),
+        "Insufficient bytes for definition level length (corrupt data page?)");
     auto defineLength = readField<uint32_t>(pageData_);
+    remainingBytes -= sizeof(uint32_t);
+    VELOX_CHECK_LE(
+        defineLength,
+        remainingBytes,
+        "Definition level length {} exceeds remaining page size {} (corrupt data page?)",
+        defineLength,
+        remainingBytes);
     if (maxDefine_ == 1) {
       defineDecoder_ = std::make_unique<RleBpDecoder>(
           pageData_,
@@ -288,6 +349,13 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
       pageHeader.data_page_header_v2.repetition_levels_byte_length;
 
   auto bytes = pageHeader.compressed_page_size;
+  VELOX_CHECK_LE(
+      static_cast<uint64_t>(repeatLength) + defineLength,
+      bytes,
+      "Repetition and definition level lengths ({} + {}) exceed compressed page size {} (corrupt data page?)",
+      repeatLength,
+      defineLength,
+      bytes);
   pageData_ = readBytes(bytes, pageBuffer_);
 
   if (repeatLength) {
@@ -477,6 +545,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       auto numParquetBytes = dictionary_.numValues * parquetTypeLength;
       auto veloxTypeLength = type_->type()->cppSizeInBytes();
       auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+      VELOX_CHECK_LE(numParquetBytes, numVeloxBytes);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto data = dictionary_.values->asMutable<char>();
       // Read the data bytes.
@@ -782,6 +851,13 @@ void PageReader::makeDecoder() {
         break;
       }
       [[fallthrough]];
+    case Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      if (parquetType == thrift::Type::BYTE_ARRAY) {
+        deltaLengthByteArrDecoder_ =
+            std::make_unique<DeltaLengthByteArrayDecoder>(pageData_);
+        break;
+      }
+      [[fallthrough]];
     default:
       VELOX_UNSUPPORTED("Encoding not supported yet: {}", encoding_);
   }
@@ -824,6 +900,8 @@ void PageReader::skip(int64_t numRows) {
     deltaBpDecoder_->skip(toSkip);
   } else if (deltaByteArrDecoder_) {
     deltaByteArrDecoder_->skip(toSkip);
+  } else if (deltaLengthByteArrDecoder_) {
+    deltaLengthByteArrDecoder_->skip(toSkip);
   } else if (rleBooleanDecoder_) {
     rleBooleanDecoder_->skip(toSkip);
   } else {

@@ -21,16 +21,20 @@
 #include <gtest/gtest.h>
 
 #include "arrow/util/key_value_metadata.h"
+#include "velox/common/io/IoStatistics.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 namespace facebook::velox::parquet::arrow {
 namespace metadata {
+
+using namespace facebook::velox::common::testutil;
+
 namespace {
 void writeToFile(
-    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<TempFilePath> filePath,
     std::shared_ptr<arrow::Buffer> buffer) {
   auto localWriteFile =
       std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
@@ -404,14 +408,18 @@ TEST(Metadata, TestAddKeyValueMetadata) {
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
   // Write the buffer to a temp file path.
-  auto filePath = exec::test::TempFilePath::create();
+  auto filePath = TempFilePath::create();
   writeToFile(filePath, buffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
       memory::memoryManager()->addRootPool("MetadataTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("MetadataTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());
@@ -523,14 +531,18 @@ TEST(Metadata, TestSortingColumns) {
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
   // Write the buffer to a temp file path.
-  auto filePath = exec::test::TempFilePath::create();
+  auto filePath = TempFilePath::create();
   writeToFile(filePath, buffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
       memory::memoryManager()->addRootPool("MetadataTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("MetadataTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -49,6 +50,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     cudf_velox::registerCudf();
+    cudf_velox::registerSparkFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
@@ -62,6 +64,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     execCtx_.reset();
     queryCtx_.reset();
@@ -158,14 +161,121 @@ TEST_F(
   ASSERT_FALSE(canBeEvaluatedByCudf(bad, /*deep=*/true));
 }
 
-TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsLike) {
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnPatternLike) {
   // OK: pattern is a constant
   auto ok = compileExecExpr("like(name, '%abc%')", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
 
-  // Bad: pattern is not a constant
-  auto bad = compileExecExpr("like(name, name)", rowType_, execCtx_.get());
-  ASSERT_FALSE(canBeEvaluatedByCudf(bad, /*deep=*/true));
+  // OK: pattern can also come from a column.
+  auto okColumn = compileExecExpr("like(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+
+  // OK: constant input still works when pattern comes from a column.
+  auto okConstantInput =
+      compileExecExpr("like('abc', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: constant null input should also remain on the cuDF path.
+  auto okNullInput = compileExecExpr(
+      "like(cast(null as varchar), name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullInput, /*deep=*/true));
+
+  // OK: escape can be a constant too.
+  auto okWithEscape =
+      compileExecExpr("like(name, '%#_%', '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okWithEscape, /*deep=*/true));
+
+  // OK: pattern column + constant escape is supported.
+  auto okColumnWithEscape =
+      compileExecExpr("like(name, name, '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumnWithEscape, /*deep=*/true));
+
+  // OK: constant input + pattern column + constant escape is supported.
+  auto okConstantInputWithEscape =
+      compileExecExpr("like('a_c', name, '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInputWithEscape, /*deep=*/true));
+
+  // OK: constant null input + pattern column + constant escape is supported.
+  auto okNullInputWithEscape = compileExecExpr(
+      "like(cast(null as varchar), name, '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullInputWithEscape, /*deep=*/true));
+
+  // OK: null constants should remain on the cuDF path.
+  auto okNullPattern = compileExecExpr(
+      "like(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullPattern, /*deep=*/true));
+
+  auto okNullEscape = compileExecExpr(
+      "like(name, '%#_%', cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullEscape, /*deep=*/true));
+
+  // Bad: escape is not a constant.
+  auto badEscape =
+      compileExecExpr("like(name, '%#_%', name)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badEscape, /*deep=*/true));
+
+  // Bad: escape column is still unsupported when pattern comes from a column.
+  auto badColumnEscape =
+      compileExecExpr("like(name, name, name)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badColumnEscape, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("startswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "startswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("startswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsContains) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("contains(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("contains('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "contains(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("contains(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("endswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("endswith('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "endswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("endswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
@@ -191,13 +301,26 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
 
-  // OK: first arg constant seed
-  auto ok = compileExecExpr(
+  // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
+  // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
+  // murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
+  // h(col1, seed)), while Spark hashes iteratively: h(col1, h(col0, seed)).
+  // The cudf API only accepts a scalar seed, so per-row seeding is not
+  // possible without a custom CUDA kernel.
+  auto multiCol = compileExecExpr(
       "hash_with_seed(42, a, b)",
       rowType_,
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+  ASSERT_FALSE(canBeEvaluatedByCudf(multiCol, /*deep=*/true));
+
+  // Single-column hash_with_seed is supported (no column combining needed).
+  auto singleCol = compileExecExpr(
+      "hash_with_seed(42, a)",
+      rowType_,
+      execCtx_.get(),
+      {.parseIntegerAsBigint = false, .functionPrefix = ""});
+  ASSERT_TRUE(canBeEvaluatedByCudf(singleCol, /*deep=*/true));
 
   // Bad: first arg must be constant seed
   try {

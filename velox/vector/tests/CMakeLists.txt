@@ -23,6 +23,7 @@ add_executable(
   FlatMapVectorTest.cpp
   IsWritableVectorTest.cpp
   LazyVectorTest.cpp
+  MapConcatTest.cpp
   MayHaveNullsRecursiveTest.cpp
   SelectivityVectorTest.cpp
   StringVectorBufferTest.cpp
@@ -41,6 +42,15 @@ add_executable(
   VectorTestUtils.cpp
   VectorToStringTest.cpp
 )
+velox_add_test_headers(
+  velox_vector_test
+  SimpleVectorTestHelper.h
+  TestingAlwaysThrowsFunction.h
+  TestingDictionaryArrayElementsFunction.h
+  TestingDictionaryFunction.h
+  VectorTestUtils.h
+  VectorValueGenerator.h
+)
 
 add_test(velox_vector_test velox_vector_test)
 
@@ -53,7 +63,7 @@ target_link_libraries(
   velox_serialization
   velox_presto_serializer
   velox_presto_types
-  velox_temp_path
+  velox_test_util
   velox_type_test_lib
   velox_common_fuzzer_util
   Boost::atomic

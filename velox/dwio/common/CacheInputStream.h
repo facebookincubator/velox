@@ -35,7 +35,7 @@ class CacheInputStream : public SeekableInputStream {
       const velox::common::Region& region,
       std::shared_ptr<ReadFileInputStream> input,
       uint64_t fileNum,
-      bool noCacheRetention,
+      bool cacheable,
       std::shared_ptr<cache::ScanTracker> tracker,
       cache::TrackingId trackingId,
       uint64_t groupId,
@@ -72,13 +72,24 @@ class CacheInputStream : public SeekableInputStream {
         region_,
         input_,
         fileNum_,
-        noCacheRetention_,
+        cacheable_,
         tracker_,
         trackingId_,
         groupId_,
         loadQuantum_);
     copy->position_ = position_;
+    if (preloaded_) {
+      copy->setPreloadedPin(pin_);
+    }
     return copy;
+  }
+
+  /// Sets the stream to serve data from a preloaded whole-file cache entry.
+  /// The pin is copied so the stream can outlive the CachedBufferedInput. When
+  /// set, the stream skips coalesced loading, prefetching, and eviction.
+  void setPreloadedPin(cache::CachePin pin) {
+    pin_ = std::move(pin);
+    preloaded_ = true;
   }
 
   /// Sets the stream to range over a window that starts at the current position
@@ -98,8 +109,8 @@ class CacheInputStream : public SeekableInputStream {
     prefetchPct_ = pct;
   }
 
-  bool testingNoCacheRetention() const {
-    return noCacheRetention_;
+  bool testingCacheable() const {
+    return cacheable_;
   }
 
  private:
@@ -120,7 +131,7 @@ class CacheInputStream : public SeekableInputStream {
       cache::AsyncDataCacheEntry& entry);
 
   // Invoked to clear the cache pin of the accessed cache entry and mark it as
-  // immediate evictable if 'noCacheRetention_' flag is set.
+  // immediate evictable if 'cacheable_' is false.
   void clearCachePin();
 
   void makeCacheEvictable();
@@ -131,10 +142,10 @@ class CacheInputStream : public SeekableInputStream {
 
   CachedBufferedInput* const bufferedInput_;
   cache::AsyncDataCache* const cache_;
-  // True if a pin should be set to the lowest retention score after
+  // False if a pin should be set to the lowest retention score after
   // unpinning. This applies to sequential reads where second access
   // to the page is not expected.
-  const bool noCacheRetention_;
+  const bool cacheable_;
   // The region of 'input' 'this' ranges over.
   const velox::common::Region region_;
   const uint64_t fileNum_;
@@ -152,15 +163,15 @@ class CacheInputStream : public SeekableInputStream {
   // Handle of cache entry.
   cache::CachePin pin_;
 
-  // Offset of current run from start of 'entry_->data()'
+  // Offset of current run from start of 'entry_->nonContiguousData()'
   uint64_t offsetOfRun_;
 
-  // Pointer  to start of  current run in 'entry->data()' or
-  // 'entry->tinyData()'.
+  // Pointer to start of current run in 'entry->nonContiguousData()' or
+  // 'entry->contiguousData()'.
   uint8_t* run_{nullptr};
   // Position of stream relative to 'run_'.
   int offsetInRun_{0};
-  // Index of run in 'entry_->data()'
+  // Index of run in 'entry_->nonContiguousData()'
   int runIndex_ = -1;
   // Number of valid bytes above 'run_'.
   uint32_t runSize_ = 0;
@@ -174,6 +185,10 @@ class CacheInputStream : public SeekableInputStream {
   // Percentage of 'loadQuantum_' at which the next load quantum gets scheduled.
   // Over 100 means no prefetch.
   int32_t prefetchPct_{200};
+
+  // True if this stream serves data from a preloaded whole-file cache entry.
+  // When set, loading, prefetching, and eviction are all skipped.
+  bool preloaded_{false};
 
   // True if prefetch the next 'loadQuantum_' has been started. Cleared when
   // moving to the next load quantum.

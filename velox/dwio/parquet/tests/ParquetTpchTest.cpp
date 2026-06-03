@@ -18,6 +18,8 @@
 #include <vector>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -25,7 +27,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -34,6 +35,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 class ParquetTpchTest : public testing::Test {
  protected:
@@ -60,22 +62,24 @@ class ParquetTpchTest : public testing::Test {
         kHiveConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
 
     connector::tpch::TpchConnectorFactory tpchFactory;
     auto tpchConnector = tpchFactory.newConnector(
         kTpchConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(tpchConnector);
+    connector::ConnectorRegistry::global().insert(
+        tpchConnector->connectorId(), tpchConnector);
 
     saveTpchTablesAsParquet();
     tpchBuilder_->initialize(tempDirectory_->getPath());
   }
 
   static void TearDownTestSuite() {
-    connector::unregisterConnector(kHiveConnectorId);
-    connector::unregisterConnector(kTpchConnectorId);
+    connector::ConnectorRegistry::global().erase(kHiveConnectorId);
+    connector::ConnectorRegistry::global().erase(kTpchConnectorId);
     parquet::unregisterParquetReaderFactory();
     parquet::unregisterParquetWriterFactory();
   }

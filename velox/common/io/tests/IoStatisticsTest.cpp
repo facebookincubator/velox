@@ -43,4 +43,42 @@ TEST(IoStatisticsTest, latencyBreakdown) {
   EXPECT_EQ(stats.storageReadLatencyUs().sum(), 300);
 }
 
+TEST(IoStatisticsTest, totalScanTimeNs) {
+  IoStatistics stats;
+  EXPECT_EQ(stats.totalScanTimeNs(), 0);
+
+  stats.incTotalScanTimeNs(1'000);
+  EXPECT_EQ(stats.totalScanTimeNs(), 1'000);
+
+  stats.incTotalScanTimeNs(2'500);
+  EXPECT_EQ(stats.totalScanTimeNs(), 3'500);
+
+  IoStatistics stats2;
+  stats2.incTotalScanTimeNs(500);
+  stats.merge(stats2);
+  EXPECT_EQ(stats.totalScanTimeNs(), 4'000);
+}
+
+TEST(IoStatisticsTest, readGap) {
+  IoStatistics stats;
+  EXPECT_EQ(stats.readGap().count(), 0);
+
+  stats.readGap().increment(1'000);
+  stats.readGap().increment(500);
+  stats.readGap().increment(2'000);
+  EXPECT_EQ(stats.readGap().count(), 3);
+  EXPECT_EQ(stats.readGap().sum(), 3'500);
+  EXPECT_EQ(stats.readGap().min(), 500);
+  EXPECT_EQ(stats.readGap().max(), 2'000);
+
+  IoStatistics stats2;
+  stats2.readGap().increment(100);
+  stats2.readGap().increment(5'000);
+  stats.merge(stats2);
+  EXPECT_EQ(stats.readGap().count(), 5);
+  EXPECT_EQ(stats.readGap().sum(), 8'600);
+  EXPECT_EQ(stats.readGap().min(), 100);
+  EXPECT_EQ(stats.readGap().max(), 5'000);
+}
+
 } // namespace facebook::velox::io

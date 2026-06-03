@@ -19,6 +19,7 @@
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimeWithTimezoneInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -72,7 +73,7 @@ void castToString(
     const auto timeWithTimezone = decoded.valueAt<int64_t>(row);
     auto output =
         TIME_WITH_TIME_ZONE()->valueToString(timeWithTimezone, rawBuffer);
-    flatResult->setNoCopy(row, output);
+    flatResult->setNoCopy(row, StringView(output.data(), output.size()));
     rawBuffer += output.size();
   });
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
@@ -157,28 +158,6 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return other->isTime();
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return other->isTime();
-      case TypeKind::VARCHAR:
-        return true;
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -193,7 +172,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
       return;
     }
 
-    if (input.type()->isTime()) {
+    if (input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
       const auto* sessionTimeZone = getTimeZoneFromConfig(config);
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
@@ -246,7 +225,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
 
     switch (resultType->kind()) {
       case TypeKind::BIGINT:
-        if (resultType->isTime()) {
+        if (resultType->equivalent(*TIME())) {
           castToTime(input, context, rows, *result);
           return;
         }
@@ -288,8 +267,16 @@ class TimeWithTimezoneTypeFactory : public CustomTypeFactory {
 
 void registerTimeWithTimezoneType() {
   registerCustomType(
-      "time with time zone",
+      "TIME WITH TIME ZONE",
       std::make_unique<const TimeWithTimezoneTypeFactory>());
+  registerCastRules({
+      {.fromType = "TIME",
+       .toType = "TIME WITH TIME ZONE",
+       .implicitAllowed = true},
+      {.fromType = "VARCHAR", .toType = "TIME WITH TIME ZONE"},
+      {.fromType = "TIME WITH TIME ZONE", .toType = "TIME"},
+      {.fromType = "TIME WITH TIME ZONE", .toType = "VARCHAR"},
+  });
 }
 
 } // namespace facebook::velox

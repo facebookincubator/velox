@@ -80,12 +80,12 @@ struct Accumulator {
 
           if (errorValue < 0) {
             VELOX_ARITHMETIC_ERROR(
-                "Value {} is less than {}",
+                "Arithmetic overflow in MAP_UNION_SUM: Value {} is less than {}",
                 errorValue,
                 std::numeric_limits<S>::min());
           } else {
             VELOX_ARITHMETIC_ERROR(
-                "Value {} exceeds {}",
+                "Arithmetic overflow in MAP_UNION_SUM: Value {} exceeds {}",
                 errorValue,
                 std::numeric_limits<S>::max());
           }
@@ -229,12 +229,12 @@ struct ComplexTypeAccumulator {
 
               if (errorValue < 0) {
                 VELOX_ARITHMETIC_ERROR(
-                    "Value {} is less than {}",
+                    "Arithmetic overflow in MAP_UNION_SUM: Value {} is less than {}",
                     errorValue,
                     std::numeric_limits<V>::min());
               } else {
                 VELOX_ARITHMETIC_ERROR(
-                    "Value {} exceeds {}",
+                    "Arithmetic overflow in MAP_UNION_SUM: Value {} exceeds {}",
                     errorValue,
                     std::numeric_limits<V>::max());
               }
@@ -533,6 +533,9 @@ void registerMapUnionSumAggregate(
                 valueTypeKind, resultType);
           case TypeKind::BIGINT:
             return createMapUnionSumAggregate<int64_t>(
+                valueTypeKind, resultType);
+          case TypeKind::HUGEINT:
+            return createMapUnionSumAggregate<int128_t>(
                 valueTypeKind, resultType);
           case TypeKind::REAL:
             return createMapUnionSumAggregate<float>(valueTypeKind, resultType);

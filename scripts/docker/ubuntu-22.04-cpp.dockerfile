@@ -11,8 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# tzdata is pinned to a known-good version so docker rebuilds (any time
+# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) don't
+# silently bump tzdata in the image. See issue #17522 for the bug class
+# this prevents — version mismatch between OS tzdata and consumers'
+# bundled tzdb code can produce silent 1-hour offsets in TIMESTAMP
+# WITH TIME ZONE values. To bump intentionally: change the default and
+# rebuild locally to confirm before merging.
+ARG UBUNTU_TZDATA_VERSION=2026a-0ubuntu0.22.04.1
+
 ARG base=ubuntu:22.04
 FROM ${base}
+
+ARG UBUNTU_TZDATA_VERSION
+ARG DEBIAN_FRONTEND="noninteractive"
+RUN apt-get update && \
+      apt-get install -y --allow-downgrades "tzdata=${UBUNTU_TZDATA_VERSION}"
 
 RUN apt update && \
       apt install -y sudo \
@@ -36,5 +50,20 @@ ARG DEBIAN_FRONTEND="noninteractive"
 ARG tz="Etc/UTC"
 ENV TZ=${tz}
 RUN /bin/bash -o pipefail /velox/scripts/setup-ubuntu.sh
+
+# Install tools needed for CI (gh for GitHub Actions stash, jq for JSON parsing)
+RUN apt-get update && \
+      apt-get install -y -q --no-install-recommends jq && \
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+      apt-get update && apt-get install -y -q --no-install-recommends gh && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Pre-download gflags source for BUNDLED builds to avoid downloading at build time.
+RUN mkdir -p /velox/deps-sources && \
+    curl -fsSL -o /velox/deps-sources/gflags-v2.2.2.tar.gz \
+      https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz
 
 WORKDIR /velox

@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -74,6 +75,33 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
     EXPECT_EQ(nullptr, arrowArray.private_data);
+  }
+
+  void testFlatTimestampType(const TypePtr& type) {
+    for (TimestampUnit unit :
+         {TimestampUnit::kSecond,
+          TimestampUnit::kMilli,
+          TimestampUnit::kMicro,
+          TimestampUnit::kNano}) {
+      options_.timestampUnit = unit;
+      testFlatVector<Timestamp>(
+          {
+              Timestamp(0, 0),
+              std::nullopt,
+              Timestamp(1699300965, 12'349),
+              Timestamp(-2208960000, 0), // 1900-01-01
+              Timestamp(3155788800, 999'999'999),
+              std::nullopt,
+          },
+          type);
+    }
+
+    // Out of range. If nanosecond precision is represented in Arrow,
+    // timestamps starting around 2263-01-01 should overflow and throw a user
+    // exception.
+    EXPECT_THROW(
+        testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, type),
+        VeloxUserError);
   }
 
   // Construct and test a constant vector based on a scalar value.
@@ -532,29 +560,11 @@ TEST_F(ArrowBridgeArrayExportTest, flatDate) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
-  for (TimestampUnit unit :
-       {TimestampUnit::kSecond,
-        TimestampUnit::kMilli,
-        TimestampUnit::kMicro,
-        TimestampUnit::kNano}) {
-    options_.timestampUnit = unit;
-    testFlatVector<Timestamp>(
-        {
-            Timestamp(0, 0),
-            std::nullopt,
-            Timestamp(1699300965, 12'349),
-            Timestamp(-2208960000, 0), // 1900-01-01
-            Timestamp(3155788800, 999'999'999),
-            std::nullopt,
-        },
-        TIMESTAMP());
-  }
+  testFlatTimestampType(TIMESTAMP());
+}
 
-  // Out of range. If nanosecond precision is represented in Arrow, timestamps
-  // starting around 2263-01-01 should overflow and throw a user exception.
-  EXPECT_THROW(
-      testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP()),
-      VeloxUserError);
+TEST_F(ArrowBridgeArrayExportTest, flatTimestampUtc) {
+  testFlatTimestampType(TIMESTAMP_UTC());
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatTime) {
@@ -1393,6 +1403,64 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
          std::nullopt});
   }
 
+  void testTimestampUtcRoundtrip() {
+    auto roundtripVector = [&](const VectorPtr& input) {
+      ArrowSchema schema;
+      ArrowArray data;
+      velox::exportToArrow(input, schema, options_);
+      velox::exportToArrow(input, data, pool_.get(), options_);
+
+      auto output = importFromArrow(schema, data, pool_.get());
+      facebook::velox::test::assertEqualVectors(input, output);
+
+      if (isViewer()) {
+        schema.release(&schema);
+        data.release(&data);
+      } else {
+        EXPECT_EQ(nullptr, schema.release);
+        EXPECT_EQ(nullptr, data.release);
+      }
+    };
+
+    auto flatVector = vectorMaker_.flatVectorNullable<Timestamp>(
+        {
+            Timestamp(0, 0),
+            std::nullopt,
+            Timestamp(1699300965, 12'349),
+            Timestamp(-2208960000, 0),
+            Timestamp(3155788800, 999'999'999),
+        },
+        TIMESTAMP_UTC());
+    roundtripVector(flatVector);
+
+    auto dictionaryValues = vectorMaker_.flatVector<Timestamp>(
+        {
+            Timestamp(0, 0),
+            Timestamp(1699300965, 12'349),
+            Timestamp(3155788800, 999'999'999),
+        },
+        TIMESTAMP_UTC());
+    auto dictionaryVector = BaseVector::wrapInDictionary(
+        nullptr, makeIndicesInReverse(3, pool_.get()), 3, dictionaryValues);
+    roundtripVector(dictionaryVector);
+
+    using NullableTimestampArray =
+        std::optional<std::vector<std::optional<Timestamp>>>;
+    std::vector<NullableTimestampArray> nestedValues = {
+        std::vector<std::optional<Timestamp>>{
+            Timestamp(0, 0),
+            std::nullopt,
+            Timestamp(2, 200),
+        },
+        std::nullopt,
+        std::vector<std::optional<Timestamp>>{Timestamp(-2208960000, 0)},
+        std::vector<std::optional<Timestamp>>{},
+    };
+    auto nestedVector = vectorMaker_.arrayVectorNullable<Timestamp>(
+        nestedValues, ARRAY(TIMESTAMP_UTC()));
+    roundtripVector(nestedVector);
+  }
+
   template <typename TOutput, typename TInput>
   void testImportWithoutNullsBuffer(
       std::vector<std::optional<TInput>> inputValues,
@@ -2023,6 +2091,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
+  testTimestampUtcRoundtrip();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, without_nulls_buffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
@@ -2065,6 +2137,51 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, failures) {
   testImportFailures();
 }
 
+// Verify that importing a Utf8View array with an out-of-bounds buffer index
+// in a non-inline string view throws instead of reading past the buffers
+// array.
+TEST_F(ArrowBridgeArrayImportAsViewerTest, utf8ViewOobBufferIndex) {
+  // Arrow Utf8View layout (format "vu"):
+  //   buffer[0] = nulls
+  //   buffer[1] = views (16 bytes each)
+  //   buffer[2 .. n_buffers-2] = data buffers
+  //   buffer[n_buffers-1] = buffer sizes (uint64_t per data buffer)
+  //
+  // We set up one data buffer (index 2) and one sizes buffer (index 3), so
+  // n_buffers = 4 and the only valid data-buffer index is 0.  The crafted
+  // view references buffer index 99 — well out of range.
+
+  const char dataBuffer[] = "some data string";
+  const uint64_t bufferSizesArr[] = {sizeof(dataBuffer)};
+
+  // Arrow Utf8View: [4B length][4B prefix][4B buffer_index][4B buffer_offset]
+  struct Utf8ViewEntry {
+    uint32_t length;
+    char prefix[4];
+    uint32_t bufferIndex;
+    uint32_t bufferOffset;
+  };
+  Utf8ViewEntry malformedView{};
+  malformedView.length = 16; // > 12, so non-inline.
+  std::memcpy(malformedView.prefix, "some", 4);
+  malformedView.bufferIndex = 99; // Out of bounds.
+  malformedView.bufferOffset = 0;
+
+  const void* buffers[] = {
+      nullptr, // nulls
+      &malformedView, // views
+      dataBuffer, // data buffer 0
+      bufferSizesArr, // buffer sizes
+  };
+
+  auto arrowSchema = makeArrowSchema("vu");
+  auto arrowArray = makeArrowArray(buffers, 4, 1, 0);
+
+  VELOX_ASSERT_THROW(
+      importFromArrowAsViewer(arrowSchema, arrowArray, pool_.get()),
+      "Arrow Utf8View buffer index out of range");
+}
+
 class ArrowBridgeArrayImportAsOwnerTest
     : public ArrowBridgeArrayImportAsViewerTest {
   bool isViewer() const override {
@@ -2082,6 +2199,10 @@ class ArrowBridgeArrayImportAsOwnerTest
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
   testImportScalar();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
+  testTimestampUtcRoundtrip();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, without_nulls_buffer) {

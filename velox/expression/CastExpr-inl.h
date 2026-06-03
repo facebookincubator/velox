@@ -18,7 +18,9 @@
 #include "velox/common/base/CountBits.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/CastExpr.h"
 #include "velox/expression/StringWriter.h"
+#include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 
@@ -30,6 +32,13 @@ inline std::string makeErrorMessage(
     vector_size_t row,
     const TypePtr& toType,
     const std::string& details = "") {
+  if (details.empty()) {
+    return fmt::format(
+        "Cannot cast {} '{}' to {}.",
+        input.type()->toString(),
+        input.toString(row),
+        toType->toString());
+  }
   return fmt::format(
       "Cannot cast {} '{}' to {}. {}",
       input.type()->toString(),
@@ -47,6 +56,36 @@ inline std::exception_ptr makeBadCastException(
       std::current_exception(),
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
+}
+
+// Returns true if casting from 'fromType' to 'toType' is a supported fast
+// upcast.
+bool isSupportedFastUpcast(const TypePtr& fromType, const TypePtr& toType) {
+  auto isIntegralType = [](const TypePtr& type) {
+    return type == TINYINT() || type == SMALLINT() || type == INTEGER() ||
+        type == BIGINT();
+  };
+
+  auto isBasicNumericType = [&isIntegralType](const TypePtr& type) {
+    return isIntegralType(type) || type == REAL() || type == DOUBLE();
+  };
+
+  if (isIntegralType(fromType) && isBasicNumericType(toType)) {
+    if (fromType->cppSizeInBytes() < toType->cppSizeInBytes()) {
+      return true;
+    }
+    if (fromType == INTEGER() && toType == REAL()) {
+      return true;
+    }
+    if (fromType == BIGINT() && (toType == REAL() || toType == DOUBLE())) {
+      return true;
+    }
+  }
+
+  if (fromType == REAL() && toType == DOUBLE()) {
+    return true;
+  }
+  return false;
 }
 
 } // namespace
@@ -103,30 +142,30 @@ void CastExpr::applyCastKernel(
   bool wrapException = true;
   auto setError = [&](const std::string& details) INLINE_LAMBDA {
     if (setNullInResultAtError()) {
-      result->setNull(row, true);
-    } else {
-      wrapException = false;
-      if (context.captureErrorDetails()) {
-        const auto errorDetails =
-            makeErrorMessage(*input, row, result->type(), details);
-        context.setStatus(row, Status::UserError("{}", errorDetails));
-      } else {
-        context.setStatus(row, Status::UserError());
-      }
+      setCastError(row, context, result, wrapException);
+      return;
     }
+    const auto errorDetails = context.captureErrorDetails()
+        ? makeErrorMessage(*input, row, result->type(), details)
+        : std::string{};
+    setCastError(row, context, result, wrapException, errorDetails);
   };
 
   // If castResult has an error, set the error in context. Otherwise, set the
   // value in castResult directly to result. This lambda should be called only
   // when ToKind is primitive and is not VARCHAR or VARBINARY.
-  auto setResultOrError = [&](const auto& castResult, vector_size_t row)
-                              INLINE_LAMBDA {
-                                if (castResult.hasError()) {
-                                  setError(castResult.error().message());
-                                } else {
-                                  result->set(row, castResult.value());
-                                }
-                              };
+  auto setResultOrStatus = [&](const auto& castResult,
+                               vector_size_t row) INLINE_LAMBDA {
+    setResultOrError(
+        row,
+        castResult,
+        [&](const std::string& details) INLINE_LAMBDA {
+          return makeErrorMessage(*input, row, result->type(), details);
+        },
+        context,
+        result,
+        wrapException);
+  };
 
   try {
     auto inputRowValue = input->valueAt(row);
@@ -137,14 +176,14 @@ void CastExpr::applyCastKernel(
         ToKind == TypeKind::TIMESTAMP) {
       const auto castResult =
           hooks_->castIntToTimestamp((int64_t)inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
     if constexpr (
         (FromKind == TypeKind::BOOLEAN) && ToKind == TypeKind::TIMESTAMP) {
       const auto castResult = hooks_->castBooleanToTimestamp(inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
@@ -153,7 +192,7 @@ void CastExpr::applyCastKernel(
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
       const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      setResultOrError(castResult, row);
+      setResultOrStatus(castResult, row);
       return;
     }
 
@@ -187,17 +226,17 @@ void CastExpr::applyCastKernel(
       }
       if constexpr (ToKind == TypeKind::TIMESTAMP) {
         const auto castResult = hooks_->castStringToTimestamp(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
       if constexpr (ToKind == TypeKind::REAL) {
         const auto castResult = hooks_->castStringToReal(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
       if constexpr (ToKind == TypeKind::DOUBLE) {
         const auto castResult = hooks_->castStringToDouble(inputRowValue);
-        setResultOrError(castResult, row);
+        setResultOrStatus(castResult, row);
         return;
       }
 
@@ -387,12 +426,27 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    const auto output =
-        util::Converter<ToKind>::tryCast(simpleInput->valueAt(row))
-            .thenOrThrow(folly::identity, [&](const Status& status) {
-              VELOX_USER_FAIL("{}", status.message());
-            });
-    resultBuffer[row] = output / scaleFactor;
+    const auto unscaledValue = simpleInput->valueAt(row);
+    // Avoid precision loss: float has ~7 significant digits; casting unscaled
+    // int128 to float first loses precision for values with 8+ digits (e.g.
+    // 113751964). Divide in double then cast to float so result is correct.
+    To finalValue;
+    if constexpr (ToKind == TypeKind::REAL) {
+      const auto output =
+          util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+      finalValue = static_cast<To>(output / scaleFactor);
+    } else {
+      const auto output =
+          util::Converter<ToKind>::tryCast(unscaledValue)
+              .thenOrThrow(folly::identity, [&](const Status& status) {
+                VELOX_USER_FAIL("{}", status.message());
+              });
+      finalValue = output / scaleFactor;
+    }
+    resultBuffer[row] = finalValue;
   });
   return result;
 }
@@ -438,10 +492,7 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
           context.setVeloxExceptionError(
               row,
               makeBadCastException(
-                  result->type(),
-                  input,
-                  row,
-                  makeErrorMessage(input, row, toType) + "Out of bounds."));
+                  result->type(), input, row, "Out of bounds."));
         }
         return;
       }
@@ -488,7 +539,11 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     char inlined[StringView::kInlineSize];
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       auto actualSize = DecimalUtil::castToString<FromNativeType>(
-          simpleInput->valueAt(row), scale, rowSize, inlined);
+          simpleInput->valueAt(row),
+          scale,
+          rowSize,
+          inlined,
+          hooks_->isScientific());
       flatResult->setNoCopy(row, StringView(inlined, actualSize));
     });
     return result;
@@ -500,7 +555,11 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     auto actualSize = DecimalUtil::castToString<FromNativeType>(
-        simpleInput->valueAt(row), scale, rowSize, rawBuffer);
+        simpleInput->valueAt(row),
+        scale,
+        rowSize,
+        rawBuffer,
+        hooks_->isScientific());
     flatResult->setNoCopy(row, StringView(rawBuffer, actualSize));
     if (!StringView::isInline(actualSize)) {
       // If string view is inline, corresponding bytes on the raw string buffer
@@ -591,6 +650,61 @@ void CastExpr::applyCastPrimitives(
   }
 }
 
+template <TypeKind ToKind, TypeKind FromKind>
+void CastExpr::applyNumericUpcast(
+    const SelectivityVector& rows,
+    const TypePtr& toType,
+    exec::EvalCtx& context,
+    const BaseVector& input,
+    VectorPtr& result) {
+  constexpr auto isNumericTypeKind = [](TypeKind kind) constexpr {
+    return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+        kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+        kind == TypeKind::REAL || kind == TypeKind::DOUBLE;
+  };
+
+  if constexpr (isNumericTypeKind(ToKind) && isNumericTypeKind(FromKind)) {
+    using ToNativeType = typename TypeTraits<ToKind>::NativeType;
+    using FromNativeType = typename TypeTraits<FromKind>::NativeType;
+
+    if (input.isConstantEncoding()) {
+      auto constantInput = input.as<ConstantVector<FromNativeType>>();
+      if (constantInput->isNullAt(0)) {
+        result =
+            BaseVector::createNullConstant(toType, rows.end(), context.pool());
+        return;
+      }
+      auto constantValue = static_cast<ToNativeType>(constantInput->valueAt(0));
+      result = std::make_shared<ConstantVector<ToNativeType>>(
+          context.pool(),
+          rows.end(),
+          /*isNull=*/false,
+          toType,
+          std::move(constantValue));
+      return;
+    }
+
+    if (input.isFlatEncoding()) {
+      const auto simpleInput = input.asFlatVector<FromNativeType>();
+      auto flatResult = result->asFlatVector<ToNativeType>();
+
+      const FromNativeType* in =
+          simpleInput->template rawValues<FromNativeType>();
+      ToNativeType* out = flatResult->template mutableRawValues<ToNativeType>();
+
+      rows.applyToSelected([&](auto row) {
+        // Converting large bigint values to float/double directly may lose
+        // precision, but it's consistent with the implementation in
+        // velox/type/Conversions.h.
+        out[row] = static_cast<ToNativeType>(in[row]);
+      });
+      return;
+    }
+  }
+  VELOX_UNSUPPORTED(
+      "Cannot upcast from {} to {}", input.type(), toType->toString());
+}
+
 template <TypeKind ToKind>
 void CastExpr::applyCastPrimitivesDispatch(
     const TypePtr& fromType,
@@ -600,6 +714,27 @@ void CastExpr::applyCastPrimitivesDispatch(
     const BaseVector& input,
     VectorPtr& result) {
   context.ensureWritable(rows, toType, result);
+
+  if (fromType->kind() == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
+  }
+
+  if constexpr (ToKind == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
+  }
+
+  if (isSupportedFastUpcast(fromType, toType)) {
+    VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+        applyNumericUpcast,
+        ToKind,
+        fromType->kind(),
+        rows,
+        toType,
+        context,
+        input,
+        result);
+    return;
+  }
 
   // This already excludes complex types, hugeint and unknown from type kinds.
   VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(

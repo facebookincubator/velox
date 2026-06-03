@@ -104,7 +104,7 @@ void checkSimd(const Filter* filter, const T* values, ScalarTest scalarTest) {
 
 TEST(FilterTest, bigIntRange) {
   // x = 1
-  auto filter = equal(1, false);
+  std::unique_ptr<common::Filter> filter = equal(1, false);
   auto testInt64 = [&](int64_t x) { return filter->testInt64(x); };
   EXPECT_TRUE(filter->testInt64(1));
 
@@ -210,6 +210,52 @@ TEST(FilterTest, bigIntRange) {
         1111};
     checkSimd(filter.get(), n16, testInt64);
   }
+}
+
+TEST(FilterTest, bigIntRangeBoundaryOverflow) {
+  auto filter = greaterThan(std::numeric_limits<int64_t>::max());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter->testInt64(0));
+
+  filter = lessThan(std::numeric_limits<int64_t>::min());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(0));
+
+  filter = greaterThan(std::numeric_limits<int64_t>::max(), true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = lessThan(std::numeric_limits<int64_t>::min(), true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = greaterThan(std::numeric_limits<int64_t>::max() - 1);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max() - 1));
+
+  filter = lessThan(std::numeric_limits<int64_t>::min() + 1);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min() + 1));
+}
+
+TEST(FilterTest, hugeintRangeBoundaryOverflow) {
+  auto filter = greaterThanHugeint(std::numeric_limits<int128_t>::max());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt128(std::numeric_limits<int128_t>::max()));
+  EXPECT_FALSE(filter->testInt128(0));
+
+  filter = lessThanHugeint(std::numeric_limits<int128_t>::min());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt128(std::numeric_limits<int128_t>::min()));
+  EXPECT_FALSE(filter->testInt128(0));
 }
 
 TEST(FilterTest, negatedBigintRange) {
@@ -702,6 +748,71 @@ TEST(FilterTest, bigintMultiRange) {
   EXPECT_TRUE(filter->testInt64Range(105, 115, true));
   EXPECT_FALSE(filter->testInt64Range(15, 45, false));
   EXPECT_FALSE(filter->testInt64Range(15, 45, true));
+}
+
+TEST(FilterTest, bigintOrWithBoundaryOverflow) {
+  auto filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()), between(1, 10));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+
+  filter =
+      bigintOr(between(1, 10), lessThan(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()),
+      lessThan(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max(), true),
+      lessThan(std::numeric_limits<int64_t>::min(), true));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()),
+      lessThan(std::numeric_limits<int64_t>::min(), true));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max(), true),
+      lessThan(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max(), true), between(1, 10));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      between(1, 10), lessThan(std::numeric_limits<int64_t>::min(), true));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()),
+      lessThan(std::numeric_limits<int64_t>::min()),
+      between(100, 200));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(150));
+  EXPECT_FALSE(filter->testInt64(50));
 }
 
 TEST(FilterTest, boolValue) {
@@ -1403,6 +1514,19 @@ void testMergeWithFloat(Filter* left, Filter* right) {
     float f = i * 0.1;
     ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
   }
+  for (float f : {
+           -3.4f,
+           -1.2f,
+           -0.5f,
+           0.5f,
+           1.2f,
+           2.0f,
+           2.5f,
+           3.4f,
+           std::numeric_limits<float>::quiet_NaN(),
+       }) {
+    ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
+  }
 }
 
 void testMergeWithBytes(Filter* left, Filter* right) {
@@ -1662,6 +1786,16 @@ TEST(FilterTest, mergeWithBigint) {
   filters.push_back(notIn({empty - 5, empty, empty + 5}, true));
   filters.push_back(notIn({5, 498, 499, 500}, false));
 
+  const int64_t kInt64Min = std::numeric_limits<int64_t>::min();
+  const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  filters.push_back(notIn({kInt64Min, -1}));
+  filters.push_back(notIn({kInt64Min, -1}, true));
+  filters.push_back(notIn({1, kInt64Max}));
+  filters.push_back(notIn({1, kInt64Max}, true));
+  filters.push_back(notIn({kInt64Min, kInt64Max}));
+  filters.push_back(between(kInt64Min, 0));
+  filters.push_back(between(0, kInt64Max));
+
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());
@@ -1819,6 +1953,10 @@ TEST(FilterTest, mergeMultiRange) {
       orFilter(lessThanOrEqualFloat(1.2), greaterThanOrEqualFloat(3.4)));
   filters.push_back(
       orFilter(lessThanOrEqualFloat(1.2), greaterThanOrEqualFloat(3.4), true));
+
+  filters.push_back(lessThanFloat(2.0));
+  filters.push_back(greaterThanOrEqualFloat(0.5));
+  filters.push_back(betweenFloat(-0.5, 2.5));
 
   for (const auto& left : filters) {
     for (const auto& right : filters) {
@@ -1994,7 +2132,8 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
 }
 
 TEST(FilterTest, hugeIntRange) {
-  auto filter = equalHugeint(HugeInt::build(1, 1), false);
+  std::unique_ptr<common::Filter> filter =
+      equalHugeint(HugeInt::build(1, 1), false);
   auto max = DecimalUtil::kLongDecimalMax;
   auto min = DecimalUtil::kLongDecimalMin;
 
@@ -2084,7 +2223,8 @@ TEST(FilterTest, dateRange) {
 
 TEST(FilterTest, timestampRange) {
   // x = timestamp '1970-01-01 00:00:10.123'
-  auto filter = equal(Timestamp(10, 123000000), false);
+  std::unique_ptr<common::Filter> filter =
+      equal(Timestamp(10, 123000000), false);
   EXPECT_FALSE(filter->testNull());
 
   EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 123000000)));

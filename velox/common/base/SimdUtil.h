@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <type_traits>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 
@@ -364,6 +367,29 @@ auto toBitMask(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
   return detail::BitMask<T, A>::toBitMask(mask, arch);
 }
 
+/// Returns true if at least one lane in the mask is true.
+template <typename T, typename A = xsimd::default_arch>
+inline bool any(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+#if XSIMD_WITH_AVX2
+  // x86 bitmasks perform better than xsimd reductions.
+  return toBitMask<T, A>(mask, arch) != 0;
+#else
+  (void)arch;
+  return xsimd::any<T, A>(mask);
+#endif
+}
+
+/// Returns true if no lanes in the mask are true.
+template <typename T, typename A = xsimd::default_arch>
+inline bool none(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+#if XSIMD_WITH_AVX2
+  return toBitMask<T, A>(mask, arch) == 0;
+#else
+  (void)arch;
+  return xsimd::none<T, A>(mask);
+#endif
+}
+
 // Get a vector mask from bit mask.
 template <typename T, typename BitMaskType, typename A = xsimd::default_arch>
 xsimd::batch_bool<T, A> fromBitMask(BitMaskType bitMask, const A& arch = {}) {
@@ -375,6 +401,17 @@ xsimd::batch_bool<T, A> fromBitMask(BitMaskType bitMask, const A& arch = {}) {
 template <typename T, typename A = xsimd::default_arch>
 auto allSetBitMask(const A& = {}) {
   return detail::BitMask<T, A>::kAllSet;
+}
+
+/// Returns true if every lane in the mask is true.
+template <typename T, typename A = xsimd::default_arch>
+inline bool all(xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+#if XSIMD_WITH_AVX2
+  return toBitMask<T, A>(mask, arch) == allSetBitMask<T>(arch);
+#else
+  (void)arch;
+  return xsimd::all<T, A>(mask);
+#endif
 }
 
 namespace detail {
@@ -530,6 +567,43 @@ inline void memcpy(void* to, const void* from, int64_t bytes, const A& = {});
 // constant values of 'bytes'.
 template <typename A = xsimd::default_arch>
 void memset(void* to, char data, int32_t bytes, const A& = {});
+
+// Fills 'count' elements of 'output' with 'value' using SIMD broadcast+store
+// for types that support it (int32_t, uint32_t, int64_t, uint64_t, float,
+// double), and falls back to std::fill for other types.
+//
+// Uses a simpler structure than std::fill's auto-vectorized code — broadcast +
+// tight store loop + overlapping tail — that performs better for repeated calls
+// with small variable-length fills.
+template <typename T>
+inline void simdFill(T* output, T value, uint32_t count) {
+  if constexpr (
+      std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> ||
+      std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t> ||
+      std::is_same_v<T, float> || std::is_same_v<T, double>) {
+    constexpr auto kBatchSize = xsimd::batch<T>::size;
+    if (count >= kBatchSize) {
+      auto batch = xsimd::broadcast<T>(value);
+      uint32_t i = 0;
+      for (; i + kBatchSize <= count; i += kBatchSize) {
+        batch.store_unaligned(output + i);
+      }
+      // Handle tail with an overlapping store. Safe because we're filling
+      // with a constant value, so re-writing already-written positions is
+      // harmless. The outer 'count >= kBatchSize' guard ensures
+      // 'count - kBatchSize' never underflows.
+      if (i < count) {
+        batch.store_unaligned(output + count - kBatchSize);
+      }
+    } else {
+      for (uint32_t i = 0; i < count; ++i) {
+        output[i] = value;
+      }
+    }
+  } else {
+    std::fill(output, output + count, value);
+  }
+}
 
 // Calls a different instantiation of a template function according to
 // 'numBytes'.

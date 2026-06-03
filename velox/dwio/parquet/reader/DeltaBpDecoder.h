@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include <folly/Varint.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Nulls.h"
 
 namespace facebook::velox::parquet {
 
@@ -127,8 +129,8 @@ class DeltaBpDecoder {
     VELOX_CHECK_EQ(
         valuesPerBlock_ % 128,
         0,
-        "the number of values in a block must be multiple of 128, but it's " +
-            std::to_string(valuesPerBlock_));
+        "the number of values in a block must be multiple of 128, but it's {}",
+        valuesPerBlock_);
     VELOX_CHECK_GT(
         miniBlocksPerBlock_, 0, "cannot have zero miniblock per block");
     valuesPerMiniBlock_ = valuesPerBlock_ / miniBlocksPerBlock_;
@@ -137,8 +139,8 @@ class DeltaBpDecoder {
     VELOX_CHECK_EQ(
         valuesPerMiniBlock_ % 32,
         0,
-        "the number of values in a miniblock must be multiple of 32, but it's " +
-            std::to_string(valuesPerMiniBlock_));
+        "the number of values in a miniblock must be multiple of 32, but it's {}",
+        valuesPerMiniBlock_);
 
     totalValuesRemaining_ = totalValueCount_;
     deltaBitWidths_.resize(miniBlocksPerBlock_);
@@ -204,12 +206,13 @@ class DeltaBpDecoder {
     uint64_t consumedBits =
         (valuesPerMiniBlock_ - valuesRemainingCurrentMiniBlock_) *
         deltaBitWidth_;
-    bits::copyBits(
-        reinterpret_cast<const uint64_t*>(bufferStart_),
-        consumedBits,
-        reinterpret_cast<uint64_t*>(&value),
-        0,
-        deltaBitWidth_);
+    if (deltaBitWidth_) {
+      value = bits::detail::loadBits<uint64_t>(
+          reinterpret_cast<const uint64_t*>(bufferStart_),
+          consumedBits,
+          deltaBitWidth_);
+      value &= (~0ULL >> (64 - deltaBitWidth_));
+    }
     // Addition between minDelta_, packed int and lastValue_ should be treated
     // as unsigned addition. Overflow is as expected.
     value = static_cast<uint64_t>(minDelta_) + static_cast<uint64_t>(value) +

@@ -270,7 +270,7 @@ class TypedColumnWriter : public ColumnWriter {
       int64_t validBitsOffset,
       const T* values) = 0;
 
-  // Estimated size of the values that are not written to a page yet
+  // Estimated size of the values that are not written to a page yet.
   virtual int64_t estimatedBufferedValueBytes() const = 0;
 };
 
@@ -290,12 +290,19 @@ constexpr int64_t kJulianEpochOffsetDays = INT64_C(2440588);
 
 template <int64_t UnitPerDay, int64_t NanosecondsPerUnit>
 inline void arrowTimestampToImpalaTimestamp(
-    const int64_t Time,
+    const int64_t time,
     Int96* impalaTimestamp) {
-  int64_t julianDays = (Time / UnitPerDay) + kJulianEpochOffsetDays;
-  (*impalaTimestamp).value[2] = (uint32_t)julianDays;
+  int64_t julianDays = (time / UnitPerDay) + kJulianEpochOffsetDays;
+  int64_t lastDayUnits = time % UnitPerDay;
 
-  int64_t lastDayUnits = Time % UnitPerDay;
+  // Avoid negative nanos.
+  if (lastDayUnits < 0) {
+    lastDayUnits += UnitPerDay;
+    julianDays -= 1;
+  }
+
+  (*impalaTimestamp).value[2] = static_cast<uint32_t>(julianDays);
+
   auto lastDayNanos = lastDayUnits * NanosecondsPerUnit;
   // impalaTimestamp will be unaligned every other entry so do memcpy instead
   // of assign and reinterpret cast to avoid undefined behavior.

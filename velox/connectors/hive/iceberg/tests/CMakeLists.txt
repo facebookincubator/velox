@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_library(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.cpp)
+velox_add_test_headers(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.h)
 target_link_libraries(
   velox_dwio_iceberg_reader_benchmark_lib
   velox_exec_test_lib
@@ -30,6 +31,7 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_exec_test_lib
     velox_exec
     velox_hive_connector
+    velox_hive_iceberg_splitreader
     Folly::folly
     Folly::follybenchmark
     ${TEST_LINK_LIBS}
@@ -61,6 +63,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
+    IcebergParquetStatsTest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp
@@ -69,6 +72,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     TransformE2ETest.cpp
     TransformTest.cpp
   )
+  velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h)
 
   add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
 
@@ -78,6 +82,19 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_vector_fuzzer
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_iceberg_deletion_vector_test DeletionVectorReaderTest.cpp)
+  add_test(velox_hive_iceberg_deletion_vector_test velox_hive_iceberg_deletion_vector_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_deletion_vector_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
     GTest::gtest
     GTest::gtest_main
   )
@@ -93,4 +110,66 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_writer
     )
   endif()
+
+  add_executable(velox_hive_iceberg_equality_delete_test EqualityDeleteFileReaderTest.cpp Main.cpp)
+  add_test(velox_hive_iceberg_equality_delete_test velox_hive_iceberg_equality_delete_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_equality_delete_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    GTest::gtest
+  )
+
+  add_executable(velox_hive_iceberg_deletion_vector_writer_test DeletionVectorWriterTest.cpp)
+  add_test(
+    velox_hive_iceberg_deletion_vector_writer_test
+    velox_hive_iceberg_deletion_vector_writer_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_deletion_vector_writer_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_dwrf_insert_test
+    IcebergDwrfInsertTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  add_test(velox_hive_iceberg_dwrf_insert_test velox_hive_iceberg_dwrf_insert_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_dwrf_insert_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    velox_dwio_dwrf_reader
+    velox_dwio_dwrf_writer
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_writer_options_adapter_test WriterOptionsAdapterTest.cpp)
+  add_test(velox_hive_writer_options_adapter_test velox_hive_writer_options_adapter_test)
+
+  target_link_libraries(
+    velox_hive_writer_options_adapter_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_dwio_common_exception
+    GTest::gtest
+    GTest::gtest_main
+  )
 endif()

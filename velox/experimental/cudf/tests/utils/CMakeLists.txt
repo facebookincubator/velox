@@ -12,24 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_cudf_exec_test_lib CudfHiveConnectorTestBase.cpp CudfPlanBuilder.cpp)
+add_library(
+  velox_cudf_exec_test_lib
+  CudfHiveConnectorTestBase.cpp
+  CudfPlanBuilder.cpp
+  CudfTpcdsQueryBuilder.cpp
+)
 
 set_target_properties(velox_cudf_exec_test_lib PROPERTIES CUDA_ARCHITECTURES native)
 
 target_link_libraries(
   velox_cudf_exec_test_lib
-  velox_vector_test_lib
-  velox_temp_path
-  velox_cursor
   cudf::cudf
-  velox_cudf_exec
-  velox_cudf_vector
-  velox_core
-  velox_exception
-  velox_expression
-  velox_parse_parser
-  velox_duckdb_conversion
-  velox_file_test_utils
-  velox_cudf_hive_connector
   velox_aggregates
+  velox_core
+  velox_cudf_exec
+  velox_cudf_hive_connector
+  velox_cudf_vector
+  velox_cursor
+  velox_duckdb_conversion
+  velox_exception
+  velox_exec_test_lib
+  velox_expression
+  velox_file_test_utils
+  velox_parse_parser
+  velox_s3fs
+  velox_test_util
+  velox_vector_test_lib
 )

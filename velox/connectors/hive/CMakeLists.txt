@@ -12,33 +12,77 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
+velox_add_library(velox_hive_config OBJECT FileConfig.cpp HiveConfig.cpp)
 velox_link_libraries(velox_hive_config velox_core velox_exception)
 
 add_subdirectory(iceberg)
+add_subdirectory(paimon)
 
 velox_add_library(
   velox_hive_connector
   OBJECT
   BufferedInputBuilder.cpp
-  FileHandle.cpp
+  ExtractionUtils.cpp
+  ExtractionUtils.h
+  FileColumnHandle.cpp
+  FileConfig.cpp
+  FileConnectorUtil.cpp
+  FileDataSink.cpp
+  FileDataSource.cpp
+  FileIndexReader.cpp
+  FileSplitReader.cpp
   HiveConfig.cpp
+  HiveConfigProvider.cpp
   HiveConnector.cpp
-  HiveConnectorUtil.cpp
   HiveConnectorSplit.cpp
+  HiveConnectorUtil.cpp
   HiveDataSink.cpp
   HiveDataSource.cpp
-  HiveIndexReader.cpp
   HiveIndexSource.cpp
   HivePartitionName.cpp
+  HiveSplitReader.cpp
   PartitionIdGenerator.cpp
-  SplitReader.cpp
   TableHandle.cpp
+  HEADERS
+  BufferedInputBuilder.h
+  FileColumnHandle.h
+  FileConfig.h
+  FileConnectorSplit.h
+  FileConnectorUtil.h
+  FileDataSink.h
+  FileDataSource.h
+  FileHandle.h
+  FileIndexReader.h
+  FileProperties.h
+  FileSplitReader.h
+  FileTableHandle.h
+  HiveConfig.h
+  HiveConfigMacrosDefine.h
+  HiveConfigMacrosUndef.h
+  HiveConfigProvider.h
+  HiveConnector.h
+  HiveConnectorSplit.h
+  HiveConnectorUtil.h
+  HiveDataSink.h
+  HiveDataSource.h
+  HiveIndexSource.h
+  HivePartitionFunction.h
+  HivePartitionName.h
+  HiveSplitReader.h
+  IndexReader.h
+  PartitionIdGenerator.h
+  TableHandle.h
 )
 
 velox_link_libraries(
   velox_hive_connector
-  PRIVATE velox_common_io velox_connector velox_dwio_catalog_fbhive velox_hive_partition_function
+  PRIVATE
+    velox_common_io
+    velox_connector
+    velox_dwio_catalog_fbhive
+    velox_exec
+    velox_hive_partition_function
+    velox_key_encoder
 )
 
 velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)

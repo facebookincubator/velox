@@ -15,6 +15,10 @@
  */
 
 #include "velox/python/runner/PyConnectors.h"
+
+#include <stdexcept>
+
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 
@@ -35,7 +39,8 @@ void registerConnector(
   TConnectorFactory factory;
   auto connector = factory.newConnector(
       connectorId, configBase, folly::getGlobalCPUExecutor().get());
-  connector::registerConnector(connector);
+  connector::ConnectorRegistry::global().insert(
+      connector->connectorId(), connector);
   connectorRegistry().insert(connectorId);
 }
 
@@ -57,7 +62,8 @@ void registerTpch(
 
 // Is it ok to unregister connectors that were not registered.
 void unregister(const std::string& connectorId) {
-  if (!facebook::velox::connector::unregisterConnector(connectorId)) {
+  if (!facebook::velox::connector::ConnectorRegistry::global().erase(
+          connectorId)) {
     throw std::runtime_error(
         fmt::format("Unable to unregister connector '{}'", connectorId));
   }

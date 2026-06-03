@@ -19,9 +19,13 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
+
+using functions::sparksql::SparkQueryConfig;
+
 namespace {
 class BloomFilterAggAggregateTest
     : public aggregate::test::AggregationTestBase {
@@ -48,7 +52,7 @@ class BloomFilterAggAggregateTest
 TEST_F(BloomFilterAggAggregateTest, basic) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
-  auto expected = {makeRowVector({getSerializedBloomFilter(4)})};
+  auto expected = {makeRowVector({getSerializedBloomFilter(11)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
@@ -56,12 +60,15 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
 
-  auto expected1 = {makeRowVector({getSerializedBloomFilter(3)})};
+  auto expected1 = {makeRowVector({getSerializedBloomFilter(13)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 6)"}, expected1);
 
-  // This capacity is kMaxNumBits / 16.
-  auto expected2 = {makeRowVector({getSerializedBloomFilter(262144)})};
+  auto expected2 = {makeRowVector({getSerializedBloomFilter(524'288)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
+
+  // Max bits case: bloom filter is at its largest possible size.
+  auto expected3 = {makeRowVector({getSerializedBloomFilter(4'194'304)})};
+  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 10000000)"}, expected3);
 }
 
 TEST_F(BloomFilterAggAggregateTest, emptyInput) {
@@ -93,7 +100,8 @@ TEST_F(BloomFilterAggAggregateTest, config) {
       {},
       {"bloom_filter_agg(c0)"},
       expected,
-      {{core::QueryConfig::kSparkBloomFilterMaxNumBits, "1600"}});
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kBloomFilterMaxNumBits),
+        "1600"}});
 
   // Test fails without setting the config.
   auto planNode = exec::test::PlanBuilder(pool())

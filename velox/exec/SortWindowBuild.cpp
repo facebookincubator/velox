@@ -59,6 +59,8 @@ SortWindowBuild::SortWindowBuild(
       partitionStartRows_(0, memory::StlAllocator<char*>(*pool)) {
   VELOX_CHECK_NOT_NULL(pool_);
   VELOX_CHECK_NOT_NULL(opStats_);
+  initializeRowContainer(pool_);
+  initializeDecodedInputVectors();
   allKeyInfo_.reserve(partitionKeyInfo_.size() + sortKeyInfo_.size());
   allKeyInfo_.insert(
       allKeyInfo_.cend(), partitionKeyInfo_.begin(), partitionKeyInfo_.end());
@@ -146,9 +148,12 @@ void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << data_->pool()->name()
-               << ", usage: " << succinctBytes(data_->pool()->usedBytes())
+               << ", root pool: " << data_->pool()->root()->name()
+               << ", used: " << succinctBytes(data_->pool()->usedBytes())
                << ", reservation: "
-               << succinctBytes(data_->pool()->reservedBytes());
+               << succinctBytes(data_->pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(data_->pool()->root()->reservedBytes());
 }
 
 void SortWindowBuild::ensureSortFits() {
@@ -372,7 +377,8 @@ void SortWindowBuild::loadNextPartitionBatchFromSpill() {
     numSpillReadBatches_--;
 
     auto lockedOpStats = opStats_->wlock();
-    lockedOpStats->runtimeStats[Window::kWindowSpillReadNumBatches] =
+    lockedOpStats
+        ->runtimeStats[std::string(Window::kWindowSpillReadNumBatches)] =
         RuntimeMetric(numSpillReadBatches_);
   }
 }

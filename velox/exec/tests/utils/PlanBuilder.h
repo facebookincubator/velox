@@ -444,6 +444,11 @@ class PlanBuilder {
       return *this;
     }
 
+    IndexLookupJoinBuilder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
     /// Stop the IndexLookupJoinBuilder.
     PlanBuilder& endIndexLookupJoin() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -463,6 +468,7 @@ class PlanBuilder {
     bool hasMarker_{false};
     std::vector<std::string> outputLayout_;
     core::JoinType joinType_{core::JoinType::kInner};
+    std::optional<bool> splitOutput_;
   };
 
   /// Start an IndexLookupJoinBuilder.
@@ -655,6 +661,11 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
+  /// Convenience overload that wraps a single RowVectorPtr in a vector.
+  PlanBuilder& values(const RowVectorPtr& value) {
+    return values(std::vector<RowVectorPtr>{value});
+  }
+
   PlanBuilder& filtersAsNode(bool filtersAsNode) {
     filtersAsNode_ = filtersAsNode;
     return *this;
@@ -682,9 +693,7 @@ class PlanBuilder {
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
   /// @param serdekind The kind of seralized data format.
-  PlanBuilder& exchange(
-      const RowTypePtr& outputType,
-      VectorSerde::Kind serdekind);
+  PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
@@ -697,7 +706,7 @@ class PlanBuilder {
   PlanBuilder& mergeExchange(
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
-      VectorSerde::Kind serdekind);
+      std::string serdekind);
 
   /// Add a ProjectNode using specified SQL expressions.
   ///
@@ -880,8 +889,18 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit,
       std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
 
-  /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge();
+  /// Add a TableWriteMergeNode. Derives the ColumnStatsSpec from the
+  /// TableWriteNode in the plan tree and applies the given step.
+  /// Finds the TableWriteNode through LocalPartitionNode if present.
+  /// @param step Must be kIntermediate or kFinal. Defaults to kIntermediate.
+  PlanBuilder& tableWriteMerge(
+      core::AggregationNode::Step step =
+          core::AggregationNode::Step::kIntermediate);
+
+  /// Add a TableWriteMergeNode with an explicit ColumnStatsSpec. Use for
+  /// coordinator-side merge where the TableWriteNode is in a different
+  /// fragment (e.g. after an Exchange).
+  PlanBuilder& tableWriteMerge(core::ColumnStatsSpec columnStatsSpec);
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -1178,14 +1197,14 @@ class PlanBuilder {
       int numPartitions,
       bool replicateNullsAndAny,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Same as above, but assumes 'replicateNullsAndAny' is false.
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Same as above, but allows to provide custom partition function.
   PlanBuilder& partitionedOutput(
@@ -1194,7 +1213,7 @@ class PlanBuilder {
       bool replicateNullsAndAny,
       core::PartitionFunctionSpecPtr partitionFunctionSpec,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Adds a PartitionedOutputNode to broadcast the input data.
   ///
@@ -1204,12 +1223,12 @@ class PlanBuilder {
   /// duplicated in the output.
   PlanBuilder& partitionedOutputBroadcast(
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Adds a PartitionedOutputNode to put data into arbitrary buffer.
   PlanBuilder& partitionedOutputArbitrary(
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Adds a LocalPartitionNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction. Number of partitions is determined
@@ -1225,6 +1244,9 @@ class PlanBuilder {
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
+
+  /// Add a LocalPartitionNode with gather type (N-to-1, empty partition keys).
+  PlanBuilder& localGather();
 
   /// A convenience method to add a LocalPartitionNode with hive partition
   /// function.
@@ -1288,7 +1310,8 @@ class PlanBuilder {
       const std::string& filter,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner,
-      bool nullAware = false);
+      bool nullAware = false,
+      bool nullAsValue = false);
 
   /// Add a MergeJoinNode to join two inputs using one or more join keys and an
   /// optional filter. The caller is responsible to ensure that inputs are
@@ -1480,11 +1503,22 @@ class PlanBuilder {
       bool generateRowNumber);
 
   /// Add a MarkDistinctNode to compute aggregate mask channel
-  /// @param markerKey Name of output mask channel
+  /// @param markerName Name of output mask channel
   /// @param distinctKeys List of columns to be marked distinct.
   PlanBuilder& markDistinct(
-      std::string markerKey,
+      std::string markerName,
       const std::vector<std::string>& distinctKeys);
+
+  /// Add a multi-mask MarkDistinctNode. Produces maskNames.size() + 1 marker
+  /// columns: one no-mask marker, followed by one marker for each mask.
+  /// @param markerNames Names of output boolean marker columns. Must have
+  ///   exactly maskNames.size() + 1 entries.
+  /// @param distinctKeys List of columns to check for distinct values.
+  /// @param maskNames Column names of the input boolean mask columns.
+  PlanBuilder& markDistinct(
+      std::vector<std::string> markerNames,
+      const std::vector<std::string>& distinctKeys,
+      const std::vector<std::string>& maskNames);
 
   /// Add an EnforceDistinctNode to ensure input has unique values for the
   /// specified keys at runtime. Throws with the specified error message if
@@ -1511,6 +1545,15 @@ class PlanBuilder {
   PlanBuilder& streamingEnforceDistinct(
       const std::vector<std::string>& distinctKeys,
       std::string errorMessage);
+
+  /// Add a MarkSortedNode to mark rows indicating sortedness.
+  /// @param markerKey Name of output marker column (boolean).
+  /// @param sortingKeys List of columns used for sorting.
+  /// @param sortingOrders Sort orders for each sorting key.
+  PlanBuilder& markSorted(
+      const std::string& markerKey,
+      const std::vector<std::string>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders);
 
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use

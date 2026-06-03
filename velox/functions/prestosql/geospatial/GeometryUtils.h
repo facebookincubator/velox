@@ -46,15 +46,15 @@ namespace facebook::velox::functions::geospatial {
 
 /// Utility macro used to wrap GEOS library calls in a try-catch block,
 /// throwing a velox::Status with error message if an exception is caught.
-#define GEOS_RETHROW(func, user_error_message)                             \
-  try {                                                                    \
-    func                                                                   \
-  } catch (const geos::util::UnsupportedOperationException& e) {           \
-    VELOX_USER_FAIL(fmt::format("Internal geometry error: {}", e.what())); \
-  } catch (const geos::util::AssertionFailedException& e) {                \
-    VELOX_FAIL(fmt::format("Internal geometry error: {}", e.what()));      \
-  } catch (const geos::util::GEOSException& e) {                           \
-    VELOX_FAIL(fmt::format("{}: {}", user_error_message, e.what()));       \
+#define GEOS_RETHROW(func, user_error_message)                   \
+  try {                                                          \
+    func                                                         \
+  } catch (const geos::util::UnsupportedOperationException& e) { \
+    VELOX_USER_FAIL("Internal geometry error: {}", e.what());    \
+  } catch (const geos::util::AssertionFailedException& e) {      \
+    VELOX_FAIL("Internal geometry error: {}", e.what());         \
+  } catch (const geos::util::GEOSException& e) {                 \
+    VELOX_FAIL("{}: {}", user_error_message, e.what());          \
   }
 
 class GeometryCollectionIterator {
@@ -131,6 +131,18 @@ FOLLY_ALWAYS_INLINE bool isMultiType(const geos::geom::Geometry& geometry) {
       geos::geom::GeometryTypeId::GEOS_GEOMETRYCOLLECTION};
 
   return std::count(multiTypes.begin(), multiTypes.end(), type);
+}
+
+FOLLY_ALWAYS_INLINE bool isGeometryCollection(
+    const geos::geom::Geometry& geometry) {
+  return geometry.getGeometryTypeId() ==
+      geos::geom::GeometryTypeId::GEOS_GEOMETRYCOLLECTION;
+}
+
+FOLLY_ALWAYS_INLINE bool hasGeometryCollection(
+    const geos::geom::Geometry& left,
+    const geos::geom::Geometry& right) {
+  return isGeometryCollection(left) || isGeometryCollection(right);
 }
 
 FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {

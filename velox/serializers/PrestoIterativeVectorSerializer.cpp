@@ -91,9 +91,17 @@ void PrestoIterativeVectorSerializer::flush(OutputStream* out) {
         opts_.minCompressionRatio,
         out);
   } else {
-    if (numCompressionToSkip_ > 0) {
-      const auto noCompressionCodec = common::compressionKindToCodec(
-          common::CompressionKind::CompressionKind_NONE);
+    // Safe to share across threads because NoCompressionCodec is stateless.
+    // Do NOT change to a different CompressionKind without removing 'static'.
+    static const auto noCompressionCodec = common::compressionKindToCodec(
+        common::CompressionKind::CompressionKind_NONE);
+    if (opts_.minCompressionPageSizeBytes > 0 &&
+        streamArena_->size() <
+            static_cast<size_t>(opts_.minCompressionPageSizeBytes)) {
+      auto [size, ignore] = flushStreams(
+          streams_, numRows_, *streamArena_, *noCompressionCodec, 1, out);
+      stats_.compressionSkippedBytes += size;
+    } else if (numCompressionToSkip_ > 0) {
       auto [size, ignore] = flushStreams(
           streams_, numRows_, *streamArena_, *noCompressionCodec, 1, out);
       stats_.compressionSkippedBytes += size;
@@ -122,18 +130,18 @@ PrestoIterativeVectorSerializer::runtimeStats() {
   std::unordered_map<std::string, RuntimeCounter> map;
   if (stats_.compressionInputBytes != 0) {
     map.emplace(
-        kCompressionInputBytes,
+        std::string(kCompressionInputBytes),
         RuntimeCounter(
             stats_.compressionInputBytes, RuntimeCounter::Unit::kBytes));
   }
   if (stats_.compressedBytes != 0) {
     map.emplace(
-        kCompressedBytes,
+        std::string(kCompressedBytes),
         RuntimeCounter(stats_.compressedBytes, RuntimeCounter::Unit::kBytes));
   }
   if (stats_.compressionSkippedBytes != 0) {
     map.emplace(
-        kCompressionSkippedBytes,
+        std::string(kCompressionSkippedBytes),
         RuntimeCounter(
             stats_.compressionSkippedBytes, RuntimeCounter::Unit::kBytes));
   }

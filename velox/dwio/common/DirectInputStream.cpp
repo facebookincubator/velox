@@ -16,7 +16,6 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/DirectInputStream.h"
@@ -143,8 +142,6 @@ void DirectInputStream::loadSync() {
     }
   }
 
-  process::TraceContext trace("DirectInputStream::loadSync");
-
   ioStats_->incRawBytesRead(loadedRegion_.length);
   auto ranges = makeRanges(loadedRegion_.length, data_, tinyData_);
   uint64_t usecs = 0;
@@ -155,11 +152,23 @@ void DirectInputStream::loadSync() {
   ioStats_->read().increment(loadedRegion_.length);
   ioStats_->queryThreadIoLatencyUs().increment(usecs);
   ioStats_->storageReadLatencyUs().increment(usecs);
-  ioStats_->incTotalScanTime(usecs * 1'000);
+  ioStats_->incTotalScanTimeNs(usecs * 1'000);
 }
 
 void DirectInputStream::loadPosition() {
   VELOX_CHECK_LT(offsetInRegion_, region_.length);
+
+  // Fast path: serve from preloaded whole-file data.
+  if (bufferedInput_->preloaded()) {
+    const auto range = bufferedInput_->preloadedData(
+        region_.offset + offsetInRegion_, region_.length - offsetInRegion_);
+    run_ = reinterpret_cast<uint8_t*>(const_cast<char*>(range.data()));
+    runSize_ = range.size();
+    offsetInRun_ = 0;
+    offsetOfRun_ = 0;
+    return;
+  }
+
   if (!loaded_) {
     loaded_ = true;
     auto load = bufferedInput_->coalescedLoad(this);

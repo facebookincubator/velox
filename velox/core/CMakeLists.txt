@@ -26,6 +26,18 @@ velox_add_library(
   QueryCtx.cpp
   SimpleFunctionMetadata.cpp
   TableWriteTraits.cpp
+  HEADERS
+  CoreTypeSystem.h
+  Expressions.h
+  ITypedExpr.h
+  PlanConsistencyChecker.h
+  PlanFragment.h
+  PlanNode.h
+  QueryConfig.h
+  QueryCtx.h
+  ScanBatchEvent.h
+  SimpleFunctionMetadata.h
+  TableWriteTraits.h
 )
 
 velox_link_libraries(
@@ -34,6 +46,7 @@ velox_link_libraries(
     velox_arrow_bridge
     velox_caching
     velox_common_config
+    velox_config_property
     velox_connector
     velox_exception
     velox_expression_functions
@@ -45,3 +58,10 @@ velox_link_libraries(
     fmt::fmt
   PRIVATE velox_encode
 )
+
+velox_add_library(velox_query_config_provider QueryConfigProvider.cpp HEADERS QueryConfigProvider.h)
+velox_link_libraries(velox_query_config_provider PUBLIC velox_core velox_config_property)
+
+velox_add_library(velox_metaprogramming INTERFACE HEADERS Metaprogramming.h)
+
+velox_add_library(velox_expression_evaluator INTERFACE HEADERS ExpressionEvaluator.h)

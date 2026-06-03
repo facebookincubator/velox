@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -56,16 +58,16 @@ CudfLocalPartition::CudfLocalPartition(
     int32_t operatorId,
     exec::DriverCtx* ctx,
     const std::shared_ptr<const core::LocalPartitionNode>& planNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           ctx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "CudfLocalPartition"),
-      NvtxHelper(
+          "CudfLocalPartition",
           nvtx3::rgb{255, 215, 0}, // Gold
-          operatorId,
-          fmt::format("[{}]", planNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          planNode),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {
@@ -177,9 +179,8 @@ void CudfLocalPartition::enqueuePartition(
   }
 }
 
-void CudfLocalPartition::addInput(RowVectorPtr input) {
+void CudfLocalPartition::doAddInput(RowVectorPtr input) {
   flushVectorPool();
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   recordOutputStats(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
@@ -207,12 +208,14 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
             numPartitions_,
             cudf::hash_id::HASH_MURMUR3,
             cudf::DEFAULT_HASH_SEED,
-            stream);
+            stream,
+            get_temp_mr());
       } else if (
           partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow) {
-        return cudf::round_robin_partition(
-            tableView, numPartitions_, counter_, stream);
+        auto result = cudf::round_robin_partition(
+            tableView, numPartitions_, counter_, stream, get_temp_mr());
         counter_ = (counter_ + cudfVector->size()) % numPartitions_;
+        return result;
       }
       VELOX_FAIL("Unsupported partition function");
     }();
@@ -246,8 +249,7 @@ void CudfLocalPartition::addInput(RowVectorPtr input) {
           pool(),
           outputType_,
           partitionData.num_rows(),
-          std::make_unique<cudf::table>(
-              partitionData, stream, cudf::get_current_device_resource_ref()),
+          std::make_unique<cudf::table>(partitionData, stream, get_output_mr()),
           stream);
       enqueuePartition(i, partitionCudfVector);
     }
@@ -275,7 +277,7 @@ exec::BlockingReason CudfLocalPartition::isBlocked(ContinueFuture* future) {
   return exec::BlockingReason::kNotBlocked;
 }
 
-void CudfLocalPartition::noMoreInput() {
+void CudfLocalPartition::doNoMoreInput() {
   Operator::noMoreInput();
   for (const auto& queue : queues_) {
     queue->noMoreData();

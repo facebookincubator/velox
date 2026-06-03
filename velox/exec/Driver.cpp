@@ -16,14 +16,29 @@
 
 #include "velox/exec/Driver.h"
 
+#include <atomic>
+
 #include "velox/common/process/TraceContext.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/LazyVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+
+Driver::~Driver() = default;
+
 namespace {
+
+/// Returns current time in microseconds using high_resolution_clock.
+/// Used for driver-level lifecycle timing to match BlockingState::sinceUs_.
+inline uint64_t currentTimeMicrosHires() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::high_resolution_clock::now().time_since_epoch())
+      .count();
+}
 
 // Checks if output channel is produced using identity projection and returns
 // input channel if so.
@@ -44,7 +59,7 @@ void recordSilentThrows(Operator& op) {
   auto numThrow = threadNumVeloxThrow();
   if (numThrow > 0) {
     op.stats().wlock()->addRuntimeStat(
-        "numSilentThrow", RuntimeCounter(numThrow));
+        std::string(DriverStats::kNumSilentThrow), RuntimeCounter(numThrow));
   }
 }
 
@@ -108,18 +123,24 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
 }
 
 namespace {
-bool isHashJoinSpillOperator(const std::string& operatorType) {
-  return operatorType == "HashBuild" || operatorType == "HashProbe";
+bool isHashJoinSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kHashBuild ||
+      operatorType == OperatorType::kHashProbe;
 }
 
-bool isAggregationSpillOperator(const std::string& operatorType) {
-  return operatorType == "Aggregation" || operatorType == "PartialAggregation";
+bool isAggregationSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kAggregation ||
+      operatorType == OperatorType::kPartialAggregation;
+}
+
+bool isRowNumberSpillOperator(std::string_view operatorType) {
+  return operatorType == OperatorType::kRowNumber;
 }
 } // namespace
 
 std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
     int32_t operatorId,
-    const std::string& operatorType) const {
+    std::string_view operatorType) const {
   const auto& queryConfig = task->queryCtx()->queryConfig();
   if (!queryConfig.spillEnabled()) {
     return std::nullopt;
@@ -149,6 +170,11 @@ std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
         queryConfig.aggregationSpillFileCreateConfig();
     if (!aggregationConfig.empty()) {
       fileCreateConfig = aggregationConfig;
+    }
+  } else if (isRowNumberSpillOperator(operatorType)) {
+    const auto& rowNumberConfig = queryConfig.rowNumberSpillFileCreateConfig();
+    if (!rowNumberConfig.empty()) {
+      fileCreateConfig = rowNumberConfig;
     }
   }
 
@@ -193,6 +219,7 @@ BlockingState::BlockingState(
               .count()) {
   // Set before leaving the thread.
   driver_->state().hasBlockingFuture = true;
+  driver_->state().blockingStartUs = sinceUs_;
   numBlockedDrivers_++;
 }
 
@@ -209,6 +236,10 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
         std::lock_guard<std::timed_mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
           state->operator_->recordBlockingTime(state->sinceUs_, state->reason_);
+          // Accumulate driver-level blocked time using high_resolution_clock,
+          // matching sinceUs_ and all other driver lifecycle timing.
+          driver->addDriverBlockedTime(
+              (currentTimeMicrosHires() - state->sinceUs_) * 1'000);
         }
         VELOX_CHECK(!driver->state().suspended());
         VELOX_CHECK(driver->state().hasBlockingFuture);
@@ -339,7 +370,7 @@ void Driver::enqueueInternal() {
   VELOX_CHECK(!state_.isEnqueued);
   state_.isEnqueued = true;
   // When enqueuing, starting timing the queue time.
-  queueTimeStartUs_ = getCurrentTimeMicro();
+  queueTimeStartUs_ = currentTimeMicrosHires();
 }
 
 // Call an Operator method. record silenced throws, but not a query
@@ -367,13 +398,13 @@ void Driver::enqueueInternal() {
   }
 
 void OpCallStatus::start(int32_t operatorId, const char* operatorMethod) {
-  timeStartMs = getCurrentTimeMs();
-  opId = operatorId;
-  method = operatorMethod;
+  timeStartMs_ = getCurrentTimeMs();
+  opId_ = operatorId;
+  method_ = operatorMethod;
 }
 
 void OpCallStatus::stop() {
-  timeStartMs = 0;
+  timeStartMs_ = 0;
 }
 
 size_t OpCallStatusRaw::callDuration() const {
@@ -395,10 +426,14 @@ CpuWallTiming Driver::processLazyIoStats(
   if (&op == operators_[0].get()) {
     return timing;
   }
+  static const std::string kCpuNanosKey(LazyVector::kCpuNanos);
+  static const std::string kWallNanosKey(LazyVector::kWallNanos);
+  static const std::string kInputBytesKey(LazyVector::kInputBytes);
+
   auto lockStats = op.stats().wlock();
 
   // Checks and tries to update cpu time from lazy loads.
-  auto it = lockStats->runtimeStats.find(LazyVector::kCpuNanos);
+  auto it = lockStats->runtimeStats.find(kCpuNanosKey);
   if (it == lockStats->runtimeStats.end()) {
     // Return early if no lazy activity.  Lazy CPU and wall times are recorded
     // together, checking one is enough.
@@ -416,7 +451,7 @@ CpuWallTiming Driver::processLazyIoStats(
 
   // Checks and tries to update wall time from lazy loads.
   int64_t wallDelta = 0;
-  it = lockStats->runtimeStats.find(LazyVector::kWallNanos);
+  it = lockStats->runtimeStats.find(kWallNanosKey);
   if (it != lockStats->runtimeStats.end()) {
     const int64_t wall = it->second.sum;
     wallDelta = std::max<int64_t>(0, wall - lockStats->lastLazyWallNanos);
@@ -427,7 +462,7 @@ CpuWallTiming Driver::processLazyIoStats(
 
   // Checks and tries to update input bytes from lazy loads.
   int64_t inputBytesDelta = 0;
-  it = lockStats->runtimeStats.find(LazyVector::kInputBytes);
+  it = lockStats->runtimeStats.find(kInputBytesKey);
   if (it != lockStats->runtimeStats.end()) {
     const int64_t inputBytes = it->second.sum;
     inputBytesDelta = inputBytes - lockStats->lastLazyInputBytes;
@@ -485,8 +520,23 @@ StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
     RowVectorPtr& result) {
-  const auto now = getCurrentTimeMicro();
+  // All driver timing uses high_resolution_clock consistently
+  // (matching BlockingState::sinceUs_ used for blocked time).
+  const auto now = currentTimeMicrosHires();
   const auto queuedTimeUs = now - queueTimeStartUs_;
+
+  totalDriverQueuedNanos_ += queuedTimeUs * 1'000;
+  onThreadStartUs_ = now;
+  // For the normal close path, closeOperators() finalizes and clears
+  // onThreadStartUs_ before reporting. This guard handles early returns
+  // (e.g. Task::enter() failure) and non-close exit paths.
+  auto onThreadTimeGuard = folly::makeGuard([this]() {
+    if (onThreadStartUs_ > 0) {
+      totalDriverOnThreadNanos_ +=
+          (currentTimeMicrosHires() - onThreadStartUs_) * 1'000;
+      onThreadStartUs_ = 0;
+    }
+  });
 
   // Update the next operator's queueTime.
   StopReason stop =
@@ -506,7 +556,7 @@ StopReason Driver::runInternal(
   // been deleted.
   if (curOperatorId_ < operators_.size()) {
     operators_[curOperatorId_]->addRuntimeStat(
-        "queuedWallNanos",
+        std::string(DriverStats::kQueuedWallNanos),
         RuntimeCounter(queuedTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
     RECORD_HISTOGRAM_METRIC_VALUE(
         kMetricDriverQueueTimeMs, queuedTimeUs / 1'000);
@@ -851,6 +901,23 @@ void Driver::closeOperators() {
     op->close();
   }
 
+  // Report driver-level lifecycle timing to the Task accumulator.
+  // Use partitionId (0..numDrivers-1) so same-index drivers across split
+  // groups in grouped execution are summed together.
+  // Finalize on-thread time here (the onThreadTimeGuard in runInternal
+  // hasn't fired yet since CancelGuard destructs before it).
+  if (onThreadStartUs_ > 0) {
+    totalDriverOnThreadNanos_ +=
+        (currentTimeMicrosHires() - onThreadStartUs_) * 1'000;
+    onThreadStartUs_ = 0; // Prevent double-counting in the guard.
+  }
+  task()->addDriverLifecycleStats(
+      static_cast<uint32_t>(ctx_->pipelineId),
+      ctx_->partitionId,
+      totalDriverQueuedNanos_,
+      totalDriverOnThreadNanos_,
+      totalDriverBlockedNanos_);
+
   // Add operator stats to the task.
   for (auto& op : operators_) {
     auto stats = op->stats(true);
@@ -864,7 +931,7 @@ void Driver::closeOperators() {
         stats.isBlockedTiming.cpuNanos;
 
     if (operatorCpuNanos > 0) {
-      stats.runtimeStats[OperatorStats::kDriverCpuTime] =
+      stats.runtimeStats[std::string(OperatorStats::kDriverCpuTime)] =
           RuntimeMetric(operatorCpuNanos, RuntimeCounter::Unit::kNanos);
     }
 
@@ -875,22 +942,40 @@ void Driver::closeOperators() {
 void Driver::updateStats() {
   DriverStats stats;
   if (state_.totalPauseTimeMs > 0) {
-    stats.runtimeStats[DriverStats::kTotalPauseTime] = RuntimeMetric(
-        1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
+    stats.runtimeStats[std::string(DriverStats::kTotalPauseTime)] =
+        RuntimeMetric(
+            1'000'000 * state_.totalPauseTimeMs, RuntimeCounter::Unit::kNanos);
   }
   if (state_.totalOffThreadTimeMs > 0) {
-    stats.runtimeStats[DriverStats::kTotalOffThreadTime] = RuntimeMetric(
-        1'000'000 * state_.totalOffThreadTimeMs, RuntimeCounter::Unit::kNanos);
+    stats.runtimeStats[std::string(DriverStats::kTotalOffThreadTime)] =
+        RuntimeMetric(
+            1'000'000 * state_.totalOffThreadTimeMs,
+            RuntimeCounter::Unit::kNanos);
   }
+
   task()->addDriverStats(ctx_->pipelineId, std::move(stats));
+}
+
+void Driver::updateOperatorBlockingStats() {
+  // Record blocked time if the driver was blocked when terminated.
+  // This ensures we don't lose blocked time metrics when a query is aborted.
+  if (state_.hasBlockingFuture) {
+    // Accumulate driver-level blocked time unconditionally.
+    totalDriverBlockedNanos_ +=
+        (currentTimeMicrosHires() - state_.blockingStartUs) * 1'000;
+    // Record per-operator blocked time if operator is available.
+    if (blockedOperatorId_ < operators_.size()) {
+      operators_[blockedOperatorId_]->recordBlockingTime(
+          state_.blockingStartUs, blockingReason_);
+    }
+  }
 }
 
 void Driver::startBarrier() {
   VELOX_CHECK(ctx_->task->underBarrier());
   VELOX_CHECK(
-      !barrier_.has_value(),
-      "The driver has already started barrier processing");
-  barrier_ = BarrierState{};
+      !hasBarrier(), "The driver has already started barrier processing");
+  barrier_.start();
 }
 
 void Driver::drainOutput() {
@@ -898,38 +983,38 @@ void Driver::drainOutput() {
       hasBarrier(), "Can't drain a driver not under barrier processing");
   VELOX_CHECK(!isDraining(), "The driver is already draining");
   // Starts to drain from the source operator.
-  barrier_->drainingOpId = 0;
+  barrier_.drainingOpId = 0;
   drainNextOperator();
 }
 
 bool Driver::isDraining() const {
-  return hasBarrier() && barrier_->drainingOpId.has_value();
+  return hasBarrier() && barrier_.drainingOpId.has_value();
 }
 
 bool Driver::isDraining(int32_t operatorId) const {
-  return isDraining() && operatorId == barrier_->drainingOpId;
+  return isDraining() && operatorId == barrier_.drainingOpId;
 }
 
 bool Driver::hasDrained(int32_t operatorId) const {
-  return isDraining() && operatorId < barrier_->drainingOpId;
+  return isDraining() && operatorId < barrier_.drainingOpId;
 }
 
 void Driver::finishDrain(int32_t operatorId) {
   VELOX_CHECK(isDraining());
-  VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operatorId);
-  barrier_->drainingOpId = barrier_->drainingOpId.value() + 1;
+  VELOX_CHECK_EQ(barrier_.drainingOpId.value(), operatorId);
+  barrier_.drainingOpId = barrier_.drainingOpId.value() + 1;
   drainNextOperator();
 }
 
 void Driver::drainNextOperator() {
   VELOX_CHECK(isDraining());
-  for (; barrier_->drainingOpId < operators_.size();
-       barrier_->drainingOpId = barrier_->drainingOpId.value() + 1) {
-    if (operators_[barrier_->drainingOpId.value()]->startDrain()) {
+  for (; barrier_.drainingOpId < operators_.size();
+       barrier_.drainingOpId = barrier_.drainingOpId.value() + 1) {
+    if (operators_[barrier_.drainingOpId.value()]->startDrain()) {
       break;
     }
   }
-  if (barrier_->drainingOpId == operators_.size()) {
+  if (barrier_.drainingOpId == operators_.size()) {
     finishBarrier();
   }
 }
@@ -940,21 +1025,37 @@ void Driver::dropInput(int32_t operatorId) {
     return;
   }
   VELOX_CHECK_LT(operatorId, operators_.size());
-  if (!barrier_->dropInputOpId.has_value()) {
-    barrier_->dropInputOpId = operatorId;
-  } else {
-    barrier_->dropInputOpId = std::max(*barrier_->dropInputOpId, operatorId);
-  }
+  // dropInput() is only called from operators within this driver's pipeline
+  // during barrier processing. Since a driver runs on a single thread at a
+  // time, we don't need compare-and-swap here. We simply keep the maximum
+  // operator id - all operators upstream (with smaller ids) will drop their
+  // output.
+  barrier_.dropInputOpId = std::max(
+      barrier_.dropInputOpId.load(std::memory_order_relaxed), operatorId);
 }
 
 bool Driver::shouldDropOutput(int32_t operatorId) const {
-  return hasBarrier() && barrier_->dropInputOpId.has_value() &&
-      operatorId < *barrier_->dropInputOpId;
+  const int32_t dropOpId =
+      barrier_.dropInputOpId.load(std::memory_order_acquire);
+  return hasBarrier() && dropOpId != BarrierState::kNoDropInput &&
+      operatorId < dropOpId;
+}
+
+void Driver::BarrierState::start() {
+  VELOX_CHECK(!active.load(std::memory_order_acquire));
+  active.store(true, std::memory_order_release);
+}
+
+void Driver::BarrierState::reset() {
+  VELOX_CHECK(active.load(std::memory_order_acquire));
+  active.store(false, std::memory_order_release);
+  drainingOpId = std::nullopt;
+  dropInputOpId.store(kNoDropInput, std::memory_order_relaxed);
 }
 
 void Driver::finishBarrier() {
   VELOX_CHECK(isDraining());
-  VELOX_CHECK_EQ(barrier_->drainingOpId.value(), operators_.size());
+  VELOX_CHECK_EQ(barrier_.drainingOpId.value(), operators_.size());
   barrier_.reset();
   ctx_->task->finishDriverBarrier();
 }
@@ -976,6 +1077,7 @@ void Driver::close() {
 void Driver::closeByTask() {
   VELOX_CHECK(isOnThread());
   VELOX_CHECK(isTerminated());
+  updateOperatorBlockingStats();
   closeOperators();
   updateStats();
   closed_ = true;
@@ -1105,11 +1207,13 @@ int Driver::pushdownFilters(
       operators_[j]->addDynamicFilterLocked(filterSource->planNodeId(), *lk);
     }
     operators_[j]->addRuntimeStat(
-        "dynamicFiltersAccepted", RuntimeCounter(numFiltersAccepted[j]));
+        std::string(DriverStats::kDynamicFiltersAccepted),
+        RuntimeCounter(numFiltersAccepted[j]));
   }
   if (numFiltersProduced > 0) {
     filterSource->addRuntimeStat(
-        "dynamicFiltersProduced", RuntimeCounter(numFiltersProduced));
+        std::string(DriverStats::kDynamicFiltersProduced),
+        RuntimeCounter(numFiltersProduced));
   }
   return numFiltersProduced;
 }

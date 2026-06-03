@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <folly/Executor.h>
+
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::io {
@@ -63,14 +67,25 @@ class ReaderOptions {
   static constexpr int32_t kDefaultCoalesceBytes = 128 << 20; // 128M
   static constexpr int32_t kDefaultPrefetchRowGroups = 1;
 
-  explicit ReaderOptions(velox::memory::MemoryPool* pool)
-      : memoryPool_(pool),
-        autoPreloadLength_(DEFAULT_AUTO_PRELOAD_SIZE),
-        prefetchMode_(PrefetchMode::PREFETCH) {}
+  explicit ReaderOptions(velox::memory::MemoryPool* pool) : pool_{pool} {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
 
-  /// Sets the memory pool for allocation.
-  ReaderOptions& setMemoryPool(velox::memory::MemoryPool& pool) {
-    memoryPool_ = &pool;
+  ReaderOptions& setDataIoStats(std::shared_ptr<IoStatistics> stats) {
+    VELOX_CHECK_NULL(dataIoStats_, "dataIoStats already set");
+    dataIoStats_ = std::move(stats);
+    return *this;
+  }
+
+  ReaderOptions& setMetadataIoStats(std::shared_ptr<IoStatistics> stats) {
+    VELOX_CHECK_NULL(metadataIoStats_, "metadataIoStats already set");
+    metadataIoStats_ = std::move(stats);
+    return *this;
+  }
+
+  ReaderOptions& setIndexIoStats(std::shared_ptr<IoStatistics> stats) {
+    VELOX_CHECK_NULL(indexIoStats_, "indexIoStats already set");
+    indexIoStats_ = std::move(stats);
     return *this;
   }
 
@@ -112,7 +127,7 @@ class ReaderOptions {
 
   /// Gets the memory allocator.
   velox::memory::MemoryPool& memoryPool() const {
-    return *memoryPool_;
+    return *pool_;
   }
 
   uint64_t autoPreloadLength() const {
@@ -139,22 +154,52 @@ class ReaderOptions {
     return prefetchRowGroups_;
   }
 
-  bool noCacheRetention() const {
-    return noCacheRetention_;
+  bool cacheable() const {
+    return cacheable_;
   }
 
-  void setNoCacheRetention(bool noCacheRetention) {
-    noCacheRetention_ = noCacheRetention;
+  void setCacheable(bool cacheable) {
+    cacheable_ = cacheable;
+  }
+
+  const std::shared_ptr<folly::Executor>& ioExecutor() const {
+    return ioExecutor_;
+  }
+
+  void setIOExecutor(std::shared_ptr<folly::Executor> ioExecutor) {
+    ioExecutor_ = std::move(ioExecutor);
+  }
+
+  /// IO statistics for tracking storage reads, SSD reads, RAM cache hits,
+  /// and overread bytes for data stream IO.
+  const std::shared_ptr<IoStatistics>& dataIoStats() const {
+    return dataIoStats_;
+  }
+
+  /// IO statistics for tracking storage reads, SSD reads, RAM cache hits,
+  /// and overread bytes for metadata IO (footer, stripe groups, index).
+  const std::shared_ptr<IoStatistics>& metadataIoStats() const {
+    return metadataIoStats_;
+  }
+
+  const std::shared_ptr<IoStatistics>& indexIoStats() const {
+    return indexIoStats_;
   }
 
  protected:
-  velox::memory::MemoryPool* memoryPool_;
-  uint64_t autoPreloadLength_;
-  PrefetchMode prefetchMode_;
+  velox::memory::MemoryPool* pool_;
+  std::shared_ptr<IoStatistics> dataIoStats_;
+  std::shared_ptr<IoStatistics> metadataIoStats_;
+  std::shared_ptr<IoStatistics> indexIoStats_;
+
+  std::shared_ptr<folly::Executor> ioExecutor_;
+
+  uint64_t autoPreloadLength_{DEFAULT_AUTO_PRELOAD_SIZE};
+  PrefetchMode prefetchMode_{PrefetchMode::PREFETCH};
   int32_t loadQuantum_{kDefaultLoadQuantum};
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
   int32_t prefetchRowGroups_{kDefaultPrefetchRowGroups};
-  bool noCacheRetention_{false};
+  bool cacheable_{true};
 };
 } // namespace facebook::velox::io

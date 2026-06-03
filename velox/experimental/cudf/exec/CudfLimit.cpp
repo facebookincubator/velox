@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/copying.hpp>
@@ -25,16 +27,16 @@ CudfLimit::CudfLimit(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::LimitNode>& limitNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           limitNode->outputType(),
-          operatorId,
           limitNode->id(),
-          "CudfLimit"),
-      NvtxHelper(
+          "CudfLimit",
           nvtx3::rgb{112, 128, 144}, // Slate Gray
-          operatorId,
-          fmt::format("[{}]", limitNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          limitNode),
       remainingOffset_{limitNode->offset()},
       remainingLimit_{limitNode->count()} {
   isIdentityProjection_ = true;
@@ -50,13 +52,12 @@ bool CudfLimit::needsInput() const {
   return !finished_ && input_ == nullptr;
 }
 
-void CudfLimit::addInput(RowVectorPtr input) {
+void CudfLimit::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
   input_ = input;
 }
 
-RowVectorPtr CudfLimit::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfLimit::doGetOutput() {
   if (input_ == nullptr || (remainingOffset_ == 0 && remainingLimit_ == 0)) {
     return nullptr;
   }
@@ -84,8 +85,8 @@ RowVectorPtr CudfLimit::getOutput() {
          static_cast<int>(remainingOffset_ + outputSize)},
         cudfInput->stream());
 
-    auto materializedTable =
-        std::make_unique<cudf::table>(slicedTable[0], cudfInput->stream());
+    auto materializedTable = std::make_unique<cudf::table>(
+        slicedTable[0], cudfInput->stream(), get_output_mr());
 
     remainingOffset_ = 0;
     remainingLimit_ -= outputSize;
@@ -123,9 +124,7 @@ RowVectorPtr CudfLimit::getOutput() {
       cudfInput->stream());
 
   auto materializedTable = std::make_unique<cudf::table>(
-      slicedTable[0],
-      cudfInput->stream(),
-      cudf::get_current_device_resource_ref());
+      slicedTable[0], cudfInput->stream(), get_output_mr());
 
   auto output = std::make_shared<cudf_velox::CudfVector>(
       input_->pool(),

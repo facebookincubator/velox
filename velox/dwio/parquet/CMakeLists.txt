@@ -23,9 +23,14 @@ if(VELOX_ENABLE_PARQUET)
   endif()
 endif()
 
-velox_add_library(velox_dwio_parquet_reader RegisterParquetReader.cpp)
+velox_add_library(
+  velox_dwio_parquet_reader
+  RegisterParquetReader.cpp
+  HEADERS
+  RegisterParquetReader.h
+  RegisterParquetWriter.h
+)
 velox_add_library(velox_dwio_parquet_writer RegisterParquetWriter.cpp)
-velox_add_library(velox_dwio_parquet_field_id INTERFACE ParquetFieldId.h)
 
 if(VELOX_ENABLE_PARQUET)
   velox_link_libraries(velox_dwio_parquet_reader velox_dwio_native_parquet_reader xsimd)

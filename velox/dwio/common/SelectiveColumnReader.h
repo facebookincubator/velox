@@ -27,6 +27,8 @@
 
 namespace facebook::velox::dwio::common {
 
+struct ColumnMetrics;
+
 using ScanSpec = velox::common::ScanSpec;
 
 /// Generalized representation of a set of distinct values for dictionary
@@ -130,6 +132,10 @@ struct ScanState {
   RawScanState rawState;
 };
 
+inline bool isDense(const RowSet& rows) {
+  return rows.empty() || rows.size() == rows.back() + 1;
+}
+
 class SelectiveColumnReader {
  public:
   static constexpr uint64_t kStringBufferSize = 16 * 1024;
@@ -170,6 +176,14 @@ class SelectiveColumnReader {
   // constant between this and the next call to read.
   virtual void
   read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls) = 0;
+
+  /// Wraps read() to collect decode timing stats for leaf columns.
+  /// Only times primitive types to avoid double-counting in complex types
+  /// (struct/map/array) which recursively call children's readWithTiming.
+  void readWithTiming(
+      int64_t offset,
+      const RowSet& rows,
+      const uint64_t* incomingNulls);
 
   virtual uint64_t skip(uint64_t numValues) {
     return formatData_->skip(numValues);
@@ -243,7 +257,7 @@ class SelectiveColumnReader {
   uint64_t* mutableNulls(int32_t size) {
     if (!resultNulls_->unique()) {
       resultNulls_ = AlignedBuffer::allocate<bool>(
-          numValues_ + size, memoryPool_, bits::kNotNull);
+          numValues_ + size, pool_, bits::kNotNull);
       rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
     }
     if (resultNulls_->capacity() * 8 < numValues_ + size) {
@@ -486,7 +500,7 @@ class SelectiveColumnReader {
 
   StringView copyStringValueIfNeed(std::string_view value) {
     if (value.size() <= StringView::kInlineSize ||
-        formatData().getStringBuffersFromDecoder()) {
+        formatData().stringDecoderZeroCopy()) {
       return StringView(value);
     }
 
@@ -504,7 +518,7 @@ class SelectiveColumnReader {
   }
 
   memory::MemoryPool* memoryPool() const {
-    return memoryPool_;
+    return pool_;
   }
 
  protected:
@@ -532,7 +546,8 @@ class SelectiveColumnReader {
     }
     formatData_->readNulls(
         numRows, incomingNulls, nullsInReadRange_, readsNullsOnly);
-    if (isFlatMapValue_ && nullsInReadRange_) {
+    if (isFlatMapValue_ && nullsInReadRange_ &&
+        flatMapValueNullsInReadRange_.get() != nullsInReadRange_.get()) {
       flatMapValueNullsInReadRange_ = nullsInReadRange_;
     }
   }
@@ -629,7 +644,7 @@ class SelectiveColumnReader {
     return scanSpec_->hasFilter() || hasDeletion();
   }
 
-  memory::MemoryPool* const memoryPool_;
+  memory::MemoryPool* const pool_;
 
   // The requested data type
   const TypePtr requestedType_;
@@ -644,6 +659,10 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* const scanSpec_;
+
+  // Per-column metrics for timing stats. May be nullptr if collection is
+  // disabled.
+  ColumnMetrics* columnMetrics_{nullptr};
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.
@@ -743,8 +762,7 @@ class SelectiveColumnReader {
 template <>
 inline void SelectiveColumnReader::addValue(const std::string_view value) {
   const uint64_t size = value.size();
-  if (formatData().getStringBuffersFromDecoder() ||
-      size <= StringView::kInlineSize) {
+  if (formatData().stringDecoderZeroCopy() || size <= StringView::kInlineSize) {
     reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
         StringView(value.data(), size);
     return;

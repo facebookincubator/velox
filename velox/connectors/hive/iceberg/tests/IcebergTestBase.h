@@ -21,10 +21,10 @@
 #include <string>
 #include <vector>
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -32,6 +32,8 @@
 #endif
 
 namespace facebook::velox::connector::hive::iceberg::test {
+
+using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 extern const std::string kIcebergConnectorId;
 
@@ -72,6 +74,17 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<IcebergPartitionSpec> createPartitionSpec(
       const RowTypePtr& rowType,
       const std::vector<PartitionField>& partitionFields);
+
+  void setConnectorSessionProperty(
+      const std::string& key,
+      const std::string& value);
+
+  /// Recreates the connector query context with the given session timezone
+  /// and timestamp-adjustment flag. Tests use this to exercise non-UTC
+  /// session configurations and verify timezone-sensitive behavior.
+  void recreateConnectorQueryCtx(
+      const std::string& sessionTimezone,
+      bool adjustTimestampToTimezone);
 
   /// Extracts partition key-value pairs from a file path.
   /// Returns a map where keys are partition column names and values are

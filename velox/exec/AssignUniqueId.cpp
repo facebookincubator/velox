@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 
 AssignUniqueId::AssignUniqueId(
@@ -31,7 +33,7 @@ AssignUniqueId::AssignUniqueId(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "AssignUniqueId"),
+          OperatorType::kAssignUniqueId),
       rowIdPool_(std::move(rowIdPool)) {
   VELOX_USER_CHECK_LT(
       uniqueTaskId,

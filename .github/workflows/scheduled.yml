@@ -82,8 +82,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Run for 15 minute on PRs
-  DURATION: ${{ inputs.duration || ( github.event_name != 'schedule' && 900 || 1800 )}}
+  # Per-instance fuzzer duration. With 4 parallel instances at 300s each,
+  # total fuzzer coverage is 1200s (20 min) vs the previous 900s (15 min).
+  DURATION: ${{ inputs.duration || ( github.event_name != 'schedule' && 300 || 600 )}}
+  NUM_FUZZER_INSTANCES: 4
   # minimize artifact duration for PRs, keep them a bit longer for nightly runs
   RETENTION: ${{ github.event_name == 'pull_request' && 1 || 3 }}
 
@@ -97,9 +99,9 @@ jobs:
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
-      NUM_THREADS: ${{ inputs.numThreads || 16 }}
+      NUM_THREADS: ${{ inputs.numThreads || 32 }}
       MAX_HIGH_MEM_JOBS: ${{ inputs.maxHighMemJobs || 8 }}
-      MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 4 }}
+      MAX_LINK_JOBS: ${{ inputs.maxLinkJobs || 6 }}
       SKBUILD_BUILD_DIR: _build/debug
       PYVELOX_LEGACY_ONLY: 'ON'
       CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -115,8 +117,22 @@ jobs:
       spark_error: ${{ steps.sig-check.outputs.spark_error }}
       presto_aggregate_bias: ${{ steps.sig-check.outputs.presto_aggregate_functions }}
       presto_aggregate_error: ${{ steps.sig-check.outputs.presto_aggregate_error }}
+      spark_aggregate_bias: ${{ steps.sig-check.outputs.spark_aggregate_functions }}
+      spark_aggregate_error: ${{ steps.sig-check.outputs.spark_aggregate_error }}
+      signatures_checked: ${{ steps.sig-paths.outputs.signatures }}
 
     steps:
+
+      # Sparse-checkout just the helper scripts dir up front so the
+      # sourced gh-api-retry.sh is on disk for the merge-base step
+      # below. Lands at $GITHUB_WORKSPACE/.github/scripts; the later
+      # "Checkout Contender" / "Checkout Main" steps put their full
+      # clones in different subdirectories (velox/, velox_main/) and
+      # don't conflict.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
 
       - name: Get merge base with main
         if: ${{ github.event_name != 'schedule' }}
@@ -129,12 +145,13 @@ jobs:
           PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
         id: get-merge-base
         run: |
+          source .github/scripts/gh-api-retry.sh
           if [ '${{ github.event_name == 'push' }}' == "true" ]; then
             # get the parent commit of the current one to get the relevant function signatures
-            head_main=$(gh api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
+            head_main=$(gh_api -q '.parents.[0].sha' '/repos/facebookincubator/velox/commits/${{ github.sha }}')
           elif [ '${{ github.event_name == 'pull_request' }}' == "true" ]; then
             # Get the merge base from the api
-            head_main=$(gh api -q '.merge_base_commit.sha' \
+            head_main=$(gh_api -q '.merge_base_commit.sha' \
               /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
           else
@@ -170,8 +187,25 @@ jobs:
           mkdir -p '$CCACHE_DIR'
           mkdir -p /tmp/signatures
 
+      - name: Check for signature-relevant changes
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        if: github.event_name == 'pull_request'
+        id: sig-paths
+        with:
+          filters: |
+            signatures:
+              - 'velox/functions/prestosql/**'
+              - 'velox/functions/sparksql/**'
+              - 'velox/functions/lib/**'
+              - 'velox/expression/**'
+              - 'velox/exec/Aggregate.h'
+              - 'velox/exec/Aggregate.cpp'
+              - 'velox/type/**'
+              - 'velox/python/**'
+              - 'pyproject.toml'
+
       - name: Checkout Main
-        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ steps.get-merge-base.outputs.head_main || 'main' }}
@@ -179,13 +213,13 @@ jobs:
           persist-credentials: false
 
       - name: Build PyVelox
-        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
         working-directory: velox_main
         run: |
           make python-build
 
       - name: Create Baseline Signatures
-        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name != 'schedule' && steps.get-sig.outputs.stash-hit != 'true' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
         working-directory: velox_main
         run: |
           # TODO convert to uv with script defined deps after 14046 is merged
@@ -194,10 +228,11 @@ jobs:
           $PIP install deepdiff
           python3 scripts/ci/signature.py export --spark /tmp/signatures/spark_signatures_main.json
           python3 scripts/ci/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+          python3 scripts/ci/signature.py export_aggregates --spark /tmp/signatures/spark_aggregate_signatures_main.json
           python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
 
       - name: Save Function Signature Stash
-        if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' }}
+        if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' && steps.sig-paths.outputs.signatures == 'true' }}
         uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: /tmp/signatures
@@ -214,19 +249,35 @@ jobs:
         run: |
           ccache -sz
 
-      - name: Build
+      - name: Build Fuzzer Targets
         env:
           EXTRA_CMAKE_FLAGS: >
             -DVELOX_ENABLE_ARROW=ON
             -DVELOX_ENABLE_GEO=ON
             -DVELOX_MONO_LIBRARY=ON
+            -DVELOX_BUILD_SHARED=ON
             -DVELOX_BUILD_PYTHON_PACKAGE=ON
             -DVELOX_PYTHON_LEGACY_ONLY=ON
             ${{ inputs.extraCMakeFlags }}
         run: |
           make python-venv
           source .venv/bin/activate
-          make debug
+          make cmake BUILD_DIR=debug BUILD_TYPE=Debug
+          cmake --build _build/debug -j ${NUM_THREADS} --target \
+            velox_expression_fuzzer_test \
+            spark_expression_fuzzer_test \
+            spark_aggregation_fuzzer_test \
+            velox_aggregation_fuzzer_test \
+            velox_join_fuzzer \
+            velox_exchange_fuzzer \
+            velox_window_fuzzer_test \
+            velox_cache_fuzzer \
+            velox_table_evolution_fuzzer_test \
+            velox_memory_arbitration_fuzzer \
+            velox_row_number_fuzzer \
+            velox_topn_row_number_fuzzer \
+            velox_writer_fuzzer_test \
+            velox_spatial_join_fuzzer
 
       - name: Ccache after
         run: ccache -s
@@ -241,25 +292,29 @@ jobs:
           key: ccache-fuzzer-centos
 
       - name: Build PyVelox
-        if: ${{ github.event_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
         run: |
           make python-build
 
       - name: Create and test new function signatures
-        if: ${{ github.event_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
         id: sig-check
         run: |
           source .venv/bin/activate
           PIP=$(command -v uv > /dev/null 2>&1 && echo "uv pip" || echo "python3 -m pip")
           $PIP install deepdiff
           python3 scripts/ci/signature.py gh_bias_check presto spark
+          python3 scripts/ci/signature.py export_aggregates --spark /tmp/signatures/spark_aggregate_signatures_contender.json
+          python3 scripts/ci/signature.py bias_aggregates --group spark /tmp/signatures/spark_aggregate_signatures_main.json \
+           /tmp/signatures/spark_aggregate_signatures_contender.json /tmp/signatures/spark_aggregate_bias_functions \
+           /tmp/signatures/spark_aggregate_errors
           python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json
-          python3 scripts/ci/signature.py bias_aggregates  /tmp/signatures/presto_aggregate_signatures_main.json \
+          python3 scripts/ci/signature.py bias_aggregates --group presto /tmp/signatures/presto_aggregate_signatures_main.json \
            /tmp/signatures/presto_aggregate_signatures_contender.json /tmp/signatures/presto_aggregate_bias_functions \
            /tmp/signatures/presto_aggregate_errors
 
       - name: Upload Signature Artifacts
-        if: ${{ github.event_name != 'schedule' }}
+        if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || steps.sig-paths.outputs.signatures == 'true') }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: signatures
@@ -284,6 +339,13 @@ jobs:
         with:
           path: /tmp/signatures
           key: function-signatures-${{ github.sha }}
+
+      - name: Upload fuzzer scripts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: fuzzer-scripts
+          path: velox/scripts/ci/run-fuzzer-parallel.sh
+          retention-days: ${{ env.RETENTION }}
 
       - name: Upload presto fuzzer
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -383,13 +445,20 @@ jobs:
           path: velox/_build/debug/velox/exec/fuzzer/velox_spatial_join_fuzzer
           retention-days: ${{ env.RETENTION }}
 
+      - name: Upload shared library
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libvelox
+          path: velox/_build/debug/lib/libvelox.so
+          retention-days: ${{ env.RETENTION }}
+
   presto-fuzzer-run:
     name: Presto Fuzzer
     if: ${{ needs.compile.outputs.presto_bias  != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         if: github.event_name == 'pull_request'
@@ -405,10 +474,10 @@ jobs:
 
       - name: Set presto specific fuzzer duration
         env:
-          # Run for 30 minutes instead of 15, when files relevant to presto are touched
-          pr_duration: ${{ steps.changes.outputs.presto == 'true' && 1800 || 900 }}
-          # Run for 60 minutes if its a scheduled run
-          other_duration: ${{ inputs.duration || (github.event_name == 'push' && 1800 || 3600) }}
+          # Run for 10 minutes per instance instead of 5, when files relevant to presto are touched
+          pr_duration: ${{ steps.changes.outputs.presto == 'true' && 600 || 300 }}
+          # Run for 20 minutes per instance if its a scheduled run
+          other_duration: ${{ inputs.duration || (github.event_name == 'push' && 600 || 1200) }}
           is_pr: ${{ github.event_name == 'pull_request' }}
         run: |
           if [ "$is_pr" == "true" ]; then
@@ -424,15 +493,23 @@ jobs:
         with:
           name: presto
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run Presto Fuzzer
         run: |
-          mkdir -p /tmp/fuzzer_repro/logs/
-          chmod -R 777 /tmp/fuzzer_repro
-          chmod +x velox_expression_fuzzer_test
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_expression_fuzzer_test \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_expression_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/fuzzer_repro \
+            ./velox_expression_fuzzer_test \
+                --seed __SEED__ \
                 --enable_variadic_signatures \
                 --velox_fuzzer_enable_complex_types \
                 --velox_fuzzer_enable_decimal_type \
@@ -447,12 +524,11 @@ jobs:
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/fuzzer_repro/logs \
-                --repro_persist_path=/tmp/fuzzer_repro \
-          && echo -e "\n\nFuzzer run finished successfully."
+                --log_dir=__LOG_DIR__ \
+                --repro_persist_path=__REPRO_DIR__
 
       - name: Archive production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-fuzzer-failure-artifacts
@@ -462,9 +538,9 @@ jobs:
   presto-sot-fuzzer-run:
     name: Expression Fuzzer with Presto SOT
     needs: compile
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -474,6 +550,16 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: presto
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -492,18 +578,16 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          mkdir -p /tmp/fuzzer_repro/logs/
-          chmod -R 777 /tmp/fuzzer_repro
-          chmod +x velox_expression_fuzzer_test
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_expression_fuzzer_test \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_expression_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/fuzzer_repro \
+            ./velox_expression_fuzzer_test \
+                --seed __SEED__ \
                 --enable_variadic_signatures \
                 --velox_fuzzer_enable_complex_types \
                 --lazy_vector_generation_ratio 0.2 \
@@ -511,18 +595,18 @@ jobs:
                 --velox_fuzzer_enable_column_reuse \
                 --velox_fuzzer_enable_expression_reuse \
                 --enable_dereference \
-                --duration_sec 900 \
+                --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/fuzzer_repro/logs \
-                --repro_persist_path=/tmp/fuzzer_repro \
+                --log_dir=__LOG_DIR__ \
+                --repro_persist_path=__REPRO_DIR__ \
                 --special_forms="cast,coalesce,if" \
                 --velox_fuzzer_max_level_of_nesting=1 \
                 --presto_url=http://127.0.0.1:8080 \
-          && echo -e "\n\nFuzzer run finished successfully."
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-fuzzer-failure-artifacts
@@ -543,6 +627,15 @@ jobs:
         with:
           name: presto
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Download Signatures
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -554,6 +647,7 @@ jobs:
           ls /tmp/signatures
           mkdir -p /tmp/presto_bias_fuzzer_repro/logs/
           chmod -R 777 /tmp/presto_bias_fuzzer_repro
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
           chmod +x velox_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
@@ -579,7 +673,7 @@ jobs:
             && echo -e "\n\nPresto Fuzzer run finished successfully."
 
       - name: Archive Presto Bias expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-fuzzer-failure-artifacts
@@ -588,9 +682,60 @@ jobs:
 
   spark-aggregate-fuzzer-run:
     name: Spark Aggregate Fuzzer
+    if: ${{ needs.compile.outputs.spark_aggregate_bias  != 'true' }}
+    runs-on: 4-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:spark-server
+    needs: compile
+    timeout-minutes: 30
+    steps:
+
+      - name: Download spark aggregation fuzzer
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: spark_aggregation_fuzzer
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
+      - name: Run Spark Aggregate Fuzzer
+        run: |
+          bash /opt/start-spark.sh
+          # Sleep for 120 seconds to allow Spark server to start.
+          sleep 120
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x spark_aggregation_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/spark_aggregate_fuzzer_repro \
+            ./spark_aggregation_fuzzer_test \
+                --seed __SEED__ \
+                --duration_sec $DURATION \
+                --enable_sorted_aggregations=false \
+                --enable_streaming_aggregations=false \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=__LOG_DIR__ \
+                --repro_persist_path=__REPRO_DIR__ \
+                --table_name_prefix=i__INSTANCE_ID__
+
+      - name: Archive Spark aggregate production artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: spark-agg-fuzzer-failure-artifacts
+          path: |
+            /tmp/spark_aggregate_fuzzer_repro
+
+  spark-bias-aggregate-fuzzer-run:
+    name: Spark Bias Aggregate Fuzzer
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:spark-server
     needs: compile
+    if: ${{ needs.compile.outputs.spark_aggregate_bias  == 'true' }}
     timeout-minutes: 60
     steps:
 
@@ -599,33 +744,53 @@ jobs:
         with:
           name: spark_aggregation_fuzzer
 
-      - name: Run Spark Aggregate Fuzzer
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
+      - name: Download Signatures
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: signatures
+          path: /tmp/signatures
+
+      - name: Run Spark Bias Aggregate Fuzzer
         run: |
+          ls /tmp/signatures
+          mkdir -p /tmp/spark_bias_aggregate_fuzzer_repro/logs/
+          chmod -R 777 /tmp/spark_bias_aggregate_fuzzer_repro
           bash /opt/start-spark.sh
-          # Sleep for 60 seconds to allow Spark server to start.
-          sleep 60
-          mkdir -p /tmp/spark_aggregate_fuzzer_repro/logs/
-          chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+          # Sleep for 120 seconds to allow Spark server to start.
+          sleep 120
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
           chmod +x spark_aggregation_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/spark_aggregate_bias_functions)"
           ./spark_aggregation_fuzzer_test \
                 --seed ${random_seed} \
                 --duration_sec $DURATION \
                 --enable_sorted_aggregations=false \
+                --enable_streaming_aggregations=false \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/spark_aggregate_fuzzer_repro/logs \
-                --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
-          && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
+                --log_dir=/tmp/spark_bias_aggregate_fuzzer_repro/logs \
+                --only=$(< /tmp/signatures/spark_aggregate_bias_functions) \
+                --repro_persist_path=/tmp/spark_bias_aggregate_fuzzer_repro \
+            && echo -e "\n\nSpark Aggregate Fuzzer run finished successfully."
 
-      - name: Archive Spark aggregate production artifacts
-        if: ${{ !cancelled() }}
+      - name: Archive Spark bias aggregate production artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: spark-agg-fuzzer-failure-artifacts
+          name: spark-bias-agg-fuzzer-failure-artifacts
           path: |
-            /tmp/spark_aggregate_fuzzer_repro
+            /tmp/spark_bias_aggregate_fuzzer_repro
 
   spark-bias-fuzzer:
     name: Spark Bias Fuzzer
@@ -641,6 +806,15 @@ jobs:
         with:
           name: spark_expression_fuzzer
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Download Signatures
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -652,6 +826,7 @@ jobs:
           ls /tmp/signatures
           mkdir -p /tmp/spark_bias_fuzzer_repro/logs/
           chmod -R 777 /tmp/spark_bias_fuzzer_repro
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
           chmod +x spark_expression_fuzzer_test
           random_seed=${RANDOM}
           echo "Random seed: ${random_seed}"
@@ -668,7 +843,7 @@ jobs:
             && echo -e "\n\nSpark Fuzzer run finished successfully."
 
       - name: Archive Spark expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
@@ -678,10 +853,10 @@ jobs:
   spark-fuzzer:
     name: Spark Fuzzer
     if: ${{ needs.compile.outputs.spark_bias  != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
 
       - name: Download spark expression fuzzer
@@ -689,15 +864,22 @@ jobs:
         with:
           name: spark_expression_fuzzer
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run Spark Expression Fuzzer
         run: |
-          mkdir -p /tmp/spark_fuzzer_repro/logs/
-          chmod -R 777 /tmp/spark_fuzzer_repro
-          chmod +x spark_expression_fuzzer_test
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./spark_expression_fuzzer_test \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x spark_expression_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/spark_fuzzer_repro \
+            ./spark_expression_fuzzer_test \
+                --seed __SEED__ \
                 --enable_variadic_signatures \
                 --lazy_vector_generation_ratio 0.2 \
                 --velox_fuzzer_enable_column_reuse \
@@ -710,12 +892,11 @@ jobs:
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/spark_fuzzer_repro/logs \
-                --repro_persist_path=/tmp/spark_fuzzer_repro \
-            && echo -e "\n\nSpark Fuzzer run finished successfully."
+                --log_dir=__LOG_DIR__ \
+                --repro_persist_path=__REPRO_DIR__
 
       - name: Archive Spark expression production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spark-fuzzer-failure-artifacts
@@ -724,10 +905,10 @@ jobs:
 
   presto-java-join-fuzzer-run:
     name: Join Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -737,6 +918,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: join
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -755,28 +945,26 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          mkdir -p /tmp/join_fuzzer_repro/logs/
-          chmod -R 777 /tmp/join_fuzzer_repro
-          chmod +x velox_join_fuzzer
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_join_fuzzer \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_join_fuzzer run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/join_fuzzer_repro \
+            ./velox_join_fuzzer \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/join_fuzzer_repro/logs \
+                --log_dir=__LOG_DIR__ \
                 --presto_url=http://127.0.0.1:8080 \
-                --req_timeout_ms=2000 \
-            && echo -e "\n\nJoin fuzzer run finished successfully."
+                --req_timeout_ms=10000 \
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive join production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-join-fuzzer-failure-artifacts
@@ -789,7 +977,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
 
       - name: Download exchange fuzzer
@@ -797,25 +985,33 @@ jobs:
         with:
           name: exchange
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run exchange Fuzzer
         run: |
           cat /proc/sys/vm/max_map_count
-          mkdir -p /tmp/exchange_fuzzer_repro/logs/
-          chmod -R 777 /tmp/exchange_fuzzer_repro
-          chmod +x velox_exchange_fuzzer
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_exchange_fuzzer \
-                --seed ${random_seed} \
-                --duration_sec $DURATION \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_exchange_fuzzer run-fuzzer-parallel.sh
+          # Exchange fuzzer is multi-threaded and memory-heavy; run 1 instance
+          # on ubuntu-latest with an extended duration.
+          ./run-fuzzer-parallel.sh 1 /tmp/exchange_fuzzer_repro \
+            ./velox_exchange_fuzzer \
+                --seed __SEED__ \
+                --duration_sec 480 \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/exchange_fuzzer_repro/logs \
-                --repro_path=/tmp/exchange_fuzzer_repro \
-            && echo -e "\n\Exchange fuzzer run finished successfully."
+                --log_dir=__LOG_DIR__ \
+                --repro_path=__REPRO_DIR__
 
       - name: Archive Exchange production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: exchange-fuzzer-failure-artifacts
@@ -824,10 +1020,10 @@ jobs:
 
   presto-java-row-number-fuzzer-run:
     name: RowNumber Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -838,6 +1034,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: row_number
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -856,28 +1061,26 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          cat /proc/sys/vm/max_map_count
-          mkdir -p /tmp/row_fuzzer_repro/logs/
-          chmod -R 777 /tmp/row_fuzzer_repro
-          chmod +x velox_row_number_fuzzer
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_row_number_fuzzer \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_row_number_fuzzer run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/row_fuzzer_repro \
+            ./velox_row_number_fuzzer \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/row_fuzzer_repro/logs \
+                --log_dir=__LOG_DIR__ \
                 --presto_url=http://127.0.0.1:8080 \
-            && echo -e "\n\Row number fuzzer run finished successfully."
+                --req_timeout_ms=10000 \
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive row number production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: row-fuzzer-failure-artifacts
@@ -886,10 +1089,10 @@ jobs:
 
   presto-java-topn-row-number-fuzzer-run:
     name: TopNRowNumber Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -900,6 +1103,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: topn_row_number
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -918,29 +1130,26 @@ jobs:
           cd velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          cat /proc/sys/vm/max_map_count
-          mkdir -p /tmp/topn_row_fuzzer_repro/logs/
-          chmod -R 777 /tmp/topn_row_fuzzer_repro
-          chmod +x velox_topn_row_number_fuzzer
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_topn_row_number_fuzzer \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_topn_row_number_fuzzer run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/topn_row_fuzzer_repro \
+            ./velox_topn_row_number_fuzzer \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
                 --req_timeout_ms 50000 \
-                --log_dir=/tmp/topn_row_fuzzer_repro/logs \
+                --log_dir=__LOG_DIR__ \
                 --presto_url=http://127.0.0.1:8080 \
-            && echo -e "\n\TopN Row number fuzzer run finished successfully."
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive topn row number production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: topn-row-fuzzer-failure-artifacts
@@ -949,10 +1158,10 @@ jobs:
 
   cache-fuzzer-run:
     name: Cache Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     # Temporarily disable on PRs till flakiness is fixed #12167
     if: ${{ github.event_name != 'pull_request' }}
     steps:
@@ -962,21 +1171,29 @@ jobs:
         with:
           name: cache_fuzzer
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run Cache Fuzzer
         run: |
-          mkdir -p /tmp/cache_fuzzer/logs/
-          chmod -R 777 /tmp/cache_fuzzer
-          chmod +x velox_cache_fuzzer
-          ./velox_cache_fuzzer \
-                --seed ${RANDOM} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_cache_fuzzer run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/cache_fuzzer \
+            ./velox_cache_fuzzer \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/cache_fuzzer/logs \
-            && echo -e "\n\Cache fuzzer run finished successfully."
+                --log_dir=__LOG_DIR__
 
       - name: Archive Cache production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cache-fuzzer-logs
@@ -985,10 +1202,10 @@ jobs:
 
   table-evolution-fuzzer-run:
     name: Table Evolution Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
 
       - name: Download table evolution fuzzer
@@ -996,21 +1213,29 @@ jobs:
         with:
           name: table_evolution_fuzzer
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run Table Evolution Fuzzer
         run: |
-          mkdir -p /tmp/table_evolution_fuzzer_test/logs/
-          chmod -R 777 /tmp/table_evolution_fuzzer_test
-          chmod +x velox_table_evolution_fuzzer_test
-          ./velox_table_evolution_fuzzer_test \
-                --seed ${RANDOM} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_table_evolution_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/table_evolution_fuzzer_test \
+            ./velox_table_evolution_fuzzer_test \
+                --seed __SEED__ \
                 --table_evolution_fuzzer_duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/table_evolution_fuzzer_test/logs \
-            && echo -e "\n\Table evolution fuzzer run finished successfully."
+                --log_dir=__LOG_DIR__
 
       - name: Archive table evolution production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: table-evolution-fuzzer-test-logs
@@ -1019,10 +1244,10 @@ jobs:
 
   memory-arbitration-fuzzer-run:
     name: Memory Arbitration Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
 
       - name: Download memory arbitration fuzzer
@@ -1030,33 +1255,41 @@ jobs:
         with:
           name: memory_arbitration_fuzzer
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run Memory Arbitration Fuzzer
         run: |
-          mkdir -p /tmp/memory_arbitration_fuzzer/logs/
-          chmod -R 777 /tmp/memory_arbitration_fuzzer
-          chmod +x velox_memory_arbitration_fuzzer
-          ./velox_memory_arbitration_fuzzer \
-                --seed ${RANDOM} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_memory_arbitration_fuzzer run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/memory_arbitration_fuzzer \
+            ./velox_memory_arbitration_fuzzer \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/memory_arbitration_fuzzer/logs \
-            && echo -e "\n\Memory arbitration fuzzer run finished successfully."
+                --log_dir=__LOG_DIR__
 
       - name: Archive memory arbitration production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: memory-arbitration-fuzzer-test-logs
           path: |
-            /tmp/memory_arbitration_fuzzer_test
+            /tmp/memory_arbitration_fuzzer
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
     needs: compile
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1066,6 +1299,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: aggregation
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1084,29 +1326,28 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          mkdir -p /tmp/aggregate_fuzzer_repro/logs/
-          chmod -R 777 /tmp/aggregate_fuzzer_repro
-          chmod +x velox_aggregation_fuzzer_test
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_aggregation_fuzzer_test \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_aggregation_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/aggregate_fuzzer_repro \
+            ./velox_aggregation_fuzzer_test \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/aggregate_fuzzer_repro/logs \
-                --repro_persist_path=/tmp/aggregate_fuzzer_repro \
+                --log_dir=__LOG_DIR__ \
+                --repro_persist_path=__REPRO_DIR__ \
                 --enable_sorted_aggregations=true \
                 --presto_url=http://127.0.0.1:8080 \
-          && echo -e "\n\nAggregation fuzzer run finished successfully."
+                --req_timeout_ms=10000 \
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-aggregate-fuzzer-failure-artifacts
@@ -1131,6 +1372,15 @@ jobs:
         with:
           name: presto
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -1154,13 +1404,14 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
           mkdir -p /tmp/presto_only_bias_function_fuzzer_repro/logs/
           chmod -R 777 /tmp/presto_only_bias_function_fuzzer_repro
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
           chmod +x velox_expression_fuzzer_test
           echo "Biased functions: $(< /tmp/signatures/presto_bias_functions)"
           # Convert the list of function names with tickets into a list of function names only.
@@ -1196,7 +1447,7 @@ jobs:
                 --repro_persist_path=/tmp/presto_only_bias_function_fuzzer_repro \
           && echo -e "\n\nPresto Fuzzer run finished successfully."
       - name: Archive Presto only-bias-function expression fuzzer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-only-bias-function-fuzzer-failure-artifacts
@@ -1219,6 +1470,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: aggregation
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1243,13 +1503,14 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
           mkdir -p /tmp/aggregate_fuzzer_repro/logs/
           chmod -R 777 /tmp/aggregate_fuzzer_repro
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
           chmod +x velox_aggregation_fuzzer_test
           echo "signatures folder"
           ls /tmp/signatures/
@@ -1270,7 +1531,7 @@ jobs:
           && echo -e "\n\nAggregation fuzzer run finished successfully."
 
       - name: Archive bias aggregate production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-bias-sot-aggregate-fuzzer-failure-artifacts
@@ -1280,7 +1541,7 @@ jobs:
 
   surface-signature-errors:
     name: Signature Changes
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && needs.compile.outputs.signatures_checked != 'false' }}
     needs: compile
     runs-on: ubuntu-latest
     steps:
@@ -1302,12 +1563,18 @@ jobs:
           cat /tmp/signatures/presto_aggregate_errors
           exit 1
 
+      - name: Surface Spark aggregate function signature errors
+        if: ${{ needs.compile.outputs.spark_aggregate_error == 'true' }}
+        run: |
+          cat /tmp/signatures/spark_aggregate_errors
+          exit 1
+
   presto-java-window-fuzzer-run:
     name: Window Fuzzer with Presto as source of truth
     needs: compile
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1317,6 +1584,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: window
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1335,30 +1611,29 @@ jobs:
           cd  velox
           cp ./scripts/ci/presto/etc/hive.properties $PRESTO_HOME/etc/catalog
           ls -lR $PRESTO_HOME/etc
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          mkdir -p /tmp/window_fuzzer_repro/logs/
-          chmod -R 777 /tmp/window_fuzzer_repro
-          chmod +x velox_window_fuzzer_test
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_window_fuzzer_test \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_window_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/window_fuzzer_repro \
+            ./velox_window_fuzzer_test \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --batch_size=50 \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/window_fuzzer_repro/logs \
-                --repro_persist_path=/tmp/window_fuzzer_repro \
+                --log_dir=__LOG_DIR__ \
+                --repro_persist_path=__REPRO_DIR__ \
                 --enable_window_reference_verification \
                 --presto_url=http://127.0.0.1:8080 \
-          && echo -e "\n\nWindow fuzzer run finished successfully."
+                --req_timeout_ms=10000 \
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive window production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-window-fuzzer-failure-artifacts
@@ -1369,9 +1644,9 @@ jobs:
   presto-java-writer-fuzzer-run:
     name: Writer Fuzzer with Presto as source of truth
     needs: compile
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1381,6 +1656,15 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: writer
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
 
       - name: Checkout Repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -1401,30 +1685,28 @@ jobs:
           ls -lR $PRESTO_HOME/etc
           echo "jvm config content:"
           cat $PRESTO_HOME/etc/jvm.config
-          $PRESTO_HOME/bin/launcher run -v > /tmp/server.log 2>&1 &
+          $PRESTO_HOME/bin/launcher run > /tmp/server.log 2>&1 &
           ls -lR /var/log
           # Sleep for 60 seconds to allow Presto server to start.
           sleep 60
           /opt/presto-cli --version
           /opt/presto-cli --server 127.0.0.1:8080 --execute 'CREATE SCHEMA IF NOT EXISTS hive.tpch;'
           cd -
-          mkdir -p /tmp/writer_fuzzer_repro/logs/
-          chmod -R 777 /tmp/writer_fuzzer_repro
-          chmod +x velox_writer_fuzzer_test
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_writer_fuzzer_test \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_writer_fuzzer_test run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/writer_fuzzer_repro \
+            ./velox_writer_fuzzer_test \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
                 --req_timeout_ms 60000 \
-                --log_dir=/tmp/writer_fuzzer_repro/logs \
+                --log_dir=__LOG_DIR__ \
                 --presto_url=http://127.0.0.1:8080 \
-          && echo -e "\n\Writer fuzzer run finished successfully."
+                --table_name_prefix=i__INSTANCE_ID__
 
       - name: Archive writer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: presto-sot-writer-fuzzer-failure-artifacts
@@ -1435,10 +1717,10 @@ jobs:
 
   spatial-join-fuzzer-run:
     name: Spatial Join Fuzzer
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:centos9
     needs: compile
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
 
       - name: Download spatial join fuzzer
@@ -1446,23 +1728,29 @@ jobs:
         with:
           name: spatial_join_fuzzer
 
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
       - name: Run Spatial Join Fuzzer
         run: |
-          mkdir -p /tmp/spatial_join_fuzzer_repro/logs/
-          chmod -R 777 /tmp/spatial_join_fuzzer_repro
-          chmod +x velox_spatial_join_fuzzer
-          random_seed=${RANDOM}
-          echo "Random seed: ${random_seed}"
-          ./velox_spatial_join_fuzzer \
-                --seed ${random_seed} \
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x velox_spatial_join_fuzzer run-fuzzer-parallel.sh
+          ./run-fuzzer-parallel.sh $NUM_FUZZER_INSTANCES /tmp/spatial_join_fuzzer_repro \
+            ./velox_spatial_join_fuzzer \
+                --seed __SEED__ \
                 --duration_sec $DURATION \
                 --minloglevel=0 \
                 --stderrthreshold=2 \
-                --log_dir=/tmp/spatial_join_fuzzer_repro/logs \
-          && echo -e "\n\Spatial join fuzzer run finished successfully."
+                --log_dir=__LOG_DIR__
 
       - name: Archive spatial join fuzzer production artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: spatial-join-fuzzer-failure-artifacts

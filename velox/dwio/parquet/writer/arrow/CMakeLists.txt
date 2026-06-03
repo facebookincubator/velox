@@ -37,8 +37,33 @@ velox_add_library(
   Properties.cpp
   Schema.cpp
   Statistics.cpp
+  StringTruncation.cpp
   Types.cpp
   Writer.cpp
+  HEADERS
+  ArrowSchema.h
+  ArrowSchemaInternal.h
+  ColumnPage.h
+  ColumnWriter.h
+  Encoding.h
+  Encryption.h
+  EncryptionInternal.h
+  Exception.h
+  FileDecryptorInternal.h
+  FileEncryptorInternal.h
+  FileWriter.h
+  Metadata.h
+  PageIndex.h
+  PathInternal.h
+  Platform.h
+  Properties.h
+  Schema.h
+  SchemaInternal.h
+  Statistics.h
+  StringTruncation.h
+  ThriftInternal.h
+  Types.h
+  Writer.h
 )
 
 velox_link_libraries(

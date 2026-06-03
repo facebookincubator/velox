@@ -129,6 +129,30 @@ TEST_F(ExprToSubfieldFilterTest, neq) {
   VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
 }
 
+TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
+  {
+    auto call = parseCallExpr("a <> 9223372036854775807", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(lessThan(std::numeric_limits<int64_t>::max()), filter);
+  }
+
+  {
+    auto call =
+        parseCallExpr("a <> -9223372036854775807 - 1", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(
+        greaterThan(std::numeric_limits<int64_t>::min()), filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, lte) {
   auto call = parseCallExpr("a <= 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
@@ -388,6 +412,94 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterFloat) {
         expected, makeOr(lessThanFloat(1.0), greaterThanFloat(1.0)));
     VELOX_ASSERT_FILTER(
         expected, makeOr(greaterThanFloat(1.0), lessThanFloat(1.0)));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesValues) {
+  // a = 'FRANCE' or a = 'JAPAN' ==> a in ('FRANCE', 'JAPAN')
+  // Note: equal(string) generates BytesValues filter
+  {
+    auto expected = in({"FRANCE", "JAPAN"});
+    VELOX_ASSERT_FILTER(expected, makeOr(equal("FRANCE"), equal("JAPAN")));
+    VELOX_ASSERT_FILTER(expected, makeOr(equal("JAPAN"), equal("FRANCE")));
+  }
+
+  // a = 'FRANCE' or a = 'GERMANY' or a = 'JAPAN'
+  // ==> a in ('FRANCE', 'GERMANY', 'JAPAN')
+  {
+    auto expected = in({"FRANCE", "GERMANY", "JAPAN"});
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(equal("FRANCE"), equal("GERMANY"), equal("JAPAN")));
+  }
+
+  // a in ('FRANCE', 'JAPAN') or a = 'GERMANY'
+  // ==> a in ('FRANCE', 'JAPAN', 'GERMANY')
+  {
+    auto expected = in({"FRANCE", "JAPAN", "GERMANY"});
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(in({"FRANCE", "JAPAN"}), equal("GERMANY")));
+  }
+
+  // a in ('FRANCE', 'JAPAN') or a in ('GERMANY', 'ITALY')
+  // ==> a in ('FRANCE', 'JAPAN', 'GERMANY', 'ITALY')
+  {
+    auto expected = in({"FRANCE", "JAPAN", "GERMANY", "ITALY"});
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(in({"FRANCE", "JAPAN"}), in({"GERMANY", "ITALY"})));
+  }
+
+  // Test with nullAllowed
+  {
+    auto expected = std::make_unique<common::BytesValues>(
+        std::vector<std::string>{"FRANCE", "JAPAN"}, /*nullAllowed=*/true);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(
+            equal("FRANCE"),
+            std::make_unique<common::BytesValues>(
+                std::vector<std::string>{"JAPAN"}, /*nullAllowed=*/true)));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRange) {
+  // Test BytesRange with single value (singleValue_ = true)
+  // between("FRANCE", "FRANCE") creates a BytesRange with singleValue_ = true
+  {
+    auto expected = in({"FRANCE", "JAPAN"});
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(between("FRANCE", "FRANCE"), between("JAPAN", "JAPAN")));
+  }
+
+  // Test mixing BytesRange (single value) with BytesValues
+  {
+    auto expected = in({"FRANCE", "JAPAN", "GERMANY"});
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(between("FRANCE", "FRANCE"), in({"JAPAN", "GERMANY"})));
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(in({"JAPAN", "GERMANY"}), between("FRANCE", "FRANCE")));
+  }
+
+  // Test BytesRange with single value combined with equal() (BytesValues)
+  {
+    auto expected = in({"FRANCE", "JAPAN"});
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(between("FRANCE", "FRANCE"), equal("JAPAN")));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(equal("JAPAN"), between("FRANCE", "FRANCE")));
+  }
+
+  // Test multiple BytesRange with single values
+  {
+    auto expected = in({"FRANCE", "GERMANY", "JAPAN"});
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(
+            between("FRANCE", "FRANCE"),
+            between("GERMANY", "GERMANY"),
+            between("JAPAN", "JAPAN")));
   }
 }
 

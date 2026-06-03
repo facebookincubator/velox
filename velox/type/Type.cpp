@@ -16,15 +16,22 @@
 
 #include <velox/type/Type.h>
 
+#include <folly/dynamic.h>
+
+#include "velox/common/EnumDefine.h"
+#include "velox/type/TypeSerde.h"
+
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
 #include <folly/Demangle.h>
+#include <folly/hash/Hash.h>
 #include <re2/re2.h>
 
 #include <sstream>
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/TimestampConversion.h"
@@ -41,8 +48,8 @@ struct hash<facebook::velox::TypeKind> {
 namespace facebook::velox {
 namespace {
 bool isColumnNameRequiringEscaping(const std::string& name) {
-  static const std::string re("^[a-zA-Z_][a-zA-Z0-9_]*$");
-  return !RE2::FullMatch(name, re);
+  static const re2::RE2 pattern("^[a-zA-Z_][a-zA-Z0-9_]*$");
+  return !RE2::FullMatch(name, pattern);
 }
 
 const auto& typeKindNames() {
@@ -254,6 +261,80 @@ TypePtr Type::create(const folly::dynamic& obj) {
   }
 }
 
+template <TypeKind KIND>
+folly::dynamic ScalarType<KIND>::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<KIND>::name;
+  return obj;
+}
+
+template folly::dynamic ScalarType<TypeKind::BOOLEAN>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::TINYINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::SMALLINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::INTEGER>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::BIGINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::REAL>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::DOUBLE>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::VARCHAR>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::VARBINARY>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::TIMESTAMP>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::HUGEINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::UNKNOWN>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::OPAQUE>::serialize() const;
+
+template <TypeKind KIND>
+folly::dynamic DecimalType<KIND>::serialize() const {
+  auto obj = ScalarType<KIND>::serialize();
+  obj["type"] = name();
+  obj["precision"] = precision();
+  obj["scale"] = scale();
+  return obj;
+}
+
+template folly::dynamic DecimalType<TypeKind::BIGINT>::serialize() const;
+template folly::dynamic DecimalType<TypeKind::HUGEINT>::serialize() const;
+
+folly::dynamic UnknownType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<TypeKind::UNKNOWN>::name;
+  return obj;
+}
+
+folly::dynamic IntervalDayTimeType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IntervalDayTimeType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr IntervalDayTimeType::deserialize(const folly::dynamic& /*obj*/) {
+  return IntervalDayTimeType::get();
+}
+
+folly::dynamic IntervalYearMonthType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IntervalYearMonthType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr IntervalYearMonthType::deserialize(const folly::dynamic& /*obj*/) {
+  return IntervalYearMonthType::get();
+}
+
+folly::dynamic DateType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "DateType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr DateType::deserialize(const folly::dynamic& /*obj*/) {
+  return DateType::get();
+}
+
 // static
 void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
@@ -265,7 +346,8 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
-  registry.Register("TimeType", TimeType::deserialize);
+  registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
+  registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -460,29 +542,25 @@ const RowType::NameToIndex* RowType::ensureNameToIndex() const {
 }
 
 namespace {
-template <typename T>
-std::string makeFieldNotFoundErrorMessage(
-    const T& name,
+std::string formatAvailableFields(
     const std::vector<std::string>& availableNames) {
   static constexpr auto kMaxFields = 50;
 
   const auto numAvailable = availableNames.size();
 
-  std::stringstream errorMessage;
-  errorMessage << "Field not found: " << name << ". Available fields are: ";
+  std::stringstream result;
   for (auto i = 0; i < numAvailable && i < kMaxFields; ++i) {
     if (i > 0) {
-      errorMessage << ", ";
+      result << ", ";
     }
-    errorMessage << availableNames[i];
+    result << availableNames[i];
   }
 
   if (numAvailable > kMaxFields) {
-    errorMessage << ", ..." << (numAvailable - kMaxFields) << " more";
+    result << ", ..." << (numAvailable - kMaxFields) << " more";
   }
 
-  errorMessage << ".";
-  return errorMessage.str();
+  return result.str();
 }
 } // namespace
 
@@ -490,7 +568,10 @@ const TypePtr& RowType::findChild(std::string_view name) const {
   if (auto i = getChildIdxIfExists(name)) {
     return children_[*i];
   }
-  VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+  VELOX_USER_FAIL(
+      "Field not found: {}. Available fields are: {}.",
+      name,
+      formatAvailableFields(names_));
 }
 
 bool RowType::isOrderable() const {
@@ -514,7 +595,10 @@ bool RowType::containsChild(std::string_view name) const {
 uint32_t RowType::getChildIdx(std::string_view name) const {
   auto index = getChildIdxIfExists(name);
   if (!index.has_value()) {
-    VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+    VELOX_USER_FAIL(
+        "Field not found: {}. Available fields are: {}.",
+        name,
+        formatAvailableFields(names_));
   }
   return index.value();
 }
@@ -1021,6 +1105,10 @@ VELOX_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 
 #undef VELOX_DEFINE_SCALAR_ACCESSOR
 
+TypePtr TIMESTAMP_UTC() {
+  return TimestampUtcType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1169,7 +1257,11 @@ std::unordered_set<std::string> getCustomTypeNames() {
 
 bool unregisterCustomType(const std::string& name) {
   auto uppercaseName = boost::algorithm::to_upper_copy(name);
-  return typeFactories().erase(uppercaseName) == 1;
+  bool removed = typeFactories().erase(uppercaseName) == 1;
+  if (removed) {
+    CastRulesRegistry::instance().unregisterCastRules(uppercaseName);
+  }
+  return removed;
 }
 
 const CustomTypeFactory* FOLLY_NULLABLE
@@ -1354,10 +1446,12 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARCHAR", VARCHAR()},
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
+      {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
       {"TIME", TIME()},
+      {"TIME MICRO UTC", TIME_MICRO_UTC()},
       {"UNKNOWN", UNKNOWN()},
   };
   return kTypes;
@@ -1508,19 +1602,92 @@ std::string getOpaqueAliasForTypeId(std::type_index typeIndex) {
   return it->second;
 }
 
-folly::dynamic TimeType::serialize() const {
+namespace {
+
+const auto& timePrecisionNames() {
+  static const folly::F14FastMap<TimePrecision, std::string_view> kNames = {
+      {TimePrecision::kMilliseconds, "MILLISECONDS"},
+      {TimePrecision ::kMicroseconds, "MICROSECONDS"}};
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TimePrecision, timePrecisionNames);
+
+namespace {
+
+const auto& typeParameterKindNames() {
+  static const folly::F14FastMap<TypeParameterKind, std::string_view> kNames = {
+      {TypeParameterKind::kType, "kType"},
+      {TypeParameterKind::kLongLiteral, "kLongLiteral"},
+      {TypeParameterKind::kLongEnumLiteral, "kLongEnumLiteral"},
+      {TypeParameterKind::kVarcharEnumLiteral, "kVarcharEnumLiteral"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
+folly::dynamic TimestampUtcType::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "TimeType";
+  obj["name"] = "TimestampUtcType";
   obj["type"] = name();
   return obj;
 }
 
-StringView TimeType::valueToString(int64_t value, char* const startPos) const {
+template <TimePrecision kPrecision, bool kLocalTime>
+folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimeType";
+  obj["type"] = name();
+  // Only include precision and localTime if they differ from defaults
+  // (milliseconds and local time) for backward compatibility.
+  if (kPrecision != TimePrecision::kMilliseconds) {
+    obj["precision"] = static_cast<int>(kPrecision);
+  }
+  if (!kLocalTime) {
+    obj["localTime"] = kLocalTime;
+  }
+  return obj;
+}
+
+// Explicit template instantiations for TimeType.
+template class TimeType<TimePrecision::kMilliseconds, true>;
+template class TimeType<TimePrecision::kMicroseconds, false>;
+
+// static
+TypePtr TimeTypeFactory::deserialize(const folly::dynamic& obj) {
+  // Default to millseconds and local time for backward compatibility.
+  auto precision = obj.get_ptr("precision")
+      ? static_cast<TimePrecision>(obj["precision"].asInt())
+      : TimePrecision::kMilliseconds;
+  bool localTime = obj.get_ptr("localTime") ? obj["localTime"].asBool() : true;
+
+  if (precision == TimePrecision::kMilliseconds) {
+    VELOX_USER_CHECK(
+        localTime,
+        "TimeType with millisecond precision and local time zone is not used.");
+    return static_cast<TypePtr>(TIME());
+  }
+  VELOX_USER_CHECK(
+      !localTime,
+      "TimeType with microsecond precision and UTC time zone is not used.");
+  return static_cast<TypePtr>(TIME_MICRO_UTC());
+}
+
+StringView TimeMilliPrecisionType::valueToString(
+    int64_t value,
+    char* const startPos) const {
   // Ensure the value is within valid TIME range
   VELOX_USER_CHECK(
-      !(value < 0 || value >= 86400000),
-      "TIME value {} is out of range [0, 86400000)",
-      value);
+      !(value < getMin() || value > getMax()),
+      "TIME value {} is out of range [{}, {}]",
+      value,
+      getMin(),
+      getMax());
 
   int64_t hours = value / kMillisInHour;
   int64_t remainingMs = value % kMillisInHour;
@@ -1531,25 +1698,24 @@ StringView TimeType::valueToString(int64_t value, char* const startPos) const {
 
   // TIME is represented as milliseconds since midnight
   // Convert to HH:mm:ss.SSS format
-
   fmt::format_to_n(
       startPos,
-      kTimeToVarcharRowSize,
+      timeToVarcharRowSize(),
       "{:02d}:{:02d}:{:02d}.{:03d}",
       hours,
       minutes,
       seconds,
       millis);
-  return StringView{startPos, kTimeToVarcharRowSize};
+  return StringView{startPos, timeToVarcharRowSize()};
 }
 
-int64_t TimeType::valueToTime(const StringView& timeStr) const {
+int64_t TimeMilliPrecisionType::valueToTime(const StringView& timeStr) const {
   return util::fromTimeString(timeStr).thenOrThrow(
       folly::identity,
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 
-int64_t TimeType::valueToTime(
+int64_t TimeMilliPrecisionType::valueToTime(
     const StringView& timeStr,
     const tz::TimeZone* timeZone,
     int64_t sessionStartTimeMs) const {
@@ -1602,6 +1768,91 @@ int64_t TimeType::valueToTime(
 
   return adjustedTime;
 }
+
+// static
+std::string TimeMicroPrecisionUtcType::toCompactIso8601(int64_t microseconds) {
+  int64_t hours = microseconds / util::kMicrosPerHour;
+  microseconds %= util::kMicrosPerHour;
+  int64_t minutes = microseconds / util::kMicrosPerMinute;
+  microseconds %= util::kMicrosPerMinute;
+  int64_t seconds = microseconds / util::kMicrosPerSec;
+  int64_t remainingMicros = microseconds % util::kMicrosPerSec;
+
+  std::string result = fmt::format("{:02d}:{:02d}", hours, minutes);
+  if (seconds > 0 || remainingMicros > 0) {
+    result += fmt::format(":{:02d}", seconds);
+    if (remainingMicros > 0) {
+      if (remainingMicros % 1000 == 0) {
+        result += fmt::format(".{:03d}", remainingMicros / 1000);
+      } else {
+        result += fmt::format(".{:06d}", remainingMicros);
+      }
+    }
+  }
+  return result;
+}
+
+// Default hash for leaf scalar types: mix in kind + RTTI to distinguish
+// singleton overlay types that share a TypeKind with their base (e.g.,
+// IntervalDayTimeType and plain BIGINT both have TypeKind::BIGINT;
+// DateType and IntervalYearMonthType both share TypeKind::INTEGER).
+// NOTE: This default is only correct when equality is fully determined by
+// (TypeKind, typeid). Types with additional state MUST override hash() just
+// as they override equals(): see RowType, DecimalType, OpaqueType, and the
+// compound types (ArrayType, MapType, FunctionType).
+size_t Type::hash() const noexcept {
+  // Offset by 1 to differentiate bool type from empty hash.
+  return folly::hash::hash_combine(
+      static_cast<size_t>(kind()) + 1,
+      std::hash<std::type_index>{}(std::type_index(typeid(*this))));
+}
+
+size_t RowType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::ROW) + 1;
+  for (uint32_t i = 0; i < size(); ++i) {
+    result =
+        folly::hash::hash_combine(result, std::hash<std::string>{}(names_[i]));
+    result = folly::hash::hash_combine(result, children_[i]->hash());
+  }
+  return result;
+}
+
+size_t ArrayType::hash() const noexcept {
+  return folly::hash::hash_combine(
+      static_cast<size_t>(TypeKind::ARRAY) + 1, child_->hash());
+}
+
+size_t MapType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::MAP) + 1;
+  result = folly::hash::hash_combine(result, keyType_->hash());
+  result = folly::hash::hash_combine(result, valueType_->hash());
+  return result;
+}
+
+size_t FunctionType::hash() const noexcept {
+  size_t result = static_cast<size_t>(TypeKind::FUNCTION) + 1;
+  for (const auto& child : children_) {
+    result = folly::hash::hash_combine(result, child->hash());
+  }
+  return result;
+}
+
+size_t OpaqueType::hash() const noexcept {
+  return folly::hash::hash_combine(
+      static_cast<size_t>(TypeKind::OPAQUE) + 1,
+      std::hash<std::type_index>{}(typeIndex_));
+}
+
+template <TypeKind KIND>
+size_t DecimalType<KIND>::hash() const noexcept {
+  size_t result = static_cast<size_t>(KIND) + 1;
+  result = folly::hash::hash_combine(result, static_cast<size_t>(precision()));
+  result = folly::hash::hash_combine(result, static_cast<size_t>(scale()));
+  return result;
+}
+
+template size_t DecimalType<TypeKind::BIGINT>::hash() const noexcept;
+template size_t DecimalType<TypeKind::HUGEINT>::hash() const noexcept;
 
 std::string stringifyTruncatedElementList(
     size_t size,

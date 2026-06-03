@@ -17,6 +17,7 @@
 #include "velox/exec/ParallelProject.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -30,7 +31,7 @@ ParallelProject::ParallelProject(
           node->outputType(),
           operatorId,
           node->id(),
-          "ParallelProject"),
+          OperatorType::kParallelProject),
       node_(node) {}
 
 namespace {

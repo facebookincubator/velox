@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/HashTable.h"
 #include "velox/type/Type.h"
 
@@ -29,6 +30,11 @@ struct TestIndexTable {
   RowTypePtr keyType;
   RowTypePtr dataType;
   std::shared_ptr<BaseHashTable> table;
+
+  // Mutex to serialize concurrent access to the hash table. The hash table's
+  // hashers contain stateful DecodedVectors that are not thread-safe for
+  // concurrent joinProbe calls from multiple index sources.
+  mutable std::mutex mutex;
 
   TestIndexTable(
       RowTypePtr _keyType,
@@ -142,6 +148,26 @@ class TestIndexConnectorSplit : public connector::ConnectorSplit {
 
   std::string toString() const override {
     return "TestIndexConnectorSplit";
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "TestIndexConnectorSplit";
+    obj["connectorId"] = connectorId;
+    return obj;
+  }
+
+  static std::shared_ptr<TestIndexConnectorSplit> create(
+      const folly::dynamic& obj) {
+    return std::make_shared<TestIndexConnectorSplit>(
+        obj["connectorId"].getString());
+  }
+
+  static void registerSerDe() {
+    auto& registry = DeserializationWithContextRegistryForSharedPtr();
+    registry.Register(
+        "TestIndexConnectorSplit",
+        [](const folly::dynamic& obj, void*) { return create(obj); });
   }
 };
 
@@ -329,7 +355,7 @@ class TestIndexSource : public connector::IndexSource,
   const std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor* const executor_;
 
-  mutable std::mutex mutex_;
+  std::mutex mutex_;
 
   // Join condition filter input type.
   RowTypePtr conditionInputType_;
@@ -409,7 +435,8 @@ class TestIndexConnectorFactory : public connector::ConnectorFactory {
     TestIndexConnectorFactory factory;
     std::shared_ptr<connector::Connector> connector =
         factory.newConnector(kTestIndexConnectorName, {}, nullptr, cpuExecutor);
-    connector::registerConnector(connector);
+    connector::ConnectorRegistry::global().insert(
+        connector->connectorId(), connector);
   }
 };
 } // namespace facebook::velox::exec::test

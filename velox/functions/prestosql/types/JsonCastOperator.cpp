@@ -31,6 +31,8 @@ void generateJsonTyped(
     int row,
     std::string& result,
     const TypePtr& type,
+    bool isDate,
+    bool isDecimal,
     const std::shared_ptr<exec::CastHooks>& hooks) {
   auto value = input.valueAt(row);
 
@@ -80,13 +82,13 @@ void generateJsonTyped(
       result.append("\"");
       result.append(buffer);
       result.append("\"");
-    } else if (type->isDate()) {
+    } else if (isDate) {
       std::string stringValue = DATE()->toString(value);
       result.reserve(stringValue.size() + 2);
       result.append("\"");
       result.append(stringValue);
       result.append("\"");
-    } else if (type->isDecimal()) {
+    } else if (isDecimal) {
       result.append(DecimalUtil::toString(value, type));
     } else {
       folly::toAppend<std::string, T>(value, &result);
@@ -102,13 +104,20 @@ void generateJsonNonKeyTyped(
     FlatVector<StringView>& flatResult,
     const std::shared_ptr<exec::CastHooks>& hooks) {
   std::string result;
+  const auto& type = inputVector.type();
+  // Resolve type checks once before the loop to avoid per-element
+  // dynamic_cast calls in isDecimal() (which does two dynamic_casts
+  // to ShortDecimalType*/LongDecimalType* that always fail for plain
+  // integer types).
+  const bool isDate = type->isDate();
+  const bool isDecimal = type->isDecimal();
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     if (inputVector.isNullAt(row)) {
       flatResult.set(row, "null");
     } else {
       result.clear();
       generateJsonTyped<T, legacyCast>(
-          inputVector, row, result, inputVector.type(), hooks);
+          inputVector, row, result, type, isDate, isDecimal, hooks);
 
       flatResult.set(row, StringView{result});
     }
@@ -123,6 +132,9 @@ void generateJsonKeyTyped(
     FlatVector<StringView>& flatResult,
     const std::shared_ptr<exec::CastHooks>& hooks) {
   std::string result;
+  const auto& type = inputVector.type();
+  const bool isDate = type->isDate();
+  const bool isDecimal = type->isDecimal();
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     if (inputVector.isNullAt(row)) {
       VELOX_USER_FAIL("Map keys cannot be null.");
@@ -134,7 +146,7 @@ void generateJsonKeyTyped(
       }
 
       generateJsonTyped<T, legacyCast>(
-          inputVector, row, result, inputVector.type(), hooks);
+          inputVector, row, result, type, isDate, isDecimal, hooks);
 
       if constexpr (!std::is_same_v<T, StringView>) {
         result.append("\"");
@@ -1157,57 +1169,7 @@ simdjson::error_code castFromJsonOneRow(
   return simdjson::SUCCESS;
 }
 
-bool isSupportedBasicType(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::BOOLEAN:
-    case TypeKind::BIGINT:
-    case TypeKind::INTEGER:
-    case TypeKind::SMALLINT:
-    case TypeKind::TINYINT:
-    case TypeKind::DOUBLE:
-    case TypeKind::REAL:
-    case TypeKind::VARCHAR:
-      return true;
-    default:
-      return false;
-  }
-}
 } // namespace
-
-bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
-  if (isSupportedBasicType(other)) {
-    return true;
-  }
-
-  switch (other->kind()) {
-    case TypeKind::UNKNOWN:
-    case TypeKind::TIMESTAMP:
-      return true;
-    case TypeKind::ARRAY:
-      return isSupportedFromType(other->childAt(0));
-    case TypeKind::ROW:
-      for (const auto& child : other->as<TypeKind::ROW>().children()) {
-        if (!isSupportedFromType(child)) {
-          return false;
-        }
-      }
-      return true;
-    case TypeKind::MAP:
-      if (other->childAt(1)->isUnknown()) {
-        if (other->childAt(0)->isUnknown()) {
-          return true;
-        }
-        return isSupportedBasicType(other->childAt(0)) &&
-            !isJsonType(other->childAt(0));
-      }
-
-      return (
-          isSupportedBasicType(other->childAt(0)) &&
-          isSupportedFromType(other->childAt(1)));
-    default:
-      return false;
-  }
-}
 
 template <TypeKind kind>
 void JsonCastOperator::castFromJson(
@@ -1250,35 +1212,6 @@ void JsonCastOperator::castFromJson(
       [&](vector_size_t row) INLINE_LAMBDA { writer.commitNull(); });
 
   writer.finish();
-}
-
-bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
-  if (other->isDate()) {
-    return false;
-  }
-
-  if (isSupportedBasicType(other)) {
-    return true;
-  }
-
-  switch (other->kind()) {
-    case TypeKind::ARRAY:
-      return isSupportedToType(other->childAt(0));
-    case TypeKind::ROW:
-      for (const auto& child : other->as<TypeKind::ROW>().children()) {
-        if (!isSupportedToType(child)) {
-          return false;
-        }
-      }
-      return true;
-    case TypeKind::MAP:
-      return (
-          isSupportedBasicType(other->childAt(0)) &&
-          isSupportedToType(other->childAt(1)) &&
-          !isJsonType(other->childAt(0)));
-    default:
-      return false;
-  }
 }
 
 /// Converts an input vector of a supported type to Json type. The

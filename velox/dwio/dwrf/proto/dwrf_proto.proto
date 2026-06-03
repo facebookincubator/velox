@@ -160,6 +160,11 @@ message StripeFooter {
   repeated bytes encryptionGroups = 3;
 }
 
+message StringPair {
+  optional string key = 1;
+  optional string value = 2;
+}
+
 message Type {
   enum Kind {
     BOOLEAN = 0;
@@ -180,6 +185,7 @@ message Type {
   required Kind kind = 1;
   repeated uint32 subtypes = 2 [ packed = true ];
   repeated string fieldNames = 3;
+  repeated StringPair attributes = 4;
 }
 
 message StripeInformation {

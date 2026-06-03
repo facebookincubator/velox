@@ -24,15 +24,16 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <fcntl.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::cache;
@@ -62,7 +63,6 @@ class CacheTest : public ::testing::Test {
   void SetUp() override {
     // executor_ = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
     rng_.seed(1);
-    ioStatistics_ = std::make_shared<IoStatistics>();
     ioStats_ = std::make_shared<facebook::velox::IoStats>();
     filesystems::registerLocalFileSystem();
   }
@@ -99,7 +99,7 @@ class CacheTest : public ::testing::Test {
     std::unique_ptr<SsdCache> ssd;
     if (ssdBytes > 0) {
       FLAGS_velox_ssd_odirect = false;
-      tempDirectory_ = exec::test::TempDirectoryPath::create();
+      tempDirectory_ = TempDirectoryPath::create();
       const SsdCache::Config config(
           fmt::format("{}/cache", tempDirectory_->getPath()),
           ssdBytes,
@@ -110,15 +110,16 @@ class CacheTest : public ::testing::Test {
           checksumEnabled,
           checksumEnabled);
       ssd = std::make_unique<SsdCache>(config);
-      ssdCacheHelper_ = std::make_unique<test::SsdCacheTestHelper>(ssd.get());
+      ssdCacheHelper_ =
+          std::make_unique<cache::test::SsdCacheTestHelper>(ssd.get());
       groupStats_ = &ssd->groupStats();
     }
-    memory::MmapAllocator::Options options;
+    memory::MemoryAllocator::Options options;
     options.capacity = maxBytes;
     allocator_ = std::make_shared<memory::MmapAllocator>(options);
     cache_ = AsyncDataCache::create(allocator_.get(), std::move(ssd));
     asyncDataCacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     cache_->setVerifyHook(checkEntry);
     for (auto i = 0; i < kMaxStreams; ++i) {
       streamIds_.push_back(
@@ -150,13 +151,13 @@ class CacheTest : public ::testing::Test {
 
   static void checkEntry(const cache::AsyncDataCacheEntry& entry) {
     uint64_t seed = entry.key().fileNum.id();
-    if (entry.tinyData()) {
-      checkData(entry.tinyData(), entry.offset(), entry.size(), seed);
+    if (entry.hasContiguousData()) {
+      checkData(entry.contiguousData(), entry.offset(), entry.size(), seed);
     } else {
       int64_t bytesLeft = entry.size();
       auto runOffset = entry.offset();
-      for (auto i = 0; i < entry.data().numRuns(); ++i) {
-        auto run = entry.data().runAt(i);
+      for (auto i = 0; i < entry.nonContiguousData().numRuns(); ++i) {
+        auto run = entry.nonContiguousData().runAt(i);
         checkData(
             run.data<char>(),
             runOffset,
@@ -217,12 +218,14 @@ class CacheTest : public ::testing::Test {
       const StringIdLease& fileId,
       const StringIdLease& groupId,
       int64_t offset,
-      bool noCacheRetention,
+      bool cacheable,
       const IoStatisticsPtr& ioStatistics,
       const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     auto data = std::make_unique<StripeData>();
     auto readOptions = io::ReaderOptions(pool_.get());
-    readOptions.setNoCacheRetention(noCacheRetention);
+    readOptions.setDataIoStats(dataIoStats_);
+    readOptions.setMetadataIoStats(metadataIoStats_);
+    readOptions.setCacheable(cacheable);
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
         MetricsLog::voidLog(),
@@ -346,7 +349,7 @@ class CacheTest : public ::testing::Test {
       int32_t readPctModulo,
       int32_t numStripes,
       int32_t stripeWindow,
-      bool noCacheRetention,
+      bool cacheable,
       const IoStatisticsPtr& ioStatistics,
       const std::shared_ptr<facebook::velox::IoStats>& ioStats) {
     auto tracker = std::make_shared<ScanTracker>(
@@ -376,7 +379,7 @@ class CacheTest : public ::testing::Test {
             fileId,
             groupId,
             prefetchStripeIndex * streamStarts_[kMaxStreams - 1],
-            noCacheRetention,
+            cacheable,
             ioStatistics,
             ioStats));
         if (stripes.back()->input->shouldPreload()) {
@@ -418,8 +421,8 @@ class CacheTest : public ::testing::Test {
           readPctModulo,
           numStripes,
           stripeWindow,
-          /*noCacheRetention=*/false,
-          ioStatistics_,
+          /*cacheable=*/true,
+          dataIoStats_,
           ioStats_);
     }
   }
@@ -433,17 +436,21 @@ class CacheTest : public ::testing::Test {
     }
   }
 
+  const std::shared_ptr<IoStatistics> dataIoStats_{
+      std::make_shared<IoStatistics>()};
+  const std::shared_ptr<IoStatistics> metadataIoStats_{
+      std::make_shared<IoStatistics>()};
+
   // Serializes 'pathToInput_' and 'fileIds_' in multithread test.
   std::mutex mutex_;
   std::vector<StringIdLease> fileIds_;
   folly::F14FastMap<uint64_t, std::shared_ptr<TestReadFile>> pathToInput_;
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
   cache::FileGroupStats* groupStats_ = nullptr;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
-  std::unique_ptr<test::SsdCacheTestHelper> ssdCacheHelper_;
-  std::shared_ptr<IoStatistics> ioStatistics_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> asyncDataCacheHelper_;
+  std::unique_ptr<cache::test::SsdCacheTestHelper> ssdCacheHelper_;
   std::shared_ptr<facebook::velox::IoStats> ioStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<memory::MemoryPool> pool_{
@@ -482,10 +489,15 @@ TEST_F(CacheTest, window) {
       cache_.get(),
       tracker,
       groupId,
-      ioStatistics_,
+      dataIoStats_,
       ioStats_,
       executor_.get(),
-      io::ReaderOptions(pool_.get()));
+      [&] {
+        io::ReaderOptions opts(pool_.get());
+        opts.setDataIoStats(dataIoStats_);
+        opts.setMetadataIoStats(metadataIoStats_);
+        return opts;
+      }());
   auto begin = 4 * kMB;
   auto end = 17 * kMB;
   auto stream = input->read(begin, end - begin, LogType::TEST);
@@ -512,7 +524,7 @@ TEST_F(CacheTest, window) {
   auto clone = cacheInput->clone();
   clone->SkipInt64(100);
   clone->setRemainingBytes(kMB);
-  auto previousRead = ioStatistics_->rawBytesRead();
+  auto previousRead = dataIoStats_->rawBytesRead();
   EXPECT_TRUE(clone->Next(&buffer, &size));
   // Half MB minus the 100 bytes skipped above should be left in the first load
   // quantum of 8MB.
@@ -521,7 +533,7 @@ TEST_F(CacheTest, window) {
   EXPECT_EQ(kMB / 2 + 100, size);
   // There should be no more data in the window.
   EXPECT_FALSE(clone->Next(&buffer, &size));
-  EXPECT_EQ(kMB, ioStatistics_->rawBytesRead() - previousRead);
+  EXPECT_EQ(kMB, dataIoStats_->rawBytesRead() - previousRead);
 }
 
 TEST_F(CacheTest, bufferedInput) {
@@ -534,8 +546,8 @@ TEST_F(CacheTest, bufferedInput) {
       10,
       20,
       4,
-      /*noCacheRetention=*/false,
-      ioStatistics_,
+      /*cacheable=*/true,
+      dataIoStats_,
       ioStats_);
   readLoop(
       "testfile",
@@ -544,8 +556,8 @@ TEST_F(CacheTest, bufferedInput) {
       10,
       20,
       4,
-      /*noCacheRetention=*/false,
-      ioStatistics_,
+      /*cacheable=*/true,
+      dataIoStats_,
       ioStats_);
   readLoop(
       "testfile2",
@@ -554,8 +566,8 @@ TEST_F(CacheTest, bufferedInput) {
       70,
       20,
       4,
-      /*noCacheRetention=*/false,
-      ioStatistics_,
+      /*cacheable=*/true,
+      dataIoStats_,
       ioStats_);
 }
 
@@ -579,15 +591,15 @@ TEST_F(CacheTest, ssd) {
       1,
       1,
       1,
-      /*noCacheRetention=*/false,
-      ioStatistics_,
+      /*cacheable=*/true,
+      dataIoStats_,
       ioStats_);
   // This is a cold read, so expect no hits.
-  EXPECT_EQ(0, ioStatistics_->ramHit().sum());
+  EXPECT_EQ(0, dataIoStats_->ramHit().sum());
   // Expect some extra reading from coalescing.
-  EXPECT_LT(0, ioStatistics_->rawOverreadBytes());
-  auto fullStripeBytes = ioStatistics_->rawBytesRead();
-  auto bytes = ioStatistics_->rawBytesRead();
+  EXPECT_LT(0, dataIoStats_->rawOverreadBytes());
+  auto fullStripeBytes = dataIoStats_->rawBytesRead();
+  auto bytes = dataIoStats_->rawBytesRead();
   cache_->clear();
   // We read 10 stripes with some columns sparsely accessed.
   readLoop(
@@ -597,13 +609,13 @@ TEST_F(CacheTest, ssd) {
       10,
       10,
       1,
-      /*noCacheRetention=*/false,
-      ioStatistics_,
+      /*cacheable=*/true,
+      dataIoStats_,
       ioStats_);
-  auto sparseStripeBytes = (ioStatistics_->rawBytesRead() - bytes) / 10;
+  auto sparseStripeBytes = (dataIoStats_->rawBytesRead() - bytes) / 10;
   EXPECT_LT(sparseStripeBytes, fullStripeBytes / 4);
   // Expect the dense fraction of columns to have read ahead.
-  EXPECT_LT(400'000, ioStatistics_->prefetch().sum());
+  EXPECT_LT(400'000, dataIoStats_->prefetch().sum());
 
   constexpr int32_t kStripesPerFile = 10;
   auto bytesPerFile = fullStripeBytes * kStripesPerFile;
@@ -624,13 +636,13 @@ TEST_F(CacheTest, ssd) {
       kStripesPerFile,
       4);
   // Expect some hits from SSD.
-  EXPECT_LE(kSsdBytes / 8, ioStatistics_->ssdRead().sum());
+  EXPECT_LE(kSsdBytes / 8, dataIoStats_->ssdRead().sum());
   // We expec some prefetch but the quantity is nondeterminstic
   // because cases where the main thread reads the data ahead of
   // background reader does not count as prefetch even if prefetch was
   // issued. Also, the head of each file does not get prefetched
   // because each file has its own tracker.
-  EXPECT_LE(kSsdBytes / 8, ioStatistics_->prefetch().sum());
+  EXPECT_LE(kSsdBytes / 8, dataIoStats_->prefetch().sum());
 
   readFiles(
       "prefix1_",
@@ -658,8 +670,8 @@ TEST_F(CacheTest, singleFileThreads) {
           10,
           20,
           4,
-          /*noCacheRetention=*/false,
-          ioStatistics_,
+          /*cacheable=*/true,
+          dataIoStats_,
           ioStats_);
     }));
   }
@@ -697,7 +709,7 @@ TEST_F(CacheTest, ssdThreads) {
                 10,
                 20,
                 2,
-                /*noCacheRetention=*/false,
+                /*cacheable=*/true,
                 threadStats,
                 ioStat);
           }
@@ -733,9 +745,11 @@ class FileWithReadAhead {
       memory::MemoryPool& pool,
       folly::Executor* executor)
       : options_(&pool) {
+    options_.setDataIoStats(dataIoStats_);
+    options_.setMetadataIoStats(metadataIoStats_);
     fileId_ = std::make_unique<StringIdLease>(fileIds(), name);
     file_ = std::make_shared<TestReadFile>(fileId_->id(), kFileSize, ioStats);
-    options_.setNoCacheRetention(true);
+    options_.setCacheable(false);
     bufferedInput_ = std::make_unique<CachedBufferedInput>(
         file_,
         MetricsLog::voidLog(),
@@ -749,9 +763,8 @@ class FileWithReadAhead {
         options_);
     auto sequential = StreamIdentifier::sequentialFile();
     stream_ = bufferedInput_->enqueue(Region{0, file_->size()}, &sequential);
-    VELOX_CHECK(
-        reinterpret_cast<CacheInputStream*>(stream_.get())
-            ->testingNoCacheRetention());
+    VELOX_CHECK(!reinterpret_cast<CacheInputStream*>(stream_.get())
+                     ->testingCacheable());
     // Trigger load of next 4MB after reading the first 2MB of the previous 4MB
     // quantum.
     reinterpret_cast<CacheInputStream*>(stream_.get())->setPrefetchPct(50);
@@ -763,6 +776,11 @@ class FileWithReadAhead {
   }
 
  private:
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+
   std::unique_ptr<StringIdLease> fileId_;
   std::unique_ptr<CachedBufferedInput> bufferedInput_;
   std::unique_ptr<SeekableInputStream> stream_;
@@ -867,29 +885,29 @@ TEST_F(CacheTest, readAhead) {
   LOG(INFO) << count << " prefetches with total " << bytes << " bytes";
 }
 
-TEST_F(CacheTest, noCacheRetention) {
+TEST_F(CacheTest, cacheable) {
   const int64_t cacheSize = 1LL << 30;
   struct {
-    bool noCacheRetention;
+    bool cacheable;
     bool hasSsdCache;
     int readPct;
 
     std::string debugString() const {
       return fmt::format(
-          "noCacheRetention {}, hasSsdCache {}, readPct {}",
-          noCacheRetention,
+          "cacheable {}, hasSsdCache {}, readPct {}",
+          cacheable,
           hasSsdCache,
           readPct);
     }
   } testSettings[] = {
-      {true, true, 100},
-      {true, false, 100},
-      {false, false, 100},
       {false, true, 100},
-      {true, true, 10},
-      {true, false, 100},
       {false, false, 100},
-      {false, true, 100}};
+      {true, false, 100},
+      {true, true, 100},
+      {false, true, 10},
+      {false, false, 100},
+      {true, false, 100},
+      {true, true, 100}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
@@ -901,26 +919,26 @@ TEST_F(CacheTest, noCacheRetention) {
 
     // We read one stripe with all columns,
     readLoop(
-        "noCacheRetention",
+        "cacheable",
         20,
         testData.readPct,
         1,
         5,
         1,
-        testData.noCacheRetention,
-        ioStatistics_,
+        testData.cacheable,
+        dataIoStats_,
         ioStats_);
     // This is a cold read, so expect no hits.
-    ASSERT_EQ(ioStatistics_->ramHit().sum(), 0);
+    ASSERT_EQ(dataIoStats_->ramHit().sum(), 0);
     // Only one reference per column so there is no prefetch.
-    ASSERT_LT(0, ioStatistics_->prefetch().sum());
+    ASSERT_LT(0, dataIoStats_->prefetch().sum());
     // Expect some extra reading from coalescing.
-    ASSERT_LT(0, ioStatistics_->rawOverreadBytes());
-    ASSERT_LT(0, ioStatistics_->rawBytesRead());
+    ASSERT_LT(0, dataIoStats_->rawOverreadBytes());
+    ASSERT_LT(0, dataIoStats_->rawBytesRead());
     auto* ssdCache = cache_->ssdCache();
     if (ssdCache != nullptr) {
       ssdCache->waitForWriteToFinish();
-      if (testData.noCacheRetention) {
+      if (!testData.cacheable) {
         ASSERT_EQ(ssdCache->stats().entriesCached, 0);
       } else {
         ASSERT_GT(ssdCache->stats().entriesCached, 0);
@@ -930,8 +948,9 @@ TEST_F(CacheTest, noCacheRetention) {
     const auto cacheEntries = asyncDataCacheHelper_->cacheEntries();
     for (const auto& cacheEntry : cacheEntries) {
       const auto cacheEntryHelper =
-          std::make_unique<test::AsyncDataCacheEntryTestHelper>(cacheEntry);
-      if (testData.noCacheRetention) {
+          std::make_unique<cache::test::AsyncDataCacheEntryTestHelper>(
+              cacheEntry);
+      if (!testData.cacheable) {
         ASSERT_EQ(cacheEntryHelper->accessStats().numUses, 0);
         ASSERT_EQ(cacheEntryHelper->accessStats().lastUse, 0);
       } else {
@@ -951,6 +970,8 @@ TEST_F(CacheTest, loadQuotumTooLarge) {
   auto readFile =
       std::make_shared<TestReadFile>(fileId.id(), 10 << 20, nullptr);
   auto readOptions = io::ReaderOptions(pool_.get());
+  readOptions.setDataIoStats(dataIoStats_);
+  readOptions.setMetadataIoStats(metadataIoStats_);
   readOptions.setLoadQuantum(9 << 20 /*9MB*/);
   VELOX_ASSERT_THROW(
       std::make_unique<CachedBufferedInput>(
@@ -985,10 +1006,15 @@ TEST_F(CacheTest, ssdReadVerification) {
       cache_.get(),
       tracker,
       groupId,
-      ioStatistics_,
+      dataIoStats_,
       ioStats_,
       executor_.get(),
-      io::ReaderOptions(pool_.get()));
+      [&] {
+        io::ReaderOptions opts(pool_.get());
+        opts.setDataIoStats(dataIoStats_);
+        opts.setMetadataIoStats(metadataIoStats_);
+        return opts;
+      }());
 
   const auto readData = [&](uint32_t numBytesRead) {
     const uint64_t kNumBytesPerRead = 4 << 20;
@@ -1013,15 +1039,15 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_EQ(stats.numHit, 0);
   ASSERT_EQ(stats.ssdStats->entriesRead, 0);
   ASSERT_EQ(stats.ssdStats->readSsdCorruptions, 0);
-  ASSERT_GT(ioStatistics_->read().sum(), 0);
-  ASSERT_EQ(ioStatistics_->ramHit().sum(), 0);
-  ASSERT_EQ(ioStatistics_->ssdRead().sum(), 0);
+  ASSERT_GT(dataIoStats_->read().sum(), 0);
+  ASSERT_EQ(dataIoStats_->ramHit().sum(), 0);
+  ASSERT_EQ(dataIoStats_->ssdRead().sum(), 0);
   // Cold read should have remote storage latency.
-  ASSERT_GT(ioStatistics_->storageReadLatencyUs().count(), 0);
+  ASSERT_GT(dataIoStats_->storageReadLatencyUs().count(), 0);
   // This test does not use coalesced loading for cold reads, so no coalesced
   // latency is expected.
-  ASSERT_EQ(ioStatistics_->coalescedSsdLoadLatencyUs().count(), 0);
-  ASSERT_EQ(ioStatistics_->ssdCacheReadLatencyUs().count(), 0);
+  ASSERT_EQ(dataIoStats_->coalescedSsdLoadLatencyUs().count(), 0);
+  ASSERT_EQ(dataIoStats_->ssdCacheReadLatencyUs().count(), 0);
 
   // Read kSsdBytes of data.
   readData(kSsdBytes);
@@ -1031,10 +1057,10 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_GT(stats.numHit, 0);
   ASSERT_EQ(stats.ssdStats->entriesRead, 0);
   ASSERT_EQ(stats.ssdStats->readSsdCorruptions, 0);
-  ASSERT_GT(ioStatistics_->read().sum(), 0);
-  ASSERT_GT(ioStatistics_->ramHit().sum(), 0);
-  ASSERT_EQ(ioStatistics_->ssdRead().sum(), 0);
-  ASSERT_EQ(ioStatistics_->ssdCacheReadLatencyUs().count(), 0);
+  ASSERT_GT(dataIoStats_->read().sum(), 0);
+  ASSERT_GT(dataIoStats_->ramHit().sum(), 0);
+  ASSERT_EQ(dataIoStats_->ssdRead().sum(), 0);
+  ASSERT_EQ(dataIoStats_->ssdCacheReadLatencyUs().count(), 0);
 
   // Read kSsdBytes of data.
   readData(kSsdBytes);
@@ -1044,10 +1070,10 @@ TEST_F(CacheTest, ssdReadVerification) {
   ASSERT_GT(stats.numHit, 0);
   ASSERT_GT(stats.ssdStats->entriesRead, 0);
   ASSERT_EQ(stats.ssdStats->readSsdCorruptions, 0);
-  ASSERT_GT(ioStatistics_->read().sum(), 0);
-  ASSERT_GT(ioStatistics_->ramHit().sum(), 0);
-  ASSERT_GT(ioStatistics_->ssdRead().sum(), 0);
-  ASSERT_GT(ioStatistics_->ssdCacheReadLatencyUs().count(), 0);
+  ASSERT_GT(dataIoStats_->read().sum(), 0);
+  ASSERT_GT(dataIoStats_->ramHit().sum(), 0);
+  ASSERT_GT(dataIoStats_->ssdRead().sum(), 0);
+  ASSERT_GT(dataIoStats_->ssdCacheReadLatencyUs().count(), 0);
 
   // Corrupt SSD cache file.
   corruptSsdFile(fmt::format("{}/cache0", tempDirectory_->getPath()));
@@ -1056,22 +1082,22 @@ TEST_F(CacheTest, ssdReadVerification) {
 
   // Record the baseline stats.
   const auto prevStats = cache_->refreshStats();
-  const auto prevRead = ioStatistics_->read().sum();
-  const auto prevRamHit = ioStatistics_->ramHit().sum();
-  const auto prevSsdRead = ioStatistics_->ssdRead().sum();
+  const auto prevRead = dataIoStats_->read().sum();
+  const auto prevRamHit = dataIoStats_->ramHit().sum();
+  const auto prevSsdRead = dataIoStats_->ssdRead().sum();
 
   // Read from the corrupted cache.
   readData(kSsdBytes);
   waitForWrite();
   stats = cache_->refreshStats();
   // Expect all new reads to be recorded as corruptions.
-  ASSERT_GT(ioStatistics_->read().sum(), prevRead);
+  ASSERT_GT(dataIoStats_->read().sum(), prevRead);
   ASSERT_GT(stats.ssdStats->readSsdCorruptions, 0);
   ASSERT_EQ(
       stats.ssdStats->readSsdCorruptions,
       stats.ssdStats->entriesRead - prevStats.ssdStats->entriesRead);
   // Expect no new succeeded cache hits.
   ASSERT_EQ(stats.numHit, prevStats.numHit);
-  ASSERT_EQ(ioStatistics_->ramHit().sum(), prevRamHit);
-  ASSERT_EQ(ioStatistics_->ssdRead().sum(), prevSsdRead);
+  ASSERT_EQ(dataIoStats_->ramHit().sum(), prevRamHit);
+  ASSERT_EQ(dataIoStats_->ssdRead().sum(), prevSsdRead);
 }

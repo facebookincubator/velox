@@ -17,6 +17,7 @@ velox_add_library(
   ApproxDistinctAggregate.cpp
   ApproxMostFrequentAggregate.cpp
   ApproxPercentileAggregate.cpp
+  ApproxWinsorizedMeanAggregate.cpp
   ArbitraryAggregate.cpp
   ArrayAggAggregate.cpp
   AverageAggregate.cpp
@@ -60,6 +61,62 @@ velox_add_library(
   SumDataSizeForStatsAggregate.cpp
   TDigestAggregate.cpp
   VarianceAggregates.cpp
+  VectorSumAggregate.cpp
+  HEADERS
+  ApproxDistinctAggregates.h
+  ApproxMostFrequentAggregate.h
+  ApproxPercentileAggregate.h
+  ArbitraryAggregate.h
+  ArrayAggAggregate.h
+  AverageAggregate.h
+  BitwiseAggregates.h
+  BitwiseXorAggregate.h
+  BoolAggregates.h
+  CentralMomentsAggregates.h
+  ChecksumAggregate.h
+  ClassificationAggregation.h
+  CountAggregate.h
+  CountIfAggregate.h
+  CovarianceAggregates.h
+  EntropyAggregates.h
+  GeometricMeanAggregate.h
+  GeometryAggregate.h
+  HistogramAggregate.h
+  KHyperLogLogAggregate.h
+  MapAccumulator.h
+  MapAggAggregate.h
+  MapAggregateBase.h
+  MapUnionAggregate.h
+  MapUnionSumAggregate.h
+  MaxByAggregate.h
+  MaxSizeForStatsAggregate.h
+  MergeAggregate.h
+  MergeKHyperLogLogAggregate.h
+  MergeQDigestAggregate.h
+  MergeTDigestAggregate.h
+  MinByAggregate.h
+  MinMaxAggregates.h
+  MinMaxByAggregateBase.h
+  MultiMapAggAggregate.h
+  NoisyApproxSfmAggregate.h
+  NoisyAvgGaussianAggregate.h
+  NoisyCountGaussianAggregate.h
+  NoisyCountIfGaussianAggregate.h
+  NoisyHelperFunctionFactory.h
+  NoisySumGaussianAggregate.h
+  NumericHistogramAggregate.h
+  PrestoHasher.h
+  QDigestAggAggregate.h
+  ReduceAgg.h
+  RegisterAggregateFunctions.h
+  ReservoirSampleAggregate.h
+  SetAggregates.h
+  SetDigestAggregate.h
+  SumAggregate.h
+  SumDataSizeForStatsAggregate.h
+  TDigestAccumulator.h
+  VarianceAggregates.h
+  VectorSumAggregate.h
 )
 
 velox_link_libraries(
@@ -77,9 +134,10 @@ velox_link_libraries(
   Folly::folly
 )
 
-if(${VELOX_ENABLE_GEO})
+if(VELOX_ENABLE_GEO)
   velox_sources(velox_aggregates PRIVATE GeometryAggregate.cpp)
   velox_link_libraries(velox_aggregates velox_functions_geo)
+  velox_compile_definitions(velox_aggregates PRIVATE VELOX_ENABLE_GEO)
 endif()
 
 if(${VELOX_BUILD_TESTING})
@@ -89,3 +147,9 @@ endif()
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()
+
+velox_add_library(velox_aggregate_names INTERFACE HEADERS AggregateNames.h)
+
+velox_add_library(velox_hyperloglog_aggregate INTERFACE HEADERS HyperLogLogAggregate.h)
+
+velox_add_library(velox_sfm_sketch_aggregate INTERFACE HEADERS SfmSketchAggregate.h)

@@ -16,16 +16,21 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
+#include <fmt/core.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/FileIds.h"
+#include "velox/common/file/tests/TestUtils.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
 
 using namespace facebook::velox::dwio::common;
+namespace cache = facebook::velox::cache;
+using facebook::velox::StringIdLease;
 using facebook::velox::common::Region;
 using namespace facebook::velox::memory;
 using namespace ::testing;
@@ -150,6 +155,128 @@ class BufferedInputTest : public testing::Test {
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
+
+TEST_F(BufferedInputTest, hasCache) {
+  auto readFile =
+      std::make_shared<facebook::velox::InMemoryReadFile>(std::string("test"));
+  BufferedInput input(readFile, *pool_);
+  // Base BufferedInput does not have cache.
+  EXPECT_FALSE(input.hasCache());
+
+  // Cache APIs throw when there is no backing cache.
+  VELOX_ASSERT_THROW(
+      input.cacheRegion(0, 4, std::string_view("test")),
+      "cacheRegion requires a backing cache");
+  VELOX_ASSERT_THROW(
+      input.findCachedRegion(0), "findCachedRegion requires a backing cache");
+}
+
+TEST_F(BufferedInputTest, cachedRegion) {
+  auto dataCache = cache::AsyncDataCache::create(memoryManager()->allocator());
+
+  // Empty pin throws.
+  VELOX_ASSERT_THROW(
+      CachedRegion(cache::CachePin{}),
+      "CachedRegion requires a non-empty cache pin");
+
+  // Exclusive pin throws.
+  auto& ids = facebook::velox::fileIds();
+  {
+    StringIdLease fileId(ids, "exclusiveTestFile");
+    cache::RawFileCacheKey key{fileId.id(), 0};
+    auto pin = dataCache->findOrCreate(key, 100);
+    ASSERT_FALSE(pin.empty());
+    ASSERT_TRUE(pin.checkedEntry()->isExclusive());
+    VELOX_ASSERT_THROW(
+        CachedRegion(std::move(pin)),
+        "CachedRegion requires a shared (non-exclusive) cache pin");
+  }
+
+  struct TestParam {
+    uint64_t entrySize;
+    bool expectTinyData;
+
+    std::string debugString() const {
+      return fmt::format(
+          "entrySize {}, expectTinyData {}", entrySize, expectTinyData);
+    }
+  };
+  std::vector<TestParam> testSettings = {
+      // Small entry uses tinyData (single contiguous range).
+      {100, true},
+      // Entry just below tinyData boundary still uses tinyData.
+      {cache::AsyncDataCacheEntry::kTinyDataSize - 1, true},
+      // Entry at tinyData boundary uses allocation.
+      {cache::AsyncDataCacheEntry::kTinyDataSize, false},
+      // One page allocation (single run).
+      {AllocationTraits::kPageSize, false},
+      // Large allocation (possibly multiple runs).
+      {128 << 10, false},
+  };
+
+  for (size_t i = 0; i < testSettings.size(); ++i) {
+    const auto& testData = testSettings[i];
+    SCOPED_TRACE(testData.debugString());
+
+    const auto entrySize = testData.entrySize;
+    std::string expected(entrySize, '\0');
+    for (uint64_t j = 0; j < entrySize; ++j) {
+      expected[j] = static_cast<char>('a' + (j % 26));
+    }
+
+    StringIdLease fileId(ids, fmt::format("cachedRegionTestFile_{}", i));
+    cache::RawFileCacheKey key{fileId.id(), 0};
+    auto pin = dataCache->findOrCreate(key, entrySize);
+    ASSERT_FALSE(pin.empty());
+    auto* entry = pin.checkedEntry();
+    ASSERT_TRUE(entry->isExclusive());
+
+    // Populate the entry with test data.
+    if (testData.expectTinyData) {
+      ASSERT_TRUE(entry->hasContiguousData());
+      memcpy(entry->contiguousData(), expected.data(), entrySize);
+    } else {
+      auto& allocation = entry->nonContiguousData();
+      ASSERT_GT(allocation.numRuns(), 0);
+      uint64_t offset = 0;
+      for (int i = 0; i < allocation.numRuns() && offset < entrySize; ++i) {
+        auto run = allocation.runAt(i);
+        const uint64_t bytes = run.numPages() * AllocationTraits::kPageSize;
+        const uint64_t copySize = std::min(bytes, entrySize - offset);
+        memcpy(run.data<char>(), expected.data() + offset, copySize);
+        offset += copySize;
+      }
+    }
+    entry->setExclusiveToShared();
+
+    CachedRegion region(std::move(pin));
+    EXPECT_EQ(region.size(), entrySize);
+    ASSERT_FALSE(region.ranges().empty());
+
+    if (testData.expectTinyData) {
+      EXPECT_EQ(region.ranges().size(), 1);
+    }
+
+    // Verify content through ranges.
+    uint64_t verified = 0;
+    for (const auto& range : region.ranges()) {
+      EXPECT_EQ(
+          std::string_view(range.data(), range.size()),
+          std::string_view(expected.data() + verified, range.size()));
+      verified += range.size();
+    }
+    EXPECT_EQ(verified, entrySize);
+
+    // Verify toIOBuf produces identical content.
+    auto iobuf = region.toIOBuf();
+    EXPECT_EQ(iobuf.computeChainDataLength(), entrySize);
+    iobuf.coalesce();
+    EXPECT_EQ(
+        std::string_view(
+            reinterpret_cast<const char*>(iobuf.data()), iobuf.length()),
+        expected);
+  }
+}
 
 TEST_F(BufferedInputTest, zeroLengthStream) {
   auto readFile =
@@ -501,6 +628,45 @@ TEST_F(BufferedInputTest, resetAfterPartialStreamsConsumed) {
   EXPECT_EQ(next4.value(), "dddeee");
 }
 
+TEST_F(BufferedInputTest, preload) {
+  std::string content = "hello world, this is preload test data!";
+  auto readFile =
+      std::make_shared<facebook::velox::tests::utils::CountingReadFile>(
+          content);
+
+  BufferedInput input(
+      readFile,
+      *pool_,
+      MetricsLog::voidLog(),
+      nullptr,
+      nullptr,
+      10,
+      /* wsVRLoad = */ false);
+
+  ASSERT_EQ(readFile->numReads(), 0);
+  EXPECT_FALSE(input.preloaded());
+
+  input.preload();
+  EXPECT_TRUE(input.preloaded());
+
+  const auto readsAfterPreload = readFile->numReads();
+  ASSERT_GT(readsAfterPreload, 0);
+
+  // After preload, sub-region reads should be served from preloaded data.
+  auto stream1 = input.read(0, 5, LogType::FILE);
+  auto next1 = getNext(*stream1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), "hello");
+
+  auto stream2 = input.read(6, 5, LogType::FILE);
+  auto next2 = getNext(*stream2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), "world");
+
+  // No additional file reads after preload.
+  ASSERT_EQ(readFile->numReads(), readsAfterPreload);
+}
+
 class CustomDirectBufferedInput
     : public facebook::velox::dwio::common::DirectBufferedInput {
  public:
@@ -526,12 +692,47 @@ class CustomDirectBufferedInput
             executor,
             readerOptions,
             std::move(fileReadOps)) {
-    // Dummy reserve to ensure the accessibility of protected members in
-    // DirectBufferedInput.
-    requests_.reserve(1);
-    coalescedLoads_.reserve(1);
     VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
   }
+
+  std::unique_ptr<facebook::velox::dwio::common::BufferedInput> clone()
+      const override {
+    return std::unique_ptr<facebook::velox::dwio::common::BufferedInput>(
+        new CustomDirectBufferedInput(
+            input_,
+            fileNum_,
+            tracker_,
+            groupId_,
+            ioStatistics_,
+            ioStats_,
+            executor_,
+            options_));
+  }
+
+ protected:
+  // Expose protected members to verify their accessibility.
+  using facebook::velox::dwio::common::DirectBufferedInput::coalescedLoads_;
+  using facebook::velox::dwio::common::DirectBufferedInput::requests_;
+
+ private:
+  CustomDirectBufferedInput(
+      std::shared_ptr<facebook::velox::dwio::common::ReadFileInputStream> input,
+      facebook::velox::StringIdLease fileNum,
+      std::shared_ptr<facebook::velox::cache::ScanTracker> tracker,
+      facebook::velox::StringIdLease groupId,
+      std::shared_ptr<facebook::velox::io::IoStatistics> ioStatistics,
+      std::shared_ptr<facebook::velox::IoStats> ioStats,
+      folly::Executor* executor,
+      const facebook::velox::io::ReaderOptions& readerOptions)
+      : DirectBufferedInput(
+            std::move(input),
+            std::move(fileNum),
+            std::move(tracker),
+            std::move(groupId),
+            std::move(ioStatistics),
+            std::move(ioStats),
+            executor,
+            readerOptions) {}
 };
 
 class CustomBufferedInputBuilder
@@ -572,6 +773,10 @@ class CustomBufferedInputTest : public testing::Test {
   }
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
 };
 
 } // namespace
@@ -579,6 +784,8 @@ class CustomBufferedInputTest : public testing::Test {
 TEST_F(CustomBufferedInputTest, basic) {
   facebook::velox::FileHandle fileHandle;
   facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto ioStatistics = std::make_shared<facebook::velox::io::IoStatistics>();
   auto ioStats = std::make_shared<facebook::velox::IoStats>();
   auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
@@ -588,4 +795,50 @@ TEST_F(CustomBufferedInputTest, basic) {
           ->create(
               fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
       "Not implemented in CustomBufferedInputBuilder");
+}
+
+TEST_F(BufferedInputTest, readGapTracking) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(content);
+
+  struct TestCase {
+    std::vector<Region> regions;
+    uint64_t expectedGapCount;
+    uint64_t expectedGapSum;
+    uint64_t expectedGapMin;
+    uint64_t expectedGapMax;
+    std::string debugString() const {
+      return fmt::format(
+          "regions {}, expectedGapCount {}", regions.size(), expectedGapCount);
+    }
+  };
+
+  std::vector<TestCase> testCases = {
+      // Scattered regions: gaps of 9'900 and 39'900 bytes.
+      {{{0, 100}, {10'000, 100}, {50'000, 100}}, 2, 49'800, 9'900, 39'900},
+      // Contiguous regions: no gaps.
+      {{{0, 100}, {100, 100}, {200, 100}},
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
+    BufferedInput input(readFile, *pool_, MetricsLog::voidLog(), ioStats.get());
+
+    for (const auto& region : testCase.regions) {
+      input.enqueue(region);
+    }
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(ioStats->readGap().count(), testCase.expectedGapCount);
+    EXPECT_EQ(ioStats->readGap().sum(), testCase.expectedGapSum);
+    EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
+    EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
+  }
 }

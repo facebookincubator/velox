@@ -23,10 +23,11 @@
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
@@ -88,6 +89,7 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::tests::utils;
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class CacheFuzzer {
@@ -157,11 +159,17 @@ class CacheFuzzer {
   // instead of random location for cache reuse.
   std::vector<std::vector<std::pair<int32_t, int32_t>>> fileFragments_;
   std::vector<std::unique_ptr<CachedBufferedInput>> inputs_;
-  std::shared_ptr<exec::test::TempDirectoryPath> sourceDataDir_;
-  std::shared_ptr<exec::test::TempDirectoryPath> cacheDataDir_;
+  std::shared_ptr<TempDirectoryPath> sourceDataDir_;
+  std::shared_ptr<TempDirectoryPath> cacheDataDir_;
   std::unique_ptr<memory::MemoryManager> memoryManager_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<AsyncDataCache> cache_;
+
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+
   // Save the config for the last iteration so they can be potentially reused
   // after restart.
   int64_t lastMemoryCacheBytes_;
@@ -189,9 +197,8 @@ CacheFuzzer::CacheFuzzer(size_t initialSeed) {
 
 void CacheFuzzer::initSourceDataFiles() {
   // Skip errors on source data files.
-  sourceDataDir_ = exec::test::TempDirectoryPath::create();
-  cacheDataDir_ =
-      exec::test::TempDirectoryPath::create(FLAGS_enable_file_faulty_injection);
+  sourceDataDir_ = TempDirectoryPath::create();
+  cacheDataDir_ = TempDirectoryPath::create(FLAGS_enable_file_faulty_injection);
   fs_ = filesystems::getFileSystem(sourceDataDir_->getPath(), nullptr);
 
   // Create files with random sizes.
@@ -370,7 +377,9 @@ void CacheFuzzer::initializeCache(bool restartCache) {
 }
 
 void CacheFuzzer::initializeInputs() {
-  const auto readOptions = io::ReaderOptions(pool_.get());
+  io::ReaderOptions readOptions(pool_.get());
+  readOptions.setDataIoStats(dataIoStats_);
+  readOptions.setMetadataIoStats(metadataIoStats_);
   auto tracker = std::make_shared<ScanTracker>(
       "testTracker", nullptr, 256 << 10 /*256KB*/);
   auto ioStatistics = std::make_shared<IoStatistics>();

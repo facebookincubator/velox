@@ -116,6 +116,8 @@ DECIMAL                 BIGINT if precision <= 18, HUGEINT if precision >= 19
 INTERVAL DAY TO SECOND  BIGINT
 INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
+TIME_MICRO_UTC          BIGINT
+TIMESTAMP_UTC           TIMESTAMP
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -131,8 +133,11 @@ upto 38 precision, with a range of :math:`[-10^{38} + 1, +10^{38} - 1]`.
 All the three values, precision, scale, unscaled value are required to represent a
 decimal value.
 
-TIME type represents time in milliseconds from midnight UTC. Thus min/max value can  range from UTC-14:00 at 00:00:00 to UTC+14:00 at 23:59:59.999 modulo 24 hours.
-TIME type is backed by BIGINT physical type.
+TIME represents time in milliseconds since midnight, subject to session timezone interpretation. Thus min/max value can range from 0 to 23:59:59.999.
+TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subject to session timezone adjustment. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
+The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
+
+TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -220,7 +225,10 @@ IPPREFIX networks.
 IPPREFIX represents an IPv6 or IPv4 formatted IPv6 address along with a one byte
 prefix length. Its physical type is ROW(HUGEINT, TINYINT). The IPADDRESS is stored in
 the HUGEINT and is in the form defined in `RFC 4291#section-2.5.5.2 <https://datatracker.ietf.org/doc/html/rfc4291.html#section-2.5.5.2>`_.
-The prefix length is stored in the TINYINT.
+The prefix length is stored in the TINYINT. Note that IPv6 prefix lengths go up
+to 128, which overflows TINYINT (int8_t, max 127). Prefix length 128 is stored
+as -128. Code that reads the prefix length must cast to uint8_t to recover the
+correct unsigned value.
 The IP address stored is the canonical(smallest) IP address in the
 subnet range. This type can be used in IP subnet functions.
 
@@ -304,6 +312,14 @@ key differences are listed below.
       ) AS t(ts);
       -- 2014-03-08 09:00:00.012345
 
+* Spark operates on the TIME_MICRO_UTC type for "microsecond" precision and timezone unawareness,
+  while Presto uses the standard TIME type.
+  Example::
+
+      SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
+
+* Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
+
 * In function comparisons, nested null values are handled as values.
   Example::
 
@@ -321,3 +337,233 @@ key differences are listed below.
   also not orderable, but it is comparable if both key and value types are
   comparable. The implication is that MAP type cannot be used as a join, group
   by or order by key in Spark.
+
+Type Coercion
+~~~~~~~~~~~~~
+Type coercion is the implicit conversion of a value from one type to
+another during query planning. It resolves function overloads and
+special-form result types when arguments don't match a signature exactly.
+
+Coercion is a planning-time concern: by the time a Velox ``Task`` is
+constructed, every implicit conversion is already a materialized ``Cast``
+node in the typed expression tree, and runtime evaluators do not consult
+the coercer.
+
+Coercion rules live in ``TypeCoercer`` (``velox/type/TypeCoercer.h``).
+``TypeCoercer`` is value-typed and immutable after construction. Velox ships
+a default instance (``TypeCoercer::defaults()``) holding a conservative
+built-in rule set used when no dialect coercer is provided. SQL dialects
+ship their own complete instances -- for example,
+``velox::functions::prestosql::typeCoercer()`` for the Presto dialect -- that
+match the dialect's overload-resolution semantics.
+
+``TypeCoercer`` itself is frontend-agnostic: it's a plain value type that
+the resolver APIs (``SignatureBinder``,
+``resolveFunction*WithCoercions``, the special-form ``resolveTypeInt``
+helpers) accept as a defaulted tail parameter so existing callers
+compile unchanged and use ``TypeCoercer::defaults()``. How a coercer
+reaches the resolver APIs is the frontend's choice. Axiom, for example,
+threads the dialect coercer through ``logical_plan::PlanBuilder``'s
+``Context.coercer`` field, which the SQL parser sets when constructing
+the plan builder; other frontends may pass a coercer directly into the
+resolver APIs or wire it through their own planning context.
+
+Customization scope
+^^^^^^^^^^^^^^^^^^^
+
+What a dialect's ``TypeCoercer`` rule set controls:
+
+* **Primitives** (TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, BOOLEAN,
+  VARCHAR, VARBINARY, DATE, TIMESTAMP, UNKNOWN): full control over which
+  source/target pairs are allowed and at what cost. Lower cost is preferred
+  during overload resolution.
+* **DECIMAL**: customizable for source and target separately; DECIMAL ->
+  DECIMAL is not customizable. See the DECIMAL section below.
+* **Container types** (ARRAY, MAP, ROW) and FUNCTION/OPAQUE: not
+  customizable directly. Coercibility is structural -- names and arities
+  must match, and children are recursed element-wise. A dialect controls
+  container behavior only indirectly via element-type rules.
+* **Custom types** (e.g. JSON, TIMESTAMP WITH TIME ZONE, BINGTILE): not
+  customizable through a dialect's ``TypeCoercer`` rule set. Custom-type
+  coercions are registered via ``registerCastRules`` alongside
+  ``registerCustomType`` and live in the global ``CastRulesRegistry``,
+  which is shared across dialects. To keep callers from having to query
+  both registries, ``TypeCoercer::coerceTypeBase`` consults
+  ``CastRulesRegistry`` as a fallback after its own rule lookup -- so
+  custom-type coercions remain reachable through any ``TypeCoercer``
+  instance even though the dialect can't override them.
+
+Cost magnitudes
+^^^^^^^^^^^^^^^
+
+Overload resolution sums per-argument coercion costs
+(``Coercion::overallCost``) to compare candidate signatures. For sums to
+be meaningful, every ``CoercionEntry.cost`` in a single ``TypeCoercer``
+instance must be in the same small magnitude -- today's defaults use
+costs 1-9, one per source-type series. There is no hardcoded surcharge
+added at lookup time: the dialect's rule cost is returned verbatim.
+
+DECIMAL
+^^^^^^^
+
+DECIMAL handling depends on which side is DECIMAL. Rule keys collapse on
+the name ``DECIMAL`` regardless of (p, s) -- one rule per
+``(sourceName, targetName)`` pair on each side.
+
+**Source DECIMAL** (e.g. ``DECIMAL(p, s) -> DOUBLE``). A dialect
+registers one rule per ``(DECIMAL, target)`` where ``target`` is a
+non-DECIMAL type (DECIMAL -> DECIMAL is not customizable; see below).
+The source must be the canonical placeholder ``DECIMAL(1, 0)``; the rule
+fires for any actual ``DECIMAL(p, s)`` source because the source's
+precision/scale is not part of the lookup key. The rule resolves
+directly to the target type at the rule's cost.
+
+**Target DECIMAL** (e.g. ``INTEGER -> DECIMAL(p, s)``). A dialect
+registers one rule per ``(source, DECIMAL)``. The rule's stored target
+is the minimum-width decimal that holds every value of the source
+(e.g. ``INTEGER -> DECIMAL(10, 0)``). At lookup, the type system extends
+the rule's fixed target to the caller's requested ``DECIMAL(p, s)`` via
+``ShortDecimalType::isCoercibleTo`` / ``LongDecimalType::isCoercibleTo``
+(see widening rule below). Returns ``nullopt`` if the caller's target is
+too narrow.
+
+Widening itself contributes 0 to the cost; the rule's stored cost is
+returned verbatim. ``INT -> DECIMAL(10, 0)`` and ``INT -> DECIMAL(38,
+18)`` both cost whatever the rule says (e.g. cost 2 in INTEGER's series).
+This is a simple choice that works for current overload-resolution
+cases; it may need to be revisited if a function is registered with
+multiple concrete DECIMAL-target signatures, since they would all coerce
+at the same cost and produce ambiguous resolution.
+
+**DECIMAL -> DECIMAL** (e.g. ``DECIMAL(10, 2) -> DECIMAL(20, 4)``) is
+**not customizable** by dialects. ``TypeCoercer`` rejects rule entries
+with both source and target DECIMAL at construction time, so attempting
+to register one fails fast. Dialects that need non-standard
+DECIMAL -> DECIMAL semantics must extend the type system, not
+``TypeCoercer``.
+
+At lookup time, ``coerceTypeBase`` short-circuits for any two DECIMALs
+regardless of (p, s) and returns ``Coercion{type: from, cost: 0}``.
+Precision/scale reconciliation is therefore not done by
+``coerceTypeBase`` itself; instead it happens via DECIMAL-specific paths
+in two places:
+
+* ``LongDecimalType::commonSuperType`` inside ``leastCommonSuperType``
+  computes the common ``(p, s)`` for plan-level operations (UNION, CASE
+  result type, etc.).
+* ``SignatureBinder``'s integer-parameter binding handles function
+  signatures of the form ``DECIMAL(P, S)`` by binding ``P`` and ``S`` as
+  integer variables from the actual argument types.
+
+*DECIMAL widening rule.* ``DECIMAL(p1, s1)`` is coercible to
+``DECIMAL(p2, s2)`` iff:
+
+* ``p1 - s1 <= p2 - s2`` -- the target has at least as many integer
+  digits as the source, and
+* ``s1 <= s2`` -- the target has at least as much scale.
+
+Both conditions must hold; otherwise the widening fails. This rule is
+used by Target DECIMAL above (extending a fixed-width target to a wider
+caller-requested DECIMAL) and by ``LongDecimalType::commonSuperType``
+for DECIMAL -> DECIMAL reconciliation.
+
+``coerceTypeBase`` vs ``coercible``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``coerceTypeBase(from, to)`` is a single-rule lookup. It does NOT recurse
+into container children -- ``coerceTypeBase(ARRAY<INT>, ARRAY<BIGINT>)``
+returns ``nullopt`` because no flat rule keys on
+``("ARRAY", "ARRAY")``. ``coercible(from, to)`` is the structural
+predicate: for primitives it delegates to ``coerceTypeBase``; for
+containers it requires matching names and arities, then sums child
+coercion costs.
+
+Default coercion rules
+^^^^^^^^^^^^^^^^^^^^^^
+
+``TypeCoercer::defaults()`` ships the rules below. In this and the
+Presto-specific table that follows, allowed targets are listed in cost
+order (cheapest first), and for DECIMAL targets the listed type is the
+minimum-width decimal that holds every value of the source (lookup
+widens to a wider DECIMAL when compatible -- see the DECIMAL section
+above).
+
+==============   ==========================================================
+Source           Allowed targets (in cost order, cheapest first)
+==============   ==========================================================
+TINYINT          SMALLINT, INTEGER, BIGINT, DECIMAL(3, 0), REAL, DOUBLE
+SMALLINT         INTEGER, BIGINT, DECIMAL(5, 0), REAL, DOUBLE
+INTEGER          BIGINT, DECIMAL(10, 0), REAL, DOUBLE
+BIGINT           DECIMAL(19, 0), DOUBLE
+REAL             DOUBLE
+DECIMAL          REAL, DOUBLE
+DATE             TIMESTAMP
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
+                 VARCHAR, VARBINARY
+==============   ==========================================================
+
+Notable absences:
+
+* ``BIGINT -> REAL`` is not in the defaults (BIGINT has 64-bit integer
+  precision; REAL holds only ~7 decimal digits). Presto allows it; the
+  Presto dialect coercer adds it (see below).
+* No reverse conversions (e.g. ``DOUBLE -> REAL``, ``BIGINT -> INTEGER``).
+* No string conversions (e.g. ``INTEGER -> VARCHAR``).
+* No conversions between unrelated families (e.g. ``BOOLEAN -> INTEGER``,
+  ``DATE -> BIGINT``).
+
+Presto-specific coercion rules
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``velox::functions::prestosql::typeCoercer()`` (in
+``velox/functions/prestosql/coercion/PrestoCoercions.{h,cpp}``) ships a
+complete rule set independent from ``TypeCoercer::defaults()`` so that
+dialect-specific changes don't silently shift when Velox defaults change.
+Same table conventions as above.
+
+==============   ==========================================================
+Source           Allowed targets (in cost order, cheapest first)
+==============   ==========================================================
+TINYINT          SMALLINT, INTEGER, BIGINT, DECIMAL(3, 0), REAL, DOUBLE
+SMALLINT         INTEGER, BIGINT, DECIMAL(5, 0), REAL, DOUBLE
+INTEGER          BIGINT, DECIMAL(10, 0), REAL, DOUBLE
+BIGINT           DECIMAL(19, 0), REAL, DOUBLE
+REAL             DOUBLE
+DECIMAL          REAL, DOUBLE
+DATE             TIMESTAMP
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
+                 VARCHAR, VARBINARY
+==============   ==========================================================
+
+Differences from Velox's defaults:
+
+* ``BIGINT -> REAL`` is added. The BIGINT row becomes
+  ``DECIMAL(19, 0), REAL, DOUBLE``, mirroring the INTEGER row's
+  ordering. This makes ``divide(real, bigint)`` resolve to
+  ``divide(real, real)`` via ``BIGINT -> REAL`` (cost 2) instead of
+  ``divide(double, double)`` via ``REAL -> DOUBLE + BIGINT -> DOUBLE``
+  (cost 1 + 3 = 4), matching Presto's overload resolution.
+
+Presto also allows the following implicit coercions:
+
+==============================   ==========================================
+Source                           Target
+==============================   ==========================================
+TIMESTAMP                        TIMESTAMP WITH TIME ZONE
+DATE                             TIMESTAMP WITH TIME ZONE
+TIME                             TIME WITH TIME ZONE
+==============================   ==========================================
+
+These are not part of ``presto::typeCoercer()``'s rule set. From
+Velox's perspective the targets above are *custom* types
+(``TIMESTAMP WITH TIME ZONE``, ``TIME WITH TIME ZONE``) registered via
+``registerCustomType``, so their coercion rules live in the global
+``CastRulesRegistry`` (registered with ``implicitAllowed = true``
+alongside the type) rather than in the dialect's ``TypeCoercer``.
+Lookup still finds them because ``coerceTypeBase`` consults
+``CastRulesRegistry`` as a fallback.
+
+Casts to other Presto types backed by Velox custom types (JSON,
+BINGTILE, IPADDRESS, IPPREFIX, UUID, BIGINT_ENUM, VARCHAR_ENUM,
+P4HYPERLOGLOG) are explicit-only -- see
+:doc:`/functions/presto/conversion`.

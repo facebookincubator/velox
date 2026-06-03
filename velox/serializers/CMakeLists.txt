@@ -11,7 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-velox_add_library(velox_key_encoder KeyEncoder.cpp)
+velox_add_library(
+  velox_key_encoder
+  KeyDecoder.cpp
+  KeyEncoder.cpp
+  HEADERS
+  KeyDecoder.h
+  KeyEncoder.h
+)
 
 velox_link_libraries(
   velox_key_encoder
@@ -37,6 +44,20 @@ velox_add_library(
   RowSerializer.cpp
   SerializedPageFile.cpp
   VectorStream.cpp
+  HEADERS
+  CompactRowSerializer.h
+  PrestoBatchVectorSerializer.h
+  PrestoHeader.h
+  PrestoIterativeVectorSerializer.h
+  PrestoSerializer.h
+  PrestoSerializerDeserializationUtils.h
+  PrestoSerializerEstimationUtils.h
+  PrestoSerializerSerializationUtils.h
+  PrestoVectorLexer.h
+  RowSerializer.h
+  SerializedPageFile.h
+  UnsafeRowSerializer.h
+  VectorStream.h
 )
 
 velox_link_libraries(velox_presto_serializer velox_vector velox_row_fast)

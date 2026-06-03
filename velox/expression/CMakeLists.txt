@@ -12,15 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_type_signature OBJECT TypeSignature.cpp)
+velox_add_library(velox_type_signature OBJECT TypeSignature.cpp HEADERS TypeSignature.h)
 
 velox_link_libraries(velox_type_signature velox_common_base)
 
 velox_add_library(
   velox_expression_functions
   FunctionSignature.cpp
-  SignatureBinder.cpp
   ReverseSignatureBinder.cpp
+  SignatureBinder.cpp
+  VectorFunctionListener.cpp
+  HEADERS
+  FunctionMetadata.h
+  FunctionSignature.h
+  ReverseSignatureBinder.h
+  SignatureBinder.h
+  VectorFunctionListener.h
 )
 
 velox_link_libraries(
@@ -34,6 +41,7 @@ velox_link_libraries(
 velox_add_library(
   velox_expression
   BooleanMix.cpp
+  CaseExpr.cpp
   CastExpr.cpp
   CastHooks.cpp
   CoalesceExpr.cpp
@@ -50,6 +58,7 @@ velox_add_library(
   FunctionCallToSpecialForm.cpp
   GenericWriter.cpp
   LambdaExpr.cpp
+  NullIfExpr.cpp
   PeeledEncoding.cpp
   PrestoCastHooks.cpp
   RegisterSpecialForm.cpp
@@ -62,6 +71,53 @@ velox_add_library(
   SwitchRewrite.cpp
   TryExpr.cpp
   VectorFunction.cpp
+  HEADERS
+  BooleanMix.h
+  CaseExpr.h
+  CastExpr-inl.h
+  CastExpr.h
+  CastHooks.h
+  CastTypeChecker.h
+  CoalesceExpr.h
+  CoalesceRewrite.h
+  ComplexViewTypes.h
+  ComplexWriterTypes.h
+  ConjunctExpr.h
+  ConjunctRewrite.h
+  ConstantExpr.h
+  DecodedArgs.h
+  EvalCtx.h
+  Expr.h
+  ExprCompiler.h
+  ExprConstants.h
+  ExprOptimizer.h
+  ExprRewriteRegistry.h
+  ExprStats.h
+  ExprToSubfieldFilter.h
+  ExprUtils.h
+  FieldReference.h
+  FunctionCallToSpecialForm.h
+  KindToSimpleType.h
+  LambdaExpr.h
+  NullIfExpr.h
+  PeeledEncoding.h
+  PrestoCastHooks.h
+  RegisterSpecialForm.h
+  RowConstructor.h
+  ScopedVarSetter.h
+  SimpleFunctionAdapter.h
+  SimpleFunctionRegistry.h
+  SpecialForm.h
+  SpecialFormRegistry.h
+  StringWriter.h
+  SwitchExpr.h
+  SwitchRewrite.h
+  TryExpr.h
+  UdfTypeResolver.h
+  VariadicView.h
+  VectorFunction.h
+  VectorReaders.h
+  VectorWriters.h
 )
 
 velox_link_libraries(
@@ -71,11 +127,13 @@ velox_link_libraries(
   velox_common_base
   velox_expression_functions
   velox_functions_util
+  velox_trace
   velox_type_tz
   double-conversion::double-conversion
   Folly::folly
 )
 
+add_subdirectory(rpc)
 add_subdirectory(type_calculation)
 add_subdirectory(signature_parser)
 

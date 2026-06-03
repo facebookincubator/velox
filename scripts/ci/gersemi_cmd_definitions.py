@@ -45,6 +45,10 @@ command_definitions = {
     "pyvelox_add_module": pyvelox_add_module,
     "velox_add_library": velox_add_library,
     "velox_base_add_library": velox_base_add_library,
+    "velox_add_test_headers": {
+        "front_positional_arguments": ["target_name"],
+        "back_positional_arguments": ["headers"],
+    },
     "velox_build_dependency": {
         "front_positional_arguments": ["dependency_name"],
     },
@@ -60,4 +64,8 @@ command_definitions = {
         "front_positional_arguments": ["var_name", "envvar_name", "default"]
     },
     "velox_sources": builtin_commands["target_sources"],
+    "velox_add_cudf_test": {
+        "one_value_keywords": ["NAME", "TIMEOUT"],
+        "multi_value_keywords": ["SOURCES", "LIBS"],
+    },
 }

@@ -549,6 +549,8 @@ and emitting results.
      - Join type: inner, left, right, full, left semi filter, left semi project, right semi filter, right semi project, anti. You can read about different join types in this `blog post <https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/>`_.
    * - nullAware
      - Applies to anti and semi project joins only. Indicates whether the join semantic is IN (nullAware = true) or EXISTS (nullAware = false).
+   * - nullAsValue
+     - Optional. When true, join keys use IS NOT DISTINCT FROM semantics where NULL equals NULL. Used to implement SQL set operations (EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL). Mutually exclusive with nullAware.
    * - useHashTableCache
      - Optional. Used only by Presto-on-Spark. When true, enables caching of the hash table built for broadcast joins so that subsequent tasks can reuse it.
    * - leftKeys
@@ -1015,8 +1017,17 @@ FilterNode(rank/row_number <= limit), but it uses less memory and CPU.
 MarkDistinctNode
 ~~~~~~~~~~~~~~~~
 
-The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
-Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of 'distinctKeys'.
+The MarkDistinct operator produces boolean marker columns identifying the first occurrence of each distinct
+combination of 'distinctKeys'. It emits one no-mask marker (true on the first occurrence of each distinct key
+combination), followed by one marker per entry in 'masks' (true on the first occurrence of each distinct key
+combination for which the corresponding mask column is true). This allows MarkDistinct to produce aggregate
+mask columns for aggregation over distinct values, with and without filters.
+
+This operator supports spilling. The spill mechanism follows the same pattern as RowNumber: when memory pressure
+triggers spilling, the hash table contents and future input are partitioned and written to disk. During restore,
+each partition's hash table is rebuilt from the spilled data, preserving knowledge of which keys were already seen.
+When masks are present, the per-key bitmask tracking which masks have already fired is spilled alongside the hash
+table and restored together. Disabled by default; enable with `mark_distinct_spill_enabled` configuration property.
 
 .. list-table::
   :widths: 10 30
@@ -1025,10 +1036,12 @@ Mask is a boolean column set to true for a subset of input rows that collectivel
 
   * - Property
     - Description
-  * - markerName
-    - Name of the output mask column.
+  * - markerNames
+    - Names of the output marker columns. The first name is the no-mask marker; the remaining names correspond positionally to entries in 'masks'. Must have exactly one more entry than 'masks'.
   * - distinctKeys
     - Names of grouping keys.
+  * - masks
+    - List of boolean mask column references. Empty when only the no-mask marker is needed.
 
 MixedUnionNode
 ~~~~~~~~~~~~~~
@@ -1121,3 +1134,41 @@ ALL.
 .. image:: images/local-exchange.png
     :width: 400
     :align: center
+
+GPU Operators (cuDF)
+--------------------
+
+When cuDF is enabled, CPU operators are replaced with GPU equivalents at
+pipeline construction time via the ``OperatorAdapterRegistry``. For example,
+``FilterProject`` becomes ``CudfFilterProject``, ``Aggregation`` becomes
+``CudfGroupby`` or ``CudfReduce``, and ``HashJoin`` becomes
+``CudfHashJoinBuild``/``CudfHashJoinProbe``.
+
+Adapter operators are automatically inserted at GPU/CPU boundaries:
+
+* ``CudfFromVelox`` — inserted before a GPU operator when the preceding
+  operator produces CPU data (host-to-device conversion).
+* ``CudfToVelox`` — inserted after a GPU operator when the next operator
+  or the pipeline output requires CPU data (device-to-host conversion).
+
+Adapter operators use synthetic planNodeIds (e.g. ``4-to-velox``) at runtime,
+but redirect their stats to the parent plan node via ``setStatSplitter``.
+This means they appear in ``printPlanWithStats`` output as operator-type
+breakdown lines under their parent node (the same mechanism used by
+``HashBuild``/``HashProbe`` under ``HashJoinNode``).
+
+All cuDF operators extend ``CudfOperatorBase``, which provides:
+
+* Template method pattern (``doAddInput``/``doGetOutput``/``doClose``)
+* NVTX profiling ranges
+
+GPU operators are identified by their ``Cudf`` prefix in operator type names
+(e.g. ``CudfFilterProject``, ``CudfLocalPartition``, ``CudfReduceFINAL``).
+Operators without this prefix (e.g. ``LocalExchange``) run on CPU.
+``TableScan`` uses the cuDF GPU parquet reader via the connector layer but
+is not itself a ``CudfOperatorBase`` subclass.
+
+In stats output, "Cpu time" and "Wall time" for GPU operators reflect the
+host-side duration of ``addInput``/``getOutput`` calls, which includes
+enqueuing GPU work and synchronizing. These are not GPU hardware execution
+times.

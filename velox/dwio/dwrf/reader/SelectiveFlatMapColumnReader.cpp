@@ -215,7 +215,7 @@ class SelectiveFlatMapAsStructReader : public SelectiveStructColumnReaderBase {
                 scanSpec,
                 dwio::common::flatmap::FlatMapOutput::kStruct)) {
     VELOX_CHECK(
-        !keyNodes_.empty(),
+        !scanSpec.children().empty(),
         "For struct encoding, keys to project must be configured");
     children_.resize(keyNodes_.size());
     for (auto& childSpec : scanSpec.children()) {
@@ -305,6 +305,14 @@ class SelectiveFlatMapReader
         &params.pool());
     auto rawKeys = keysVector_->values()->asMutable<T>();
     children_.resize(keyNodes_.size());
+
+    // Invalidate subscripts from previous stripes. The shared ScanSpec
+    // accumulates children across stripes via getOrCreateChild(). Keys
+    // absent in the current stripe must not be accessed via children_,
+    // so mark them constant so read() skips them.
+    for (auto& child : scanSpec.children()) {
+      child->setSubscript(kConstantChildSpecSubscript);
+    }
 
     for (int i = 0; i < keyNodes_.size(); ++i) {
       keyNodes_[i].reader->scanSpec()->setSubscript(i);

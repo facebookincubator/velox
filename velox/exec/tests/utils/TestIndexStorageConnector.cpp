@@ -72,6 +72,7 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
       /*dependentTypes=*/dependentTypes,
       /*allowDuplicates=*/true,
       /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
       /*minTableSizeForParallelJoinBuild=*/1,
       &pool);
 
@@ -270,7 +271,11 @@ std::shared_ptr<connector::IndexSource::ResultIterator> TestIndexSource::lookup(
   checkNotFailed();
   VELOX_CHECK(!tableHandle_->needsIndexSplit() || !splits_.empty());
   const auto numInputRows = request.input->size();
-  auto& hashTable = tableHandle_->indexTable()->table;
+  auto* indexTable = tableHandle_->indexTable().get();
+  auto& hashTable = indexTable->table;
+  // Serialize access to the shared hash table. The hashers contain stateful
+  // DecodedVectors that are not thread-safe for concurrent access.
+  std::lock_guard<std::mutex> l(indexTable->mutex);
   auto lookup = std::make_unique<HashLookup>(hashTable->hashers(), pool_.get());
   SelectivityVector activeRows(numInputRows);
   VELOX_CHECK(activeRows.isAllSelected());
@@ -342,13 +347,13 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
   std::lock_guard<std::mutex> l(mutex_);
   if (timing.wallNanos != 0) {
     addOperatorRuntimeStats(
-        IndexLookupJoin::kConnectorLookupWallTime,
+        std::string(IndexLookupJoin::kConnectorLookupWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        IndexLookupJoin::kClientLookupWaitWallTime,
+        std::string(IndexLookupJoin::kClientLookupWaitWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }
@@ -356,7 +361,7 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        IndexLookupJoin::kConnectorResultPrepareTime,
+        std::string(IndexLookupJoin::kConnectorResultPrepareTime),
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }

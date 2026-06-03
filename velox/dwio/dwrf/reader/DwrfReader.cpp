@@ -41,8 +41,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::ColumnReaderStatistics>
-          columnReaderStatistics,
+      std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -51,7 +50,7 @@ class DwrfUnit : public LoadUnit {
       : stripeReaderBase_{readerBase},
         memoryPool_(readerBase->memoryPool().shared_from_this()),
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStatistics_{std::move(columnReaderStatistics)},
+        columnReaderStats_{std::move(columnReaderStats)},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
         projectedNodes_{std::move(projectedNodes)},
@@ -101,7 +100,7 @@ class DwrfUnit : public LoadUnit {
   const StrideIndexProvider& strideIndexProvider_;
 
   const std::shared_ptr<dwio::common::ColumnReaderStatistics>
-      columnReaderStatistics_;
+      columnReaderStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -166,7 +165,8 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.offset(),
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
-      stripeIndex_);
+      stripeIndex_,
+      columnReaderStats_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -182,7 +182,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        *columnReaderStatistics_,
+        *columnReaderStats_,
         scanSpec,
         flatMapContext,
         /*isRoot=*/true);
@@ -265,9 +265,11 @@ DwrfRowReader::DwrfRowReader(
                     reader->schema()))},
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
-      columnReaderStatistics_{
-          std::make_shared<dwio::common::ColumnReaderStatistics>()},
+      columnReaderStats_(
+          std::make_shared<dwio::common::ColumnReaderStatistics>()),
       currentUnit_{nullptr} {
+  columnReaderStats_->initColumnStatsCollection(
+      *getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -357,7 +359,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_unique<DwrfUnit>(
             /*readerBase=*/readerBaseShared(),
             /*strideIndexProvider=*/*this,
-            columnReaderStatistics_,
+            columnReaderStats_,
             stripe,
             columnSelector_,
             projectedNodes_,
@@ -600,8 +602,10 @@ int64_t DwrfRowReader::nextRowNumber() {
         const auto skipRows = getReader().randomSkip()->nextSkip();
         if (skipRows >= numStripeRows) {
           getReader().randomSkip()->consume(numStripeRows);
-          const auto numStrides = bits::divRoundUp(numStripeRows, strideSize);
-          skippedStrides_ += numStrides;
+          if (strideSize > 0) {
+            skippedStrides_ += static_cast<int64_t>(
+                bits::divRoundUp(numStripeRows, strideSize));
+          }
           goto advanceToNextStripe;
         }
       }
@@ -611,6 +615,9 @@ int64_t DwrfRowReader::nextRowNumber() {
 
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
+      if (strideSize > 0 && currentRowInStripe_ % strideSize == 0) {
+        ++processedStrides_;
+      }
       nextRowNumber_ = firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
       return *nextRowNumber_;
     }
@@ -703,7 +710,6 @@ void DwrfRowReader::loadCurrentStripe() {
   const auto loadUnitIdx = currentStripe_ - firstStripe_;
   currentUnit_ = castDwrfUnit(&unitLoader_->getLoadedUnit(loadUnitIdx));
   rowsInCurrentStripe_ = currentUnit_->getNumRows();
-  ++processedStrides_;
 }
 
 size_t DwrfRowReader::estimatedReaderMemory() const {
@@ -722,7 +728,6 @@ bool DwrfRowReader::shouldReadNode(
 }
 
 namespace {
-
 template <typename T>
 std::optional<uint64_t> getStringOrBinaryColumnSize(
     const dwio::common::ColumnStatistics& stats) {
@@ -860,13 +865,19 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  VELOX_CHECK_NE(
+      readerBase_->readerOptions().columnMappingMode(),
+      dwio::common::ColumnMappingMode::kParquetFieldId,
+      "Parquet field ID column mapping is not supported by DWRF.");
+
   // If we are not using column names to map table columns to file columns,
   // then we use indices. In that case we need to ensure the names completely
   // match, because we are still mapping columns by names further down the
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((!readerBase_->readerOptions().useColumnNamesForColumnMapping()) &&
+  if (readerBase_->readerOptions().columnMappingMode() !=
+          dwio::common::ColumnMappingMode::kName &&
       (readerBase_->readerOptions().fileSchema() != nullptr)) {
     updateColumnNamesFromTableSchema();
   }
@@ -1049,8 +1060,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerEstimatedSize()) {
-    memoryBytes = footerLength + readerBase.footerEstimatedSize();
+  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
+    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.

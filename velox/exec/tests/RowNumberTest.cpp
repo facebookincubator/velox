@@ -16,13 +16,15 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class RowNumberTest : public OperatorTestBase {
  protected:
@@ -204,7 +206,7 @@ TEST_F(RowNumberTest, spill) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     TestScopedSpillInjection scopedSpillInjection(100, ".*", 1);
 
@@ -238,11 +240,13 @@ TEST_F(RowNumberTest, spill) {
         task->taskStats().pipelineStats.back().operatorStats.at(1);
     auto runtimeStats = operatorStats.runtimeStats;
     ASSERT_EQ(
-        runtimeStats.at(Operator::kSpillReadBytes).sum,
+        runtimeStats.at(std::string(Operator::kSpillReadBytes)).sum,
         operatorStats.spilledBytes);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillReads).sum, 0);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillReadTime).sum, 0);
-    ASSERT_GT(runtimeStats.at(Operator::kSpillDeserializationTime).sum, 0);
+    ASSERT_GT(runtimeStats.at(std::string(Operator::kSpillReads)).sum, 0);
+    ASSERT_GT(runtimeStats.at(std::string(Operator::kSpillReadTime)).sum, 0);
+    ASSERT_GT(
+        runtimeStats.at(std::string(Operator::kSpillDeserializationTime)).sum,
+        0);
 
     task.reset();
     waitForAllTasksToBeDeleted();
@@ -269,7 +273,7 @@ TEST_F(RowNumberTest, maxSpillBytes) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     try {
       TestScopedSpillInjection scopedSpillInjection(100, ".*", 1);
@@ -321,7 +325,7 @@ TEST_F(RowNumberTest, memoryUsage) {
 
     for (const auto& spillEnable : {false, true}) {
       auto queryCtx = core::QueryCtx::create(executor_.get());
-      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto spillDirectory = TempDirectoryPath::create();
       const std::string spillEnableConfig = std::to_string(spillEnable);
 
       std::shared_ptr<Task> task;
@@ -375,7 +379,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     std::atomic_int numRound{0};
@@ -443,7 +447,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     std::atomic_int numSpills{0};
@@ -540,7 +544,7 @@ TEST_F(RowNumberTest, spillWithYield) {
     SCOPED_TRACE(testData.debugString());
     TestScopedSpillInjection scopedSpillInjection(
         100, ".*", testData.numSpills);
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
 
     core::PlanNodeId rowNumberPlanNodeId;
@@ -570,6 +574,174 @@ TEST_F(RowNumberTest, spillWithYield) {
     task.reset();
     waitForAllTasksToBeDeleted();
   }
+}
+
+DEBUG_ONLY_TEST_F(RowNumberTest, rowNumberSpillFileCreateConfig) {
+  auto vectors = createVectors(8, rowType_, fuzzerOpts_);
+  createDuckDbTable(vectors);
+
+  auto tempDirectory = TempDirectoryPath::create();
+
+  std::atomic_bool rowNumberConfigVerified{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::isBlocked",
+      std::function<void(exec::Operator*)>([&](exec::Operator* op) {
+        const auto* spillConfig = op->testingSpillConfig();
+        if (spillConfig == nullptr) {
+          return;
+        }
+        const auto& opType = op->operatorType();
+        if (opType == "RowNumber") {
+          ASSERT_EQ(spillConfig->fileCreateConfig, "test_row_number_config")
+              << "Operator: " << opType;
+          rowNumberConfigVerified = true;
+        }
+      }));
+
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(tempDirectory->getPath())
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kRowNumberSpillEnabled, true)
+      .config(core::QueryConfig::kSpillFileCreateConfig, "test_default_config")
+      .config(
+          core::QueryConfig::kRowNumberSpillFileCreateConfig,
+          "test_row_number_config")
+      .plan(PlanBuilder().values(vectors).rowNumber({"c0"}).planNode())
+      .assertResults("SELECT *, row_number() over (partition by c0) FROM tmp");
+
+  ASSERT_TRUE(rowNumberConfigVerified.load());
+}
+
+namespace {
+
+// Defines a minimal plan node for the backpressuring downstream used by the
+// regression test below.
+class BackpressureNode : public core::PlanNode {
+ public:
+  BackpressureNode(const core::PlanNodeId& id, core::PlanNodePtr input)
+      : PlanNode(id), sources_{std::move(input)} {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "Backpressure";
+  }
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+
+  std::vector<core::PlanNodePtr> sources_;
+};
+
+// Passes input through but refuses it most of the time, keeping the upstream
+// RowNumber holding a buffered batch. Before the needsInput() fix this made the
+// Driver re-feed RowNumber and overwrite its undrained input_.
+class BackpressureOperator : public Operator {
+ public:
+  BackpressureOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const std::shared_ptr<const BackpressureNode>& node)
+      : Operator(ctx, node->outputType(), id, node->id(), "Backpressure") {}
+
+  bool needsInput() const override {
+    if (noMoreInput_ || input_ != nullptr) {
+      return false;
+    }
+    // Accept input only every 4th poll. The rejected polls are when the Driver
+    // would re-feed (and, before the fix, overwrite) the upstream RowNumber.
+    return (++polls_ % 4) == 0;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    return std::move(input_);
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /* future */) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
+
+ private:
+  mutable int32_t polls_{0};
+};
+
+class BackpressureNodeFactory : public Operator::PlanNodeTranslator {
+ public:
+  std::unique_ptr<Operator> toOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node) override {
+    if (auto bpNode = std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return std::make_unique<BackpressureOperator>(ctx, id, bpNode);
+    }
+    return nullptr;
+  }
+
+  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override {
+    if (std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      // Single driver, mirroring the BATCH-mode RPC operator that exposed the
+      // bug.
+      return 1;
+    }
+    return std::nullopt;
+  }
+};
+
+} // namespace
+
+// Regression test: a window operator (RowNumber) feeding a backpressuring
+// downstream must not drop rows. Before the fix, RowNumber::needsInput() did
+// not check input_ == nullptr, so when the downstream returned
+// needsInput()=false the Driver re-fed RowNumber and addInput() overwrote the
+// undrained batch, silently dropping rows (seen in production with a BATCH-mode
+// RPC operator).
+TEST_F(RowNumberTest, noRowLossWithBackpressuringDownstream) {
+  Operator::registerOperator(std::make_unique<BackpressureNodeFactory>());
+
+  // Many small batches so the Driver repeatedly feeds RowNumber while the
+  // downstream refuses input.
+  const int32_t numBatches = 50;
+  const int32_t rowsPerBatch = 100;
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch,
+             [&](auto row) { return (i * rowsPerBatch + row) % 17; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .rowNumber({"c0"})
+          .addNode([](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<BackpressureNode>(id, std::move(input));
+          })
+          .planNode();
+
+  // Single driver so RowNumber and the backpressuring downstream share a
+  // pipeline, as with a BATCH-mode RPC operator (maxDrivers=1).
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
 }
 
 } // namespace facebook::velox::exec::test

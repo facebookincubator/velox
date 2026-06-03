@@ -23,7 +23,10 @@ PartitionStreamingWindowBuild::PartitionStreamingWindowBuild(
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
-    : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {}
+    : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection) {
+  initializeRowContainer(pool);
+  initializeDecodedInputVectors();
+}
 
 void PartitionStreamingWindowBuild::buildNextPartition() {
   partitionStartRows_.push_back(sortedRows_.size());

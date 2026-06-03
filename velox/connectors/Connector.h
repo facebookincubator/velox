@@ -16,17 +16,19 @@
 #pragma once
 
 #include "folly/CancellationToken.h"
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/exec/SpillStats.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
@@ -45,7 +47,7 @@ class ConfigBase;
 
 namespace facebook::velox::core {
 class ITypedExpr;
-}
+} // namespace facebook::velox::core
 
 namespace facebook::velox::core {
 struct IndexLookupCondition;
@@ -61,6 +63,13 @@ struct ConnectorSplit : public ISerializable {
   const std::string connectorId;
   const int64_t splitWeight{0};
   const bool cacheable{true};
+
+  /// Optional hint for the number of rows a TableScan should read per batch
+  /// from this split. When set (> 0), TableScan uses this instead of the
+  /// query-level preferred batch size. This allows split generators (e.g.,
+  /// MixedUnion split iterators) to control per-source read rates by stamping
+  /// each split with a batch size proportional to its share of the union.
+  int32_t batchSizeHint{0};
 
   std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
@@ -281,6 +290,17 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
+  /// Stores a callback to fire after each scan batch.
+  void setScanBatchCallback(core::ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Default is a no-op. Subclasses should override to create a
+  /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
+  /// connector-specific fields, and call scanBatchCallback_.
+  virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
+
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }
@@ -325,6 +345,9 @@ class DataSource {
   /// connector implementation decides how to support the cancellation if
   /// needed.
   virtual void cancel() {}
+
+ protected:
+  core::ScanBatchCallback scanBatchCallback_;
 };
 
 class IndexSource {
@@ -532,10 +555,12 @@ class ConnectorQueryCtx {
     return cancellationToken_;
   }
 
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
   bool selectiveNimbleReaderEnabled() const {
     return selectiveNimbleReaderEnabled_;
   }
 
+  /// Deprecated: Use connector session properties instead.
   void setSelectiveNimbleReaderEnabled(bool value) {
     selectiveNimbleReaderEnabled_ = value;
   }
@@ -611,6 +636,12 @@ class Connector {
 
   const std::shared_ptr<const config::ConfigBase>& connectorConfig() const {
     return config_;
+  }
+
+  /// Returns the config provider for this connector's session properties,
+  /// or nullptr if the connector has no session-overridable properties.
+  virtual const config::ConfigProvider* configProvider() const {
+    return nullptr;
   }
 
   /// Returns true if this connector would accept a filter dynamically
@@ -717,30 +748,35 @@ class Connector {
 
   /// The name of the common runtime stats collected and reported by connector
   /// data/index sources.
-  static inline const std::string kTotalRemainingFilterTime{
+  static constexpr std::string_view kTotalRemainingFilterTime{
       "totalRemainingFilterWallNanos"};
+
+  /// Total CPU time spent on remaining filter evaluation.
+  static inline const std::string kTotalRemainingFilterCpuTime{
+      "totalRemainingFilterCpuNanos"};
 
   /// Total time spent waiting for synchronously issued IO or for an in-progress
   /// read-ahead to finish.
-  static inline const std::string kIoWaitWallNanos{"ioWaitWallNanos"};
+  static constexpr std::string_view kIoWaitWallNanos{"ioWaitWallNanos"};
 
   /// Time spent waiting for remote storage reads (S3, HDFS, etc.)
-  static inline const std::string kStorageReadWallNanos{"storageReadWallNanos"};
+  static constexpr std::string_view kStorageReadWallNanos{
+      "storageReadWallNanos"};
 
   /// Time spent waiting for SSD cache reads.
-  static inline const std::string kSsdCacheReadWallNanos{
+  static constexpr std::string_view kSsdCacheReadWallNanos{
       "ssdCacheReadWallNanos"};
 
   /// Time spent waiting for EXCLUSIVE cache entries (another thread is
   /// loading).
-  static inline const std::string kCacheWaitWallNanos{"cacheWaitWallNanos"};
+  static constexpr std::string_view kCacheWaitWallNanos{"cacheWaitWallNanos"};
 
   /// Time spent waiting for coalesced loads from SSD cache.
-  static inline const std::string kCoalescedSsdLoadWallNanos{
+  static constexpr std::string_view kCoalescedSsdLoadWallNanos{
       "coalescedSsdLoadWallNanos"};
 
   /// Time spent waiting for coalesced loads from remote storage.
-  static inline const std::string kCoalescedStorageLoadWallNanos{
+  static constexpr std::string_view kCoalescedStorageLoadWallNanos{
       "coalescedStorageLoadWallNanos"};
 
  private:
@@ -754,26 +790,18 @@ class Connector {
       trackers_;
 };
 
-/// Adds connector instance to the registry using connector ID as the key.
-/// Throws if connector with the same ID is already present. Always returns
-/// true. The return value makes it easy to use with FB_ANONYMOUS_VARIABLE.
-bool registerConnector(std::shared_ptr<Connector> connector);
+/// Deprecated free functions. Use ConnectorRegistry methods instead.
 
-/// Returns true if a connector with the specified ID has been registered, false
-/// otherwise.
+[[deprecated("Use ConnectorRegistry::global().insert() instead.")]]
+bool registerConnector(const std::shared_ptr<Connector>& connector);
+
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 bool hasConnector(const std::string& connectorId);
 
-/// Removes the connector with specified ID from the registry. Returns true
-/// if connector was removed and false if connector didn't exist.
+[[deprecated("Use ConnectorRegistry::global().erase() instead.")]]
 bool unregisterConnector(const std::string& connectorId);
 
-/// Returns a connector with specified ID. Throws if connector doesn't
-/// exist.
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
-
-/// Returns a map of all (connectorId -> connector) pairs currently
-/// registered.
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-getAllConnectors();
 
 } // namespace facebook::velox::connector

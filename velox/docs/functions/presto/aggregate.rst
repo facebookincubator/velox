@@ -17,13 +17,13 @@ depending on the order of input values.
 General Aggregate Functions
 ---------------------------
 
-.. function:: arbitrary(x) -> [same as x]
-
-    Returns an arbitrary non-null value of ``x``, if one exists.
-
 .. function:: any_value(x) -> [same as x]
 
     This is an alias for :func:`arbitrary`.
+
+.. function:: arbitrary(x) -> [same as x]
+
+    Returns an arbitrary non-null value of ``x``, if one exists.
 
 .. function:: array_agg(x) -> array<[same as x]>
 
@@ -89,37 +89,17 @@ General Aggregate Functions
 
     This is an alias for :func:`bool_and`.
 
-.. function:: histogram(x)
-
-    Returns a map containing the count of the number of times
-    each input value occurs. Supports integral, floating-point,
-    boolean, timestamp, and date input types.
-
 .. function:: geometric_mean(bigint) -> double
               geometric_mean(double) -> double
               geometric_mean(real) -> real
 
     Returns the `geometric mean <https://en.wikipedia.org/wiki/Geometric_mean>`_ of all input values.
 
-.. function:: max_by(x, y) -> [same as x]
+.. function:: histogram(x)
 
-    Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
-    ``y`` must be an orderable type.
-
-.. function:: max_by(x, y, n) -> array([same as x])
-    :noindex:
-
-    Returns n values of ``x`` associated with the n largest values of ``y`` in descending order of ``y``.
-
-.. function:: min_by(x, y) -> [same as x]
-
-    Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
-    ``y`` must be an orderable type.
-
-.. function:: min_by(x, y, n) -> array([same as x])
-    :noindex:
-
-    Returns n values of ``x`` associated with the n smallest values of ``y`` in ascending order of ``y``.
+    Returns a map containing the count of the number of times
+    each input value occurs. Supports integral, floating-point,
+    boolean, timestamp, and date input types.
 
 .. function:: max(x) -> [same as x]
 
@@ -138,6 +118,16 @@ General Aggregate Functions
     Nulls are not included in the output array.
     For REAL and DOUBLE types, NaN is considered greater than Infinity.
 
+.. function:: max_by(x, y) -> [same as x]
+
+    Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
+
+.. function:: max_by(x, y, n) -> array([same as x])
+    :noindex:
+
+    Returns n values of ``x`` associated with the n largest values of ``y`` in descending order of ``y``.
+
 .. function:: min(x) -> [same as x]
 
     Returns the minimum value of all input values.
@@ -154,6 +144,16 @@ General Aggregate Functions
     Currently not supported for ARRAY, MAP, and ROW input types.
     Nulls are not included in output array.
     For REAL and DOUBLE types, NaN is considered greater than Infinity.
+
+.. function:: min_by(x, y) -> [same as x]
+
+    Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+    ``y`` must be an orderable type.
+
+.. function:: min_by(x, y, n) -> array([same as x])
+    :noindex:
+
+    Returns n values of ``x`` associated with the n smallest values of ``y`` in ascending order of ``y``.
 
 .. function:: multimap_agg(K key, V value) -> map(K,array(V))
 
@@ -307,6 +307,33 @@ Map Aggregate Functions
     Returns the union of all the input maps summing the values of matching keys in all
     the maps. All null values in the original maps are coalesced to 0.
 
+Array Aggregate Functions
+-------------------------
+
+.. function:: vector_sum(array(T)) -> array(T)
+
+    Returns the element-wise sum of all input arrays. Equivalent to
+    ``ARRAY[SUM(a[1]), SUM(a[2]), ...]``, with the same null-handling
+    semantics as :func:`sum`: null elements are skipped, and positions
+    where all input values are null produce null in the output.
+    All input arrays must have the same length; an error is raised if
+    arrays of different lengths are encountered.
+    Supported types for T are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL
+    and DOUBLE.
+    For integer types, arithmetic overflow results in an error,
+    consistent with the behavior of :func:`sum`. For floating-point
+    types (REAL, DOUBLE), NaN values propagate through the sum and
+    overflow produces Infinity, following standard IEEE 754 semantics.
+
+    This is useful when rows contain fixed-dimension vectors (e.g.
+    embedding vectors or feature arrays) and you need to compute a
+    component-wise sum across all rows::
+
+        SELECT vector_sum(embedding) FROM item_embeddings;
+
+        -- With 3 rows: [1, 2, 3], [10, 20, 30], [100, 200, 300]
+        -- Returns:     [111, 222, 333]
+
 Approximate Aggregate Functions
 -------------------------------
 
@@ -441,6 +468,7 @@ __ https://www.cse.ust.hk/~raywong/comp5331/References/EfficientComputationOfFre
         --{30.0->1.0, 22.5->2.0, 12.5->2.0}
 
 .. function:: numeric_histogram(buckets, value) -> map<double, double>
+   :noindex:
 
     Computes an approximate histogram with up to ``buckets`` number of buckets
     for all ``value``\ s. This function is equivalent to the variant of
@@ -548,6 +576,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_miss_rate(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_miss_rate` that takes a ``weight``, with a per-item weight of ``1``.
@@ -577,6 +606,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_fall_out(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_fall_out` that takes a ``weight``, with a per-item weight of ``1``.
@@ -606,6 +636,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_precision(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_precision` that takes a ``weight``, with a per-item weight of ``1``.
@@ -635,6 +666,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_recall(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_recall` that takes a ``weight``, with a per-item weight of ``1``.
@@ -737,10 +769,6 @@ Statistical Aggregate Functions
 
     Returns the sample standard deviation of all input values.
 
-.. function:: variance(x) -> double
-
-    This is an alias for :func:`var_samp`.
-
 .. function:: var_pop(x) -> double
 
     Returns the population variance of all input values.
@@ -748,6 +776,10 @@ Statistical Aggregate Functions
 .. function:: var_samp(x) -> double
 
     Returns the sample variance of all input values.
+
+.. function:: variance(x) -> double
+
+    This is an alias for :func:`var_samp`.
 
 Noisy Aggregate Functions
 -------------------------
@@ -818,6 +850,7 @@ Counts, Sums, and Averages
     Otherwise, noise is drawn from a secure random.
 
 .. function:: noisy_sum_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+   :noindex:
 
     Calculates the sum over the input values in ``col`` and then adds a normally distributed
     random double value with 0 mean and standard deviation of ``noise_scale``.
@@ -835,6 +868,7 @@ Counts, Sums, and Averages
     Otherwise, noise is drawn from a secure random.
 
 .. function:: noisy_avg_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+   :noindex:
 
     Calculates the average (arithmetic mean) of all the input values in ``col`` and then adds a
     normally distributed random double value with 0 mean and standard deviation of ``noise_scale``.

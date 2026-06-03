@@ -15,11 +15,12 @@
  */
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/parquet/ParquetFieldId.h"
+#include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -32,12 +33,18 @@ class IcebergColumnHandle : public HiveColumnHandle {
       ColumnType columnType,
       TypePtr dataType,
       parquet::ParquetFieldId icebergField,
-      std::vector<common::Subfield> requiredSubfields = {});
+      std::vector<common::Subfield> requiredSubfields = {},
+      std::optional<std::string> initialDefaultValue = std::nullopt);
 
   const parquet::ParquetFieldId& field() const;
 
+  const std::optional<std::string>& initialDefaultValue() const {
+    return initialDefaultValue_;
+  }
+
  private:
   const parquet::ParquetFieldId field_;
+  const std::optional<std::string> initialDefaultValue_;
 };
 
 using IcebergColumnHandlePtr = std::shared_ptr<const IcebergColumnHandle>;

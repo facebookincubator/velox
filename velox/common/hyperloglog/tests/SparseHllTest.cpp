@@ -15,8 +15,7 @@
  */
 #include "velox/common/hyperloglog/SparseHll.h"
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include <gtest/gtest-typed-test.h>
 #include <gtest/gtest.h>
@@ -141,6 +140,20 @@ class NameGenerator {
 };
 
 TYPED_TEST_SUITE(SparseHllTest, AllocatorTypes, NameGenerator);
+
+TYPED_TEST(SparseHllTest, corruptEntryCount) {
+  // SparseHll format: int8_t version (2) + int8_t indexBitLength + int16_t
+  // size.  A negative size causes std::terminate in vector::resize due to
+  // fbcode's noexcept _M_check_len.
+  std::string serialized(4, '\0');
+  serialized[0] = 2; // kPrestoSparseV2
+  serialized[1] = 11; // indexBitLength
+  // Write size = -1 as little-endian int16_t.
+  serialized[2] = static_cast<char>(0xFF);
+  serialized[3] = static_cast<char>(0xFF);
+
+  EXPECT_ANY_THROW(SparseHll(serialized.data(), this->allocator_));
+}
 
 TYPED_TEST(SparseHllTest, basic) {
   SparseHll sparseHll{this->allocator_};

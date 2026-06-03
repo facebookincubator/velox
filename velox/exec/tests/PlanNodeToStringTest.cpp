@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -22,6 +23,7 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using facebook::velox::exec::test::PlanBuilder;
@@ -412,6 +414,28 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
   ASSERT_EQ(
       "-- HashJoin[2][ANTI t_c0=u_c0] -> t_c0:SMALLINT, t_c1:INTEGER\n",
       plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({data_})
+             .project({"c0 as t_c0", "c1 as t_c1"})
+             .hashJoin(
+                 {"t_c0"},
+                 {"u_c0"},
+                 PlanBuilder()
+                     .values({data_})
+                     .project({"c0 as u_c0", "c1 as u_c1"})
+                     .planNode(),
+                 "",
+                 {"t_c0", "t_c1"},
+                 core::JoinType::kAnti,
+                 false /*nullAware*/,
+                 true /*nullAsValue*/)
+             .planNode();
+
+  ASSERT_EQ("-- HashJoin[2]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[2][ANTI t_c0=u_c0, null as value] -> t_c0:SMALLINT, t_c1:INTEGER\n",
+      plan->toString(true, false));
 }
 
 TEST_F(PlanNodeToStringTest, mergeJoin) {
@@ -592,10 +616,8 @@ TEST_F(PlanNodeToStringTest, localPartition) {
 }
 
 TEST_F(PlanNodeToStringTest, partitionedOutput) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
     auto plan =
         PlanBuilder()
@@ -698,10 +720,8 @@ TEST_F(PlanNodeToStringTest, localMerge) {
 }
 
 TEST_F(PlanNodeToStringTest, exchange) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
     auto plan = PlanBuilder()
@@ -716,10 +736,8 @@ TEST_F(PlanNodeToStringTest, exchange) {
 }
 
 TEST_F(PlanNodeToStringTest, mergeExchange) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
     auto plan =
@@ -983,15 +1001,131 @@ TEST_F(PlanNodeToStringTest, topNDenseRank) {
 }
 
 TEST_F(PlanNodeToStringTest, markDistinct) {
-  auto op =
-      PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-          .markDistinct("marker", {"a", "b"})
-          .planNode();
-  ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+  {
+    SCOPED_TRACE("single-marker");
+    auto op =
+        PlanBuilder()
+            .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+            .markDistinct("marker", {"a", "b"})
+            .planNode();
+    ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+    ASSERT_EQ(
+        "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
+        op->toString(true, false));
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    auto op =
+        PlanBuilder()
+            .tableScan(
+                ROW({"a", "b", "m0", "m1"},
+                    {VARCHAR(), BIGINT(), BOOLEAN(), BOOLEAN()}))
+            .markDistinct({"nomask", "r0", "r1"}, {"a", "b"}, {"m0", "m1"})
+            .planNode();
+    ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+    ASSERT_EQ(
+        "-- MarkDistinct[1][a, b, masks: [m0, m1]] -> a:VARCHAR, b:BIGINT, "
+        "m0:BOOLEAN, m1:BOOLEAN, nomask:BOOLEAN, r0:BOOLEAN, r1:BOOLEAN\n",
+        op->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, tableWrite) {
+  auto outputDir = common::testutil::TempDirectoryPath::create();
+
+  // TableWrite without stats.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(outputDir->getPath())
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with stats (no grouping keys) and TableWriteMerge.
+  {
+    core::TableWriteNodePtr writeNode;
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(
+                        outputDir->getPath(),
+                        dwio::common::FileFormat::DWRF,
+                        {"min(c0)"})
+                    .capturePlanNode(writeNode)
+                    .localGather()
+                    .tableWriteMerge()
+                    .planNode();
+
+    ASSERT_EQ("-- TableWrite[1]\n", writeNode->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, stats[PARTIAL: min(ROW[\"c0\"])]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, a0:SMALLINT\n",
+        writeNode->toString(true, false));
+
+    ASSERT_EQ("-- TableWriteMerge[3]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWriteMerge[3][stats[INTERMEDIATE: min(\"a0\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, a0:SMALLINT\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with stats and grouping keys (partitioned table).
+  {
+    core::TableWriteNodePtr writeNode;
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(
+                        outputDir->getPath(),
+                        {"c2"},
+                        dwio::common::FileFormat::DWRF,
+                        {"min(c0)", "max(c1)"})
+                    .capturePlanNode(writeNode)
+                    .localGather()
+                    .tableWriteMerge()
+                    .planNode();
+
+    ASSERT_EQ("-- TableWrite[1]\n", writeNode->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, stats[PARTIAL [c2]: min(ROW[\"c0\"]), max(ROW[\"c1\"])]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
+        writeNode->toString(true, false));
+
+    ASSERT_EQ("-- TableWriteMerge[3]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWriteMerge[3][stats[INTERMEDIATE [c2]: min(\"a0\"), max(\"a1\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, countingJoin) {
+  auto makePlan = [&](core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({data_})
+        .hashJoin(
+            {"c0"},
+            {"u_c0"},
+            PlanBuilder(planNodeIdGenerator)
+                .values({data_})
+                .project({"c0 as u_c0"})
+                .planNode(),
+            "",
+            {"c0", "c1"},
+            joinType)
+        .planNode();
+  };
+
+  auto plan = makePlan(core::JoinType::kCountingAnti);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
-      op->toString(true, false));
+      "-- HashJoin[3][COUNTING ANTI c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+
+  plan = makePlan(core::JoinType::kCountingLeftSemiFilter);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING LEFT SEMI (FILTER) c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
 }
 
 } // namespace

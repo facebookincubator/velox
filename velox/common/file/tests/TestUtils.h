@@ -23,4 +23,26 @@ namespace facebook::velox::tests::utils {
 std::vector<std::string> iobufsToStrings(
     const std::vector<folly::IOBuf>& iobufs);
 
+/// Wraps InMemoryReadFile with pread call counting for test assertions.
+class CountingReadFile : public InMemoryReadFile {
+ public:
+  using InMemoryReadFile::InMemoryReadFile;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const FileIoContext& context = {}) const override {
+    ++numReads_;
+    return InMemoryReadFile::pread(offset, length, buf, context);
+  }
+
+  uint64_t numReads() const {
+    return numReads_;
+  }
+
+ private:
+  mutable std::atomic_uint64_t numReads_{0};
+};
+
 } // namespace facebook::velox::tests::utils

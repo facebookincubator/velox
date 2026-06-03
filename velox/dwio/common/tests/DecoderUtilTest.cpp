@@ -17,6 +17,7 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/type/Filter.h"
 
 #include <gtest/gtest.h>
@@ -161,17 +162,6 @@ TEST_F(DecoderUtilTest, nonNullsFromSparse) {
   }
 }
 
-namespace facebook::velox::dwio::common {
-// Excerpt from LazyVector.h.
-struct NoHook {
-  void addValues(
-      const int32_t* /*rows*/,
-      const int32_t* /*values*/,
-      int32_t /*size*/) {}
-};
-
-} // namespace facebook::velox::dwio::common
-
 TEST_F(DecoderUtilTest, processFixedWithRun) {
   // Tests processing consecutive batches of integers with processFixedWidthRun.
   constexpr int kSize = 100;
@@ -232,4 +222,36 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
       ++passedCount;
     }
   }
+}
+
+TEST_F(DecoderUtilTest, fixedWidthScanMemcpyFastPath) {
+  constexpr int kSize = 10;
+  int32_t rows[kSize];
+  std::iota(std::begin(rows), std::end(rows), 0);
+  float expectedValues[kSize], actualValues[kSize];
+  for (int i = 0; i < kSize; ++i) {
+    expectedValues[i] = std::sin(i);
+    actualValues[i] = NAN;
+  }
+  int32_t numValues = 0;
+  SeekableArrayInputStream input(
+      reinterpret_cast<const uint8_t*>(expectedValues), sizeof(expectedValues));
+  const char* bufferStart = nullptr;
+  const char* bufferEnd = nullptr;
+  NoHook noHook;
+  fixedWidthScan<float, false, false>(
+      {rows, kSize},
+      nullptr,
+      actualValues,
+      nullptr,
+      numValues,
+      input,
+      bufferStart,
+      bufferEnd,
+      common::AlwaysTrue(),
+      noHook);
+  for (int i = 0; i < kSize; ++i) {
+    ASSERT_EQ(actualValues[i], expectedValues[i]);
+  }
+  ASSERT_EQ(numValues, kSize);
 }

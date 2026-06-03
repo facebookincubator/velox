@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/Range.h>
 
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileGroupStats.h"
@@ -160,8 +161,10 @@ class DirectBufferedInput : public BufferedInput {
       velox::common::Region region,
       const StreamIdentifier* sid) override;
 
-  bool supportSyncLoad() const override {
-    return false;
+  void preload() override;
+
+  bool preloaded() const override {
+    return preloadData_.has_value();
   }
 
   void load(const LogType /*unused*/) override;
@@ -197,6 +200,12 @@ class DirectBufferedInput : public BufferedInput {
     return pool_;
   }
 
+  /// Returns the contiguous byte range of preloaded data at 'offset' in the
+  /// file, up to 'length' bytes. Caller must call preload() first and ensure
+  /// 'offset' < file size.
+  folly::Range<const char*> preloadedData(uint64_t offset, uint64_t length)
+      const;
+
   /// Returns the CoalescedLoad that contains the correlated loads for
   /// 'stream' or nullptr if none. Returns nullptr on all but first
   /// call for 'stream' since the load is to be triggered by the first
@@ -228,14 +237,8 @@ class DirectBufferedInput : public BufferedInput {
   void reset() override;
 
  protected:
-  // Some members are protected to allow custom extended buffered inputs.
-  // Regions that are candidates for loading.
-  std::vector<LoadRequest> requests_;
-
-  // Distinct coalesced loads in 'coalescedLoads_'.
-  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
-
- private:
+  // The constructor and some member variables are protected to allow custom
+  // extended buffered inputs.
   // Constructor used by clone().
   DirectBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
@@ -256,6 +259,21 @@ class DirectBufferedInput : public BufferedInput {
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
 
+  // Regions that are candidates for loading.
+  const StringIdLease fileNum_;
+  const std::shared_ptr<cache::ScanTracker> tracker_;
+  const StringIdLease groupId_;
+  const std::shared_ptr<IoStatistics> ioStatistics_;
+  const std::shared_ptr<velox::IoStats> ioStats_;
+  folly::Executor* const executor_;
+  const uint64_t fileSize_;
+  const io::ReaderOptions options_;
+  std::vector<LoadRequest> requests_;
+
+  // Distinct coalesced loads in 'coalescedLoads_'.
+  std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
+
+ private:
   std::vector<int32_t> groupRequests(
       const std::vector<LoadRequest*>& requests,
       bool prefetch) const;
@@ -292,20 +310,21 @@ class DirectBufferedInput : public BufferedInput {
     }
   };
 
-  const StringIdLease fileNum_;
-  const std::shared_ptr<cache::ScanTracker> tracker_;
-  const StringIdLease groupId_;
-  const std::shared_ptr<IoStatistics> ioStatistics_;
-  const std::shared_ptr<velox::IoStats> ioStats_;
-  folly::Executor* const executor_;
-  const uint64_t fileSize_;
-  const io::ReaderOptions options_;
-
   // Coalesced loads spanning multiple streams in one IO.
   folly::Synchronized<folly::F14FastMap<
       const SeekableInputStream*,
       std::shared_ptr<DirectCoalescedLoad>>>
       streamToCoalescedLoad_;
+
+  // Preloaded file data read in a single IO by preload(). Exactly one of
+  // 'tinyData' or 'data' is populated: 'tinyData' when the file size <=
+  // kTinySize, 'data' (non-contiguous allocation) otherwise.
+  struct PreloadData {
+    memory::Allocation data;
+    std::string tinyData;
+    uint64_t size;
+  };
+  std::optional<PreloadData> preloadData_;
 };
 
 } // namespace facebook::velox::dwio::common

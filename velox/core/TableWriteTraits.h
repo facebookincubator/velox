@@ -51,6 +51,8 @@ class TableWriteTraits {
   ///
   /// [row_count_channel] - contains number of rows processed by a TableWriter
   /// [fragment_channel] - contains data provided by the DataSink#finish
+  /// [context_channel] - JSON-serialized commit context (VARBINARY).
+  ///   Present on every row. See k*ContextKey constants below.
   /// [statistic_channel_1] ...[statistic_channel_N] -
   /// contain aggregated statistics computed by the statistics aggregation
   /// within the TableWriter
@@ -69,7 +71,10 @@ class TableWriteTraits {
   static constexpr int32_t kContextChannel = 2;
   static constexpr int32_t kStatsChannel = 3;
 
-  /// Defines the names of metadata in commit context in table writer output.
+  /// Field names in the commit context JSON object (context_channel).
+  /// The context is a JSON object serialized as VARBINARY, e.g.:
+  ///   {"taskId":"...", "lifespan":"TaskWide",
+  ///    "pageSinkCommitStrategy":"NO_COMMIT", "lastPage":true}
   static constexpr std::string_view kLifeSpanContextKey = "lifespan";
   static constexpr std::string_view kTaskIdContextKey = "taskId";
   static constexpr std::string_view kCommitStrategyContextKey =
@@ -78,6 +83,13 @@ class TableWriteTraits {
 
   static RowTypePtr outputType(
       const std::optional<core::ColumnStatsSpec>& columnStatsSpec);
+
+  /// Returns true if row 'index' in 'output' is a statistics row (both row
+  /// count and fragment channels are NULL). Statistics rows carry aggregated
+  /// per-column stats; data rows carry row counts and/or file fragments.
+  static bool isStatisticsRow(
+      const RowVectorPtr& output,
+      vector_size_t index = 0);
 
   /// Returns the parsed commit context from table writer 'output'.
   static folly::dynamic getTableCommitContext(const RowVectorPtr& output);

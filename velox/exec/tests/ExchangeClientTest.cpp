@@ -36,20 +36,19 @@ namespace {
 
 static constexpr int32_t kDefaultMinExchangeOutputBatchBytes{2 << 20}; // 2 MB.
 
-class ExchangeClientTest
-    : public testing::Test,
-      public velox::test::VectorTestBase,
-      public testing::WithParamInterface<VectorSerde::Kind> {
+class ExchangeClientTest : public testing::Test,
+                           public velox::test::VectorTestBase,
+                           public testing::WithParamInterface<std::string> {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    if (!isRegisteredNamedVectorSerde("CompactRow")) {
       serializer::CompactRowVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
       serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
     }
   }
@@ -85,7 +84,8 @@ class ExchangeClientTest
         executor_.get(), core::QueryConfig{std::move(config)});
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId()));
-    auto plan = test::PlanBuilder().values({}).planNode();
+    auto plan =
+        test::PlanBuilder().values(std::vector<RowVectorPtr>{}).planNode();
     return Task::create(
         taskId,
         core::PlanFragment{plan},
@@ -160,7 +160,7 @@ class ExchangeClientTest
     return executor_.get();
   }
 
-  VectorSerde::Kind serdeKind_;
+  std::string serdeKind_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
   std::shared_ptr<OutputBufferManager> bufferManager_;
 };
@@ -1108,6 +1108,7 @@ TEST_P(ExchangeClientTest, lazyFetching) {
     auto pages = fetchPages(1, *client, 1);
     ASSERT_EQ(1, pages.size());
 
+    bufferManager_->noMoreData(taskId);
     task->requestCancel();
     bufferManager_->removeTask(taskId);
     task.reset();
@@ -1143,6 +1144,7 @@ TEST_P(ExchangeClientTest, lazyFetching) {
     auto pages = fetchPages(1, *client, 1);
     ASSERT_EQ(1, pages.size());
 
+    bufferManager_->noMoreData(taskId);
     task->requestCancel();
     bufferManager_->removeTask(taskId);
     task.reset();
@@ -1166,11 +1168,8 @@ TEST_P(ExchangeClientTest, hasNoMoreSourcesApi) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ExchangeClientTest,
     ExchangeClientTest,
-    testing::Values(
-        VectorSerde::Kind::kPresto,
-        VectorSerde::Kind::kCompactRow,
-        VectorSerde::Kind::kUnsafeRow),
-    [](const testing::TestParamInfo<VectorSerde::Kind>& info) {
+    testing::Values("Presto", "CompactRow", "UnsafeRow"),
+    [](const testing::TestParamInfo<std::string>& info) {
       return fmt::format("{}", info.param);
     });
 

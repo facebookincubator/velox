@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include <string_view>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
@@ -44,7 +45,7 @@ class OperatorCtx {
       DriverCtx* driverCtx,
       const core::PlanNodeId& planNodeId,
       int32_t operatorId,
-      const std::string& operatorType = "");
+      std::string_view operatorType = "");
 
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
@@ -115,11 +116,11 @@ class Operator : public BaseRuntimeStatWriter {
     virtual ~PlanNodeTranslator() = default;
 
     /// Translates plan node to operator. Returns nullptr if the plan node
-    /// cannot be handled by this factory.
+    /// cannot be handled by this factory. Defined out-of-line in Operator.cpp
+    /// because returning `std::unique_ptr<Operator>` here would instantiate
+    /// the unique_ptr destructor while `Operator` is still incomplete.
     virtual std::unique_ptr<Operator>
-    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
-      return nullptr;
-    }
+    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
     /// An overloaded method that should be called when the operator needs an
     /// ExchangeClient.
@@ -127,9 +128,7 @@ class Operator : public BaseRuntimeStatWriter {
         DriverCtx* ctx,
         int32_t id,
         const core::PlanNodePtr& node,
-        std::shared_ptr<ExchangeClient> exchangeClient) {
-      return nullptr;
-    }
+        std::shared_ptr<ExchangeClient> exchangeClient);
 
     /// Translates plan node to join bridge. Returns nullptr if the plan node
     /// cannot be handled by this factory.
@@ -155,7 +154,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// The name for background cpu time metric if operator has background cpu
   /// usages outside its driver thread.
-  static inline const std::string kBackgroundCpuTimeNanos =
+  static constexpr std::string_view kBackgroundCpuTimeNanos =
       "backgroundCpuTimeNanos";
 
   /// The name of the runtime spill stats collected and reported by operators
@@ -164,34 +163,34 @@ class Operator : public BaseRuntimeStatWriter {
   /// This indicates the spill not supported for a spillable operator when the
   /// spill config is enabled. This is due to the spill limitation in certain
   /// plan node config such as unpartition window operator.
-  static inline const std::string kSpillNotSupported{"spillNotSupported"};
+  static constexpr std::string_view kSpillNotSupported{"spillNotSupported"};
   /// The spill write stats.
-  static inline const std::string kSpillFillTime{"spillFillWallNanos"};
-  static inline const std::string kSpillSortTime{"spillSortWallNanos"};
-  static inline const std::string kSpillExtractVectorTime{
+  static constexpr std::string_view kSpillFillTime{"spillFillWallNanos"};
+  static constexpr std::string_view kSpillSortTime{"spillSortWallNanos"};
+  static constexpr std::string_view kSpillExtractVectorTime{
       "spillExtractVectorWallNanos"};
-  static inline const std::string kSpillSerializationTime{
+  static constexpr std::string_view kSpillSerializationTime{
       "spillSerializationWallNanos"};
-  static inline const std::string kSpillFlushTime{"spillFlushWallNanos"};
-  static inline const std::string kSpillWrites{"spillWrites"};
-  static inline const std::string kSpillWriteTime{"spillWriteWallNanos"};
-  static inline const std::string kSpillRuns{"spillRuns"};
-  static inline const std::string kExceededMaxSpillLevel{
+  static constexpr std::string_view kSpillFlushTime{"spillFlushWallNanos"};
+  static constexpr std::string_view kSpillWrites{"spillWrites"};
+  static constexpr std::string_view kSpillWriteTime{"spillWriteWallNanos"};
+  static constexpr std::string_view kSpillRuns{"spillRuns"};
+  static constexpr std::string_view kExceededMaxSpillLevel{
       "exceededMaxSpillLevel"};
   /// The spill read stats.
-  static inline const std::string kSpillReadBytes{"spillReadBytes"};
-  static inline const std::string kSpillReads{"spillReads"};
-  static inline const std::string kSpillReadTime{"spillReadWallNanos"};
-  static inline const std::string kSpillDeserializationTime{
+  static constexpr std::string_view kSpillReadBytes{"spillReadBytes"};
+  static constexpr std::string_view kSpillReads{"spillReads"};
+  static constexpr std::string_view kSpillReadTime{"spillReadWallNanos"};
+  static constexpr std::string_view kSpillDeserializationTime{
       "spillDeserializationWallNanos"};
 
   /// The vector serde kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.
-  static inline const std::string kShuffleSerdeKind{"shuffleSerdeKind"};
+  static constexpr std::string_view kShuffleSerdeKind{"shuffleSerdeKind"};
 
   /// The compression kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.
-  static inline const std::string kShuffleCompressionKind{
+  static constexpr std::string_view kShuffleCompressionKind{
       "shuffleCompressionKind"};
 
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
@@ -209,7 +208,7 @@ class Operator : public BaseRuntimeStatWriter {
       RowTypePtr outputType,
       int32_t operatorId,
       std::string planNodeId,
-      std::string operatorType,
+      std::string_view operatorType,
       std::optional<common::SpillConfig> spillConfig = std::nullopt);
 
   virtual ~Operator() = default;
@@ -218,7 +217,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// allocation from memory pool that can't be done under operator constructor.
   ///
   /// NOTE: the default implementation set 'initialized_' to true to ensure we
-  /// never call this more than once. The overload initialize() implementation
+  /// never call this more than once. The overriding initialize() implementation
   /// must call this base implementation first.
   virtual void initialize();
 
@@ -347,7 +346,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Add a single runtime stat to the operator stats under the write lock.
   /// This member overrides BaseRuntimeStatWriter's member.
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     stats_.wlock()->addRuntimeStat(name, value);
   }
@@ -704,7 +703,7 @@ class SourceOperator : public Operator {
       RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
-      const std::string& operatorType,
+      std::string_view operatorType,
       const std::optional<common::SpillConfig>& spillConfig = std::nullopt)
       : Operator(
             driverCtx,

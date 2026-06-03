@@ -39,7 +39,7 @@ SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, params.streamLabels().label(), true),
       rleVersion,
-      *memoryPool_,
+      *pool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
   blobStream_ = stripe.getStream(
@@ -54,7 +54,7 @@ SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
 
 uint64_t SelectiveStringDirectColumnReader::skip(uint64_t numValues) {
   numValues = SelectiveColumnReader::skip(numValues);
-  dwio::common::ensureCapacity<uint32_t>(lengths_, numValues, memoryPool_);
+  dwio::common::ensureCapacity<uint32_t>(lengths_, numValues, pool_);
   lengthDecoder_->nextLengths(lengths_->asMutable<int32_t>(), numValues);
   rawLengths_ = lengths_->as<uint32_t>();
   for (auto i = 0; i < numValues; ++i) {
@@ -318,11 +318,10 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
 void SelectiveStringDirectColumnReader::extractSparse(
     const int32_t* rows,
     int32_t numRows) {
-  dwio::common::rowLoop(
+  dwio::common::rowLoop<8>(
       rows,
       0,
       numRows,
-      8,
       [&](int32_t row) {
         auto start = rangeSum(rawLengths_, 0, lengthIndex_, rows[row]);
         lengthIndex_ = rows[row];
@@ -478,8 +477,7 @@ void SelectiveStringDirectColumnReader::read(
   auto numNulls = nullsInReadRange_
       ? BaseVector::countNulls(nullsInReadRange_, 0, numRows)
       : 0;
-  dwio::common::ensureCapacity<int32_t>(
-      lengths_, numRows - numNulls, memoryPool_);
+  dwio::common::ensureCapacity<int32_t>(lengths_, numRows - numNulls, pool_);
   lengthDecoder_->nextLengths(
       lengths_->asMutable<int32_t>(), numRows - numNulls);
   rawLengths_ = lengths_->as<uint32_t>();

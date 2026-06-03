@@ -15,13 +15,13 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -56,6 +56,7 @@ DEFINE_int32(
     "N=5 means 20% chance, N=2 means 50% chance.");
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 std::ostream& operator<<(
     std::ostream& out,
@@ -270,10 +271,9 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
     });
   }
   std::vector<std::vector<RowVectorPtr>> results;
-  constexpr std::chrono::seconds kTaskTimeout(10);
   results.reserve(futures.size());
   for (auto& future : futures) {
-    results.push_back(std::move(future).get(kTaskTimeout));
+    results.push_back(std::move(future).get());
   }
   return results;
 }
@@ -321,7 +321,7 @@ void buildScanSplitFromTableWriteResult(
       for (auto bucketColumnIndex : bucketColumnIndices) {
         auto handle = std::make_unique<connector::hive::HiveColumnHandle>(
             tableSchema->nameOf(bucketColumnIndex),
-            connector::hive::HiveColumnHandle::ColumnType::kRegular,
+            connector::hive::FileColumnHandle::ColumnType::kRegular,
             tableSchema->childAt(bucketColumnIndex),
             tableSchema->childAt(bucketColumnIndex));
         bucketConversion.bucketColumnHandles.push_back(std::move(handle));

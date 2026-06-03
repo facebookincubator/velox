@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/HashTableCache.h"
@@ -54,6 +56,13 @@ class HashBuild final : public Operator {
     kFinish = 5,
   };
   static std::string stateName(State state);
+
+  /// Runtime stat keys for hash build.
+  /// Maximum spill level reached during hash join build.
+  static constexpr std::string_view kMaxSpillLevel = "maxSpillLevel";
+  /// Whether dedup hash build was abandoned.
+  static constexpr std::string_view kAbandonBuildNoDupHash =
+      "abandonBuildNoDupHash";
 
   HashBuild(
       int32_t operatorId,
@@ -104,6 +113,13 @@ class HashBuild final : public Operator {
   void setRunning();
   bool isRunning() const;
   void checkRunning() const;
+
+  // Returns true if this task is the builder task for the hash table cache
+  // entry (i.e. the task that builds the table, as opposed to a waiter task
+  // that reuses a cached table built by another task).
+  bool hashTableCacheBuilderTask() const {
+    return cacheEntry_->builderTaskId == taskId();
+  }
 
   // Invoked to set up hash table to build.
   void setupTable();
@@ -258,6 +274,8 @@ class HashBuild final : public Operator {
   const core::JoinType joinType_;
 
   const bool nullAware_;
+
+  const bool nullAsValue_;
 
   // Sets to true for join type which needs right side join processing. The hash
   // table spiller then needs to record the probed flag, and the spilled input

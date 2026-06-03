@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/Fs.h"
@@ -26,6 +27,7 @@
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -37,14 +39,16 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
+#include <cudf/io/parquet.hpp>
+
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::core;
 using namespace facebook::velox::exec;
@@ -54,6 +58,37 @@ using namespace facebook::velox::tests::utils;
 using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
+
+namespace {
+struct StatsFilterMetrics {
+  cudf::size_type inputRowGroups{0};
+  std::optional<cudf::size_type> rowGroupsAfterStats;
+  cudf::size_type outputRows{0};
+};
+
+StatsFilterMetrics readParquetWithStatsFilter(
+    const std::string& filePath,
+    const RowTypePtr& rowType,
+    const common::SubfieldFilters& filters,
+    bool useJitFilter) {
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  auto const& expr =
+      createAstFromSubfieldFilters(filters, tree, scalars, rowType);
+
+  auto options =
+      cudf::io::parquet_reader_options::builder(cudf::io::source_info(filePath))
+          .use_jit_filter(useJitFilter)
+          .build();
+  options.set_filter(expr);
+
+  auto result = cudf::io::read_parquet(options);
+  return {
+      result.metadata.num_input_row_groups,
+      result.metadata.num_row_groups_after_stats_filter,
+      result.tbl->num_rows()};
+}
+} // namespace
 
 class TableScanTest : public virtual CudfHiveConnectorTestBase {
  protected:
@@ -177,10 +212,13 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
            REAL()})};
 };
 
-TEST_F(TableScanTest, allColumns) {
+class TableScanTestParameterized : public TableScanTest,
+                                   public testing::WithParamInterface<bool> {};
+
+TEST_P(TableScanTestParameterized, allColumns) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
 
   createDuckDbTable(vectors);
   auto plan = tableScanNode();
@@ -212,6 +250,14 @@ TEST_F(TableScanTest, allColumns) {
         // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
       };
 
+  const bool useBufferedInput = GetParam();
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseBufferedInput,
+       useBufferedInput ? "true" : "false"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
+
   // Test scan all columns with CudfHiveConnectorSplits
   {
     auto splits = makeCudfHiveConnectorSplits({filePath});
@@ -220,47 +266,46 @@ TEST_F(TableScanTest, allColumns) {
 
   // Test scan all columns with HiveConnectorSplits
   {
-    // Lambda to create HiveConnectorSplits from file paths
-    auto makeHiveConnectorSplits =
-        [&](const std::vector<std::shared_ptr<
-                facebook::velox::exec::test::TempFilePath>>& filePaths) {
-          std::vector<
-              std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
-              splits;
-          for (const auto& filePath : filePaths) {
-            splits.push_back(
-                facebook::velox::connector::hive::HiveConnectorSplitBuilder(
-                    filePath->getPath())
-                    .connectorId(kCudfHiveConnectorId)
-                    .fileFormat(dwio::common::FileFormat::PARQUET)
-                    .build());
-          }
-          return splits;
-        };
-
-    auto splits = makeHiveConnectorSplits({filePath});
+    std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+        splits;
+    splits.push_back(
+        facebook::velox::connector::hive::HiveConnectorSplitBuilder(
+            filePath->getPath())
+            .connectorId(kCudfHiveConnectorId)
+            .fileFormat(dwio::common::FileFormat::PARQUET)
+            .build());
     testScanAllColumns(splits);
   }
 }
 
-TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
+TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
 
   createDuckDbTable(vectors);
-  auto plan = tableScanNode();
+  const std::string duckDbSql =
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp UNION ALL "
+      "SELECT * FROM tmp";
 
-  const std::string duckDbSql = "SELECT * FROM tmp";
+  auto splits = makeCudfHiveConnectorSplits(
+      {filePath, filePath, filePath, filePath, filePath});
 
-  // Reset the CudfHiveConnector config to not buffered input data source
+  auto useBufferedInput = GetParam();
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseExperimentalCudfReader,
+       "true"},
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseBufferedInput,
-       "false"}};
+       useBufferedInput ? "true" : "false"}};
   resetCudfHiveConnector(
       std::make_shared<config::ConfigBase>(std::move(config)));
-  auto splits = makeCudfHiveConnectorSplits({filePath});
+
+  auto plan = tableScanNode();
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .plan(plan)
                   .splits(splits)
@@ -282,72 +327,13 @@ TEST_F(TableScanTest, allColumnsUsingFileDataSource) {
   // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
 
-TEST_F(TableScanTest, allColumnsUsingExperimentalReader) {
-  auto vectors = makeVectors(10, 1'000);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
-
-  createDuckDbTable(vectors);
-  const std::string duckDbSql =
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp UNION ALL "
-      "SELECT * FROM tmp";
-
-  auto splits = makeCudfHiveConnectorSplits(
-      {filePath, filePath, filePath, filePath, filePath});
-
-  // Helper to test scan all columns for the given splits
-  auto testScanAllColumnsUsingExperimentalReader =
-      [&](const core::PlanNodePtr& plan) {
-        auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                        .plan(plan)
-                        .splits(splits)
-                        .assertResults(duckDbSql);
-
-        // A quick sanity check for memory usage reporting. Check that peak
-        // total memory usage for the project node is > 0.
-        auto planStats = toPlanStats(task->taskStats());
-        auto scanNodeId = plan->id();
-        auto it = planStats.find(scanNodeId);
-        ASSERT_TRUE(it != planStats.end());
-        // TODO (dm): enable this test once we start to track gpu memory
-        // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
-
-        //  Verifies there is no dynamic filter stats.
-        ASSERT_TRUE(it->second.dynamicFilterStats.empty());
-
-        // TODO: We are not writing any customStats yet so disable this check
-        // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
-      };
-
-  // Reset the CudfHiveConnector config to use the experimental cudf reader
-  auto config = std::unordered_map<std::string, std::string>{
-      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-           kUseExperimentalCudfReader,
-       "true"}};
-  resetCudfHiveConnector(
-      std::make_shared<config::ConfigBase>(std::move(config)));
-
-  // Test scan all columns with buffered input datasource(s)
-  {
-    auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
-  }
-
-  // Test scan all columns with kvikIO datasource(s)
-  {
-    config.insert(
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseBufferedInput,
-         "false"});
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-    auto plan = tableScanNode();
-    testScanAllColumnsUsingExperimentalReader(plan);
-  }
-}
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    TableScanTestParameterized,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "BufferedInput" : "FileDataSource";
+    });
 
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   constexpr int kSize = 10;
@@ -358,7 +344,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   });
   auto filePath = TempFilePath::create();
   createDuckDbTable({vector});
-  writeToFile(filePath->getPath(), {vector}, "c");
+  writeToFile(filePath->getPath(), {vector});
 
   auto tableHandle = makeTableHandle();
   auto plan = PlanBuilder(pool_.get())
@@ -410,7 +396,7 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
 TEST_F(TableScanTest, columnAliases) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors, "c");
+  writeToFile(filePath->getPath(), vectors);
   createDuckDbTable(vectors);
 
   std::string tableName = "t";
@@ -449,7 +435,7 @@ TEST_F(TableScanTest, filterPushdown) {
           .build();
 
   auto tableHandle = makeTableHandle(
-      "parquet_table", rowType, true, std::move(subfieldFilters), nullptr);
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
 
   auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
@@ -526,6 +512,164 @@ TEST_F(TableScanTest, filterPushdown) {
 #endif
 }
 
+// Disable this test and the one below for now, pending a CUDF fix.
+// simoneves 2/25/26
+// @TODO simoneves/mattgara re-enable once fixed.
+
+TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
+
+  auto vector = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int64_t>(
+              {123, 500, -250, 300, 400, 200}, DECIMAL(12, 2)),
+          makeFlatVector<int128_t>(
+              {int128_t{200},
+               int128_t{200},
+               int128_t{700},
+               int128_t{700},
+               int128_t{900},
+               int128_t{-100}},
+              DECIMAL(20, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {vector};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  // c0 between 1.00 and 4.00 and c1 in (2.00, 7.00)
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  int64_t{100}, int64_t{400}, /*nullAllowed*/ false))
+          .add(
+              "c1",
+              common::createHugeintValues(
+                  {int128_t{200}, int128_t{700}}, /*nullAllowed*/ false))
+          .build();
+
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT c0, c1 FROM tmp "
+      "WHERE c0 BETWEEN CAST('1.00' AS DECIMAL(12, 2)) "
+      "AND CAST('4.00' AS DECIMAL(12, 2)) "
+      "AND c1 IN (CAST('2.00' AS DECIMAL(20, 2)), "
+      "CAST('7.00' AS DECIMAL(20, 2)))");
+}
+
+TEST_F(TableScanTest, DISABLED_decimalStatsFilterIoPruning) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), DECIMAL(20, 2)});
+  auto vec0 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({100, 200}, DECIMAL(12, 2)),
+       makeFlatVector<int128_t>(
+           {int128_t{1000}, int128_t{2000}}, DECIMAL(20, 2))});
+  auto vec1 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({300, 400}, DECIMAL(12, 2)),
+       makeFlatVector<int128_t>(
+           {int128_t{3000}, int128_t{4000}}, DECIMAL(20, 2))});
+  auto vec2 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({500, 600}, DECIMAL(12, 2)),
+       makeFlatVector<int128_t>(
+           {int128_t{5000}, int128_t{6000}}, DECIMAL(20, 2))});
+
+  std::vector<RowVectorPtr> vectors = {vec0, vec1, vec2};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  common::SubfieldFilters filters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  int64_t{300}, int64_t{400}, /*nullAllowed*/ false))
+          .add(
+              "c1",
+              std::make_unique<common::HugeintRange>(
+                  int128_t{3000}, int128_t{4000}, /*nullAllowed*/ false))
+          .build();
+
+  auto metrics = readParquetWithStatsFilter(
+      filePath->getPath(), rowType, filters, /*useJitFilter*/ true);
+  EXPECT_EQ(metrics.inputRowGroups, 3);
+  ASSERT_TRUE(metrics.rowGroupsAfterStats.has_value());
+  EXPECT_EQ(metrics.rowGroupsAfterStats.value(), 1);
+  EXPECT_EQ(metrics.outputRows, 2);
+}
+
+TEST_F(TableScanTest, doubleStatsFilterIoPruning) {
+  auto rowType = ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()});
+  auto vec0 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<double>({1.0, 2.0}),
+       makeFlatVector<double>({10.0, 20.0})});
+  auto vec1 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<double>({3.0, 4.0}),
+       makeFlatVector<double>({30.0, 40.0})});
+  auto vec2 = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<double>({5.0, 6.0}),
+       makeFlatVector<double>({50.0, 60.0})});
+
+  std::vector<RowVectorPtr> vectors = {vec0, vec1, vec2};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  common::SubfieldFilters filters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::DoubleRange>(
+                  3.0,
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  4.0,
+                  /*upperUnbounded*/ false,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .add(
+              "c1",
+              std::make_unique<common::DoubleRange>(
+                  30.0,
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  40.0,
+                  /*upperUnbounded*/ false,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .build();
+
+  auto metrics = readParquetWithStatsFilter(
+      filePath->getPath(), rowType, filters, /*useJitFilter*/ true);
+  EXPECT_EQ(metrics.inputRowGroups, 3);
+  ASSERT_TRUE(metrics.rowGroupsAfterStats.has_value());
+  EXPECT_EQ(metrics.rowGroupsAfterStats.value(), 1);
+  EXPECT_EQ(metrics.outputRows, 2);
+}
+
 TEST_F(TableScanTest, splitOffsetAndLength) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
@@ -562,4 +706,43 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       tableScanNode(),
       makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
+}
+
+// Verify that extractFiltersFromRemainingFilter extracts simple single-column
+// filters from the remaining filter into subfield filters for pushdown.
+// When a filter like "c0 = 1" is fully extracted, remainingFilterExprSet_ is
+// null and totalRemainingFilterWallNanos is 0. Without extraction, the filter
+// runs post-read on the GPU and the stat is > 0.
+TEST_F(TableScanTest, remainingFilterExtraction) {
+  auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(5, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  // "c0 = 1" is a single-column equality that should be fully extracted into
+  // a subfield filter, leaving no remaining filter to evaluate post-read.
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .remainingFilter("c0 = 1")
+                  .endTableScan()
+                  .planNode();
+
+  auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp WHERE c0 = 1");
+
+  // Verify the filter was fully extracted: no post-read remaining filter ran.
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& scanStats = planStats.at(plan->id());
+  auto it = scanStats.customStats.find("totalRemainingFilterWallNanos");
+  ASSERT_NE(it, scanStats.customStats.end());
+  EXPECT_EQ(it->second.sum, 0)
+      << "Expected no remaining filter time when filter is fully extracted";
 }

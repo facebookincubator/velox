@@ -189,8 +189,7 @@ bool SignatureBinder::tryBind(
           }
 
           for (auto i = numFormalArgs; i < numActualTypes; i++) {
-            if (auto cost =
-                    TypeCoercer::coercible(actualTypes_[i], firstType)) {
+            if (auto cost = coercer_.coercible(actualTypes_[i], firstType)) {
               if (cost.value() > 0) {
                 coercions[i] = Coercion{firstType, cost.value()};
               }
@@ -288,7 +287,7 @@ std::optional<bool> SignatureBinderBase::checkSetTypeVariable(
     VELOX_CHECK(bindingIt != typeVariablesBindings_.end());
 
     const auto& boundType = bindingIt->second;
-    const auto cost = TypeCoercer::coercible(actualType, boundType);
+    const auto cost = coercer_.coercible(actualType, boundType);
     VELOX_CHECK(cost.has_value());
 
     if (cost.value() > 0) {
@@ -344,7 +343,11 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
         typeSignature.parameters().empty(),
         "Variables with parameters are not supported");
     const auto& variable = variableIt->second;
-    VELOX_CHECK(variable.isTypeParameter(), "Not expecting integer variable");
+    if (!variable.isTypeParameter()) {
+      // Integer variables (e.g. decimal precision and scale) are bound
+      // later by tryBind. Skip them here.
+      return true;
+    }
 
     if (!variable.isEligibleType(*actualType)) {
       return false;
@@ -357,7 +360,7 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
     }
 
     if (auto superType =
-            TypeCoercer::leastCommonSuperType(actualType, bindingIt->second)) {
+            coercer_.leastCommonSuperType(actualType, bindingIt->second)) {
       typeVariablesBindings_[baseName] = superType;
       return true;
     }
@@ -406,9 +409,9 @@ bool SignatureBinderBase::tryBind(
   const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
   if (!boost::algorithm::iequals(typeName, actualType->name())) {
-    if (allowCoercion) {
+    if (allowCoercion && typeSignature.parameters().empty()) {
       if (auto availableCoercion =
-              TypeCoercer::coerceTypeBase(actualType, typeName)) {
+              coercer_.coerceTypeBase(actualType, typeName)) {
         coercion = availableCoercion.value();
         return true;
       }
@@ -608,4 +611,43 @@ TypePtr SignatureBinder::tryResolveType(
       return nullptr;
   }
 }
+TypePtr tryResolveReturnTypeWithCoercions(
+    const std::vector<FunctionSignaturePtr>& signatures,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
+  std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
+  for (const auto& signature : signatures) {
+    SignatureBinder binder(*signature, argTypes, coercer);
+    std::vector<Coercion> requiredCoercions;
+    if (binder.tryBindWithCoercions(requiredCoercions)) {
+      auto type = binder.tryResolveReturnType();
+      bool needsCoercion = false;
+      for (const auto& c : requiredCoercions) {
+        if (c.type != nullptr) {
+          needsCoercion = true;
+          break;
+        }
+      }
+      if (!needsCoercion) {
+        // Exact match. No coercions needed.
+        coercions.resize(argTypes.size(), nullptr);
+        return type;
+      }
+      candidates.emplace_back(std::move(requiredCoercions), type);
+    }
+  }
+
+  if (auto index = Coercion::pickLowestCost(candidates)) {
+    const auto& requiredCoercions = candidates[index.value()].first;
+    coercions.reserve(requiredCoercions.size());
+    for (const auto& coercion : requiredCoercions) {
+      coercions.push_back(coercion.type);
+    }
+    return candidates[index.value()].second;
+  }
+
+  return nullptr;
+}
+
 } // namespace facebook::velox::exec

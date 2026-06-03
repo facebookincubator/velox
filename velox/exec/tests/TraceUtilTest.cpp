@@ -21,13 +21,13 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/trace/Trace.h"
 #include "velox/exec/trace/TraceUtil.h"
 
-using namespace facebook::velox::exec::test;
-
 namespace facebook::velox::exec::trace::test {
+using namespace facebook::velox::common::testutil;
+
 class TraceUtilTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
@@ -253,7 +253,7 @@ TEST_F(TraceUtilTest, getDriverIds) {
 }
 
 TEST_F(TraceUtilTest, createTraceDirectoryTest) {
-  auto tmpRootDir = exec::test::TempDirectoryPath::create();
+  auto tmpRootDir = TempDirectoryPath::create();
   auto tmpTraceDir = fmt::format(
       "{}{}/trace",
       tests::utils::FaultyFileSystem::scheme(),

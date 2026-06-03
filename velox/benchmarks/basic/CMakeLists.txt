@@ -107,12 +107,30 @@ target_link_libraries(
 add_executable(velox_cast_benchmark CastBenchmark.cpp)
 target_link_libraries(velox_cast_benchmark ${velox_benchmark_deps} velox_vector_test_lib)
 
+add_executable(velox_numeric_upcast_benchmark NumericUpcastBenchmark.cpp)
+target_link_libraries(velox_numeric_upcast_benchmark ${velox_benchmark_deps} velox_vector_test_lib)
+
+add_executable(velox_benchmark_expr_flat_no_nulls ExprFlatNoNullsBenchmark.cpp)
+target_link_libraries(
+  velox_benchmark_expr_flat_no_nulls
+  ${velox_benchmark_deps}
+  velox_functions_prestosql
+)
+
 add_executable(velox_format_datetime_benchmark FormatDateTimeBenchmark.cpp)
 target_link_libraries(
   velox_format_datetime_benchmark
   ${velox_benchmark_deps}
   velox_vector_test_lib
-  velox_functions_spark
   velox_functions_prestosql
   velox_row_fast
+)
+
+add_executable(velox_date_extract_benchmark DateExtractBenchmark.cpp)
+target_link_libraries(
+  velox_date_extract_benchmark
+  ${velox_benchmark_deps}
+  velox_vector_test_lib
+  velox_functions_prestosql
+  velox_functions_spark
 )

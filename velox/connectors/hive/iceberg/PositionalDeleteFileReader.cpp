@@ -17,8 +17,7 @@
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 #include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -31,7 +30,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    const std::shared_ptr<const FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStatistics& runtimeStats,
@@ -42,7 +41,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
-      hiveConfig_(hiveConfig),
+      fileConfig_(fileConfig),
       ioStatistics_(ioStatistics),
       ioStats_(ioStats),
       pool_(connectorQueryCtx->memoryPool()),
@@ -56,9 +55,6 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       totalNumRowsScanned_(0) {
   VELOX_CHECK(deleteFile_.content == FileContent::kPositionalDeletes);
   VELOX_CHECK(deleteFile_.recordCount);
-
-  // TODO: check if the lowerbounds and upperbounds in deleteFile overlap with
-  //  this batch. If not, no need to proceed.
 
   // Create the ScanSpec for this delete file
   auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
@@ -86,8 +82,11 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // Create the Reader and RowReader
 
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  // TODO: Use separate IoStatistics for data and metadata.
+  deleteReaderOpts.setDataIoStats(ioStatistics_);
+  deleteReaderOpts.setMetadataIoStats(ioStatistics_);
   configureReaderOptions(
-      hiveConfig_,
+      fileConfig_,
       connectorQueryCtx,
       deleteFileSchema,
       deleteSplit_,
@@ -120,7 +119,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
           deleteSplit_->filePath,
           deleteSplit_->partitionKeys,
           {},
-          hiveConfig_->readTimestampPartitionValueAsLocalTime(
+          fileConfig_->readTimestampPartitionValueAsLocalTime(
               connectorQueryCtx_->sessionProperties()))) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped

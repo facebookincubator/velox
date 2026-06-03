@@ -17,6 +17,7 @@
 #include "velox/exec/tests/utils/TableWriterTestBase.h"
 
 namespace velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 TableWriterTestBase::TestParam::TestParam(
     FileFormat fileFormat,

@@ -18,6 +18,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TempFilePath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -27,11 +30,10 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/SignatureBinder.h"
 
+using namespace facebook::velox::common::testutil;
 using facebook::velox::exec::CursorParameters;
 using facebook::velox::exec::test::AssertQueryBuilder;
 using facebook::velox::exec::test::PlanBuilder;
@@ -81,13 +83,14 @@ void AggregationTestBase::SetUp() {
       kHiveConnectorId,
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()));
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
   dwrf::registerDwrfReaderFactory();
 }
 
 void AggregationTestBase::TearDown() {
   dwrf::unregisterDwrfReaderFactory();
-  connector::unregisterConnector(kHiveConnectorId);
+  connector::ConnectorRegistry::global().erase(kHiveConnectorId);
   OperatorTestBase::TearDown();
 }
 
@@ -219,7 +222,7 @@ std::string getMergeExtractFunctionNameWithSuffix(
   VELOX_CHECK(signatures.has_value());
 
   for (const auto& signature : signatures.value()) {
-    exec::SignatureBinder binder{*signature, argTypes};
+    exec::SignatureBinder binder{*signature, argTypes, TypeCoercer::defaults()};
     if (binder.tryBind()) {
       if (auto resolvedType = binder.tryResolveReturnType()) {
         return exec::CompanionSignatures::mergeExtractFunctionNameWithSuffix(
@@ -242,7 +245,7 @@ std::string getExtractFunctionNameWithSuffix(
   VELOX_CHECK(signatures.has_value());
 
   for (const auto& signature : signatures.value()) {
-    exec::SignatureBinder binder{*signature, argTypes};
+    exec::SignatureBinder binder{*signature, argTypes, TypeCoercer::defaults()};
     if (binder.tryBind()) {
       if (auto resultType = binder.tryResolveReturnType()) {
         return exec::CompanionSignatures::extractFunctionNameWithSuffix(
@@ -503,7 +506,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
       builder.project(postAggregationProjections);
     }
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
@@ -753,7 +756,7 @@ void AggregationTestBase::testReadFromFiles(
     return;
   }
 
-  std::vector<std::shared_ptr<exec::test::TempFilePath>> files;
+  std::vector<std::shared_ptr<TempFilePath>> files;
   std::vector<exec::Split> splits;
   std::vector<VectorPtr> inputs;
   auto writerPool = rootPool_->addAggregateChild("AggregationTestBase.writer");
@@ -773,7 +776,7 @@ void AggregationTestBase::testReadFromFiles(
   }
 
   for (auto& vector : inputs) {
-    auto file = exec::test::TempFilePath::create();
+    auto file = TempFilePath::create();
     writeToFile(file->getPath(), vector, writerPool.get());
     files.push_back(file);
     splits.emplace_back(
@@ -963,7 +966,7 @@ void AggregationTestBase::testAggregationsImpl(
       builder.project(postAggregationProjections);
     }
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
 
     ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
     const auto peakSpillMemoryUsage =
@@ -1036,8 +1039,8 @@ void AggregationTestBase::testAggregationsImpl(
     auto partialStats = taskStats.at(partialNodeId).customStats;
     auto intermediateStats = taskStats.at(intermediateNodeId).customStats;
     if (inputVectors > 1) {
-      EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
-      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregation").count);
+      EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
+      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregationRows").sum);
     }
   }
 
@@ -1067,7 +1070,7 @@ void AggregationTestBase::testAggregationsImpl(
       builder.project(postAggregationProjections);
     }
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
@@ -1297,7 +1300,8 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& inputTypes,
     HashStringAllocator& allocator,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    const std::vector<VectorPtr>& rawInputs = {}) {
   auto finalType = exec::resolveResultType(functionName, inputTypes);
   auto intermediateType =
       exec::resolveIntermediateType(functionName, inputTypes);
@@ -1308,6 +1312,17 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
       inputTypes,
       finalType,
       queryConfig);
+  // Pass constant inputs so aggregates can read constant arguments at
+  // initialization time (e.g., ignoreNulls flag for collect_set).
+  if (!rawInputs.empty()) {
+    std::vector<VectorPtr> constantInputs(rawInputs.size());
+    for (size_t i = 0; i < rawInputs.size(); ++i) {
+      if (rawInputs[i] && rawInputs[i]->isConstantEncoding()) {
+        constantInputs[i] = rawInputs[i];
+      }
+    }
+    func->setConstantInputs(constantInputs);
+  }
   func->setAllocator(&allocator);
   func->setOffsets(kOffset, 0, 1, 0, 2, kRowSizeOffset);
 
@@ -1411,8 +1426,8 @@ VectorPtr AggregationTestBase::testStreaming(
       [](const VectorPtr& vec) { return vec->type(); });
 
   HashStringAllocator allocator(pool());
-  auto func =
-      createAggregateFunction(functionName, rawInputTypes, allocator, config);
+  auto func = createAggregateFunction(
+      functionName, rawInputTypes, allocator, config, rawInput1);
   int maxRowCount = std::max(rawInput1Size, rawInput2Size);
   std::vector<char> group(kOffset + func->accumulatorFixedWidthSize());
   std::vector<char*> groups(maxRowCount, group.data());
@@ -1438,8 +1453,8 @@ VectorPtr AggregationTestBase::testStreaming(
   }
 
   // Create a new function picking up the intermediate result.
-  auto func2 =
-      createAggregateFunction(functionName, rawInputTypes, allocator, config);
+  auto func2 = createAggregateFunction(
+      functionName, rawInputTypes, allocator, config, rawInput1);
   func2->initializeNewGroups(groups.data(), indices);
   if (testGlobal) {
     func2->addSingleGroupIntermediateResults(

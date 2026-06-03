@@ -27,6 +27,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <folly/Random.h>
 #include <folly/String.h>
@@ -311,6 +312,10 @@ struct ReaderTestParams {
   }
 };
 
+inline void PrintTo(const ReaderTestParams& param, std::ostream* os) {
+  *os << param.toString();
+}
+
 class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
                          public ColumnReaderTestBase {
  protected:
@@ -356,6 +361,55 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
   bool parallelDecoding() const override {
     return parallelDecoding_;
   }
+
+  // Helper for SelectiveDecimalColumnReader tests that exercise schema
+  // mismatch between the file footer (e.g. Hive ORC's DECIMAL(38, 18))
+  // and the requested table-schema type.
+  template <typename DataT, size_t kDataSize, size_t kScaleSize>
+  void verifyDecimalRequestedType(
+      const unsigned char (&dataBuffer)[kDataSize],
+      const unsigned char (&scaleBuffer)[kScaleSize],
+      const TypePtr& fileType,
+      const TypePtr& requestedType,
+      const std::vector<DataT>& expectedValues) {
+    auto fileRowType = ROW("col_0", fileType);
+    auto requestedRowType = ROW("col_0", requestedType);
+    proto::ColumnEncoding directEncoding;
+    directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+    EXPECT_CALL(streams_, getEncodingProxy(_))
+        .WillRepeatedly(Return(&directEncoding));
+
+    EXPECT_CALL(
+        streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+        .WillRepeatedly(Return(nullptr));
+    EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+        .WillRepeatedly(Return(nullptr));
+
+    EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+        .WillRepeatedly(
+            Return(new SeekableArrayInputStream(dataBuffer, kDataSize)));
+    EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+        .WillRepeatedly(
+            Return(new SeekableArrayInputStream(scaleBuffer, kScaleSize)));
+
+    auto scanSpec = std::make_unique<common::ScanSpec>("root");
+    buildReader(requestedRowType, fileRowType, {}, scanSpec.get());
+    VectorPtr batch = newBatch(requestedRowType);
+    skipAndRead(batch, /*readSize=*/expectedValues.size());
+
+    auto actual = getOnlyChild<FlatVector<DataT>>(batch);
+    ASSERT_EQ(expectedValues.size(), batch->size());
+    ASSERT_EQ(0, getNullCount(batch));
+    ASSERT_EQ(0, getNullCount(actual));
+
+    auto* pool = &streams_.getMemoryPool();
+    auto expected = BaseVector::create<FlatVector<DataT>>(
+        requestedType, expectedValues.size(), pool);
+    for (vector_size_t i = 0; i < expectedValues.size(); ++i) {
+      expected->set(i, expectedValues[i]);
+    }
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
 };
 
 struct NonSelectiveReaderTestParams {
@@ -369,6 +423,12 @@ struct NonSelectiveReaderTestParams {
     return out.str();
   }
 };
+
+inline void PrintTo(
+    const NonSelectiveReaderTestParams& param,
+    std::ostream* os) {
+  *os << param.toString();
+}
 
 // For test cases where SelectiveColumnReader does not have support.
 class TestNonSelectiveColumnReader
@@ -422,6 +482,10 @@ struct SchemaMismatchTestParam {
     return out.str();
   }
 };
+
+inline void PrintTo(const SchemaMismatchTestParam& param, std::ostream* os) {
+  *os << param.toString();
+}
 
 class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
                            public ColumnReaderTestBase {
@@ -4061,6 +4125,71 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
   ASSERT_EQ(
       "-9.9999999999999999999999999999999999999",
       DecimalUtil::toString(intBatch->valueAt(4), decimalType));
+}
+
+// Verify that when the file type doesn't match the metastore type,
+// the metastore type wins and data is rescaled accordingly.
+
+// Integer column (per-row scale=0) stored in an ORC file whose footer
+// declares DECIMAL(38, 18), but the metastore says DECIMAL(20, 0). The
+// reader must produce the original integer values without rescaling.
+TEST_P(TestColumnReader, longDecimalRequestedTypeScaleZero) {
+  const unsigned char dataBuffer[] = {0x02, 0x04, 0x06, 0x08};
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x00};
+  verifyDecimalRequestedType<int128_t>(
+      dataBuffer, scaleBuffer, DECIMAL(38, 18), DECIMAL(20, 0), {1, 2, 3, 4});
+}
+
+// Per-row scale (5) already matches the requestedType scale (5); no
+// rescaling expected.
+TEST_P(TestColumnReader, longDecimalRequestedTypeScaleMatchesData) {
+  const unsigned char dataBuffer[] = {0x02, 0x04, 0x06, 0x08};
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x0A};
+  verifyDecimalRequestedType<int128_t>(
+      dataBuffer, scaleBuffer, DECIMAL(38, 18), DECIMAL(25, 5), {1, 2, 3, 4});
+}
+
+// Per-row scale (3) is lower than the requestedType scale (5). The reader
+// must upscale by multiplying by 10^(5-3) = 100.
+TEST_P(TestColumnReader, longDecimalRequestedTypeUpscale) {
+  const unsigned char dataBuffer[] = {0x02, 0x04, 0x06, 0x08};
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x06};
+  verifyDecimalRequestedType<int128_t>(
+      dataBuffer,
+      scaleBuffer,
+      DECIMAL(38, 18),
+      DECIMAL(25, 5),
+      {100, 200, 300, 400});
+}
+
+// Short decimal (BIGINT, precision<=18). File declares DECIMAL(12, 5),
+// metastore says DECIMAL(10, 2). Reader must downscale by 10^(5-2)=1000.
+TEST_P(TestColumnReader, shortDecimalRequestedTypeDownscale) {
+  const unsigned char dataBuffer[] = {
+      0xD0, 0x0F, 0xA0, 0x1F, 0xF0, 0x2E, 0xC0, 0x3E};
+  const unsigned char scaleBuffer[] = {0x01, 0x00, 0x0A};
+  verifyDecimalRequestedType<int64_t>(
+      dataBuffer, scaleBuffer, DECIMAL(12, 5), DECIMAL(10, 2), {1, 2, 3, 4});
+}
+
+TEST_P(TestColumnReader, decimalRequestedTypeNonDecimalRejected) {
+  proto::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+
+  auto fileType = ROW("col_0", DECIMAL(38, 18));
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  VELOX_ASSERT_THROW(
+      buildReader(ROW("col_0", BIGINT()), fileType, {}, scanSpec.get()),
+      "Schema mismatch, From Kind: HUGEINT, To Kind: BIGINT");
+  VELOX_ASSERT_THROW(
+      buildReader(ROW("col_0", DOUBLE()), fileType, {}, scanSpec.get()),
+      "Schema mismatch, From Kind: HUGEINT, To Kind: DOUBLE");
 }
 
 TEST_P(TestColumnReader, testLargeSkip) {

@@ -42,7 +42,11 @@ class PyTaskIterator {
   /// Steps through execution, returning either the input to the next operator
   /// with a breakpoint installed, or the next task output. If no breakpoints
   /// are set, then step() behaves like next().
-  PyVector step();
+  ///
+  /// If @p planId is non-empty, only stops at a breakpoint whose plan node ID
+  /// matches @p planId; breakpoints for other plan nodes are skipped
+  /// automatically.
+  PyVector step(const std::string& planId = "");
 
   std::optional<PyVector> current() const {
     if (!vector_) {

@@ -16,15 +16,16 @@
 
 #include <gtest/gtest.h>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/fuzzer/WriterFuzzer.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
 
 TEST(WriterFuzzerUtilTest, listFolders) {
   facebook::velox::filesystems::registerLocalFileSystem();
-  const auto tempFolder = exec::test::TempDirectoryPath::create();
+  const auto tempFolder = TempDirectoryPath::create();
   // Directory layout:
   // First layer:   dir1/   dir2/      dir3/    a
   // Second layer:  b       dir2_1/

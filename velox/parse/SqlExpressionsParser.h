@@ -15,14 +15,19 @@
  */
 #pragma once
 
+#include <string>
+#include "velox/parse/Expressions.h"
 #include "velox/parse/IExpr.h"
 
 namespace facebook::velox::parse {
 
+/// Represents a single ORDER BY key with sort direction and nulls ordering.
 struct OrderByClause {
   core::ExprPtr expr;
   bool ascending;
   bool nullsFirst;
+
+  std::string toString() const;
 };
 
 class SqlExpressionsParser {
@@ -37,6 +42,20 @@ class SqlExpressionsParser {
 
   /// Parses an expression that represents an ORDER BY clause. Throws on error.
   virtual OrderByClause parseOrderByExpr(const std::string& expr) = 0;
+
+  /// Parses an aggregate function call with optional FILTER, ORDER BY,
+  /// and DISTINCT. Always returns an AggregateCallExpr. Throws on error.
+  virtual core::AggregateCallExprPtr parseAggregateExpr(
+      const std::string& expr) = 0;
+
+  /// Parses a window function expression. Returns a WindowCallExpr.
+  /// Throws on error.
+  virtual core::WindowCallExprPtr parseWindowExpr(const std::string& expr) = 0;
+
+  /// Parses a SQL expression that can be either a scalar expression or a
+  /// window function. Returns a WindowCallExpr (kWindow kind) for window
+  /// functions, or a regular ExprPtr for scalar expressions.
+  virtual core::ExprPtr parseScalarOrWindowExpr(const std::string& expr) = 0;
 };
 
 } // namespace facebook::velox::parse

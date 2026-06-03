@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/TypeSerde.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -55,6 +56,7 @@ class PlanNodeSerdeTest : public testing::Test,
             {3, 4, 5},
             {},
         }),
+        makeFlatVector<bool>({false, true, true}),
     })};
   }
 
@@ -170,11 +172,22 @@ TEST_F(PlanNodeSerdeTest, assignUniqueId) {
 }
 
 TEST_F(PlanNodeSerdeTest, markDistinct) {
-  auto plan = PlanBuilder()
-                  .values({data_})
-                  .markDistinct("marker", {"c0", "c1", "c2"})
-                  .planNode();
-  testSerde(plan);
+  {
+    SCOPED_TRACE("single-marker");
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .markDistinct("marker", {"c0", "c1", "c2"})
+                    .planNode();
+    testSerde(plan);
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .markDistinct({"m0", "m1", "m2"}, {"c0"}, {"c2", "c4"})
+                    .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, enforceDistinct) {
@@ -232,10 +245,8 @@ TEST_F(PlanNodeSerdeTest, enforceSingleRow) {
 }
 
 TEST_F(PlanNodeSerdeTest, exchange) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
     auto plan = PlanBuilder()
                     .exchange(
@@ -319,10 +330,8 @@ TEST_F(PlanNodeSerdeTest, limit) {
 }
 
 TEST_F(PlanNodeSerdeTest, mergeExchange) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     auto plan = PlanBuilder()
                     .mergeExchange(
                         ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
@@ -429,10 +438,8 @@ TEST_F(PlanNodeSerdeTest, orderBy) {
 }
 
 TEST_F(PlanNodeSerdeTest, partitionedOutput) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
     auto plan = PlanBuilder()
@@ -540,6 +547,22 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
                  "", // no filter
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kLeft)
+             .planNode();
+
+  testSerde(plan);
+
+  // nullAsValue join (used for EXCEPT/INTERSECT).
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"t0"},
+                 {"u0"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "",
+                 {"t0", "t1"},
+                 core::JoinType::kAnti,
+                 /*nullAware=*/false,
+                 /*nullAsValue=*/true)
              .planNode();
 
   testSerde(plan);
@@ -1000,6 +1023,29 @@ TEST_F(PlanNodeSerdeTest, columnStatsSpec) {
             std::move(aggregateNames),
             std::move(aggregates)),
         "");
+  }
+}
+
+TEST_F(PlanNodeSerdeTest, countingJoin) {
+  for (auto joinType :
+       {core::JoinType::kCountingAnti,
+        core::JoinType::kCountingLeftSemiFilter}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({data_})
+                    .hashJoin(
+                        {"c0"},
+                        {"u_c0"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({data_})
+                            .project({"c0 as u_c0"})
+                            .planNode(),
+                        "",
+                        {"c0", "c1"},
+                        joinType)
+                    .planNode();
+    testSerde(plan);
   }
 }
 

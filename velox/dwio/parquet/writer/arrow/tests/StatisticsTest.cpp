@@ -20,10 +20,12 @@
 
 #include "arrow/testing/builder.h"
 
+#include "velox/common/io/IoStatistics.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
+#include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 
 using arrow::default_memory_pool;
 using arrow::MemoryPool;
@@ -32,6 +34,7 @@ using arrow::util::SafeCopy;
 namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
+using namespace facebook::velox::common::testutil;
 
 using schema::GroupNode;
 using schema::NodePtr;
@@ -40,7 +43,7 @@ using schema::PrimitiveNode;
 namespace test {
 namespace {
 void writeToFile(
-    std::shared_ptr<exec::test::TempFilePath> filePath,
+    std::shared_ptr<TempFilePath> filePath,
     std::shared_ptr<::arrow::Buffer> buffer) {
   auto localWriteFile =
       std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
@@ -477,14 +480,18 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
 
     // Write the buffer to a temp file.
-    auto filePath = exec::test::TempFilePath::create();
+    auto filePath = TempFilePath::create();
     writeToFile(filePath, buffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
         memory::memoryManager()->addRootPool("StatisticsTest");
     std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
         rootPool->addLeafChild("StatisticsTest");
-    dwio::common::ReaderOptions readerOptions{leafPool.get()};
+    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    dwio::common::ReaderOptions readerOptions(leafPool.get());
+    readerOptions.setDataIoStats(dataIoStats);
+    readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1022,14 +1029,18 @@ class TestStatisticsSortOrder : public ::testing::Test {
     ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
     // Write the pbuffer to a temp file.
-    auto filePath = exec::test::TempFilePath::create();
+    auto filePath = TempFilePath::create();
     writeToFile(filePath, pbuffer);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
         memory::memoryManager()->addRootPool("StatisticsTest");
     std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
         rootPool->addLeafChild("StatisticsTest");
-    dwio::common::ReaderOptions readerOptions{leafPool.get()};
+    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    dwio::common::ReaderOptions readerOptions(leafPool.get());
+    readerOptions.setDataIoStats(dataIoStats);
+    readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
         readerOptions.memoryPool());
@@ -1317,14 +1328,18 @@ TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
   ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
   // Write the pbuffer to a temp file.
-  auto filePath = exec::test::TempFilePath::create();
+  auto filePath = TempFilePath::create();
   writeToFile(filePath, pbuffer);
   memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
       memory::memoryManager()->addRootPool("StatisticsTest");
   std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
       rootPool->addLeafChild("StatisticsTest");
-  dwio::common::ReaderOptions readerOptions{leafPool.get()};
+  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());
@@ -2002,6 +2017,41 @@ TEST(IcebergStatistics, byteArrayBoundsUnicode) {
   // "好" (U+597D) incremented becomes U+597E "奾".
   const std::string expectedUpper = "ZZZZ你好你好你好你好你好你奾";
   EXPECT_EQ(*upperBound, expectedUpper);
+}
+
+// Verifies the lower and upper bounds for non-string ByteArray (BINARY /
+// VARBINARY) take a raw-byte prefix and a byte-level round-up rather than
+// going through the UTF-8 paths. Inputs include 0xff bytes that would not
+// form a valid UTF-8 sequence; the lower bound must be a byte-truncation
+// (string_view::substr), and the upper bound must use the binary round-up
+// (which propagates carry on 0xff and yields an exclusive upper bound).
+TEST(IcebergStatistics, byteArrayBoundsBinary) {
+  NodePtr Node = PrimitiveNode::make(
+      "binary_col",
+      Repetition::kRequired,
+      Type::kByteArray,
+      ConvertedType::kNone);
+  ColumnDescriptor descr(Node, 0, 0);
+
+  // Each value is 20 raw bytes, longer than kTruncLen (16). Bytes include
+  // 0xff and other non-ASCII values to ensure UTF-8 parsing would not be
+  // appropriate.
+  const std::string min(20, '\x10');
+  const std::string max = std::string(15, '\xff') + std::string(5, '\x10');
+  auto stats = makeStats(&descr, {min, max});
+
+  ASSERT_TRUE(stats->hasMinMax());
+
+  // Lower bound: raw-byte prefix of 'min' (16 bytes of 0x10).
+  const auto lowerBound = stats->icebergLowerBoundInclusive(kTruncLen);
+  EXPECT_EQ(lowerBound, std::string(16, '\x10'));
+
+  // Upper bound: max truncated to 16 bytes is 15 * 0xff + 1 * 0x10. The
+  // binary round-up walks from the end and increments the first non-0xff
+  // byte (0x10 -> 0x11), then truncates anything past it.
+  const auto upperBound = stats->icebergUpperBoundExclusive(kTruncLen);
+  ASSERT_TRUE(upperBound.has_value());
+  EXPECT_EQ(*upperBound, std::string(15, '\xff') + std::string(1, '\x11'));
 }
 
 TEST(IcebergStatistics, floatBounds) {

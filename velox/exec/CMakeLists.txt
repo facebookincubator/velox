@@ -47,11 +47,13 @@ velox_add_library(
   HashTable.cpp
   HashTableCache.cpp
   IndexLookupJoin.cpp
+  IndexLookupJoinBridge.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  MarkSorted.cpp
   EnforceDistinct.cpp
   MemoryReclaimer.cpp
   Merge.cpp
@@ -92,7 +94,6 @@ velox_add_library(
   SpatialJoinProbe.cpp
   Spill.cpp
   SpillFile.cpp
-  SpillStats.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   StreamingEnforceDistinct.cpp
@@ -113,7 +114,129 @@ velox_add_library(
   WindowBuild.cpp
   WindowFunction.cpp
   WindowPartition.cpp
+  HEADERS
+  AddressableNonNullValueList.h
+  Aggregate.h
+  AdaptivePrefetch.h
+  AggregateCompanionAdapter.h
+  AggregateCompanionSignatures.h
+  AggregateFunctionRegistry.h
+  AggregateInfo.h
+  AggregateWindow.h
+  AggregationMasks.h
+  ArrowStream.h
+  AssignUniqueId.h
+  BarrierSplit.h
+  BlockingReason.h
+  CallbackSink.h
+  ColumnStatsCollector.h
+  ContainerRowSerde.h
+  DistinctAggregations.h
+  Driver.h
+  DriverStats.h
+  EnforceDistinct.h
+  EnforceSingleRow.h
+  Exchange.h
+  ExchangeClient.h
+  ExchangeQueue.h
+  ExchangeSource.h
+  Expand.h
+  FilterProject.h
+  GroupId.h
+  GroupingSet.h
+  HashAggregation.h
+  HashBitRange.h
+  HashBuild.h
+  HashJoinBridge.h
+  HashPartitionFunction.h
+  HashProbe.h
+  HashTable.h
+  HashTableCache.h
+  HilbertIndex.h
+  IndexLookupJoin.h
+  IndexLookupJoinBridge.h
+  JoinBridge.h
+  KRangeFrameBound.h
+  Limit.h
+  LocalPartition.h
+  LocalPlanner.h
+  MarkDistinct.h
+  MarkSorted.h
+  MemoryReclaimer.h
+  Merge.h
+  MergeJoin.h
+  MergeSource.h
+  MixedUnion.h
+  NestedLoopJoinBuild.h
+  NestedLoopJoinProbe.h
+  OneWayStatusFlag.h
+  Operator.h
+  OperatorStats.h
+  OperatorTraceCtx.h
+  OperatorTraceReader.h
+  OperatorTraceScan.h
+  OperatorTraceWriter.h
+  OperatorType.h
+  OperatorUtils.h
+  OrderBy.h
+  OutputBuffer.h
+  OutputBufferManager.h
+  ParallelProject.h
+  PeerGroupComputation.h
+  PartitionFunction.h
+  PartitionStreamingWindowBuild.h
+  PartitionedOutput.h
+  PlanNodeStats.h
+  PrefixSort.h
+  ProbeOperatorState.h
+  RoundRobinPartitionFunction.h
+  RowContainer.h
+  RowNumber.h
+  RowsStreamingWindowBuild.h
+  ScaleWriterLocalPartition.h
+  ScaledScanController.h
+  SerializedPage.h
+  SetAccumulator.h
+  SimpleAggregateAdapter.h
+  SortBuffer.h
+  SortWindowBuild.h
+  SortedAggregations.h
+  SpatialIndex.h
+  SpatialJoinBuild.h
+  SpatialJoinProbe.h
+  Spill.h
+  SpillFile.h
+  Spiller.h
+  Split.h
+  StreamingAggregation.h
+  StreamingEnforceDistinct.h
+  Strings.h
+  SubPartitionedSortWindowBuild.h
+  TableScan.h
+  TableWriteMerge.h
+  TableWriter.h
+  Task.h
+  TaskStats.h
+  TaskStructs.h
+  TaskTraceReader.h
+  TaskTraceWriter.h
+  TopN.h
+  TopNRowNumber.h
+  TraceUtil.h
+  Unnest.h
+  UnorderedStreamReader.h
+  Values.h
+  VectorHasher-inl.h
+  VectorHasher.h
+  Window.h
+  WindowBuild.h
+  WindowFunction.h
+  WindowPartition.h
+  WindowPartitionAccessor.h
 )
+
+velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)
+velox_link_libraries(velox_exec_spill_stats velox_common_base velox_file Folly::folly)
 
 velox_link_libraries(
   velox_exec
@@ -122,6 +245,8 @@ velox_link_libraries(
   velox_common_compression
   velox_core
   velox_connector
+  velox_connector_registry
+  velox_exec_spill_stats
   velox_expression
   velox_file
   velox_presto_serializer
@@ -131,7 +256,12 @@ velox_link_libraries(
   velox_vector
 )
 
-velox_add_library(velox_cursor Cursor.cpp)
+if(VELOX_ENABLE_GEO)
+  velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_GEO)
+  velox_link_libraries(velox_exec velox_common_geospatial_serde)
+endif()
+
+velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 
 velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)
 
@@ -147,4 +277,9 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(prefixsort)
+add_subdirectory(rpc)
 add_subdirectory(trace)
+
+velox_add_library(velox_aggregate_util INTERFACE HEADERS AggregateUtil.h)
+
+velox_add_library(velox_operator_type INTERFACE HEADERS OperatorType.h)

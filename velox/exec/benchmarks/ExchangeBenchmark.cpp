@@ -162,7 +162,7 @@ class ExchangeBenchmark : public VectorTestBase {
       std::vector<std::string> finalAggTaskIds;
       core::PlanNodePtr finalAggPlan =
           exec::test::PlanBuilder()
-              .exchange(leafPlan->outputType(), VectorSerde::Kind::kPresto)
+              .exchange(leafPlan->outputType(), "Presto")
               .capturePlanNodeId(exchangeId)
               .singleAggregation({}, {"count(1)"})
               .partitionedOutput({}, 1)
@@ -184,11 +184,10 @@ class ExchangeBenchmark : public VectorTestBase {
       })});
 
       // plan: Agg/kSingle(1) <-- Exchange (0)
-      plan =
-          exec::test::PlanBuilder()
-              .exchange(finalAggPlan->outputType(), VectorSerde::Kind::kPresto)
-              .singleAggregation({}, {"sum(a0)"})
-              .planNode();
+      plan = exec::test::PlanBuilder()
+                 .exchange(finalAggPlan->outputType(), "Presto")
+                 .singleAggregation({}, {"sum(a0)"})
+                 .planNode();
     };
 
     exec::test::AssertQueryBuilder(plan)
@@ -600,7 +599,7 @@ int main(int argc, char** argv) {
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
-  if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+  if (!isRegisteredNamedVectorSerde("Presto")) {
     serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
   }
   exec::ExchangeSource::registerFactory(exec::test::createLocalExchangeSource);

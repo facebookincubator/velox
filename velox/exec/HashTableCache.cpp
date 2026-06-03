@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::exec {
 
@@ -44,7 +45,11 @@ std::shared_ptr<HashTableCacheEntry> HashTableCache::get(
     auto entry = std::make_shared<HashTableCacheEntry>(
         key,
         taskId,
-        queryPool->addLeafChild(fmt::format("cached_table_{}", key)));
+        // Add memory reclaimer that is not reclaimable.
+        queryPool->addLeafChild(
+            fmt::format("cached_table_{}", key),
+            /* threadsafe */ true,
+            exec::MemoryReclaimer::create()));
     tables_.insert({key, entry});
 
     // Register callback to clean up this cache entry when QueryCtx is
@@ -113,6 +118,7 @@ void HashTableCache::put(
 
 void HashTableCache::drop(const std::string& key) {
   std::shared_ptr<HashTableCacheEntry> entry;
+  std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> guard(lock_);
     auto it = tables_.find(key);
@@ -126,7 +132,14 @@ void HashTableCache::drop(const std::string& key) {
   // is destroyed. This ensures the tablePool's memory is released
   // before any parent pools are destroyed.
   if (entry) {
+    promises = std::move(entry->buildPromises);
     entry->table.reset();
+  }
+
+  // Fulfill any pending build promises so waiting tasks are unblocked
+  // rather than hanging forever (e.g., after builder OOM).
+  for (auto& promise : promises) {
+    promise.setValue();
   }
 }
 

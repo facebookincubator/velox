@@ -65,7 +65,7 @@ class MemoryManager {
   struct Options {
     Options() {}
     /// Specifies the default memory allocation alignment.
-    uint16_t alignment{MemoryAllocator::kMaxAlignment};
+    uint16_t alignment{MemoryAllocator::kDefaultAlignment};
 
     /// If true, enable memory usage tracking in the default memory pool.
     bool trackDefaultUsage{
@@ -138,6 +138,12 @@ class MemoryManager {
     ///
     /// NOTE: this only applies for MallocAllocator.
     uint32_t allocationSizeThresholdWithReservation{1 << 20};
+
+    /// If true, MallocAllocator uses malloc for contiguous allocations instead
+    /// of mmap/munmap.
+    ///
+    /// NOTE: this only applies for MallocAllocator.
+    bool mallocContiguousEnabled{false};
 
     /// ================== 'MemoryArbitrator' settings =================
 

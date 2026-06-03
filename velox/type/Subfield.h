@@ -19,7 +19,7 @@
 #include <folly/hash/Hash.h>
 #include <ostream>
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
 
@@ -86,6 +86,14 @@ class Subfield {
     template <typename T>
     const T* as() const {
       return dynamic_cast<const T*>(this);
+    }
+
+    template <typename T>
+    const T* asChecked() const {
+      auto* ptr = dynamic_cast<const T*>(this);
+      VELOX_CHECK_NOT_NULL(
+          ptr, "PathElement is not of expected type. Actual kind: {}", kind_);
+      return ptr;
     }
 
    private:

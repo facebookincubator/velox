@@ -35,6 +35,7 @@ namespace facebook::velox::exec {
 class OutputBufferManager;
 
 class HashJoinBridge;
+class IndexLookupJoinBridge;
 class NestedLoopJoinBridge;
 class SpatialJoinBridge;
 class SplitListener;
@@ -439,12 +440,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// so many of splits at the head of the queue are preloading. If
   /// they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
+      uint32_t driverId,
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
+      int32_t maxPreloadSplits,
+      const ConnectorSplitPreloadFunc& preload,
       exec::Split& split,
-      ContinueFuture& future,
-      int32_t maxPreloadSplits = 0,
-      const ConnectorSplitPreloadFunc& preload = nullptr);
+      ContinueFuture& future);
 
   /// Returns the scaled scan controller for a given table scan node if the
   /// query has configured.
@@ -559,6 +561,11 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
+  /// Adds IndexLookupJoinBridge's for all the specified plan node IDs.
+  void addIndexLookupJoinBridgesLocked(
+      uint32_t splitGroupId,
+      const std::vector<core::PlanNodeId>& planNodeIds);
+
   /// Adds custom join bridges for all the specified plan nodes.
   void addCustomJoinBridgesLocked(
       uint32_t splitGroupId,
@@ -586,6 +593,11 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
+  /// Returns an IndexLookupJoinBridge for 'planNodeId'.
+  std::shared_ptr<IndexLookupJoinBridge> getIndexLookupJoinBridge(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
   /// Returns a custom join bridge for 'planNodeId'.
   std::shared_ptr<JoinBridge> getCustomJoinBridge(
       uint32_t splitGroupId,
@@ -602,6 +614,16 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Adds per driver statistics.  Called from Drivers upon their closure.
   void addDriverStats(int pipelineId, DriverStats stats);
+
+  /// Accumulates driver lifecycle timing (queued, on-thread, blocked) for gap
+  /// analysis. Same-index drivers across split groups are summed together.
+  /// Called from Driver::closeOperators() upon driver closure.
+  void addDriverLifecycleStats(
+      uint32_t pipelineId,
+      uint32_t driverIndex,
+      uint64_t queuedNanos,
+      uint64_t onThreadNanos,
+      uint64_t blockedNanos);
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the
@@ -1038,6 +1060,12 @@ class Task : public std::enable_shared_from_this<Task> {
       std::unique_ptr<SplitsStore>& splitsStore,
       std::unique_ptr<SplitsStore> newSplitsStore);
 
+  // Returns the splits store for the given group, creating one if it doesn't
+  // exist.
+  SplitsStore* getOrCreateSplitsStoreLocked(
+      SplitsState& splitsState,
+      uint32_t splitGroupId);
+
   // Invoked when all the driver threads are off thread. The function returns
   // 'threadFinishPromises_' to fulfill.
   std::vector<ContinuePromise> allThreadsFinishedLocked();
@@ -1220,6 +1248,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
   std::vector<std::shared_ptr<Driver>> drivers_;
+  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {
@@ -1348,6 +1377,27 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
+
+  // Per-pipeline driver lifecycle timing accumulator. For each pipeline, holds
+  // a vector of per-driver timing indexed by driver index within the pipeline.
+  // In grouped execution, same-index drivers across groups accumulate into the
+  // same entry, giving the total time for a logical driver across all groups.
+  // Reported as RuntimeMetrics at task close via taskStats().
+  struct DriverLifecycleTiming {
+    uint64_t queuedNanos{0};
+    uint64_t onThreadNanos{0};
+    uint64_t blockedNanos{0};
+  };
+
+  struct PipelineLifecycleStats {
+    std::string sourceOperatorType;
+    core::PlanNodeId sourcePlanNodeId;
+    std::vector<DriverLifecycleTiming> driverTimes;
+  };
+  std::vector<PipelineLifecycleStats> pipelineLifecycleStats_;
+
+  /// Initializes pipelineLifecycleStats_ from driverFactories_.
+  void initDriverLifecycleStatsLocked();
 
   // Stores inter-operator state (exchange, bridges) per split group. During
   // ungrouped execution we use the [0] entry in this vector.

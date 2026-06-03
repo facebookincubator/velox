@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::functions::aggregate::test;
 using facebook::velox::exec::test::AssertQueryBuilder;
 using facebook::velox::exec::test::PlanBuilder;
@@ -533,7 +534,7 @@ TEST_F(FirstAggregateTest, spillingAndSorting) {
   auto results = AssertQueryBuilder(plan).copyResults(pool());
   exec::test::assertEqualResults({expected}, {results});
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
 
   exec::TestScopedSpillInjection scopedSpillInjection(100);
   results = AssertQueryBuilder(plan)

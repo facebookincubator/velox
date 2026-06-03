@@ -70,7 +70,7 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
 )
 
-add_executable(velox_dwio_dwrf_decompression_test TestDecompression.cpp)
+add_executable(velox_dwio_dwrf_decompression_test DecompressionTest.cpp)
 add_test(
   NAME velox_dwio_dwrf_decompression_test
   COMMAND velox_dwio_dwrf_decompression_test
@@ -428,6 +428,7 @@ target_link_libraries(
   velox_dwio_dwrf_reader_test
   velox_dwrf_test_utils
   velox_vector_test_lib
+  velox_hive_connector
   velox_link_libs
   Folly::folly
   fmt::fmt
@@ -618,7 +619,7 @@ target_link_libraries(
   velox_dwio_cache_test
   velox_common_io
   velox_link_libs
-  velox_temp_path
+  velox_test_util
   Folly::folly
   fmt::fmt
   lz4::lz4
@@ -626,3 +627,9 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS}
 )
+
+velox_add_library(velox_test_column_statistics_base INTERFACE HEADERS ColumnStatisticsBase.h)
+
+velox_add_library(velox_test-read-file INTERFACE HEADERS TestReadFile.h)
+
+velox_add_library(velox_orc-test INTERFACE HEADERS OrcTest.h)

@@ -20,7 +20,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include <fcntl.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
@@ -31,6 +31,7 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::tests::utils;
 
 using facebook::velox::memory::MemoryAllocator;
@@ -79,10 +80,9 @@ class SsdFileTest : public testing::Test {
     FLAGS_velox_ssd_odirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
     cacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     fileName_ = StringIdLease(fileIds(), "fileInStorage");
-    tempDirectory_ =
-        exec::test::TempDirectoryPath::create(enableFaultInjection);
+    tempDirectory_ = TempDirectoryPath::create(enableFaultInjection);
     initializeSsdFile(
         ssdBytes,
         checkpointIntervalBytes,
@@ -111,7 +111,7 @@ class SsdFileTest : public testing::Test {
     ssdFile_ = std::make_unique<SsdFile>(config);
     if (ssdFile_ != nullptr) {
       ssdFileHelper_ =
-          std::make_unique<test::SsdFileTestHelper>(ssdFile_.get());
+          std::make_unique<cache::test::SsdFileTestHelper>(ssdFile_.get());
     }
   }
 
@@ -199,12 +199,12 @@ class SsdFileTest : public testing::Test {
     std::vector<CachePin> pins;
     while (bytesFromCache < totalSize) {
       pins.push_back(
-          cache_->findOrCreate(RawFileCacheKey{fileId, offset}, size, nullptr));
+          cache_->findOrCreate(RawFileCacheKey{fileId, offset}, size));
       bytesFromCache += size;
       EXPECT_FALSE(pins.back().empty());
       auto entry = pins.back().entry();
       if (entry && entry->isExclusive()) {
-        initializeContents(fileId + offset, entry->data());
+        initializeContents(fileId + offset, entry->nonContiguousData());
       }
       offset += size;
       size *= 2;
@@ -240,7 +240,7 @@ class SsdFileTest : public testing::Test {
     }
     ssdFile_->load(ssdPins, pins);
     for (auto& pin : pins) {
-      checkContents(pin.entry()->data(), pin.entry()->size());
+      checkContents(pin.entry()->nonContiguousData(), pin.entry()->size());
     }
   }
 
@@ -302,8 +302,7 @@ class SsdFileTest : public testing::Test {
       std::vector<CachePin> pins;
       pins.push_back(cache_->findOrCreate(
           RawFileCacheKey{entry.key.fileNum.id(), entry.key.offset},
-          entry.size,
-          nullptr));
+          entry.size));
       if (pins.back().entry()->isExclusive()) {
         std::vector<SsdPin> ssdPins;
         ssdPins.push_back(ssdFile_->find(
@@ -312,21 +311,23 @@ class SsdFileTest : public testing::Test {
           ++numFound;
           ssdFile_->load(ssdPins, pins);
           checkContents(
-              pins[0].entry()->data(), pins[0].entry()->size(), expectEqual);
+              pins[0].entry()->nonContiguousData(),
+              pins[0].entry()->size(),
+              expectEqual);
         }
       }
     }
     return numFound;
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
 
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> cacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> cacheHelper_;
   StringIdLease fileName_;
 
   std::unique_ptr<SsdFile> ssdFile_;
-  std::unique_ptr<test::SsdFileTestHelper> ssdFileHelper_;
+  std::unique_ptr<cache::test::SsdFileTestHelper> ssdFileHelper_;
 };
 
 TEST_F(SsdFileTest, writeAndRead) {
@@ -378,9 +379,7 @@ TEST_F(SsdFileTest, writeAndRead) {
     std::vector<CachePin> pins;
 
     pins.push_back(cache_->findOrCreate(
-        RawFileCacheKey{fileName_.id(), entry.key.offset},
-        entry.size,
-        nullptr));
+        RawFileCacheKey{fileName_.id(), entry.key.offset}, entry.size));
     if (pins.back().entry()->isExclusive()) {
       std::vector<SsdPin> ssdPins;
 
@@ -388,7 +387,8 @@ TEST_F(SsdFileTest, writeAndRead) {
           ssdFile_->find(RawFileCacheKey{fileName_.id(), entry.key.offset}));
       if (!ssdPins.back().empty()) {
         ssdFile_->load(ssdPins, pins);
-        checkContents(pins[0].entry()->data(), pins[0].entry()->size());
+        checkContents(
+            pins[0].entry()->nonContiguousData(), pins[0].entry()->size());
       }
     }
   }
@@ -418,9 +418,7 @@ TEST_F(SsdFileTest, checkpoint) {
         makePins(fileName_.id(), startOffset, 4096, 2048 * 1025, 62 * kMB);
     // Each region has one entry from `fileNameAlt`.
     pins.push_back(cache_->findOrCreate(
-        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset},
-        1024,
-        nullptr));
+        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset}, 1024));
     ssdFile_->write(pins);
     for (auto& pin : pins) {
       EXPECT_EQ(ssdFile_.get(), pin.entry()->ssdFile());
@@ -445,9 +443,7 @@ TEST_F(SsdFileTest, checkpoint) {
     auto pins =
         makePins(fileName_.id(), startOffset, 4096, 2048 * 1025, 62 * kMB);
     pins.push_back(cache_->findOrCreate(
-        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset},
-        1024,
-        nullptr));
+        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset}, 1024));
     readAndCheckPins(pins);
   }
   // All entries can be found.

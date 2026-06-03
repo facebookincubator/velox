@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_common_io IoStatistics.cpp)
+velox_add_library(
+  velox_common_io
+  AsyncIoContext.cpp
+  IoStatistics.cpp
+  HEADERS
+  AsyncIoContext.h
+  IoStatistics.h
+  Options.h
+)
 
-velox_link_libraries(velox_common_io Folly::folly glog::glog)
+velox_link_libraries(velox_common_io velox_common_base Folly::folly glog::glog)

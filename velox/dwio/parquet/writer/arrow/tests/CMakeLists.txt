@@ -25,6 +25,7 @@ add_executable(
   PropertiesTest.cpp
   SchemaTest.cpp
   StatisticsTest.cpp
+  StringTruncationTest.cpp
   TypesTest.cpp
 )
 
@@ -39,7 +40,7 @@ target_link_libraries(
   arrow
   arrow_testing
   velox_dwio_native_parquet_reader
-  velox_temp_path
+  velox_test_util
 )
 
 add_library(
@@ -51,6 +52,17 @@ add_library(
   FileReader.cpp
   TestUtil.cpp
   XxHasher.cpp
+)
+velox_add_test_headers(
+  velox_dwio_arrow_parquet_writer_test_lib
+  BloomFilter.h
+  BloomFilterReader.h
+  ColumnReader.h
+  ColumnScanner.h
+  FileReader.h
+  Hasher.h
+  TestUtil.h
+  XxHasher.h
 )
 
 target_link_libraries(

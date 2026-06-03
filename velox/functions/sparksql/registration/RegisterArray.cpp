@@ -28,6 +28,7 @@
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions {
 
@@ -45,7 +46,6 @@ void registerSparkArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "arrays_zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "exists");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "forall");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
 }
@@ -216,6 +216,8 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayRemoveFunctions(prefix);
   registerArrayPrependFunctions(prefix);
   registerSparkArrayFunctions(prefix);
+  // Register Spark-specific filter with index support.
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_filter, prefix + "filter");
   // Register Spark-specific transform with index support.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_transform, prefix + "transform");
   // Register array sort functions.
@@ -251,9 +253,15 @@ void registerArrayFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
-      makeArrayShuffleWithCustomSeed,
+      [](const std::string& /*name*/,
+         const std::vector<exec::VectorFunctionArg>& inputArgs,
+         const core::QueryConfig& config) {
+        return makeArrayShuffleWithCustomSeed(
+            inputArgs, SparkQueryConfig{config}.partitionId());
+      },
       getMetadataForArrayShuffle());
   registerIntegerSliceFunction(prefix);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_spark_sequence, prefix + "sequence");
   registerFunction<
       ArrayAppendFunction,
       Array<Generic<T1>>,

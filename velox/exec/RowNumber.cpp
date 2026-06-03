@@ -15,6 +15,7 @@
  */
 #include "velox/exec/RowNumber.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 
 namespace facebook::velox::exec {
@@ -28,9 +29,9 @@ RowNumber::RowNumber(
           rowNumberNode->outputType(),
           operatorId,
           rowNumberNode->id(),
-          "RowNumber",
+          OperatorType::kRowNumber,
           rowNumberNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, "RowNumber")
+              ? driverCtx->makeSpillConfig(operatorId, OperatorType::kRowNumber)
               : std::nullopt),
       limit_{rowNumberNode->limit()},
       generateRowNumber_{rowNumberNode->generateRowNumber()} {
@@ -46,6 +47,7 @@ RowNumber::RowNumber(
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
+        false, // hasCountFlag
         0, // minTableSizeForParallelJoinBuild
         pool());
     lookup_ = std::make_unique<HashLookup>(table_->hashers(), pool());
@@ -72,6 +74,16 @@ RowNumber::RowNumber(
 }
 
 void RowNumber::addInput(RowVectorPtr input) {
+  // needsInput() returns false while 'input_' is set, so the Driver must drain
+  // getOutput() before feeding the next batch. A non-null 'input_' on entry
+  // would mean a buffered batch is being overwritten and its rows silently
+  // lost, so fail loudly instead. Guards against a regression of the row-loss
+  // bug seen with a backpressuring downstream (e.g. a BATCH-mode RPC operator).
+  VELOX_CHECK_NULL(
+      input_,
+      "RowNumber::addInput() called while a previous input batch is still "
+      "buffered; needsInput() should have prevented this");
+
   const auto numInput = input->size();
 
   if (table_) {
@@ -239,8 +251,11 @@ void RowNumber::ensureInputFits(const RowVectorPtr& input) {
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
                << " for memory pool " << pool()->name()
-               << ", usage: " << succinctBytes(pool()->usedBytes())
-               << ", reservation: " << succinctBytes(pool()->reservedBytes());
+               << ", root pool: " << pool()->root()->name()
+               << ", used: " << succinctBytes(pool()->usedBytes())
+               << ", reservation: " << succinctBytes(pool()->reservedBytes())
+               << ", root pool reservation: "
+               << succinctBytes(pool()->root()->reservedBytes());
 }
 
 FlatVector<int64_t>& RowNumber::getOrCreateRowNumberVector(vector_size_t size) {
@@ -383,11 +398,15 @@ void RowNumber::reclaim(
     return;
   }
 
-  if (exceededMaxSpillLevelLimit_) {
+  if (FOLLY_UNLIKELY(exceededMaxSpillLevelLimit_)) {
     LOG(WARNING) << "Exceeded row spill level limit: "
                  << spillConfig_->maxSpillLevel
-                 << ", and abandon spilling for memory pool: "
-                 << pool()->name();
+                 << ", and abandon spilling for memory pool: " << pool()->name()
+                 << ", root pool: " << pool()->root()->name()
+                 << ", used: " << succinctBytes(pool()->usedBytes())
+                 << ", reservation: " << succinctBytes(pool()->reservedBytes())
+                 << ", root pool reservation: "
+                 << succinctBytes(pool()->root()->reservedBytes());
     spillStats_->spillMaxLevelExceededCount.fetch_add(
         1, std::memory_order_relaxed);
     return;

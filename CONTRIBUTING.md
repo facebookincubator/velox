@@ -95,12 +95,24 @@ The contribution process is outlined below:
      tagging the appropriate maintainers for that component.
    * Once all CI signals are green, tag the reviewers identified in Step 3.
 
-5. Review is performed by one or more reviewers.
+5. **Self-review before requesting review.** Run through the
+   [Self-Review Checklist](scripts/review/SELF_REVIEW.md) before tagging
+   reviewers. For PRs that add or modify functions, also check the
+   [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md). If you use
+   Claude or a similar AI tool, paste these checklists as context and ask
+   it to review your diff.
+   * We want to provide timely, thorough reviews on every PR. When
+   reviewers spend rounds on naming, style, and conventions, it delays
+   feedback on design and correctness — for your PR and for others
+   waiting in the queue. PRs that repeatedly miss these basics may be
+   sent back for self-review before a detailed review can begin.
+
+6. Review is performed by one or more reviewers.
    * This normally happens within a few days, but may take longer if the change
    is large, complex, or if a critical reviewer is unavailable (feel free to
    ping them in the PR or on Slack).
 
-6. Address feedback and update the PR.
+7. Address feedback and update the PR.
    * After pushing changes, add a comment to the PR mentioning the
    reviewer(s) by name, stating the comments have been addressed. This is the best
    way to ensure that the reviewer is notified that the code is ready to be reviewed
@@ -108,8 +120,12 @@ The contribution process is outlined below:
    * As a PR author, please do not "Resolve Conversation" when review comments are
    addressed. Instead, wait for the reviewer to verify the comment has been
    addressed and resolve the conversation.
+   * Before requesting re-review, confirm every review comment is either
+   addressed in code or discussed in a reply. Do not silently skip items.
+   If a requested change is too large for this PR, say so and propose a
+   plan (e.g., separate PR).
 
-7. Iterate on this process until your changes are reviewed and accepted by a
+8. Iterate on this process until your changes are reviewed and accepted by a
    maintainer. At this point, a Meta employee will be notified to merge your PR,
    due to tooling limitations.
 
@@ -225,6 +241,47 @@ following best practices:
    your PR. If a component or API does not have a corresponding
    unit test suite, please consider improving the codebase by first adding a
    new unit test suite to ensure the existing behavior is correct.
+   * **Common test workflows**:
+     ```bash
+     # Run all tests in parallel.
+     cd _build/debug && ctest -j 8
+
+     # Run all test binaries whose ctest name matches a regex.
+     # On Linux this matches velox_exec_test_group0 … _group7.
+     # On macOS this matches velox_exec_test_ValuesTest,
+     # velox_exec_test_HashJoinTest, etc.
+     cd _build/debug && ctest -R velox_exec
+
+     # Run a single test binary by name (works on macOS where each
+     # test file produces its own binary).
+     cd _build/debug && ctest -R ValuesTest
+     ```
+   * **Re-running a CI failure locally**: CI reports a failure in
+   `velox_exec_test_group3` with `ValuesTest.empty`. On Linux, run the grouped
+   binary directly. On macOS, the grouped binary does not exist — use the
+   per-file binary instead:
+     ```bash
+     # Linux (grouped binary)
+     _build/debug/velox/exec/tests/velox_exec_test_group3 --gtest_filter="ValuesTest.empty"
+     # macOS (per-file binary)
+     _build/debug/velox/exec/tests/velox_exec_test_ValuesTest --gtest_filter="ValuesTest.empty"
+     ```
+   * **Test binary structure**: Four test suites (`velox/exec/tests`,
+   `velox/functions/prestosql/aggregates/tests`, `velox/common/caching/tests`,
+   `velox/serializers/tests`) use grouped binaries on Linux CI (e.g.,
+   `velox_exec_test_group0` through `_group7`) to reduce link times. All other
+   suites use individual binaries on all platforms. On macOS, grouping is off
+   by default and each test file gets its own binary (e.g.,
+   `velox_exec_test_ValuesTest`). To disable grouping on Linux, pass
+   `-DVELOX_ENABLE_GROUPED_TESTS=OFF` to CMake.
+   * **Adding a test to a grouped suite**: Add the source file to the `SOURCES`
+   list in the relevant `velox_add_grouped_tests()` call in `CMakeLists.txt`.
+   It is automatically assigned to a group on Linux and gets its own binary on
+   macOS. For new test suites, use `velox_add_grouped_tests` when the suite
+   has many test files (10+) that link against large libraries like velox
+   core — each individual binary pays the full link cost, so grouping
+   significantly reduces total CI build time. For suites with only a few
+   test files or lightweight dependencies, use `add_executable` / `add_test`.
 
 4. **Code Comments**: Appropriately add comments to your code and document APIs.
    * As a library, Velox code is optimized for the reader, not the writer.
@@ -254,13 +311,17 @@ following best practices:
 
 Adding Presto and Spark functions are a good way to get yourself familiar with
 Velox and the code review process. In addition to the general contribution
-guidelines presented above, here are specific guidelines for contributing
-functions:
+guidelines presented above, review the
+[Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md) for a detailed
+checklist covering documentation, registration, and implementation.
+Here are specific guidelines for contributing functions:
 
 1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
 with a benchmark.
 
-2. Use the following template for the PR title: Add xxx [Presto|Spark] function (replace xxx with the function name).
+2. Follow the PR title convention from the
+   [Function PR Guide](scripts/review/FUNCTION_PR_GUIDE.md), e.g.
+   `feat(presto): Add abs scalar function`.
    * Ensure the PR description contains a link to the function documentation
    from Presto or Spark docs.
    * Describe the function semantics and edge cases clearly.
@@ -286,6 +347,8 @@ with a benchmark.
    Note: Fuzzer is under active development and the commands below may not work as is.
    Consult the CircleCI configuration in .circleci/config.yml for the up-to-date command
    line arguments.
+   For Spark aggregate fuzzer tests, including how to start Spark Connect,
+   see [Spark Query Runner Usage](https://github.com/facebookincubator/velox/blob/main/velox/docs/develop/testing/spark-query-runner.rst#usage).
 
    ```
    # Test the new function in isolation. Use --only flag to restrict the set of functions

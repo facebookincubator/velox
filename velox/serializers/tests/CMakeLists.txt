@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_key_encoder_test KeyEncoderTest.cpp)
+add_executable(velox_key_encoder_test KeyDecoderTest.cpp KeyEncoderTest.cpp)
 
 add_test(
   NAME velox_key_encoder_test
@@ -32,8 +32,10 @@ target_link_libraries(
   GTest::gmock
 )
 
-add_executable(
-  velox_serializer_test
+# Split velox_serializer_test into individual test binaries for parallel
+# execution.
+set(
+  VELOX_SERIALIZER_TEST_SOURCES
   CompactRowSerializerTest.cpp
   PrestoOutputStreamListenerTest.cpp
   PrestoSerializerTest.cpp
@@ -41,10 +43,8 @@ add_executable(
   UnsafeRowSerializerTest.cpp
 )
 
-add_test(velox_serializer_test velox_serializer_test)
-
-target_link_libraries(
-  velox_serializer_test
+set(
+  VELOX_SERIALIZER_TEST_DEPS
   velox_expression_test_utility
   velox_presto_serializer
   velox_vector_test_lib
@@ -53,6 +53,12 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   glog::glog
+)
+
+velox_add_grouped_tests(
+  PREFIX velox_serializer_test
+  SOURCES ${VELOX_SERIALIZER_TEST_SOURCES}
+  DEPS ${VELOX_SERIALIZER_TEST_DEPS}
 )
 
 if(VELOX_ENABLE_BENCHMARKS)

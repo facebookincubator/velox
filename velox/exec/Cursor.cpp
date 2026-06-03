@@ -18,8 +18,11 @@
 
 #include <folly/system/HardwareConcurrency.h>
 #include <filesystem>
+#include <optional>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/future/VeloxPromise.h"
+#include "velox/exec/BlockingReason.h"
 #include "velox/vector/EncodedVectorCopy.h"
 
 namespace facebook::velox::exec {
@@ -48,9 +51,8 @@ class TaskQueue {
   // producer may continue. Returns kWaitForConsumer if the queue is
   // full after the addition and sets '*future' to a future that is
   // realized when the producer may continue.
-  exec::BlockingReason enqueue(
-      RowVectorPtr vector,
-      velox::ContinueFuture* future);
+  exec::BlockingReason
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
 
   // Returns nullptr when all producers are at end. Otherwise blocks.
   RowVectorPtr dequeue();
@@ -63,11 +65,13 @@ class TaskQueue {
     return pool_.get();
   }
 
+  std::optional<int32_t> numProducers_;
+  std::atomic_int32_t numDrainedProducers_{0};
+
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
-  std::optional<int32_t> numProducers_;
   int32_t producersFinished_ = 0;
   uint64_t totalBytes_ = 0;
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
@@ -83,10 +87,15 @@ class TaskQueue {
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
+    bool drained,
     velox::ContinueFuture* future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
-    ++producersFinished_;
+    if (drained) {
+      ++numDrainedProducers_;
+    } else {
+      ++producersFinished_;
+    }
     if (consumerBlocked_) {
       consumerBlocked_ = false;
       consumerPromise_.setValue();
@@ -139,7 +148,10 @@ RowVectorPtr TaskQueue::dequeue() {
       } else if (
           numProducers_.has_value() && producersFinished_ == numProducers_) {
         return nullptr;
+      } else if (numDrainedProducers_ == numProducers_) {
+        return nullptr;
       }
+
       if (!vector) {
         consumerBlocked_ = true;
         consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
@@ -263,7 +275,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
       : TaskCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
-                folly::hardware_concurrency())),
+                folly::available_concurrency())),
         maxDrivers_{params.maxDrivers},
         numConcurrentSplitGroups_{params.numConcurrentSplitGroups},
         numSplitGroups_{params.numSplitGroups} {
@@ -300,16 +312,16 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
             LOG(ERROR) << "TaskQueue has been destroyed, taskId: " << taskId;
             return exec::BlockingReason::kNotBlocked;
           }
-          VELOX_CHECK(
-              !drained, "Unexpected drain in multithreaded task cursor");
-          if (!vector || !copyResult) {
-            return queue->enqueue(vector, future);
-          }
 
+          if (!vector || !copyResult) {
+            return queue->enqueue(vector, drained, future);
+          }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
           return queue->enqueue(
-              std::static_pointer_cast<RowVector>(std::move(copy)), future);
+              std::static_pointer_cast<RowVector>(std::move(copy)),
+              drained,
+              future);
         },
         0,
         std::move(spillDiskOpts),
@@ -365,12 +377,19 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
     checkTaskError();
     if (!current_) {
+      if (queue_->numDrainedProducers_ > 0) {
+        VELOX_CHECK(queue_->numProducers_.has_value());
+        VELOX_CHECK_EQ(
+            queue_->numDrainedProducers_.load(), queue_->numProducers_.value());
+        queue_->numDrainedProducers_ = 0;
+        return false;
+      }
       atEnd_ = true;
     }
     return current_ != nullptr;
   }
 
-  bool moveStep() override {
+  bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
     return moveNext();
   }
 
@@ -435,7 +454,12 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 class SingleThreadedTaskCursor : public TaskCursorBase {
  public:
   explicit SingleThreadedTaskCursor(const CursorParameters& params)
-      : TaskCursorBase(params, nullptr) {
+      : TaskCursorBase(params, nullptr),
+        outputPool_{
+            (params.outputPool != nullptr || !params.copyResult)
+                ? params.outputPool
+                : memory::memoryManager()->addLeafPool()},
+        copyResult_{params.copyResult} {
     VELOX_CHECK(params.serialExecution);
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
@@ -490,7 +514,13 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
       ContinueFuture future = ContinueFuture::makeEmpty();
       RowVectorPtr next = task_->next(&future);
       if (next != nullptr) {
-        current_ = next;
+        if (outputPool_ && copyResult_) {
+          VectorPtr copy = encodedVectorCopy(
+              {.pool = outputPool_.get(), .reuseSource = false}, next);
+          current_ = std::static_pointer_cast<RowVector>(std::move(copy));
+        } else {
+          current_ = next;
+        }
         return true;
       }
       // When next is returned from task as a null pointer.
@@ -505,7 +535,7 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     return false;
   }
 
-  bool moveStep() override {
+  bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
     return moveNext();
   }
 
@@ -530,6 +560,8 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 
  private:
   std::shared_ptr<exec::Task> task_;
+  std::shared_ptr<memory::MemoryPool> outputPool_;
+  bool copyResult_{false};
   bool noMoreSplits_{false};
   RowVectorPtr current_;
   std::exception_ptr error_;
@@ -685,8 +717,8 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
     return advance(false);
   }
 
-  bool moveStep() override {
-    return advance(true);
+  bool moveStep(const core::PlanNodeId& planId = "") override {
+    return advance(true, planId);
   }
 
   RowVectorPtr& current() override {
@@ -725,8 +757,11 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
   // `isStep` is true, move to the next trace point or task output. If false,
   // moves to the next task output.
   //
+  // If `isStep` is true and `planId` is non-empty, only stops at trace points
+  // matching the given plan node ID; other trace points are skipped.
+  //
   // Returns false when the task is done producing output.
-  virtual bool advance(bool isStep) = 0;
+  virtual bool advance(bool isStep, const core::PlanNodeId& planId = "") = 0;
 
   // Unblocks the trace writer (driver) from the previously consumed trace
   // state.
@@ -773,7 +808,7 @@ class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
   void start() override {}
 
  private:
-  bool advance(bool isStep) override {
+  bool advance(bool isStep, const core::PlanNodeId& planId = "") override {
     if (error_) {
       std::rethrow_exception(error_);
     }
@@ -795,7 +830,7 @@ class TaskDebuggerSerialCursor : public TaskDebuggerCursorBase {
           auto state = std::move(traceState_.queue.front());
           traceState_.queue.pop_front();
 
-          if (isStep) {
+          if (isStep && (planId.empty() || state.planId == planId)) {
             current_ = state.traceData;
             pendingTraceDriverState_ = std::move(state);
             return true;
@@ -831,7 +866,7 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
       : TaskDebuggerCursorBase(
             params,
             std::make_shared<folly::CPUThreadPoolExecutor>(
-                folly::hardware_concurrency())),
+                folly::available_concurrency())),
         maxDrivers_(params.maxDrivers),
         numConcurrentSplitGroups_(params.numConcurrentSplitGroups) {
     // Installs the required trace provider.
@@ -901,7 +936,7 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
   }
 
  private:
-  bool advance(bool isStep) override {
+  bool advance(bool isStep, const core::PlanNodeId& planId = "") override {
     start();
     if (error_) {
       std::rethrow_exception(error_);
@@ -917,14 +952,15 @@ class TaskDebuggerParallelCursor : public TaskDebuggerCursorBase {
           auto state = std::move(traceState_.queue.front());
           traceState_.queue.pop_front();
 
-          if (isStep || state.planId.empty()) {
+          const bool matchesPlanId = planId.empty() || state.planId == planId;
+          if ((isStep && matchesPlanId) || state.planId.empty()) {
             current_ = state.traceData;
             pendingTraceDriverState_ = std::move(state);
             return true;
           }
 
-          // moveNext() skips breakpoint trace data; unblock the trace writer
-          // (driver).
+          // moveNext() skips breakpoint trace data, or the planId filter
+          // didn't match; unblock the trace writer (driver).
           state.tracePromise.setValue();
         }
 

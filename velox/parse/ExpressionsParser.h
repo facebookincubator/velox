@@ -24,10 +24,20 @@ namespace facebook::velox::parse {
 struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
+
+  // TODO: Replace or add a new flag with behavior that matches Presto and Spark
+  // where small integer literals are INTEGER and large ones are BIGINT, instead
+  // of this all-or-nothing flag.
   bool parseIntegerAsBigint = true;
+
   // Controls whether to parse the values in an IN list as separate arguments or
   // as a single array argument.
   bool parseInListAsArray = true;
+
+  // DuckDB defaults the window frame end bound to CURRENT ROW even when ORDER
+  // BY is absent. The SQL standard requires UNBOUNDED FOLLOWING in that case.
+  // When true, corrects this default.
+  bool correctWindowFrameDefault = false;
 
   /// SQL functions could be registered with different prefixes by the user.
   /// This parameter is the registered prefix of presto or spark functions,
@@ -46,6 +56,13 @@ class DuckSqlExpressionsParser : public SqlExpressionsParser {
   std::vector<core::ExprPtr> parseExprs(const std::string& expr) override;
 
   OrderByClause parseOrderByExpr(const std::string& expr) override;
+
+  core::AggregateCallExprPtr parseAggregateExpr(
+      const std::string& expr) override;
+
+  core::WindowCallExprPtr parseWindowExpr(const std::string& expr) override;
+
+  core::ExprPtr parseScalarOrWindowExpr(const std::string& expr) override;
 
  private:
   const facebook::velox::duckdb::ParseOptions options_;

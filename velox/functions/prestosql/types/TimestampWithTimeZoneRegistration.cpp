@@ -20,6 +20,7 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
+#include "velox/type/CastRegistry.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox {
@@ -247,36 +248,6 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
   }
 
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::TIMESTAMP:
-        return true;
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::INTEGER:
-        return other->isDate();
-      case TypeKind::BIGINT:
-        return other->isTime();
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::TIMESTAMP:
-        return true;
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::INTEGER:
-        return other->isDate();
-      case TypeKind::BIGINT:
-        return other->isTime();
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -285,7 +256,8 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       VectorPtr& result) const override {
     context.ensureWritable(rows, resultType, result);
 
-    if (input.typeKind() == TypeKind::BIGINT && input.type()->isTime()) {
+    if (input.typeKind() == TypeKind::BIGINT &&
+        input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
       const auto* sessionTimeZone = getTimeZoneFromConfig(config);
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
@@ -336,6 +308,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     auto* rawResults = timestampWithTzResult->mutableRawValues();
 
     if (input.typeKind() == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(input.type()->equivalent(*TIMESTAMP()));
       const auto inputVector = input.as<SimpleVector<Timestamp>>();
       castFromTimestamp(*inputVector, context, rows, rawResults);
     } else if (input.typeKind() == TypeKind::VARCHAR) {
@@ -361,6 +334,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     context.ensureWritable(rows, resultType, result);
 
     if (resultType->kind() == TypeKind::TIMESTAMP) {
+      VELOX_DCHECK(resultType->equivalent(*TIMESTAMP()));
       castToTimestamp(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::VARCHAR) {
       castToString(input, context, rows, *result);
@@ -368,7 +342,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
       VELOX_CHECK(resultType->isDate());
       castToDate(input, context, rows, *result);
     } else if (resultType->kind() == TypeKind::BIGINT) {
-      VELOX_CHECK(resultType->isTime());
+      VELOX_CHECK(resultType->equivalent(*TIME()));
       castToTime(input, context, rows, *result);
     } else {
       VELOX_UNSUPPORTED(
@@ -385,7 +359,6 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
     return TIMESTAMP_WITH_TIME_ZONE();
   }
 
-  // Type casting from and to TimestampWithTimezone is not supported yet.
   exec::CastOperatorPtr getCastOperator() const override {
     return TimestampWithTimeZoneCastOperator::get();
   }
@@ -400,7 +373,25 @@ class TimestampWithTimeZoneTypeFactory : public CustomTypeFactory {
 
 void registerTimestampWithTimeZoneType() {
   registerCustomType(
-      "timestamp with time zone",
+      "TIMESTAMP WITH TIME ZONE",
       std::make_unique<const TimestampWithTimeZoneTypeFactory>());
+  // Lower cost = preferred during overload resolution. TIMESTAMP is closer
+  // to TIMESTAMP WITH TIME ZONE than DATE.
+  registerCastRules({
+      {.fromType = "TIMESTAMP",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = true,
+       .cost = 1},
+      {.fromType = "VARCHAR", .toType = "TIMESTAMP WITH TIME ZONE"},
+      {.fromType = "DATE",
+       .toType = "TIMESTAMP WITH TIME ZONE",
+       .implicitAllowed = true,
+       .cost = 2},
+      {.fromType = "TIME", .toType = "TIMESTAMP WITH TIME ZONE"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "TIMESTAMP"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "VARCHAR"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "DATE"},
+      {.fromType = "TIMESTAMP WITH TIME ZONE", .toType = "TIME"},
+  });
 }
 } // namespace facebook::velox

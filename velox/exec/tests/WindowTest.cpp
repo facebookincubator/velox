@@ -18,6 +18,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RowsStreamingWindowBuild.h"
@@ -25,13 +26,12 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::exec {
-
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class WindowTest : public OperatorTestBase {
@@ -70,7 +70,7 @@ class WindowTest : public OperatorTestBase {
 
   const std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
-          folly::hardware_concurrency())};
+          folly::available_concurrency())};
 
   tsan_atomic<bool> nonReclaimableSection_{false};
 };
@@ -165,7 +165,7 @@ TEST_F(WindowTest, spillBatchReadTinyPartitions) {
   ASSERT_GT(stats.spilledPartitions, 0);
   ASSERT_EQ(
       stats.operatorStats.at("Window")
-          ->customStats[Window::kWindowSpillReadNumBatches]
+          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
           .sum,
       size / minReadBatchRows);
 }
@@ -218,7 +218,7 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
   ASSERT_GT(stats.spilledPartitions, 0);
   ASSERT_EQ(
       stats.operatorStats.at("Window")
-          ->customStats[Window::kWindowSpillReadNumBatches]
+          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
           .sum,
       size / partitionRows);
 }
@@ -264,7 +264,10 @@ TEST_F(WindowTest, spillUnsupported) {
   ASSERT_EQ(stats.spilledPartitions, 0);
   auto opStats = toOperatorStats(task->taskStats());
   ASSERT_GT(
-      opStats.at("Window").runtimeStats[Operator::kSpillNotSupported].sum, 1);
+      opStats.at("Window")
+          .runtimeStats[std::string(Operator::kSpillNotSupported)]
+          .sum,
+      1);
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
@@ -877,7 +880,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
             usePrefixSort,
             spillEnabled,
             enableSpillPrefixSort));
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
     auto spillConfig =
         getSpillConfig(spillDirectory->getPath(), enableSpillPrefixSort);
     exec::SpillStats spillStats;
@@ -978,6 +981,32 @@ TEST_F(WindowTest, NaNFrameBound) {
         PlanBuilder().values({data}).window({frame}).project({"w0"}).planNode();
     AssertQueryBuilder(plan).assertResults(expected);
   }
+}
+
+TEST_F(WindowTest, nanFrameBoundAcrossOutputBatches) {
+  const auto kNan = std::numeric_limits<double>::quiet_NaN();
+  auto data = makeRowVector(
+      {"value", "sort_key", "frame_offset"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<double>({1.0, 2.0, 3.0, 4.0}),
+          makeFlatVector<double>({0.0, 0.0, kNan, 0.0}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window(
+              {"sum(value) over (order by sort_key range between frame_offset preceding and current row)"})
+          .project({"w0"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, 3, std::nullopt, 10})});
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .assertResults(expected);
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {

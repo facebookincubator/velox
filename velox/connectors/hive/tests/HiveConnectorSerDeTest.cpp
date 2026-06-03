@@ -141,7 +141,6 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
         "hive_table",
         ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}),
         indexColumns,
-        /*filterPushdownEnabled=*/true,
         {{dwio::common::TableParameter::kSkipHeaderLineCount, "1"}});
 
     EXPECT_EQ(tableHandle->supportsIndexLookup(), withIndexColumns);
@@ -169,11 +168,11 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
   });
 
   auto columnHandleTypes = {
-      HiveColumnHandle::ColumnType::kPartitionKey,
-      HiveColumnHandle::ColumnType::kRegular,
-      HiveColumnHandle::ColumnType::kSynthesized,
-      HiveColumnHandle::ColumnType::kRowIndex,
-      HiveColumnHandle::ColumnType::kRowId,
+      FileColumnHandle::ColumnType::kPartitionKey,
+      FileColumnHandle::ColumnType::kRegular,
+      FileColumnHandle::ColumnType::kSynthesized,
+      FileColumnHandle::ColumnType::kRowIndex,
+      FileColumnHandle::ColumnType::kRowId,
   };
 
   for (auto columnHandleType : columnHandleTypes) {
@@ -231,6 +230,11 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
       {"key2", "value2"},
   };
 
+  std::unordered_map<std::string, std::string> storageParameters = {
+      {"key3", "value3"},
+      {"key4", "value4"},
+  };
+
   auto hiveInsertTableHandle =
       exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
           tableColumnNames,
@@ -240,7 +244,10 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
           locationHandle,
           dwio::common::FileFormat::NIMBLE,
           common::CompressionKind::CompressionKind_SNAPPY,
-          serdeParameters);
+          serdeParameters,
+          nullptr, // writerOptions
+          false, // ensureFiles
+          storageParameters);
   testSerde(*hiveInsertTableHandle);
 }
 

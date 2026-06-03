@@ -50,14 +50,20 @@ class GroupingSet {
 
   ~GroupingSet();
 
-  /// Used by MarkDistinct and EnforceDistinct operators to identify rows with
-  /// unique values for a set of keys.
+  /// Creates a GroupingSet for MarkDistinct and EnforceDistinct operators to
+  /// identify rows with unique values for a set of keys. When
+  /// 'extraAccumulators' is non-empty, appends them to the row layout and
+  /// eagerly creates the hash table so callers can read column offsets via
+  /// table().
   /// @param preGroupedKeys Subset of grouping keys that input is already
   /// clustered on.
+  /// @param extraAccumulators Caller-provided accumulators appended to the
+  ///   row layout (e.g. MarkDistinct's per-group bitmask). Can be empty.
   static std::unique_ptr<GroupingSet> createForDistinct(
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       std::vector<column_index_t>&& preGroupedKeys,
+      std::vector<Accumulator> extraAccumulators,
       OperatorCtx* operatorCtx,
       tsan_atomic<bool>* nonReclaimableSection);
 
@@ -91,6 +97,10 @@ class GroupingSet {
   /// freed but only table content.
   void resetTable(bool freeTable);
 
+  /// Resets reusable state for global aggregation so it can be initialized
+  /// again for a new processing cycle.
+  void resetGlobalAggregation();
+
   /// Returns true if 'this' should start producing partial
   /// aggregation results. Checks the memory consumption against
   /// 'maxBytes'. If exceeding 'maxBytes', sees if changing hash mode
@@ -114,6 +124,18 @@ class GroupingSet {
 
   const HashLookup& hashLookup() const;
 
+  /// Returns true if there are pending new-group rows from the most recent
+  /// tail auto-drain that have not yet been consumed.
+  bool hasDrainedNewGroups() const;
+
+  /// Returns the number of pending drained new-group rows.
+  vector_size_t drainedNewGroupsCount() const;
+
+  /// Extracts the pending drained new-group rows into 'result' by reading
+  /// directly from row-container pointers. Clears the pending state after
+  /// extraction.
+  void extractDrainedNewGroups(const RowVectorPtr& result);
+
   /// Spills all the rows in container.
   void spill();
 
@@ -128,6 +150,17 @@ class GroupingSet {
   /// Returns true if spilling has triggered on this grouping set.
   bool hasSpilled() const;
 
+  /// Performs lightweight memory compaction across all aggregates before
+  /// spilling. Iterates over all groups and calls Aggregate::compact() on each
+  /// aggregate function. Returns the total number of bytes freed.
+  uint64_t compact();
+
+  /// Returns true if any aggregate function supports lightweight memory
+  /// compaction.
+  bool hasCompactableAggregates() const {
+    return hasCompactableAggregates_;
+  }
+
   /// Returns the hashtable stats.
   HashTableStats hashTableStats() const {
     return table_ ? table_->stats() : HashTableStats{};
@@ -136,6 +169,12 @@ class GroupingSet {
   /// Return the number of rows kept in memory.
   int64_t numRows() const {
     return table_ ? table_->rows()->numRows() : 0;
+  }
+
+  /// Returns the underlying hash table, or nullptr if it has not been created
+  /// yet.
+  BaseHashTable* table() const {
+    return table_.get();
   }
 
   /// Frees hash tables and other state when giving up partial aggregation as
@@ -325,6 +364,13 @@ class GroupingSet {
   std::unique_ptr<SortedAggregations> sortedAggregations_;
   std::vector<std::unique_ptr<DistinctAggregations>> distinctAggregations_;
 
+  // Caller-provided accumulators appended to the row layout by
+  // createForDistinct(). Used by MarkDistinct for per-group bitmask storage.
+  std::vector<Accumulator> extraAccumulators_;
+
+  // Boolean indicating whether any aggregate supports compact().
+  bool hasCompactableAggregates_{false};
+
   uint64_t numInputRows_ = 0;
 
   // Column for groupId for a GROUPING SET.
@@ -356,6 +402,12 @@ class GroupingSet {
 
   // First row in remainingInput_ that needs to be processed.
   vector_size_t firstRemainingRow_;
+
+  // Populated by addRemainingInput(); reset at top of addInput()/noMoreInput().
+  // Pointers reference table_->rows() and remain valid only while no spill
+  // path runs. Pre-grouped distinct aggregation does not currently spill, so
+  // the row container is not cleared between capture and consumption.
+  std::vector<char*> drainedNewGroups_;
 
   // In case of distinct aggregation without aggregates and the grouping key
   // reordered, the spilled data is first loaded into

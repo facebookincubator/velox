@@ -13,5 +13,6 @@
 # limitations under the License.
 
 add_library(velox_functions_aggregates_test_lib AggregationTestBase.cpp)
+velox_add_test_headers(velox_functions_aggregates_test_lib AggregationTestBase.h)
 
 target_link_libraries(velox_functions_aggregates_test_lib velox_exec_test_lib velox_vector_test_lib)

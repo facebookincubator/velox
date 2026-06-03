@@ -140,23 +140,44 @@ struct Stats {
 
 class MemoryAllocator;
 
+/// Memory collected from evicted cache entries. Non-contiguous page
+/// allocations and byte allocations (from allocateBytes()) are tracked
+/// separately so they can be freed back to the allocator before retrying
+/// allocation.
+struct AcquiredMemory {
+  Allocation nonContiguousAllocs;
+  // Byte allocations from allocateBytes().
+  std::vector<std::pair<void*, uint64_t>> byteAllocations;
+
+  uint64_t totalBytes() const {
+    uint64_t bytes = nonContiguousAllocs.byteSize();
+    for (const auto& [_, size] : byteAllocations) {
+      bytes += size;
+    }
+    return bytes;
+  }
+
+  void free(MemoryAllocator* allocator);
+
+  bool empty() const {
+    return nonContiguousAllocs.empty() && byteAllocations.empty();
+  }
+};
+
 /// A general cache interface using 'MemoryAllocator' to allocate memory, that
 /// is also able to free up memory upon request by shrinking itself.
 class Cache {
  public:
   virtual ~Cache() = default;
 
-  /// This method should be implemented so that it tries to
-  /// accommodate the passed in 'allocate' by freeing up space from
-  /// 'this' if needed. 'numPages' is the number of pages 'allocate
-  /// needs to be free for allocate to succeed. This should return
-  /// true if 'allocate' succeeds, and false otherwise. 'numPages' can
-  /// be less than the planned allocation, even 0 but not
-  /// negative. This is possible if 'allocate' brings its own memory
-  /// that is exchanged for the new allocation.
+  /// Tries to accommodate 'allocate' by freeing up space from 'this'
+  /// if needed. 'numPages' is the number of pages 'allocate' needs to
+  /// be free to succeed. Returns true if 'allocate' succeeds.
+  /// 'allocate' receives an 'AcquiredMemory' containing evicted memory
+  /// that should be freed before retrying allocation.
   virtual bool makeSpace(
       memory::MachinePageCount numPages,
-      std::function<bool(Allocation&)> allocate) = 0;
+      std::function<bool(AcquiredMemory&)> allocate) = 0;
 
   /// This method is implemented to shrink the cache space with the specified
   /// 'targetBytes'. The method returns the actually freed cache space in bytes.
@@ -191,6 +212,45 @@ std::string getAndClearCacheFailureMessage();
 /// tracking while delegating the allocation to a root allocator.
 class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
  public:
+  struct Options {
+    /// Capacity in bytes, default unlimited.
+    /// Applies to: MallocAllocator, MmapAllocator.
+    size_t capacity{static_cast<size_t>(std::numeric_limits<int64_t>::max())};
+
+    /// --- MallocAllocator-only options ---
+
+    /// Allocation size threshold below which allocations use sharded local
+    /// counters instead of updating the global counter. Default 1MB.
+    uint32_t reservationByteLimit{1 << 20};
+
+    /// If true, use malloc for contiguous allocations instead of mmap/munmap.
+    bool mallocContiguousEnabled{false};
+
+    /// --- MmapAllocator-only options ---
+
+    /// Number of pages in the largest size class.
+    int32_t largestSizeClass{256};
+
+    /// If set true, allocations larger than largest size class size will be
+    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
+    /// issued for each such allocation.
+    bool useMmapArena{false};
+
+    /// Used to determine MmapArena capacity. The ratio represents system
+    /// memory capacity to single MmapArena capacity ratio.
+    int32_t mmapArenaCapacityRatio{10};
+
+    /// If not zero, reserve 'smallAllocationReservePct'% of space from
+    /// 'capacity' for ad hoc small allocations delegated to std::malloc.
+    /// If 'maxMallocBytes' is 0, this value will be disregarded.
+    uint32_t smallAllocationReservePct{0};
+
+    /// The allocation threshold less than which an allocation is delegated
+    /// to std::malloc(). If zero, no allocations are delegated to malloc
+    /// and 'smallAllocationReservePct' is automatically set to 0.
+    int32_t maxMallocBytes{3072};
+  };
+
   /// Defines the memory allocator kinds.
   enum class Kind {
     /// The default memory allocator kind which is implemented by
@@ -209,7 +269,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   static constexpr int32_t kMaxSizeClasses = 12;
   static constexpr uint16_t kMinAlignment = alignof(max_align_t);
-  static constexpr uint16_t kMaxAlignment = 64;
+  static constexpr uint16_t kDefaultAlignment = 64;
 
   /// Returns the kind of this memory allocator. For AsyncDataCache, it returns
   /// the kind of the delegated memory allocator underneath.
@@ -302,14 +362,27 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// space from 'cache()' if registered. But sufficient space is not
   /// guaranteed.
   ///
-  /// NOTE: 'alignment' must be power of two and in range of
-  /// [kMinAlignment, kMaxAlignment].
+  /// NOTE: 'alignment' must be power of two and >= kMinAlignment.
   void* allocateBytes(uint64_t bytes, uint16_t alignment = kMinAlignment);
 
   /// Allocates a zero-filled contiguous bytes. Returns nullptr if there is no
   /// space. The function might retry allocation failure by making space from
   /// 'cache()' if registered. But sufficient space is not guaranteed.
   void* allocateZeroFilled(uint64_t bytes);
+
+  /// Reallocates contiguous memory. Tries in-place reallocation first (via the
+  /// allocator-specific reallocateBytesWithoutRetry), falling back to
+  /// allocateBytes + memcpy + freeBytes if the allocator does not support
+  /// in-place reallocation. Returns nullptr on failure.
+  ///
+  /// When the underlying allocator is MallocAllocator (backed by jemalloc),
+  /// this uses ::realloc() which can often expand the allocation in-place,
+  /// avoiding the expensive memcpy.
+  void* reallocateBytes(
+      void* p,
+      uint64_t oldSize,
+      uint64_t newSize,
+      uint16_t alignment = kMinAlignment);
 
   /// Frees contiguous memory allocated by allocateBytes, allocateZeroFilled,
   /// reallocateBytes.
@@ -450,6 +523,16 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       uint16_t alignment) = 0;
 
   virtual void* allocateZeroFilledWithoutRetry(uint64_t bytes);
+
+  // Attempts to reallocate 'p' from 'oldSize' to 'newSize' bytes without
+  // retry through cache eviction. Returns nullptr if in-place reallocation
+  // is not supported or fails. The default implementation always returns
+  // nullptr; MallocAllocator overrides this to use ::realloc().
+  virtual void* reallocateBytesWithoutRetry(
+      void* p,
+      uint64_t oldSize,
+      uint64_t newSize,
+      uint16_t alignment);
 
   virtual bool growContiguousWithoutRetry(
       MachinePageCount increment,

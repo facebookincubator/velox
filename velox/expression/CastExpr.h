@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
@@ -27,14 +28,6 @@ namespace facebook::velox::exec {
 class CastOperator {
  public:
   virtual ~CastOperator() = default;
-
-  /// Determines whether the cast operator supports casting to the custom type
-  /// from the other type.
-  virtual bool isSupportedFromType(const TypePtr& other) const = 0;
-
-  /// Determines whether the cast operator supports casting from the custom type
-  /// to the other type.
-  virtual bool isSupportedToType(const TypePtr& other) const = 0;
 
   /// Casts an input vector to the custom type. This function should not throw
   /// when processing input rows, but report errors via context.setError().
@@ -106,14 +99,7 @@ class CastExpr : public SpecialForm {
 
   std::string toSql(std::vector<VectorPtr>*) const override;
 
- private:
-  /// Apply the cast after generating the input vectors
-  /// @param rows The list of rows being processed
-  /// @param input The input vector to be casted
-  /// @param context The context
-  /// @param fromType the input type
-  /// @param toType the target type
-  /// @param result The result vector
+  /// Casts 'input' from 'fromType' to 'toType' for selected 'rows'.
   void apply(
       const SelectivityVector& rows,
       const VectorPtr& input,
@@ -122,6 +108,7 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
+ private:
   VectorPtr applyMap(
       const SelectivityVector& rows,
       const MapVector* input,
@@ -314,12 +301,86 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const BaseVector& input);
 
+  // Casts basic numeric types to wider types.
+  template <TypeKind ToKind, TypeKind FromKind>
+  void applyNumericUpcast(
+      const SelectivityVector& rows,
+      const TypePtr& toType,
+      exec::EvalCtx& context,
+      const BaseVector& input,
+      VectorPtr& result);
+
   bool isTryCast() const {
     return isTryCast_;
   }
 
   bool setNullInResultAtError() const {
     return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
+  }
+
+  /// Helper function to set error status or null in result based on cast
+  /// policy. Centralizes error handling logic used across different cast
+  /// operations.
+  /// @param row The row index where the error occurred
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  /// @param details Optional error details message
+  template <typename TResult>
+  void setCastError(
+      vector_size_t row,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException,
+      const std::string& details = "") const {
+    if (setNullInResultAtError()) {
+      result->setNull(row, true);
+    } else {
+      wrapException = false;
+      if (context.captureErrorDetails()) {
+        if (!details.empty()) {
+          context.setStatus(row, Status::UserError("{}", details));
+        } else {
+          context.setStatus(row, Status::UserError());
+        }
+      } else {
+        context.setStatus(row, Status::UserError());
+      }
+    }
+  }
+
+  /// Helper to set result or error from Expected<T> cast result.
+  /// If castResult has an error, sets the error in context. Otherwise, sets
+  /// the value in castResult directly to result.
+  /// @param row The row index being processed
+  /// @param castResult The Expected<T> result from cast operation
+  /// @param makeErrorDetails Builds the full error details string lazily from
+  /// the cast error message.
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  template <typename T, typename TResult, typename TMakeErrorDetails>
+  void setResultOrError(
+      vector_size_t row,
+      const Expected<T>& castResult,
+      TMakeErrorDetails makeErrorDetails,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException) const {
+    if (castResult.hasError()) {
+      if (setNullInResultAtError()) {
+        setCastError(row, context, result, wrapException);
+        return;
+      }
+      const auto errorDetails = context.captureErrorDetails()
+          ? makeErrorDetails(castResult.error().message())
+          : std::string{};
+      setCastError(row, context, result, wrapException, errorDetails);
+    } else {
+      result->set(row, castResult.value());
+    }
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);

@@ -45,10 +45,10 @@ struct CursorParameters {
 
   uint64_t bufferedBytes{512 * 1024};
 
-  /// An optional memory pool to be used to allocate vectors returned by
-  /// MultiThreadedTaskCursor. A new pool is created if not specified.
-  ///
-  /// Only used if serialExecution is false.
+  /// An optional memory pool to be used to allocate vectors returned by the
+  /// task cursor. If null and `copyResult` is true, the cursor creates a new
+  /// leaf pool internally. If `copyResult` is false, vectors are returned
+  /// without copy and outputPool is ignored.
   std::shared_ptr<memory::MemoryPool> outputPool;
 
   /// Ungrouped (by default) or grouped (bucketed) execution.
@@ -153,8 +153,13 @@ class TaskCursor {
   /// with a breakpoint installed, or the next task output. If no breakpoints
   /// are set, then moveStep() == moveNext().
   ///
+  /// If @planId is non-empty, only stops at a breakpoint whose plan node ID
+  /// matches @planId; breakpoints for other plan nodes are skipped
+  /// (unblocked) automatically. When empty (the default), stops at the next
+  /// breakpoint regardless of plan node ID.
+  ///
   /// @return Returns false is the task is done producing output.
-  virtual bool moveStep() = 0;
+  virtual bool moveStep(const core::PlanNodeId& planId = "") = 0;
 
   /// Returns the vector the cursor is currently on.
   virtual RowVectorPtr& current() = 0;
