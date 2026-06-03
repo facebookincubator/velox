@@ -74,6 +74,16 @@ RowNumber::RowNumber(
 }
 
 void RowNumber::addInput(RowVectorPtr input) {
+  // needsInput() returns false while 'input_' is set, so the Driver must drain
+  // getOutput() before feeding the next batch. A non-null 'input_' on entry
+  // would mean a buffered batch is being overwritten and its rows silently
+  // lost, so fail loudly instead. Guards against a regression of the row-loss
+  // bug seen with a backpressuring downstream (e.g. a BATCH-mode RPC operator).
+  VELOX_CHECK_NULL(
+      input_,
+      "RowNumber::addInput() called while a previous input batch is still "
+      "buffered; needsInput() should have prevented this");
+
   const auto numInput = input->size();
 
   if (table_) {

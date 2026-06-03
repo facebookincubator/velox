@@ -244,6 +244,7 @@ Decimal Functions
         pr = min(38, p - s + min(s, 1))
 
 .. function:: divide(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p, s)
+   :noindex:
 
     Returns the result of dividing x by y (r = x / y).
 
@@ -292,6 +293,7 @@ Decimal Functions
     Throws if y is zero.
 
 .. function:: multiply(x: decimal(p1, s1), y: decimal(p2, s2)) -> r: decimal(p, s)
+   :noindex:
 
     Returns the result of multiplying x by y (r = x * y).
 
@@ -332,6 +334,7 @@ Decimal Functions
         pr = min(38, p - s + min(s, 1))
 
 .. function:: round(x: decimal(p, s), d: integer) -> r: decimal(rp, s)
+   :noindex:
 
     Returns 'x' rounded to 'd' decimal places. The scale of the result is
     the same as the scale of the input. The precision is calculated as:
@@ -361,6 +364,7 @@ Decimal Functions
         pr = max(p - s, 1)
 
 .. function:: truncate(x: decimal(p, s), d: integer) -> r: decimal(rp, s)
+   :noindex:
 
     Returns ``x`` truncated to ``d`` decimal places.
     The precision and scale of the result are the same as the precision and scale of the input.

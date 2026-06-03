@@ -538,7 +538,7 @@ Spilling
      - integer
      - 3
      - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
-       value is 3, meaning we only support up to 8-way spill partitioning.ing.
+       value is 3, meaning we only support up to 8-way spill partitioning.
    * - testing.spill_pct
      - integer
      - 0
@@ -908,6 +908,36 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
+   * - parquet-footer-memory-tracking-threshold
+     - parquet_footer_memory_tracking_threshold
+     - integer
+     - disabled (max uint64)
+     - Serialized footer byte size above which the Parquet reader engages
+       memory tracking for the deserialized footer. Disabled by default
+       because the tracking path adds per-file CPU (walking the inline
+       struct tree to estimate heap usage) and the estimate is approximate;
+       enable it on workloads where large Parquet footers (millions of
+       columns or row groups) can dominate worker memory and cause silent
+       OOMs.
+
+       The threshold is compared against the serialized footer length
+       reported in the file trailer. The reported reservation is the
+       estimated heap footprint of the deserialized footer, which can be
+       several times the serialized length (in observed cases ~7-8x for
+       wide schemas). Pick the threshold based on the serialized size you
+       are willing to silently absorb; e.g. setting it to 16MB will start
+       tracking once the deserialized estimate is likely to exceed ~100MB.
+
+       Tracking is approximate: the estimate walks the thrift struct tree
+       at file-open time and is never re-measured against the allocator.
+       It cannot prevent the initial deserialization allocation — that
+       memory is already on the heap — but it makes the footprint visible
+       to the pool so the next allocation check fails fast instead of
+       silently over-consuming. The reservation shrinks as row groups are
+       skipped by filterRowGroups and is released in full when the reader
+       is destroyed. When tracking engages, the estimate is also surfaced
+       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       operators can compare it against actual pool usage.
    * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer

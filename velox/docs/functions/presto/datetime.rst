@@ -41,6 +41,7 @@ Date and Time Operators
      - ``0 00:00:10.000``
 
 .. function:: plus(x, y) -> [same as x]
+   :noindex:
 
     Returns the sum of ``x`` and ``y``. Both ``x`` and ``y`` are intervals day
     to second or one of them can be timestamp. For addition of two intervals day to
@@ -50,6 +51,7 @@ Date and Time Operators
     second, overflowed results are wrapped around.
 
 .. function:: minus(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of subtracting ``y`` from ``x``. Both ``x`` and ``y``
     are intervals day to second or ``x`` can be timestamp. For subtraction of
@@ -67,6 +69,7 @@ Date and Time Operators
     when ``x`` is -infinity or when the multiplication overflow in negiative.
 
 .. function:: multiply(x, interval day to second) -> interval day to second
+   :noindex:
 
     Returns the result of multiplying ``x`` by ``interval day to second``.
     Same as ``multiply(interval day to second, x)``.
@@ -156,6 +159,7 @@ Date and Time Functions
     using ``string`` for the time zone.
 
 .. function:: from_unixtime(unixtime, hours, minutes) -> timestamp with time zone
+   :noindex:
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``hours`` and ``minutes`` for the time zone offset.

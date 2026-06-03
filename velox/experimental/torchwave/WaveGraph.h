@@ -94,7 +94,10 @@ const Metadata* nodeMeta(NodeCP node);
 /// Context needed to create and recreate OpKernels. Holds the graph,
 /// weights, and config that KernelFactory and WaveGraph require.
 struct ModelContext {
-  nativert::Graph* graph{nullptr};
+  /// Exclusively owns the nativert::Graph. WaveGraph and WaveGraphExecutor
+  /// mutate the graph internally during compilation (normalization, op
+  /// substitution, value creation). The graph must not be shared.
+  std::unique_ptr<nativert::Graph> graph;
   std::shared_ptr<nativert::Weights> weights;
   nativert::ExecutorConfig config;
 
@@ -144,10 +147,9 @@ struct ModelContext {
 ///    that the WaveGraphExecutor iterates at runtime.
 class WaveGraph {
  public:
-  /// Analyzes 'graph' and creates an execution plan and fused kernels. The
-  /// actual tensor content types and ranks come from 'weights'. Normalizes
-  /// the graph first to fill in default attribute values from FunctionSchema.
-  explicit WaveGraph(std::shared_ptr<ModelContext> modelContext);
+  /// Borrows the ModelContext (owned by WaveGraphExecutor) and mutates the
+  /// graph internally (normalization, op substitution, value creation).
+  explicit WaveGraph(ModelContext* modelContext);
 
   /// Normalizes and optimizes 'graph' without compiling kernels.
   static std::unique_ptr<WaveGraph> optimizeOnly(
@@ -268,7 +270,7 @@ class WaveGraph {
   }
 
   /// Returns the ModelContext, or nullptr if none was provided.
-  const std::shared_ptr<ModelContext>& modelContext() const {
+  ModelContext* modelContext() const {
     return modelContext_;
   }
 
@@ -349,7 +351,7 @@ class WaveGraph {
   folly::F14FastMap<NodeCP, NodeInfo> nodeInfos_;
 
   // Retained for recreating OpKernels after graph mutations.
-  std::shared_ptr<ModelContext> modelContext_;
+  ModelContext* modelContext_;
 
   // Set during construction, cleared after.
   CompileCtx* compileCtx_{nullptr};

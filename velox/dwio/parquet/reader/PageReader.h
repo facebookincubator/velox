@@ -216,10 +216,18 @@ class PageReader {
   // 'hasChunkRepDefs_' is false.
   void readPageDefLevels();
 
-  // Returns a pointer to contiguous space for the next 'size' bytes
-  // from current position. Copies data into 'copy' if the range
-  // straddles buffers. Allocates or resizes 'copy' as needed.
+  // Returns a pointer to contiguous space for the next 'size' bytes from
+  // current position, with at least 'kPageReadPadding' readable trailing
+  // bytes past 'size'. Copies into 'copy' if needed; allocates or resizes
+  // 'copy' as needed.
   const char* readBytes(int32_t size, BufferPtr& copy);
+
+  // Trailing readable bytes past readBytes()'s returned size. Sized
+  // for bits::detail::loadBits<uint64_t>, which touches bytes
+  // [offset, offset + 9) when the bit field straddles the 8-byte word
+  // boundary. For any value within a miniblock 'offset < size', so the
+  // furthest byte is at most 'size + 7' — 8 trailing bytes suffice.
+  static constexpr int kPageReadPadding = 8;
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
   // producing up to 'uncompressedSize' bytes. The start of the decoding

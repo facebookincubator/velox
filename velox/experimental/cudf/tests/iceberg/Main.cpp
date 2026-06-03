@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "velox/common/process/ThreadDebugInfo.h"
 
-#include <vector>
+#include <folly/init/Init.h>
+#include <gtest/gtest.h>
 
-namespace facebook::velox::parquet {
-/// Parquet field IDs during write operations. Each ID must be unique positive
-/// number, do not need to be sequential.
-/// Used to explicitly control field ID assignment in the Parquet schema.
-struct ParquetFieldId {
-  int32_t fieldId;
-  std::vector<ParquetFieldId> children;
-};
-} // namespace facebook::velox::parquet
+// This main is needed for some tests on linux.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  // Signal handler required for ThreadDebugInfoTest
+  facebook::velox::process::addDefaultFatalSignalHandler();
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
+}

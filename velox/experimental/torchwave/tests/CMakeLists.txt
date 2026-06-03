@@ -37,12 +37,24 @@ add_custom_target(
     ${TORCHWAVE_TEST_DATA_DIR}/element_test_results.pt
 )
 
+add_library(torchwave_executor_test_base ExecutorTestBase.cpp)
+
+target_link_libraries(
+  torchwave_executor_test_base
+  torch_wave
+  torch_wave_describe_pt
+  GTest::gtest
+  Folly::folly
+  CUDA::cudart
+)
+
 add_executable(torchwave_executor_test ExecutorTest.cpp)
 
 add_dependencies(torchwave_executor_test element_test_data)
 
 target_link_libraries(
   torchwave_executor_test
+  torchwave_executor_test_base
   torch_wave
   GTest::gtest
   GTest::gtest_main
@@ -56,6 +68,24 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 set_tests_properties(torchwave_executor_test PROPERTIES LABELS cuda_driver)
+
+add_executable(torchwave_compile_test CompileTest.cpp)
+
+target_link_libraries(
+  torchwave_compile_test
+  torch_wave
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+  CUDA::cudart
+)
+
+add_test(
+  NAME torchwave_compile_test
+  COMMAND torchwave_compile_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_tests_properties(torchwave_compile_test PROPERTIES LABELS cuda_driver)
 
 add_executable(torchwave_graph_tool GraphTool.cpp)
 

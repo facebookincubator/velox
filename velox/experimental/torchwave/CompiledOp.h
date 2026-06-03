@@ -154,7 +154,7 @@ class OpInvocation {
 
   /// Maps each node in the projectOp's formal subgraph to the corresponding
   /// node in the actual subgraph passed at construction.
-  const std::unordered_map<NodeCP, NodeCP>& nodeMap() const {
+  const NodeMap& nodeMap() const {
     return nodeMap_;
   }
 
@@ -163,11 +163,13 @@ class OpInvocation {
     bindings_[formalId] = actualId;
   }
 
+  std::string toString() const;
+
  private:
   ProjectOperation* projectOp_;
   FormalToActual bindings_;
   std::vector<const c10::IValue*> constants_;
-  std::unordered_map<NodeCP, NodeCP> nodeMap_;
+  NodeMap nodeMap_;
 };
 
 /// Compiled CUDA kernel containing one or more ProjectOperations.
@@ -209,6 +211,10 @@ class CompositeKernel {
   }
 
   void warmup();
+
+  const std::vector<std::unique_ptr<KernelOperation>>& kernelOps() const {
+    return kernelOpStorage_;
+  }
 
  private:
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
@@ -278,6 +284,9 @@ struct LaunchData {
   std::vector<nativert::Type::Kind> returnTypes;
 
   std::vector<TensorListParam> tensorLists;
+
+  float costAdjustFactor{1};
+  float expectedFraction{0};
 };
 
 class CompositeInvocation {

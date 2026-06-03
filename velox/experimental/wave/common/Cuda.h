@@ -41,6 +41,7 @@ struct Device {
   int32_t sharedMemPerSM;
   int32_t L2Size;
   int32_t persistingL2MaxSize;
+  int32_t float32To64Ratio{1};
 };
 
 /// Checks that the machine has the right capability and returns the device for

@@ -34,7 +34,7 @@ StringKeyBuffer::StringKeyBuffer(
     : data_{pool, nodes.size() + 1} {
   uint64_t size = 0;
   for (auto& node : nodes) {
-    auto& str = node->getKey().get();
+    auto str = node->getKey().get();
     size += str.size();
   }
   buffer_ = AlignedBuffer::allocate<char>(size, &pool);
@@ -43,7 +43,7 @@ StringKeyBuffer::StringKeyBuffer(
   uint32_t ordinal = 0;
   for (auto& node : nodes) {
     node->setOrdinal(ordinal);
-    auto& str = node->getKey().get();
+    auto str = node->getKey().get();
     std::memcpy(data, str.data(), str.size());
     data_[ordinal++] = data;
     data += str.size();
