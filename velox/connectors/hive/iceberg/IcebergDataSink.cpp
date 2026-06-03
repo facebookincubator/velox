@@ -129,7 +129,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     dwio::common::FileFormat tableStorageFormat,
     IcebergPartitionSpecPtr partitionSpec,
     std::optional<common::CompressionKind> compressionKind,
-    const std::unordered_map<std::string, std::string>& serdeParameters)
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    WriteKind writeKind)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -142,10 +143,16 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           nullptr,
           false,
           std::make_shared<const HiveInsertFileNameGenerator>()),
-      partitionSpec_(partitionSpec) {
-  VELOX_USER_CHECK(
-      !inputColumns_.empty(),
-      "Input columns cannot be empty for Iceberg tables.");
+      partitionSpec_(partitionSpec),
+      writeKind_(writeKind) {
+  // Data-file writes require the input row type to match inputColumns; the
+  // deletion-vector path passes a synthetic (file_path, pos) row that is
+  // intentionally narrower, so skip the inputColumns check for that path.
+  if (writeKind_ == WriteKind::kData) {
+    VELOX_USER_CHECK(
+        !inputColumns_.empty(),
+        "Input columns cannot be empty for Iceberg tables.");
+  }
   VELOX_USER_CHECK_NOT_NULL(
       locationHandle_, "Location handle is required for Iceberg tables.");
   VELOX_USER_CHECK(
@@ -362,7 +369,15 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
         // Sort order evolution is not supported. Set default id to 0 ( unsorted order).
         ("sortOrderId", 0)
         ("fileFormat", toManifestFormatString(icebergInsertTableHandle_->storageFormat()))
-        ("content", "DATA");
+      // Iceberg "content" is derived from the sink's WriteKind. INSERT (kData)
+      // emits "DATA"; the V3 deletion-vector path (kDeletionVector) emits
+      // "POSITION_DELETES" because Iceberg classifies deletion vectors as a
+      // Puffin-encoded form of position deletes for catalog accounting.
+        ("content",
+          icebergInsertTableHandle_->writeKind() ==
+              IcebergInsertTableHandle::WriteKind::kDeletionVector
+              ? "POSITION_DELETES"
+              : "DATA");
       // clang-format on
       if (!commitPartitionValue_.empty() &&
           !commitPartitionValue_[i].isNull()) {
