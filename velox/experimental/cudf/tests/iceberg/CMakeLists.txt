@@ -21,8 +21,6 @@
 
 add_library(velox_cudf_iceberg_test_lib CudfIcebergTestBase.cpp)
 
-set_target_properties(velox_cudf_iceberg_test_lib PROPERTIES CUDA_ARCHITECTURES native)
-
 target_link_libraries(
   velox_cudf_iceberg_test_lib
   velox_cudf_exec_test_lib
