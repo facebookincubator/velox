@@ -1034,8 +1034,12 @@ class GreatestLeastFunction : public CudfFunction {
     if (foldedScalar_) {
       cudf::column_view lhs =
           result ? result->view() : asView(inputColumns[order_[0]]);
-      result =
-          cudf::binary_operation(lhs, *foldedScalar_, op_, type_, stream, mr);
+      // TODO(mh): Workaround to avoid the invalid memory access in
+      // `cudf::scalar_as_column_view`. Revert when
+      // https://github.com/rapidsai/cudf/pull/22759 is merged.
+      auto col =
+          cudf::make_column_from_scalar(*foldedScalar_, lhs.size(), stream, mr);
+      result = cudf::binary_operation(lhs, col->view(), op_, type_, stream, mr);
     }
     return result;
   }
