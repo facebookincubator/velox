@@ -390,9 +390,10 @@ jobs:
           wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
           sudo mv ./"${MINIO_BINARY_NAME}" /usr/local/bin/
           sudo chmod +x /usr/local/bin/"${MINIO_BINARY_NAME}"
-          curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-          sudo apt-get install -y nodejs
-          sudo npm install -g azurite
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+          . "$HOME/.nvm/nvm.sh" && nvm install 22
+          . "$HOME/.nvm/nvm.sh" && npm install -g azurite && \
+            sudo ln -sf "$(dirname "$(which node)")"/* /usr/local/bin/
           azurite-blob --version
 
       - name: Check NVIDIA Driver Version
