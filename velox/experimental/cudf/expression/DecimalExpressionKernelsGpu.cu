@@ -156,7 +156,7 @@ void launchDivideKernelRhsScalar(
 
 namespace detail {
 
-void launchDecimalDivideColumnColumn(
+void decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -175,7 +175,7 @@ void launchDecimalDivideColumnColumn(
   }
 }
 
-void launchDecimalDivideColumnRhsScalar(
+void decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -197,7 +197,7 @@ void launchDecimalDivideColumnRhsScalar(
   }
 }
 
-void launchDecimalDivideLhsScalarColumn(
+void decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,

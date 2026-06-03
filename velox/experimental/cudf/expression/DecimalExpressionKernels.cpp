@@ -143,7 +143,7 @@ std::unique_ptr<cudf::column> decimalDivide(
   auto out = cudf::make_fixed_width_column(
       outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
-  detail::launchDecimalDivideColumnColumn(
+  detail::decimalDivideColumnColumn(
       inType, outType, lhs, rhs, out->mutable_view(), aRescale, stream);
 
   // Scatter nulls where divisor is zero.
@@ -187,7 +187,7 @@ std::unique_ptr<cudf::column> decimalDivide(
         "Unexpected output type for decimal divide");
   }
 
-  detail::launchDecimalDivideColumnRhsScalar(
+  detail::decimalDivideColumnScalar(
       inType, outType, lhs, rhsValue, out->mutable_view(), aRescale, stream);
 
   return out;
@@ -233,7 +233,7 @@ std::unique_ptr<cudf::column> decimalDivide(
         "Unexpected output type for decimal divide");
   }
 
-  detail::launchDecimalDivideLhsScalarColumn(
+  detail::decimalDivideScalarColumn(
       inType, outType, lhsValue, rhs, out->mutable_view(), aRescale, stream);
 
   // Scatter nulls where divisor is zero.

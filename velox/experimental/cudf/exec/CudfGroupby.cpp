@@ -18,8 +18,8 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
-#include "velox/experimental/cudf/exec/DecimalAggregationCommon.h"
-#include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -753,7 +753,7 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
   auto const& kind = p.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
-    if (p.isDecimalInput) {
+    if (p.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalSumAggregator>(
           p.companionStep, p.inputIndex, p.constant, p.resultType);
     }
@@ -770,7 +770,7 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
     return std::make_unique<GroupbyMaxAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
-    if (p.isDecimalInput) {
+    if (p.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalAvgAggregator>(
           p.companionStep, p.inputIndex, p.constant, p.resultType);
     }

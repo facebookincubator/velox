@@ -28,7 +28,7 @@ namespace facebook::velox::cudf_velox::detail {
 // rhs with half-away-from-zero rounding on the remainder, writing into out.
 // Zero divisors produce a numeric zero in out (callers patch nulls). inType /
 // outType select DECIMAL64 vs DECIMAL128 storage widths for inputs and result.
-void launchDecimalDivideColumnColumn(
+void decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -37,9 +37,9 @@ void launchDecimalDivideColumnColumn(
     int32_t aRescale,
     rmm::cuda_stream_view stream);
 
-// Same kernel math as launchDecimalDivideColumnColumn, but rhs is a single
+// Same kernel math as decimalDivideColumnColumn, but rhs is a single
 // __int128_t decimal payload (already decoded from a cuDF scalar).
-void launchDecimalDivideColumnRhsScalar(
+void decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
@@ -48,9 +48,9 @@ void launchDecimalDivideColumnRhsScalar(
     int32_t aRescale,
     rmm::cuda_stream_view stream);
 
-// Same kernel math as launchDecimalDivideColumnColumn, but lhs is a single
+// Same kernel math as decimalDivideColumnColumn, but lhs is a single
 // __int128_t decimal payload and rhs is per-row.
-void launchDecimalDivideLhsScalarColumn(
+void decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,

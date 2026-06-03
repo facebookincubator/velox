@@ -19,8 +19,8 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
-#include "velox/experimental/cudf/exec/DecimalAggregationCommon.h"
-#include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -668,7 +668,7 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
   auto const& kind = p.kind;
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
-    if (p.isDecimalInput) {
+    if (p.isDecimalAggregate) {
       return std::make_unique<ReduceDecimalSumAggregator>(
           p.companionStep, p.inputIndex, p.constant, p.resultType);
     }
@@ -685,7 +685,7 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
     return std::make_unique<ReduceMaxAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
-    if (p.isDecimalInput) {
+    if (p.isDecimalAggregate) {
       return std::make_unique<ReduceDecimalAvgAggregator>(
           p.companionStep, p.inputIndex, p.constant, p.resultType);
     }

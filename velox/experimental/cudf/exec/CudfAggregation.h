@@ -62,7 +62,10 @@ struct ResolvedAggregateInfo {
   VectorPtr constant;
   TypePtr resultType;
   std::optional<CountInputKind> countInputKind;
-  bool isDecimalInput;
+  // True if the aggregate was declared on a decimal raw input in the plan.
+  // Routing keys off the function family, not the physical batch type (which is
+  // VARBINARY/STRING on intermediate and final steps).
+  bool isDecimalAggregate;
 };
 
 // Parse aggregate inputs from the aggregation node and resolve companion steps,

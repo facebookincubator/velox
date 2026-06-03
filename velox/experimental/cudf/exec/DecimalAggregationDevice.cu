@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/DecimalAggregationKernelsGpu.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationDevice.h"
 
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>

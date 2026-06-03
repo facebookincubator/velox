@@ -15,8 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/DecimalAggregationKernels.h"
-#include "velox/experimental/cudf/exec/DecimalAggregationKernelsGpu.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationState.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationDevice.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/common/base/Exceptions.h"
