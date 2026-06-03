@@ -131,10 +131,28 @@ class HiveIndexSource : public IndexSource,
   // 3. Non-index conditions stored in nonIndexConditions_ for post-read
   //    equality filtering. Their columns are added to
   //    readColumnNames/readColumnTypes if not already present.
-  // TODO: refactor into sub-methods for each bucket.
   void initConditions(
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const ColumnHandleMap& assignments,
+      const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
+          columnHandles,
+      std::vector<std::string>& readColumnNames,
+      std::vector<TypePtr>& readColumnTypes);
+
+  // Processes index columns in order, converting filters to index lookup
+  // conditions where possible. Populates indexLookupConditions_ and returns
+  // the set of column names consumed as index conditions.
+  folly::F14FastSet<std::string> initIndexConditions(
+      const folly::F14FastMap<std::string, core::IndexLookupConditionPtr>&
+          conditionMap);
+
+  // Processes remaining non-index conditions from conditionMap, splitting
+  // them into partitionIndexConditions_ or nonIndexConditions_. Adds
+  // required columns to readColumnNames/readColumnTypes.
+  void initNonIndexConditions(
+      const folly::F14FastMap<std::string, core::IndexLookupConditionPtr>&
+          conditionMap,
+      const folly::F14FastSet<std::string>& indexConditionColumns,
       const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
           columnHandles,
       std::vector<std::string>& readColumnNames,
