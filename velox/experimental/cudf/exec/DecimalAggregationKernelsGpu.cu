@@ -17,13 +17,18 @@
 #include "velox/experimental/cudf/exec/DecimalAggregationKernelsGpu.h"
 
 #include <cudf/column/column_device_view.cuh>
-#include <cudf/detail/valid_if.cuh>
+#include <cudf/column/column_factories.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/utilities/error.hpp>
 
+#include <rmm/exec_policy.hpp>
+
 #include <cub/device/device_for.cuh>
+#include <cuda/std/span>
 #include <cuda/std/type_traits>
 #include <cuda_runtime.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/transform.h>
 
 #include <cstdint>
 
@@ -57,7 +62,7 @@ splitToWords(__int128_t value, int64_t& upper, uint64_t& lower) {
 
 template <typename OffsetT>
 struct FillOffsetsFunctor {
-  OffsetT* offsets;
+  cuda::std::span<OffsetT> offsets;
 
   __device__ void operator()(int32_t idx) const {
     int64_t offset = static_cast<int64_t>(idx) * detail::kDecimalSumStateSize;
@@ -67,9 +72,9 @@ struct FillOffsetsFunctor {
 
 template <typename SumT, typename OffsetT>
 struct PackStateFunctor {
-  const SumT* sums;
-  const int64_t* counts;
-  const OffsetT* offsets;
+  cuda::std::span<const SumT> sums;
+  cuda::std::span<const int64_t> counts;
+  cuda::std::span<const OffsetT> offsets;
   uint8_t* chars;
 
   __device__ void operator()(int32_t idx) const {
@@ -87,10 +92,10 @@ struct PackStateFunctor {
 
 template <typename OffsetT>
 struct UnpackStateFunctor {
-  const OffsetT* offsets;
+  cuda::std::span<const OffsetT> offsets;
   const uint8_t* chars;
-  __int128_t* sums;
-  int64_t* counts;
+  cuda::std::span<__int128_t> sums;
+  cuda::std::span<int64_t> counts;
 
   __device__ void operator()(int32_t idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
@@ -102,9 +107,9 @@ struct UnpackStateFunctor {
 
 template <typename SumT>
 struct AvgRoundFunctor {
-  const SumT* sums;
-  const int64_t* counts;
-  SumT* out;
+  cuda::std::span<const SumT> sums;
+  cuda::std::span<const int64_t> counts;
+  cuda::std::span<SumT> out;
 
   __device__ void operator()(int32_t idx) const {
     auto count = counts[idx];
@@ -124,53 +129,61 @@ struct AvgRoundFunctor {
 
 template <typename OffsetT>
 void launchFillOffsets(
-    OffsetT* offsets,
-    int32_t numRows,
+    cuda::std::span<OffsetT> offsets,
     rmm::cuda_stream_view stream) {
   FillOffsetsFunctor<OffsetT> op{offsets};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), numRows + 1, op, stream.value());
+      thrust::counting_iterator<int32_t>(0),
+      static_cast<int32_t>(offsets.size()),
+      op,
+      stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
 template <typename SumT, typename OffsetT>
 void launchPackState(
-    const SumT* sums,
-    const int64_t* counts,
-    const OffsetT* offsets,
+    cuda::std::span<const SumT> sums,
+    cuda::std::span<const int64_t> counts,
+    cuda::std::span<const OffsetT> offsets,
     uint8_t* chars,
-    int32_t numRows,
     rmm::cuda_stream_view stream) {
   PackStateFunctor<SumT, OffsetT> op{sums, counts, offsets, chars};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), numRows, op, stream.value());
+      thrust::counting_iterator<int32_t>(0),
+      static_cast<int32_t>(sums.size()),
+      op,
+      stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
 template <typename OffsetT>
 void launchUnpackState(
-    const OffsetT* offsets,
+    cuda::std::span<const OffsetT> offsets,
     const uint8_t* chars,
-    __int128_t* sums,
-    int64_t* counts,
-    int32_t numRows,
+    cuda::std::span<__int128_t> sums,
+    cuda::std::span<int64_t> counts,
     rmm::cuda_stream_view stream) {
   UnpackStateFunctor<OffsetT> op{offsets, chars, sums, counts};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), numRows, op, stream.value());
+      thrust::counting_iterator<int32_t>(0),
+      static_cast<int32_t>(sums.size()),
+      op,
+      stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
 template <typename SumT>
 void launchAvgRound(
-    const SumT* sums,
-    const int64_t* counts,
-    SumT* out,
-    int32_t numRows,
+    cuda::std::span<const SumT> sums,
+    cuda::std::span<const int64_t> counts,
+    cuda::std::span<SumT> out,
     rmm::cuda_stream_view stream) {
   AvgRoundFunctor<SumT> op{sums, counts, out};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), numRows, op, stream.value());
+      thrust::counting_iterator<int32_t>(0),
+      static_cast<int32_t>(out.size()),
+      op,
+      stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -198,9 +211,21 @@ std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMaskImpl(
   auto sumDeviceView = cudf::column_device_view::create(sumCol, stream);
   auto countDeviceView = cudf::column_device_view::create(countCol, stream);
   StateValidPredicate pred{*sumDeviceView, *countDeviceView};
-  auto begin = thrust::make_counting_iterator<cudf::size_type>(0);
-  auto end = begin + numRows;
-  return cudf::detail::valid_if(begin, end, pred, stream, mr);
+  // Build a BOOL8 column of per-row validity, then convert via the public API.
+  auto bools = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::BOOL8},
+      numRows,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  thrust::transform(
+      rmm::exec_policy(stream),
+      thrust::make_counting_iterator<cudf::size_type>(0),
+      thrust::make_counting_iterator<cudf::size_type>(numRows),
+      bools->mutable_view().begin<bool>(),
+      pred);
+  auto [mask, nullCount] = cudf::bools_to_mask(bools->view(), stream, mr);
+  return {std::move(*mask), nullCount};
 }
 
 } // namespace
@@ -212,10 +237,16 @@ void fillOffsetsForDecimalSumState(
     void* offsetsMutable,
     int32_t numRows,
     rmm::cuda_stream_view stream) {
+  // The offsets buffer holds numRows + 1 entries.
+  auto const n = static_cast<size_t>(numRows) + 1;
   if (use64BitOffsets) {
-    launchFillOffsets(static_cast<int64_t*>(offsetsMutable), numRows, stream);
+    launchFillOffsets(
+        cuda::std::span<int64_t>{static_cast<int64_t*>(offsetsMutable), n},
+        stream);
   } else {
-    launchFillOffsets(static_cast<int32_t*>(offsetsMutable), numRows, stream);
+    launchFillOffsets(
+        cuda::std::span<int32_t>{static_cast<int32_t*>(offsetsMutable), n},
+        stream);
   }
 }
 
@@ -228,42 +259,46 @@ void packDecimalSumState(
     uint8_t* chars,
     int32_t numRows,
     rmm::cuda_stream_view stream) {
+  auto const n = static_cast<size_t>(numRows);
+  cuda::std::span<const int64_t> counts{countPtr, n};
   if (use64BitOffsets) {
-    auto offsets = static_cast<const int64_t*>(offsetsPtr);
+    cuda::std::span<const int64_t> offsets{
+        static_cast<const int64_t*>(offsetsPtr), n};
     if (sumType == cudf::type_id::DECIMAL64) {
       launchPackState(
-          static_cast<const int64_t*>(sumPtr),
-          countPtr,
+          cuda::std::span<const int64_t>{
+              static_cast<const int64_t*>(sumPtr), n},
+          counts,
           offsets,
           chars,
-          numRows,
           stream);
     } else {
       launchPackState(
-          static_cast<const __int128_t*>(sumPtr),
-          countPtr,
+          cuda::std::span<const __int128_t>{
+              static_cast<const __int128_t*>(sumPtr), n},
+          counts,
           offsets,
           chars,
-          numRows,
           stream);
     }
   } else {
-    auto offsets = static_cast<const int32_t*>(offsetsPtr);
+    cuda::std::span<const int32_t> offsets{
+        static_cast<const int32_t*>(offsetsPtr), n};
     if (sumType == cudf::type_id::DECIMAL64) {
       launchPackState(
-          static_cast<const int64_t*>(sumPtr),
-          countPtr,
+          cuda::std::span<const int64_t>{
+              static_cast<const int64_t*>(sumPtr), n},
+          counts,
           offsets,
           chars,
-          numRows,
           stream);
     } else {
       launchPackState(
-          static_cast<const __int128_t*>(sumPtr),
-          countPtr,
+          cuda::std::span<const __int128_t>{
+              static_cast<const __int128_t*>(sumPtr), n},
+          counts,
           offsets,
           chars,
-          numRows,
           stream);
     }
   }
@@ -277,21 +312,24 @@ void unpackDecimalSumState(
     int64_t* counts,
     int32_t numRows,
     rmm::cuda_stream_view stream) {
+  auto const n = static_cast<size_t>(numRows);
+  cuda::std::span<__int128_t> sumsSpan{sums, n};
+  cuda::std::span<int64_t> countsSpan{counts, n};
   if (offsets64) {
     launchUnpackState(
-        static_cast<const int64_t*>(offsetsPtr),
+        cuda::std::span<const int64_t>{
+            static_cast<const int64_t*>(offsetsPtr), n},
         chars,
-        sums,
-        counts,
-        numRows,
+        sumsSpan,
+        countsSpan,
         stream);
   } else {
     launchUnpackState(
-        static_cast<const int32_t*>(offsetsPtr),
+        cuda::std::span<const int32_t>{
+            static_cast<const int32_t*>(offsetsPtr), n},
         chars,
-        sums,
-        counts,
-        numRows,
+        sumsSpan,
+        countsSpan,
         stream);
   }
 }
@@ -303,19 +341,20 @@ void averageRoundDecimalSum(
     void* out,
     int32_t numRows,
     rmm::cuda_stream_view stream) {
+  auto const n = static_cast<size_t>(numRows);
+  cuda::std::span<const int64_t> countsSpan{counts, n};
   if (sumType == cudf::type_id::DECIMAL64) {
     launchAvgRound(
-        static_cast<const int64_t*>(sums),
-        counts,
-        static_cast<int64_t*>(out),
-        numRows,
+        cuda::std::span<const int64_t>{static_cast<const int64_t*>(sums), n},
+        countsSpan,
+        cuda::std::span<int64_t>{static_cast<int64_t*>(out), n},
         stream);
   } else {
     launchAvgRound(
-        static_cast<const __int128_t*>(sums),
-        counts,
-        static_cast<__int128_t*>(out),
-        numRows,
+        cuda::std::span<const __int128_t>{
+            static_cast<const __int128_t*>(sums), n},
+        countsSpan,
+        cuda::std::span<__int128_t>{static_cast<__int128_t*>(out), n},
         stream);
   }
 }
