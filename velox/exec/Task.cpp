@@ -488,8 +488,8 @@ Task::~Task() {
   CLEAR(exception_ = nullptr);
   CLEAR(nodePools_.clear());
   CLEAR(childPools_.clear());
-  CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
@@ -731,9 +731,11 @@ velox::memory::MemoryPool* Task::getOrAddNodePool(
 memory::MemoryPool* Task::getOrAddJoinNodePool(
     const core::PlanNodeId& planNodeId,
     uint32_t splitGroupId) {
-  const std::string nodeId = splitGroupId == kUngroupedGroupId
-      ? planNodeId
+  const std::string formattedId = splitGroupId == kUngroupedGroupId
+      ? std::string{}
       : fmt::format("{}[{}]", planNodeId, splitGroupId);
+  const std::string& nodeId =
+      splitGroupId == kUngroupedGroupId ? planNodeId : formattedId;
   if (nodePools_.count(nodeId) == 1) {
     return nodePools_[nodeId];
   }

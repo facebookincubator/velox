@@ -156,6 +156,7 @@ velox_add_library(
   IndexLookupJoin.h
   IndexLookupJoinBridge.h
   JoinBridge.h
+  KRangeFrameBound.h
   Limit.h
   LocalPartition.h
   LocalPlanner.h
@@ -181,6 +182,7 @@ velox_add_library(
   OutputBuffer.h
   OutputBufferManager.h
   ParallelProject.h
+  PeerGroupComputation.h
   PartitionFunction.h
   PartitionStreamingWindowBuild.h
   PartitionedOutput.h
@@ -230,6 +232,7 @@ velox_add_library(
   WindowBuild.h
   WindowFunction.h
   WindowPartition.h
+  WindowPartitionAccessor.h
 )
 
 velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)

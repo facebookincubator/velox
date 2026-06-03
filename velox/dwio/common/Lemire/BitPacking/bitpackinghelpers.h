@@ -10,7 +10,9 @@
 
 #include <stdexcept>
 
-namespace velox::fastpforlib {
+namespace facebook::velox::fastpforlib {
+
+constexpr uint32_t BITPACKING_ALGORITHM_GROUP_SIZE = 32;
 
 namespace internal {
 
@@ -897,4 +899,4 @@ inline void fastpack(
       throw std::logic_error("Invalid bit width for bitpacking");
   }
 }
-} // namespace velox::fastpforlib
+} // namespace facebook::velox::fastpforlib

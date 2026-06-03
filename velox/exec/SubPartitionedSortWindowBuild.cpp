@@ -34,7 +34,7 @@ SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
       pool_(pool),
       spillStats_(spillStats) {
   VELOX_CHECK_NOT_NULL(pool_);
-  data_.reset();
+  initializeDecodedInputVectors();
 
   std::vector<column_index_t> keyChannels(numPartitionKeys_);
   for (int i = 0; i < numPartitionKeys_; i++) {

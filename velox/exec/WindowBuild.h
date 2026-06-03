@@ -68,10 +68,10 @@ class WindowBuild {
   /// called when no partition is available.
   virtual std::shared_ptr<WindowPartition> nextPartition() = 0;
 
-  /// Returns the average size of input rows in bytes stored in the data
-  /// container of the WindowBuild.
+  /// Returns the average size of input rows in bytes when rows are materialized
+  /// in a RowContainer.
   virtual std::optional<int64_t> estimateRowSize() {
-    return data_->estimateRowSize();
+    return data_ == nullptr ? std::nullopt : data_->estimateRowSize();
   }
 
   /// Releases the memory held by the window build. This is called by the
@@ -91,6 +91,14 @@ class WindowBuild {
       const char* lhs,
       const char* rhs,
       const std::vector<std::pair<column_index_t, core::SortOrder>>& keys);
+
+  // Initializes the RowContainer for WindowBuild implementations that
+  // materialize input rows.
+  void initializeRowContainer(velox::memory::MemoryPool* pool);
+
+  // Initializes reusable decoded vectors for WindowBuild implementations that
+  // decode input vectors before materializing rows.
+  void initializeDecodedInputVectors();
 
   const common::SpillConfig* const spillConfig_;
   tsan_atomic<bool>* const nonReclaimableSection_;
@@ -113,12 +121,12 @@ class WindowBuild {
   /// Input column types in 'inputChannels_' order.
   RowTypePtr inputType_;
 
-  /// The RowContainer holds all the input rows in WindowBuild. Columns are
-  /// already reordered according to inputChannels_.
+  /// RowContainer used by WindowBuild implementations that materialize input
+  /// rows. Columns are already reordered according to inputChannels_.
   std::unique_ptr<RowContainer> data_;
 
-  /// The decodedInputVectors_ are reused across addInput() calls to decode the
-  /// partition and sort keys for the above RowContainer.
+  /// Reused across addInput() calls by WindowBuild implementations that decode
+  /// input vectors before materializing rows.
   std::vector<DecodedVector> decodedInputVectors_;
 
   /// Number of input rows.

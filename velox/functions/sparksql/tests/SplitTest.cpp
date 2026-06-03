@@ -317,6 +317,53 @@ TEST_F(SplitTest, fastPath) {
   // Octal string delimiter that is outside the range of ASCII characters.
   testSplit(input, "\\251", std::nullopt, 1, expected);
   testSplitConstantDelim(input, "\\251", std::nullopt, 1, expected);
+
+  input = std::vector<std::string>{
+      {"I--he--she--they"}, // Simple
+      {"one------four--"}, // Empty strings
+      {"a--\xED--\xA0--123"}, // Not a well-formed UTF-8 string
+      {""}, // The whole string is empty
+  };
+
+  // Multi-character plain string delimiter.
+  testSplit(input, "--", std::nullopt, 1, expected);
+  testSplitConstantDelim(input, "--", std::nullopt, 1, expected);
+
+  expected = {
+      {"I", "he", "she--they"},
+      {"one", "", "--four--"},
+      {"a", "\xED", "\xA0--123"},
+      {""},
+  };
+  testSplit(input, "--", 3, 1, expected);
+  testSplitConstantDelim(input, "--", 3, 1, expected);
 }
+
+TEST_F(SplitTest, bypassRegexCacheLimit) {
+  auto guard =
+      folly::makeGuard([&]() { queryCtx_->testingOverrideConfigUnsafe({}); });
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kExprMaxCompiledRegexes, "5"}});
+
+  auto input = makeFlatVector<std::string>(
+      {"a11b11c", "a22b22c", "a33b33c", "a44b44c", "a55b55c", "a66b66c"});
+  auto delimiters =
+      makeFlatVector<std::string>({"11", "22", "33", "44", "55", "66"});
+  auto expected = makeArrayVector<std::string>(
+      {{"a", "b", "c"},
+       {"a", "b", "c"},
+       {"a", "b", "c"},
+       {"a", "b", "c"},
+       {"a", "b", "c"},
+       {"a", "b", "c"}});
+
+  // Before the plain-string fast path, this would try to compile six
+  // different regex patterns and throw due to the cache limit of five.
+  VectorPtr result;
+  EXPECT_NO_THROW(
+      result = evaluate("split(c0, c1)", makeRowVector({input, delimiters})));
+  assertEqualVectors(expected, result);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

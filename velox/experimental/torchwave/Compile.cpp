@@ -29,12 +29,12 @@
 #include <sstream>
 #include <vector>
 
-DEFINE_bool(elt_trace, false, "Trace elementwise kernel results");
+// elt_trace is now WaveConfig::kernelDebugOutput
 
 namespace torch::wave {
 
 void eltTrace(std::stringstream& ss, std::string_view printf) {
-  if (FLAGS_elt_trace) {
+  if (WaveConfig::get().kernelDebugOutput) {
     ss << "  if (threadIdx.x == 0) {printf(" << printf << ");}\n";
   }
 }
@@ -674,7 +674,8 @@ ProjectOperation* CompileCtx::makeProjectionOperation(const Subgraph& sg) {
         *sg.root,
         placed_,
         [&types](const Metadata& m, NodeCP node) {
-          return m.cgVariant && !m.isStandalone(node, types);
+          return (m.cgVariant || m.multiBlockReturnBarrier) &&
+              !m.isStandalone(node, types);
         },
         cgVisited);
     if (hasCgVariant) {
@@ -713,7 +714,8 @@ ProjectOperation* CompileCtx::makeProjectionOperation(const Subgraph& sg) {
           *sg.root,
           placed_,
           [&types](const Metadata& m, NodeCP node) {
-            return m.cgVariant && !m.isStandalone(node, types);
+            return (m.cgVariant || m.multiBlockReturnBarrier) &&
+                !m.isStandalone(node, types);
           },
           cgVisited);
       if (hasCgVariant) {
@@ -895,7 +897,7 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     pushdownStandalone(node);
     return thisContext;
   }
-  if (meta->isKernelBreak(isSingleBlock_)) {
+  if (meta->isKernelBreak(isSingleBlock_, isCgGrid_)) {
     pushdownFused(node);
     return Context::kFusedBreak;
   }
@@ -974,28 +976,11 @@ void CompileCtx::pushdownFused(NodeCP node) {
   auto sg = extractSubgraph(node, *inputs_, placed_);
   Launch launch;
 
-  auto it = projectKernelOps_.find(sg);
-  if (it != projectKernelOps_.end()) {
-    auto* kernelOp = it->second;
-    launch.op = kernelOp;
-
-    const auto& formalSg = it->first;
-    auto bindings = makeBindings(formalSg, sg, *kernelOp);
-
-    // Translate orderedInputs to actual values using bindings.
-    const auto& idToValue = waveGraph_.idToValue();
-    const auto& orderedInputs = kernelOp->orderedInputs();
-    launch.values.reserve(orderedInputs.size());
-    for (auto* v : orderedInputs) {
-      launch.values.push_back(idToValue.at(bindings.at(v->id())));
-    }
-  } else {
-    auto kernelOp = generateFused(sg);
-    kernelOpStorage_.push_back(std::move(kernelOp));
-    launch.op = kernelOpStorage_.back().get();
-    launch.values.assign(
-        launch.op->orderedInputs().begin(), launch.op->orderedInputs().end());
-  }
+  auto kernelOp = generateFused(sg);
+  kernelOpStorage_.push_back(std::move(kernelOp));
+  launch.op = kernelOpStorage_.back().get();
+  launch.values.assign(
+      launch.op->orderedInputs().begin(), launch.op->orderedInputs().end());
 
   fillConstantIndices(sg, launch);
   placeKernelLaunch(std::move(launch));
@@ -1097,37 +1082,68 @@ void CompileCtx::generateElementwiseBorderImpl(
     NodeCP node,
     const std::unordered_set<ValueCP>& opInputs,
     NodeSet& visited) {
-  for (auto& input : node->inputs()) {
-    auto* value = input.value;
-    auto* producer = value->producer();
-    if (!producer || placed_.count(producer) || opInputs.count(value)) {
-      continue;
+  auto* consumerMeta = nodeMeta(node);
+
+  auto getArgMeta = [&](size_t idx) -> const ArgumentMeta* {
+    if (consumerMeta && idx < consumerMeta->argumentMeta.size()) {
+      return &consumerMeta->argumentMeta[idx];
     }
-    if (!visited.insert(producer).second) {
+    return nullptr;
+  };
+
+  auto shouldSkip = [&](ValueCP value, NodeCP producer) {
+    return !producer || placed_.count(producer) || opInputs.count(value) ||
+        !visited.insert(producer).second;
+  };
+
+  auto emitBorder = [&](NodeCP producer) {
+    auto specs = outputSpecs(producer);
+    fusedCode(producer, specs);
+  };
+
+  // An elementwise producer can be part of the elementwise tree only if
+  // its result is in register. Ops with non-register return (like
+  // index_put_elt_*) write to a whole tensor as a side effect and must
+  // be treated as border — they produce a value in memory, not a
+  // register scalar.
+  auto isElementwiseProducer = [&](NodeCP producer) {
+    auto* meta = nodeMeta(producer);
+    if (!meta || !meta->elementwise) {
+      return false;
+    }
+    if (!meta->returnMeta.empty() && !meta->returnMeta[0].isRegister) {
+      return false;
+    }
+    return true;
+  };
+
+  for (size_t inputIdx = 0; inputIdx < node->inputs().size(); ++inputIdx) {
+    auto* value = node->inputs()[inputIdx].value;
+    auto* producer = value->producer();
+    if (shouldSkip(value, producer)) {
       continue;
     }
     if (producer->target() == "prim.ListPack") {
+      auto* am = getArgMeta(inputIdx);
+      bool isRegister = am && am->isRegister;
       for (auto& listInput : producer->inputs()) {
-        auto* listValue = listInput.value;
-        auto* listProducer = listValue->producer();
-        if (!listProducer || placed_.count(listProducer) ||
-            opInputs.count(listValue)) {
+        auto* listProducer = listInput.value->producer();
+        if (shouldSkip(listInput.value, listProducer)) {
           continue;
         }
-        if (!visited.insert(listProducer).second) {
-          continue;
+        if (isRegister && isElementwiseProducer(listProducer)) {
+          generateElementwiseBorderImpl(listProducer, opInputs, visited);
+        } else {
+          emitBorder(listProducer);
         }
-        auto resultSpecs = outputSpecs(listProducer);
-        fusedCode(listProducer, resultSpecs);
       }
       continue;
     }
-    auto* meta = nodeMeta(producer);
-    if (meta && meta->elementwise) {
+    auto* am = getArgMeta(inputIdx);
+    if (isElementwiseProducer(producer) && !(am && am->wholeTensor)) {
       generateElementwiseBorderImpl(producer, opInputs, visited);
     } else {
-      auto resultSpecs = outputSpecs(producer);
-      fusedCode(producer, resultSpecs);
+      emitBorder(producer);
     }
   }
 }
@@ -1295,6 +1311,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
 
   if (!meta->hasRegisterInputs()) {
     auto inSpecs = inputSpecs(node);
+    if (callNeedsBarrier(node)) {
+      emitBarrier();
+    }
     if (multiBlockSingleOp) {
       emitBarrier();
       code_ << "  if (blockInfo.blockInOp == 0) {\n";
@@ -1302,6 +1321,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     code_ << "  " << makeCall(node, inSpecs, resultSpecs) << "\n";
     if (multiBlockSingleOp) {
       code_ << "  }\n";
+      emitBarrier();
+    }
+    if ((isCgGrid_ || isSingleBlock_) && meta->multiBlockReturnBarrier) {
       emitBarrier();
     }
     placed_.insert(node);
@@ -1321,6 +1343,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
 
   if (allInMemory) {
+    if (callNeedsBarrier(node)) {
+      emitBarrier();
+    }
     if (multiBlockSingleOp) {
       emitBarrier();
       code_ << "  if (blockInfo.blockInOp == 0) {\n";
@@ -1328,6 +1353,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     functionLoop(node);
     if (multiBlockSingleOp) {
       code_ << "  }\n";
+      emitBarrier();
+    }
+    if ((isCgGrid_ || isSingleBlock_) && meta->multiBlockReturnBarrier) {
       emitBarrier();
     }
     placed_.insert(node);
@@ -1368,6 +1396,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
 
   auto callStmt = makeCall(node, callInputSpecs, resultSpecs);
+  if (callNeedsBarrier(node)) {
+    emitBarrier();
+  }
   if (multiBlockSingleOp) {
     emitBarrier();
     code_ << "  if (blockInfo.blockInOp == 0) {\n";
@@ -1377,6 +1408,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
   if (multiBlockSingleOp) {
     code_ << "  }\n";
+    emitBarrier();
+  }
+  if (isCgGrid_ && meta->multiBlockReturnBarrier) {
     emitBarrier();
   }
   placed_.insert(node);
@@ -1782,10 +1816,36 @@ void CompileCtx::emitCode(std::string_view text) {
 void CompileCtx::emitBarrier() {
   if (isSingleBlock_) {
     code_ << "  __syncthreads();\n";
+    generatingOp_->setAlwaysSingleBlock(true);
   } else {
     auto barrierOffset = generatingOp_->allocateBarrier();
     code_ << "  opBarrier(blockInfo, " << barrierOffset << ");\n";
   }
+  for (auto* node : generatingOp_->allNodes()) {
+    for (auto* output : node->outputs()) {
+      preBarrierValues_.insert(output);
+    }
+  }
+}
+
+bool CompileCtx::callNeedsBarrier(NodeCP node) {
+  auto* meta = nodeMeta(node);
+  if (!meta) {
+    return false;
+  }
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size(); ++i) {
+    if (!meta->argumentMeta[i].randomAccess) {
+      continue;
+    }
+    auto* value = inputs[i].value;
+    auto* producer = value->producer();
+    if (producer && generatingOp_->allNodes().count(producer) &&
+        !preBarrierValues_.count(value)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void CompileCtx::addInclude(std::string_view header) {

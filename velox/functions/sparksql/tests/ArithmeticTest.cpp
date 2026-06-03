@@ -792,7 +792,8 @@ TEST_F(ArithmeticTest, checkedDiv) {
 TEST_F(ArithmeticTest, abs) {
   for (const auto& ansiEnabled : {"false", "true"}) {
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled}});
 
     EXPECT_EQ(abs<int8_t>(-127), 127);
     EXPECT_EQ(abs<int16_t>(-32767), 32767);
@@ -813,7 +814,7 @@ TEST_F(ArithmeticTest, abs) {
 TEST_F(ArithmeticTest, absMinValueOverflow) {
   // Test abs with ANSI off.
   queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
 
   EXPECT_EQ(
       abs<int8_t>(std::numeric_limits<int8_t>::min()),
@@ -830,7 +831,7 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
 
   // Test abs with ANSI on.
   queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
 
   VELOX_ASSERT_THROW(
       abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");

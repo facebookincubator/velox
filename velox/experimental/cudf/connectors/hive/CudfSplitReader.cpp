@@ -183,8 +183,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
     hybridScanState_->columnChunkData_ = std::move(std::get<1>(ioData));
 
     exptSplitReader_->setup_chunking_for_all_columns(
-        cudfHiveConfig_->maxChunkReadLimit(),
-        cudfHiveConfig_->maxPassReadLimit(),
+        cudfHiveConfig_->maxChunkReadLimitSession(
+            connectorQueryCtx_->sessionProperties()),
+        cudfHiveConfig_->maxPassReadLimitSession(
+            connectorQueryCtx_->sessionProperties()),
         rowGroupIndices,
         hybridScanState_->columnChunkData_,
         readerOptions_,
@@ -273,7 +275,8 @@ void CudfSplitReader::setupCudfDataSource() {
 
 void CudfSplitReader::setupReaderOptions() {
   VELOX_CHECK_NOT_NULL(
-      dataSource_, "CudfSplitReader failed to setup a cuDF datasource");
+      dataSource_,
+      "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
   auto sourceInfo = cudf::io::source_info{dataSource_.get()};
 
   // Reader options
@@ -312,8 +315,10 @@ void CudfSplitReader::createCudfReader(
 
   // Create a parquet reader
   splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
-      cudfHiveConfig_->maxChunkReadLimit(),
-      cudfHiveConfig_->maxPassReadLimit(),
+      cudfHiveConfig_->maxChunkReadLimitSession(
+          connectorQueryCtx_->sessionProperties()),
+      cudfHiveConfig_->maxPassReadLimitSession(
+          connectorQueryCtx_->sessionProperties()),
       readerOptions_,
       stream_,
       output_mr);

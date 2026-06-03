@@ -13,17 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #pragma once
 
-#include <vector>
+#include "velox/common/config/ConfigProvider.h"
 
-namespace facebook::velox::parquet {
-/// Parquet field IDs during write operations. Each ID must be unique positive
-/// number, do not need to be sequential.
-/// Used to explicitly control field ID assignment in the Parquet schema.
-struct ParquetFieldId {
-  int32_t fieldId;
-  std::vector<ParquetFieldId> children;
+namespace facebook::velox::functions::prestosql {
+
+/// Exposes Presto function-package session-overridable properties.
+class PrestoConfigProvider : public config::ConfigProvider {
+ public:
+  /// Returns all session-overridable Presto function properties.
+  std::vector<config::ConfigProperty> properties() const override;
+
+  /// Validates and normalizes a property value.
+  std::string normalize(std::string_view name, std::string_view value)
+      const override;
 };
-} // namespace facebook::velox::parquet
+
+} // namespace facebook::velox::functions::prestosql

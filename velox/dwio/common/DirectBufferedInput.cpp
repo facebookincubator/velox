@@ -16,7 +16,6 @@
 
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DirectInputStream.h"
 
@@ -151,7 +150,7 @@ std::vector<int32_t> DirectBufferedInput::groupRequests(
   std::vector<int32_t> ends;
   ends.reserve(requests.size());
   std::vector<char> ranges;
-  coalesceIo<LoadRequest*, char>(
+  const auto stats = coalesceIo<LoadRequest*, char>(
       requests,
       maxDistance,
       // Break batches up. Better load more short ones i parallel.
@@ -183,6 +182,7 @@ std::vector<int32_t> DirectBufferedInput::groupRequests(
           int32_t end,
           uint64_t /*offset*/,
           const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  ioStatistics_->readGap().merge(stats.gaps);
   return ends;
 }
 
@@ -228,7 +228,6 @@ void DirectBufferedInput::readRegions(
         AsyncLoadHolder loadHolder{
             .load = load, .pool = pool_->shared_from_this()};
         executor_->add([asyncLoad = std::move(loadHolder)]() {
-          process::TraceContext trace("Read Ahead");
           VELOX_CHECK_NOT_NULL(asyncLoad.load);
           asyncLoad.load->loadOrFuture(nullptr);
         });

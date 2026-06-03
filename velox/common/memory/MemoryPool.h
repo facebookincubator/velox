@@ -128,7 +128,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   struct Options {
     /// Specifies the memory allocation alignment through this memory pool.
-    uint16_t alignment{MemoryAllocator::kMaxAlignment};
+    uint16_t alignment{MemoryAllocator::kDefaultAlignment};
 
     /// Specifies the max memory capacity of this memory pool.
     int64_t maxCapacity{kMaxMemory};
@@ -261,6 +261,18 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
+
+  /// Allocates a buffer with arbitrary power-of-two alignment (e.g., 4096 for
+  /// O_DIRECT). Unlike allocate(), which is limited to the pool's fixed
+  /// alignment, this supports any power-of-two alignment >= kMinAlignment.
+  virtual void* allocateAligned(int64_t size, uint32_t alignment) {
+    VELOX_NYI("allocateAligned not implemented for {}", toString());
+  }
+
+  /// Frees a buffer allocated by allocateAligned.
+  virtual void freeAligned(void* buffer, int64_t size, uint32_t alignment) {
+    VELOX_NYI("freeAligned not implemented for {}", toString());
+  }
 
   /// Transfer the ownership of memory at 'buffer' for 'size' bytes to the
   /// memory pool 'dest'. Returns true if the transfer succeeds.
@@ -648,6 +660,10 @@ class MemoryPoolImpl : public MemoryPool {
 
   void free(void* p, int64_t size) override;
 
+  void* allocateAligned(int64_t size, uint32_t alignment) override;
+
+  void freeAligned(void* buffer, int64_t size, uint32_t alignment) override;
+
   bool transferTo(MemoryPool* dest, void* buffer, uint64_t size) override;
 
   void reportExternalFree(int64_t size) override;
@@ -811,7 +827,13 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
   FOLLY_ALWAYS_INLINE int64_t sizeAlign(int64_t size) const {
-    return (size + alignment_ - 1) & ~(alignment_ - 1);
+    return sizeAlign(size, alignment_);
+  }
+
+  static FOLLY_ALWAYS_INLINE int64_t
+  sizeAlign(int64_t size, uint32_t alignment) {
+    const auto mask = static_cast<int64_t>(alignment) - 1;
+    return checkedPlus(size, mask) & ~mask;
   }
 
   // Returns a rounded up delta based on adding 'delta' to 'size'. Adding the
