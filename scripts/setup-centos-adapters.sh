@@ -36,6 +36,9 @@ SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-centos9.sh
 
 function configure_dnf_for_cuda {
+  # CUDA 13.3 renamed cuda-cccl to cccl, and the new package obsoletes the
+  # CUDA 12.9 package that the installed 12.9 devel packages still require.
+  # This workaround can be dropped when updating to CUDA >=13.3.
   if grep -q '^best=' /etc/dnf/dnf.conf; then
     sed -i 's/^best=.*/best=False/' /etc/dnf/dnf.conf
   else
