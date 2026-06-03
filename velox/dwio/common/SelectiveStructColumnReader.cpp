@@ -16,7 +16,6 @@
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
@@ -321,7 +320,6 @@ void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
     const Mutation* mutation) {
-  process::TraceContext trace("SelectiveStructColumnReaderBase::next");
   mutation_ = mutation;
   hasDeletion_ = common::hasDeletion(mutation);
   const RowSet rows(iota(numValues, rows_), numValues);

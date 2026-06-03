@@ -18,7 +18,6 @@
 #include "folly/io/Cursor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 
@@ -583,7 +582,6 @@ void CachedBufferedInput::readRegions(
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
             [pendingLoad = load, ssdSavable = options_.cacheable()]() {
-              process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
       }

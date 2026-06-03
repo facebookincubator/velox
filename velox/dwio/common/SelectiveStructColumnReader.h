@@ -506,7 +506,7 @@ void SelectiveFlatMapColumnReaderHelper<T, KeyNode, FormatData>::copyValues(
       flatKeys->addStringBuffer(buf);
       strKeySize = 0;
       for (int k = 0; k < reader_.children_.size(); ++k) {
-        auto& s = keyNodes_[k].key.get();
+        auto s = keyNodes_[k].key.get();
         if (!s.isInline()) {
           memcpy(&rawStrKeyBuffer[strKeySize], s.data(), s.size());
           strKeySize += s.size();

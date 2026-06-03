@@ -43,6 +43,7 @@ IP Functions
         SELECT is_subnet_of(IPPREFIX '64:fa9b::17/64', IPADDRESS '64:ffff::17'); -- false
 
 .. function:: is_subnet_of(ip_prefix1, ip_prefix2) -> boolean
+   :noindex:
 
     Returns ``true`` if ``ip_prefix2`` is a subnet of ``ip_prefix1``. ::
 
@@ -81,6 +82,7 @@ IP Functions
         SELECT ip_version(IPADDRESS '2001:db8::1'); -- 6
 
 .. function:: ip_version(ip_prefix) -> bigint
+   :noindex:
 
     Returns ``4`` if ``ip_prefix`` contains an IPv4 address, ``6`` if it contains an IPv6 address.
     IPv4-mapped IPv6 prefixes are treated as IPv4.

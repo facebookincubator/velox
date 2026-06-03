@@ -256,7 +256,7 @@ float sumNodeCosts(
   float cost = 0;
   auto* meta = Registry::metadata(node->target());
   if (meta) {
-    cost += meta->cost;
+    cost += meta->unitCost(node);
   }
   for (const auto& input : node->inputs()) {
     if (inputs.count(input.value)) {
@@ -417,20 +417,43 @@ KernelOperation::KernelOperation(
   std::vector<ValueCP> outputValues;
   setOutputs(sg.root, inputs_, outputValues, outputDescs_, true);
 
-  // Compute unit cost: 10 per input/output tensor + sum of node costs.
-  // Tensor lists count as one per element.
-  int32_t numTensors = 0;
+  // Compute unit cost: per-tensor I/O cost (scaled by element size) + sum of
+  // node costs.
+  auto tensorCost = [this](ValueCP value) -> float {
+    auto& types = waveGraph_->types();
+    auto id = value->id();
+    if (id >= 0 && static_cast<size_t>(id) < types.types.size() &&
+        types.types[id]) {
+      auto dtype = types.types[id]->dtype();
+      auto elemSize = c10::elementSize(dtype);
+      if (elemSize >= 8) {
+        return 18.0f;
+      }
+      if (elemSize >= 4) {
+        return 10.0f;
+      }
+      if (elemSize >= 2) {
+        return 6.0f;
+      }
+      return 3.0f;
+    }
+    return 10.0f;
+  };
+  float tensorCostSum = 0;
   for (int32_t i = 0; i < numInputs_; ++i) {
     if (orderedInputs_[i]->type().kind() == nativert::Type::Kind::TensorList) {
-      numTensors +=
-          static_cast<int32_t>(orderedInputs_[i]->getListElements().size());
+      for (auto* elem : orderedInputs_[i]->getListElements()) {
+        tensorCostSum += tensorCost(elem);
+      }
     } else {
-      ++numTensors;
+      tensorCostSum += tensorCost(orderedInputs_[i]);
     }
   }
-  numTensors += static_cast<int32_t>(outputValues.size());
+  for (auto* value : outputValues) {
+    tensorCostSum += tensorCost(value);
+  }
   std::unordered_set<NodeCP> costVisited;
-  unitCost_ = 10.0f * static_cast<float>(numTensors);
+  unitCost_ = tensorCostSum;
   unitCost_ += sumNodeCosts(sg.root, inputs_, costVisited);
 
   // Check if any node in the subgraph has alwaysSingleBlock set.
