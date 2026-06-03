@@ -68,8 +68,13 @@ velox_resolve_dependency_url(cudf)
 find_library(UCX_LIBRARY NAMES ucp)
 find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
 if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+  set(UCX_FOUND TRUE)
+else()
+  set(UCX_FOUND FALSE)
+endif()
+if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit 2e37c84 from 2026-05-29 (release v0.49.00)
+  # ucxx commit 2e37c84 from 2026-05-29 (release/0.50 branch)
   set(VELOX_ucxx_VERSION 0.50)
   set(VELOX_ucxx_COMMIT 2e37c8463544064e680e51820c47bfec69f55b69)
   set(
@@ -123,7 +128,7 @@ block(SCOPE_FOR VARIABLES)
     UPDATE_DISCONNECTED 1
   )
 
-  if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+  if(UCX_FOUND)
     FetchContent_Declare(
       ucxx
       URL ${VELOX_ucxx_SOURCE_URL}
@@ -136,7 +141,7 @@ block(SCOPE_FOR VARIABLES)
 
   FetchContent_MakeAvailable(cudf)
 
-  if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+  if(UCX_FOUND)
     FetchContent_MakeAvailable(ucxx)
   endif()
 
