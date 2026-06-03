@@ -1053,6 +1053,10 @@ struct WriterOptions {
 struct ColumnReaderOptions {
   /// How to map table fields to file fields.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+
+  // Whether to return NULL for a struct when all requested children are
+  // missing in Parquet name-based mapping mode.
+  bool parquetNullStructIfAllFieldsMissing_{false};
 };
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);

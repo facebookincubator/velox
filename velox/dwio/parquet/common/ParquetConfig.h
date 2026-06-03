@@ -88,6 +88,16 @@ class ParquetConfig {
       false,
       "Allow reading INT32 Parquet columns as a narrower integer type.")
 
+  VELOX_PARQUET_CONFIG(
+      kNullStructIfAllFieldsMissingSession,
+      kNullStructIfAllFieldsMissing,
+      nullStructIfAllFieldsMissing,
+      "null_struct_if_all_fields_missing",
+      "null-struct-if-all-fields-missing",
+      bool,
+      false,
+      "When name-based mapping is enabled and all requested struct children are missing, return NULL struct instead of a non-null struct with all-null children.")
+
   static constexpr uint64_t kDefaultFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
   VELOX_PARQUET_CONFIG(
@@ -110,6 +120,8 @@ class ParquetConfig {
     registerProperty<kFooterSpeculativeIoSizeSessionProperty>(
         properties, sessionPrefix);
     registerProperty<kAllowInt32NarrowingSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kNullStructIfAllFieldsMissingSessionProperty>(
         properties, sessionPrefix);
     registerProperty<kFooterMemoryTrackingThresholdSessionProperty>(
         properties, sessionPrefix);
