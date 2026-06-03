@@ -35,6 +35,14 @@ VELOX_UCX_VERSION=${UCX_VERSION:-"1.19.0"}
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-centos9.sh
 
+function configure_dnf_for_cuda {
+  if grep -q '^best=' /etc/dnf/dnf.conf; then
+    sed -i 's/^best=.*/best=False/' /etc/dnf/dnf.conf
+  else
+    echo "best=False" >>/etc/dnf/dnf.conf
+  fi
+}
+
 function install_ucx {
   dnf_install rdma-core-devel
   local UCX_REPO_NAME="openucx/ucx"
@@ -84,6 +92,7 @@ function setup_cuda_repo {
     return 1
   fi
 
+  configure_dnf_for_cuda
   dnf config-manager --add-repo "$repo_url"
 }
 

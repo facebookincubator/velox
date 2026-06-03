@@ -44,21 +44,12 @@ function dnf_install {
   dnf install -y -q --setopt=install_weak_deps=False "$@"
 }
 
-function configure_dnf {
-  if grep -q '^best=' /etc/dnf/dnf.conf; then
-    sed -i 's/^best=.*/best=False/' /etc/dnf/dnf.conf
-  else
-    echo "best=False" >>/etc/dnf/dnf.conf
-  fi
-}
-
 function install_clang15 {
   dnf_install clang15 gcc-toolset-13-libatomic-devel
 }
 
 # Install packages required for build.
 function install_build_prerequisites {
-  configure_dnf
   dnf update -y
   dnf_install epel-release dnf-plugins-core # For ccache, ninja
   if grep -q CentOS /etc/os-release; then
