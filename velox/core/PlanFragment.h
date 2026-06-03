@@ -63,17 +63,11 @@ struct PlanFragment {
   std::unordered_set<PlanNodeId> groupedExecutionLeafNodeIds;
 
   /// Per-node transport types assigned by the coordinator at task creation time
-  /// based on cluster topology.
+  /// based on cluster topology. inputTransportTypes is keyed by Exchange node
+  /// ID, outputTransportTypes by PartitionedOutput node ID. A node absent from
+  /// the map uses TransportKind::kHttp.
   folly::F14FastMap<PlanNodeId, std::string> inputTransportTypes;
   folly::F14FastMap<PlanNodeId, std::string> outputTransportTypes;
-
-  /// Returns the transport type for a specific Exchange (input) node.
-  /// Defaults to TransportKind::kHttp if the node ID is not in the map.
-  std::string_view inputTransportType(const PlanNodeId& planNodeId) const;
-
-  /// Returns the transport type for a specific PartitionedOutput node.
-  /// Defaults to TransportKind::kHttp if the node ID is not in the map.
-  std::string_view outputTransportType(const PlanNodeId& planNodeId) const;
 
   /// Validates that every node ID in inputTransportTypes refers to an Exchange
   /// node and every node ID in outputTransportTypes refers to a

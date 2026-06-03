@@ -427,6 +427,9 @@ Task::Task(
       splitsStates_(buildSplitStates(planFragment_.planNode)),
       bufferManager_(OutputBufferManager::getInstanceRef()) {
   ++numCreatedTasks_;
+  // Validate that any per-node transport type annotations refer to the right
+  // kind of plan node before they are used to select exchange transports.
+  planFragment_.validateTransportTypes();
   // NOTE: the executor must not be folly::InlineLikeExecutor for parallel
   // execution.
   if (mode_ == Task::ExecutionMode::kParallel) {

@@ -18,50 +18,42 @@
 
 namespace facebook::velox::core {
 
-std::string_view PlanFragment::inputTransportType(
-    const PlanNodeId& planNodeId) const {
-  auto it = inputTransportTypes.find(planNodeId);
-  return it != inputTransportTypes.end() ? std::string_view{it->second}
-                                         : TransportKind::kHttp;
-}
-
-std::string_view PlanFragment::outputTransportType(
-    const PlanNodeId& planNodeId) const {
-  auto it = outputTransportTypes.find(planNodeId);
-  return it != outputTransportTypes.end() ? std::string_view{it->second}
-                                          : TransportKind::kHttp;
-}
-
 namespace {
 // Checks that every node ID in 'transportTypes' refers to a node of type TNode
-// in the plan tree rooted at 'root'. 'expectedNodeType' names TNode for error
+// in the plan tree rooted at 'root'. 'direction' ("Input"/"Output") and
+// 'expectedNodeType' name the offending map and required node type in error
 // messages.
 template <typename TNode>
 void validateTransportNodeTypes(
     const PlanNode* root,
     const folly::F14FastMap<PlanNodeId, std::string>& transportTypes,
+    std::string_view direction,
     std::string_view expectedNodeType) {
   for (const auto& entry : transportTypes) {
     const auto& planNodeId = entry.first;
     const auto* node = PlanNode::findNodeById(root, planNodeId);
     VELOX_USER_CHECK_NOT_NULL(
-        node, "Transport type set for unknown plan node ID: {}", planNodeId);
+        node,
+        "{} transport type set for unknown plan node ID: {}",
+        direction,
+        planNodeId);
     VELOX_USER_CHECK(
         node->is<TNode>(),
-        "Transport type can only be set on {} nodes, but node '{}' is of "
-        "type {}",
+        "{} transport type can only be set on {} nodes, but node is of "
+        "type {}: {}",
+        direction,
         expectedNodeType,
-        planNodeId,
-        node->name());
+        node->name(),
+        planNodeId);
   }
 }
 } // namespace
 
 void PlanFragment::validateTransportTypes() const {
   validateTransportNodeTypes<ExchangeNode>(
-      planNode.get(), inputTransportTypes, "Exchange");
+      planNode.get(), inputTransportTypes, "Input", "Exchange");
   validateTransportNodeTypes<PartitionedOutputNode>(
-      planNode.get(), outputTransportTypes, "PartitionedOutput");
+      planNode.get(), outputTransportTypes, "Output", "PartitionedOutput");
 }
 
 bool PlanFragment::canSpill(const QueryConfig& queryConfig) const {
