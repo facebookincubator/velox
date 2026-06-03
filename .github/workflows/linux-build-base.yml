@@ -128,6 +128,7 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
+            bash /setup-centos-adapters.sh configure_dnf_for_cuda
             export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-centos9.sh
