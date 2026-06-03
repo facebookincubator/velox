@@ -422,5 +422,60 @@ TEST_F(JsonReaderTest, parseTimestampMalformedThrows) {
       "Failed to parse TIMESTAMP");
 }
 
+TEST_F(JsonReaderTest, arrayOfBigint) {
+  auto row = read("{\"a\":[1,2,3]}\n", ROW({{"a", ARRAY(BIGINT())}}));
+  // Compare the whole row: next() leaves child vectors at their batch
+  // capacity, so comparing the array child directly would mismatch on size.
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{1, 2, 3}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, arrayOfString) {
+  auto row =
+      read("{\"a\":[\"x\",\"y\",\"z\"]}\n", ROW({{"a", ARRAY(VARCHAR())}}));
+  auto expected =
+      makeRowVector({makeArrayVector<StringView>({{"x"_sv, "y"_sv, "z"_sv}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, arrayElementTypeMismatchCoerces) {
+  // [1, "abc", 3] into ARRAY<BIGINT>: the element "abc" coerces to 0 (full-
+  // fail to zero) rather than throwing or
+  // producing a NULL element.
+  auto row = read("{\"a\":[1,\"abc\",3]}\n", ROW({{"a", ARRAY(BIGINT())}}));
+  auto expected = makeRowVector({makeArrayVector<int64_t>({{1, 0, 3}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, arrayNullProducesSqlNull) {
+  // JSON null for the whole array is SQL NULL, not an empty array.
+  auto row = read("{\"a\":null}\n", ROW({{"a", ARRAY(BIGINT())}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, arrayEmptyIsNotNull) {
+  // JSON [] is a non-null array of cardinality 0, distinct from SQL NULL.
+  auto row = read("{\"a\":[]}\n", ROW({{"a", ARRAY(BIGINT())}}));
+  ASSERT_EQ(row->size(), 1);
+  auto arrays = row->childAt(0)->as<ArrayVector>();
+  EXPECT_FALSE(arrays->isNullAt(0));
+  EXPECT_EQ(arrays->sizeAt(0), 0);
+}
+
+TEST_F(JsonReaderTest, arrayShapeMismatchScalarThrows) {
+  // A scalar where an array is expected is a container-shape mismatch.
+  VELOX_ASSERT_THROW(
+      read("{\"a\":5}\n", ROW({{"a", ARRAY(BIGINT())}})),
+      "expected array");
+}
+
+TEST_F(JsonReaderTest, arrayShapeMismatchObjectThrows) {
+  // An object where an array is expected is a container-shape mismatch.
+  VELOX_ASSERT_THROW(
+      read("{\"a\":{\"k\":1}}\n", ROW({{"a", ARRAY(BIGINT())}})),
+      "expected array");
+}
+
 } // namespace
 } // namespace facebook::velox::json

@@ -491,6 +491,84 @@ int32_t coerceToDate(
   return static_cast<int32_t>(days);
 }
 
+// Returns a human-readable name for a JSON value's type, used in
+// container-shape mismatch error messages.
+const char* jsonTypeName(simdjson::ondemand::json_type type) {
+  switch (type) {
+    case simdjson::ondemand::json_type::array:
+      return "array";
+    case simdjson::ondemand::json_type::object:
+      return "object";
+    case simdjson::ondemand::json_type::number:
+      return "number";
+    case simdjson::ondemand::json_type::string:
+      return "string";
+    case simdjson::ondemand::json_type::boolean:
+      return "boolean";
+    case simdjson::ondemand::json_type::null:
+      return "null";
+    case simdjson::ondemand::json_type::unknown:
+      return "unknown";
+  }
+  return "unknown";
+}
+
+// Forward declaration: writeArray recurses through writeValue for per-element
+// coercion, and writeValue dispatches arrays to writeArray.
+void writeValue(
+    simdjson::ondemand::value& value,
+    const TypePtr& type,
+    BaseVector& column,
+    vector_size_t rowIndex,
+    const FileContents& contents);
+
+// Writes one JSON array into an ArrayVector cell. simdjson On-Demand is
+// forward-only, so the array is iterated exactly once: each element is
+// appended to the tail of the ArrayVector's shared elements vector and
+// recursed through writeValue for per-element coercion. Because rows are
+// written in order, the current element count is this array's offset.
+//
+// A non-array, non-null JSON value is a container-shape mismatch and throws,
+// matching Presto. Element-level type mismatches coerce rather than
+// throw.
+void writeArray(
+    simdjson::ondemand::value& value,
+    const TypePtr& type,
+    BaseVector& column,
+    vector_size_t rowIndex,
+    const FileContents& contents) {
+  const auto jsonType = unwrap(value.type());
+  if (jsonType != simdjson::ondemand::json_type::array) {
+    VELOX_USER_FAIL(
+        "Container shape mismatch: expected array, got JSON {}.",
+        jsonTypeName(jsonType));
+  }
+
+  auto* arrayVector = column.asUnchecked<ArrayVector>();
+  auto& elements = arrayVector->elements();
+  const auto& elementType = type->childAt(0);
+
+  const vector_size_t offset = elements->size();
+  vector_size_t count{0};
+  auto jsonArray = unwrap(value.get_array());
+  for (auto elementResult : jsonArray) {
+    auto element = unwrap(elementResult);
+    const vector_size_t elementIndex = offset + count;
+    elements->resize(elementIndex + 1);
+    if (element.is_null()) {
+      elements->setNull(elementIndex, true);
+    } else {
+      writeValue(element, elementType, *elements, elementIndex, contents);
+    }
+    ++count;
+  }
+
+  arrayVector->setOffsetAndSize(rowIndex, offset, count);
+  // setOffsetAndSize does not touch the null flag; clear it so an empty array
+  // ([] -> cardinality 0) is distinct from a JSON null (SQL NULL).
+  arrayVector->setNull(rowIndex, false);
+}
+
 // Writes one JSON value into a FlatVector cell. The caller has verified
 // that the JSON value is not `null` (it set the cell to NULL beforehand).
 void writeValue(
@@ -581,6 +659,10 @@ void writeValue(
     case TypeKind::TIMESTAMP: {
       column.asUnchecked<FlatVector<Timestamp>>()->set(
           rowIndex, coerceToTimestamp(value, *contents.timestampFormatter));
+      return;
+    }
+    case TypeKind::ARRAY: {
+      writeArray(value, type, column, rowIndex, contents);
       return;
     }
     default:
