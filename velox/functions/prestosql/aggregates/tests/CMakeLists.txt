@@ -36,6 +36,7 @@ set(
   EntropyAggregationTest.cpp
   GeometricMeanTest.cpp
   HistogramTest.cpp
+  InternalVariadicVectorSumTest.cpp
   KHyperLogLogAggregateTest.cpp
   MapAccumulatorTest.cpp
   MapAggTest.cpp
