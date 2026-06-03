@@ -601,7 +601,7 @@ std::vector<std::shared_ptr<Task>> Task::getRunningTasks() {
   std::vector<std::shared_ptr<Task>> tasks;
   std::shared_lock guard(taskListLock());
   tasks.reserve(taskList().size());
-  for (auto taskEntry : taskList()) {
+  for (const auto& taskEntry : taskList()) {
     if (auto task = taskEntry.taskPtr.lock()) {
       tasks.push_back(std::move(task));
     }
@@ -646,7 +646,7 @@ SplitsState& Task::getPlanNodeSplitsStateLocked(
 
 bool Task::allNodesReceivedNoMoreSplitsMessageLocked() const {
   for (const auto& it : splitsStates_) {
-    if (not it.second.noMoreSplits) {
+    if (!it.second.noMoreSplits) {
       return false;
     }
   }
@@ -1504,12 +1504,12 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
 
 void Task::ensureSplitGroupsAreBeingProcessedLocked() {
   // Only try creating more drivers if we are running.
-  if (not isRunningLocked() or (numDriversPerSplitGroup_ == 0)) {
+  if (!isRunningLocked() || (numDriversPerSplitGroup_ == 0)) {
     return;
   }
 
-  while (numRunningSplitGroups_ < concurrentSplitGroups_ and
-         not queuedSplitGroups_.empty()) {
+  while (numRunningSplitGroups_ < concurrentSplitGroups_ &&
+         !queuedSplitGroups_.empty()) {
     const uint32_t splitGroupId = queuedSplitGroups_.front();
     queuedSplitGroups_.pop();
 
@@ -2108,7 +2108,7 @@ bool Task::isGroupedExecution() const {
 }
 
 bool Task::isUngroupedExecution() const {
-  return not isGroupedExecution();
+  return !isGroupedExecution();
 }
 
 bool Task::hasMixedExecutionGroupJoin(
@@ -2603,6 +2603,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   std::vector<ContinuePromise> splitPromises;
   std::vector<std::shared_ptr<JoinBridge>> oldBridges;
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplitsCopy;
   std::vector<SplitGroupState> splitGroupStates;
   std::
       unordered_map<core::PlanNodeId, std::pair<std::vector<exec::Split>, bool>>
@@ -2650,6 +2652,10 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         }
       }
     }
+
+    preloadingSplitsCopy.swap(preloadingSplits_);
+    // preloadingSplits_ is now empty; safe to iterate preloadingSplitsCopy
+    // outside the lock
   }
 
   TestValue::adjust("facebook::velox::exec::Task::terminate", this);
@@ -2682,10 +2688,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     bridge->cancel();
   }
 
-  for (auto split : preloadingSplits_) {
+  for (auto& split : preloadingSplitsCopy) {
     split->dataSource->close();
   }
-  preloadingSplits_.clear();
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
@@ -2992,7 +2997,7 @@ ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   // If 'this' is running, the future is realized on timeout or when
   // this no longer is running.
-  if (not isRunningLocked()) {
+  if (!isRunningLocked()) {
     return ContinueFuture();
   }
   auto [promise, future] = makeVeloxContinuePromiseContract(
@@ -3008,7 +3013,7 @@ ContinueFuture Task::taskCompletionFuture() {
   std::lock_guard<std::timed_mutex> l(mutex_);
   // If 'this' is running, the future is realized on timeout or when
   // this no longer is running.
-  if (not isRunningLocked()) {
+  if (!isRunningLocked()) {
     return makeFinishFutureLocked(
         fmt::format("Task::taskCompletionFuture {}", taskId_).data());
   }
@@ -3307,7 +3312,7 @@ void Task::setError(const std::exception_ptr& exception) {
   TestValue::adjust("facebook::velox::exec::Task::setError", this);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
-    if (not isRunningLocked()) {
+    if (!isRunningLocked()) {
       return;
     }
     if (exception_ != nullptr) {
