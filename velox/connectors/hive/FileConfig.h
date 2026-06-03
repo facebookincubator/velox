@@ -55,6 +55,16 @@ class FileConfig {
       "Map Parquet table field names to file field names using names, not indices.")
 
   VELOX_HIVE_CONFIG_LEGACY(
+      kParquetNullStructForMissingFieldsSession,
+      kParquetNullStructForMissingFields,
+      isParquetNullStructForMissingFields,
+      "parquet_null_struct_for_missing_fields",
+      "parquet.null-struct-for-missing-fields",
+      bool,
+      false,
+      "When Parquet name-based mapping is enabled and all requested struct children are missing, return NULL struct instead of a non-null struct with all-null children.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
       kAllowInt32NarrowingSession,
       kAllowInt32Narrowing,
       allowInt32Narrowing,

@@ -31,46 +31,161 @@ StructColumnReader::StructColumnReader(
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    memory::MemoryPool& pool)
     : SelectiveStructColumnReader(
           columnReaderOptions,
           requestedType,
           fileType,
           params,
           scanSpec) {
+  const bool useColumnNames = columnReaderOptions.columnMappingMode_ ==
+      dwio::common::ColumnMappingMode::kName;
+  const bool parquetNullStructForMissingFields =
+      columnReaderOptions.parquetNullStructForMissingFields_;
+
+  auto missingFields = buildChildren(
+      columnReaderOptions, requestedType, params, useColumnNames, pool);
+  applyMissingFieldPolicy(
+      missingFields, requestedType, parquetNullStructForMissingFields, pool);
+  ensureChild(
+      columnReaderOptions,
+      params,
+      useColumnNames,
+      parquetNullStructForMissingFields,
+      pool);
+  initRepDefState();
+}
+
+std::vector<column_index_t> StructColumnReader::buildChildren(
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    const TypePtr& requestedType,
+    ParquetParams& params,
+    bool useColumnNames,
+    memory::MemoryPool& pool) {
   auto& childSpecs = scanSpec_->stableChildren();
+  std::vector<column_index_t> missingFields;
   for (auto i = 0; i < childSpecs.size(); ++i) {
-    auto childSpec = childSpecs[i];
-    if (childSpec->isConstant() || isChildMissing(*childSpec)) {
+    auto* childSpec = childSpecs[i];
+    // Stale constant cleanup when a nested field reappears across splits: a
+    // previous split may have marked this regular field as a null constant
+    // because it was missing. If the nested field exists in the current split,
+    // clear that stale constant so we build a physical child reader for real
+    // values. Skip this at top level where constants can come from partition
+    // keys and must be preserved.
+    if (useColumnNames && fileType_->parent() != nullptr &&
+        childSpec->isConstant() &&
+        childSpec->columnType() == common::ScanSpec::ColumnType::kRegular &&
+        !isChildMissing(*childSpec)) {
+      childSpec->setConstantValue(nullptr);
+    }
+    // Constant children and index-mapped missing fields are synthetic and do
+    // not need a physical child reader.
+    if (childSpec->isConstant() ||
+        (!useColumnNames && isChildMissing(*childSpec))) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;
     }
-    if (!childSpecs[i]->readFromFile()) {
+    if (!childSpec->readFromFile()) {
       continue;
     }
+    if (useColumnNames && isChildMissing(*childSpec)) {
+      missingFields.emplace_back(i);
+      continue;
+    }
+
     auto childFileType = fileType_->childByName(childSpec->fieldName());
     auto childRequestedType =
-        requestedType_->asRow().findChild(childSpec->fieldName());
+        requestedType->asRow().findChild(childSpec->fieldName());
     addChild(
         ParquetColumnReader::build(
             columnReaderOptions,
             childRequestedType,
             childFileType,
             params,
-            *childSpec));
-
-    childSpecs[i]->setSubscript(children_.size() - 1);
+            *childSpec,
+            pool));
+    childSpec->setSubscript(children_.size() - 1);
   }
+  return missingFields;
+}
+
+void StructColumnReader::applyMissingFieldPolicy(
+    const std::vector<column_index_t>& missingFields,
+    const TypePtr& requestedType,
+    bool parquetNullStructForMissingFields,
+    memory::MemoryPool& pool) {
+  auto& childSpecs = scanSpec_->stableChildren();
+
+  if (childSpecs.empty() && parquetNullStructForMissingFields) {
+    // No children to read, set the struct as null.
+    scanSpec_->setConstantValue(
+        BaseVector::createNullConstant(requestedType_, 1, &pool));
+    return;
+  }
+
+  if (missingFields.empty()) {
+    return;
+  }
+
+  if (missingFields.size() == childSpecs.size() &&
+      parquetNullStructForMissingFields) {
+    // All requested subfields are missing, set the struct as null.
+    scanSpec_->setConstantValue(
+        BaseVector::createNullConstant(requestedType_, 1, &pool));
+    return;
+  }
+
+  // Set null constant for missing subfields of requested type.
+  auto rowType = asRowType(requestedType);
+  for (auto channel : missingFields) {
+    childSpecs[channel]->setConstantValue(
+        BaseVector::createNullConstant(
+            rowType->findChild(childSpecs[channel]->fieldName()), 1, &pool));
+  }
+}
+
+void StructColumnReader::ensureChild(
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    ParquetParams& params,
+    bool useColumnNames,
+    bool parquetNullStructForMissingFields,
+    memory::MemoryPool& pool) {
+  if (!useColumnNames || parquetNullStructForMissingFields ||
+      !children_.empty() || fileType_->size() == 0) {
+    return;
+  }
+
+  // Preserve one physical child to source rep/def levels for this struct.
+  auto fileRowType = asRowType(fileType_->type());
+  auto* repDefSourceSpec = scanSpec_->getOrCreateChild(fileRowType->nameOf(0));
+  repDefSourceSpec->setProjectOut(false);
+  addChild(
+      ParquetColumnReader::build(
+          columnReaderOptions,
+          fileType_->childAt(0)->type(),
+          fileType_->childAt(0),
+          params,
+          *repDefSourceSpec,
+          pool));
+  repDefSourceSpec->setSubscript(children_.size() - 1);
+}
+
+void StructColumnReader::initRepDefState() {
   auto type = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get());
   if (type->parent()) {
     levelMode_ = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get())
                      ->makeLevelInfo(levelInfo_);
     childForRepDefs_ = findBestLeaf();
+    if (!childForRepDefs_) {
+      levelMode_ = LevelMode::kNulls;
+      return;
+    }
     // Set mode to struct over lists if the child for repdefs has a list between
     // this and the child.
     auto child = childForRepDefs_;
     for (;;) {
-      assert(child);
+      VELOX_CHECK_NOT_NULL(child);
       if (child->fileType().type()->kind() == TypeKind::ARRAY ||
           child->fileType().type()->kind() == TypeKind::MAP) {
         levelMode_ = LevelMode::kStructOverLists;
@@ -107,7 +222,7 @@ StructColumnReader::findBestLeaf() {
       best = child;
     }
   }
-  assert(best);
+  // Null can be returned if there are no children.
   return best;
 }
 

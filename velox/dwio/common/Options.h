@@ -964,6 +964,17 @@ class ReaderOptions : public io::ReaderOptions {
     cache_ = cache;
   }
 
+  /// When enabled, in Parquet name-based column mapping mode, a struct whose
+  /// requested children have no name matches in the file is returned as NULL
+  /// instead of a non-null struct with all-null children.
+  bool parquetNullStructForMissingFields() const {
+    return parquetNullStructForMissingFields_;
+  }
+
+  void setParquetNullStructForMissingFields(bool value) {
+    parquetNullStructForMissingFields_ = value;
+  }
+
  private:
   uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
   FileFormat fileFormat_{FileFormat::UNKNOWN};
@@ -994,6 +1005,7 @@ class ReaderOptions : public io::ReaderOptions {
   cache::AsyncDataCache* cache_{nullptr};
   uint64_t parquetFooterMemoryTrackingThreshold_{
       kDefaultParquetFooterMemoryTrackingThreshold};
+  bool parquetNullStructForMissingFields_{false};
 };
 
 struct WriterOptions {
@@ -1032,6 +1044,10 @@ struct WriterOptions {
 struct ColumnReaderOptions {
   /// How to map table fields to file fields.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+
+  // Whether to return NULL for a struct when all requested children are
+  // missing in Parquet name-based mapping mode.
+  bool parquetNullStructForMissingFields_{false};
 };
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);

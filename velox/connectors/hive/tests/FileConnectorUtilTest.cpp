@@ -121,6 +121,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(
         readerOptions.columnMappingMode(),
         dwio::common::ColumnMappingMode::kPosition);
+    EXPECT_FALSE(readerOptions.parquetNullStructForMissingFields());
   }
 
   // Test with ORC format and useColumnNames enabled via session.
@@ -147,8 +148,10 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
   // Test with Parquet format and useColumnNames enabled via session.
   {
-    auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kParquetUseColumnNamesSession, "true"}});
+    auto holder = makeConnectorQueryCtx({
+        {hive::FileConfig::kParquetUseColumnNamesSession, "true"},
+        {hive::FileConfig::kParquetNullStructForMissingFieldsSession, "true"},
+    });
     auto split = makeSplit(dwio::common::FileFormat::PARQUET);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
@@ -165,6 +168,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(
         readerOptions.columnMappingMode(),
         dwio::common::ColumnMappingMode::kName);
+    EXPECT_TRUE(readerOptions.parquetNullStructForMissingFields());
   }
 
   // Test format mismatch throws.
