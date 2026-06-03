@@ -67,6 +67,24 @@ std::unique_ptr<connector::DataSource> createDataSource(
   return dataSource;
 }
 
+// Snapshots cumulative 'dataSource' runtime stats into 'stats'. Must be called
+// with the operator stats lock held and from the Driver thread (the only thread
+// that mutates 'dataSource'). No-op if 'dataSource' is null.
+void copyConnectorRuntimeStatsLocked(
+    connector::DataSource* dataSource,
+    OperatorStats& stats) {
+  if (dataSource == nullptr) {
+    return;
+  }
+  for (const auto& [name, metric] : dataSource->getRuntimeStats()) {
+    if (auto it = stats.runtimeStats.find(name);
+        it != stats.runtimeStats.end()) {
+      VELOX_CHECK_EQ(it->second.unit, metric.unit);
+    }
+    stats.runtimeStats[name] = metric;
+  }
+}
+
 } // namespace
 
 TableScan::TableScan(
@@ -274,6 +292,7 @@ RowVectorPtr TableScan::getOutput() {
             RuntimeCounter(numReadyPreloadedSplits_));
         numReadyPreloadedSplits_ = 0;
       }
+      copyConnectorRuntimeStatsLocked(dataSource_.get(), *lockedStats);
       currNumRawInputRows = lockedStats->rawInputPositions;
     }
     VELOX_CHECK_LE(rawInputRowsSinceLastSplit_, currNumRawInputRows);
@@ -319,18 +338,6 @@ bool TableScan::getSplit() {
 
   if (!split.hasConnectorSplit()) {
     noMoreSplits_ = true;
-    if (dataSource_) {
-      const auto connectorStats = dataSource_->getRuntimeStats();
-      auto lockedStats = stats_.wlock();
-      for (const auto& [name, metric] : connectorStats) {
-        if (FOLLY_UNLIKELY(lockedStats->runtimeStats.count(name) == 0)) {
-          lockedStats->runtimeStats.emplace(name, RuntimeMetric(metric.unit));
-        } else {
-          VELOX_CHECK_EQ(lockedStats->runtimeStats.at(name).unit, metric.unit);
-        }
-        lockedStats->runtimeStats.at(name).merge(metric);
-      }
-    }
     return false;
   }
 
@@ -571,6 +578,7 @@ void TableScan::close() {
   Operator::close();
 
   if (dataSource_ != nullptr) {
+    copyConnectorRuntimeStatsLocked(dataSource_.get(), *stats_.wlock());
     dataSource_->cancel();
   }
 
