@@ -15,6 +15,8 @@
  */
 #include "velox/external/regex_compat/JavaRegex.h"
 
+#if VELOX_REGEX_COMPAT_HAS_JAVA
+
 #include "velox/external/regex_compat/JvmFixture.h"
 
 #include <mutex>
@@ -545,3 +547,5 @@ int JavaRegex::GlobalReplace(
 }
 
 } // namespace facebook::velox::regex_compat
+
+#endif // VELOX_REGEX_COMPAT_HAS_JAVA

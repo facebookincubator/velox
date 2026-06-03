@@ -15,6 +15,8 @@
  */
 #include "velox/external/regex_compat/JvmFixture.h"
 
+#if VELOX_REGEX_COMPAT_HAS_JAVA
+
 #include <gtest/gtest.h>
 
 #include <sstream>
@@ -63,3 +65,5 @@ void JvmFixture::Register() {
 }
 
 } // namespace facebook::velox::regex_compat
+
+#endif // VELOX_REGEX_COMPAT_HAS_JAVA
