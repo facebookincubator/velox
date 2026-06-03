@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/exec/WindowPartition.h"
-#include "velox/exec/WindowPartitionKeys.h"
+#include "velox/exec/window/RowColumnsSnapshot.h"
 
 #include <deque>
 #include <utility>
@@ -124,16 +124,6 @@ class VectorWindowPartition : public WindowPartition {
   // Finds the retained block and local row for a partition-relative row.
   std::pair<size_t, vector_size_t> findBlock(vector_size_t row) const;
 
-  // Returns a reference to the absolute partition row.
-  detail::WindowPartitionRowReference rowAt(vector_size_t row) const;
-
-  // Returns true if two retained rows are equal over the specified keys.
-  bool rowsEqual(
-      const detail::WindowPartitionRowReference& lhs,
-      const detail::WindowPartitionRowReference& rhs,
-      const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
-      const;
-
   // Rebuilds block prefix sums after processed rows are removed.
   void rebuildPrefixSums();
 
@@ -150,7 +140,7 @@ class VectorWindowPartition : public WindowPartition {
   vector_size_t startRow_{0};
 
   // Last row from the previously processed range, if needed for peer grouping.
-  detail::WindowPartitionKeyRowSnapshot previousRow_;
+  RowColumnsSnapshot previousRow_;
 
   // Original input channels that must be copied to compare previous rows.
   std::vector<column_index_t> previousRowKeyChannels_;

@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/exec/WindowPartitionKeys.h"
+#include "velox/exec/window/RowColumnsSnapshot.h"
 #include "velox/exec/window/WindowBuild.h"
 
 #include <deque>
@@ -110,7 +110,7 @@ class RowsStreamingWindowBuild : public WindowBuild {
 
   // Used to compare the first row of an input vector with the last row of the
   // previous input vector.
-  detail::WindowPartitionKeyRowSnapshot previousRow_;
+  RowColumnsSnapshot previousRow_;
 
   // Original input channels that must be copied to compare previous rows.
   std::vector<column_index_t> previousRowKeyChannels_;

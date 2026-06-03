@@ -108,7 +108,6 @@ velox_add_library(
   Window.cpp
   WindowFunction.cpp
   WindowPartition.cpp
-  WindowPartitionKeys.cpp
   HEADERS
   AddressableNonNullValueList.h
   Aggregate.h
@@ -219,7 +218,6 @@ velox_add_library(
   Window.h
   WindowFunction.h
   WindowPartition.h
-  WindowPartitionKeys.h
 )
 
 velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)

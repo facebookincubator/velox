@@ -18,6 +18,8 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/window/VectorWindowPartition.h"
 
+#include <algorithm>
+
 namespace facebook::velox::exec::window {
 
 namespace {
@@ -30,6 +32,32 @@ bool hasRangeFrame(const std::shared_ptr<const core::WindowNode>& windowNode) {
   }
   return false;
 }
+
+void appendUnique(
+    std::vector<column_index_t>& channels,
+    column_index_t channel) {
+  if (std::find(channels.begin(), channels.end(), channel) == channels.end()) {
+    channels.push_back(channel);
+  }
+}
+
+// Returns the deduplicated input channels referenced by the partition and sort
+// keys, in first-seen order.
+std::vector<column_index_t> keyChannels(
+    const std::vector<std::pair<column_index_t, core::SortOrder>>&
+        partitionKeyInfo,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    const std::vector<column_index_t>& inputChannels) {
+  std::vector<column_index_t> channels;
+  channels.reserve(partitionKeyInfo.size() + sortKeyInfo.size());
+  for (const auto& key : partitionKeyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  for (const auto& key : sortKeyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  return channels;
+}
 } // namespace
 
 RowsStreamingWindowBuild::RowsStreamingWindowBuild(
@@ -40,10 +68,7 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection),
       hasRangeFrame_(hasRangeFrame(windowNode)),
       previousRowKeyChannels_(
-          detail::WindowPartitionKeyChannels::create(
-              partitionKeyInfo_,
-              sortKeyInfo_,
-              inputChannels_)),
+          keyChannels(partitionKeyInfo_, sortKeyInfo_, inputChannels_)),
       boundaryKeyChannels_(previousRowKeyChannels_),
       pool_(pool) {
   VELOX_CHECK_NOT_NULL(pool_);

@@ -24,16 +24,47 @@
 
 namespace facebook::velox::exec::window {
 
+namespace {
+
+// Points to a row in a retained input vector.
+struct RowReference {
+  // Input vector that owns the referenced row.
+  RowVectorPtr input;
+
+  // Row number in 'input'.
+  vector_size_t row;
+};
+
+void appendUnique(
+    std::vector<column_index_t>& channels,
+    column_index_t channel) {
+  if (std::find(channels.begin(), channels.end(), channel) == channels.end()) {
+    channels.push_back(channel);
+  }
+}
+
+// Returns the deduplicated input channels referenced by the sort keys, in
+// first-seen order.
+std::vector<column_index_t> keyChannels(
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo,
+    const std::vector<column_index_t>& inputChannels) {
+  std::vector<column_index_t> channels;
+  channels.reserve(keyInfo.size());
+  for (const auto& key : keyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  return channels;
+}
+
+} // namespace
+
 VectorWindowPartition::VectorWindowPartition(
     const std::vector<column_index_t>& inputChannels,
     const std::vector<column_index_t>& inputMapping,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
     memory::MemoryPool* pool)
     : WindowPartition(inputMapping, sortKeyInfo, true),
-      previousRowKeyChannels_(
-          detail::WindowPartitionKeyChannels::create(
-              sortKeyInfo,
-              inputChannels)),
+      previousRowKeyChannels_(keyChannels(sortKeyInfo, inputChannels)),
       inputChannels_(inputChannels),
       pool_(pool) {
   VELOX_CHECK_NOT_NULL(pool_);
@@ -82,8 +113,9 @@ void VectorWindowPartition::removeProcessedRows(vector_size_t numRows) {
   if (complete() && numRows == totalRows_) {
     previousRow_.clear();
   } else {
+    const auto [blockIndex, localRow] = findBlock(numRows - 1);
     previousRow_.capture(
-        rowAt(startRow_ + numRows - 1), previousRowKeyChannels_, pool_);
+        blocks_[blockIndex].input, localRow, previousRowKeyChannels_, pool_);
   }
 
   auto remaining = numRows;
@@ -218,15 +250,16 @@ class VectorWindowPartition::VectorAccessor {
   }
 
   bool previousRowEquals(vector_size_t row) const {
+    const auto rowRef = rowAt(row);
     return partition_.previousRow_.rowsEqual(
-        partition_.rowAt(row),
+        rowRef.input,
+        rowRef.row,
         partition_.sortKeyInfo(),
         partition_.inputChannels_);
   }
 
   bool rowsEqual(vector_size_t lhs, vector_size_t rhs) const {
-    return partition_.rowsEqual(
-        partition_.rowAt(lhs), partition_.rowAt(rhs), partition_.sortKeyInfo());
+    return rowsEqual(rowAt(lhs), rowAt(rhs), partition_.sortKeyInfo());
   }
 
   std::optional<int32_t> compareFrameValue(
@@ -234,8 +267,8 @@ class VectorWindowPartition::VectorAccessor {
       vector_size_t frameValueRow,
       column_index_t frameColumn,
       const CompareFlags& flags) const {
-    const auto orderByRef = partition_.rowAt(orderByRow);
-    const auto frameValueRef = partition_.rowAt(frameValueRow);
+    const auto orderByRef = rowAt(orderByRow);
+    const auto frameValueRef = rowAt(frameValueRow);
     return orderByRef.input->childAt(orderByColumn())
         ->compare(
             frameValueRef.input->childAt(frameColumn).get(),
@@ -245,25 +278,25 @@ class VectorWindowPartition::VectorAccessor {
   }
 
   bool frameValueIsNull(vector_size_t row, column_index_t frameColumn) const {
-    const auto rowRef = partition_.rowAt(row);
+    const auto rowRef = rowAt(row);
     return rowRef.input->childAt(frameColumn)->isNullAt(rowRef.row);
   }
 
   bool orderByValueIsNull(vector_size_t row) const {
-    const auto rowRef = partition_.rowAt(row);
+    const auto rowRef = rowAt(row);
     return rowRef.input->childAt(orderByColumn())->isNullAt(rowRef.row);
   }
 
   template <typename T>
   bool frameValueIsNan(vector_size_t row, column_index_t frameColumn) const {
-    const auto rowRef = partition_.rowAt(row);
+    const auto rowRef = rowAt(row);
     return partition_.isNanAt<T>(
         rowRef.input->childAt(frameColumn), rowRef.row);
   }
 
   template <typename T>
   bool orderByValueIsNan(vector_size_t row) const {
-    const auto rowRef = partition_.rowAt(row);
+    const auto rowRef = rowAt(row);
     return partition_.isNanAt<T>(
         rowRef.input->childAt(orderByColumn()), rowRef.row);
   }
@@ -271,6 +304,31 @@ class VectorWindowPartition::VectorAccessor {
  private:
   column_index_t orderByColumn() const {
     return partition_.inputChannels_[partition_.sortKeyInfo()[0].first];
+  }
+
+  // Returns a reference to the absolute partition row.
+  RowReference rowAt(vector_size_t row) const {
+    VELOX_CHECK_GE(row, partition_.startRow_);
+    const auto [blockIndex, localRow] =
+        partition_.findBlock(row - partition_.startRow_);
+    return {partition_.blocks_[blockIndex].input, localRow};
+  }
+
+  // Returns true if two retained rows are equal over the specified keys.
+  bool rowsEqual(
+      const RowReference& lhs,
+      const RowReference& rhs,
+      const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
+      const {
+    for (const auto& key : keyInfo) {
+      const auto inputColumn = partition_.inputChannels_[key.first];
+      if (!lhs.input->childAt(inputColumn)
+               ->equalValueAt(
+                   rhs.input->childAt(inputColumn).get(), lhs.row, rhs.row)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   const VectorWindowPartition& partition_;
@@ -340,29 +398,6 @@ std::pair<size_t, vector_size_t> VectorWindowPartition::findBlock(
   const size_t blockIndex = std::distance(blockPrefixSums_.begin(), it) - 1;
   const auto offsetInBlock = row - blockPrefixSums_[blockIndex];
   return {blockIndex, blocks_[blockIndex].startRow + offsetInBlock};
-}
-
-detail::WindowPartitionRowReference VectorWindowPartition::rowAt(
-    vector_size_t row) const {
-  VELOX_CHECK_GE(row, startRow_);
-  const auto [blockIndex, localRow] = findBlock(row - startRow_);
-  return {blocks_[blockIndex].input, localRow};
-}
-
-bool VectorWindowPartition::rowsEqual(
-    const detail::WindowPartitionRowReference& lhs,
-    const detail::WindowPartitionRowReference& rhs,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
-    const {
-  for (const auto& key : keyInfo) {
-    const auto inputColumn = inputChannels_[key.first];
-    if (!lhs.input->childAt(inputColumn)
-             ->equalValueAt(
-                 rhs.input->childAt(inputColumn).get(), lhs.row, rhs.row)) {
-      return false;
-    }
-  }
-  return true;
 }
 
 void VectorWindowPartition::rebuildPrefixSums() {
