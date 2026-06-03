@@ -73,6 +73,20 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 
         SELECT regexp_extract_all('1a 2b 14m', '(\d+)([a-z]+)', 2); -- ['a', 'b', 'm']
 
+.. spark:function:: regexp_instr(string, pattern) -> integer
+
+    Returns the 1-based character position of the first substring in ``string``
+    that matches the regular expression ``pattern``. Returns 0 if no match is found.
+    If ``string`` is NULL, returns NULL.
+
+    Examples:
+
+    ::
+
+        SELECT regexp_instr('hello world', 'world'); -- 7
+        SELECT regexp_instr('abc123def', '[0-9]+'); -- 4
+        SELECT regexp_instr('hello', 'xyz'); -- 0
+
 .. spark:function:: rlike(string, pattern) -> boolean
 
     Evaluates the regular expression ``pattern`` and determines if it is

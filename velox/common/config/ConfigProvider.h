@@ -20,9 +20,11 @@
 namespace facebook::velox::config {
 
 /// Declares and normalizes configuration properties for a component.
-/// A ConfigProvider is shared and stateless — it does not hold per-session
-/// values. It knows only its own property names (e.g., "session_timezone"),
-/// not how they are exposed to the user.
+/// Each provider knows its own property names (e.g., "session_timezone"),
+/// types, code defaults, and validation rules. Providers may be initialized
+/// with config-file values at construction to override code defaults,
+/// enabling a three-layer cascade: code default → config file → session
+/// override.
 class ConfigProvider {
  public:
   virtual ~ConfigProvider() = default;

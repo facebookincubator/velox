@@ -754,6 +754,10 @@ struct RuntimeStatistics {
 
   int64_t footerBufferOverread{0};
 
+  int64_t footerBufferUnderread{0};
+
+  int64_t footerCacheHit{0};
+
   int64_t numStripes{0};
 
   // Estimated bytes reported to the memory pool for the deserialized
@@ -792,6 +796,14 @@ struct RuntimeStatistics {
       result.emplace(
           "footerBufferOverread",
           RuntimeMetric(footerBufferOverread, RuntimeCounter::Unit::kBytes));
+    }
+    if (footerBufferUnderread > 0) {
+      result.emplace(
+          "footerBufferUnderread",
+          RuntimeMetric(footerBufferUnderread, RuntimeCounter::Unit::kBytes));
+    }
+    if (footerCacheHit > 0) {
+      result.emplace("footerCacheHit", RuntimeMetric(footerCacheHit));
     }
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));

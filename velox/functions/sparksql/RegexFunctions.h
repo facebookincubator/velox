@@ -74,4 +74,10 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 /// If position > length string, return string.
 void registerRegexpReplace(const std::string& prefix);
 
+/// regexp_instr(string, pattern) → integer
+///
+/// Returns the 1-based character position of the first substring that matches
+/// the given regex pattern. Returns 0 if no match is found.
+void registerRegexpInstr(const std::string& prefix);
+
 } // namespace facebook::velox::functions::sparksql

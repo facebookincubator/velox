@@ -264,6 +264,7 @@ Array Functions
     For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
 
 .. function:: cardinality(x) -> bigint
+   :noindex:
 
     Returns the cardinality (size) of the array ``x``.
 
@@ -307,6 +308,7 @@ Array Functions
           SELECT dot_product(NULL, ARRAY[1, 2, 3]); -- NULL
 
 .. function:: dot_product(map(K, V), map(K, V)) -> bigint/double
+   :noindex:
 
     Computes the dot product of two maps. For maps, the dot product is computed by
     multiplying values with matching keys and summing the results. Keys present in only
@@ -392,6 +394,7 @@ Array Functions
           SELECT l2_norm(ARRAY[3, NULL, 4]); -- 5.0
 
 .. function:: l2_norm(map(K, V)) -> double
+   :noindex:
 
     Returns the Euclidean norm (L2 norm) of the values in a map.
     The L2 norm is calculated as the square root of the sum of squares of all values: sqrt(sum(v^2)).
