@@ -22,7 +22,7 @@
 #include <concepts>
 #include <optional>
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 /// Defines access to rows within a single window partition.
 ///
@@ -84,4 +84,4 @@ concept WindowPartitionAccessor = requires(
   { rows.template orderByValueIsNan<double>(row) } -> std::same_as<bool>;
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

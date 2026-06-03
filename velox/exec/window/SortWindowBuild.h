@@ -19,9 +19,9 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Spiller.h"
-#include "velox/exec/WindowBuild.h"
+#include "velox/exec/window/WindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 // Sorts input data of the Window by {partition keys, sort keys}
 // to identify window partitions. This sort fully orders
 // rows as needed for window function computation.
@@ -135,4 +135,4 @@ class SortWindowBuild : public WindowBuild {
   // Number of batches of whole partitions read from spilled data.
   uint64_t numSpillReadBatches_ = 0;
 };
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window
