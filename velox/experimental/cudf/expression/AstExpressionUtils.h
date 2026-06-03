@@ -287,10 +287,10 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
-  // For now, AST does not support expressions with DECIMAL output, or immediate
-  // DECIMAL inputs.
+  // For now, AST does not support expressions involving DECIMAL anywhere in
+  // their subtree.
   // @TODO implement DECIMAL in AST and JIT
-  if (containsDecimalType(expr, false)) {
+  if (containsDecimalType(expr, true)) {
     if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
       LOG(WARNING)
           << "Expression contains DECIMAL type, which is not supported by AST/JIT: "

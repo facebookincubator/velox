@@ -31,6 +31,6 @@ target_compile_options(
 
 target_link_libraries(
   velox_cudf_iceberg_connector
-  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg cuco::cuco
+  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg
   PUBLIC cudf::cudf velox_cudf_hive_connector
 )

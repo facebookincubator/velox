@@ -419,9 +419,8 @@ void CudfHashJoinProbe::initialize() {
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
 
   // For now we disable AST-based filtering (and force precomputation)
-  // if the filter expression contains decimal types, using the same
-  // shallow search as used for regular expression evaluation.
-  if (containsDecimalType(exprs.exprs()[0], false)) {
+  // if the filter expression contains decimal types anywhere in its subtree.
+  if (containsDecimalType(exprs.exprs()[0], true)) {
     useAstFilter_ = false;
   }
 
