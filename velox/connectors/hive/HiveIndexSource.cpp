@@ -750,9 +750,6 @@ void HiveIndexSource::initConditions(
         columnHandles,
     std::vector<std::string>& readColumnNames,
     std::vector<TypePtr>& readColumnTypes) {
-  const auto& indexColumns = tableHandle_->indexColumns();
-  const auto& dataColumns = tableHandle_->dataColumns();
-
   // Build a map from condition key name to condition for quick lookup. The key
   // name in IndexLookupCondition references input column name, we need to
   // convert it to the table column name using assignments.
@@ -768,8 +765,34 @@ void HiveIndexSource::initConditions(
         columnName);
   }
 
+  const auto indexConditionColumns = initIndexConditions(conditionMap);
+  initNonIndexConditions(
+      conditionMap,
+      indexConditionColumns,
+      columnHandles,
+      readColumnNames,
+      readColumnTypes);
+
+  VELOX_CHECK_EQ(
+      indexConditionColumns.size() + nonIndexConditions_.size() +
+          partitionIndexConditions_.size(),
+      indexLookupConditions.size(),
+      "Not all join conditions were processed");
+
+  VELOX_CHECK(
+      !indexLookupConditions_.empty(),
+      "No index column join conditions found. At least one must be an "
+      "index column");
+}
+
+folly::F14FastSet<std::string> HiveIndexSource::initIndexConditions(
+    const folly::F14FastMap<std::string, core::IndexLookupConditionPtr>&
+        conditionMap) {
+  const auto& indexColumns = tableHandle_->indexColumns();
+  const auto& dataColumns = tableHandle_->dataColumns();
+
   indexLookupConditions_.reserve(indexColumns.size());
-  folly::F14FastSet<std::string> indexConditions;
+  folly::F14FastSet<std::string> indexConditionColumns;
   // Process index columns in order, converting filters to index lookup
   // conditions where possible. A range filter/condition stops further
   // processing.
@@ -797,7 +820,7 @@ void HiveIndexSource::initConditions(
       const auto& condition = conditionIt->second;
       indexLookupConditions_.push_back(condition);
       VELOX_CHECK(!condition->isFilter());
-      indexConditions.insert(indexColumn);
+      indexConditionColumns.insert(indexColumn);
 
       // Check if this is a range condition (Between) - stops further
       // processing.
@@ -845,11 +868,23 @@ void HiveIndexSource::initConditions(
     break;
   }
 
-  // Process remaining conditions not consumed as index conditions.
+  return indexConditionColumns;
+}
+
+void HiveIndexSource::initNonIndexConditions(
+    const folly::F14FastMap<std::string, core::IndexLookupConditionPtr>&
+        conditionMap,
+    const folly::F14FastSet<std::string>& indexConditionColumns,
+    const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
+        columnHandles,
+    std::vector<std::string>& readColumnNames,
+    std::vector<TypePtr>& readColumnTypes) {
+  const auto& indexColumns = tableHandle_->indexColumns();
+
   folly::F14FastSet<std::string> readColumnNameSet(
       readColumnNames.begin(), readColumnNames.end());
   for (const auto& [columnName, condition] : conditionMap) {
-    if (indexConditions.count(columnName) > 0) {
+    if (indexConditionColumns.count(columnName) > 0) {
       continue;
     }
 
@@ -911,17 +946,6 @@ void HiveIndexSource::initConditions(
            static_cast<column_index_t>(requestColumnIndex)});
     }
   }
-
-  VELOX_CHECK_EQ(
-      indexConditions.size() + nonIndexConditions_.size() +
-          partitionIndexConditions_.size(),
-      indexLookupConditions.size(),
-      "Not all join conditions were processed");
-
-  VELOX_CHECK(
-      !indexLookupConditions_.empty(),
-      "No index column join conditions found. At least one must be an "
-      "index column");
 }
 
 void HiveIndexSource::initRemainingFilter(
