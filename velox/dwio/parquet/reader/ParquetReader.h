@@ -62,6 +62,14 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
     return footerMemoryTrackingThreshold_;
   }
 
+  void setNullStructIfAllFieldsMissing(bool value) {
+    nullStructIfAllFieldsMissing_ = value;
+  }
+
+  bool nullStructIfAllFieldsMissing() const {
+    return nullStructIfAllFieldsMissing_;
+  }
+
  private:
   /// Allows reading INT32 physical columns as narrower integer types.
   bool allowInt32Narrowing_{
@@ -70,6 +78,11 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
   /// Serialized footer size threshold above which heap tracking is enabled.
   uint64_t footerMemoryTrackingThreshold_{
       ParquetConfig::kDefaultFooterMemoryTrackingThreshold};
+
+  /// Returns NULL for fully-missing structs under name-based mapping.
+  bool nullStructIfAllFieldsMissing_{
+      ParquetConfig::kNullStructIfAllFieldsMissingSessionProperty::
+          defaultValue};
 };
 
 /// Implements the RowReader interface for Parquet.
