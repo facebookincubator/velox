@@ -155,6 +155,7 @@ jobs:
             CLAUDE.md
             .claude/CLAUDE.md
             .claude/skills/ci-failure-analysis/SKILL.md
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Prepare analysis prompt
