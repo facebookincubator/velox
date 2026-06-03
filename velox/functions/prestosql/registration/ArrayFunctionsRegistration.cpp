@@ -282,6 +282,8 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayTopNFunction<Date>(prefix);
   registerArrayTopNFunction<Varbinary>(prefix);
   registerArrayTopNFunction<Orderable<T1>>(prefix);
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_top_n_transform, prefix + "array_top_n");
 
   registerArrayRemoveNullFunctions<int8_t>(prefix);
   registerArrayRemoveNullFunctions<int16_t>(prefix);
