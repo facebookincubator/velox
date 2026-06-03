@@ -49,12 +49,7 @@ struct RoundHalfUpPolicy {
     }
     TResult rescaledValue;
     DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
-        rescaledValue,
-        input,
-        factors_.divideFactor.value_or(1),
-        false,
-        0,
-        0);
+        rescaledValue, input, factors_.divideFactor.value_or(1), false, 0, 0);
     rescaledValue *= factors_.multiplyFactor.value_or(1);
     return rescaledValue;
   }

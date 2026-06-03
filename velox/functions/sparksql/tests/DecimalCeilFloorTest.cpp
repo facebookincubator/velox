@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/sparksql/specialforms/DecimalCeilFloor.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
