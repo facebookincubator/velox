@@ -157,13 +157,6 @@ class HiveIndexSource : public IndexSource,
       const std::vector<SplitIndexReader*>& readers,
       const SplitIndexReader::Options& options);
 
-  // Creates a partitioned lookup iterator when probe rows target different
-  // partition groups. Splits the probe batch by partition, dispatches each
-  // sub-batch to the matching group's readers, and merges results.
-  std::shared_ptr<ResultIterator> createPartitionLookupIterator(
-      const Request& request,
-      const SplitIndexReader::Options& options);
-
   // Creates a SplitIndexReader using a registered IndexReaderFactory.
   void createCustomIndexReader(
       const IndexReaderFactory& factory,
@@ -213,11 +206,18 @@ class HiveIndexSource : public IndexSource,
 
   // Finds the partition group whose partition values match the given probe
   // row's partition column values. Returns nullptr if no group matches.
-  // TODO: accept a batch of rows and return a per-row group mapping to
-  // avoid redundant per-row calls from PartitionDispatchIterator.
   PartitionGroup* findPartitionGroup(
       const RowVectorPtr& probeInput,
       vector_size_t row);
+
+  // Creates a partitioned lookup iterator when probe rows target different
+  // partition groups. Takes a pre-built row-to-group mapping, dispatches
+  // each sub-batch to the matching group's readers, and merges results.
+  std::shared_ptr<ResultIterator> createPartitionLookupIterator(
+      const Request& request,
+      folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
+          partitionRowMap,
+      const SplitIndexReader::Options& options);
 
   // Per-iteration timing breakdown for index lookups.
   struct IterationStats {

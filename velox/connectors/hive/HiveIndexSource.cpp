@@ -1167,9 +1167,9 @@ void HiveIndexSource::buildPartitionGroups(
       hiveConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties());
 
-  // For each distinct partition, build typed routing constants (used by
-  // findPartitionGroup() at lookup time) and a per-group scan spec where
-  // partition columns are emitted as constants by the underlying reader.
+  // For each distinct partition, build typed routing constants and a per-group
+  // scan spec where partition columns are emitted as constants by the
+  // underlying reader.
   partitionGroups_.reserve(splitGroups.size());
   for (auto& [_, groupSplits] : splitGroups) {
     PartitionGroup group;
@@ -1289,27 +1289,41 @@ std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
 
   const auto numRows = request.input->size();
 
-  // Fast path: check if all rows route to the same partition group.
-  auto* firstGroup = findPartitionGroup(request.input, 0);
-  bool singleGroup = true;
-  for (vector_size_t row = 1; row < numRows; ++row) {
-    if (findPartitionGroup(request.input, row) != firstGroup) {
-      singleGroup = false;
-      break;
+  // Map each row to its partition group.
+  folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
+      partitionRowMap;
+  partitionRowMap.reserve(partitionGroups_.size());
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    auto* group = findPartitionGroup(request.input, row);
+    if (group != nullptr) {
+      partitionRowMap[group].emplace_back(row);
     }
+    // NOTE: Rows with no matching group are intentionally dropped — they
+    // produce no output. IndexLookupJoin detects the gap in inputHits and
+    // emits nulls for LEFT JOIN or skips for INNER JOIN.
   }
 
-  if (singleGroup) {
+  if (partitionRowMap.empty()) {
     // No partition group matched any probe row.
-    if (firstGroup == nullptr) {
-      static const std::shared_ptr<IndexSource::ResultIterator> kEmpty =
-          std::make_shared<EmptyIterator>();
-      return kEmpty;
-    }
-    return createLookupIterator(request, firstGroup->readers, options);
+    static const std::shared_ptr<IndexSource::ResultIterator> kEmpty =
+        std::make_shared<EmptyIterator>();
+    return kEmpty;
   }
-  // Slow path: probe rows target different partition groups.
-  return createPartitionLookupIterator(request, options);
+
+  if (partitionRowMap.size() == 1) {
+    const auto* group = partitionRowMap.begin()->first;
+    if (partitionRowMap.begin()->second.size() == numRows) {
+      // Fast path: all rows matched the same group.
+      return createLookupIterator(request, group->readers, options);
+    }
+    // NOTE: When a single group matched but not all rows (some had no
+    // matching partition), we still go through createPartitionLookupIterator
+    // so that unmatched rows are excluded from the sub-batch and their
+    // inputHit gaps signal misses to IndexLookupJoin.
+  }
+
+  return createPartitionLookupIterator(
+      request, std::move(partitionRowMap), options);
 }
 
 std::shared_ptr<IndexSource::ResultIterator>
@@ -1336,27 +1350,13 @@ HiveIndexSource::createLookupIterator(
 std::shared_ptr<IndexSource::ResultIterator>
 HiveIndexSource::createPartitionLookupIterator(
     const Request& request,
+    folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
+        partitionRowMap,
     const SplitIndexReader::Options& options) {
-  const auto numRows = request.input->size();
-
-  // Map each row to its partition group.
-  folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
-      partitionGroups;
-  partitionGroups.reserve(partitionGroups_.size());
-  for (vector_size_t row = 0; row < numRows; ++row) {
-    auto* group = findPartitionGroup(request.input, row);
-    if (group != nullptr) {
-      partitionGroups[group].push_back(row);
-    }
-    // Rows with no matching group are intentionally dropped — they produce
-    // no output. IndexLookupJoin detects the gap in inputHits and emits
-    // nulls for LEFT JOIN or skips for INNER JOIN.
-  }
-
   // Create a PartitionIterator per group.
   std::vector<std::shared_ptr<IndexSource::ResultIterator>> partitionIters;
-  partitionIters.reserve(partitionGroups.size());
-  for (auto& [partition, partitionRows] : partitionGroups) {
+  partitionIters.reserve(partitionRowMap.size());
+  for (auto& [partition, partitionRows] : partitionRowMap) {
     const auto numPartitionRows =
         static_cast<vector_size_t>(partitionRows.size());
     auto partitionIndices = allocateIndices(numPartitionRows, pool_);
