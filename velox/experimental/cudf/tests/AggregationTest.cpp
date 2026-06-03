@@ -305,6 +305,50 @@ TEST_F(AggregationTest, minMaxTimestampGroupBy) {
   assertQuery(plan, "SELECT c0, min(c1), max(c1) FROM tmp GROUP BY c0");
 }
 
+TEST_F(AggregationTest, minMaxDateGlobal) {
+  // cuDF represents DATE as TIMESTAMP_DAYS, a distinct type from TIMESTAMP, so
+  // exercise min/max on it directly.
+  std::vector<std::optional<int32_t>> dates = {
+      DATE()->toDays("2021-01-01"),
+      DATE()->toDays("2021-01-02"),
+      std::nullopt,
+      DATE()->toDays("2020-12-31"),
+      DATE()->toDays("2021-01-03"),
+  };
+
+  auto data = makeRowVector({makeNullableFlatVector<int32_t>(dates, DATE())});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"min(c0)", "max(c0)"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT min(c0), max(c0) FROM tmp");
+}
+
+TEST_F(AggregationTest, minMaxDateGroupBy) {
+  std::vector<std::optional<int32_t>> dates = {
+      DATE()->toDays("2021-01-01"),
+      std::nullopt,
+      DATE()->toDays("2021-01-02"),
+      DATE()->toDays("2020-12-31"),
+      DATE()->toDays("2021-01-03"),
+  };
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 2, 2, 2}),
+       makeNullableFlatVector<int32_t>(dates, DATE())});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"min(c1)", "max(c1)"})
+                  .planNode();
+
+  assertQuery(plan, "SELECT c0, min(c1), max(c1) FROM tmp GROUP BY c0");
+}
+
 TEST_F(AggregationTest, singleBigintKey) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);

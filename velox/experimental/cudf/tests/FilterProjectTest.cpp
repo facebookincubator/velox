@@ -1866,7 +1866,9 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
             toDateDays("2025-02-28"),
             toDateDays("2024-02-29")},
            DATE()),
-       makeConstant<int64_t>(kMillisInDay, 3, INTERVAL_DAY_TIME())});
+       makeFlatVector<int64_t>(
+           {1 * kMillisInDay, 5 * kMillisInDay, 30 * kMillisInDay},
+           INTERVAL_DAY_TIME())});
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan = PlanBuilder()
@@ -1876,8 +1878,8 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
 
   auto expected = makeRowVector({makeFlatVector<int32_t>(
       {toDateDays("2025-01-02"),
-       toDateDays("2025-03-01"),
-       toDateDays("2024-03-01")},
+       toDateDays("2025-03-05"),
+       toDateDays("2024-03-30")},
       DATE())});
   assertQuery(plan, expected);
 }

@@ -19,11 +19,11 @@ add_library(
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
   JitExpression.cpp
-  prestosql/DatePlusIntervalFunction.cpp
   PrestoFunctions.cpp
+  prestosql/DatePlusIntervalFunction.cpp
+  SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/HashFunction.cpp
-  SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
 )
 
