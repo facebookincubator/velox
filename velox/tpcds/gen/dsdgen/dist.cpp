@@ -53,7 +53,6 @@
 #ifndef USE_STDLIB_H
 #include <malloc.h>
 #endif
-#include "velox/tpcds/gen/dsdgen/include/config.h"
 #include "velox/tpcds/gen/dsdgen/include/date.h"
 #include "velox/tpcds/gen/dsdgen/include/dcomp.h"
 #include "velox/tpcds/gen/dsdgen/include/decimal.h"
@@ -82,11 +81,6 @@ struct {
 #define D_NAME_LEN 20
 #define FL_LOADED 0x01
 static int load_dist(d_idx_t* d);
-
-#include <stdio.h>
-#include "velox/tpcds/gen/dsdgen/include/config.h"
-#include "velox/tpcds/gen/dsdgen/include/porting.h"
-#include "velox/tpcds/gen/dsdgen/include/r_params.h"
 
 /*
  * Routine: release(char *param_name, char *msg)
