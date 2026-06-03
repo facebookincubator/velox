@@ -27,6 +27,7 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/filling.hpp>
 #include <cudf/lists/count_elements.hpp>
 #include <cudf/lists/extract.hpp>
 #include <cudf/reduction.hpp>
