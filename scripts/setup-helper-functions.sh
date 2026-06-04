@@ -172,6 +172,8 @@ function get_cxx_flags {
         else
           echo -n "-mcpu=neoverse-v2 "
         fi
+      elif grep -qw "atomics" /proc/cpuinfo; then
+        echo -n "-march=armv8.1-a+crc+crypto+lse "
       else
         echo -n "-march=armv8-a+crc+crypto "
       fi
