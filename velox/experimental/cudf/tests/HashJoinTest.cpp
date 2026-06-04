@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -58,6 +59,7 @@ class HashJoinTest : public HashJoinTestBase {
     HashJoinTestBase::SetUp();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
   }
 
   void TearDown() override {

@@ -21,6 +21,7 @@ add_library(
   ExpressionEvaluator.cpp
   JitExpression.cpp
   PrestoFunctions.cpp
+  PrestoFunctionsKernel.cu
   SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
 )

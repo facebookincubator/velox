@@ -15,8 +15,10 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -46,6 +48,9 @@ class CudfFilterProjectTest : public OperatorTestBase {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     rng_.seed(123);
+
+    // Register Presto-specific CUDF functions
+    facebook::velox::cudf_velox::registerPrestoFunctions("");
 
     rowType_ = ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", VARCHAR()}});
   }
@@ -1473,6 +1478,8 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::registerCudf();
+    // Register Presto-specific CUDF functions
+    facebook::velox::cudf_velox::registerPrestoFunctions("");
   }
 
   static void TearDownTestCase() {
@@ -1678,6 +1685,34 @@ TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
         "true OR c0 OR c1"}) {
     assertExpressionMatchesCpu(expr, input, rowType);
   }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, modInt) {
+  auto modTinyInt =
+      evaluateOnce<int8_t, int8_t, int8_t>("mod(c0, c1)", 10, 4);
+  EXPECT_EQ(modTinyInt, 2);
+  auto modSmallInt =
+    evaluateOnce<int16_t, int16_t, int16_t>("mod(c0, c1)", 10, 4);
+  EXPECT_EQ(modSmallInt, 2);
+
+  auto modInteger =
+      evaluateOnce<int32_t, int32_t, int32_t>("mod(c0, c1)", 10, 4);
+  EXPECT_EQ(modInteger, 2);
+
+  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", rowType));
+
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {9, 10, 0, -9, -10, -11, std::numeric_limits<int64_t>::min()}),
+       makeFlatVector<int64_t>({3, -3, 11, -1, 199999, 77, -1})});
+  assertExpressionMatchesCpu("mod(c0, c1)", input, rowType);
+
+  auto testError = [&](int64_t a, int64_t b) {
+        evaluateOnce<int64_t, int64_t, int64_t>("mod(c0, c1)", a, b);
+  };
+
+  VELOX_ASSERT_THROW(testError(10, 0), "Cannot divide by 0");
 }
 
 TEST_F(CudfFilterProjectTest, andAndAndExpr) {
