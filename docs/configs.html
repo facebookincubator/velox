@@ -1093,7 +1093,9 @@ execution stats.</p></td>
 <td><p>reader.timestamp_partition_value_as_local_time</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
-<td><p>Reads timestamp partition value as local time if true. Otherwise, reads as UTC.</p></td>
+<td><p>Reads TIMESTAMP partition value as local time if true. Otherwise, reads
+as UTC. This setting does not apply to TIMESTAMP_UTC partition values,
+which are always read as UTC.</p></td>
 </tr>
 <tr class="row-even"><td><p>preserve-flat-maps-in-memory</p></td>
 <td><p>preserve_flat_maps_in_memory</p></td>
