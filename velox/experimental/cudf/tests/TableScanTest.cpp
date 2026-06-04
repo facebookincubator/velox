@@ -24,6 +24,7 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/MemoryArbitrator.h"
@@ -31,7 +32,9 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
@@ -817,4 +820,45 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+// Velox's parquet writer stores DECIMAL(7, 2) as INT32 (the default
+// `enableStoreDecimalAsInteger` is true), and cuDF's reader maps INT32
+// decimals to DECIMAL32. Velox short decimals are always DECIMAL64, so the
+// scan output must be normalized before downstream consumers see it.
+TEST_F(TableScanTest, lowPrecisionDecimalScan) {
+  auto rowType = ROW({"d"}, {DECIMAL(7, 2)});
+  auto vector = makeRowVector(
+      {"d"},
+      {makeNullableFlatVector<int64_t>(
+          {12345, std::nullopt, -2500, 300}, DECIMAL(7, 2))});
+
+  auto filePath = TempFilePath::create();
+  auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+  auto writeFile = fs->openFileForWrite(
+      filePath->getPath(),
+      {.shouldCreateParentDirectories = true,
+       .shouldThrowOnFileAlreadyExists = false});
+  auto sink = std::make_unique<dwio::common::WriteFileSink>(
+      std::move(writeFile), filePath->getPath());
+  auto writerPool = rootPool_->addAggregateChild("TableScanTest.ParquetWriter");
+  parquet::WriterOptions options;
+  parquet::Writer writer(std::move(sink), options, writerPool, rowType);
+  writer.write(vector);
+  writer.close();
+  createDuckDbTable({vector});
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(plan, {filePath}, "SELECT * FROM tmp");
 }

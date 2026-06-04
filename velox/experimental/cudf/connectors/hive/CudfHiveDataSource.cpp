@@ -35,11 +35,55 @@
 #include "velox/expression/FieldReference.h"
 
 #include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
+
+#include <algorithm>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+std::unique_ptr<cudf::table> normalizeDecimalColumnsToVeloxTypes(
+    std::unique_ptr<cudf::table> table,
+    const RowTypePtr& rowType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto tableView = table->view();
+  const auto numColumns =
+      std::min<size_t>(tableView.num_columns(), rowType->size());
+  bool needsCast = false;
+  for (size_t i = 0; i < numColumns; ++i) {
+    const auto& veloxType = rowType->childAt(i);
+    if (!veloxType->isDecimal()) {
+      continue;
+    }
+    if (tableView.column(i).type() != veloxToCudfDataType(veloxType)) {
+      needsCast = true;
+      break;
+    }
+  }
+  if (!needsCast) {
+    return table;
+  }
+
+  auto columns = table->release();
+  for (size_t i = 0; i < numColumns; ++i) {
+    const auto& veloxType = rowType->childAt(i);
+    if (!veloxType->isDecimal()) {
+      continue;
+    }
+    auto expectedType = veloxToCudfDataType(veloxType);
+    if (columns[i]->type() != expectedType) {
+      columns[i] = cudf::cast(columns[i]->view(), expectedType, stream, mr);
+    }
+  }
+  return std::make_unique<cudf::table>(std::move(columns));
+}
+
+} // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -231,6 +275,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   }
   auto cudfTable = std::move(chunkOpt.value());
   auto stream = cudfSplitReader_->stream();
+
+  // cuDF can read small Parquet decimals as DECIMAL32. Normalize scanned
+  // decimal columns to the physical representation promised by the Velox row
+  // type before filters or downstream operators see the batch.
+  cudfTable = normalizeDecimalColumnsToVeloxTypes(
+      std::move(cudfTable), getTableRowType(), stream, get_output_mr());
 
   uint64_t filterTimeUs{0};
   if (remainingFilterExprSet_) {
