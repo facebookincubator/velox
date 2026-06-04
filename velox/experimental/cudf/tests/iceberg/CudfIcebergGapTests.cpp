@@ -465,12 +465,12 @@ TEST_F(CudfIcebergGapTests, equalityDeleteNullMatchesNull) {
       makeNullableFlatVector<int64_t>({std::nullopt}),
   });
   auto eqDelFile = TempFilePath::create();
-  writeDeleteFile(DeleteFileFormat::PARQUET, eqDelFile->getPath(), {eqDel});
+  writeDeleteFile(DeleteFileFormat::DWRF, eqDelFile->getPath(), {eqDel});
 
   IcebergDeleteFile eqDelete(
       FileContent::kEqualityDeletes,
       eqDelFile->getPath(),
-      dwio::common::FileFormat::PARQUET,
+      dwio::common::FileFormat::DWRF,
       1,
       getFileSize(eqDelFile->getPath()),
       /*equalityFieldIds=*/{1});
