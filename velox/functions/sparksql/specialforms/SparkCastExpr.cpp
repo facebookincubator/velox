@@ -26,19 +26,30 @@ bool isIntegralType(const TypePtr& type) {
       type == BIGINT();
 }
 
+bool isFloatingPointType(const TypePtr& type) {
+  return type == REAL() || type == DOUBLE();
+}
+
 } // namespace
 
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  // String to Boolean, Integer, or Date types support ANSI mode.
   if (fromType->isVarchar()) {
+    // String to Boolean or Date types support ANSI mode.
     if (toType->isBoolean() || toType->isDate()) {
       return true;
     }
     if (isIntegralType(toType)) {
       // For string-to-integral casts, ANSI mode rejects invalid formats (e.g.
       // decimal points) instead of returning NULL.
+      return true;
+    }
+    // String to float/double casts support ANSI mode (invalid format strings
+    // throw instead of returning NULL). Note: allowOverflow_ will also be false
+    // when ANSI is active, but castStringToReal/Double correctly produce
+    // Infinity for overflow per Spark semantics without consulting truncate().
+    if (isFloatingPointType(toType)) {
       return true;
     }
   }

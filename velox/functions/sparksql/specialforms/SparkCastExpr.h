@@ -47,6 +47,9 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
 
  private:
   /// Determines if ANSI mode is supported for casting from fromType to toType.
+  /// Currently supported:
+  ///   - varchar -> boolean, date, integral (existing)
+  ///   - varchar -> float/double (invalid-format errors)
   /// TODO: Remove this function once all cast operations support ANSI mode.
   /// @param fromType The source type of the cast
   /// @param toType The target type of the cast

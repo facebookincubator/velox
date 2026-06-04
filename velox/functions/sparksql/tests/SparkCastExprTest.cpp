@@ -1596,5 +1596,154 @@ TEST_F(SparkCastExprTestAnsiOff, overflow) {
 TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
   testRecursiveTryCast();
 }
+
+// ============================================================================
+// ANSI ON — String to Float/Double Tests
+// ============================================================================
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleAnsiInvalidThrows) {
+  auto testThrows = [this](
+                        const std::string& type,
+                        const std::string& value,
+                        const std::string& errorFragment) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate(fmt::format("cast(c0 as {})", type), input)), errorFragment);
+  };
+
+  // Invalid format strings should throw in ANSI mode.
+  testThrows("real", "abc", "Number format error");
+  testThrows("real", "1.2a", "Number format error");
+  testThrows("real", "1.2.3", "Number format error");
+  testThrows("double", "abc", "Number format error");
+  testThrows("double", "1.2.3", "Number format error");
+  testThrows("double", "xyz123", "Number format error");
+
+  // Empty strings throw a different error message.
+  testThrows("real", "", "Empty string");
+  testThrows("double", "", "Empty string");
+
+  // Whitespace-only strings trim to empty and should also throw.
+  testThrows("real", "   ", "Empty string");
+  testThrows("double", "   ", "Empty string");
+  testThrows("real", "\t\n", "Empty string");
+  testThrows("double", "\t\n", "Empty string");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleAnsiValidFormats) {
+  auto kNan = std::numeric_limits<float>::quiet_NaN();
+  auto kInf = std::numeric_limits<float>::infinity();
+  auto kDNan = std::numeric_limits<double>::quiet_NaN();
+  auto kDInf = std::numeric_limits<double>::infinity();
+
+  // Basic valid values.
+  testCast<std::string, float>("real", {"1.5"}, {1.5f});
+  testCast<std::string, double>("double", {"1.5"}, {1.5});
+
+  // Special literals (case variants).
+  testCast<std::string, float>("real", {"nan"}, {kNan});
+  testCast<std::string, float>("real", {"NaN"}, {kNan});
+  testCast<std::string, float>("real", {"infinity"}, {kInf});
+  testCast<std::string, float>("real", {"Infinity"}, {kInf});
+  testCast<std::string, float>("real", {"-infinity"}, {-kInf});
+  testCast<std::string, float>("real", {"-Infinity"}, {-kInf});
+  testCast<std::string, double>("double", {"nan"}, {kDNan});
+  testCast<std::string, double>("double", {"NaN"}, {kDNan});
+  testCast<std::string, double>("double", {"infinity"}, {kDInf});
+  testCast<std::string, double>("double", {"Infinity"}, {kDInf});
+  testCast<std::string, double>("double", {"-infinity"}, {-kDInf});
+  testCast<std::string, double>("double", {"-Infinity"}, {-kDInf});
+
+  // Scientific notation.
+  testCast<std::string, float>("real", {"1.5e2"}, {150.0f});
+  testCast<std::string, float>("real", {"-3.14E-2"}, {-0.0314f});
+  testCast<std::string, double>("double", {"1.5e10"}, {1.5e10});
+  testCast<std::string, double>("double", {"-3.14E-5"}, {-3.14e-5});
+
+  // Signed values and zeros.
+  testCast<std::string, float>("real", {"+1.5"}, {1.5f});
+  testCast<std::string, float>("real", {"-1.5"}, {-1.5f});
+  testCast<std::string, float>("real", {"+0"}, {0.0f});
+  testCast<std::string, float>("real", {"-0"}, {-0.0f});
+  testCast<std::string, double>("double", {"+1.5"}, {1.5});
+  testCast<std::string, double>("double", {"-0"}, {-0.0});
+
+  // Overflow → Infinity (not error, per Spark behavior).
+  testCast<std::string, float>("real", {"1e39"}, {kInf});
+  testCast<std::string, float>("real", {"-1e39"}, {-kInf});
+  testCast<std::string, double>("double", {"1e309"}, {kDInf});
+  testCast<std::string, double>("double", {"-1e309"}, {-kDInf});
+}
+
+TEST_F(SparkCastExprTestAnsiOn, tryCastStringToRealDoubleAnsiReturnsNull) {
+  // TRY_CAST should return NULL on invalid input even with ANSI ON.
+  auto result = evaluateOnce<float>(
+      "try_cast(c0 as real)",
+      makeRowVector({makeFlatVector<std::string>({"abc"})}));
+  EXPECT_FALSE(result.has_value());
+  auto resultDouble = evaluateOnce<double>(
+      "try_cast(c0 as double)",
+      makeRowVector({makeFlatVector<std::string>({"abc"})}));
+  EXPECT_FALSE(resultDouble.has_value());
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleAnsiMultiRow) {
+  // Multi-row vector with mix of valid, invalid, and null values.
+  // CAST with ANSI ON should throw on the first invalid value.
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {std::nullopt, "1.5", "abc", "nan"})});
+  VELOX_ASSERT_THROW(
+      (evaluate("cast(c0 as real)", input)), "Number format error");
+
+  // TRY_CAST with ANSI ON should return null for invalid, preserve valid.
+  auto expected = makeNullableFlatVector<float>(
+      {std::nullopt,
+       1.5f,
+       std::nullopt,
+       std::numeric_limits<float>::quiet_NaN()});
+  auto result = evaluate("try_cast(c0 as real)", input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToDoubleAnsiMultiRow) {
+  // Multi-row vector for DOUBLE (mirrors REAL multi-row test above).
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {std::nullopt, "1.5", "abc", "nan"})});
+  VELOX_ASSERT_THROW(
+      (evaluate("cast(c0 as double)", input)), "Number format error");
+
+  auto expected = makeNullableFlatVector<double>(
+      {std::nullopt,
+       1.5,
+       std::nullopt,
+       std::numeric_limits<double>::quiet_NaN()});
+  auto result = evaluate("try_cast(c0 as double)", input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleAnsiNullInput) {
+  // NULL input should return NULL, not throw.
+  auto input =
+      makeRowVector({makeNullableFlatVector<std::string>({std::nullopt})});
+  auto resultFloat = evaluateOnce<float>("cast(c0 as real)", input);
+  EXPECT_FALSE(resultFloat.has_value());
+  auto resultDouble = evaluateOnce<double>("cast(c0 as double)", input);
+  EXPECT_FALSE(resultDouble.has_value());
+}
+
+// ============================================================================
+// ANSI OFF — String to Float/Double Tests (legacy behavior)
+// ============================================================================
+
+TEST_F(SparkCastExprTestAnsiOff, stringToFloatInvalidLegacy) {
+  // Invalid format strings should return NULL in legacy (ANSI off) mode.
+  testCast<std::string, float>("real", {"abc"}, {std::nullopt});
+  testCast<std::string, float>("real", {""}, {std::nullopt});
+  testCast<std::string, float>("real", {"1.2a"}, {std::nullopt});
+  testCast<std::string, float>("real", {"1.2.3"}, {std::nullopt});
+  testCast<std::string, double>("double", {"abc"}, {std::nullopt});
+  testCast<std::string, double>("double", {""}, {std::nullopt});
+  testCast<std::string, double>("double", {"1.2.3"}, {std::nullopt});
+}
 } // namespace
 } // namespace facebook::velox::test
