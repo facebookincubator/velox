@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/specialforms/DecimalCeilFloor.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -33,11 +33,11 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
         std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(scale))};
     const auto [precision, inputScale] = getDecimalPrecisionScale(*inputType);
     const auto [resultPrecision, resultScale] =
-        DecimalCeilFloorCallToSpecialFormBase::getResultPrecisionScale(
+        DecimalRoundCallToSpecialForm::getResultPrecisionScale(
             precision, inputScale, scale);
     const std::string& name = mode == Mode::kCeil
-        ? std::string(DecimalCeilCallToSpecialForm::kCeilDecimal)
-        : std::string(DecimalFloorCallToSpecialForm::kFloorDecimal);
+        ? std::string(DecimalRoundCallToSpecialForm::kCeilDecimal)
+        : std::string(DecimalRoundCallToSpecialForm::kFloorDecimal);
     return std::make_shared<const core::CallTypedExpr>(
         DECIMAL(resultPrecision, resultScale), std::move(inputs), name);
   }
@@ -144,7 +144,7 @@ TEST_F(DecimalCeilFloorTest, highInputScaleNegativeRoundScale) {
   // by either 10^38 or 10^39 yields quotient 0 with full remainder).
   // Spark result type for (p=38, s=38, _scale=-1): DECIMAL(2, 0).
   // Values: 10^37 represents 0.1, -10^37 represents -0.1.
-  constexpr int64_t kTenToTheNine = 1000000000LL;
+  constexpr int64_t kTenToTheNine = 1'000'000'000LL;
   const int128_t kTenToTheEighteen =
       static_cast<int128_t>(kTenToTheNine) * kTenToTheNine;
   const int128_t pointOne =
@@ -167,33 +167,38 @@ TEST_F(DecimalCeilFloorTest, longDecimal) {
   // is short decimal (int64).
   testCall(
       makeFlatVector<int128_t>(
-          {1234567890123456789LL, -1234567890123456789LL, 0}, DECIMAL(20, 5)),
+          {1'234'567'890'123'456'789LL, -1'234'567'890'123'456'789LL, 0},
+          DECIMAL(20, 5)),
       2,
       Mode::kCeil,
       makeFlatVector<int64_t>(
-          {1234567890123457LL, -1234567890123456LL, 0}, DECIMAL(18, 2)));
+          {1'234'567'890'123'457LL, -1'234'567'890'123'456LL, 0},
+          DECIMAL(18, 2)));
 
   // Long-decimal floor path.
   testCall(
       makeFlatVector<int128_t>(
-          {1234567890123456789LL, -1234567890123456789LL, 0}, DECIMAL(20, 5)),
+          {1'234'567'890'123'456'789LL, -1'234'567'890'123'456'789LL, 0},
+          DECIMAL(20, 5)),
       2,
       Mode::kFloor,
       makeFlatVector<int64_t>(
-          {1234567890123456LL, -1234567890123457LL, 0}, DECIMAL(18, 2)));
+          {1'234'567'890'123'456LL, -1'234'567'890'123'457LL, 0},
+          DECIMAL(18, 2)));
 }
 
 TEST_F(DecimalCeilFloorTest, longToLongDecimal) {
   // Long-decimal input → long-decimal result (divide-only path, no multiply).
   // DECIMAL(38, 2) with scale=1 → DECIMAL(38, 1).
-  const int128_t val = static_cast<int128_t>(99999999999999999LL) * 100 + 55;
+  const int128_t val =
+      static_cast<int128_t>(99'999'999'999'999'999LL) * 100 + 55;
   testCall(
       makeFlatVector<int128_t>({val, -val, 0}, DECIMAL(38, 2)),
       1,
       Mode::kCeil,
       makeFlatVector<int128_t>(
-          {static_cast<int128_t>(99999999999999999LL) * 10 + 6,
-           -static_cast<int128_t>(99999999999999999LL) * 10 - 5,
+          {static_cast<int128_t>(99'999'999'999'999'999LL) * 10 + 6,
+           -static_cast<int128_t>(99'999'999'999'999'999LL) * 10 - 5,
            0},
           DECIMAL(38, 1)));
 
@@ -202,8 +207,8 @@ TEST_F(DecimalCeilFloorTest, longToLongDecimal) {
       1,
       Mode::kFloor,
       makeFlatVector<int128_t>(
-          {static_cast<int128_t>(99999999999999999LL) * 10 + 5,
-           -static_cast<int128_t>(99999999999999999LL) * 10 - 6,
+          {static_cast<int128_t>(99'999'999'999'999'999LL) * 10 + 5,
+           -static_cast<int128_t>(99'999'999'999'999'999LL) * 10 - 6,
            0},
           DECIMAL(38, 1)));
 }
@@ -213,23 +218,25 @@ TEST_F(DecimalCeilFloorTest, shortToLongDecimal) {
   // DECIMAL(18, 0) with scale=-1 → result precision 19 → long decimal.
   testCall(
       makeFlatVector<int64_t>(
-          {999999999999999999LL, -999999999999999999LL, 55LL}, DECIMAL(18, 0)),
+          {999'999'999'999'999'999LL, -999'999'999'999'999'999LL, 55LL},
+          DECIMAL(18, 0)),
       -1,
       Mode::kCeil,
       makeFlatVector<int128_t>(
-          {static_cast<int128_t>(1000000000000000000LL),
-           static_cast<int128_t>(-999999999999999990LL),
+          {static_cast<int128_t>(1'000'000'000'000'000'000LL),
+           static_cast<int128_t>(-999'999'999'999'999'990LL),
            static_cast<int128_t>(60)},
           DECIMAL(19, 0)));
 
   testCall(
       makeFlatVector<int64_t>(
-          {999999999999999999LL, -999999999999999999LL, 55LL}, DECIMAL(18, 0)),
+          {999'999'999'999'999'999LL, -999'999'999'999'999'999LL, 55LL},
+          DECIMAL(18, 0)),
       -1,
       Mode::kFloor,
       makeFlatVector<int128_t>(
-          {static_cast<int128_t>(999999999999999990LL),
-           static_cast<int128_t>(-1000000000000000000LL),
+          {static_cast<int128_t>(999'999'999'999'999'990LL),
+           static_cast<int128_t>(-1'000'000'000'000'000'000LL),
            static_cast<int128_t>(50)},
           DECIMAL(19, 0)));
 }
@@ -346,7 +353,7 @@ TEST_F(DecimalCeilFloorTest, scaleBoundaryMinus38) {
 
 TEST_F(DecimalCeilFloorTest, floorIdentityLongDecimal) {
   // Identity path (scale >= inputScale) for long decimal floor.
-  constexpr int64_t kTenToNine = 1000000000LL;
+  constexpr int64_t kTenToNine = 1'000'000'000LL;
   const int128_t bigVal =
       static_cast<int128_t>(kTenToNine) * kTenToNine * kTenToNine * 123;
   testCall(

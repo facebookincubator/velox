@@ -72,62 +72,41 @@ class DecimalRoundOps {
       uint8_t inputPrecision,
       uint8_t inputScale,
       uint8_t resultPrecision,
-      uint8_t resultScale) {
-    ScaleFactors factors{};
-    factors.scale = clampScale(scale);
-    factors.inputPrecision = inputPrecision;
-    factors.inputScale = inputScale;
-    factors.resultPrecision = resultPrecision;
-    factors.resultScale = resultScale;
-    factors.overflowBound = DecimalUtil::kPowersOfTen[resultPrecision];
+      uint8_t resultScale);
 
-    if (factors.scale < static_cast<int32_t>(inputScale)) {
-      const int32_t divDigits =
-          static_cast<int32_t>(inputScale) - factors.scale;
-      VELOX_DCHECK_GT(divDigits, 0);
-      const int32_t cappedDivDigits = std::min(
-          divDigits, static_cast<int32_t>(LongDecimalType::kMaxPrecision));
-      factors.divideFactor = DecimalUtil::kPowersOfTen[cappedDivDigits];
-      if (factors.scale < 0) {
-        VELOX_DCHECK_LE(
-            -factors.scale,
-            static_cast<int32_t>(LongDecimalType::kMaxPrecision));
-        factors.multiplyFactor = DecimalUtil::kPowersOfTen[-factors.scale];
-      }
-    }
-    return factors;
-  }
-
+  /// Extracts a constant INTEGER scale argument from an expression.
   static int32_t extractConstantScaleArg(
       const exec::ExprPtr& expr,
-      std::string_view funcName) {
-    VELOX_USER_CHECK_EQ(
-        expr->type()->kind(),
-        TypeKind::INTEGER,
-        "The second argument of {} must be INTEGER, got: {}.",
-        funcName,
-        expr->type()->toString());
-    auto constantExpr = std::dynamic_pointer_cast<exec::ConstantExpr>(expr);
-    VELOX_USER_CHECK_NOT_NULL(
-        constantExpr,
-        "The second argument of {} must be a constant expression.",
-        funcName);
-    VELOX_CHECK(
-        constantExpr->value()->isConstantEncoding(),
-        "ConstantExpr must hold a constant-encoded vector.");
-    auto* constantVector =
-        constantExpr->value()->asUnchecked<ConstantVector<int32_t>>();
-    VELOX_USER_CHECK(
-        !constantVector->isNullAt(0),
-        "The second argument of {} must not be NULL.",
-        funcName);
-    return constantVector->valueAt(0);
+      std::string_view funcName);
+
+  /// Creates a DecimalRoundFunction<Policy> dispatching on decimal types.
+  /// Policy is instantiated with the appropriate TResult and TInput types.
+  template <template <typename, typename> class Policy>
+  static std::shared_ptr<exec::VectorFunction> createFunction(
+      const TypePtr& inputType,
+      int32_t scale,
+      const TypePtr& resultType) {
+    const auto [inputPrecision, inputScale] =
+        getDecimalPrecisionScale(*inputType);
+    const auto [resultPrecision, resultScale] =
+        getDecimalPrecisionScale(*resultType);
+    const auto factors = computeFactors(
+        scale, inputPrecision, inputScale, resultPrecision, resultScale);
+    return dispatchTypes(
+        inputType,
+        resultType,
+        [&](auto resultTag,
+            auto inputTag) -> std::shared_ptr<exec::VectorFunction> {
+          using TResult = typename decltype(resultTag)::type;
+          using TInput = typename decltype(inputTag)::type;
+          return std::make_shared<
+              DecimalRoundFunction<TResult, TInput, Policy<TResult, TInput>>>(
+              factors);
+        });
   }
 
-  /// Dispatches on the physical types of input/result decimals. We use explicit
-  /// branching rather than VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH because we need
-  /// to handle all four combinations of short/long independently (the macro
-  /// only dispatches on a single type at a time).
+ private:
+  /// Dispatches on the physical types of input/result decimals.
   template <typename Fn>
   static auto
   dispatchTypes(const TypePtr& inputType, const TypePtr& resultType, Fn&& fn) {
@@ -141,28 +120,6 @@ class DecimalRoundOps {
       return fn(TypeTag<int64_t>{}, TypeTag<int128_t>{});
     }
     return fn(TypeTag<int128_t>{}, TypeTag<int128_t>{});
-  }
-
-  /// Creates a VectorFunction for a given Policy, dispatching on decimal types.
-  template <typename PolicyFactory>
-  static std::shared_ptr<exec::VectorFunction> createFunction(
-      const TypePtr& inputType,
-      int32_t scale,
-      const TypePtr& resultType,
-      PolicyFactory&& factory) {
-    const auto [inputPrecision, inputScale] =
-        getDecimalPrecisionScale(*inputType);
-    const auto [resultPrecision, resultScale] =
-        getDecimalPrecisionScale(*resultType);
-    const auto factors = computeFactors(
-        scale, inputPrecision, inputScale, resultPrecision, resultScale);
-    return dispatchTypes(
-        inputType,
-        resultType,
-        [&](auto resultTag,
-            auto inputTag) -> std::shared_ptr<exec::VectorFunction> {
-          return factory(resultTag, inputTag, factors);
-        });
   }
 };
 

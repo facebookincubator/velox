@@ -20,6 +20,8 @@
 
 namespace facebook::velox::functions::sparksql {
 
+/// Spark decimal_round special form. The result type depends on the value of
+/// the constant scale argument, requiring special-form type resolution.
 class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
  public:
   // Throws not supported exception.
@@ -45,5 +47,13 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
   getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
 
   static constexpr const char* kRoundDecimal = "decimal_round";
+  // Ceil/floor constants live here because all three forms share
+  // getResultPrecisionScale and are registered together.
+  static constexpr const char* kCeilDecimal = "decimal_ceil";
+  static constexpr const char* kFloorDecimal = "decimal_floor";
 };
+
+/// Registers decimal_round, decimal_ceil, and decimal_floor special forms.
+void registerDecimalRoundingForms();
+
 } // namespace facebook::velox::functions::sparksql
