@@ -382,6 +382,10 @@ jobs:
     env:
       CUDF_DIR: _build/release/velox/experimental/cudf
     steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
       - name: Install Packages
         run: |
           sudo apt-get update && sudo apt-get install -y cmake patchelf cuda-toolkit-12-9
