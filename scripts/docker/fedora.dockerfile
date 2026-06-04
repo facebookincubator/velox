@@ -18,10 +18,6 @@
 ARG base=quay.io/fedora/fedora:42-x86_64
 FROM $base AS base-build
 
-ARG FEDORA_TZDATA_VERSION
-RUN dnf -y install "tzdata-${FEDORA_TZDATA_VERSION}.noarch" || \
-      dnf -y downgrade "tzdata-${FEDORA_TZDATA_VERSION}.noarch"
-
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
@@ -54,10 +50,6 @@ RUN bash /setup-fedora.sh && \
 # Stage 2: Base Image  #
 ########################
 FROM $base AS fedora
-
-ARG FEDORA_TZDATA_VERSION
-RUN dnf -y install "tzdata-${FEDORA_TZDATA_VERSION}.noarch" || \
-      dnf -y downgrade "tzdata-${FEDORA_TZDATA_VERSION}.noarch"
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
