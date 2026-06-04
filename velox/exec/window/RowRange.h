@@ -23,10 +23,10 @@
 namespace facebook::velox::exec::window {
 
 /// Represents a contiguous row range [startRow, endRow) from an input vector.
-struct RowBlock {
+struct RowRange {
   /// Creates a range over 'input' and checks that [startRow, endRow) is a valid
   /// row range within 'input'.
-  RowBlock(RowVectorPtr input, vector_size_t startRow, vector_size_t endRow)
+  RowRange(RowVectorPtr input, vector_size_t startRow, vector_size_t endRow)
       : input(std::move(input)), startRow(startRow), endRow(endRow) {
     VELOX_CHECK_NOT_NULL(this->input, "Input vector must not be null");
     VELOX_CHECK_LE(

@@ -64,11 +64,8 @@ VectorWindowPartition::VectorWindowPartition(
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
     memory::MemoryPool* pool)
     : WindowPartition(inputMapping, sortKeyInfo, true),
-      previousRowKeyChannels_(keyChannels(sortKeyInfo, inputChannels)),
-      inputChannels_(inputChannels),
-      pool_(pool) {
-  VELOX_CHECK_NOT_NULL(pool_);
-}
+      previousRow_(keyChannels(sortKeyInfo, inputChannels), pool),
+      inputChannels_(inputChannels) {}
 
 void VectorWindowPartition::addRows(const std::vector<char*>& /*rows*/) {
   VELOX_FAIL("VectorWindowPartition does not support RowContainer rows");
@@ -78,14 +75,14 @@ void VectorWindowPartition::addRows(
     const RowVectorPtr& input,
     vector_size_t startRow,
     vector_size_t endRow) {
-  RowBlock block{input, startRow, endRow};
-  if (block.size() == 0) {
+  RowRange range{input, startRow, endRow};
+  if (range.size() == 0) {
     return;
   }
 
-  blocks_.push_back(block);
-  blockPrefixSums_.push_back(blockPrefixSums_.back() + block.size());
-  totalRows_ += block.size();
+  ranges_.push_back(range);
+  rangePrefixSums_.push_back(rangePrefixSums_.back() + range.size());
+  totalRows_ += range.size();
 }
 
 void VectorWindowPartition::removeProcessedRows(vector_size_t numRows) {
@@ -95,22 +92,21 @@ void VectorWindowPartition::removeProcessedRows(vector_size_t numRows) {
   }
 
   if (complete() && numRows == totalRows_) {
-    previousRow_.clear();
+    previousRow_.reset();
   } else {
-    const auto [blockIndex, localRow] = findBlock(numRows - 1);
-    previousRow_.capture(
-        blocks_[blockIndex].input, localRow, previousRowKeyChannels_, pool_);
+    const auto [rangeIndex, localRow] = findRange(numRows - 1);
+    previousRow_.capture(ranges_[rangeIndex].input, localRow);
   }
 
   auto remaining = numRows;
   while (remaining > 0) {
-    auto& block = blocks_.front();
-    const auto blockSize = block.size();
-    if (remaining >= blockSize) {
-      blocks_.pop_front();
-      remaining -= blockSize;
+    auto& range = ranges_.front();
+    const auto rangeSize = range.size();
+    if (remaining >= rangeSize) {
+      ranges_.pop_front();
+      remaining -= rangeSize;
     } else {
-      block.startRow += remaining;
+      range.startRow += remaining;
       remaining = 0;
     }
   }
@@ -132,14 +128,14 @@ void VectorWindowPartition::extractColumn(
 
   result->resize(resultOffset + numRows);
 
-  auto [blockIndex, localRow] = findBlock(partitionOffset - startRow_);
+  auto [rangeIndex, localRow] = findRange(partitionOffset - startRow_);
   auto remaining = numRows;
   auto outputOffset = resultOffset;
   while (remaining > 0) {
-    const auto& block = blocks_[blockIndex];
-    const auto numRowsToCopy = std::min(block.endRow - localRow, remaining);
+    const auto& range = ranges_[rangeIndex];
+    const auto numRowsToCopy = std::min(range.endRow - localRow, remaining);
     result->copy(
-        block.input->childAt(columnIndex).get(),
+        range.input->childAt(columnIndex).get(),
         outputOffset,
         localRow,
         numRowsToCopy);
@@ -147,8 +143,8 @@ void VectorWindowPartition::extractColumn(
     outputOffset += numRowsToCopy;
     remaining -= numRowsToCopy;
     if (remaining > 0) {
-      ++blockIndex;
-      localRow = blocks_[blockIndex].startRow;
+      ++rangeIndex;
+      localRow = ranges_[rangeIndex].startRow;
     }
   }
 }
@@ -172,9 +168,9 @@ void VectorWindowPartition::extractColumn(
     }
 
     VELOX_CHECK_GE(rowNumber, startRow_);
-    const auto [blockIndex, localRow] = findBlock(rowNumber - startRow_);
+    const auto [rangeIndex, localRow] = findRange(rowNumber - startRow_);
     result->copy(
-        blocks_[blockIndex].input->childAt(columnIndex).get(),
+        ranges_[rangeIndex].input->childAt(columnIndex).get(),
         resultOffset + i,
         localRow,
         1);
@@ -194,13 +190,13 @@ void VectorWindowPartition::extractNulls(
   auto* rawNulls = nullsBuffer->asMutable<uint64_t>();
   bits::fillBits(rawNulls, 0, numRows, false);
 
-  auto [blockIndex, localRow] = findBlock(partitionOffset - startRow_);
+  auto [rangeIndex, localRow] = findRange(partitionOffset - startRow_);
   vector_size_t processedRows = 0;
   while (processedRows < numRows) {
-    const auto& block = blocks_[blockIndex];
-    const auto input = block.input->childAt(columnIndex);
+    const auto& range = ranges_[rangeIndex];
+    const auto input = range.input->childAt(columnIndex);
     const auto numRowsToProcess =
-        std::min(block.endRow - localRow, numRows - processedRows);
+        std::min(range.endRow - localRow, numRows - processedRows);
 
     for (auto i = 0; i < numRowsToProcess; ++i) {
       if (input->isNullAt(localRow + i)) {
@@ -210,8 +206,8 @@ void VectorWindowPartition::extractNulls(
 
     processedRows += numRowsToProcess;
     if (processedRows < numRows) {
-      ++blockIndex;
-      localRow = blocks_[blockIndex].startRow;
+      ++rangeIndex;
+      localRow = ranges_[rangeIndex].startRow;
     }
   }
 }
@@ -230,16 +226,12 @@ class VectorWindowPartition::VectorAccessor {
   }
 
   bool hasPreviousRow() const {
-    return partition_.previousRow_.isValid();
+    return partition_.previousRow_.hasValue();
   }
 
   bool previousRowEquals(vector_size_t row) const {
     const auto rowRef = rowAt(row);
-    return partition_.previousRow_.rowsEqual(
-        rowRef.input,
-        rowRef.row,
-        partition_.sortKeyInfo(),
-        partition_.inputChannels_);
+    return partition_.previousRow_.equals(rowRef.input, rowRef.row);
   }
 
   bool rowsEqual(vector_size_t lhs, vector_size_t rhs) const {
@@ -293,9 +285,9 @@ class VectorWindowPartition::VectorAccessor {
   // Returns a reference to the absolute partition row.
   RowReference rowAt(vector_size_t row) const {
     VELOX_CHECK_GE(row, partition_.startRow_);
-    const auto [blockIndex, localRow] =
-        partition_.findBlock(row - partition_.startRow_);
-    return {partition_.blocks_[blockIndex].input, localRow};
+    const auto [rangeIndex, localRow] =
+        partition_.findRange(row - partition_.startRow_);
+    return {partition_.ranges_[rangeIndex].input, localRow};
   }
 
   // Returns true if two retained rows are equal over the specified keys.
@@ -330,7 +322,7 @@ VectorWindowPartition::computePeerBuffers(
   auto result = PeerGroupComputation::compute(
       rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
   if (result.previousRowConsumed) {
-    previousRow_.clear();
+    previousRow_.reset();
   }
   return {result.peerStart, result.peerEnd};
 }
@@ -356,7 +348,7 @@ void VectorWindowPartition::computeKRangeFrameBounds(
   }
 
   const auto sortOrder = sortKeyInfo()[0].second;
-  const auto frameType = blocks_.front().input->childAt(frameColumn)->type();
+  const auto frameType = ranges_.front().input->childAt(frameColumn)->type();
 
   VectorAccessor rows{*this};
   KRangeFrameBound::compute(
@@ -373,24 +365,24 @@ void VectorWindowPartition::computeKRangeFrameBounds(
       validFrames);
 }
 
-std::pair<size_t, vector_size_t> VectorWindowPartition::findBlock(
+std::pair<size_t, vector_size_t> VectorWindowPartition::findRange(
     vector_size_t row) const {
   VELOX_CHECK_LT(row, totalRows_);
 
   const auto it =
-      std::upper_bound(blockPrefixSums_.begin(), blockPrefixSums_.end(), row);
-  const size_t blockIndex = std::distance(blockPrefixSums_.begin(), it) - 1;
-  const auto offsetInBlock = row - blockPrefixSums_[blockIndex];
-  return {blockIndex, blocks_[blockIndex].startRow + offsetInBlock};
+      std::upper_bound(rangePrefixSums_.begin(), rangePrefixSums_.end(), row);
+  const size_t rangeIndex = std::distance(rangePrefixSums_.begin(), it) - 1;
+  const auto offsetInRange = row - rangePrefixSums_[rangeIndex];
+  return {rangeIndex, ranges_[rangeIndex].startRow + offsetInRange};
 }
 
 void VectorWindowPartition::rebuildPrefixSums() {
-  blockPrefixSums_.clear();
-  blockPrefixSums_.push_back(0);
-  for (const auto& block : blocks_) {
-    blockPrefixSums_.push_back(blockPrefixSums_.back() + block.size());
+  rangePrefixSums_.clear();
+  rangePrefixSums_.push_back(0);
+  for (const auto& range : ranges_) {
+    rangePrefixSums_.push_back(rangePrefixSums_.back() + range.size());
   }
-  totalRows_ = blockPrefixSums_.back();
+  totalRows_ = rangePrefixSums_.back();
 }
 
 } // namespace facebook::velox::exec::window

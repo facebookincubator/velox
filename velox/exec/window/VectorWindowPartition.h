@@ -16,8 +16,8 @@
 #pragma once
 
 #include "velox/exec/WindowPartition.h"
-#include "velox/exec/window/RowBlock.h"
-#include "velox/exec/window/RowColumnsSnapshot.h"
+#include "velox/exec/window/RowRange.h"
+#include "velox/exec/window/SingleRowValues.h"
 
 #include <deque>
 #include <utility>
@@ -110,17 +110,17 @@ class VectorWindowPartition : public WindowPartition {
   template <typename T>
   bool isNanAt(const VectorPtr& vector, vector_size_t row) const;
 
-  // Finds the retained block and local row for a partition-relative row.
-  std::pair<size_t, vector_size_t> findBlock(vector_size_t row) const;
+  // Finds the retained range and local row for a partition-relative row.
+  std::pair<size_t, vector_size_t> findRange(vector_size_t row) const;
 
-  // Rebuilds block prefix sums after processed rows are removed.
+  // Rebuilds range prefix sums after processed rows are removed.
   void rebuildPrefixSums();
 
   // Retained input vector row ranges.
-  std::deque<RowBlock> blocks_;
+  std::deque<RowRange> ranges_;
 
-  // Prefix sums of retained row counts by block.
-  std::vector<vector_size_t> blockPrefixSums_{0};
+  // Prefix sums of retained row counts by range.
+  std::vector<vector_size_t> rangePrefixSums_{0};
 
   // Number of retained rows in this partition.
   vector_size_t totalRows_{0};
@@ -129,17 +129,10 @@ class VectorWindowPartition : public WindowPartition {
   vector_size_t startRow_{0};
 
   // Last row from the previously processed range, if needed for peer grouping.
-  RowColumnsSnapshot previousRow_;
-
-  // Original input channels that must be copied to compare previous rows.
-  std::vector<column_index_t> previousRowKeyChannels_;
+  SingleRowValues previousRow_;
 
   // Maps window input columns to retained input vector columns.
   const std::vector<column_index_t> inputChannels_;
-
-  // Pool used for copied previous-row key snapshots. The owner must outlive
-  // this partition.
-  memory::MemoryPool* const pool_;
 };
 
 } // namespace facebook::velox::exec::window

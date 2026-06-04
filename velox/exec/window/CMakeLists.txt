@@ -16,8 +16,8 @@ velox_add_library(
   velox_exec_window
   AggregateWindow.cpp
   PartitionStreamingWindowBuild.cpp
-  RowColumnsSnapshot.cpp
   RowsStreamingWindowBuild.cpp
+  SingleRowValues.cpp
   SortWindowBuild.cpp
   SubPartitionedSortWindowBuild.cpp
   VectorWindowPartition.cpp
@@ -27,9 +27,9 @@ velox_add_library(
   KRangeFrameBound.h
   PartitionStreamingWindowBuild.h
   PeerGroupComputation.h
-  RowBlock.h
-  RowColumnsSnapshot.h
+  RowRange.h
   RowsStreamingWindowBuild.h
+  SingleRowValues.h
   SortWindowBuild.h
   SubPartitionedSortWindowBuild.h
   VectorWindowPartition.h

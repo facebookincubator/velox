@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/exec/window/RowBlock.h"
-#include "velox/exec/window/RowColumnsSnapshot.h"
+#include "velox/exec/window/RowRange.h"
+#include "velox/exec/window/SingleRowValues.h"
 #include "velox/exec/window/WindowBuild.h"
 
 #include <deque>
@@ -60,9 +60,9 @@ class RowsStreamingWindowBuild : public WindowBuild {
   bool needsInput() override;
 
  private:
-  // Flushes rows in [start, end) from 'input' as a vector block.
+  // Flushes rows in [start, end) from 'input' as a vector row range.
   void
-  flushBlock(const RowVectorPtr& input, vector_size_t start, vector_size_t end);
+  flushRange(const RowVectorPtr& input, vector_size_t start, vector_size_t end);
 
   // Adds input rows to the current partition, or creates a new partition if it
   // does not exist.
@@ -81,11 +81,13 @@ class RowsStreamingWindowBuild : public WindowBuild {
   bool isNewPeerGroup(const RowVectorPtr& input, vector_size_t row) const;
 
   // Compares 'row' with the previous row using the specified key columns.
+  // 'previousValues' holds the captured values of the previous input vector's
+  // last row over the same keys; it is used only when 'row' is 0.
   bool compareRowsEqual(
       const RowVectorPtr& input,
       vector_size_t row,
-      const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
-      const;
+      const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo,
+      const SingleRowValues& previousValues) const;
 
   // Loads only key columns needed to detect partition and peer boundaries.
   void loadBoundaryColumns(const RowVectorPtr& input) const;
@@ -93,20 +95,21 @@ class RowsStreamingWindowBuild : public WindowBuild {
   // Sets to true if this window node has range frames.
   const bool hasRangeFrame_;
 
-  // Blocks of input rows buffered for the current partition.
-  std::vector<RowBlock> currentBlocks_;
+  // Ranges of input rows buffered for the current partition.
+  std::vector<RowRange> currentRanges_;
 
-  // Used to compare the first row of an input vector with the last row of the
-  // previous input vector.
-  RowColumnsSnapshot previousRow_;
+  // Partition-key values from the last row of the previous input vector, used
+  // to detect partition boundaries across vectors.
+  SingleRowValues partitionKeyValues_;
 
-  // Original input channels that must be copied to compare previous rows.
-  std::vector<column_index_t> previousRowKeyChannels_;
+  // Sort-key values from the last row of the previous input vector, used to
+  // detect peer-group boundaries across vectors.
+  SingleRowValues peerKeyValues_;
 
   // Original input channels used to detect partition and peer boundaries.
   std::vector<column_index_t> boundaryKeyChannels_;
 
-  // Pool used for copied previous-row key snapshots.
+  // Pool used to create window partitions.
   memory::MemoryPool* const pool_;
 
   // Number of rows accumulated since the last partial flush.

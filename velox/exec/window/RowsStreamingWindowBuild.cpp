@@ -41,6 +41,19 @@ void appendUnique(
   }
 }
 
+// Returns the deduplicated input channels referenced by 'keyInfo', in
+// first-seen order.
+std::vector<column_index_t> keyChannels(
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo,
+    const std::vector<column_index_t>& inputChannels) {
+  std::vector<column_index_t> channels;
+  channels.reserve(keyInfo.size());
+  for (const auto& key : keyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  return channels;
+}
+
 // Returns the deduplicated input channels referenced by the partition and sort
 // keys, in first-seen order.
 std::vector<column_index_t> keyChannels(
@@ -67,9 +80,10 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection),
       hasRangeFrame_(hasRangeFrame(windowNode)),
-      previousRowKeyChannels_(
+      partitionKeyValues_(keyChannels(partitionKeyInfo_, inputChannels_), pool),
+      peerKeyValues_(keyChannels(sortKeyInfo_, inputChannels_), pool),
+      boundaryKeyChannels_(
           keyChannels(partitionKeyInfo_, sortKeyInfo_, inputChannels_)),
-      boundaryKeyChannels_(previousRowKeyChannels_),
       pool_(pool) {
   VELOX_CHECK_NOT_NULL(pool_);
   velox::common::testutil::TestValue::adjust(
@@ -91,7 +105,7 @@ void RowsStreamingWindowBuild::ensureInputPartition() {
 }
 
 void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
-  if (currentBlocks_.empty()) {
+  if (currentRanges_.empty()) {
     if (finished && !windowPartitions_.empty() &&
         !windowPartitions_.back()->complete()) {
       windowPartitions_.back()->setComplete();
@@ -102,57 +116,58 @@ void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
   ensureInputPartition();
   auto partition =
       std::static_pointer_cast<VectorWindowPartition>(windowPartitions_.back());
-  for (const auto& block : currentBlocks_) {
-    partition->addRows(block.input, block.startRow, block.endRow);
+  for (const auto& range : currentRanges_) {
+    partition->addRows(range.input, range.startRow, range.endRow);
   }
 
   if (finished) {
     windowPartitions_.back()->setComplete();
   }
 
-  currentBlocks_.clear();
+  currentRanges_.clear();
   pendingRowCount_ = 0;
 }
 
 void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
   loadBoundaryColumns(input);
 
-  vector_size_t blockStart = 0;
+  vector_size_t rangeStart = 0;
   for (auto row = 0; row < input->size(); ++row) {
-    const bool hasPreviousRow = row > 0 || previousRow_.isValid();
+    const bool hasPreviousRow = row > 0 || partitionKeyValues_.hasValue();
     if (isNewPartition(input, row)) {
-      flushBlock(input, blockStart, row);
+      flushRange(input, rangeStart, row);
       addPartitionInputs(true);
-      blockStart = row;
+      rangeStart = row;
     }
     if (hasPreviousRow && pendingRowCount_ >= numRowsPerOutput_) {
       // Needs to wait the peer group ready for range frame.
       if (hasRangeFrame_) {
         if (isNewPeerGroup(input, row)) {
-          flushBlock(input, blockStart, row);
+          flushRange(input, rangeStart, row);
           addPartitionInputs(false);
-          blockStart = row;
+          rangeStart = row;
         }
       } else {
-        flushBlock(input, blockStart, row);
+        flushRange(input, rangeStart, row);
         addPartitionInputs(false);
-        blockStart = row;
+        rangeStart = row;
       }
     }
 
     ++pendingRowCount_;
   }
 
-  flushBlock(input, blockStart, input->size());
+  flushRange(input, rangeStart, input->size());
   if (input->size() > 0) {
-    previousRow_.capture(
-        input, input->size() - 1, previousRowKeyChannels_, pool_);
+    partitionKeyValues_.capture(input, input->size() - 1);
+    peerKeyValues_.capture(input, input->size() - 1);
   }
 }
 
 void RowsStreamingWindowBuild::noMoreInput() {
   addPartitionInputs(true);
-  previousRow_.clear();
+  partitionKeyValues_.reset();
+  peerKeyValues_.reset();
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
@@ -183,41 +198,41 @@ bool RowsStreamingWindowBuild::hasNextPartition() {
   return false;
 }
 
-void RowsStreamingWindowBuild::flushBlock(
+void RowsStreamingWindowBuild::flushRange(
     const RowVectorPtr& input,
     vector_size_t start,
     vector_size_t end) {
   if (start >= end) {
     return;
   }
-  currentBlocks_.emplace_back(input, start, end);
+  currentRanges_.emplace_back(input, start, end);
 }
 
 bool RowsStreamingWindowBuild::isNewPartition(
     const RowVectorPtr& input,
     vector_size_t row) const {
-  if (row == 0 && !previousRow_.isValid()) {
+  if (row == 0 && !partitionKeyValues_.hasValue()) {
     return false;
   }
-  return !compareRowsEqual(input, row, partitionKeyInfo_);
+  return !compareRowsEqual(input, row, partitionKeyInfo_, partitionKeyValues_);
 }
 
 bool RowsStreamingWindowBuild::isNewPeerGroup(
     const RowVectorPtr& input,
     vector_size_t row) const {
-  if (row == 0 && !previousRow_.isValid()) {
+  if (row == 0 && !peerKeyValues_.hasValue()) {
     return false;
   }
-  return !compareRowsEqual(input, row, sortKeyInfo_);
+  return !compareRowsEqual(input, row, sortKeyInfo_, peerKeyValues_);
 }
 
 bool RowsStreamingWindowBuild::compareRowsEqual(
     const RowVectorPtr& input,
     vector_size_t row,
-    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo)
-    const {
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo,
+    const SingleRowValues& previousValues) const {
   if (row == 0) {
-    return previousRow_.rowsEqual(input, row, keyInfo, inputChannels_);
+    return previousValues.equals(input, row);
   }
 
   for (const auto& key : keyInfo) {
