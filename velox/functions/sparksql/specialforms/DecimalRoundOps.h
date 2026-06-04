@@ -24,6 +24,10 @@
 
 namespace facebook::velox::functions::sparksql {
 
+// Forward declaration — defined below after DecimalRoundOps.
+template <typename TResult, typename TInput, typename Policy>
+class DecimalRoundFunction;
+
 /// Shared infrastructure for Spark's decimal rounding special forms
 /// (decimal_round, decimal_ceil, decimal_floor).
 ///
