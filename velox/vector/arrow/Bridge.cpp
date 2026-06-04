@@ -2310,6 +2310,12 @@ VectorPtr importFromArrowImpl(
   // First parse and generate a Velox type.
   auto type = importFromArrow(arrowSchema);
 
+  if (type->isUnknown()) {
+    VELOX_USER_CHECK_EQ(
+        arrowArray.n_buffers, 0, "Null type expects zero buffers as input.");
+    return BaseVector::createNullConstant(type, arrowArray.length, pool);
+  }
+
   // Wrap the nulls buffer into a Velox BufferView (zero-copy). Null buffer size
   // needs to be at least one bit per element.
   BufferPtr nulls = nullptr;

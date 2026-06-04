@@ -1580,6 +1580,21 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         });
   }
 
+  void testImportNullType() {
+    ArrowSchema arrowSchema = makeArrowSchema("n");
+    ArrowArray arrowArray = makeArrowArray(nullptr, 0, 4, 4);
+
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    EXPECT_TRUE(output->type()->kindEquals(UNKNOWN()));
+    EXPECT_EQ(4, output->size());
+    ASSERT_TRUE(output->mayHaveNulls());
+    EXPECT_EQ(4, *output->getNullCount());
+    for (vector_size_t i = 0; i < output->size(); ++i) {
+      EXPECT_TRUE(output->isNullAt(i));
+    }
+  }
+
  private:
   // Creates short decimals from int128 and asserts the content of actual vector
   // with the expected values.
@@ -2113,6 +2128,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
   testImportStringView();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
+  testImportNullType();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, row) {
   testImportRow();
 }
@@ -2221,6 +2240,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, string64) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
   testImportStringView();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {
+  testImportNullType();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, row) {
