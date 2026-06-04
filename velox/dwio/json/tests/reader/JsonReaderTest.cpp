@@ -477,5 +477,128 @@ TEST_F(JsonReaderTest, arrayShapeMismatchObjectThrows) {
       "expected array");
 }
 
+TEST_F(JsonReaderTest, mapVarcharVarcharBaseline) {
+  auto row = read(
+      "{\"m\":{\"k1\":\"v1\",\"k2\":\"v2\"}}\n",
+      ROW({{"m", MAP(VARCHAR(), VARCHAR())}}));
+  auto expected = makeRowVector({makeMapVector<StringView, StringView>(
+      {{{"k1"_sv, "v1"_sv}, {"k2"_sv, "v2"_sv}}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, mapVarcharVarcharStringifiesNonStrings) {
+  // Non-string values stringify into VARCHAR per the leaf coercion rules:
+  // numbers via lexeme, booleans as lowercase literals, objects re-serialized
+  // minified with key order preserved.
+  auto row = read(
+      "{\"m\":{\"a\":1,\"b\":true,\"c\":{\"x\":1}}}\n",
+      ROW({{"m", MAP(VARCHAR(), VARCHAR())}}));
+  auto expected = makeRowVector({makeMapVector<StringView, StringView>(
+      {{{"a"_sv, "1"_sv},
+        {"b"_sv, "true"_sv},
+        {"c"_sv, "{\"x\":1}"_sv}}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, mapVarcharBigintCoercesValues) {
+  // Values coerce into BIGINT per the leaf table: "abc" -> 0, true -> 1,
+  // -3.7 -> -3 (truncate toward zero).
+  auto row = read(
+      "{\"m\":{\"a\":\"abc\",\"b\":true,\"c\":-3.7}}\n",
+      ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  auto expected = makeRowVector({makeMapVector<StringView, int64_t>(
+      {{{"a"_sv, 0}, {"b"_sv, 1}, {"c"_sv, -3}}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, mapBadValueDoesNotDropRowOrEntry) {
+  // A value that fails to coerce becomes 0 (full-fail to zero) — the entry is
+  // kept and the row stays. Both keys remain.
+  auto row = read(
+      "{\"m\":{\"k1\":100,\"k2\":\"abc\"}}\n",
+      ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  auto expected = makeRowVector({makeMapVector<StringView, int64_t>(
+      {{{"k1"_sv, 100}, {"k2"_sv, 0}}})});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, mapKeysPassThroughCaseUnchanged) {
+  // MAP keys are data, NOT schema — they are never case-folded. "K" and "k"
+  // are two distinct keys (contrast with ROW field matching, which folds).
+  auto row = read(
+      "{\"m\":{\"K\":1,\"k\":2}}\n", ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  ASSERT_FALSE(map->isNullAt(0));
+  EXPECT_EQ(map->sizeAt(0), 2);
+  auto keys = map->mapKeys()->asFlatVector<StringView>();
+  auto values = map->mapValues()->asFlatVector<int64_t>();
+  const auto offset = map->offsetAt(0);
+  EXPECT_EQ(keys->valueAt(offset), "K"_sv);
+  EXPECT_EQ(values->valueAt(offset), 1);
+  EXPECT_EQ(keys->valueAt(offset + 1), "k"_sv);
+  EXPECT_EQ(values->valueAt(offset + 1), 2);
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysLastWriteWinsInsertionOrderPreserved) {
+  // {"a":1,"b":2,"a":3} -> {a=3, b=2} with "a" first, cardinality 2. A naive
+  // append would produce a malformed MapVector with a duplicate "a" key.
+  auto row = read(
+      "{\"m\":{\"a\":1,\"b\":2,\"a\":3}}\n",
+      ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  ASSERT_FALSE(map->isNullAt(0));
+  EXPECT_EQ(map->sizeAt(0), 2);
+  auto keys = map->mapKeys()->asFlatVector<StringView>();
+  auto values = map->mapValues()->asFlatVector<int64_t>();
+  const auto offset = map->offsetAt(0);
+  EXPECT_EQ(keys->valueAt(offset), "a"_sv);
+  EXPECT_EQ(values->valueAt(offset), 3);
+  EXPECT_EQ(keys->valueAt(offset + 1), "b"_sv);
+  EXPECT_EQ(values->valueAt(offset + 1), 2);
+}
+
+TEST_F(JsonReaderTest, mapDuplicateKeysCaseSensitive) {
+  // {"k":1,"K":2} -> two distinct entries, cardinality 2. Distinct from ROW
+  // case-insensitive matching: MAP keys are not folded.
+  auto row = read(
+      "{\"m\":{\"k\":1,\"K\":2}}\n", ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  EXPECT_EQ(map->sizeAt(0), 2);
+  auto keys = map->mapKeys()->asFlatVector<StringView>();
+  const auto offset = map->offsetAt(0);
+  EXPECT_EQ(keys->valueAt(offset), "k"_sv);
+  EXPECT_EQ(keys->valueAt(offset + 1), "K"_sv);
+}
+
+TEST_F(JsonReaderTest, mapJsonNullProducesSqlNull) {
+  // JSON null for the whole map is SQL NULL, not an empty map.
+  auto row =
+      read("{\"m\":null}\n", ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, mapJsonEmptyObjectIsNotNull) {
+  // JSON {} is a non-null map of cardinality 0, distinct from SQL NULL.
+  auto row = read("{\"m\":{}}\n", ROW({{"m", MAP(VARCHAR(), BIGINT())}}));
+  auto* map = row->childAt(0)->as<MapVector>();
+  EXPECT_FALSE(map->isNullAt(0));
+  EXPECT_EQ(map->sizeAt(0), 0);
+}
+
+TEST_F(JsonReaderTest, mapShapeMismatchScalarThrows) {
+  // A scalar where an object is expected is a container-shape mismatch.
+  VELOX_ASSERT_THROW(
+      read("{\"m\":5}\n", ROW({{"m", MAP(VARCHAR(), BIGINT())}})),
+      "expected object");
+}
+
+TEST_F(JsonReaderTest, mapShapeMismatchArrayThrows) {
+  // An array where an object is expected is a container-shape mismatch.
+  VELOX_ASSERT_THROW(
+      read("{\"m\":[1,2]}\n", ROW({{"m", MAP(VARCHAR(), BIGINT())}})),
+      "expected object");
+}
+
 } // namespace
 } // namespace facebook::velox::json

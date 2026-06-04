@@ -20,6 +20,7 @@
 #include <cstring>
 
 #include <folly/Conv.h>
+#include <folly/container/F14Map.h>
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
@@ -569,6 +570,76 @@ void writeArray(
   arrayVector->setNull(rowIndex, false);
 }
 
+// Writes one JSON object into a MapVector cell. simdjson On-Demand is
+// forward-only, so the object is iterated exactly once: keys and values are
+// appended to the tail of the MapVector's shared keys/values vectors. JSON
+// object keys are data (MAP<VARCHAR, V>) and pass through with case preserved
+// — unlike ROW field names, they are never case-folded.
+//
+// Velox MapVectors require unique keys per row, so duplicate keys are deduped
+// with insertion-order + last-write-wins (JsonSerDe LinkedHashMap semantics):
+// a repeated key overwrites the value at its first position and does not grow
+// the map. A non-object, non-null JSON value is a container-shape mismatch and
+// throws; value-level type mismatches coerce rather than throw.
+void writeMap(
+    simdjson::ondemand::value& value,
+    const TypePtr& type,
+    BaseVector& column,
+    vector_size_t rowIndex,
+    const FileContents& contents) {
+  const auto jsonType = unwrap(value.type());
+  if (jsonType != simdjson::ondemand::json_type::object) {
+    VELOX_USER_FAIL(
+        "Container shape mismatch: expected object for MAP, got JSON {}.",
+        jsonTypeName(jsonType));
+  }
+
+  auto* mapVector = column.asUnchecked<MapVector>();
+  auto& keys = mapVector->mapKeys();
+  auto& values = mapVector->mapValues();
+  const auto& keyType = type->childAt(0);
+  const auto& valueType = type->childAt(1);
+  // JSON object keys are strings; only VARCHAR-keyed maps are in scope.
+  VELOX_USER_CHECK(
+      keyType->kind() == TypeKind::VARCHAR,
+      "JSON reader supports only VARCHAR map keys, got: {}",
+      keyType->toString());
+  auto* keyVector = keys->asUnchecked<FlatVector<StringView>>();
+
+  const vector_size_t offset = values->size();
+  // Maps each key seen in this object to its element index in the shared
+  // keys/values vectors, giving O(1) last-write-wins on duplicate keys.
+  folly::F14FastMap<std::string, vector_size_t> keyToIndex;
+  vector_size_t count{0};
+
+  auto jsonObject = unwrap(value.get_object());
+  for (auto fieldResult : jsonObject) {
+    auto field = unwrap(fieldResult);
+    std::string key{unwrap(field.unescaped_key())};
+    simdjson::ondemand::value fieldValue = field.value();
+
+    auto [it, inserted] = keyToIndex.emplace(key, offset + count);
+    const vector_size_t elementIndex = it->second;
+    if (inserted) {
+      keys->resize(elementIndex + 1);
+      values->resize(elementIndex + 1);
+      keyVector->set(elementIndex, StringView(key.data(), key.size()));
+      ++count;
+    }
+
+    if (fieldValue.is_null()) {
+      values->setNull(elementIndex, true);
+    } else {
+      writeValue(fieldValue, valueType, *values, elementIndex, contents);
+    }
+  }
+
+  mapVector->setOffsetAndSize(rowIndex, offset, count);
+  // setOffsetAndSize does not touch the null flag; clear it so an empty object
+  // ({} -> cardinality 0) is distinct from a JSON null (SQL NULL).
+  mapVector->setNull(rowIndex, false);
+}
+
 // Writes one JSON value into a FlatVector cell. The caller has verified
 // that the JSON value is not `null` (it set the cell to NULL beforehand).
 void writeValue(
@@ -663,6 +734,10 @@ void writeValue(
     }
     case TypeKind::ARRAY: {
       writeArray(value, type, column, rowIndex, contents);
+      return;
+    }
+    case TypeKind::MAP: {
+      writeMap(value, type, column, rowIndex, contents);
       return;
     }
     default:
