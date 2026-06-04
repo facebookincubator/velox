@@ -1568,8 +1568,10 @@ std::string MemoryPoolImpl::dumpRecordsDbgLocked() const {
 
 void MemoryPoolImpl::handleAllocationFailure(
     const std::string& failureMessage) {
+  const auto fullMessage =
+      fmt::format("{}\n{}", failureMessage, root()->treeMemoryUsage());
   if (coreOnAllocationFailureEnabled_) {
-    VELOX_MEM_LOG(ERROR) << failureMessage;
+    VELOX_MEM_LOG(ERROR) << fullMessage;
     // SIGBUS is one of the standard signals in Linux that triggers a core
     // dump Normally it is raised by the operating system when a misaligned
     // memory access occurs. On x86 and aarch64 misaligned access is allowed
@@ -1579,6 +1581,6 @@ void MemoryPoolImpl::handleAllocationFailure(
     raise(SIGBUS);
   }
 
-  VELOX_MEM_ALLOC_ERROR(failureMessage);
+  VELOX_MEM_ALLOC_ERROR(fullMessage);
 }
 } // namespace facebook::velox::memory
