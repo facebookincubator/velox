@@ -21,6 +21,7 @@
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/dwio/parquet/reader/BooleanColumnReader.h"
 #include "velox/dwio/parquet/reader/FloatingPointColumnReader.h"
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
@@ -56,12 +57,43 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
 
   switch (fileType->type()->kind()) {
     case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
     case TypeKind::HUGEINT:
       return std::make_unique<IntegerColumnReader>(
           requestedType, fileType, params, scanSpec);
+
+    case TypeKind::BIGINT: {
+      // Check if this is TIMESTAMP_WITH_TIME_ZONE (which extends BigintType)
+      if (isTimestampWithTimeZoneType(requestedType)) {
+        const auto parquetType =
+            std::static_pointer_cast<const ParquetTypeWithId>(fileType)
+                ->parquetType_;
+        if (parquetType) {
+          switch (parquetType.value()) {
+            case thrift::Type::INT64:
+              // INT64 timestamps (used by Delta Lake and modern Parquet)
+              return std::make_unique<TimestampColumnReader<int64_t>>(
+                  requestedType, fileType, params, scanSpec);
+            case thrift::Type::INT96:
+              // INT96 timestamps (legacy format, still supported)
+              return std::make_unique<TimestampColumnReader<int128_t>>(
+                  requestedType, fileType, params, scanSpec);
+            default:
+              VELOX_FAIL(
+                  "Unsupported Parquet type {} for TIMESTAMP WITH TIME ZONE column '{}'",
+                  thrift::to_string(parquetType.value()),
+                  colName);
+          }
+        }
+        VELOX_FAIL(
+            "Missing Parquet type information for TIMESTAMP WITH TIME ZONE column '{}'",
+            colName);
+      }
+      // Regular BIGINT
+      return std::make_unique<IntegerColumnReader>(
+          requestedType, fileType, params, scanSpec);
+    }
 
     case TypeKind::REAL:
       if (requestedType->kind() == TypeKind::REAL) {

@@ -19,6 +19,7 @@
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
 namespace {
@@ -130,6 +131,9 @@ class TimestampColumnReader : public IntegerColumnReader {
   }
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
+    // Check if we need to produce packed int64 for TIMESTAMP_WITH_TIME_ZONE
+    const bool isTimestampWithTZ = isTimestampWithTimeZoneType(requestedType_);
+
     getFlatValues<Timestamp, Timestamp>(rows, result, requestedType_);
     if (allNull_) {
       return;
@@ -155,6 +159,42 @@ class TimestampColumnReader : public IntegerColumnReader {
             toInt96Timestamp(encoded).toPrecision(requestedPrecision_);
       }
     }
+    if (isTimestampWithTZ) {
+      auto timestampVector = resultVector->as<FlatVector<Timestamp>>();
+      auto size = timestampVector->size();
+
+      const Timestamp* __restrict rawTimestamps =
+          timestampVector->rawValues();
+
+      // Allocate a separate output buffer for packed int64
+      BufferPtr packedBuffer = AlignedBuffer::allocate<int64_t>(
+          size, timestampVector->pool());
+      int64_t* __restrict rawPacked = packedBuffer->asMutable<int64_t>();
+
+#ifdef __clang__
+      #pragma clang loop vectorize(enable)
+#endif
+
+      for (vector_size_t i = 0; i < size; ++i) {
+        const int64_t seconds = rawTimestamps[i].getSeconds();
+        const int64_t nanos   = rawTimestamps[i].getNanos();
+
+        // Convert to milliseconds
+        const int64_t millis = seconds * 1000 + nanos / 1'000'000;
+
+        rawPacked[i] = (millis << 12);
+      }
+
+      // Create a new FlatVector<int64_t> with the packed buffer
+      *result = std::make_shared<FlatVector<int64_t>>(
+          timestampVector->pool(),
+          requestedType_,
+          timestampVector->nulls(), // share the nulls buffer
+          size,
+          packedBuffer,             // use the new packed buffer
+          std::vector<BufferPtr>{});
+    }
+
   }
 
   template <
