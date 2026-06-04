@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/exec/AggregateWindow.h"
+#include "velox/exec/window/AggregateWindow.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 namespace {
 
@@ -435,4 +435,4 @@ void registerAggregateWindowFunction(const std::string& name) {
         });
   }
 }
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

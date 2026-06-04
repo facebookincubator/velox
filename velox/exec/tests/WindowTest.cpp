@@ -21,11 +21,11 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/RowsStreamingWindowBuild.h"
-#include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/window/RowsStreamingWindowBuild.h"
+#include "velox/exec/window/SortWindowBuild.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
@@ -38,7 +38,7 @@ class WindowTest : public OperatorTestBase {
  public:
   void SetUp() override {
     OperatorTestBase::SetUp();
-    window::prestosql::registerAllWindowFunctions();
+    velox::window::prestosql::registerAllWindowFunctions();
     filesystems::registerLocalFileSystem();
   }
 
@@ -348,9 +348,9 @@ DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
 
   std::atomic_bool isStreamCreated{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
-      std::function<void(RowsStreamingWindowBuild*)>(
-          [&](RowsStreamingWindowBuild* windowBuild) {
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
             isStreamCreated.store(true);
           }));
 
@@ -381,9 +381,9 @@ DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
 
   std::atomic_bool isStreamCreated{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
-      std::function<void(RowsStreamingWindowBuild*)>(
-          [&](RowsStreamingWindowBuild* windowBuild) {
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
             isStreamCreated.store(true);
           }));
 
@@ -424,9 +424,9 @@ DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
 
   std::atomic_bool isStreamCreated{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
-      std::function<void(RowsStreamingWindowBuild*)>(
-          [&](RowsStreamingWindowBuild* windowBuild) {
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
             isStreamCreated.store(true);
           }));
 
@@ -577,9 +577,9 @@ DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
 
   std::atomic_bool isStreamCreated{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
-      std::function<void(RowsStreamingWindowBuild*)>(
-          [&](RowsStreamingWindowBuild* windowBuild) {
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
             isStreamCreated.store(true);
           }));
 
@@ -610,9 +610,9 @@ DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
 
   std::atomic_bool isStreamCreated{false};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
-      std::function<void(RowsStreamingWindowBuild*)>(
-          [&](RowsStreamingWindowBuild* windowBuild) {
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild* windowBuild) {
             isStreamCreated.store(true);
           }));
 
@@ -889,7 +889,7 @@ DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
         velox::common::PrefixSortConfig{
             std::numeric_limits<int32_t>::max(), 130, 12};
     folly::Synchronized<OperatorStats> opStats;
-    auto sortWindowBuild = std::make_unique<SortWindowBuild>(
+    auto sortWindowBuild = std::make_unique<window::SortWindowBuild>(
         plan,
         pool_.get(),
         std::move(prefixSortConfig),

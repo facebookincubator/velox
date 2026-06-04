@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/WindowPartition.h"
-#include "velox/exec/KRangeFrameBound.h"
-#include "velox/exec/PeerGroupComputation.h"
+#include "velox/exec/window/KRangeFrameBound.h"
+#include "velox/exec/window/PeerGroupComputation.h"
 
 #include <algorithm>
 
@@ -287,7 +287,7 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     vector_size_t* rawPeerStarts,
     vector_size_t* rawPeerEnds) {
   RowContainerAccessor rows{*this};
-  auto result = PeerGroupComputation::compute(
+  auto result = window::PeerGroupComputation::compute(
       rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
   if (result.previousRowConsumed) {
     removePreviousRow();
@@ -308,7 +308,7 @@ void WindowPartition::computeKRangeFrameBounds(
   const auto frameType = data_->columnTypes()[inputMapping_[frameColumn]];
 
   RowContainerAccessor rows{*this};
-  KRangeFrameBound::compute(
+  window::KRangeFrameBound::compute(
       rows,
       isStartBound,
       isPreceding,

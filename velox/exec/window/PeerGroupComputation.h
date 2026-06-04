@@ -16,13 +16,13 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowPartitionAccessor.h"
+#include "velox/exec/window/WindowPartitionAccessor.h"
 #include "velox/vector/TypeAliases.h"
 
 #include <algorithm>
 #include <utility>
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 /// Computes peer group bounds over storage-specific window partition rows.
 class PeerGroupComputation {
@@ -94,4 +94,4 @@ class PeerGroupComputation {
   }
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

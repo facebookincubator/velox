@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SortWindowBuild.h"
+#include "velox/exec/window/SortWindowBuild.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Window.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 namespace {
 std::vector<CompareFlags> makeCompareFlags(
@@ -410,4 +410,4 @@ bool SortWindowBuild::hasNextPartition() {
   return partitionStartRows_.size() > 0 &&
       currentPartition_ < static_cast<int>(partitionStartRows_.size() - 2);
 }
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

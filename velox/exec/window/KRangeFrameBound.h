@@ -18,14 +18,14 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/WindowPartitionAccessor.h"
+#include "velox/exec/window/WindowPartitionAccessor.h"
 #include "velox/type/Type.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/TypeAliases.h"
 
 #include <type_traits>
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 /// Computes k RANGE frame bounds over storage-specific window partition rows.
 class KRangeFrameBound {
@@ -197,4 +197,4 @@ class KRangeFrameBound {
   }
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window
