@@ -410,7 +410,7 @@ jobs:
             exit 1
           fi
           for f in "${ctest_files[@]}"; do
-            sed -i 's|/__w/velox/velox|${{ github.workspace }}|g' "$f"
+            sed -i "s|/__w/velox/velox|${GITHUB_WORKSPACE}|g" "$f"
             echo "Patched: $f"
           done
           if grep -rq '/__w/velox/velox' "$CUDF_DIR/tests" --include=CTestTestfile.cmake; then
