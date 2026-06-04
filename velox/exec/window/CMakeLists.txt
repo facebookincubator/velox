@@ -12,18 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(
-  velox_cudf_iceberg_connector
-  CudfDeletionVectorReader.cpp
-  CudfEqualityDeleteFileReader.cpp
-  CudfIcebergConnector.cpp
-  CudfIcebergDataSource.cpp
-  CudfIcebergDeletionHelpers.cu
-  CudfIcebergSplitReader.cpp
+velox_add_library(
+  velox_exec_window
+  AggregateWindow.cpp
+  PartitionStreamingWindowBuild.cpp
+  RowsStreamingWindowBuild.cpp
+  SortWindowBuild.cpp
+  SubPartitionedSortWindowBuild.cpp
+  WindowBuild.cpp
+  HEADERS
+  AggregateWindow.h
+  KRangeFrameBound.h
+  PartitionStreamingWindowBuild.h
+  PeerGroupComputation.h
+  RowsStreamingWindowBuild.h
+  SortWindowBuild.h
+  SubPartitionedSortWindowBuild.h
+  WindowBuild.h
+  WindowPartitionAccessor.h
 )
 
-target_link_libraries(
-  velox_cudf_iceberg_connector
-  PRIVATE velox_hive_iceberg_splitreader velox_hive_connector velox_functions_iceberg
-  PUBLIC cudf::cudf velox_cudf_hive_connector
-)
+velox_link_libraries(velox_exec_window velox_exec velox_vector)

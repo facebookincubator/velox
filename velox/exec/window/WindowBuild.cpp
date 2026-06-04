@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/exec/WindowBuild.h"
+#include "velox/exec/window/WindowBuild.h"
 
 #include "velox/exec/Operator.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 namespace {
 std::tuple<std::vector<column_index_t>, std::vector<column_index_t>, RowTypePtr>
@@ -140,4 +140,4 @@ bool WindowBuild::compareRowsWithKeys(
   return false;
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

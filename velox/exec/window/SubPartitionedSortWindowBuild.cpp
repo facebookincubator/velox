@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SubPartitionedSortWindowBuild.h"
+#include "velox/exec/window/SubPartitionedSortWindowBuild.h"
 #include "velox/exec/MemoryReclaimer.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& node,
@@ -189,4 +189,4 @@ bool SubPartitionedSortWindowBuild::hasNextPartition() {
   }
   return false;
 }
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

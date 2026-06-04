@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 #pragma once
-#include <string>
 
-namespace facebook::velox::exec {
+#include "velox/experimental/cudf/expression/CommonFunctions.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-void registerAggregateWindowFunction(const std::string& name);
+#include <memory>
 
-} // namespace facebook::velox::exec
+namespace facebook::velox::cudf_velox {
+
+std::shared_ptr<CudfFunction> makeArrayAccessFunction(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    ArrayAccessPolicy policy);
+
+} // namespace facebook::velox::cudf_velox
