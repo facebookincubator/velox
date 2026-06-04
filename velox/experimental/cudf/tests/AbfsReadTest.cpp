@@ -109,7 +109,6 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
     }
     ioExecutor_.reset();
 
-    // TODO(mh): Unregister cuDF to remove the CudfAbfsDataSource
     cudf_velox::unregisterCudf();
   }
 
