@@ -14,16 +14,10 @@
  * limitations under the License.
  */
 #pragma once
+#include <string>
 
-#include "velox/expression/Expr.h"
+namespace facebook::velox::exec::window {
 
-namespace facebook::velox::cudf_velox {
+void registerAggregateWindowFunction(const std::string& name);
 
-/// Returns true if \p expr or any of its inputs is of decimal type. When \p
-/// deep is true the entire subtree is inspected; when false only \p expr and
-/// its immediate inputs are checked.
-bool containsDecimalType(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    const bool deep);
-
-} // namespace facebook::velox::cudf_velox
+} // namespace facebook::velox::exec::window

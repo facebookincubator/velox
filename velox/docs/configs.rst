@@ -846,7 +846,9 @@ must be specified as raw byte counts.
      - reader.timestamp_partition_value_as_local_time
      - bool
      - true
-     - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
+     - Reads TIMESTAMP partition value as local time if true. Otherwise, reads
+       as UTC. This setting does not apply to TIMESTAMP_UTC partition values,
+       which are always read as UTC.
    * - preserve-flat-maps-in-memory
      - preserve_flat_maps_in_memory
      - bool

@@ -14,13 +14,42 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+void registerPrestoArrayAccessFunctions(const std::string& prefix) {
+  // Presto element_at is 1-based, allows negative indices from the end, and
+  // returns NULL for out-of-bounds indices.
+  registerArrayAccessFunction(
+      prefix + "element_at",
+      ArrayAccessPolicy{
+          .allowNegativeIndices = true,
+          .nullOnNegativeIndices = false,
+          .allowOutOfBound = true,
+          .indexStartsAtOne = true,
+      },
+      arrayAccessSignatures({"integer", "bigint"}));
+
+  // Presto subscript is 1-based and raises on negative or out-of-bounds
+  // indices.
+  registerArrayAccessFunction(
+      prefix + "subscript",
+      ArrayAccessPolicy{
+          .allowNegativeIndices = false,
+          .nullOnNegativeIndices = false,
+          .allowOutOfBound = false,
+          .indexStartsAtOne = true,
+      },
+      arrayAccessSignatures({"integer", "bigint"}));
+}
+
+} // namespace
 
 void registerPrestoFunctions(const std::string& prefix) {
-  // Presto-specific functions will be registered here in the future
+  registerPrestoArrayAccessFunctions(prefix);
 }
 
 } // namespace facebook::velox::cudf_velox

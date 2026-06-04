@@ -18,10 +18,10 @@
 
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/PrefixSort.h"
-#include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/Spiller.h"
+#include "velox/exec/window/SortWindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 // Divides the input data into several sub partitions by partition keys, then
 // sequentially sorts input data of each sub partition by {partition keys, sort
 // keys} to identify window partitions with SortWindowBuild. As each sub
@@ -92,4 +92,4 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
 
   int32_t currentSubPartition_ = -1;
 };
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

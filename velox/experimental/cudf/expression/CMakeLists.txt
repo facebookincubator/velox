@@ -14,7 +14,9 @@
 
 add_library(
   velox_cudf_expression
+  ArrayAccessFunctions.cpp
   AstExpression.cpp
+  CommonFunctions.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernels.cu
   DecimalTypeCheck.cpp
