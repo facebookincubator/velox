@@ -26,6 +26,14 @@ bool isIntegralType(const TypePtr& type) {
       type == BIGINT();
 }
 
+bool isFloatingPointType(const TypePtr& type) {
+  return type == REAL() || type == DOUBLE();
+}
+
+bool isNumericType(const TypePtr& type) {
+  return isIntegralType(type) || isFloatingPointType(type);
+}
+
 } // namespace
 
 bool SparkCastCallToSpecialForm::isAnsiSupported(
@@ -41,6 +49,12 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+  }
+
+  // Numeric types (integral + floating point) to integral types support ANSI
+  // mode.
+  if (isNumericType(fromType) && isIntegralType(toType)) {
+    return true;
   }
 
   return false;

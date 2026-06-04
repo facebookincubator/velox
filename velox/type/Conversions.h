@@ -151,6 +151,35 @@ Expected<T> callFollyTo(const F& v) {
   return result.value();
 }
 
+/// Spark try_cast helper: truncate toward zero, then check if the
+/// truncated value fits in the target integral type T.
+/// Note: int128_t is only used for Spark long decimals which are handled
+/// separately, so this helper is not instantiated for int128_t.
+template <typename T, typename FP>
+Expected<T> sparkTryCastFloatToIntegral(FP v) {
+  static_assert(
+      !std::is_same_v<T, int128_t>,
+      "int128_t is handled by the decimal cast path, not here.");
+  auto truncated = std::trunc(v);
+  if (truncated > static_cast<double>(std::numeric_limits<T>::max())) {
+    return folly::makeUnexpected(Status::UserError("overflow"));
+  }
+  if (truncated < static_cast<double>(std::numeric_limits<T>::min())) {
+    return folly::makeUnexpected(Status::UserError("overflow"));
+  }
+  // Clamp for edge cases where the truncated FP value equals the
+  // limit but can't be safely static_cast'd (e.g., float
+  // 9.223372E18 represents 2^63 exactly = Long.MaxValue + 1, but
+  // compares equal to (double)Long.MaxValue due to rounding).
+  if (truncated >= static_cast<double>(std::numeric_limits<T>::max())) {
+    return std::numeric_limits<T>::max();
+  }
+  if (truncated <= static_cast<double>(std::numeric_limits<T>::min())) {
+    return std::numeric_limits<T>::min();
+  }
+  return static_cast<T>(truncated);
+}
+
 } // namespace detail
 
 /// To BOOLEAN converter.
@@ -428,34 +457,7 @@ struct Converter<
             Status::UserError("Cannot cast NaN to an integral value."));
       }
       if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
-        return detail::callFollyTo<T>(std::trunc(v));
-      }
-      return detail::callFollyTo<T>(std::round(v));
-    }
-  }
-
-  static Expected<T> tryCast(const double& v) {
-    if constexpr (TPolicy::truncate) {
-      if (std::isnan(v)) {
-        return 0;
-      }
-
-      if constexpr (std::is_same_v<T, int128_t>) {
-        return std::numeric_limits<int128_t>::max();
-      } else if (v > LimitType::maxLimit()) {
-        return LimitType::max();
-      } else if (v < LimitType::minLimit()) {
-        return LimitType::min();
-      }
-
-      return LimitType::tryCast(v);
-    } else {
-      if (std::isnan(v)) {
-        return folly::makeUnexpected(
-            Status::UserError("Cannot cast NaN to an integral value."));
-      }
-      if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
-        return detail::callFollyTo<T>(std::trunc(v));
+        return detail::sparkTryCastFloatToIntegral<T>(v);
       }
       return detail::callFollyTo<T>(std::round(v));
     }
