@@ -84,6 +84,18 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
     case IcebergInsertTableHandle::WriteKind::kDeletionVector:
       return std::make_unique<IcebergDeletionVectorSink>(
           inputType, icebergInsertHandle, connectorQueryCtx, commitStrategy);
+    case IcebergInsertTableHandle::WriteKind::kPositionDelete:
+      // V2 position-delete sink: not yet implemented in Velox. V2 DELETE
+      // currently runs through the Java row-id-rewrite path on the
+      // coordinator, so this dispatch arm is never hit in production
+      // today. Wired up so the WriteKind enum is exhaustive and a future
+      // V2 native port has a clear plug-in point. See
+      // ~/.llms/plans/iceberg_v2_native_positional_delete_sink.plan.md.
+      VELOX_NYI(
+          "Iceberg V2 native position-delete sink is not implemented. "
+          "V2 DELETE flows through the Java row-id-rewrite path; if "
+          "this NYI fires, the planner unexpectedly routed a V2 delete "
+          "through the native bridge.");
   }
   VELOX_UNREACHABLE(
       "Unhandled IcebergInsertTableHandle::WriteKind: {}",

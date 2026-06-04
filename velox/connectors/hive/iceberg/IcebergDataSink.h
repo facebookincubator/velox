@@ -42,11 +42,20 @@ namespace facebook::velox::connector::hive::iceberg {
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
   /// Identifies which kind of file the sink should produce. Used by
-  /// IcebergConnector::createDataSink to dispatch between the data-file
-  /// IcebergDataSink and the V3 deletion-vector IcebergDeletionVectorSink.
+  /// IcebergConnector::createDataSink to dispatch between:
+  ///  - the data-file IcebergDataSink (kData, INSERT and UPDATE-insert
+  ///    halves),
+  ///  - the V3 deletion-vector IcebergDeletionVectorSink (kDeletionVector,
+  ///    Puffin blobs encoding deleted positions per data file), and
+  ///  - the V2 position-delete sink (kPositionDelete, position-delete
+  ///    Parquet/AVRO files). The V2 sink is not yet implemented; today
+  ///    V2 DELETE flows through the Java row-id-rewrite path. See
+  ///    ~/.llms/plans/iceberg_v2_native_positional_delete_sink.plan.md
+  ///    for the full design.
   enum class WriteKind {
     kData,
     kDeletionVector,
+    kPositionDelete,
   };
 
   /// @param inputColumns Columns from the table schema to write.
