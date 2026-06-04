@@ -74,8 +74,10 @@ VectorPtr newConstantFromStringImpl(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
-      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
-      if (isLocalTimestamp) {
+      // TIMESTAMP partition value is read as local time subject to the
+      // 'readTimestampPartitionValueAsLocalTime' setting. TIMESTAMP_UTC
+      // partition value is always read as UTC.
+      if (type->equivalent(*TIMESTAMP()) && isLocalTimestamp) {
         copy.toGMT(Timestamp::defaultTimezone());
       }
     }
@@ -304,6 +306,11 @@ void FileSplitReader::createReader(
   if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
     cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
   }
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    baseReaderOpts_.setFileHandle(&(*fileHandleCachePtr));
+    baseReaderOpts_.setCache(cache);
+  }
+
   auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       baseReaderOpts_,

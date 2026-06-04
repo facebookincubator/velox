@@ -18,6 +18,9 @@
 
 #include <cstdint>
 #include <vector>
+
+#include "velox/common/base/IoCounter.h"
+
 namespace facebook::velox {
 /// Utility for combining IOs to nearby location into fewer coalesced IOs. This
 /// may increase data transfer but generally reduces latency and may reduce
@@ -32,6 +35,11 @@ struct CoalesceIoStats {
   int64_t payloadBytes{0};
   /// Number of bytes read and discarded due to coalescing.
   int64_t extraBytes{0};
+
+  /// Distribution of gaps (in bytes) between consecutive items before
+  /// coalescing. Measures how spread out the read regions are on disk:
+  /// smaller gaps indicate better data locality for the access pattern.
+  io::IoCounter gaps;
 };
 
 static constexpr int32_t kNoCoalesce = -1;
@@ -82,6 +90,9 @@ CoalesceIoStats coalesceIo(
         !ranges.empty();
     if ((lastEndOffset != itemOffset) || enoughRanges) {
       const int64_t gap = itemOffset - lastEndOffset;
+      if (gap > 0) {
+        result.gaps.increment(gap);
+      }
       if (gap > 0 && gap < maxGap && !enoughRanges) {
         // The next one is after the previous and no farther than maxGap bytes,
         // we read the gap but drop the bytes.

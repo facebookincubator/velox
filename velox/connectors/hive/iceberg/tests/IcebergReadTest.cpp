@@ -1537,6 +1537,11 @@ TEST_F(HiveIcebergTest, skipDeleteFileByPositionUpperBound) {
 //   7. Positional deletes: _row_id uses file-absolute positions.
 //   8. Subfield filter: _row_id uses file-absolute positions, not output
 //   indices.
+//   9. data_sequence_number without first_row_id: both _row_id and
+//      _last_updated_sequence_number are null.
+//  10. Physical lineage columns present with data_sequence_number but no
+//      first_row_id: both columns are null (spec requires null when
+//      first_row_id is absent, regardless of physical storage).
 TEST_F(HiveIcebergTest, rowLineage) {
   folly::SingletonVault::singleton()->registrationComplete();
 
@@ -1668,6 +1673,42 @@ TEST_F(HiveIcebergTest, rowLineage) {
               makeFlatVector<int64_t>({15, 15, 15}),
           })},
   });
+
+  // 9. data_sequence_number without first_row_id: _last_updated_sequence_number
+  // must be null because _row_id is null (no first_row_id to anchor it).
+  assertRowLineage({
+      .values = {1, 2, 3},
+      .dataSequenceNumber = 7,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({1, 2, 3}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+          })},
+  });
+
+  // 10. Physical lineage columns present, data_sequence_number set,
+  // first_row_id absent. Per spec, first_row_id absent means null for both
+  // _row_id and _last_updated_sequence_number regardless of what is
+  // physically stored in the file.
+  assertRowLineage({
+      .values = {10, 20, 30},
+      .storedRowIds = {{500, 501, 502}},
+      .storedSequenceNumbers = {{3, 5, 3}},
+      .dataSequenceNumber = 7,
+      .expectedVectors = {makeRowVector(
+          kOutputNames,
+          {
+              makeFlatVector<int64_t>({10, 20, 30}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+              makeNullableFlatVector<int64_t>(
+                  {std::nullopt, std::nullopt, std::nullopt}),
+          })},
+  });
 }
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -1680,7 +1721,7 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
   // resulting in records in the position delete file being mapped to incorrect
   // rows.
   auto path = test::getDataFilePath(
-      "velox/connectors/hive/iceberg/test", "examples/three_groups.parquet");
+      "velox/connectors/hive/iceberg/tests", "examples/three_groups.parquet");
   const auto deletedPositionSize = 100;
   std::vector<int64_t> deletePositionsVec(
       deletedPositionSize); // allocate 100 elements, [100, 199].

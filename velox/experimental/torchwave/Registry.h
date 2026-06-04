@@ -58,6 +58,9 @@ struct ElementwiseOp {
   /// If true, size (the element count of the first input) is passed after idx.
   /// Requires hasIdxArg.
   bool hasSizeArg{false};
+
+  /// If true, blockInfo is passed as the last argument.
+  bool hasBlockInfo{false};
 };
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
@@ -79,10 +82,16 @@ using Dim = uint32_t;
 /// inputs to produce sizes for each.
 using FormalToActual = folly::F14FastMap<int32_t, int32_t>;
 
+using NodeMap = folly::F14FastMap<NodeCP, NodeCP>;
+
 // Returns shapes to reserve for outputs given inputs. Can return multiple
 // shapes for output params that are tuples of tensors.
-using OutputReserveFunc = std::function<std::vector<std::vector<
-    Dim>>(NodeCP node, nativert::ExecutionFrame&, const FormalToActual& map)>;
+using OutputReserveFunc = std::function<std::vector<std::vector<Dim>>(
+    NodeCP node,
+    nativert::ExecutionFrame&,
+    const FormalToActual& map,
+    NodeCP originalFormalNode,
+    const NodeMap& nodeMap)>;
 
 /// Per-argument metadata controlling how an argument is passed to device code.
 struct ArgumentMeta {
@@ -113,6 +122,12 @@ struct ArgumentMeta {
   /// Marks that for an elementwise operation, we want the whole tensor as
   /// opposed to its element for this lane.
   bool wholeTensor{false};
+
+  /// If true, and the value is produced in this kernel, there must be a
+  /// kernel-wide barrier between producer and user. E.g. if an elementwise
+  /// writes a tensor and another indexes into it at random, there must be
+  /// a barrier.
+  bool randomAccess{false};
 
   /// If true, emits a bool template parameter indicating whether this argument
   /// is present with a non-None value. Absent arguments and None-valued
@@ -150,10 +165,11 @@ struct Metadata {
   /// When set, this is the ordinal of this input.
   std::optional<int32_t> inputFromPreviousKernel;
 
-  /// If true, the user of outputs must be in a different kernel launch on the
-  /// same stream. Many ops with this property can be in the same kernel as long
-  /// as their consumers are in a subsequent one.
-  bool kernelBreakForMultiblock{false};
+  /// If true, a barrier is needed after this op before consumers can read its
+  /// output. In default multi-block mode this forces a kernel break; in CG mode
+  /// an opBarrier is emitted instead so the next op stays in the same kernel.
+  /// In single-block mode the flag is ignored.
+  bool multiBlockReturnBarrier{false};
 
   /// If true, the operation always uses the single block grid variant
   /// regardless of input size.
@@ -195,8 +211,22 @@ struct Metadata {
 
   bool isStandalone(NodeCP node, const ValueTypes& types) const;
 
-  /// Unit cost for scheduling, e.g. proportional block assignment.
+  /// Default per-node cost for scheduling. Used by unitCost() when
+  /// costFunction is not set.
   float cost{1.0f};
+
+  /// If set, returns the per-element cost for this node given its metadata.
+  /// Takes precedence over 'cost' when computing kernel op costs.
+  std::function<float(NodeCP, const Metadata&)> costFunction;
+
+  /// Returns the per-element cost for 'node'. If costFunction is set, calls
+  /// it; otherwise returns 'cost'.
+  float unitCost(NodeCP node) const {
+    if (costFunction) {
+      return costFunction(node, *this);
+    }
+    return cost;
+  }
 
   /// If set, the output is a view over the argument at this ordinal.
   std::optional<int32_t> viewOfArg;
@@ -346,13 +376,16 @@ struct Metadata {
       bool callerIsElementwise)>
       setOutputs;
 
-  bool isKernelBreak(bool isSingleBlock) const {
+  bool isKernelBreak(bool isSingleBlock, bool isCgGrid = false) const {
     for (auto& rm : returnMeta) {
       if (rm.neededOnHost) {
         return true;
       }
     }
-    return !isSingleBlock && kernelBreakForMultiblock;
+    if (isSingleBlock || isCgGrid) {
+      return false;
+    }
+    return multiBlockReturnBarrier;
   }
 };
 
@@ -410,7 +443,7 @@ class MetadataBuilder {
   MetadataBuilder& hasBarrier(bool val = true);
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
-  MetadataBuilder& kernelBreakForMultiblock(bool val = true);
+  MetadataBuilder& multiBlockReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
@@ -425,6 +458,8 @@ class MetadataBuilder {
   MetadataBuilder& isStandaloneFunc(
       std::function<bool(NodeCP, const ValueTypes&)> func);
   MetadataBuilder& cost(float val);
+  MetadataBuilder& costFunction(
+      std::function<float(NodeCP, const Metadata&)> func);
   MetadataBuilder& viewOfArg(int32_t ordinal);
   MetadataBuilder& shapeAttr(std::string name);
   MetadataBuilder& ignoreAttrs(std::vector<std::string> attrs);
@@ -468,6 +503,7 @@ class MetadataBuilder {
   MetadataBuilder& numArgs(int32_t n);
   MetadataBuilder& hasIdxArg(bool val = true);
   MetadataBuilder& hasSizeArg(bool val = true);
+  MetadataBuilder& hasBlockInfo(bool val = true);
 
   Metadata build();
   void registerOp();

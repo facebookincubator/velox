@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,9 +66,9 @@ struct ModelFixture {
   /// Creates fresh node kernels (each executor consumes them).
   std::vector<std::unique_ptr<nativert::OpKernel>> makeKernels() const;
 
-  /// Creates a ModelContext for passing to WaveGraphExecutor, enabling
-  /// OpKernel recreation after graph mutations.
-  std::shared_ptr<ModelContext> makeModelContext() const;
+  /// Creates a ModelContext for passing to WaveGraphExecutor, moving the
+  /// graph out of this fixture. Can only be called once per fixture.
+  std::unique_ptr<ModelContext> makeModelContext();
 };
 
 /// Returns the path to a test data file. In fbcode (Buck), the CWD ends with
@@ -134,10 +135,14 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& deviceInputs);
 
   /// Runs a .pt2 model through the WaveGraphExecutor on device.
-  /// Verifies outputs match 'expected' and returns timing.
+  /// Verifies outputs match 'expected' and returns timing. If 'alterInputs'
+  /// is set, it is called after filling the frame but before execution,
+  /// allowing modification of input tensors (e.g. injecting bad indices).
   RunTiming runWave(
       ModelFixture& fixture,
-      const std::vector<c10::IValue>& expected);
+      const std::vector<c10::IValue>& expected,
+      const std::function<void(nativert::ExecutionFrame&)>& alterInputs =
+          nullptr);
 
   /// Loads a .pt2 model and reference results, runs serial on CPU, serial on
   /// device and wave, and logs the run times for each.
@@ -167,6 +172,9 @@ class ExecutorTestBase : public ::testing::Test {
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};
   int64_t lastRefNodesChecked_{0};
+
+  /// Display name for the current test, included in failure messages.
+  std::string displayName_;
 
   // Snapshot of the serial frame's initial state (after filling user inputs,
   // before execution). Maps value id to shape string or "none"/"scalar".

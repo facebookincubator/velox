@@ -61,6 +61,7 @@ Functions
     * ``count`` - total count of values
 
 .. function:: merge(tdigest<double>) -> tdigest<double>
+   :noindex:
 
     Merges all input ``tdigest``\ s into a single ``tdigest``.
 
@@ -155,11 +156,13 @@ Functions
     means more accuracy at the cost of more memory.
 
 .. function:: value_at_quantile(digest: tdigest<double>, quantile: double) -> double
+   :noindex:
 
     Returns the approximate percentile value from the T-digest ``digest`` at the given ``quantile``.
     The ``quantile`` must be between zero and one (inclusive).
 
 .. function:: values_at_quantiles(digest: tdigest<double>, quantiles: array<double>) -> array<double>
+   :noindex:
 
     Returns the approximate percentile values as an array from the T-digest ``digest`` at each of the specified quantiles given in the ``quantiles`` array.
     All quantile values must be between zero and one (inclusive).

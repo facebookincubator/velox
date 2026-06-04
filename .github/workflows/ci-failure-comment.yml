@@ -155,6 +155,9 @@ jobs:
             CLAUDE.md
             .claude/CLAUDE.md
             .claude/skills/ci-failure-analysis/SKILL.md
+          # Cone mode (the default) rejects file paths as of git 2.54; the
+          # entries above are files, not directories, so disable cone mode.
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Prepare analysis prompt

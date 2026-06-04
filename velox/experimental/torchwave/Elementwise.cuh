@@ -70,17 +70,31 @@ __device__ inline double __div(int32_t a1, int32_t a2) {
   return static_cast<double>(a1) / static_cast<double>(a2);
 }
 
+// PyTorch remainder: result = a - floor(a/b) * b, same sign as divisor.
+// C++ % truncates toward zero (sign of dividend), so we adjust.
 template <typename T, typename T2 = T>
 __device__ inline T __remainder(T a1, T2 a2) {
-  return a1 % a2;
+  T r = a1 % a2;
+  if (r != 0 && ((r ^ a2) < 0)) {
+    r += a2;
+  }
+  return r;
 }
 
 __device__ inline float __remainder(float a1, float a2) {
-  return remainderf(a1, a2);
+  float r = fmodf(a1, a2);
+  if (r != 0.0f && ((r < 0) != (a2 < 0))) {
+    r += a2;
+  }
+  return r;
 }
 
 __device__ inline double __remainder(double a1, double a2) {
-  return ::remainder(a1, a2);
+  double r = fmod(a1, a2);
+  if (r != 0.0 && ((r < 0) != (a2 < 0))) {
+    r += a2;
+  }
+  return r;
 }
 
 template <typename T, typename T2 = T>
@@ -515,6 +529,203 @@ __device__ inline T __arange(int64_t idx) {
 
 __device__ inline int64_t __sym_size(Tensor* self, int64_t dim) {
   return self->dims[self->rank - 1 - dim];
+}
+
+// Index gather: returns source[indices[0][i]] for 1D indexing.
+// Takes a TensorList with a single index tensor.
+template <typename T, typename TIdx>
+__device__ inline T __index1d(Tensor* source, TIdx index) {
+  return storage<T>(source)[index * source->strides[0]];
+}
+
+// Elementwise index_put variants with scalar indices in registers.
+template <typename T>
+__device__ inline T __index_put_elt_one(
+    Tensor* dest,
+    int32_t idx0,
+    T value,
+    bool accumulate,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < dest->dims[0]) {
+    auto* dst = storage<T>(dest);
+    auto offset = indexOffset(dest, idx0);
+    if (accumulate) {
+      dst[offset] += value;
+    } else {
+      dst[offset] = value;
+    }
+  } else if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = 0;
+    block.debugInfo->extra[1] = idx0;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T __index_put_elt_two(
+    Tensor* dest,
+    int32_t idx0,
+    int32_t idx1,
+    T value,
+    bool accumulate,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < dest->dims[0] && idx1 >= 0 && idx1 < dest->dims[1]) {
+    auto* dst = storage<T>(dest);
+    auto offset = indexOffset(dest, idx0, idx1);
+    if (accumulate) {
+      dst[offset] += value;
+    } else {
+      dst[offset] = value;
+    }
+  } else if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = idx0 < 0 || idx0 >= dest->dims[0] ? 0 : 1;
+    block.debugInfo->extra[1] = idx0 < 0 || idx0 >= dest->dims[0] ? idx0 : idx1;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T __index_put_elt_three(
+    Tensor* dest,
+    int32_t idx0,
+    int32_t idx1,
+    int32_t idx2,
+    T value,
+    bool accumulate,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < dest->dims[0] && idx1 >= 0 && idx1 < dest->dims[1] &&
+      idx2 >= 0 && idx2 < dest->dims[2]) {
+    auto* dst = storage<T>(dest);
+    auto offset = indexOffset(dest, idx0, idx1, idx2);
+    if (accumulate) {
+      dst[offset] += value;
+    } else {
+      dst[offset] = value;
+    }
+  } else if (block.debugInfo) {
+    int32_t dim = idx0 < 0 || idx0 >= dest->dims[0] ? 0
+        : idx1 < 0 || idx1 >= dest->dims[1]         ? 1
+                                                    : 2;
+    int32_t badIdx = dim == 0 ? idx0 : (dim == 1 ? idx1 : idx2);
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = dim;
+    block.debugInfo->extra[1] = badIdx;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+// Elementwise index gather variants with scalar indices in registers.
+template <typename T>
+__device__ inline T
+__index_elt_one(Tensor* source, int32_t idx0, BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < source->dims[0]) {
+    return storage<T>(source)[indexOffset(source, idx0)];
+  }
+  if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = 0;
+    block.debugInfo->extra[1] = idx0;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T
+__index_elt_two(Tensor* source, int32_t idx0, int32_t idx1, BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < source->dims[0] && idx1 >= 0 &&
+      idx1 < source->dims[1]) {
+    return storage<T>(source)[indexOffset(source, idx0, idx1)];
+  }
+  if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = idx0 < 0 || idx0 >= source->dims[0] ? 0 : 1;
+    block.debugInfo->extra[1] =
+        idx0 < 0 || idx0 >= source->dims[0] ? idx0 : idx1;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T __index_elt_three(
+    Tensor* source,
+    int32_t idx0,
+    int32_t idx1,
+    int32_t idx2,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < source->dims[0] && idx1 >= 0 &&
+      idx1 < source->dims[1] && idx2 >= 0 && idx2 < source->dims[2]) {
+    return storage<T>(source)[indexOffset(source, idx0, idx1, idx2)];
+  }
+  if (block.debugInfo) {
+    int32_t dim = idx0 < 0 || idx0 >= source->dims[0] ? 0
+        : idx1 < 0 || idx1 >= source->dims[1]         ? 1
+                                                      : 2;
+    int32_t badIdx = dim == 0 ? idx0 : (dim == 1 ? idx1 : idx2);
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = dim;
+    block.debugInfo->extra[1] = badIdx;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+// Fused index gather from TensorList. Supports 1D to kMaxDims indexing.
+// Each index tensor selects a coordinate along its dimension. The linear
+// offset is sum(idx[dim] * source->strides[dim]).
+template <typename T>
+__device__ void __indexgather(
+    Tensor* source,
+    TensorList* indices,
+    Tensor* output,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    for (int32_t dim = 0; dim < indices->size; ++dim) {
+      auto* t = indices->tensors[dim];
+      assert(
+          (t->elementType == kScalarTypeInt ||
+           t->elementType == kScalarTypeLong) &&
+          "index tensor must be int or long");
+    }
+  }
+  __syncthreads();
+  auto n = indices->tensors[0]->numEl;
+  auto* src = storage<T>(source);
+  auto* dst = storage<T>(output);
+  for (uint32_t i = block.blockInOp * blockDim.x + threadIdx.x; i < n;
+       i += block.numBlocksInOp * blockDim.x) {
+    int32_t offset = 0;
+    bool valid = true;
+    for (int32_t dim = 0; dim < indices->size; ++dim) {
+      auto* idxTensor = indices->tensors[dim];
+      int32_t idx;
+      if (idxTensor->elementType == kScalarTypeLong) {
+        idx = static_cast<int32_t>(storage<int64_t>(idxTensor)[i]);
+      } else {
+        idx = storage<int32_t>(idxTensor)[i];
+      }
+      if (idx < 0 || idx >= source->dims[dim]) {
+        valid = false;
+        if (block.debugInfo) {
+          block.debugInfo->line = __LINE__;
+          block.debugInfo->extra[0] = dim;
+          block.debugInfo->extra[1] = idx;
+          SET_MSG(block.debugInfo, "Bad idx\0");
+        }
+        break;
+      }
+      offset += idx * source->strides[dim];
+    }
+    if (valid) {
+      dst[i] = src[offset];
+    }
+  }
 }
 
 } // namespace torch::wave

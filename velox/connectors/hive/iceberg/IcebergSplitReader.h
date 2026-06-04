@@ -97,16 +97,21 @@ class IcebergSplitReader : public FileSplitReader {
   ///       written. Set as NULL constant since the old file doesn't contain
   ///       this column.
   ///    c) Row lineage (_last_updated_sequence_number):
-  ///       For Iceberg V3 row lineage, if the column is not in the file,
-  ///       inherit the data sequence number from the file's manifest entry
-  ///       (provided via $data_sequence_number info column). Per the spec,
-  ///       null values indicate the value should be inherited.
+  ///       Per the Iceberg V3 spec, when first_row_id is absent, readers must
+  ///       produce null for both _row_id and _last_updated_sequence_number.
+  ///       This applies whether or not the columns are physically present in
+  ///       the file. When first_row_id is present and the column is absent
+  ///       from the file, inherit the data sequence number from the manifest
+  ///       entry ($data_sequence_number info column). When the column is
+  ///       physically present and first_row_id is present, use the stored
+  ///       value (null slots are filled from $data_sequence_number in next()).
   ///    d) Row lineage (_row_id):
-  ///       Per the spec, null _row_id values are assigned as
-  ///       first_row_id + file position. When first_row_id is available from
-  ///       the split info column $first_row_id, the value is computed
-  ///       in next(). When first_row_id is not available (e.g.,
-  ///       pre-V3 tables), NULL is returned.
+  ///       Per the spec, when first_row_id is absent, produce null regardless
+  ///       of physical storage. When first_row_id is present and the column
+  ///       is absent from the file, null is installed here and next() replaces
+  ///       it with first_row_id + file position. When the column is physically
+  ///       present, null slots are filled from first_row_id + file position in
+  ///       next(); non-null slots are preserved.
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;

@@ -293,13 +293,10 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     VELOX_CHECK(options.parquetWriteTimestampUnit.has_value());
     const auto [values, expectedValues] = timestampValues(
         options.parquetWriteTimestampUnit.value(), readTimestampPrecision);
-    // Parquet writer relies on Arrow bridge for schema conversion.
-    // TODO: Switch back to TIMESTAMP_UTC() once Arrow bridge supports
-    // TimestampUtcType.
     auto vector = makeRowVector(
         {"t"},
         {
-            makeFlatVector<Timestamp>(values, TIMESTAMP()),
+            makeFlatVector<Timestamp>(values, TIMESTAMP_UTC()),
         });
     auto file = TempFilePath::create();
     writeToParquetFile(file->getPath(), {vector}, options);
@@ -1577,6 +1574,70 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
       {makeSplit(getExampleFilePath("delta_byte_array.parquet"))},
       {"a"},
       "SELECT a from expected");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  auto vector = makeRowVector(
+      {"c"},
+      {makeFlatVector<int64_t>(kSize, [](auto row) { return 100 + 7 * row; })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
+  auto run = [&]<typename T>() {
+    constexpr vector_size_t kSize = 4096;
+    auto vector = makeRowVector({"c"}, {makeFlatVector<T>(kSize, [](auto row) {
+                                  return static_cast<T>(row + row / 2);
+                                })});
+
+    for (bool useV2 : {false, true}) {
+      SCOPED_TRACE(fmt::format("T=int{} useV2={}", sizeof(T) * 8, useV2));
+      WriterOptions options;
+      options.enableDictionary = false;
+      options.encoding =
+          facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+      options.useParquetDataPageV2 = useV2;
+      options.compressionKind = common::CompressionKind::CompressionKind_NONE;
+
+      auto file = TempFilePath::create();
+      writeToParquetFile(file->getPath(), {vector}, options);
+      loadData(vector->rowType(), vector);
+      assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+    }
+  };
+
+  run.template operator()<int32_t>();
+  run.template operator()<int64_t>();
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  auto vector = makeRowVector(
+      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+        const int64_t steps[] = {
+            -1'000'000'000LL, 2'000'000'000LL, -500'000LL, 1'500'000'000LL};
+        return steps[row % 4] * row;
+      })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
 }
 
 TEST_F(ParquetTableScanTest, booleanRle) {
