@@ -169,7 +169,7 @@ function get_cxx_flags {
         GRACE_SOC_ID="jep106:036b:0241"
         # Check for NVIDIA Grace which has various extensions
         if [ -f "$SOC_ID_FILE" ] && [ "$(cat $SOC_ID_FILE)" = "$GRACE_SOC_ID" ]; then
-          echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4 $AARCH64_ATOMIC_FLAGS"
+          echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4 $AARCH64_ATOMIC_FLAGS "
         else
           echo -n "-mcpu=neoverse-v2 $AARCH64_ATOMIC_FLAGS "
         fi
