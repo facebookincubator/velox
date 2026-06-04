@@ -15,15 +15,15 @@
  */
 #pragma once
 
-#include "velox/expression/Expr.h"
+#include "velox/experimental/cudf/expression/CommonFunctions.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+
+#include <memory>
 
 namespace facebook::velox::cudf_velox {
 
-/// Returns true if \p expr or any of its inputs is of decimal type. When \p
-/// deep is true the entire subtree is inspected; when false only \p expr and
-/// its immediate inputs are checked.
-bool containsDecimalType(
+std::shared_ptr<CudfFunction> makeArrayAccessFunction(
     const std::shared_ptr<velox::exec::Expr>& expr,
-    const bool deep);
+    ArrayAccessPolicy policy);
 
 } // namespace facebook::velox::cudf_velox

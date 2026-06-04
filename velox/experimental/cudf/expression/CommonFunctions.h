@@ -13,17 +13,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/expression/Expr.h"
+#include "velox/expression/FunctionSignature.h"
+
+#include <initializer_list>
 
 namespace facebook::velox::cudf_velox {
 
-/// Returns true if \p expr or any of its inputs is of decimal type. When \p
-/// deep is true the entire subtree is inspected; when false only \p expr and
-/// its immediate inputs are checked.
-bool containsDecimalType(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    const bool deep);
+struct ArrayAccessPolicy {
+  bool allowNegativeIndices;
+  bool nullOnNegativeIndices;
+  bool allowOutOfBound;
+  bool indexStartsAtOne;
+};
+
+std::vector<exec::FunctionSignaturePtr> arrayAccessSignatures(
+    std::initializer_list<const char*> indexTypes);
+
+void registerArrayAccessFunction(
+    const std::string& name,
+    ArrayAccessPolicy policy,
+    std::vector<exec::FunctionSignaturePtr> signatures);
 
 } // namespace facebook::velox::cudf_velox
