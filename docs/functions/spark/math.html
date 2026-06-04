@@ -207,6 +207,85 @@ For integral types, overflow results in an error. Corresponds to Spark’s opera
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_ceil">
+<span class="sig-name descname"><span class="pre">decimal_ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#decimal_ceil" title="Link to this definition">¶</a></dt>
+<dd><p>Rounds the decimal value <code class="docutils literal notranslate"><span class="pre">x</span></code> up (toward positive infinity) to the
+specified target <code class="docutils literal notranslate"><span class="pre">scale</span></code>. The first argument must be a DECIMAL and the
+second must be a constant INTEGER representing the desired number of digits
+after the decimal point.</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">scale</span></code> is negative, rounds up to a power of 10 (e.g., scale = -2
+rounds up to the nearest hundred). When <code class="docutils literal notranslate"><span class="pre">scale</span></code> &gt;= the input
+scale, returns the value unchanged. Values that overflow the result
+precision return NULL.</p>
+<p><strong>Result type rules:</strong></p>
+<p>The result type is determined by the input type <code class="docutils literal notranslate"><span class="pre">DECIMAL(p,</span> <span class="pre">s)</span></code> and
+the target <code class="docutils literal notranslate"><span class="pre">scale</span></code> (n):</p>
+<ul class="simple">
+<li><p>When n &gt;= 0: result is <code class="docutils literal notranslate"><span class="pre">DECIMAL(min(p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">1</span> <span class="pre">+</span> <span class="pre">min(s,</span> <span class="pre">n),</span> <span class="pre">38),</span> <span class="pre">min(s,</span> <span class="pre">n))</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">+1</span></code> accounts for carry (e.g., <code class="docutils literal notranslate"><span class="pre">ceil(9.9,</span> <span class="pre">0)</span></code> = 10 needs an extra digit).
+The result scale is <code class="docutils literal notranslate"><span class="pre">min(s,</span> <span class="pre">n)</span></code> — it never pads with trailing zeros beyond the
+input scale.</p></li>
+<li><p>When n &lt; 0: result is <code class="docutils literal notranslate"><span class="pre">DECIMAL(min(max(p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">1,</span> <span class="pre">|n|</span> <span class="pre">+</span> <span class="pre">1),</span> <span class="pre">38),</span> <span class="pre">0)</span></code>.
+The result scale is always 0. <code class="docutils literal notranslate"><span class="pre">|n|</span> <span class="pre">+</span> <span class="pre">1</span></code> digits are needed because rounding
+to the nearest 10^|n| can produce a value one digit wider.</p></li>
+</ul>
+<p>See <a class="reference external" href="https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala">Spark’s RoundBase.dataType</a>.</p>
+<p>Examples (type annotations for clarity, not executable SQL):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">scale</span> <span class="mi">0</span><span class="p">:</span> <span class="nb">round</span> <span class="n">up</span> <span class="n">to</span> <span class="n">integer</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="o">-</span><span class="mf">1.234</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">scale</span> <span class="mi">1</span><span class="p">:</span> <span class="n">one</span> <span class="n">fractional</span> <span class="n">digit</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.3</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="o">-</span><span class="mf">1.234</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mf">1.2</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">scale</span> <span class="mi">2</span><span class="p">:</span> <span class="n">two</span> <span class="n">fractional</span> <span class="n">digits</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.24</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">2</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">scale</span> <span class="o">&gt;=</span> <span class="nb">input</span> <span class="n">scale</span><span class="p">:</span> <span class="n">identity</span> <span class="p">(</span><span class="n">no</span> <span class="n">rounding</span> <span class="n">needed</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">10.1</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.1</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">negative</span> <span class="n">scale</span><span class="p">:</span> <span class="nb">round</span> <span class="n">up</span> <span class="n">to</span> <span class="n">power</span> <span class="n">of</span> <span class="mi">10</span>
+<span class="n">SELECT</span> <span class="n">decimal_ceil</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">99.0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">100</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="decimal_floor">
+<span class="sig-name descname"><span class="pre">decimal_floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">decimal</span></span></span><a class="headerlink" href="#decimal_floor" title="Link to this definition">¶</a></dt>
+<dd><p>Rounds the decimal value <code class="docutils literal notranslate"><span class="pre">x</span></code> down (toward negative infinity) to the
+specified target <code class="docutils literal notranslate"><span class="pre">scale</span></code>. The first argument must be a DECIMAL and the
+second must be a constant INTEGER representing the desired number of digits
+after the decimal point.</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">scale</span></code> is negative, rounds down to a power of 10 (e.g., scale = -2
+rounds down to the nearest hundred). When <code class="docutils literal notranslate"><span class="pre">scale</span></code> &gt;= the input
+scale, returns the value unchanged. Values that overflow the result
+precision return NULL.</p>
+<p><strong>Result type rules:</strong></p>
+<p>Same as <code class="docutils literal notranslate"><span class="pre">decimal_ceil</span></code> — see above.</p>
+<p>Examples (type annotations for clarity, not executable SQL):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">scale</span> <span class="mi">0</span><span class="p">:</span> <span class="nb">round</span> <span class="n">down</span> <span class="n">to</span> <span class="n">integer</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="o">-</span><span class="mf">1.234</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">2</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">scale</span> <span class="mi">1</span><span class="p">:</span> <span class="n">one</span> <span class="n">fractional</span> <span class="n">digit</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="o">-</span><span class="mf">1.234</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mf">1.3</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">scale</span> <span class="mi">2</span><span class="p">:</span> <span class="n">two</span> <span class="n">fractional</span> <span class="n">digits</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span> <span class="mf">1.234</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.23</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">2</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">scale</span> <span class="o">&gt;=</span> <span class="nb">input</span> <span class="n">scale</span><span class="p">:</span> <span class="n">identity</span> <span class="p">(</span><span class="n">no</span> <span class="n">rounding</span> <span class="n">needed</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">10.1</span><span class="p">,</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.1</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+
+<span class="o">--</span> <span class="n">negative</span> <span class="n">scale</span><span class="p">:</span> <span class="nb">round</span> <span class="n">down</span> <span class="n">to</span> <span class="n">power</span> <span class="n">of</span> <span class="mi">10</span>
+<span class="n">SELECT</span> <span class="n">decimal_floor</span><span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="mf">99.0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="mi">90</span> <span class="p">(</span><span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="degrees">
 <span class="sig-name descname"><span class="pre">degrees</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#degrees" title="Link to this definition">¶</a></dt>
 <dd><p>Converts angle x in radians to degrees.</p>
@@ -583,6 +662,8 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#cosh"><code class="docutils literal notranslate"><span class="pre">cosh()</span></code></a></li>
 <li><a class="reference internal" href="#cot"><code class="docutils literal notranslate"><span class="pre">cot()</span></code></a></li>
 <li><a class="reference internal" href="#csc"><code class="docutils literal notranslate"><span class="pre">csc()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_ceil"><code class="docutils literal notranslate"><span class="pre">decimal_ceil()</span></code></a></li>
+<li><a class="reference internal" href="#decimal_floor"><code class="docutils literal notranslate"><span class="pre">decimal_floor()</span></code></a></li>
 <li><a class="reference internal" href="#degrees"><code class="docutils literal notranslate"><span class="pre">degrees()</span></code></a></li>
 <li><a class="reference internal" href="#div"><code class="docutils literal notranslate"><span class="pre">div()</span></code></a></li>
 <li><a class="reference internal" href="#divide"><code class="docutils literal notranslate"><span class="pre">divide()</span></code></a></li>
