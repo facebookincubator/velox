@@ -105,6 +105,7 @@ struct UnpackStateFunctor {
   }
 };
 
+// Half-up sum/count divide for AVG.
 template <typename SumT>
 struct AvgRoundFunctor {
   cuda::std::span<const SumT> sums;

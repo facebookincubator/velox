@@ -28,7 +28,9 @@ namespace facebook::velox::cudf_velox {
 
 // Asserts that a column holds serialized decimal aggregate state in the form
 // Velox uses for VARBINARY: a cuDF STRING column whose bytes are the packed
-// sum/count payloads (see serializeDecimalSumState).
+// sum/count payloads (see serializeDecimalSumState). The payload does not carry
+// scale, so VARBINARY intermediate steps decode at scale 0; the real scale is
+// applied at final cast time.
 void validateIntermediateColumnType(cudf::column_view const& column);
 
 // Casts a DECIMAL64 column up to DECIMAL128 (scale preserved) so a subsequent
