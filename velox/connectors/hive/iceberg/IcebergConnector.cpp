@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
+#include "velox/connectors/hive/iceberg/IcebergDeletionVectorSink.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -71,13 +72,22 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
   auto icebergInsertHandle = checkedPointerCast<const IcebergInsertTableHandle>(
       connectorInsertTableHandle);
 
-  return std::make_unique<IcebergDataSink>(
-      inputType,
-      icebergInsertHandle,
-      connectorQueryCtx,
-      commitStrategy,
-      hiveConfig_,
-      icebergConfig_);
+  switch (icebergInsertHandle->writeKind()) {
+    case IcebergInsertTableHandle::WriteKind::kData:
+      return std::make_unique<IcebergDataSink>(
+          inputType,
+          icebergInsertHandle,
+          connectorQueryCtx,
+          commitStrategy,
+          hiveConfig_,
+          icebergConfig_);
+    case IcebergInsertTableHandle::WriteKind::kDeletionVector:
+      return std::make_unique<IcebergDeletionVectorSink>(
+          inputType, icebergInsertHandle, connectorQueryCtx, commitStrategy);
+  }
+  VELOX_UNREACHABLE(
+      "Unhandled IcebergInsertTableHandle::WriteKind: {}",
+      static_cast<int32_t>(icebergInsertHandle->writeKind()));
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

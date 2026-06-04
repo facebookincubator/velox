@@ -41,6 +41,14 @@ namespace facebook::velox::connector::hive::iceberg {
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
+  /// Identifies which kind of file the sink should produce. Used by
+  /// IcebergConnector::createDataSink to dispatch between the data-file
+  /// IcebergDataSink and the V3 deletion-vector IcebergDeletionVectorSink.
+  enum class WriteKind {
+    kData,
+    kDeletionVector,
+  };
+
   /// @param inputColumns Columns from the table schema to write.
   /// The input RowVector must have the same number of columns and matching
   /// types in the same order.
@@ -57,13 +65,17 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param compressionKind Optional compression to apply to data files.
   /// @param serdeParameters Additional serialization/deserialization parameters
   /// for the file format.
+  /// @param writeKind Selects between data-file emission (default) and V3
+  /// deletion-vector emission. The default preserves existing INSERT
+  /// semantics.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
       dwio::common::FileFormat tableStorageFormat,
       IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {});
+      const std::unordered_map<std::string, std::string>& serdeParameters = {},
+      WriteKind writeKind = WriteKind::kData);
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -71,8 +83,15 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return partitionSpec_;
   }
 
+  /// Returns the requested write kind. kData routes to IcebergDataSink;
+  /// kDeletionVector routes to IcebergDeletionVectorSink.
+  WriteKind writeKind() const {
+    return writeKind_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
+  const WriteKind writeKind_;
 };
 
 using IcebergInsertTableHandlePtr =
