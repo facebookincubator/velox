@@ -12,15 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# tzdata is pinned to a known-good version so docker rebuilds (any time
-# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) don't
-# silently bump tzdata in the image. See issue #17522 for the bug class
-# this prevents — version mismatch between OS tzdata and consumers'
-# bundled tzdb code can produce silent 1-hour offsets in TIMESTAMP
-# WITH TIME ZONE values. To bump intentionally: change the default and
-# rebuild locally to confirm before merging.
-ARG FEDORA_TZDATA_VERSION=2025c-1.fc42
-
 ########################
 # Stage 1: Base Build  #
 ########################
