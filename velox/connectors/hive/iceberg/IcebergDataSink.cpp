@@ -478,9 +478,30 @@ void IcebergDataSink::closeWriterAndCollectStats(size_t index) {
     return;
   }
 #endif
-  dataFileStats_[index].emplace_back(
-      std::make_shared<IcebergDataFileStatistics>(
-          IcebergDataFileStatistics::empty()));
+  // ORC/DWRF (and any other format without a stats collector) path: we don't
+  // have file-level metadata that exposes row count, so derive it from
+  // writerInfo_->numWrittenRows. That counter accumulates across all files
+  // written by this writer (rotated files included), so compute per-file
+  // recordCount as the delta since the previous closeWriterAndCollectStats
+  // call for this writer index.
+  //
+  // Without this, the manifest writes recordCount=0 for every DWRF/ORC file,
+  // which makes the DELETE/UPDATE/MERGE planner believe each file is empty
+  // and skip it entirely (no rewrite, no DV puffin, no visible delete).
+  if (reportedRowsPerWriter_.size() <= index) {
+    reportedRowsPerWriter_.resize(index + 1, 0);
+  }
+  const int64_t totalRows = writerInfo_[index]->numWrittenRows;
+  const int64_t thisFileRows = totalRows - reportedRowsPerWriter_[index];
+  reportedRowsPerWriter_[index] = totalRows;
+
+  auto stats = std::make_shared<IcebergDataFileStatistics>();
+  stats->numRecords = thisFileRows;
+  // Column-level stats (min/max/null counts) are still empty here. That only
+  // degrades predicate pruning (a perf optimization), not correctness. The
+  // proper fix is to add an IcebergDwrfStatsCollector that mirrors the
+  // Parquet path and consumes per-stripe stats from the DWRF writer footer.
+  dataFileStats_[index].emplace_back(std::move(stats));
 }
 
 void IcebergDataSink::rotateWriter(size_t index) {

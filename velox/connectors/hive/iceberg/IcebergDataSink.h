@@ -251,6 +251,17 @@ class IcebergDataSink : public HiveDataSink {
   // individual data file.
   std::vector<std::vector<IcebergDataFileStatisticsPtr>> dataFileStats_;
 
+  // Per-writer running total of rows that have already been accounted for in
+  // an emitted dataFileStats_ entry. Used to compute per-file recordCount as
+  // (writerInfo_[index]->numWrittenRows - reportedRowsPerWriter_[index]) when
+  // we don't have a format-specific stats collector (DWRF/ORC path). Required
+  // because writerInfo_->numWrittenRows accumulates across all files written
+  // by the writer (including rotated files), but Iceberg manifests need a
+  // per-file recordCount. Without this the manifest reports recordCount=0
+  // for every file and DELETE/UPDATE/MERGE plans no-op because the planner
+  // believes the files are empty.
+  std::vector<int64_t> reportedRowsPerWriter_;
+
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
 
 #ifdef VELOX_ENABLE_PARQUET
