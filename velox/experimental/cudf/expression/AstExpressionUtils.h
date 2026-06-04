@@ -618,8 +618,12 @@ cudf::ast::expression const& AstContext::pushExprToTree(
           exprVec.push_back(&logicalNode);
         }
 
+        // Per Presto IN semantics, an empty or null-only in-list yields NULL
+        // regardless of the probe value.
         if (exprVec.empty()) {
-          VELOX_FAIL("Empty IN list");
+          auto nullBoolean =
+              BaseVector::createNullConstant(BOOLEAN(), 1, pool);
+          return tree.push(createLiteral(nullBoolean, scalars));
         }
 
         auto* result = exprVec[0];
