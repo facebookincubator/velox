@@ -24,9 +24,12 @@
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/expression/ConstantExpr.h"
-#include "velox/expression/FieldReference.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/ITypedExpr.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -235,7 +238,7 @@ const std::unordered_map<std::string, Op> unaryOps = [] {
 
 namespace detail {
 
-// return the AST operator for the given expression name, if any
+// Return the AST operator for the given expression name, if any.
 std::optional<Op> opFromFunctionName(const std::string& funcName) {
   if (binaryOps.find(funcName) != binaryOps.end()) {
     return binaryOps.at(funcName);
@@ -270,21 +273,9 @@ bool isOpAndInputsSupported(
 
 // not special form, name = function, so unsupported for astpure
 // "in", "between", "isnotnull" are not special form, but supported for astpure
-// enum class SpecialFormKind : int32_t {
-//   kFieldAccess = 0, supported if not nested column / function
-//   kConstant = 1, "literal" for fixed_width and VARCHAR / function
-//   kCast = 2, "cast" or "try_cast" to int32, int64, double only / function
-//   kCoalesce = 3, unsupported/function
-//   kSwitch = 4, unsupported
-//   kLambda = 5, unsupported
-//   kTry = 6, unsupported
-//   kAnd = 7, "and" or "or" with multiple inputs
-//   kOr = 8,
-//   kCustom = 999,
-// };
-// check if the expression (name + input types) is supported in AST
-bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
-  using velox::exec::FieldReference;
+// Check if the expression (name + input types) is supported in AST.
+// Pure TypedExpr-based check, no exec::Expr dependency.
+bool isAstExprSupported(const core::TypedExprPtr& expr) {
   using Op = cudf::ast::ast_operator;
 
   // For now, AST does not support expressions with DECIMAL output, or immediate
@@ -299,11 +290,7 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
     return false;
   }
 
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
-  const auto len = expr->inputs().size();
-
-  // Literals and field references are always supported
+  // Literals are always supported if the type maps to cudf
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
       auto cudfType = veloxToCudfDataType(type);
@@ -314,23 +301,24 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       return false;
     }
   };
-  if (name == "literal") {
+  if (expr->isConstantKind()) {
     auto type = expr->type();
     return isSupportedLiteral(type);
   }
-  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
-    const auto fieldName =
-        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
-    if (fieldExpr->field() == fieldName) {
-      return true;
+
+  if (expr->isFieldAccessKind()) {
+    const auto* field = expr->asUnchecked<core::FieldAccessTypedExpr>();
+    if (field->isInputColumn()) {
+      return true; // Simple top-level input column
     }
-    LOG(WARNING) << "Field " << name << "not found, in expression "
+    LOG(WARNING) << "Nested or non-input field access not supported in AST: "
                  << expr->toString();
     return false;
   }
 
   // Convert input types to CUDF types once
   std::vector<cudf::data_type> inputCudfDataTypes;
+  const auto len = expr->inputs().size();
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
@@ -340,49 +328,56 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
     }
   }
 
-  // Binary operations
-  if (binaryOps.find(name) != binaryOps.end()) {
-    // AND/OR can handle multiple inputs by chaining
-    if ((name == "and" || name == "or") && len > 2) {
-      for (size_t i = 1; i < len; i++) {
-        if (!isOpAndInputsSupported(
-                binaryOps.at(name),
-                {inputCudfDataTypes[0], inputCudfDataTypes[i]})) {
-          return false;
+  if (expr->isCallKind()) {
+    const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+    const auto name =
+        stripPrefix(call->name(), CudfConfig::getInstance().functionNamePrefix);
+
+    // Binary operations
+    if (binaryOps.find(name) != binaryOps.end()) {
+      // AND/OR can handle multiple inputs by chaining
+      if ((name == "and" || name == "or") && len > 2) {
+        for (size_t i = 1; i < len; i++) {
+          if (!isOpAndInputsSupported(
+                  binaryOps.at(name),
+                  {inputCudfDataTypes[0], inputCudfDataTypes[i]})) {
+            return false;
+          }
         }
+        return true;
       }
-      return true;
+      return len == 2 &&
+          isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
     }
-    return len == 2 &&
-        isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+
+    // Unary operations (includes both unaryOps and "isnotnull")
+    if (unaryOps.find(name) != unaryOps.end()) {
+      return isOpAndInputsSupported(unaryOps.at(name), inputCudfDataTypes);
+    }
+    if (name == "isnotnull" && len == 1) {
+      return isOpAndInputsSupported(Op::IS_NULL, inputCudfDataTypes);
+    }
+
+    // Between: value >= lower AND value <= upper
+    if (name == "between" && len == 3) {
+      return isOpAndInputsSupported(
+                 Op::GREATER_EQUAL,
+                 {inputCudfDataTypes[0], inputCudfDataTypes[1]}) &&
+          isOpAndInputsSupported(
+                 Op::LESS_EQUAL,
+                 {inputCudfDataTypes[0], inputCudfDataTypes[2]});
+    }
+
+    // In: chain of EQUAL operations
+    if (name == "in") {
+      return len == 2 && isSupportedLiteral(call->inputs()[0]->type()) &&
+          isOpAndInputsSupported(
+                 Op::EQUAL, {inputCudfDataTypes[0], inputCudfDataTypes[0]});
+    }
   }
 
-  // Unary operations (includes both unaryOps and "isnotnull")
-  if (unaryOps.find(name) != unaryOps.end()) {
-    return isOpAndInputsSupported(unaryOps.at(name), inputCudfDataTypes);
-  }
-  if (name == "isnotnull" && len == 1) {
-    return isOpAndInputsSupported(Op::IS_NULL, inputCudfDataTypes);
-  }
-
-  // Between: value >= lower AND value <= upper
-  if (name == "between" && len == 3) {
-    return isOpAndInputsSupported(
-               Op::GREATER_EQUAL,
-               {inputCudfDataTypes[0], inputCudfDataTypes[1]}) &&
-        isOpAndInputsSupported(
-               Op::LESS_EQUAL, {inputCudfDataTypes[0], inputCudfDataTypes[2]});
-  }
-
-  // In: chain of EQUAL operations
-  if (name == "in") {
-    return len == 2 && isSupportedLiteral(expr->inputs()[0]->type()) &&
-        isOpAndInputsSupported(
-               Op::EQUAL, {inputCudfDataTypes[0], inputCudfDataTypes[0]});
-  }
-
-  // Cast operations: only INTEGER, BIGINT, DOUBLE supported in pure AST
-  if ((name == "cast" || name == "try_cast") && len == 1) {
+  if (expr->isCastKind()) {
+    // Cast operations: only INTEGER, BIGINT, DOUBLE supported in pure AST
     const auto outputKind = expr->type()->kind();
     if (outputKind == TypeKind::INTEGER || outputKind == TypeKind::BIGINT) {
       return isOpAndInputsSupported(Op::CAST_TO_INT64, inputCudfDataTypes);
@@ -405,12 +400,10 @@ struct AstContext {
   const std::vector<RowTypePtr> inputRowSchema;
   const std::vector<std::reference_wrapper<std::vector<PrecomputeInstruction>>>
       precomputeInstructions;
-  const std::shared_ptr<velox::exec::Expr>
-      rootExpr; // Track the root expression
-  bool allowPureAstOnly;
+  CudfExprCtx exprCtx;
+  const core::TypedExprPtr rootExpr;
 
-  cudf::ast::expression const& pushExprToTree(
-      const std::shared_ptr<velox::exec::Expr>& expr);
+  cudf::ast::expression const& pushExprToTree(const core::TypedExprPtr& expr);
   cudf::ast::expression const& addPrecomputeInstructionOnSide(
       size_t sideIdx,
       size_t columnIndex,
@@ -423,12 +416,11 @@ struct AstContext {
       std::string const& fieldName = {},
       const std::shared_ptr<CudfExpression>& node = nullptr);
   cudf::ast::expression const& multipleInputsToPairWise(
-      const std::shared_ptr<velox::exec::Expr>& expr);
-  static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
+      const core::TypedExprPtr& expr);
   // Determines which side (0=left, 1=right) an expression references by
   // examining its field references. Returns -1 if no fields found, -2 if spans
   // both sides.
-  int findExpressionSide(const std::shared_ptr<velox::exec::Expr>& expr) const;
+  int findExpressionSide(const core::TypedExprPtr& expr) const;
 };
 
 /// Checks if an expression contains sub-expressions that:
@@ -436,7 +428,7 @@ struct AstContext {
 /// 2. AND reference fields from both sides of a join
 /// Returns true only if such problematic sub-expressions exist.
 inline bool hasNonAstSubexprSpanningBothSides(
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
     const RowTypePtr& leftSchema,
     const RowTypePtr& rightSchema) {
   // Check if the expression is natively supported by AST
@@ -453,9 +445,9 @@ inline bool hasNonAstSubexprSpanningBothSides(
 
   // Expression needs precomputation - check if it spans both sides
   bool hasLeft = false, hasRight = false;
-  for (const auto* field : expr->distinctFields()) {
-    hasLeft |= leftSchema->containsChild(field->field());
-    hasRight |= rightSchema->containsChild(field->field());
+  for (const auto& field : referencedInputFields(expr)) {
+    hasLeft |= leftSchema->containsChild(field);
+    hasRight |= rightSchema->containsChild(field);
     if (hasLeft && hasRight) {
       return true;
     }
@@ -463,7 +455,7 @@ inline bool hasNonAstSubexprSpanningBothSides(
   return false;
 }
 
-// get nested column indices
+// Get nested column indices.
 std::vector<int> getNestedColumnIndices(
     const TypePtr& rowType,
     const std::string& fieldName) {
@@ -517,28 +509,31 @@ cudf::ast::expression const& AstContext::addPrecomputeInstruction(
   VELOX_FAIL("Field not found: {}", name);
 }
 
-/// Handles logical AND/OR expressions with multiple inputs by converting them
-/// into a chain of binary operations. For example, "a AND b AND c" becomes
-/// "(a AND b) AND c".
-///
-/// @param expr The expression containing multiple inputs for AND/OR operation
-/// @return A reference to the resulting AST expression
 cudf::ast::expression const& AstContext::multipleInputsToPairWise(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr) {
   using Operation = cudf::ast::operation;
 
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
+  VELOX_CHECK(expr->isCallKind());
+  const auto name = stripPrefix(
+      expr->asUnchecked<core::CallTypedExpr>()->name(),
+      CudfConfig::getInstance().functionNamePrefix);
   auto len = expr->inputs().size();
-  // Create a simple chain of operations
   auto result = &pushExprToTree(expr->inputs()[0]);
 
-  // Chain the rest of the inputs sequentially
   for (size_t i = 1; i < len; i++) {
     auto const& nextInput = pushExprToTree(expr->inputs()[i]);
     result = &tree.push(Operation{binaryOps.at(name), *result, nextInput});
   }
   return *result;
+}
+
+/// Materialise a ConstantTypedExpr to a VectorPtr.
+static VectorPtr toConstantVector(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK(expr->isConstantKind());
+  const auto* c = expr->asUnchecked<core::ConstantTypedExpr>();
+  return c->hasValueVector() ? c->valueVector() : c->toConstantVector(pool);
 }
 
 /// Pushes an expression into the AST tree and returns a reference to the
@@ -547,186 +542,181 @@ cudf::ast::expression const& AstContext::multipleInputsToPairWise(
 /// @param expr The expression to push into the AST tree
 /// @return A reference to the resulting AST expression
 cudf::ast::expression const& AstContext::pushExprToTree(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
-  using velox::exec::ConstantExpr;
-  using velox::exec::FieldReference;
-
-  const auto name =
-      stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
-
-  if (!detail::isAstExprSupported(expr)) {
-    if (canBeEvaluatedByCudf(expr, /*deep=*/false)) {
-      // Shallow check: only verify this operation is supported
-      // Children will be recursively handled by createCudfExpression
-      // Determine which side this expression references
-      int sideIdx = findExpressionSide(expr);
-      if (sideIdx == -2) {
-        // Expression spans both sides of the join - cannot precompute on one
-        // side
-        VELOX_FAIL(
-            "Expression spans both join sides and cannot be precomputed: " +
-            name);
-      }
-      if (sideIdx < 0) {
-        sideIdx = 0; // Default to left side if no fields found
-      }
-      auto node = createCudfExpression(expr, inputRowSchema[sideIdx]);
-      return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
-    }
-    VELOX_FAIL("Unsupported expression: {}", name);
-  }
 
   auto len = expr->inputs().size();
   auto& type = expr->type();
 
-  if (name == "literal") {
-    auto c = dynamic_cast<ConstantExpr*>(expr.get());
-    VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
-    auto value = c->value();
-    VELOX_CHECK(value->isConstantEncoding());
+  auto compileSubExpression = [&]() -> cudf::ast::expression const& {
+    int sideIdx = findExpressionSide(expr);
+    VELOX_CHECK_NE(
+        sideIdx,
+        -2,
+        "Expression spans both join sides and cannot be precomputed: {}",
+        expr->toString());
+    if (sideIdx < 0) {
+      sideIdx = 0;
+    }
+    auto node = createCudfExpression(expr, inputRowSchema[sideIdx], exprCtx);
+    VELOX_CHECK_NOT_NULL(
+        node,
+        "Failed to compile sub-expression: {}",
+        expr->toString());
+    return addPrecomputeInstructionOnSide(
+        sideIdx, 0, expr->toString(), "", node);
+  };
 
-    // Materialize NULL literals via make_column_from_scalar so the output
-    // column preserves nullness for downstream operators like count(column).
-    //
-    // Also keep the standalone literal workaround: cudf::compute_column can
-    // produce spurious nulls for root literal expressions. See comment below.
-    //
-    // TODO: There is a scalar stream synchronization bug that causes
-    // cudf::compute_column to produce spurious nulls for standalone
-    // literal expressions.  Work around it by materialising via
-    // make_column_from_scalar instead.
-    if (value->isNullAt(0) || expr == rootExpr) {
-      // convert to cudf scalar and store it
-      createLiteral(value, scalars);
-      // The scalar index is scalars.size() - 1 since we just added it
-      std::string fillExpr = "fill " + std::to_string(scalars.size() - 1);
-      // For literals, we use the first column just to get the size, but create
-      // a new column The new column will be appended after the original input
-      // columns
-      return addPrecomputeInstruction(inputRowSchema[0]->nameOf(0), fillExpr);
-    }
+  if (!detail::isAstExprSupported(expr)) {
+    return compileSubExpression();
+  }
 
-    return tree.push(createLiteral(value, scalars));
-  } else if (binaryOps.find(name) != binaryOps.end()) {
-    if (name == "and" or name == "or") {
-      return multipleInputsToPairWise(expr);
-    }
-    VELOX_CHECK_EQ(len, 2);
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    auto const& op2 = pushExprToTree(expr->inputs()[1]);
-    return tree.push(Operation{binaryOps.at(name), op1, op2});
-  } else if (unaryOps.find(name) != unaryOps.end()) {
-    VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    // Spark result type is different with presto, presto is same with cudf
-    const auto& op2 = tree.push(Operation{unaryOps.at(name), op1});
-    if ((name == "ceil" || name == "floor") &&
-        expr->type()->kind() == TypeKind::BIGINT) {
-      return tree.push(Operation{Op::CAST_TO_INT64, op2});
-    }
-    return op2;
-  } else if (name == "isnotnull") {
-    VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    auto const& nullOp = tree.push(Operation{Op::IS_NULL, op1});
-    return tree.push(Operation{Op::NOT, nullOp});
-  } else if (name == "between") {
-    VELOX_CHECK_EQ(len, 3);
-    auto const& value = pushExprToTree(expr->inputs()[0]);
-    auto const& lower = pushExprToTree(expr->inputs()[1]);
-    auto const& upper = pushExprToTree(expr->inputs()[2]);
-    // construct between(op2, op3) using >= and <=
-    auto const& geLower = tree.push(Operation{Op::GREATER_EQUAL, value, lower});
-    auto const& leUpper = tree.push(Operation{Op::LESS_EQUAL, value, upper});
-    return tree.push(Operation{Op::NULL_LOGICAL_AND, geLower, leUpper});
-  } else if (name == "in") {
-    // number of inputs is variable. >=2
-    VELOX_CHECK_EQ(len, 2);
-    // actually len is 2, second input is ARRAY
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    auto c = dynamic_cast<ConstantExpr*>(expr->inputs()[1].get());
-    VELOX_CHECK_NOT_NULL(c, "literal expression should be ConstantExpr");
-    auto value = c->value();
-    VELOX_CHECK_NOT_NULL(value, "ConstantExpr value is null");
+  switch (expr->kind()) {
+    case core::ExprKind::kConstant: {
+      auto value = toConstantVector(expr, exprCtx.pool);
+      VELOX_CHECK(value->isConstantEncoding());
 
-    // Use the new createLiteralsFromArray function to get literals
-    auto literals = createLiteralsFromArray(value, scalars);
+      // Materialize NULL literals via make_column_from_scalar so the output
+      // column preserves nullness for downstream operators like count(column).
+      //
+      // Also keep the standalone literal workaround: cudf::compute_column can
+      // produce spurious nulls for root literal expressions. See comment below.
+      //
+      // TODO: There is a scalar stream synchronization bug that causes
+      // cudf::compute_column to produce spurious nulls for standalone
+      // literal expressions.  Work around it by materialising via
+      // make_column_from_scalar instead.
+      if (value->isNullAt(0) || expr == rootExpr) {
+        // convert to cudf scalar and store it
+        createLiteral(value, scalars);
+        // The scalar index is scalars.size() - 1 since we just added it
+        std::string fillExpr = "fill " + std::to_string(scalars.size() - 1);
+        // For literals, we use the first column just to get the size, but
+        // create a new column The new column will be appended after the
+        // original input columns
+        return addPrecomputeInstruction(inputRowSchema[0]->nameOf(0), fillExpr);
+      }
 
-    // Create equality expressions for each literal and OR them together
-    std::vector<const cudf::ast::expression*> exprVec;
-    for (auto& literal : literals) {
-      auto const& opi = tree.push(std::move(literal));
-      auto const& logicalNode = tree.push(Operation{Op::EQUAL, op1, opi});
-      exprVec.push_back(&logicalNode);
+      return tree.push(createLiteral(value, scalars));
     }
+    case core::ExprKind::kCall: {
+      const auto name = stripPrefix(
+          expr->asUnchecked<core::CallTypedExpr>()->name(),
+          CudfConfig::getInstance().functionNamePrefix);
 
-    // Handle empty IN list case
-    if (exprVec.empty()) {
-      // FAIL
-      VELOX_FAIL("Empty IN list");
-      // Return FALSE for empty IN list
-      // auto falseValue = std::make_shared<ConstantVector<bool>>(
-      //     value->pool(), 1, false, TypeKind::BOOLEAN, false);
-      // return tree.push(createLiteral(falseValue, scalars));
-    }
+      if (binaryOps.find(name) != binaryOps.end()) {
+        if (name == "and" or name == "or") {
+          return multipleInputsToPairWise(expr);
+        }
+        VELOX_CHECK_EQ(len, 2);
+        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        auto const& op2 = pushExprToTree(expr->inputs()[1]);
+        return tree.push(Operation{binaryOps.at(name), op1, op2});
+      } else if (unaryOps.find(name) != unaryOps.end()) {
+        VELOX_CHECK_EQ(len, 1);
+        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        // Spark result type is different with presto, presto is same with cudf
+        const auto& op2 = tree.push(Operation{unaryOps.at(name), op1});
+        if ((name == "ceil" || name == "floor") &&
+            expr->type()->kind() == TypeKind::BIGINT) {
+          return tree.push(Operation{Op::CAST_TO_INT64, op2});
+        }
+        return op2;
+      } else if (name == "isnotnull") {
+        VELOX_CHECK_EQ(len, 1);
+        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        auto const& nullOp = tree.push(Operation{Op::IS_NULL, op1});
+        return tree.push(Operation{Op::NOT, nullOp});
+      } else if (name == "between") {
+        VELOX_CHECK_EQ(len, 3);
+        auto const& value = pushExprToTree(expr->inputs()[0]);
+        auto const& lower = pushExprToTree(expr->inputs()[1]);
+        auto const& upper = pushExprToTree(expr->inputs()[2]);
+        auto const& geLower =
+            tree.push(Operation{Op::GREATER_EQUAL, value, lower});
+        auto const& leUpper =
+            tree.push(Operation{Op::LESS_EQUAL, value, upper});
+        return tree.push(Operation{Op::NULL_LOGICAL_AND, geLower, leUpper});
+      } else if (name == "in") {
+        VELOX_CHECK_EQ(len, 2);
+        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        VELOX_CHECK(
+            expr->inputs()[1]->isConstantKind(), "IN list must be a constant");
+        auto inListVec =
+          toConstantVector(expr->inputs()[1], exprCtx.pool);
+        VELOX_CHECK_NOT_NULL(inListVec, "ConstantExpr value is null");
 
-    // OR all logical nodes
-    auto* result = exprVec[0];
-    for (size_t i = 1; i < exprVec.size(); i++) {
-      auto const& treeNode =
-          tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
-      result = &treeNode;
+        auto literals = createLiteralsFromArray(inListVec, scalars);
+
+        std::vector<const cudf::ast::expression*> exprVec;
+        for (auto& literal : literals) {
+          auto const& opi = tree.push(std::move(literal));
+          auto const& logicalNode = tree.push(Operation{Op::EQUAL, op1, opi});
+          exprVec.push_back(&logicalNode);
+        }
+
+        if (exprVec.empty()) {
+          VELOX_FAIL("Empty IN list");
+        }
+
+        auto* result = exprVec[0];
+        for (size_t i = 1; i < exprVec.size(); i++) {
+          auto const& treeNode =
+              tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprVec[i]});
+          result = &treeNode;
+        }
+        return *result;
+      }
+      return compileSubExpression();
     }
-    return *result;
-  } else if (name == "cast" || name == "try_cast") {
-    VELOX_CHECK_EQ(len, 1);
-    auto const& op1 = pushExprToTree(expr->inputs()[0]);
-    if (expr->type()->kind() == TypeKind::INTEGER) {
-      // No int32 cast in cudf ast
-      return tree.push(Operation{Op::CAST_TO_INT64, op1});
-    } else if (expr->type()->kind() == TypeKind::BIGINT) {
-      return tree.push(Operation{Op::CAST_TO_INT64, op1});
-    } else if (expr->type()->kind() == TypeKind::DOUBLE) {
-      return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
-    } else {
-      VELOX_FAIL("Unsupported type for cast operation");
+    case core::ExprKind::kCast: {
+      VELOX_CHECK_EQ(len, 1);
+      if (type->kind() == TypeKind::INTEGER ||
+          type->kind() == TypeKind::BIGINT) {
+        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        return tree.push(Operation{Op::CAST_TO_INT64, op1});
+      } else if (type->kind() == TypeKind::DOUBLE) {
+        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        return tree.push(Operation{Op::CAST_TO_FLOAT64, op1});
+      }
+      return compileSubExpression();
     }
-  } else if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
-    // Refer to the appropriate side
-    const auto fieldName =
-        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
-    for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
-      auto& schema = inputRowSchema[sideIdx];
-      if (schema.get()->containsChild(fieldName)) {
-        auto columnIndex = schema.get()->getChildIdx(fieldName);
-        // This column may be complex data type like ROW, we need to get the
-        // name from row. Push fieldName.name to the tree.
-        auto side = static_cast<cudf::ast::table_reference>(sideIdx);
-        if (fieldExpr->field() == fieldName) {
-          return tree.push(cudf::ast::column_reference(columnIndex, side));
-        } else if (!allowPureAstOnly) {
-          return addPrecomputeInstruction(
-              fieldName, "nested_column", fieldExpr->field());
-        } else {
-          VELOX_FAIL("Unsupported type for nested column operation");
+    case core::ExprKind::kDereference:
+    case core::ExprKind::kFieldAccess: {
+      auto path = extractFieldPath(expr);
+      VELOX_CHECK(path.has_value() && !path->empty());
+      const auto& fieldName = path->front();
+      const auto& leafName = path->back();
+      for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
+        auto& schema = inputRowSchema[sideIdx];
+        if (schema.get()->containsChild(fieldName)) {
+          auto columnIndex = schema.get()->getChildIdx(fieldName);
+          auto side = static_cast<cudf::ast::table_reference>(sideIdx);
+          if (path->size() == 1) {
+            return tree.push(cudf::ast::column_reference(columnIndex, side));
+          } else {
+            // Nested field: delegate to precompute instruction
+            return addPrecomputeInstruction(
+                fieldName, "nested_column", leafName);
+          }
         }
       }
+      VELOX_FAIL("Field not found: {}", fieldName);
     }
-    VELOX_FAIL("Field not found: {}", name);
-  } else {
-    VELOX_UNREACHABLE("Unsupported expression: {}", name);
+    // Fallback: compile unsupported sub-expression on-demand.
+    default: {
+      return compileSubExpression();
+    }
   }
 }
 
 // Returns: 0 = left only, 1 = right only, -1 = no fields, -2 = spans both sides
-int AstContext::findExpressionSide(
-    const std::shared_ptr<velox::exec::Expr>& expr) const {
+int AstContext::findExpressionSide(const core::TypedExprPtr& expr) const {
   int foundSide = -1;
-  for (const auto* field : expr->distinctFields()) {
+  for (const auto& field : referencedInputFields(expr)) {
     for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
-      if (inputRowSchema[sideIdx].get()->containsChild(field->field())) {
+      if (inputRowSchema[sideIdx].get()->containsChild(field)) {
         if (foundSide == -1) {
           foundSide = static_cast<int>(sideIdx);
         } else if (foundSide != static_cast<int>(sideIdx)) {

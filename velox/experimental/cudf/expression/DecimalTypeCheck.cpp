@@ -18,13 +18,11 @@
 
 namespace facebook::velox::cudf_velox {
 
-bool isOfDecimalType(const std::shared_ptr<velox::exec::Expr>& expr) {
+bool isOfDecimalType(const core::TypedExprPtr& expr) {
   return expr && expr->type() && expr->type()->isDecimal();
 }
 
-bool containsDecimalType(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    const bool deep) {
+bool containsDecimalType(const core::TypedExprPtr& expr, const bool deep) {
   // check output type
   if (isOfDecimalType(expr)) {
     return true;

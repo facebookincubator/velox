@@ -16,11 +16,12 @@
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/expression/Expr.h"
-#include "velox/expression/FieldReference.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/FunctionSignature.h"
 
 #include <gtest/gtest.h>
+
+#include <string>
 
 using namespace facebook::velox;
 
@@ -51,7 +52,7 @@ class TagFunction : public CudfFunction {
 };
 
 CudfFunctionFactory tagFactory(std::string tag) {
-  return [tag](const std::string&, const std::shared_ptr<exec::Expr>&) {
+  return [tag](const std::string&, const core::TypedExprPtr&) {
     return std::make_shared<TagFunction>(tag);
   };
 }
@@ -61,32 +62,30 @@ std::string tagOf(const std::shared_ptr<CudfFunction>& fn) {
   return tagged ? tagged->tag() : std::string{"<null>"};
 }
 
-// Necessary to mock `exec::Expr` call nodes successfully because the fake
-// function names used in these tests aren't registered with Velox's scalar
-// registry, so the usual `ExprSet` compilation path would reject them.
-std::shared_ptr<exec::Expr> makeCall(
+// Synthetic typed call nodes let these tests exercise the cuDF registry without
+// registering fake scalar functions in Velox's function registry.
+core::TypedExprPtr makeCall(
     const std::string& name,
     const TypePtr& returnType,
     const std::vector<TypePtr>& argTypes) {
-  std::vector<std::shared_ptr<exec::Expr>> inputs;
+  std::vector<core::TypedExprPtr> inputs;
   inputs.reserve(argTypes.size());
-  for (const auto& argType : argTypes) {
-    inputs.push_back(
-        std::make_shared<exec::Expr>(
-            argType,
-            std::vector<std::shared_ptr<exec::Expr>>{},
-            "field",
-            /*specialFormKind=*/std::nullopt,
-            /*supportsFlatNoNullsFastPath=*/false,
-            /*trackCpuUsage=*/false));
+  for (size_t i = 0; i < argTypes.size(); ++i) {
+    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
+        argTypes[i], "c" + std::to_string(i)));
   }
-  return std::make_shared<exec::Expr>(
+  return std::make_shared<core::CallTypedExpr>(
+      returnType, std::move(inputs), name);
+}
+
+core::TypedExprPtr makeCast(
+    const TypePtr& returnType,
+    const TypePtr& argType,
+    bool isTryCast = false) {
+  return std::make_shared<core::CastTypedExpr>(
       returnType,
-      std::move(inputs),
-      name,
-      /*specialFormKind=*/std::nullopt,
-      /*supportsFlatNoNullsFastPath=*/false,
-      /*trackCpuUsage=*/false);
+      std::make_shared<core::FieldAccessTypedExpr>(argType, "c0"),
+      isTryCast);
 }
 
 } // namespace
@@ -260,23 +259,21 @@ TEST_F(FunctionRegistryTest, canEvaluateMultipleSignatures) {
           makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()})));
 }
 
-// `FieldReference` expression, no registry setup. Test that `canEvaluate`
-// returns true without consulting the function registry at all.
+// Field access expression, no registry setup. Test that `canEvaluate` returns
+// true without consulting the function registry at all.
 TEST_F(FunctionRegistryTest, canEvaluateFieldReference) {
-  auto fieldExpr = std::make_shared<exec::FieldReference>(
-      DOUBLE(), std::vector<std::shared_ptr<exec::Expr>>{}, "c0");
+  auto fieldExpr =
+      std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c0");
   EXPECT_TRUE(FunctionExpression::canEvaluate(fieldExpr));
 }
 
-// `cast` and `try_cast` calls with cudf-supported type pairs. Test that
+// CastTypedExpr nodes with cudf-supported type pairs. Test that
 // `canEvaluate` dispatches these through `cudf::is_supported_cast` rather
 // than through the normal signature-matching path.
 TEST_F(FunctionRegistryTest, canEvaluateCastExpression) {
+  EXPECT_TRUE(FunctionExpression::canEvaluate(makeCast(BIGINT(), DOUBLE())));
   EXPECT_TRUE(
-      FunctionExpression::canEvaluate(makeCall("cast", BIGINT(), {DOUBLE()})));
-  EXPECT_TRUE(
-      FunctionExpression::canEvaluate(
-          makeCall("try_cast", BIGINT(), {DOUBLE()})));
+      FunctionExpression::canEvaluate(makeCast(BIGINT(), DOUBLE(), true)));
 }
 
 // Two function registrations under the same name with identical signatures,
