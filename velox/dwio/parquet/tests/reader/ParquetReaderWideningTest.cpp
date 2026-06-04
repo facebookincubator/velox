@@ -45,12 +45,10 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowTypePtr& readSchema,
       bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
-    auto [reader, rowReader] = readerBuilder()
-                                   .sink(*sink)
-                                   .schema(readSchema)
-                                   .readerOptions(makeWideningReaderOptions(
-                                       readSchema, allowInt32Narrowing))
-                                   .build();
+    auto [reader, rowReader] =
+        readerBuilder(*sink, readSchema)
+            .options(makeWideningReaderOptions(readSchema, allowInt32Narrowing))
+            .build();
     readerStore_.push_back(std::move(reader));
     return std::move(rowReader);
   }
@@ -1092,11 +1090,8 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
         makeRowVector({"c1"}, {makeFlatVector<int8_t>({-128, -1, 0, 1, 127})});
     auto* tinySink = write(tinyData);
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] = readerBuilder()
-                                   .sink(*tinySink)
-                                   .schema(readSchema)
-                                   .readerOptions(readerOptions)
-                                   .build();
+    auto [reader, rowReader] =
+        readerBuilder(*tinySink, readSchema).options(readerOptions).build();
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, tinyData, *leafPool_);
   }
@@ -1109,11 +1104,8 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
         {"c1"}, {makeFlatVector<int16_t>({-32768, -1, 0, 1, 32767})});
     auto* smallSink = write(smallData);
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] = readerBuilder()
-                                   .sink(*smallSink)
-                                   .schema(readSchema)
-                                   .readerOptions(readerOptions)
-                                   .build();
+    auto [reader, rowReader] =
+        readerBuilder(*smallSink, readSchema).options(readerOptions).build();
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, smallData, *leafPool_);
   }
@@ -1125,11 +1117,8 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   {
     auto readSchema = ROW("c1", TINYINT());
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] = readerBuilder()
-                                   .sink(*sink)
-                                   .schema(readSchema)
-                                   .readerOptions(readerOptions)
-                                   .build();
+    auto [reader, rowReader] =
+        readerBuilder(*sink, readSchema).options(readerOptions).build();
 
     auto expected = makeRowVector(
         {"c1"},
@@ -1155,11 +1144,8 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   {
     auto readSchema = ROW("c1", SMALLINT());
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] = readerBuilder()
-                                   .sink(*sink)
-                                   .schema(readSchema)
-                                   .readerOptions(readerOptions)
-                                   .build();
+    auto [reader, rowReader] =
+        readerBuilder(*sink, readSchema).options(readerOptions).build();
 
     auto expected = makeRowVector(
         {"c1"},

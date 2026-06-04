@@ -36,8 +36,7 @@ class ParquetReaderTest : public ParquetTestBase {
   std::unique_ptr<dwio::common::RowReader> createRowReader(
       const std::string& fileName,
       const RowTypePtr& rowType) {
-    auto [reader, rowReader] =
-        readerBuilder().file(fileName).schema(rowType).build();
+    auto [reader, rowReader] = readerBuilder(fileName, rowType).build();
     readerStore_.push_back(std::move(reader));
     return std::move(rowReader);
   }
@@ -76,7 +75,7 @@ TEST_F(ParquetReaderTest, parseSample) {
   //   a: [1..20]
   //   b: [1.0..20.0]
   auto [reader, rowReader] =
-      readerBuilder().file("sample.parquet").schema(sampleSchema()).build();
+      readerBuilder("sample.parquet", sampleSchema()).build();
   EXPECT_EQ(reader->numberOfRows(), 20ULL);
 
   auto type = reader->typeWithId();
@@ -127,10 +126,8 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   // All 1000 rows in one row group.
   // Data is in RLE_DICTIONARY Snappy format.
   auto schema = ROW("msg", ROW("a", ROW("b", ARRAY(INTEGER()))));
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("parse_empty_nested_list.parquet")
-                                 .schema(schema)
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("parse_empty_nested_list.parquet", schema).build();
   EXPECT_EQ(reader->numberOfRows(), 1000ULL);
 
   // Ensure the intact data structure
@@ -373,11 +370,8 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("sample.parquet")
-                                 .schema(sampleSchema())
-                                 .range(0, 200)
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("sample.parquet", sampleSchema()).byteRange(0, 200).build();
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1; }),
       makeFlatVector<double>(10, [](auto row) { return row + 1; }),
@@ -387,10 +381,8 @@ TEST_F(ParquetReaderTest, parseSampleRange1) {
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange2) {
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("sample.parquet")
-                                 .schema(sampleSchema())
-                                 .range(200, 500)
+  auto [reader, rowReader] = readerBuilder("sample.parquet", sampleSchema())
+                                 .byteRange(200, 500)
                                  .build();
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 11; }),
@@ -401,10 +393,8 @@ TEST_F(ParquetReaderTest, parseSampleRange2) {
 }
 
 TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("sample.parquet")
-                                 .schema(sampleSchema())
-                                 .range(300, 10)
+  auto [reader, rowReader] = readerBuilder("sample.parquet", sampleSchema())
+                                 .byteRange(300, 10)
                                  .build();
 
   VectorPtr result;
@@ -508,8 +498,7 @@ TEST_F(ParquetReaderTest, parseInt) {
   // Data is in plain uncompressed format:
   //   int: [100 .. 109]
   //   bigint: [1000 .. 1009]
-  auto [reader, rowReader] =
-      readerBuilder().file("int.parquet").schema(intSchema()).build();
+  auto [reader, rowReader] = readerBuilder("int.parquet", intSchema()).build();
 
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
 
@@ -539,8 +528,7 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
   auto rowType =
       ROW({"uint8", "uint16", "uint32", "uint64"},
           {TINYINT(), SMALLINT(), INTEGER(), BIGINT()});
-  auto [reader, rowReader] =
-      readerBuilder().file("uint.parquet").schema(rowType).build();
+  auto [reader, rowReader] = readerBuilder("uint.parquet", rowType).build();
   EXPECT_EQ(reader->numberOfRows(), 3ULL);
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 4ULL);
@@ -630,7 +618,7 @@ TEST_F(ParquetReaderTest, parseDate) {
   // Data is in plain uncompressed format:
   //   date: [1969-12-27 .. 1970-01-20]
   auto [reader, rowReader] =
-      readerBuilder().file("date.parquet").schema(dateSchema()).build();
+      readerBuilder("date.parquet", dateSchema()).build();
 
   EXPECT_EQ(reader->numberOfRows(), 25ULL);
 
@@ -682,11 +670,8 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 TEST_F(ParquetReaderTest, projectNoColumns) {
   // This is the case for count(*).
   auto rowType = ROW({}, {});
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("sample.parquet")
-                                 .schema(rowType)
-                                 .noColumnSelector()
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("sample.parquet", rowType).withScanSpecOnly().build();
   auto result = BaseVector::create(rowType, 1, leafPool_.get());
   constexpr int kBatchSize = 100;
   ASSERT_TRUE(rowReader->next(kBatchSize, result));
@@ -706,11 +691,8 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   //   a: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   //   b: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(14, 2)});
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("decimal_dict.parquet")
-                                 .schema(rowType)
-                                 .noColumnSelector()
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("decimal_dict.parquet", rowType).withScanSpecOnly().build();
 
   EXPECT_EQ(reader->numberOfRows(), 6ULL);
 
@@ -759,7 +741,7 @@ TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
   auto fileSchema =
       ROW("test", createType<TypeKind::MAP>({VARCHAR(), BIGINT()}));
   auto [reader, rowReader] =
-      readerBuilder().file("map_key_value.parquet").schema(fileSchema).build();
+      readerBuilder("map_key_value.parquet", fileSchema).build();
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
 
   auto rowType = reader->typeWithId();
@@ -809,10 +791,8 @@ TEST_F(ParquetReaderTest, parseRowArrayTest) {
            ROW("someId", INTEGER()),
            ROW("someId", INTEGER()),
            ARRAY(ROW("someId", INTEGER()))});
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("proto-struct-with-array.parquet")
-                                 .schema(outputRowType)
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("proto-struct-with-array.parquet", outputRowType).build();
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 6ULL);
@@ -1080,11 +1060,10 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   // decimal_no_ColumnMetadata.parquet has one columns a: DECIMAL(9,1). It
   // doesn't have ColumnMetaData, and rowGroups_[0].columns[0].file_offset is 0.
   auto rowType = ROW("_c0", DECIMAL(9, 1));
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("decimal_no_ColumnMetadata.parquet")
-                                 .schema(rowType)
-                                 .noColumnSelector()
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("decimal_no_ColumnMetadata.parquet", rowType)
+          .withScanSpecOnly()
+          .build();
 
   EXPECT_EQ(reader->numberOfRows(), 10ULL);
 }
@@ -1104,11 +1083,10 @@ TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
 // This test is to verify filterRowGroups() doesn't fail if offset is 0
 TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
   auto rowType = ROW("IDX", INTEGER());
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("zero_offset_row_group.parquet")
-                                 .schema(rowType)
-                                 .noColumnSelector()
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("zero_offset_row_group.parquet", rowType)
+          .withScanSpecOnly()
+          .build();
 
   EXPECT_EQ(reader->numberOfRows(), 1L);
 }
@@ -1177,7 +1155,7 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
     auto reader = createReader("multiple_row_groups.parquet", readerOptions);
     EXPECT_EQ(reader->fileMetaData().numRowGroups(), numRowGroups);
 
-    auto rowReader = createRowReaderFromReaderNoSelect(*reader, rowType);
+    auto rowReader = createRowReaderFromReader(*reader, rowType, false);
     auto parquetRowReader = dynamic_cast<ParquetRowReader*>(rowReader.get());
 
     constexpr int kBatchSize = 1000;
@@ -1211,10 +1189,8 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
 TEST_F(ParquetReaderTest, testEmptyRowGroups) {
   // empty_row_groups.parquet contains empty row groups
   auto fileSchema = ROW("a", INTEGER());
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("empty_row_groups.parquet")
-                                 .schema(fileSchema)
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("empty_row_groups.parquet", fileSchema).build();
   EXPECT_EQ(reader->numberOfRows(), 5ULL);
 
   auto rowType = reader->typeWithId();
@@ -1233,7 +1209,7 @@ TEST_F(ParquetReaderTest, testEnumType) {
   // enum_type.parquet contains 1 column (ENUM) with 3 rows.
   auto fileSchema = ROW("test", VARCHAR());
   auto [reader, rowReader] =
-      readerBuilder().file("enum_type.parquet").schema(fileSchema).build();
+      readerBuilder("enum_type.parquet", fileSchema).build();
   EXPECT_EQ(reader->numberOfRows(), 3ULL);
 
   auto rowType = reader->typeWithId();
@@ -1251,8 +1227,7 @@ TEST_F(ParquetReaderTest, testEnumType) {
 TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
   const std::string filename("varbinary_flba.parquet");
   auto selectedType = ROW("flba_field", VARBINARY());
-  auto [reader, rowReader] =
-      readerBuilder().file(filename).schema(selectedType).build();
+  auto [reader, rowReader] = readerBuilder(filename, selectedType).build();
 
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 8ULL);
@@ -1374,7 +1349,7 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
 TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   auto outputRowType = ROW("regionkey", BIGINT());
   auto [reader, rowReader] =
-      readerBuilder().file("v2_page.parquet").schema(outputRowType).build();
+      readerBuilder("v2_page.parquet", outputRowType).build();
   EXPECT_EQ(reader->numberOfRows(), 5ULL);
 
   auto rowType = reader->typeWithId();
@@ -1392,10 +1367,8 @@ TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
 TEST_F(ParquetReaderTest, readComplexTypeWithV2Page) {
   auto outputRowType =
       ROW({"nums", "props"}, {ARRAY(INTEGER()), MAP(VARCHAR(), INTEGER())});
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("complex_type_v2_page.parquet")
-                                 .schema(outputRowType)
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("complex_type_v2_page.parquet", outputRowType).build();
   EXPECT_EQ(reader->numberOfRows(), 1ULL);
 
   auto rowType = reader->typeWithId();
@@ -1428,10 +1401,8 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
       "ROW<test:ARRAY<MAP<VARCHAR,ARRAY<INTEGER>>>>";
   auto rowType = ROW("test", ARRAY(MAP(VARCHAR(), ARRAY(INTEGER()))));
   auto [reader, rowReader] =
-      readerBuilder()
-          .file("array_of_map_of_int_key_array_value.parquet")
-          .schema(rowType)
-          .noColumnSelector()
+      readerBuilder("array_of_map_of_int_key_array_value.parquet", rowType)
+          .withScanSpecOnly()
           .build();
   EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
   auto type = reader->typeWithId();
@@ -1462,7 +1433,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
   auto type = reader->typeWithId();
   auto rowType = reader->rowType();
-  auto rowReader = createRowReaderFromReaderNoSelect(*reader, rowType);
+  auto rowReader = createRowReaderFromReader(*reader, rowType, false);
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
@@ -1491,11 +1462,10 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
       ROW("test",
           ROW({"stringarrayfield", "intarrayfield"},
               {ARRAY(ARRAY(VARCHAR())), ARRAY(ARRAY(INTEGER()))}));
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("struct_of_array_of_array.parquet")
-                                 .schema(rowType)
-                                 .noColumnSelector()
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("struct_of_array_of_array.parquet", rowType)
+          .withScanSpecOnly()
+          .build();
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   EXPECT_EQ(reader->rowType()->toString(), expectedVeloxType);
@@ -1552,7 +1522,7 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
       {"test"},
       {ROW({"intfield", "stringarrayfield"}, {INTEGER(), ARRAY(VARCHAR())})});
   auto [reader, rowReader] =
-      readerBuilder().file("lzo.parquet").schema(outputRowType).build();
+      readerBuilder("lzo.parquet", outputRowType).build();
   EXPECT_EQ(reader->numberOfRows(), 23'547ULL);
 
   VectorPtr result = BaseVector::create(outputRowType, 0, &*leafPool_);
@@ -1578,10 +1548,8 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
 
 TEST_F(ParquetReaderTest, testEmptyV2DataPage) {
   auto outputRowType = ROW("test", REAL());
-  auto [reader, rowReader] = readerBuilder()
-                                 .file("empty_v2datapage.parquet")
-                                 .schema(outputRowType)
-                                 .build();
+  auto [reader, rowReader] =
+      readerBuilder("empty_v2datapage.parquet", outputRowType).build();
   EXPECT_EQ(reader->numberOfRows(), 30001ULL);
   EXPECT_EQ(*(reader->typeWithId()->type()), *outputRowType);
 
@@ -1805,8 +1773,7 @@ TEST_F(ParquetReaderTest, readTimeMillis) {
           TIME())});
   auto sink = write(data);
 
-  auto [reader, rowReader] =
-      readerBuilder().sink(*sink).schema(rowType).build();
+  auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
 
   EXPECT_EQ(reader->numberOfRows(), 6ULL);
 
@@ -1837,8 +1804,7 @@ TEST_F(ParquetReaderTest, readTimeMicros) {
           TIME_MICRO_UTC())});
   auto sink = write(data);
 
-  auto [reader, rowReader] =
-      readerBuilder().sink(*sink).schema(rowType).build();
+  auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
 
   EXPECT_EQ(reader->numberOfRows(), 7ULL);
 
@@ -1866,8 +1832,7 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
 
   auto sink = write(data);
 
-  auto [reader, rowReader] =
-      readerBuilder().sink(*sink).schema(rowType).build();
+  auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
 
   EXPECT_EQ(reader->numberOfRows(), 5ULL);
 

@@ -19,43 +19,73 @@
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
+namespace {
 
-ParquetTestReaderBuilder::ParquetTestReaderBuilder(ParquetTestBase* testBase)
-    : testBase_(testBase) {}
-
-ParquetTestReaderBuilder& ParquetTestReaderBuilder::file(
-    const std::string& fileName) {
-  fileName_ = fileName;
-  sink_ = nullptr;
-  return *this;
+dwio::common::ReaderOptions makeReaderOptions(
+    memory::MemoryPool* pool,
+    const std::shared_ptr<velox::io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats) {
+  dwio::common::ReaderOptions opts(pool);
+  opts.setDataIoStats(dataIoStats);
+  opts.setMetadataIoStats(metadataIoStats);
+  return opts;
 }
 
-ParquetTestReaderBuilder& ParquetTestReaderBuilder::sink(
-    const dwio::common::MemorySink& sink) {
-  sink_ = &sink;
-  fileName_.reset();
-  return *this;
-}
-
-ParquetTestReaderBuilder& ParquetTestReaderBuilder::schema(
+dwio::common::RowReaderOptions makeRowReaderOptsWithSelector(
     const RowTypePtr& rowType) {
-  schema_ = rowType;
-  return *this;
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.select(
+      std::make_shared<dwio::common::ColumnSelector>(
+          rowType, rowType->names(), nullptr, false));
+  return rowReaderOpts;
 }
 
-ParquetTestReaderBuilder& ParquetTestReaderBuilder::range(
+std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
+    const RowTypePtr& rowType) {
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
+  scanSpec->addAllChildFields(*rowType);
+  return scanSpec;
+}
+
+} // namespace
+
+ParquetReaderBuilder::ParquetReaderBuilder(
+    memory::MemoryPool* pool,
+    const std::shared_ptr<velox::io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats,
+    const std::string& filePath,
+    const RowTypePtr& outputType)
+    : pool_(pool),
+      dataIoStats_(dataIoStats),
+      metadataIoStats_(metadataIoStats),
+      filePath_(filePath),
+      outputType_(outputType) {}
+
+ParquetReaderBuilder::ParquetReaderBuilder(
+    memory::MemoryPool* pool,
+    const std::shared_ptr<velox::io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats,
+    const dwio::common::MemorySink& buffer,
+    const RowTypePtr& outputType)
+    : pool_(pool),
+      dataIoStats_(dataIoStats),
+      metadataIoStats_(metadataIoStats),
+      buffer_(&buffer),
+      outputType_(outputType) {}
+
+ParquetReaderBuilder& ParquetReaderBuilder::byteRange(
     uint64_t offset,
     uint64_t length) {
-  range_ = {offset, length};
+  byteRange_ = {offset, length};
   return *this;
 }
 
-ParquetTestReaderBuilder& ParquetTestReaderBuilder::noColumnSelector() {
-  noColumnSelector_ = true;
+ParquetReaderBuilder& ParquetReaderBuilder::withScanSpecOnly() {
+  withScanSpecOnly_ = true;
   return *this;
 }
 
-ParquetTestReaderBuilder& ParquetTestReaderBuilder::readerOptions(
+ParquetReaderBuilder& ParquetReaderBuilder::options(
     const dwio::common::ReaderOptions& readerOptions) {
   readerOptions_ = readerOptions;
   return *this;
@@ -64,31 +94,41 @@ ParquetTestReaderBuilder& ParquetTestReaderBuilder::readerOptions(
 std::pair<
     std::unique_ptr<ParquetReader>,
     std::unique_ptr<dwio::common::RowReader>>
-ParquetTestReaderBuilder::build() {
-  VELOX_CHECK(schema_ != nullptr, "schema is required");
+ParquetReaderBuilder::build() {
   VELOX_CHECK(
-      fileName_.has_value() ^ (sink_ != nullptr),
-      "either file or sink must be set");
+      filePath_.has_value() ^ (buffer_ != nullptr),
+      "file path or in-memory buffer must be set");
 
-  auto readerOpts =
-      readerOptions_.value_or(testBase_->makeDefaultReaderOptions());
+  auto readerOpts = readerOptions_.value_or(
+      makeReaderOptions(pool_, dataIoStats_, metadataIoStats_));
   std::unique_ptr<ParquetReader> reader;
-  if (sink_ != nullptr) {
-    reader = testBase_->createReaderInMemory(*sink_, readerOpts);
+  if (buffer_ != nullptr) {
+    std::string data(buffer_->data(), buffer_->size());
+    reader = std::make_unique<ParquetReader>(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(std::move(data)),
+            readerOpts.memoryPool()),
+        readerOpts);
   } else {
-    reader = testBase_->createReader(*fileName_, readerOpts);
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::make_shared<LocalReadFile>(*filePath_), readerOpts.memoryPool());
+    reader = std::make_unique<ParquetReader>(std::move(input), readerOpts);
   }
 
   dwio::common::RowReaderOptions rowReaderOpts;
-  if (!noColumnSelector_) {
-    rowReaderOpts = testBase_->makeRowReaderOpts(schema_);
+  if (!withScanSpecOnly_) {
+    rowReaderOpts = makeRowReaderOptsWithSelector(outputType_);
   }
-  rowReaderOpts.setScanSpec(testBase_->makeScanSpec(schema_));
-  if (range_.has_value()) {
-    rowReaderOpts.range(range_->first, range_->second);
+  rowReaderOpts.setScanSpec(makeScanSpec(outputType_));
+  if (byteRange_.has_value()) {
+    rowReaderOpts.range(byteRange_->first, byteRange_->second);
   }
   auto rowReader = reader->createRowReader(rowReaderOpts);
   return {std::move(reader), std::move(rowReader)};
+}
+
+dwio::common::ReaderOptions ParquetTestBase::makeDefaultReaderOptions() const {
+  return makeReaderOptions(leafPool_.get(), dataIoStats_, metadataIoStats_);
 }
 
 std::unique_ptr<facebook::velox::parquet::ParquetReader>
@@ -236,17 +276,12 @@ std::unique_ptr<ParquetReader> ParquetTestBase::createReaderInMemory(
 std::unique_ptr<dwio::common::RowReader>
 ParquetTestBase::createRowReaderFromReader(
     dwio::common::Reader& reader,
-    const RowTypePtr& rowType) {
-  auto rowReaderOpts = makeRowReaderOpts(rowType);
-  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
-  return reader.createRowReader(rowReaderOpts);
-}
-
-std::unique_ptr<dwio::common::RowReader>
-ParquetTestBase::createRowReaderFromReaderNoSelect(
-    dwio::common::Reader& reader,
-    const RowTypePtr& rowType) {
+    const RowTypePtr& rowType,
+    bool useColumnSelector) {
   dwio::common::RowReaderOptions rowReaderOpts;
+  if (useColumnSelector) {
+    rowReaderOpts = makeRowReaderOpts(rowType);
+  }
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   return reader.createRowReader(rowReaderOpts);
 }

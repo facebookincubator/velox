@@ -38,44 +38,67 @@ using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 class ParquetTestBase;
 
-/// Fluent builder for creating ParquetReader + RowReader pairs in tests.
-class ParquetTestReaderBuilder {
+/// Builder for creating ParquetReader + RowReader pairs in unit tests.
+///
+/// Construct via ParquetTestBase::readerBuilder with a data source (example
+/// file or in-memory buffer) and output projection, then apply optional
+/// overrides.
+class ParquetReaderBuilder {
  public:
-  ParquetTestReaderBuilder& file(const std::string& fileName);
+  /// Reads Parquet from an on-disk file at filePath (a resolved path, e.g. from
+  /// getExampleFilePath()) and projects outputType.
+  ParquetReaderBuilder(
+      memory::MemoryPool* pool,
+      const std::shared_ptr<velox::io::IoStatistics>& dataIoStats,
+      const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats,
+      const std::string& filePath,
+      const RowTypePtr& outputType);
 
-  ParquetTestReaderBuilder& sink(const dwio::common::MemorySink& sink);
+  /// Reads Parquet from bytes held in buffer (e.g. a MemorySink from write())
+  /// and projects outputType.
+  ParquetReaderBuilder(
+      memory::MemoryPool* pool,
+      const std::shared_ptr<velox::io::IoStatistics>& dataIoStats,
+      const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats,
+      const dwio::common::MemorySink& buffer,
+      const RowTypePtr& outputType);
 
-  ParquetTestReaderBuilder& schema(const RowTypePtr& rowType);
+  /// Limits the read to byte range [offset, offset + length) in the file.
+  /// Use for split-level / slice read tests.
+  ParquetReaderBuilder& byteRange(uint64_t offset, uint64_t length);
 
-  ParquetTestReaderBuilder& range(uint64_t offset, uint64_t length);
+  /// Configures RowReaderOptions with only a ScanSpec and no ColumnSelector.
+  /// By default, build() adds a ColumnSelector derived from the output type
+  /// passed to readerBuilder(). Use
+  /// this when tests should not select output columns explicitly—for example
+  /// empty projection (count(*)), metadata-only reads, or reading via
+  /// ParquetReader::rowType() without a predetermined projection.
+  ParquetReaderBuilder& withScanSpecOnly();
 
-  ParquetTestReaderBuilder& noColumnSelector();
-
-  ParquetTestReaderBuilder& readerOptions(
+  /// Supplies ReaderOptions instead of the default (leaf pool + IoStatistics).
+  ParquetReaderBuilder& options(
       const dwio::common::ReaderOptions& readerOptions);
 
+  /// Creates a ParquetReader and RowReader from the configured inputs.
   std::pair<
       std::unique_ptr<ParquetReader>,
       std::unique_ptr<dwio::common::RowReader>>
   build();
 
  private:
-  friend class ParquetTestBase;
-  explicit ParquetTestReaderBuilder(ParquetTestBase* testBase);
-
-  ParquetTestBase* testBase_;
-  std::optional<std::string> fileName_;
-  const dwio::common::MemorySink* sink_{nullptr};
-  RowTypePtr schema_;
-  std::optional<std::pair<uint64_t, uint64_t>> range_;
-  bool noColumnSelector_{false};
+  memory::MemoryPool* pool_;
+  std::shared_ptr<velox::io::IoStatistics> dataIoStats_;
+  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_;
+  std::optional<std::string> filePath_;
+  const dwio::common::MemorySink* buffer_{nullptr};
+  RowTypePtr outputType_;
+  std::optional<std::pair<uint64_t, uint64_t>> byteRange_;
+  bool withScanSpecOnly_{false};
   std::optional<dwio::common::ReaderOptions> readerOptions_;
 };
 
 class ParquetTestBase : public testing::Test,
                         public velox::test::VectorTestBase {
-  friend class ParquetTestReaderBuilder;
-
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -118,12 +141,7 @@ class ParquetTestBase : public testing::Test,
   // and the leaf memory pool. Callers needing extra settings (e.g.
   // setFileSchema, setAllowInt32Narrowing) should obtain a copy via this
   // method and then apply their overrides.
-  dwio::common::ReaderOptions makeDefaultReaderOptions() const {
-    dwio::common::ReaderOptions opts(leafPool_.get());
-    opts.setDataIoStats(dataIoStats_);
-    opts.setMetadataIoStats(metadataIoStats_);
-    return opts;
-  }
+  dwio::common::ReaderOptions makeDefaultReaderOptions() const;
 
   // Returns RowReaderOptions with a ColumnSelector for the given schema.
   dwio::common::RowReaderOptions makeRowReaderOpts(
@@ -207,16 +225,32 @@ class ParquetTestBase : public testing::Test,
     return createReaderInMemory(sink, makeDefaultReaderOptions());
   }
 
+  /// Creates a RowReader for reader. When useColumnSelector is true (default),
+  /// RowReaderOptions include a ColumnSelector for rowType;
+  /// otherwise only a ScanSpec is set (see
+  /// ParquetReaderBuilder::withScanSpecOnly).
   std::unique_ptr<dwio::common::RowReader> createRowReaderFromReader(
       dwio::common::Reader& reader,
-      const RowTypePtr& rowType);
+      const RowTypePtr& rowType,
+      bool useColumnSelector = true);
 
-  std::unique_ptr<dwio::common::RowReader> createRowReaderFromReaderNoSelect(
-      dwio::common::Reader& reader,
-      const RowTypePtr& rowType);
+  /// exampleFileName is a file under the parquet reader examples directory.
+  ParquetReaderBuilder readerBuilder(
+      const std::string& exampleFileName,
+      const RowTypePtr& outputType) {
+    return ParquetReaderBuilder(
+        leafPool_.get(),
+        dataIoStats_,
+        metadataIoStats_,
+        getExampleFilePath(exampleFileName),
+        outputType);
+  }
 
-  ParquetTestReaderBuilder readerBuilder() {
-    return ParquetTestReaderBuilder(this);
+  ParquetReaderBuilder readerBuilder(
+      const dwio::common::MemorySink& buffer,
+      const RowTypePtr& outputType) {
+    return ParquetReaderBuilder(
+        leafPool_.get(), dataIoStats_, metadataIoStats_, buffer, outputType);
   }
 
   static constexpr uint64_t kRowsInRowGroup = 10'000;
