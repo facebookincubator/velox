@@ -73,6 +73,7 @@ velox_add_library(
   OrderBy.cpp
   OutputBuffer.cpp
   OutputBufferManager.cpp
+  OutputBufferManagerRegistry.cpp
   ParallelProject.cpp
   PartitionFunction.cpp
   PartitionedOutput.cpp
@@ -148,6 +149,7 @@ velox_add_library(
   HilbertIndex.h
   IndexLookupJoin.h
   IndexLookupJoinBridge.h
+  IOutputBufferManager.h
   JoinBridge.h
   Limit.h
   LocalPartition.h
@@ -173,6 +175,8 @@ velox_add_library(
   OrderBy.h
   OutputBuffer.h
   OutputBufferManager.h
+  OutputBufferManagerRegistry.h
+  OutputBufferManagerRegistryInternal.h
   ParallelProject.h
   PartitionFunction.h
   PartitionedOutput.h
