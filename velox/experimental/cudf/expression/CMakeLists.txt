@@ -32,5 +32,3 @@ target_link_libraries(
 )
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
-
-set_target_properties(velox_cudf_expression PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)

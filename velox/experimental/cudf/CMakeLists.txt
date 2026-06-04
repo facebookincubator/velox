@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Build cuDF's CUDA sources at the same C++ standard as the rest of the project.
+set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
+set(CMAKE_CUDA_STANDARD_REQUIRED ${CMAKE_CXX_STANDARD_REQUIRED})
+
 add_subdirectory(connectors)
 add_subdirectory(exec)
 add_subdirectory(expression)
