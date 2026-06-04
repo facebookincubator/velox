@@ -140,6 +140,7 @@ function get_cxx_flags {
     ;;
 
   "aarch64")
+    AARCH64_ATOMIC_FLAGS="-mno-outline-atomics"
     # Read Arm MIDR_EL1 register to detect Arm cpu.
     # https://developer.arm.com/documentation/100616/0301/register-descriptions/aarch64-system-registers/midr-el1--main-id-register--el1
     ARM_CPU_FILE="/sys/devices/system/cpu/cpu0/regs/identification/midr_el1"
@@ -156,11 +157,11 @@ function get_cxx_flags {
       ARM_CPU_PRODUCT=${hex_ARM_CPU_DETECT: -4:3}
 
       if [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
-        echo -n "-mcpu=neoverse-n1 "
+        echo -n "-mcpu=neoverse-n1 $AARCH64_ATOMIC_FLAGS "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
-        echo -n "-mcpu=neoverse-n2 "
+        echo -n "-mcpu=neoverse-n2 $AARCH64_ATOMIC_FLAGS "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
-        echo -n "-mcpu=neoverse-v1 "
+        echo -n "-mcpu=neoverse-v1 $AARCH64_ATOMIC_FLAGS "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
         # Read the JEDEC JEP-106 manufacturer ID to distinguish different Neoverse V2 cores
         # https://developer.arm.com/documentation/ka001301/latest/
@@ -168,17 +169,17 @@ function get_cxx_flags {
         GRACE_SOC_ID="jep106:036b:0241"
         # Check for NVIDIA Grace which has various extensions
         if [ -f "$SOC_ID_FILE" ] && [ "$(cat $SOC_ID_FILE)" = "$GRACE_SOC_ID" ]; then
-          echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4"
+          echo -n "-mcpu=neoverse-v2+crypto+sha3+sm4+sve2-aes+sve2-sha3+sve2-sm4 $AARCH64_ATOMIC_FLAGS"
         else
-          echo -n "-mcpu=neoverse-v2 "
+          echo -n "-mcpu=neoverse-v2 $AARCH64_ATOMIC_FLAGS "
         fi
       elif grep -qw "atomics" /proc/cpuinfo; then
-        echo -n "-march=armv8.1-a+crc+crypto+lse "
+        echo -n "-march=armv8.1-a+crc+crypto+lse $AARCH64_ATOMIC_FLAGS "
       else
-        echo -n "-march=armv8-a+crc+crypto "
+        echo -n "-march=armv8-a+crc+crypto $AARCH64_ATOMIC_FLAGS "
       fi
     else
-      echo -n "-march=armv8-a+crc+crypto "
+      echo -n "-march=armv8-a+crc+crypto $AARCH64_ATOMIC_FLAGS "
     fi
     ;;
   *)
