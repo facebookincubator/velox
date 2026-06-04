@@ -163,6 +163,54 @@ TEST_F(ExecutorTest, arangeTest) {
   runTest("data/arange_test.pt2", "data/arange_test_results.pt");
 }
 
+TEST_F(ExecutorTest, indexTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest("data/index_test.pt2", "data/index_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest("data/index_test.pt2", "data/index_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/index_test.pt2", "data/index_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+
+  // Error injection: set one index out of range and verify error is reported.
+  {
+    WaveConfig::get().throwOnError = false;
+    auto baseDir = dataDir();
+    auto pt2Path = getDataFilePath(baseDir, "data/index_test.pt2");
+    auto fixture = ModelFixture::load(pt2Path);
+    WaveGraphExecutor waveExec(fixture->makeModelContext());
+    auto& graph = waveExec.graph();
+    auto pooledFrame = waveExec.getFrame();
+    auto inputs = loadSampleInputs(*fixture);
+    auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
+    fillWaveFrame(graph, *pooledFrame, deviceInputs);
+    auto values = graph.userInputs();
+    auto names = graph.signature().userInputs();
+    for (size_t i = 0; i < values.size() && i < names.size(); ++i) {
+      if (names[i].find("idx") == std::string::npos) {
+        continue;
+      }
+      auto& iv = pooledFrame->getIValue(values[i]->id());
+      if (iv.isTensor()) {
+        auto& tensor = iv.toTensor();
+        if (tensor.dim() == 1 && tensor.device().is_cuda()) {
+          tensor[0] = 999'999;
+          break;
+        }
+      }
+    }
+    waveExec.executeWithPrefilledFrame(*pooledFrame);
+    waveExec.returnFrame(std::move(pooledFrame));
+    auto& errors = waveThreadInfo().errors;
+    EXPECT_FALSE(errors.empty()) << "Expected error from out-of-range index";
+    LOG(INFO) << "index_put error injection result:\n" << errors;
+    WaveConfig::get().throwOnError = true;
+  }
+}
+
 TEST_F(ExecutorTest, elementShapeTest) {
   runTest("data/element_shape_test.pt2", "data/element_shape_test_results.pt");
 }
@@ -179,6 +227,48 @@ TEST_F(ExecutorTest, elementTest2) {
 
 TEST_F(ExecutorTest, isinTest) {
   runTest("data/isin_test.pt2", "data/isin_test_results.pt");
+}
+
+TEST_F(ExecutorTest, nonzeroTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/nonzero_test.pt2", "data/nonzero_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/nonzero_test.pt2", "data/nonzero_test_results.pt", "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/nonzero_test.pt2", "data/nonzero_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, maskedPutTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/masked_put_test.pt2",
+      "data/masked_put_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/masked_put_test.pt2",
+      "data/masked_put_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/masked_put_test.pt2", "data/masked_put_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, indexGetTest) {
+  runTest("data/index_get_test.pt2", "data/index_get_test_results.pt");
+}
+
+TEST_F(ExecutorTest, dedupTest) {
+  runTest("data/dedup_test.pt2", "data/dedup_test_results.pt");
 }
 
 TEST_F(ExecutorTest, largeElementTest) {
@@ -203,6 +293,9 @@ TEST_F(ExecutorTest, referenceFrame) {
   runWave(*fixture, expected);
 
   // Second wave run: verify intermediates match the reference.
+  // Reload fixture since makeModelContext moves the graph.
+  fixture = ModelFixture::load(pt2Path);
+  setGraphDevice(fixture->model.graph.get(), true);
   FLAGS_reference_frame = refPath;
   runWave(*fixture, expected);
   FLAGS_reference_frame = "";

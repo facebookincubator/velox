@@ -209,7 +209,7 @@ void IcebergSplitReader::prepareSplit(
   auto rowType = getAdaptedRowType();
 
   lastUpdatedSeqNumOutputIndex_ = std::nullopt;
-  if (dataSequenceNumber_.has_value()) {
+  if (dataSequenceNumber_.has_value() && firstRowId_.has_value()) {
     auto* seqNumSpec = scanSpec_->childByName(
         IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName);
     if (seqNumSpec && !seqNumSpec->isConstant()) {
@@ -565,11 +565,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
     VELOX_DCHECK_NOT_NULL(
         rowOutput, "Expected RowVector output from table scan");
 
-    // If lastUpdatedSeqNumOutputIndex_ is present but dataSequenceNumber_ is
-    // not, the output is a constant NULL value vector already populated by the
-    // reader via adaptColumns.
-    if (lastUpdatedSeqNumOutputIndex_.has_value() &&
-        dataSequenceNumber_.has_value()) {
+    if (lastUpdatedSeqNumOutputIndex_.has_value()) {
+      VELOX_DCHECK(dataSequenceNumber_.has_value());
       auto& seqNumChild = rowOutput->childAt(*lastUpdatedSeqNumOutputIndex_);
       const int64_t seqNum = static_cast<int64_t>(*dataSequenceNumber_);
       fillNullsWithInt64(
@@ -709,6 +706,16 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           // try to bind this output channel to a file read.
           continue;
         }
+        if (!firstRowId_.has_value() &&
+            (fieldName == IcebergMetadataColumn::kRowIdColumnName ||
+             fieldName ==
+                 IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName)) {
+          // Null first_row_id: spec requires null for both lineage columns.
+          childSpec->setConstantValue(
+              BaseVector::createNullConstant(
+                  BIGINT(), 1, connectorQueryCtx_->memoryPool()));
+          continue;
+        }
         childSpec->setConstantValue(nullptr);
         auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
         columnTypes[*fileTypeIdx] = outputType;
@@ -734,11 +741,9 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
         //    partition value as a constant, so this branch leaves it alone.
         if (fieldName ==
             IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName) {
-          // Column is absent from the data file. If a data sequence number is
-          // available (V3 snapshot), set a constant so every row inherits it.
-          // Otherwise (pre-V3 snapshot where the sequence number chain is
-          // unassigned), return null — analogous to the _row_id null path.
-          if (dataSequenceNumber_.has_value()) {
+          // Column absent from file. Use data_sequence_number constant when
+          // first_row_id is present; null otherwise (spec requirement).
+          if (dataSequenceNumber_.has_value() && firstRowId_.has_value()) {
             childSpec->setConstantValue(
                 std::make_shared<ConstantVector<int64_t>>(
                     connectorQueryCtx_->memoryPool(),
@@ -752,12 +757,14 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                     BIGINT(), 1, connectorQueryCtx_->memoryPool()));
           }
         } else if (fieldName == IcebergMetadataColumn::kRowIdColumnName) {
+          // Column absent from file. next() fills nulls with first_row_id +
+          // _pos when first_row_id is present.
           childSpec->setConstantValue(
               BaseVector::createNullConstant(
                   BIGINT(), 1, connectorQueryCtx_->memoryPool()));
         } else if (childSpec->isConstant()) {
-          // Constant already set (case 6, or set on a previous prepareSplit
-          // call for the same scanSpec). Nothing to do.
+          // Constant already set (equality-delete partition column, or set on
+          // a previous prepareSplit call for the same scanSpec). Nothing to do.
           continue;
         } else if (auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
                    partitionIt != fileSplit_->partitionKeys.end()) {

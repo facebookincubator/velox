@@ -18,6 +18,7 @@
 
 #include "velox/expression/StringWriter.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec {
 
@@ -82,5 +83,15 @@ class CastHooks {
   /// "1E-20" when isScientific() is true, and "0.00000000000000000001" when
   /// false.
   virtual bool isScientific() const = 0;
+
+  /// Converts a local timestamp to GMT using the given timezone.
+  /// The default implementation calls timestamp.toGMT() which throws on
+  /// nonexistent local times (timezone gaps). Spark overrides this to adjust
+  /// gap times to the post-transition time instead of throwing.
+  virtual void castDateTimestampToGMT(
+      Timestamp& timestamp,
+      const tz::TimeZone& timeZone) const {
+    timestamp.toGMT(timeZone);
+  }
 };
 } // namespace facebook::velox::exec

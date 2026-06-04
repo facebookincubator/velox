@@ -170,8 +170,8 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   return wg;
 }
 
-WaveGraph::WaveGraph(std::shared_ptr<ModelContext> modelContext)
-    : graph_(modelContext->graph), modelContext_(std::move(modelContext)) {
+WaveGraph::WaveGraph(ModelContext* modelContext)
+    : graph_(modelContext->graph.get()), modelContext_(modelContext) {
   waveGraph() = this;
   SCOPE_EXIT {
     waveGraph() = nullptr;

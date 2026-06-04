@@ -19,10 +19,26 @@
 #include <cstdint>
 
 namespace torch::wave {
+
+constexpr int32_t kDebugNoOp = -1;
+
 /// Header for host to torch::wave kernel communication. Included in both host
 /// and device code.
 
 constexpr int kMaxDims = 3;
+
+// ScalarType constants matching c10::ScalarType enum values. Defined here so
+// device code can switch on element types without including c10 headers.
+constexpr uint8_t kScalarTypeByte = 0;
+constexpr uint8_t kScalarTypeChar = 1;
+constexpr uint8_t kScalarTypeShort = 2;
+constexpr uint8_t kScalarTypeInt = 3;
+constexpr uint8_t kScalarTypeLong = 4;
+constexpr uint8_t kScalarTypeHalf = 5;
+constexpr uint8_t kScalarTypeFloat = 6;
+constexpr uint8_t kScalarTypeDouble = 7;
+constexpr uint8_t kScalarTypeBool = 11;
+constexpr uint8_t kScalarTypeBFloat16 = 15;
 
 // Fast integer division by multiplication using a precomputed magic number.
 // Adapted from PyTorch ATen IntDivider. The dividend must be at most
@@ -95,8 +111,9 @@ struct Tensor {
   // matching row-major linear index decomposition.
   __device__ void initIndexCalculator(const Tensor* output = nullptr) {
     const int32_t* d = output ? output->dims : dims;
+    int32_t dimOffset = output ? output->rank - rank : 0;
     for (int i = 0; i < rank; ++i) {
-      sizes[i].init(d[rank - 1 - i]);
+      sizes[i].init(d[rank - 1 - i + dimOffset]);
     }
   }
 

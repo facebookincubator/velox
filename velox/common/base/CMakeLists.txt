@@ -58,6 +58,7 @@ velox_add_library(
   GTestMacros.h
   IOUtils.h
   IndexedPriorityQueue.h
+  IoCounter.h
   Nulls.h
   PeriodicStatsReporter.h
   Pointers.h

@@ -198,10 +198,6 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     return nullptr;
   }
 
-  memory::MemoryArbitrator* arbitrator() const override {
-    return nullptr;
-  }
-
   void enterArbitration() override {
     VELOX_UNSUPPORTED("{} unsupported", __FUNCTION__);
   }

@@ -269,8 +269,8 @@ MetadataBuilder& MetadataBuilder::inputFromPreviousKernel(int32_t ordinal) {
   return *this;
 }
 
-MetadataBuilder& MetadataBuilder::kernelBreakForMultiblock(bool val) {
-  md_.kernelBreakForMultiblock = val;
+MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
+  md_.multiBlockReturnBarrier = val;
   return *this;
 }
 
@@ -329,6 +329,12 @@ MetadataBuilder& MetadataBuilder::isStandaloneFunc(
 
 MetadataBuilder& MetadataBuilder::cost(float val) {
   md_.cost = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::costFunction(
+    std::function<float(NodeCP, const Metadata&)> func) {
+  md_.costFunction = std::move(func);
   return *this;
 }
 
@@ -481,6 +487,11 @@ MetadataBuilder& MetadataBuilder::hasIdxArg(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
   ensureElementwise().hasSizeArg = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
+  ensureElementwise().hasBlockInfo = val;
   return *this;
 }
 

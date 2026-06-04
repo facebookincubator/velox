@@ -38,6 +38,7 @@ velox_add_library(
   DecimalCeil.cpp
   DecimalCompare.cpp
   FilterFunction.cpp
+  FormatNumber.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
@@ -71,6 +72,7 @@ velox_add_library(
   DecimalCeil.h
   DecimalUtil.h
   Factorial.h
+  FormatNumber.h
   GetJsonObject.h
   Hash.h
   In.h

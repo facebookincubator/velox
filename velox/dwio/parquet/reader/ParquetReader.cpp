@@ -27,6 +27,8 @@
 
 namespace facebook::velox::parquet {
 
+using dwio::common::ColumnMappingMode;
+
 namespace {
 
 /// Finds the node with the given ID in the TypeWithId tree. Uses a full
@@ -386,6 +388,9 @@ void ReaderBase::initializeSchema() {
   if (fileMetaData_->__isset.encryption_algorithm) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }
+  if (options_.columnMappingMode() == ColumnMappingMode::kParquetFieldId) {
+    VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
+  }
 
   VELOX_CHECK_GT(
       fileMetaData_->schema.size(),
@@ -467,7 +472,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (!options_.useColumnNamesForColumnMapping() && options_.fileSchema()) {
+  if (options_.columnMappingMode() != ColumnMappingMode::kName &&
+      options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
     }
@@ -513,7 +519,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (options_.useColumnNamesForColumnMapping()) {
+          if (options_.columnMappingMode() == ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);

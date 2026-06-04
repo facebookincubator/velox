@@ -118,6 +118,19 @@ TEST_F(ParquetReaderTest, parseSample) {
       sampleSchema(), *rowReader, expected, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, parquetFieldIdColumnMappingNotImplemented) {
+  const std::string sample(getExampleFilePath("sample.parquet"));
+
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+
+  VELOX_ASSERT_THROW(
+      createReader(sample, readerOptions),
+      "Parquet field ID column mapping is not implemented yet.");
+}
+
 TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   // parse_empty_nested_list.parquet holds 1,000 rows of the following data:
   //

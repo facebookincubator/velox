@@ -19,7 +19,6 @@
 #include <atomic>
 #include <memory>
 #include <string_view>
-#include <unordered_map>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
@@ -262,15 +261,6 @@ struct DriverCtx {
   const trace::TraceCtx* traceCtx() const;
 
   velox::memory::MemoryPool* addOperatorPool(
-      const core::PlanNodeId& planNodeId,
-      const std::string& operatorType);
-
-  /// Creates one leaf operator pool per registered custom root pool on the
-  /// owning task's QueryCtx, mirroring 'addOperatorPool' but under each
-  /// custom root. Returns a map keyed by resource tag. Empty when no custom
-  /// pools are registered.
-  std::unordered_map<std::string, velox::memory::MemoryPool*>
-  addCustomOperatorPools(
       const core::PlanNodeId& planNodeId,
       const std::string& operatorType);
 
