@@ -94,7 +94,7 @@ VectorPtr CastExpr::castFromDate(
         auto timestamp = Timestamp::fromMillis(
             inputFlatVector->valueAt(row) * kMillisPerDay);
         if (timeZone) {
-          timestamp.toGMT(*timeZone);
+          hooks_->castDateTimestampToGMT(timestamp, *timeZone);
         }
         resultFlatVector->set(row, timestamp);
       });
