@@ -52,8 +52,8 @@ TEST_F(VectorWindowPartitionTest, extractsColumnsAcrossBlocksAndRanges) {
   auto secondBlock = makeRowVector({makeFlatVector<int64_t>({5, 6, 7})});
 
   auto partition = makePartition({0});
-  partition.addBlock(firstBlock, 1, 4);
-  partition.addBlock(secondBlock, 0, 2);
+  partition.addRows(firstBlock, 1, 4);
+  partition.addRows(secondBlock, 0, 2);
 
   auto result = makeFlatVector<int64_t>(5);
   partition.extractColumn(0, 0, 5, 0, result);
@@ -65,9 +65,9 @@ TEST_F(VectorWindowPartitionTest, rejectsInvalidBlocks) {
   auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
   auto partition = makePartition({0});
 
-  VELOX_ASSERT_THROW(partition.addBlock(nullptr, 0, 1), "Input vector");
-  VELOX_ASSERT_THROW(partition.addBlock(data, 2, 1), "startRow");
-  VELOX_ASSERT_THROW(partition.addBlock(data, 0, 4), "endRow");
+  VELOX_ASSERT_THROW(partition.addRows(nullptr, 0, 1), "Input vector");
+  VELOX_ASSERT_THROW(partition.addRows(data, 2, 1), "startRow");
+  VELOX_ASSERT_THROW(partition.addRows(data, 0, 4), "endRow");
 }
 
 TEST_F(VectorWindowPartitionTest, extractsRandomRowsAndNullRows) {
@@ -75,8 +75,8 @@ TEST_F(VectorWindowPartitionTest, extractsRandomRowsAndNullRows) {
   auto secondBlock = makeRowVector({makeFlatVector<int64_t>({4, 5, 6})});
 
   auto partition = makePartition({0});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
 
   std::vector<vector_size_t> rowNumbers{5, WindowFunction::kNullRow, 0, 3};
   auto result = makeFlatVector<int64_t>(rowNumbers.size());
@@ -96,7 +96,7 @@ TEST_F(VectorWindowPartitionTest, extractsRandomRowsAfterRemoval) {
       std::vector<std::optional<int64_t>>{3, 4, std::nullopt});
 
   auto vectorPartition = makePartition({0});
-  vectorPartition.addBlock(data, 0, data->size());
+  vectorPartition.addRows(data, 0, data->size());
   vectorPartition.removeProcessedRows(2);
   auto vectorResult = makeFlatVector<int64_t>(rowNumbers.size());
   vectorPartition.extractColumn(
@@ -121,8 +121,8 @@ TEST_F(VectorWindowPartitionTest, extractsNullsAcrossBlocksAfterRemoval) {
       });
 
   auto partition = makePartition({0, 1}, {{0, core::SortOrder{true, true}}});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
   partition.removeProcessedRows(2);
 
   auto nulls = allocateNulls(4, pool_.get());
@@ -161,8 +161,8 @@ TEST_F(VectorWindowPartitionTest, computesPeerBuffersAfterRemoval) {
   auto secondBlock = makeRowVector({makeFlatVector<int32_t>({10, 20})});
 
   auto partition = makePartition({0}, {{0, core::SortOrder{true, true}}});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
   partition.removeProcessedRows(2);
 
   std::vector<vector_size_t> peerStarts(3);
@@ -183,14 +183,14 @@ TEST_F(VectorWindowPartitionTest, previousRowDoesNotRetainProcessedInput) {
   {
     auto firstBlock = makeRowVector({makeFlatVector<int32_t>({10})});
     processedInput = firstBlock;
-    partition.addBlock(firstBlock, 0, firstBlock->size());
+    partition.addRows(firstBlock, 0, firstBlock->size());
   }
 
   partition.removeProcessedRows(1);
   EXPECT_TRUE(processedInput.expired());
 
   auto secondBlock = makeRowVector({makeFlatVector<int32_t>({10})});
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
 
   std::vector<vector_size_t> peerStarts(1);
   std::vector<vector_size_t> peerEnds(1);
@@ -210,11 +210,11 @@ TEST_F(
   auto secondBlock = makeRowVector({makeFlatVector<int64_t>({4, 5})});
 
   auto partition = makePartition({0});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, 0);
-  partition.addBlock(secondBlock, 2, 2);
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, 0);
+  partition.addRows(secondBlock, 2, 2);
   partition.removeProcessedRows(2);
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
   partition.removeProcessedRows(2);
 
   EXPECT_EQ(partition.numRows(), 1);
@@ -240,8 +240,8 @@ TEST_F(
       });
 
   auto partition = makePartition({0, 1}, {{0, core::SortOrder{true, true}}});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
   partition.removeProcessedRows(2);
 
   std::vector<vector_size_t> peerStarts(3);
@@ -278,8 +278,8 @@ TEST_F(VectorWindowPartitionTest, computesKRangeFrameBoundsForNullOrderValues) {
       });
 
   auto partition = makePartition({0, 1}, {{0, core::SortOrder{true, true}}});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
 
   std::vector<vector_size_t> peerStarts(4);
   std::vector<vector_size_t> peerEnds(4);
@@ -311,8 +311,8 @@ TEST_F(VectorWindowPartitionTest, computesKRangeFrameBoundsAcrossBlocks) {
       });
 
   auto partition = makePartition({0, 1}, {{0, core::SortOrder{true, true}}});
-  partition.addBlock(firstBlock, 0, firstBlock->size());
-  partition.addBlock(secondBlock, 0, secondBlock->size());
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
 
   std::vector<vector_size_t> peerStarts(4);
   std::vector<vector_size_t> peerEnds(4);

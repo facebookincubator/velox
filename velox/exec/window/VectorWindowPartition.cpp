@@ -68,32 +68,16 @@ VectorWindowPartition::VectorWindowPartition(
       inputChannels_(inputChannels),
       pool_(pool) {
   VELOX_CHECK_NOT_NULL(pool_);
-  blockPrefixSums_.push_back(0);
-}
-
-vector_size_t VectorWindowPartition::numRows() const {
-  return totalRows_;
-}
-
-vector_size_t VectorWindowPartition::numRowsForProcessing(
-    vector_size_t /*partitionOffset*/) const {
-  return totalRows_;
 }
 
 void VectorWindowPartition::addRows(const std::vector<char*>& /*rows*/) {
   VELOX_FAIL("VectorWindowPartition does not support RowContainer rows");
 }
 
-void VectorWindowPartition::addBlock(
+void VectorWindowPartition::addRows(
     const RowVectorPtr& input,
     vector_size_t startRow,
     vector_size_t endRow) {
-  VELOX_CHECK_NOT_NULL(input, "Input vector must not be null");
-  VELOX_CHECK_LE(
-      startRow, endRow, "startRow must be less than or equal to endRow");
-  VELOX_CHECK_LE(
-      endRow, input->size(), "endRow must be less than or equal to input size");
-
   RowBlock block{input, startRow, endRow};
   if (block.size() == 0) {
     return;

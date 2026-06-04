@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/exec/WindowPartition.h"
+#include "velox/exec/window/RowBlock.h"
 #include "velox/exec/window/RowColumnsSnapshot.h"
 
 #include <deque>
@@ -36,17 +37,21 @@ class VectorWindowPartition : public WindowPartition {
       memory::MemoryPool* pool);
 
   /// Returns the number of retained rows in this partition.
-  vector_size_t numRows() const override;
+  vector_size_t numRows() const override {
+    return totalRows_;
+  }
 
   /// Returns the number of retained rows available for processing.
   vector_size_t numRowsForProcessing(
-      vector_size_t partitionOffset) const override;
+      vector_size_t /*partitionOffset*/) const override {
+    return totalRows_;
+  }
 
   /// Rejects RowContainer rows because this partition stores vector ranges.
   void addRows(const std::vector<char*>& rows) override;
 
   /// Adds a retained input vector row range to this partition.
-  void addBlock(
+  void addRows(
       const RowVectorPtr& input,
       vector_size_t startRow,
       vector_size_t endRow);
@@ -99,22 +104,6 @@ class VectorWindowPartition : public WindowPartition {
       SelectivityVector& validFrames) const override;
 
  private:
-  // Represents a contiguous row range from a retained input vector.
-  struct RowBlock {
-    // Input vector that owns the rows in this block.
-    RowVectorPtr input;
-
-    // First retained row in 'input', inclusive.
-    vector_size_t startRow;
-
-    // Last retained row in 'input', exclusive.
-    vector_size_t endRow;
-
-    vector_size_t size() const {
-      return endRow - startRow;
-    }
-  };
-
   class VectorAccessor;
 
   // Returns true if the vector value at 'row' is NaN.
@@ -131,7 +120,7 @@ class VectorWindowPartition : public WindowPartition {
   std::deque<RowBlock> blocks_;
 
   // Prefix sums of retained row counts by block.
-  std::vector<vector_size_t> blockPrefixSums_;
+  std::vector<vector_size_t> blockPrefixSums_{0};
 
   // Number of retained rows in this partition.
   vector_size_t totalRows_{0};

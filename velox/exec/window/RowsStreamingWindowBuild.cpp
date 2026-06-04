@@ -103,7 +103,7 @@ void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
   auto partition =
       std::static_pointer_cast<VectorWindowPartition>(windowPartitions_.back());
   for (const auto& block : currentBlocks_) {
-    partition->addBlock(block.input, block.startRow, block.endRow);
+    partition->addRows(block.input, block.startRow, block.endRow);
   }
 
   if (finished) {
@@ -190,7 +190,7 @@ void RowsStreamingWindowBuild::flushBlock(
   if (start >= end) {
     return;
   }
-  currentBlocks_.push_back({input, start, end});
+  currentBlocks_.emplace_back(input, start, end);
 }
 
 bool RowsStreamingWindowBuild::isNewPartition(

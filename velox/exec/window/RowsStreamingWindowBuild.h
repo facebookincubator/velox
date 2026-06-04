@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/exec/window/RowBlock.h"
 #include "velox/exec/window/RowColumnsSnapshot.h"
 #include "velox/exec/window/WindowBuild.h"
 
@@ -59,19 +60,6 @@ class RowsStreamingWindowBuild : public WindowBuild {
   bool needsInput() override;
 
  private:
-  // Represents a contiguous row range from an input vector waiting to be added
-  // to the current partition.
-  struct RowBlock {
-    // Input vector that owns the rows in this block.
-    RowVectorPtr input;
-
-    // First retained row in 'input', inclusive.
-    vector_size_t startRow;
-
-    // Last retained row in 'input', exclusive.
-    vector_size_t endRow;
-  };
-
   // Flushes rows in [start, end) from 'input' as a vector block.
   void
   flushBlock(const RowVectorPtr& input, vector_size_t start, vector_size_t end);

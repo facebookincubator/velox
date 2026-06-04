@@ -27,6 +27,7 @@ velox_add_library(
   KRangeFrameBound.h
   PartitionStreamingWindowBuild.h
   PeerGroupComputation.h
+  RowBlock.h
   RowColumnsSnapshot.h
   RowsStreamingWindowBuild.h
   SortWindowBuild.h
