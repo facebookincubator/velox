@@ -16,9 +16,153 @@
 
 #include "velox/functions/sparksql/specialforms/DecimalRound.h"
 
+#include <optional>
+#include <string_view>
+
+#include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/expression/VectorFunction.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql {
+
+// Forward declaration — defined below after DecimalRoundOps.
+template <typename TResult, typename TInput, typename Policy>
+class DecimalRoundFunction;
+
+/// Shared infrastructure for decimal rounding special forms.
+class DecimalRoundOps {
+ public:
+  template <typename T>
+  struct TypeTag {
+    using type = T;
+  };
+
+  /// Precomputed scale factors shared by all rounding policies.
+  struct ScaleFactors {
+    int32_t scale;
+    uint8_t inputPrecision;
+    uint8_t inputScale;
+    uint8_t resultPrecision;
+    uint8_t resultScale;
+    std::optional<int128_t> divideFactor;
+    std::optional<int128_t> multiplyFactor;
+    int128_t overflowBound;
+  };
+
+  static int32_t clampScale(int32_t scale) {
+    constexpr int32_t kMax = LongDecimalType::kMaxPrecision;
+    return std::max(-kMax, std::min(scale, kMax));
+  }
+
+  static ScaleFactors computeFactors(
+      int32_t scale,
+      uint8_t inputPrecision,
+      uint8_t inputScale,
+      uint8_t resultPrecision,
+      uint8_t resultScale);
+
+  static int32_t extractConstantScaleArg(
+      const exec::ExprPtr& expr,
+      std::string_view funcName);
+
+  template <template <typename, typename> class Policy>
+  static std::shared_ptr<exec::VectorFunction> createFunction(
+      const TypePtr& inputType,
+      int32_t scale,
+      const TypePtr& resultType) {
+    const auto [inputPrecision, inputScale] =
+        getDecimalPrecisionScale(*inputType);
+    const auto [resultPrecision, resultScale] =
+        getDecimalPrecisionScale(*resultType);
+    const auto factors = computeFactors(
+        scale, inputPrecision, inputScale, resultPrecision, resultScale);
+    return dispatchTypes(
+        inputType,
+        resultType,
+        [&](auto resultTag,
+            auto inputTag) -> std::shared_ptr<exec::VectorFunction> {
+          using TResult = typename decltype(resultTag)::type;
+          using TInput = typename decltype(inputTag)::type;
+          return std::make_shared<
+              DecimalRoundFunction<TResult, TInput, Policy<TResult, TInput>>>(
+              factors);
+        });
+  }
+
+ private:
+  template <typename Fn>
+  static auto
+  dispatchTypes(const TypePtr& inputType, const TypePtr& resultType, Fn&& fn) {
+    if (inputType->isShortDecimal()) {
+      if (resultType->isShortDecimal()) {
+        return fn(TypeTag<int64_t>{}, TypeTag<int64_t>{});
+      }
+      return fn(TypeTag<int128_t>{}, TypeTag<int64_t>{});
+    }
+    if (resultType->isShortDecimal()) {
+      return fn(TypeTag<int64_t>{}, TypeTag<int128_t>{});
+    }
+    return fn(TypeTag<int128_t>{}, TypeTag<int128_t>{});
+  }
+};
+
+/// Generic VectorFunction for decimal rounding, parameterized on a Policy.
+template <typename TResult, typename TInput, typename Policy>
+class DecimalRoundFunction : public exec::VectorFunction {
+ public:
+  explicit DecimalRoundFunction(const DecimalRoundOps::ScaleFactors& factors)
+      : policy_(factors) {}
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& resultType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, resultType, result);
+    auto* flat = result->asUnchecked<FlatVector<TResult>>();
+    flat->clearNulls(rows);
+    auto* rawResults = flat->mutableRawValues();
+
+    if (args[0]->isConstantEncoding()) {
+      auto value =
+          args[0]->template asUnchecked<ConstantVector<TInput>>()->valueAt(0);
+      auto rounded = policy_.applyOne(value);
+      rows.applyToSelected([&](auto row) {
+        if constexpr (Policy::canOverflow) {
+          if (FOLLY_UNLIKELY(!rounded.has_value())) {
+            flat->setNull(row, true);
+            return;
+          }
+        }
+        rawResults[row] = rounded.value();
+      });
+    } else {
+      auto* rawValues =
+          args[0]->template asUnchecked<FlatVector<TInput>>()->rawValues();
+      rows.applyToSelected([&](auto row) {
+        auto rounded = policy_.applyOne(rawValues[row]);
+        if constexpr (Policy::canOverflow) {
+          if (FOLLY_UNLIKELY(!rounded.has_value())) {
+            flat->setNull(row, true);
+            return;
+          }
+        }
+        rawResults[row] = rounded.value();
+      });
+    }
+  }
+
+  bool supportsFlatNoNullsFastPath() const override {
+    return !Policy::canOverflow;
+  }
+
+ private:
+  Policy policy_;
+};
+
 namespace {
 
 // Half-up rounding (Spark's ROUND_HALF_UP). Never overflows because
@@ -119,6 +263,22 @@ struct FloorPolicy : DirectionalRoundPolicy<TResult, TInput, false> {
 };
 
 } // namespace
+
+/// Spark decimal_round special form. Defined in .cpp because external callers
+/// only need registerDecimalRoundingForms().
+class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
+ public:
+  TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<exec::ExprPtr>&& args,
+      bool trackCpuUsage,
+      const core::QueryConfig& config) override;
+
+  static std::pair<uint8_t, uint8_t>
+  getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
+};
 
 DecimalRoundOps::ScaleFactors DecimalRoundOps::computeFactors(
     int32_t scale,
@@ -297,16 +457,14 @@ class DecimalCeilFloorCallToSpecialForm
 
 void registerDecimalRoundingForms() {
   exec::registerFunctionCallToSpecialForm(
-      DecimalRoundCallToSpecialForm::kRoundDecimal,
-      std::make_unique<DecimalRoundCallToSpecialForm>());
+      kRoundDecimal, std::make_unique<DecimalRoundCallToSpecialForm>());
   exec::registerFunctionCallToSpecialForm(
-      DecimalRoundCallToSpecialForm::kCeilDecimal,
-      std::make_unique<DecimalCeilFloorCallToSpecialForm>(
-          true, DecimalRoundCallToSpecialForm::kCeilDecimal));
+      kCeilDecimal,
+      std::make_unique<DecimalCeilFloorCallToSpecialForm>(true, kCeilDecimal));
   exec::registerFunctionCallToSpecialForm(
-      DecimalRoundCallToSpecialForm::kFloorDecimal,
+      kFloorDecimal,
       std::make_unique<DecimalCeilFloorCallToSpecialForm>(
-          false, DecimalRoundCallToSpecialForm::kFloorDecimal));
+          false, kFloorDecimal));
 }
 
 } // namespace facebook::velox::functions::sparksql

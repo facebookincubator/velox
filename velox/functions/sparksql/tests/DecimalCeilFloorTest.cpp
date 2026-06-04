@@ -26,6 +26,34 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
  protected:
   enum class Mode { kCeil, kFloor };
 
+  /// Computes result precision and scale for decimal rounding. Matches Spark's
+  /// logic from version 3.3+.
+  static std::pair<uint8_t, uint8_t> getResultPrecisionScale(
+      uint8_t precision,
+      uint8_t scale,
+      int32_t roundScale) {
+    const int32_t integralLeastNumDigits = precision - scale + 1;
+    if (roundScale < 0) {
+      const auto newPrecision = std::max(
+          integralLeastNumDigits,
+          -std::max(
+              roundScale,
+              -static_cast<int32_t>(LongDecimalType::kMaxPrecision)) +
+              1);
+      return {
+          std::min(
+              newPrecision,
+              static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
+          0};
+    }
+    const uint8_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
+    return {
+        std::min(
+            integralLeastNumDigits + newScale,
+            static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
+        newScale};
+  }
+
   core::CallTypedExprPtr
   createCall(const TypePtr& inputType, int32_t scale, Mode mode) {
     std::vector<core::TypedExprPtr> inputs = {
@@ -33,11 +61,9 @@ class DecimalCeilFloorTest : public SparkFunctionBaseTest {
         std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(scale))};
     const auto [precision, inputScale] = getDecimalPrecisionScale(*inputType);
     const auto [resultPrecision, resultScale] =
-        DecimalRoundCallToSpecialForm::getResultPrecisionScale(
-            precision, inputScale, scale);
-    const std::string& name = mode == Mode::kCeil
-        ? std::string(DecimalRoundCallToSpecialForm::kCeilDecimal)
-        : std::string(DecimalRoundCallToSpecialForm::kFloorDecimal);
+        getResultPrecisionScale(precision, inputScale, scale);
+    const std::string& name = mode == Mode::kCeil ? std::string(kCeilDecimal)
+                                                  : std::string(kFloorDecimal);
     return std::make_shared<const core::CallTypedExpr>(
         DECIMAL(resultPrecision, resultScale), std::move(inputs), name);
   }
