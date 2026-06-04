@@ -418,9 +418,8 @@ void CudfHashJoinProbe::initialize() {
   exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
 
-  // For now we disable AST-based filtering (and force precomputation)
   // if the filter expression contains decimal types anywhere in its subtree.
-  if (containsDecimalType(exprs.exprs()[0], true)) {
+  if (containsDecimalType(exprs.exprs()[0], false)) {
     useAstFilter_ = false;
   }
 
