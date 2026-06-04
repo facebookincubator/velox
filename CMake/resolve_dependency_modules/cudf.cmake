@@ -72,16 +72,13 @@ block(SCOPE_FOR VARIABLES)
 
   # TODO(mh,bd): Remove this once we have a permanent solution for the spdlog/fmt
   # incompatibility.
-  
-  # cuDF (via rapids_logger) pins spdlog 1.14.1, which is incompatible with 
-  # the fmt 11.2.0 that Velox builds. Override the rapids-cmake/CPM spdlog 
+
+  # cuDF (via rapids_logger) pins spdlog 1.14.1, which is incompatible with
+  # the fmt 11.2.0 that Velox builds. Override the rapids-cmake/CPM spdlog
   # version to 1.15.3, which is fmt 11.2 compatible.
   # RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE is honored by every rapids_cpm_init,
   # so the override applies before rapids_logger fetches spdlog.
-  set(
-    RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json"
-  )
+  set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json")
 
   FetchContent_Declare(
     rapids-cmake
