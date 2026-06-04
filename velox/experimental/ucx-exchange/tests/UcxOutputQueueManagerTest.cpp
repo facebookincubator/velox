@@ -47,7 +47,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   std::shared_ptr<Task> initializeTask(
-      std::string_view taskId,
+      const std::string& taskId,
       int numDestinations,
       int numDrivers,
       bool cleanup = true,

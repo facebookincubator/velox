@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
+#include <velox/exec/IOutputBufferManager.h>
 #include <velox/exec/Task.h>
 #include <functional>
 #include <string_view>
@@ -24,7 +25,7 @@
 
 namespace facebook::velox::ucx_exchange {
 
-class UcxOutputQueueManager {
+class UcxOutputQueueManager : public exec::IOutputBufferManager {
  public:
   /// Factory method to retrieve a reference to the output queue manager.
   static std::shared_ptr<UcxOutputQueueManager> getInstanceRef();
@@ -48,15 +49,15 @@ class UcxOutputQueueManager {
       std::shared_ptr<exec::Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers) override;
 
   /// @brief Updates the number of destination buffers for a task.
   /// For broadcast mode, new destinations are backfilled with previously
   /// broadcast data.
-  void updateOutputBuffers(
-      std::string_view taskId,
+  bool updateOutputBuffers(
+      const std::string& taskId,
       int numBuffers,
-      bool noMoreBuffers);
+      bool noMoreBuffers) override;
 
   /// @brief Enqueues a cudf packed column into the queue.
   /// @param taskId The unique task Id.
@@ -110,11 +111,21 @@ class UcxOutputQueueManager {
 
   /// @brief Removes the queue for the given task from the queue manager.
   /// Calls "terminate" on the queue to awake waiting producers.
-  void removeTask(std::string_view taskId);
+  void removeTask(const std::string& taskId) override;
 
   /// @brief Returns the queue statistics of the queue associated with the given
   /// task. Returns nullopt when the specified output queue doesn't exist.
-  std::optional<exec::OutputBuffer::Stats> stats(std::string_view taskId);
+  std::optional<exec::OutputBuffer::Stats> stats(
+      const std::string& taskId) override;
+
+  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers)
+      override;
+
+  double getUtilization(const std::string& taskId) override;
+
+  bool isOverutilized(const std::string& taskId) override;
+
+  std::string toString(const std::string& taskId) override;
 
  private:
   // Retrieves the queue for a task if it exists.
