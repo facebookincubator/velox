@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
+#include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -1718,6 +1719,105 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
       makeNullableFlatVector<bool>({true, false, false, false}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDayDate) {
+  // Basic Presto date_add('day', N, date) with DATE input.
+  auto dates = makeRowVector({
+      makeFlatVector<int32_t>({20120, 20089, 20148}, DATE()), // c0: dates
+      makeFlatVector<int64_t>({10, -31, 5}), // c1: values
+  });
+  createDuckDbTable({dates});
+
+  auto plan = PlanBuilder()
+                  .values({dates})
+                  .project({"date_add('day', c1, c0) AS result"})
+                  .planNode();
+  runTest(plan, "SELECT c0 + cast(c1 as integer) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDayTimestamp) {
+  // Presto date_add('day', N, timestamp) without timezone.
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>({
+          Timestamp(1710415496, 0), // 2024-03-14 12:34:56 UTC
+          Timestamp(1719792000, 0), // 2024-07-01 00:00:00 UTC
+      }),
+      makeFlatVector<int64_t>({-30, 15}),
+  });
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"date_add('day', c1, c0) AS result"})
+                  .planNode();
+  runTest(
+      plan,
+      "SELECT c0 + interval '1 day' * cast(c1 as integer) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDayTimestampWithTimezone) {
+  // date_add('day', -30, ts) across DST boundary with America/Los_Angeles.
+  // This is the CIO telemetry query pattern that caused the row-count bug.
+  // 2025-03-15 12:00:00 UTC minus 30 days should land on Feb 13 at the same
+  // wall-clock time in LA, but DST shifted from PST to PDT on Mar 9.
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>({
+          Timestamp(1742040000, 0), // 2025-03-15 12:00:00 UTC
+          Timestamp(1735689600, 0), // 2025-01-01 00:00:00 UTC
+      }),
+      makeFlatVector<int64_t>({-30, -30}),
+  });
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"date_add('day', c1, c0) AS result"})
+                  .planNode();
+
+  // The expected result matches CPU date_add behavior: convert to local time,
+  // subtract 30 days, convert back. DuckDB doesn't have this exact function,
+  // so we validate by running the same plan without GPU and comparing.
+  auto cpuResult =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool());
+
+  // Now disable cudf to get CPU baseline for comparison.
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+
+  auto cpuPlan = PlanBuilder()
+                     .values({data})
+                     .project({"date_add('day', c1, c0) AS result"})
+                     .planNode();
+
+  auto cpuBaseline =
+      AssertQueryBuilder(cpuPlan)
+          .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool());
+
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+
+  assertEqualResults({cpuResult}, {cpuBaseline});
+}
+
+TEST_F(CudfFilterProjectTest, dateAddMonthDate) {
+  auto dates = makeRowVector({
+      makeFlatVector<int32_t>({20120, 20089}, DATE()),
+      makeFlatVector<int64_t>({1, -2}),
+  });
+  createDuckDbTable({dates});
+
+  auto plan = PlanBuilder()
+                  .values({dates})
+                  .project({"date_add('month', c1, c0) AS result"})
+                  .planNode();
+  runTest(
+      plan,
+      "SELECT c0 + interval '1 month' * cast(c1 as integer) AS result "
+      "FROM tmp");
 }
 
 } // namespace
