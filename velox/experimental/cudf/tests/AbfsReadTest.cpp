@@ -36,6 +36,8 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <filesystem>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -49,6 +51,19 @@ constexpr int kAzuritePort{12'345};
 constexpr int64_t kIntParquetRows{10};
 
 namespace velox_filesystems = ::facebook::velox::filesystems;
+
+std::string resolveIntParquetPath() {
+  const std::string kIntParquetRelativePath{
+      "../../../dwio/parquet/tests/examples/int.parquet"};
+  auto path = test::getDataFilePath(
+      "velox/experimental/cudf/tests", kIntParquetRelativePath);
+  if (std::filesystem::exists(path)) {
+    return path;
+  }
+  return (std::filesystem::current_path() / kIntParquetRelativePath)
+      .lexically_normal()
+      .string();
+}
 
 class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
  protected:
@@ -99,9 +114,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
   }
 
   std::string uploadSourceFile() {
-    const auto sourceFilePath = test::getDataFilePath(
-        "velox/experimental/cudf/tests",
-        "../../../dwio/parquet/tests/examples/int.parquet");
+    const auto sourceFilePath = resolveIntParquetPath();
     azuriteServer_->addFile(sourceFilePath);
     return azuriteServer_->fileURI();
   }
