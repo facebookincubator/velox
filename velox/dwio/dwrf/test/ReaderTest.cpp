@@ -3076,6 +3076,54 @@ TEST_F(TestReader, mapAsStructFilterAfterRead) {
   assertEqualVectors(expected, batch);
 }
 
+TEST_F(TestReader, mapAsStructNullChildrenWithReuse) {
+  // Reproduces the SIGSEGV fixed by initializing null children in
+  // SelectiveMapAsStructColumnReader::getValues. A filter on the
+  // flat-map-as-struct column routes the parent struct reader to call
+  // getValues() directly. The result is not singly referenced (a second
+  // reference is held, as a real downstream consumer would), so prepareResult()
+  // reallocates it via fillRowVectorChildren(), which leaves the
+  // flat-map-as-struct's non-ROW children as nullptr. getValues() must
+  // initialize those children rather than dereference them.
+  //
+  // This is identical to mapAsStructFilterAfterRead except for the held
+  // reference that forces the reallocation path.
+  auto row = makeRowVector({
+      makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {}, {{1, 6}, {3, 7}}}),
+      makeRowVector(
+          {makeConstant<int64_t>(0, 3)}, [](auto i) { return i == 0; }),
+  });
+  auto [writer, reader] =
+      createWriterReader({row}, pool(), dataIoStats_, metadataIoStats_);
+  auto outType =
+      ROW({"c0", "c1"}, {ROW({"3", "1"}, BIGINT()), ROW({"c0"}, BIGINT())});
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*outType);
+  auto* c0Spec = spec->childByName("c0");
+  c0Spec->setFlatMapAsStruct(true);
+  c0Spec->setFilter(std::make_shared<common::IsNotNull>());
+  spec->childByName("c1")->setFilter(std::make_shared<common::IsNotNull>());
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  // Hold a second reference so the result is not singly referenced; this forces
+  // prepareResult() down the fillRowVectorChildren() path, producing a
+  // flat-map-as-struct child whose non-ROW children are null.
+  VectorPtr holder = batch;
+  ASSERT_EQ(rowReader->next(10, batch), 3);
+  auto expected = makeRowVector({
+      makeRowVector(
+          {"3", "1"},
+          {
+              makeNullableFlatVector<int64_t>({std::nullopt, 7}),
+              makeNullableFlatVector<int64_t>({std::nullopt, 6}),
+          }),
+      makeRowVector({makeConstant<int64_t>(0, 2)}),
+  });
+  assertEqualVectors(expected, batch);
+}
+
 TEST_F(TestReader, mapAsStructAllEmpty) {
   auto row = makeRowVector({makeMapVector<int32_t, int64_t>({{}, {}})});
   auto [writer, reader] =
