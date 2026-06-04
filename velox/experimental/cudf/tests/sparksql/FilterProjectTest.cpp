@@ -53,6 +53,84 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
   CudfFilterProjectTest() {
     options_.parseIntegerAsBigint = false;
   }
+
+  template <typename T>
+  ArrayVectorPtr makeGetNumericTestVector(
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return makeNullableArrayVector<T>(
+        {
+            {{static_cast<T>(1), static_cast<T>(2), static_cast<T>(3)}},
+            {{static_cast<T>(4), std::nullopt, static_cast<T>(6)}},
+            std::nullopt,
+            {{static_cast<T>(7), static_cast<T>(8)}},
+        },
+        arrayType);
+  }
+
+  void assertGetElementTypeMatchesCpu(
+      const std::string& label,
+      const ArrayVectorPtr& arrays) {
+    SCOPED_TRACE(label);
+
+    auto assertMatchesCpu = [&](const std::string& expression,
+                                const RowVectorPtr& input) {
+      SCOPED_TRACE(expression);
+      assertExpressionMatchesCpu(expression, input, input->rowType());
+    };
+
+    // Spark get is zero-based and supports all integral index widths. Negative
+    // and out-of-bounds indexes return null instead of throwing.
+    for (const auto& indices : std::vector<VectorPtr>{
+             makeFlatVector<int8_t>({1, -1, 0, 1}),
+             makeFlatVector<int16_t>({2, 1, 0, 0}),
+             makeFlatVector<int32_t>({0, 1, 0, 1}),
+             makeFlatVector<int64_t>({2, -1, 0, 0})}) {
+      assertMatchesCpu("get(c0, c1)", makeRowVector({arrays, indices}));
+    }
+
+    // Literal indexes use a scalar extraction path distinct from variable
+    // index columns, including null and invalid literal indexes.
+    auto input = makeRowVector({arrays});
+    for (const auto& expression : {
+             "get(c0, cast(1 as tinyint))",
+             "get(c0, cast(1 as smallint))",
+             "get(c0, cast(1 as integer))",
+             "get(c0, cast(1 as bigint))",
+             "get(c0, cast(null as tinyint))",
+             "get(c0, cast(null as smallint))",
+             "get(c0, cast(null as integer))",
+             "get(c0, cast(null as bigint))",
+             "get(c0, cast(-1 as tinyint))",
+             "get(c0, cast(-1 as smallint))",
+             "get(c0, cast(-1 as integer))",
+             "get(c0, cast(-1 as bigint))",
+             "get(c0, cast(3 as tinyint))",
+             "get(c0, cast(3 as smallint))",
+             "get(c0, cast(3 as integer))",
+             "get(c0, cast(3 as bigint))",
+         }) {
+      assertMatchesCpu(expression, input);
+    }
+  }
+
+  void assertConstantArrayGetMatchesCpu(
+      const std::string& label,
+      const std::string& arraySql) {
+    SCOPED_TRACE(label);
+
+    // Constant arrays are materialized by the cuDF adapter because literals are
+    // not supplied as input columns during expression evaluation.
+    for (const auto& indices : std::vector<VectorPtr>{
+             makeFlatVector<int8_t>({0, 1, 2, -1}),
+             makeFlatVector<int16_t>({0, 1, 2, 3}),
+             makeFlatVector<int32_t>({0, 1, 2, -1}),
+             makeFlatVector<int64_t>({0, 1, 2, 3})}) {
+      auto input = makeRowVector({indices});
+      auto expression = "get(" + arraySql + ", c0)";
+      SCOPED_TRACE(expression);
+      assertExpressionMatchesCpu(expression, input, input->rowType());
+    }
+  }
 };
 
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
@@ -117,6 +195,241 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   // Account for the last day of a year-month
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
+
+TEST_F(CudfFilterProjectTest, getConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{10, 20, 30}},
+      {{4, 5}},
+      std::nullopt,
+      {{7, std::nullopt, 9}},
+  });
+  auto input = makeRowVector({arrays});
+
+  assertExpressionMatchesCpu("get(c0, 1)", input, input->rowType());
+  assertExpressionMatchesCpu(
+      "get(c0, cast(1 as bigint))", input, input->rowType());
+}
+
+TEST_F(CudfFilterProjectTest, getNullConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{10, 20, 30}},
+      {{4, 5}},
+      std::nullopt,
+  });
+  auto input = makeRowVector({arrays});
+
+  assertExpressionMatchesCpu(
+      "get(c0, cast(null as integer))", input, input->rowType());
+  assertExpressionMatchesCpu(
+      "get(c0, cast(null as bigint))", input, input->rowType());
+}
+
+TEST_F(CudfFilterProjectTest, getReturnsNullForInvalidIndex) {
+  auto arrays = makeArrayVector<int32_t>({{1, 2, 3}});
+  auto input = makeRowVector({arrays});
+
+  assertExpressionMatchesCpu("get(c0, -1)", input, input->rowType());
+  assertExpressionMatchesCpu("get(c0, 3)", input, input->rowType());
+}
+
+TEST_F(CudfFilterProjectTest, getSupportsIntegralIndexTypes) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7, 8}},
+  });
+
+  auto tinyintIndices = makeFlatVector<int8_t>({1, -1, 0, 1});
+  auto tinyintInput = makeRowVector({arrays, tinyintIndices});
+  assertExpressionMatchesCpu(
+      "get(c0, c1)", tinyintInput, tinyintInput->rowType());
+
+  auto smallintIndices = makeFlatVector<int16_t>({2, 1, 0, 0});
+  auto smallintInput = makeRowVector({arrays, smallintIndices});
+  assertExpressionMatchesCpu(
+      "get(c0, c1)", smallintInput, smallintInput->rowType());
+
+  auto integerIndices = makeFlatVector<int32_t>({0, 1, 0, 1});
+  auto integerInput = makeRowVector({arrays, integerIndices});
+  assertExpressionMatchesCpu(
+      "get(c0, c1)", integerInput, integerInput->rowType());
+
+  auto bigintIndices = makeFlatVector<int64_t>({2, -1, 0, 0});
+  auto bigintInput = makeRowVector({arrays, bigintIndices});
+  assertExpressionMatchesCpu(
+      "get(c0, c1)", bigintInput, bigintInput->rowType());
+}
+
+TEST_F(CudfFilterProjectTest, getSupportedScalarElementTypes) {
+  // Cover all scalar ARRAY element types supported by Velox-cuDF conversion.
+  assertGetElementTypeMatchesCpu("tinyint", makeGetNumericTestVector<int8_t>());
+  assertGetElementTypeMatchesCpu(
+      "smallint", makeGetNumericTestVector<int16_t>());
+  assertGetElementTypeMatchesCpu(
+      "integer", makeGetNumericTestVector<int32_t>());
+  assertGetElementTypeMatchesCpu("bigint", makeGetNumericTestVector<int64_t>());
+  assertGetElementTypeMatchesCpu("real", makeGetNumericTestVector<float>());
+  assertGetElementTypeMatchesCpu("double", makeGetNumericTestVector<double>());
+  assertGetElementTypeMatchesCpu(
+      "date", makeGetNumericTestVector<int32_t>(ARRAY(DATE())));
+  assertGetElementTypeMatchesCpu(
+      "short decimal",
+      makeGetNumericTestVector<int64_t>(ARRAY(DECIMAL(10, 2))));
+  assertGetElementTypeMatchesCpu(
+      "long decimal",
+      makeGetNumericTestVector<int128_t>(ARRAY(DECIMAL(20, 4))));
+
+  auto booleanArrays = makeNullableArrayVector<bool>({
+      {{true, false, true}},
+      {{false, std::nullopt, true}},
+      std::nullopt,
+      {{true, true}},
+  });
+  assertGetElementTypeMatchesCpu("boolean", booleanArrays);
+
+  auto varcharArrays = makeNullableArrayVector<std::string>({
+      {{"alpha", "beta", "gamma"}},
+      {{"delta", std::nullopt, "zeta"}},
+      std::nullopt,
+      {{"eta", "theta"}},
+  });
+  assertGetElementTypeMatchesCpu("varchar", varcharArrays);
+
+  auto varbinaryArrays = makeNullableArrayVector<std::string>(
+      {
+          {{"alpha", "beta", "gamma"}},
+          {{"delta", std::nullopt, "zeta"}},
+          std::nullopt,
+          {{"eta", "theta"}},
+      },
+      ARRAY(VARBINARY()));
+  assertGetElementTypeMatchesCpu("varbinary", varbinaryArrays);
+
+  auto timestampArrays = makeNullableArrayVector<Timestamp>({
+      {{Timestamp(1, 0), Timestamp(2, 0), Timestamp(3, 0)}},
+      {{Timestamp(4, 0), std::nullopt, Timestamp(6, 0)}},
+      std::nullopt,
+      {{Timestamp(7, 0), Timestamp(8, 0)}},
+  });
+  assertGetElementTypeMatchesCpu("timestamp", timestampArrays);
+}
+
+TEST_F(CudfFilterProjectTest, getSupportedComplexElementTypes) {
+  // Cover complex ARRAY element types that cuDF list extraction can return.
+  using OptionalIntArray = std::optional<std::vector<std::optional<int32_t>>>;
+  using OptionalNestedArray = std::optional<std::vector<OptionalIntArray>>;
+
+  std::vector<OptionalNestedArray> nestedArrayData = {
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{1, 2},
+          std::vector<std::optional<int32_t>>{3},
+          std::vector<std::optional<int32_t>>{4, 5},
+      },
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{6},
+          std::vector<std::optional<int32_t>>{7, 8},
+          std::vector<std::optional<int32_t>>{9},
+      },
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{10},
+          std::vector<std::optional<int32_t>>{11, 12},
+      },
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{13},
+          std::vector<std::optional<int32_t>>{14, 15},
+      },
+  };
+  assertGetElementTypeMatchesCpu(
+      "array", makeNullableNestedArrayVector<int32_t>(nestedArrayData));
+
+  auto rowArrays = makeArrayOfRowVector(
+      ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
+      {
+          {variant::row({1, "alpha"}),
+           variant::row({2, "beta"}),
+           variant::row({3, "gamma"})},
+          {variant::row({4, "delta"}),
+           variant::row({5, "epsilon"}),
+           variant::row({6, "zeta"})},
+          {variant::row({7, "eta"}), variant::row({8, "theta"})},
+          {variant::row({9, "iota"}), variant::row({10, "kappa"})},
+      });
+  assertGetElementTypeMatchesCpu("row", rowArrays);
+}
+
+TEST_F(CudfFilterProjectTest, getConstantArraySupportedTypes) {
+  // Constant array literals take a different input-column path from array
+  // columns, so repeat the supported element-type matrix here.
+  assertConstantArrayGetMatchesCpu(
+      "tinyint",
+      "array_constructor("
+      "cast(1 as tinyint), cast(2 as tinyint), cast(3 as tinyint))");
+  assertConstantArrayGetMatchesCpu(
+      "smallint",
+      "array_constructor("
+      "cast(1 as smallint), cast(2 as smallint), cast(3 as smallint))");
+  assertConstantArrayGetMatchesCpu(
+      "integer",
+      "array_constructor("
+      "cast(1 as integer), cast(2 as integer), cast(3 as integer))");
+  assertConstantArrayGetMatchesCpu(
+      "bigint",
+      "array_constructor("
+      "cast(1 as bigint), cast(2 as bigint), cast(3 as bigint))");
+  assertConstantArrayGetMatchesCpu(
+      "real",
+      "array_constructor("
+      "cast(1.25 as real), cast(2.5 as real), cast(3.75 as real))");
+  assertConstantArrayGetMatchesCpu(
+      "double",
+      "array_constructor("
+      "cast(1.25 as double), cast(2.5 as double), cast(3.75 as double))");
+  assertConstantArrayGetMatchesCpu(
+      "boolean", "array_constructor(true, false, true)");
+  assertConstantArrayGetMatchesCpu(
+      "varchar", "array_constructor('alpha', 'beta', 'gamma')");
+  assertConstantArrayGetMatchesCpu(
+      "varbinary",
+      "array_constructor("
+      "cast('alpha' as varbinary), "
+      "cast('beta' as varbinary), "
+      "cast('gamma' as varbinary))");
+  assertConstantArrayGetMatchesCpu(
+      "date",
+      "array_constructor("
+      "DATE '2020-01-01', DATE '2020-01-02', DATE '2020-01-03')");
+  assertConstantArrayGetMatchesCpu(
+      "timestamp",
+      "array_constructor("
+      "cast('2020-01-01 00:00:00' as timestamp), "
+      "cast('2020-01-02 00:00:00' as timestamp), "
+      "cast('2020-01-03 00:00:00' as timestamp))");
+  assertConstantArrayGetMatchesCpu(
+      "short decimal",
+      "array_constructor("
+      "cast('1.00' as decimal(10, 2)), "
+      "cast('2.00' as decimal(10, 2)), "
+      "cast('3.00' as decimal(10, 2)))");
+  assertConstantArrayGetMatchesCpu(
+      "long decimal",
+      "array_constructor("
+      "cast('1.0000' as decimal(20, 4)), "
+      "cast('2.0000' as decimal(20, 4)), "
+      "cast('3.0000' as decimal(20, 4)))");
+  assertConstantArrayGetMatchesCpu(
+      "array",
+      "array_constructor("
+      "array_constructor(1, 2), "
+      "array_constructor(3), "
+      "array_constructor(4, 5))");
+  assertConstantArrayGetMatchesCpu(
+      "row",
+      "array_constructor("
+      "row_constructor(1, 'alpha'), "
+      "row_constructor(2, 'beta'), "
+      "row_constructor(3, 'gamma'))");
 }
 
 TEST_F(CudfFilterProjectTest, likeWithEscape) {
