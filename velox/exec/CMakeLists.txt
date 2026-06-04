@@ -251,6 +251,10 @@ if(VELOX_ENABLE_GEO)
   velox_link_libraries(velox_exec velox_common_geospatial_serde)
 endif()
 
+if(VELOX_ENABLE_CUDF)
+  velox_link_libraries(velox_exec cudf::cudf)
+endif()
+
 velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 
 velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)

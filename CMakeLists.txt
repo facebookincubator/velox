@@ -500,6 +500,7 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     string(APPEND CMAKE_CUDA_FLAGS " -Wno-deprecated-gpu-targets")
   endif()
   if(VELOX_ENABLE_CUDF)
+    add_compile_definitions(VELOX_ENABLE_CUDF)
     foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
       if(arch LESS 70)
         message(
