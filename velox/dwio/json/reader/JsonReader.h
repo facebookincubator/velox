@@ -60,12 +60,15 @@ struct FileContents {
   /// can read from it without taking ownership.
   std::unique_ptr<dwio::common::BufferedInput> input;
 
-  /// Lowercased top-level field name to column index in the schema.
-  /// Built once from the schema; reused across rows. The iterate-once
-  /// dispatch pattern requires
-  /// a fast name lookup because simdjson On-Demand is forward-only and
-  /// values cannot be stashed for later association with a column.
-  std::unordered_map<std::string, size_t> fieldIndex;
+  /// For every ROW type reachable from the schema (the top-level row and
+  /// any ROW nested inside ARRAY elements, MAP values, or other ROWs), maps
+  /// its lowercased field names to child indices, keyed by RowType identity.
+  /// Built once at construction; reused across rows. The iterate-once dispatch
+  /// pattern requires a fast name
+  /// lookup because simdjson On-Demand is forward-only and values cannot be
+  /// stashed for later association with a column.
+  std::unordered_map<const RowType*, std::unordered_map<std::string, uint32_t>>
+      fieldIndexes;
 };
 
 /// Reader for the JSON file format (JSON Lines, matching Hive

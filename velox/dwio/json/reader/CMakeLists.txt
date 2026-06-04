@@ -19,6 +19,7 @@ velox_link_libraries(
   velox_dwio_common
   velox_encode
   velox_functions_lib_date_time_formatter
+  velox_functions_string
   velox_type
   velox_vector
   Folly::folly

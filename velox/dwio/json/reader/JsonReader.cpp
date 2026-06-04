@@ -24,6 +24,7 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonWrapper.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
@@ -41,9 +42,7 @@ T unwrap(simdjson::simdjson_result<T> result) {
   return std::move(result).value_unsafe();
 }
 
-// Lowercases an ASCII string. JSON field names that fall outside ASCII go
-// through unchanged; full Unicode folding lands with nested ROW support
-// (see json-reader-pr-roadmap.md PR-6c).
+// Lowercases an ASCII string byte by byte.
 std::string asciiLower(std::string_view s) {
   std::string out;
   out.reserve(s.size());
@@ -51,6 +50,20 @@ std::string asciiLower(std::string_view s) {
     out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
   }
   return out;
+}
+
+// Lowercases a JSON field name for case-insensitive ROW field matching.
+// Pure-ASCII names take a fast byte-wise
+// path; names carrying non-ASCII bytes fall back to full Unicode lowercasing
+// to match JsonSerDe's String.toLowerCase() semantics. MAP keys do NOT go
+// through here — they are data and pass through with case preserved.
+std::string toLowerKey(std::string_view key) {
+  for (char c : key) {
+    if (static_cast<unsigned char>(c) >= 0x80) {
+      return functions::stringImpl::utf8StrToLowerCopy(std::string{key});
+    }
+  }
+  return asciiLower(key);
 }
 
 // Trims trailing ASCII whitespace from a raw simdjson token. raw_json_token()
@@ -523,6 +536,15 @@ void writeValue(
     vector_size_t rowIndex,
     const FileContents& contents);
 
+// Forward declaration: writeValue dispatches nested ROWs to writeRowObject,
+// which recurses back through writeValue for each field.
+void writeRowObject(
+    simdjson::ondemand::object& object,
+    const RowType& rowType,
+    RowVector& row,
+    vector_size_t rowIndex,
+    const FileContents& contents);
+
 // Writes one JSON array into an ArrayVector cell. simdjson On-Demand is
 // forward-only, so the array is iterated exactly once: each element is
 // appended to the tail of the ArrayVector's shared elements vector and
@@ -740,10 +762,95 @@ void writeValue(
       writeMap(value, type, column, rowIndex, contents);
       return;
     }
+    case TypeKind::ROW: {
+      const auto jsonType = unwrap(value.type());
+      if (jsonType != simdjson::ondemand::json_type::object) {
+        VELOX_USER_FAIL(
+            "Container shape mismatch: expected object for ROW, got JSON {}.",
+            jsonTypeName(jsonType));
+      }
+      auto object = unwrap(value.get_object());
+      writeRowObject(
+          object,
+          type->asRow(),
+          *column.asUnchecked<RowVector>(),
+          rowIndex,
+          contents);
+      return;
+    }
     default:
       VELOX_NYI(
           "JSON reader does not yet support column type: {}",
           type->toString());
+  }
+}
+
+// Writes the fields of one JSON object into a RowVector cell at rowIndex.
+// simdjson On-Demand is forward-only, so the object is iterated exactly once:
+// each field name is lowercased and looked up in rowType's field index, then
+// dispatched directly into the matching child column. Fields absent from the
+// object stay NULL; fields not in the schema are silently ignored. Iteration
+// does not short-circuit on first match, so case-duplicate keys resolve
+// last-write-wins. An empty object {}
+// produces a non-null row whose every field is NULL — distinct from a JSON
+// null, which the caller maps to SQL NULL before reaching here.
+void writeRowObject(
+    simdjson::ondemand::object& object,
+    const RowType& rowType,
+    RowVector& row,
+    vector_size_t rowIndex,
+    const FileContents& contents) {
+  // The object exists, so the row cell is non-null even when it has no fields.
+  row.setNull(rowIndex, false);
+  // Initialize every column at this row to NULL; present fields overwrite.
+  for (size_t i = 0; i < row.childrenSize(); ++i) {
+    auto* child = row.childAt(i).get();
+    if (child != nullptr) {
+      child->setNull(rowIndex, true);
+    }
+  }
+
+  const auto& fieldIndex = contents.fieldIndexes.at(&rowType);
+  for (auto fieldResult : object) {
+    auto field = unwrap(fieldResult);
+    auto it = fieldIndex.find(toLowerKey(unwrap(field.unescaped_key())));
+    if (it == fieldIndex.end()) {
+      // Extra field — silently ignored.
+      continue;
+    }
+    auto* child = row.childAt(it->second).get();
+    if (child == nullptr) {
+      continue;
+    }
+    simdjson::ondemand::value fieldValue = field.value();
+    if (fieldValue.is_null()) {
+      // Already NULL from the per-row initialization above.
+      continue;
+    }
+    writeValue(
+        fieldValue, rowType.childAt(it->second), *child, rowIndex, contents);
+  }
+}
+
+// Recursively builds a lowercased-field-name -> child-index map for every ROW
+// type reachable from type — the type itself, ROWs nested in its ARRAY
+// elements and MAP values, and ROWs nested in its fields — keyed by RowType
+// identity. Called once per file so per-row dispatch is a hash lookup. Field
+// names collide last-write-wins on case:
+// a ROW with both `x` and `X` keeps a single entry pointing at the later field.
+void collectFieldIndexes(
+    const TypePtr& type,
+    std::unordered_map<const RowType*, std::unordered_map<std::string, uint32_t>>&
+        out) {
+  if (type->isRow()) {
+    const auto& rowType = type->asRow();
+    auto& index = out[&rowType];
+    for (uint32_t i = 0; i < rowType.size(); ++i) {
+      index[toLowerKey(rowType.nameOf(i))] = i;
+    }
+  }
+  for (uint32_t i = 0; i < type->size(); ++i) {
+    collectFieldIndexes(type->childAt(i), out);
   }
 }
 
@@ -777,13 +884,7 @@ FileContents::FileContents(
       timestampFormatterOrError.error().message());
   timestampFormatter = timestampFormatterOrError.value();
 
-  fieldIndex.reserve(this->schema->size());
-  for (size_t i = 0; i < this->schema->size(); ++i) {
-    // Last-write-wins on case-collision: a schema with both `x` and `X`
-    // produces a single index entry pointing to the second field. JSON
-    // field matching is case-insensitive.
-    fieldIndex[asciiLower(this->schema->nameOf(i))] = i;
-  }
+  collectFieldIndexes(this->schema, fieldIndexes);
 }
 
 JsonReader::JsonReader(
@@ -866,15 +967,6 @@ bool JsonRowReader::readNextLine() {
 }
 
 void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
-  // Initialize every column at this row to NULL. Fields absent from the
-  // JSON object stay NULL; present fields overwrite below.
-  for (size_t i = 0; i < row.childrenSize(); ++i) {
-    auto* child = row.childAt(i).get();
-    if (child != nullptr) {
-      child->setNull(rowIndex, true);
-    }
-  }
-
   simdjson::padded_string_view padded(
       lineBuffer_.data(),
       lineLength_,
@@ -896,47 +988,10 @@ void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
   }
   simdjson::ondemand::object obj = objResult.value_unsafe();
 
-  // Iterate-once dispatch. simdjson On-Demand is forward-only — we
-  // cannot stash ondemand::value handles for later association with a
-  // column. Instead, look each field up in the schema's lowercase-name
-  // -> column-index map and dispatch directly into the matching column.
-  // Last-write-wins on case-duplicate keys falls out for free.
-  for (auto field : obj) {
-    auto keyResult = field.unescaped_key();
-    if (keyResult.error() != simdjson::SUCCESS) {
-      VELOX_USER_FAIL(
-          "JSON parse error: {}",
-          simdjson::error_message(keyResult.error()));
-    }
-    std::string_view key = keyResult.value_unsafe();
-    auto it = contents_->fieldIndex.find(asciiLower(key));
-    if (it == contents_->fieldIndex.end()) {
-      // Extra field — silently ignored.
-      continue;
-    }
-
-    auto valueResult = field.value();
-    if (valueResult.error() != simdjson::SUCCESS) {
-      VELOX_USER_FAIL(
-          "JSON parse error: {}",
-          simdjson::error_message(valueResult.error()));
-    }
-    simdjson::ondemand::value value = valueResult.value_unsafe();
-    auto* child = row.childAt(it->second).get();
-    if (child == nullptr) {
-      continue;
-    }
-    if (value.is_null()) {
-      // Already NULL from the per-row initialization above.
-      continue;
-    }
-    writeValue(
-        value,
-        contents_->schema->childAt(it->second),
-        *child,
-        rowIndex,
-        *contents_);
-  }
+  // The top-level record dispatches through the same iterate-once writer as
+  // nested ROWs: simdjson On-Demand is forward-only, so each field is looked
+  // up in the schema's lowercase-name -> column-index map and written directly.
+  writeRowObject(obj, *contents_->schema, row, rowIndex, *contents_);
 }
 
 uint64_t JsonRowReader::next(

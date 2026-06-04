@@ -600,5 +600,134 @@ TEST_F(JsonReaderTest, mapShapeMismatchArrayThrows) {
       "expected object");
 }
 
+TEST_F(JsonReaderTest, nestedRowBaseline) {
+  auto schema =
+      ROW({{"u", ROW({{"id", BIGINT()}, {"name", VARCHAR()}})}});
+  auto row = read("{\"u\":{\"id\":123,\"name\":\"Alice\"}}\n", schema);
+  auto inner = makeRowVector(
+      {makeFlatVector<int64_t>({123}),
+       makeFlatVector<StringView>({"Alice"_sv})});
+  test::assertEqualVectors(makeRowVector({inner}), row);
+}
+
+TEST_F(JsonReaderTest, rowFieldMatchCaseInsensitive) {
+  // {"X":1,"y":"hi"} matches ROW(x BIGINT, y VARCHAR) — field names are
+  // folded for matching.
+  auto schema = ROW({{"u", ROW({{"x", BIGINT()}, {"y", VARCHAR()}})}});
+  auto row = read("{\"u\":{\"X\":1,\"y\":\"hi\"}}\n", schema);
+  auto inner = makeRowVector(
+      {makeFlatVector<int64_t>({1}), makeFlatVector<StringView>({"hi"_sv})});
+  test::assertEqualVectors(makeRowVector({inner}), row);
+}
+
+TEST_F(JsonReaderTest, rowFieldLastWriteWins) {
+  // {"X":1,"x":2} both fold to x; the later assignment wins.
+  auto schema = ROW({{"u", ROW({{"x", BIGINT()}})}});
+  auto row = read("{\"u\":{\"X\":1,\"x\":2}}\n", schema);
+  auto inner = makeRowVector({makeFlatVector<int64_t>({2})});
+  test::assertEqualVectors(makeRowVector({inner}), row);
+}
+
+TEST_F(JsonReaderTest, rowFieldNestedCaseInsensitive) {
+  // Case-folding applies at every nesting level.
+  auto schema = ROW(
+      {{"u", ROW({{"profile", ROW({{"name", VARCHAR()}})}})}});
+  auto row = read("{\"U\":{\"Profile\":{\"NAME\":\"Bob\"}}}\n", schema);
+  auto profile = makeRowVector({makeFlatVector<StringView>({"Bob"_sv})});
+  test::assertEqualVectors(makeRowVector({makeRowVector({profile})}), row);
+}
+
+TEST_F(JsonReaderTest, rowMissingFieldYieldsNull) {
+  auto schema =
+      ROW({{"u", ROW({{"id", BIGINT()}, {"name", VARCHAR()}})}});
+  auto row = read("{\"u\":{\"id\":1}}\n", schema);
+  auto* inner = row->childAt(0)->as<RowVector>();
+  EXPECT_FALSE(inner->isNullAt(0));
+  EXPECT_EQ(inner->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 1);
+  EXPECT_TRUE(inner->childAt(1)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, rowExtraInnerFieldIgnored) {
+  auto schema = ROW({{"u", ROW({{"id", BIGINT()}})}});
+  auto row = read("{\"u\":{\"id\":1,\"extra\":99}}\n", schema);
+  auto inner = makeRowVector({makeFlatVector<int64_t>({1})});
+  test::assertEqualVectors(makeRowVector({inner}), row);
+}
+
+TEST_F(JsonReaderTest, rowExtraOuterFieldIgnored) {
+  auto schema = ROW({{"u", ROW({{"id", BIGINT()}})}});
+  auto row = read("{\"u\":{\"id\":1},\"junk\":2}\n", schema);
+  auto inner = makeRowVector({makeFlatVector<int64_t>({1})});
+  test::assertEqualVectors(makeRowVector({inner}), row);
+}
+
+TEST_F(JsonReaderTest, rowJsonNullProducesSqlNull) {
+  // JSON null for the whole ROW is SQL NULL.
+  auto schema = ROW({{"u", ROW({{"id", BIGINT()}})}});
+  auto row = read("{\"u\":null}\n", schema);
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_TRUE(row->childAt(0)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, rowEmptyObjectAllFieldsNullButRowNotNull) {
+  // {} is a non-null ROW whose every field is NULL — distinct from JSON null.
+  auto schema =
+      ROW({{"u", ROW({{"id", BIGINT()}, {"name", VARCHAR()}})}});
+  auto row = read("{\"u\":{}}\n", schema);
+  auto* inner = row->childAt(0)->as<RowVector>();
+  EXPECT_FALSE(inner->isNullAt(0));
+  EXPECT_TRUE(inner->childAt(0)->isNullAt(0));
+  EXPECT_TRUE(inner->childAt(1)->isNullAt(0));
+}
+
+TEST_F(JsonReaderTest, rowFieldTypeMismatchCoerces) {
+  // A leaf type mismatch coerces (per the leaf table), it does not throw:
+  // "abc" into BIGINT -> 0.
+  auto schema = ROW({{"u", ROW({{"x", BIGINT()}, {"y", VARCHAR()}})}});
+  auto row = read("{\"u\":{\"x\":\"abc\",\"y\":\"hi\"}}\n", schema);
+  auto inner = makeRowVector(
+      {makeFlatVector<int64_t>({0}), makeFlatVector<StringView>({"hi"_sv})});
+  test::assertEqualVectors(makeRowVector({inner}), row);
+}
+
+TEST_F(JsonReaderTest, rowShapeMismatchScalarThrows) {
+  // A scalar where a ROW is expected is a container-shape mismatch.
+  VELOX_ASSERT_THROW(
+      read("{\"u\":5}\n", ROW({{"u", ROW({{"id", BIGINT()}})}})),
+      "expected object");
+}
+
+TEST_F(JsonReaderTest, rowShapeMismatchArrayThrows) {
+  // An array where a ROW is expected is a container-shape mismatch.
+  VELOX_ASSERT_THROW(
+      read("{\"u\":[1,2]}\n", ROW({{"u", ROW({{"id", BIGINT()}})}})),
+      "expected object");
+}
+
+TEST_F(JsonReaderTest, arrayOfRow) {
+  // ROW reachable through an ARRAY element exercises the recursive field-index
+  // walk: the element ROW's field map must be built even though no top-level
+  // column has that ROW type directly.
+  auto schema =
+      ROW({{"items", ARRAY(ROW({{"id", BIGINT()}, {"qty", BIGINT()}}))}});
+  auto row = read(
+      "{\"items\":[{\"id\":10,\"qty\":2},{\"id\":20,\"qty\":1}]}\n", schema);
+  auto elements = makeRowVector(
+      {makeFlatVector<int64_t>({10, 20}), makeFlatVector<int64_t>({2, 1})});
+  auto expected = makeRowVector({makeArrayVector({0}, elements)});
+  test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, mapValueRow) {
+  // ROW reachable through a MAP value exercises the same recursive walk.
+  auto schema =
+      ROW({{"m", MAP(VARCHAR(), ROW({{"n", BIGINT()}}))}});
+  auto row = read("{\"m\":{\"a\":{\"n\":1}}}\n", schema);
+  auto values = makeRowVector({makeFlatVector<int64_t>({1})});
+  auto keys = makeFlatVector<StringView>({"a"_sv});
+  auto expected = makeRowVector({makeMapVector({0}, keys, values)});
+  test::assertEqualVectors(expected, row);
+}
+
 } // namespace
 } // namespace facebook::velox::json
