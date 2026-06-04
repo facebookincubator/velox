@@ -155,7 +155,7 @@ class AbfsReadTest : public ::testing::Test, public test::VectorTestBase {
 } // namespace
 
 // Reads a Parquet file from an ABFS path
-TEST_F(AbfsReadTest, readWithBufferedInput) {
+TEST_F(AbfsReadTest, readBlob) {
   const auto abfsFilePath = uploadSourceFile();
   auto plan = tableScanNode();
   auto split = makeSplit(abfsFilePath);
@@ -167,7 +167,7 @@ TEST_F(AbfsReadTest, readWithBufferedInput) {
 
 // An invalid ABFS split throws instead of falling back to the KvikIO data
 // source
-TEST_F(AbfsReadTest, nonExistentBlobBufferedInput) {
+TEST_F(AbfsReadTest, nonExistentBlob) {
   const auto missingPath = azuriteServer_->URI() + "does_not_exist.parquet";
   auto plan = tableScanNode();
   auto split = makeSplit(missingPath);
@@ -192,7 +192,7 @@ TEST_F(AbfsReadTest, noAvailableDataSource) {
               "false")
           .split(split)
           .copyResults(pool()),
-      "ABFS path requires a registered native cuDF datasource");
+      "ABFS blobs require buffered input data source");
 }
 
 // Multiple independent queries reading the same ABFS blob in parallel must
