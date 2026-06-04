@@ -408,7 +408,7 @@ std::unique_ptr<cudf::column> reduceFinalDecimalAvgFromSerializedColumn(
 // Decimal SUM and AVG use dedicated aggregators rather than cudf::reduce's
 // built-in sum/mean: partial/intermediate state is VARBINARY-encoded sum+count
 // (see DecimalAggregationState), and the final divide needs decimal half-up
-// rounding. 
+// rounding.
 struct ReduceDecimalSumAggregator : ReduceAggregator {
   ReduceDecimalSumAggregator(
       core::AggregationNode::Step step,
