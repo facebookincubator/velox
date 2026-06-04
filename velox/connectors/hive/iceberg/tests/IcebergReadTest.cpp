@@ -1721,7 +1721,7 @@ TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
   // resulting in records in the position delete file being mapped to incorrect
   // rows.
   auto path = test::getDataFilePath(
-      "velox/connectors/hive/iceberg/test", "examples/three_groups.parquet");
+      "velox/connectors/hive/iceberg/tests", "examples/three_groups.parquet");
   const auto deletedPositionSize = 100;
   std::vector<int64_t> deletePositionsVec(
       deletedPositionSize); // allocate 100 elements, [100, 199].

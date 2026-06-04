@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/exec/PartitionStreamingWindowBuild.h"
+#include "velox/exec/window/PartitionStreamingWindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 PartitionStreamingWindowBuild::PartitionStreamingWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
@@ -105,4 +105,4 @@ bool PartitionStreamingWindowBuild::hasNextPartition() {
       static_cast<vector_size_t>(partitionStartRows_.size() - 2);
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

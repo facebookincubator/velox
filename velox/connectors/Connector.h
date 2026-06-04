@@ -301,6 +301,8 @@ class DataSource {
   /// connector-specific fields, and call scanBatchCallback_.
   virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
 
+  /// Returns cumulative runtime stats for work completed so far by this data
+  /// source.
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }

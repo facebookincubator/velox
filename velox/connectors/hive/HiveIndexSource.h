@@ -131,10 +131,28 @@ class HiveIndexSource : public IndexSource,
   // 3. Non-index conditions stored in nonIndexConditions_ for post-read
   //    equality filtering. Their columns are added to
   //    readColumnNames/readColumnTypes if not already present.
-  // TODO: refactor into sub-methods for each bucket.
   void initConditions(
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const ColumnHandleMap& assignments,
+      const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
+          columnHandles,
+      std::vector<std::string>& readColumnNames,
+      std::vector<TypePtr>& readColumnTypes);
+
+  // Processes index columns in order, converting filters to index lookup
+  // conditions where possible. Populates indexLookupConditions_ and returns
+  // the set of column names consumed as index conditions.
+  folly::F14FastSet<std::string> initIndexConditions(
+      const folly::F14FastMap<std::string, core::IndexLookupConditionPtr>&
+          conditionMap);
+
+  // Processes remaining non-index conditions from conditionMap, splitting
+  // them into partitionIndexConditions_ or nonIndexConditions_. Adds
+  // required columns to readColumnNames/readColumnTypes.
+  void initNonIndexConditions(
+      const folly::F14FastMap<std::string, core::IndexLookupConditionPtr>&
+          conditionMap,
+      const folly::F14FastSet<std::string>& indexConditionColumns,
       const folly::F14FastMap<std::string_view, const HiveColumnHandle*>&
           columnHandles,
       std::vector<std::string>& readColumnNames,
@@ -155,13 +173,6 @@ class HiveIndexSource : public IndexSource,
   std::shared_ptr<ResultIterator> createLookupIterator(
       const Request& request,
       const std::vector<SplitIndexReader*>& readers,
-      const SplitIndexReader::Options& options);
-
-  // Creates a partitioned lookup iterator when probe rows target different
-  // partition groups. Splits the probe batch by partition, dispatches each
-  // sub-batch to the matching group's readers, and merges results.
-  std::shared_ptr<ResultIterator> createPartitionLookupIterator(
-      const Request& request,
       const SplitIndexReader::Options& options);
 
   // Creates a SplitIndexReader using a registered IndexReaderFactory.
@@ -213,11 +224,18 @@ class HiveIndexSource : public IndexSource,
 
   // Finds the partition group whose partition values match the given probe
   // row's partition column values. Returns nullptr if no group matches.
-  // TODO: accept a batch of rows and return a per-row group mapping to
-  // avoid redundant per-row calls from PartitionDispatchIterator.
   PartitionGroup* findPartitionGroup(
       const RowVectorPtr& probeInput,
       vector_size_t row);
+
+  // Creates a partitioned lookup iterator when probe rows target different
+  // partition groups. Takes a pre-built row-to-group mapping, dispatches
+  // each sub-batch to the matching group's readers, and merges results.
+  std::shared_ptr<ResultIterator> createPartitionLookupIterator(
+      const Request& request,
+      folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
+          partitionRowMap,
+      const SplitIndexReader::Options& options);
 
   // Per-iteration timing breakdown for index lookups.
   struct IterationStats {

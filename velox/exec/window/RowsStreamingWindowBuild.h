@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "velox/exec/WindowBuild.h"
+#include "velox/exec/window/WindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 /// Unlike PartitionStreamingWindowBuild, RowsStreamingWindowBuild is capable of
 /// processing window functions as rows arrive within a single partition,
@@ -78,4 +78,4 @@ class RowsStreamingWindowBuild : public WindowBuild {
   std::deque<std::shared_ptr<WindowPartition>> windowPartitions_;
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window
