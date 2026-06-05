@@ -23,7 +23,7 @@
 #include <cudf/utilities/error.hpp>
 
 #include <rmm/device_buffer.hpp>
-#include <rmm/mr/cuda_memory_resource.hpp>
+#include <rmm/mr/cuda_async_memory_resource.hpp>
 #include <rmm/resource_ref.hpp>
 
 #include <cuda/memory_resource>
@@ -66,18 +66,18 @@ class TestCudaStream {
   cudaStream_t stream_{nullptr};
 };
 
-struct RecordingState {
+struct RecordingAsyncResourceState {
   cudaStream_t lastDeallocationStream{nullptr};
   std::size_t deallocationCount{0};
 };
 
-class RecordingDeviceResource {
+class RecordingAsyncDeviceResource {
  public:
   void* allocate(
       cuda::stream_ref stream,
       std::size_t bytes,
       std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) {
-    return upstream_.allocate(stream, bytes, alignment);
+    return asyncUpstream_.allocate(stream, bytes, alignment);
   }
 
   void deallocate(
@@ -87,20 +87,20 @@ class RecordingDeviceResource {
       std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) noexcept {
     state_->lastDeallocationStream = stream.get();
     ++state_->deallocationCount;
-    upstream_.deallocate(stream, ptr, bytes, alignment);
+    asyncUpstream_.deallocate(stream, ptr, bytes, alignment);
   }
 
   void* allocate_sync(
       std::size_t bytes,
       std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) {
-    return upstream_.allocate_sync(bytes, alignment);
+    return asyncUpstream_.allocate_sync(bytes, alignment);
   }
 
   void deallocate_sync(
       void* ptr,
       std::size_t bytes,
       std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) noexcept {
-    upstream_.deallocate_sync(ptr, bytes, alignment);
+    asyncUpstream_.deallocate_sync(ptr, bytes, alignment);
   }
 
   void reset() {
@@ -108,7 +108,7 @@ class RecordingDeviceResource {
     state_->deallocationCount = 0;
   }
 
-  int deallocationCount() const {
+  std::size_t deallocationCount() const {
     return state_->deallocationCount;
   }
 
@@ -116,17 +116,18 @@ class RecordingDeviceResource {
     return state_->lastDeallocationStream;
   }
 
-  bool operator==(const RecordingDeviceResource& other) const noexcept {
+  bool operator==(const RecordingAsyncDeviceResource& other) const noexcept {
     return state_ == other.state_;
   }
 
  private:
-  std::shared_ptr<RecordingState> state_{std::make_shared<RecordingState>()};
-  rmm::mr::cuda_memory_resource upstream_;
+  std::shared_ptr<RecordingAsyncResourceState> state_{
+      std::make_shared<RecordingAsyncResourceState>()};
+  rmm::mr::cuda_async_memory_resource asyncUpstream_;
 };
 
 void get_property(
-    const RecordingDeviceResource&,
+    const RecordingAsyncDeviceResource&,
     cuda::mr::device_accessible) noexcept {}
 
 std::unique_ptr<cudf::table> makeTable(
@@ -161,7 +162,7 @@ class CudfVectorTest : public ::testing::Test, public VectorTestBase {
 TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
-  RecordingDeviceResource resource;
+  RecordingAsyncDeviceResource resource;
 
   auto table = makeTable(
       allocationStream.view(),
@@ -186,7 +187,7 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
 TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
-  RecordingDeviceResource resource;
+  RecordingAsyncDeviceResource resource;
 
   auto table = makeTable(
       allocationStream.view(), cudf::get_current_device_resource_ref());
