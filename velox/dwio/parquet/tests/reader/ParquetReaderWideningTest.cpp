@@ -37,20 +37,15 @@ class ParquetReaderWideningTest : public ParquetTestBase {
     return opts;
   }
 
-  /// Writes data, reads it back with a wider (or narrower) schema and returns
-  /// only the RowReader. The underlying ParquetReader is stored in readerStore_
-  /// so it stays alive for the duration of the test.
-  std::unique_ptr<dwio::common::RowReader> createWideningRowReader(
+  /// Writes data and reads it back with a wider or narrower schema.
+  ParquetReaderSession createWideningReadSession(
       const RowVectorPtr& writeData,
       const RowTypePtr& readSchema,
       bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
-    auto [reader, rowReader] =
-        readerBuilder(*sink, readSchema)
-            .options(makeWideningReaderOptions(readSchema, allowInt32Narrowing))
-            .build();
-    readerStore_.push_back(std::move(reader));
-    return std::move(rowReader);
+    return readerBuilder(*sink, readSchema)
+        .options(makeWideningReaderOptions(readSchema, allowInt32Narrowing))
+        .build();
   }
 
   /// Writes Parquet data with one schema and reads it back with a wider schema,
@@ -59,9 +54,9 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowVectorPtr& writeData,
       const RowTypePtr& readSchema,
       const RowVectorPtr& expected) {
-    auto rowReader = createWideningRowReader(writeData, readSchema);
+    auto readSession = createWideningReadSession(writeData, readSchema);
     assertReadWithReaderAndExpected(
-        readSchema, *rowReader, expected, *leafPool_);
+        readSchema, *readSession.rowReader, expected, *leafPool_);
   }
 
   /// Writes Parquet data and reads it back with a narrower schema
@@ -70,10 +65,10 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowVectorPtr& writeData,
       const RowTypePtr& readSchema,
       const RowVectorPtr& expected) {
-    auto rowReader = createWideningRowReader(
+    auto readSession = createWideningReadSession(
         writeData, readSchema, /*allowInt32Narrowing=*/true);
     assertReadWithReaderAndExpected(
-        readSchema, *rowReader, expected, *leafPool_);
+        readSchema, *readSession.rowReader, expected, *leafPool_);
   }
 
   /// Writes Parquet data, reads with widening schema + filter, verifies result.
@@ -1090,10 +1085,10 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
         makeRowVector({"c1"}, {makeFlatVector<int8_t>({-128, -1, 0, 1, 127})});
     auto* tinySink = write(tinyData);
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] =
+    auto readSession =
         readerBuilder(*tinySink, readSchema).options(readerOptions).build();
     assertReadWithReaderAndExpected(
-        readSchema, *rowReader, tinyData, *leafPool_);
+        readSchema, *readSession.rowReader, tinyData, *leafPool_);
   }
 
   // INT_16 -> SMALLINT: write as SMALLINT (produces INT_16 annotation), read
@@ -1104,10 +1099,10 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
         {"c1"}, {makeFlatVector<int16_t>({-32768, -1, 0, 1, 32767})});
     auto* smallSink = write(smallData);
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] =
+    auto readSession =
         readerBuilder(*smallSink, readSchema).options(readerOptions).build();
     assertReadWithReaderAndExpected(
-        readSchema, *rowReader, smallData, *leafPool_);
+        readSchema, *readSession.rowReader, smallData, *leafPool_);
   }
 
   // With flag enabled, narrowing is allowed with silent truncation.
@@ -1117,7 +1112,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   {
     auto readSchema = ROW("c1", TINYINT());
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] =
+    auto readSession =
         readerBuilder(*sink, readSchema).options(readerOptions).build();
 
     auto expected = makeRowVector(
@@ -1137,14 +1132,14 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
              static_cast<int8_t>(std::numeric_limits<int32_t>::min()),
              static_cast<int8_t>(std::numeric_limits<int32_t>::max())})});
     assertReadWithReaderAndExpected(
-        readSchema, *rowReader, expected, *leafPool_);
+        readSchema, *readSession.rowReader, expected, *leafPool_);
   }
 
   // INT32->SMALLINT: values are truncated via static_cast<int16_t>.
   {
     auto readSchema = ROW("c1", SMALLINT());
     readerOptions.setFileSchema(readSchema);
-    auto [reader, rowReader] =
+    auto readSession =
         readerBuilder(*sink, readSchema).options(readerOptions).build();
 
     auto expected = makeRowVector(
@@ -1164,7 +1159,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
              static_cast<int16_t>(std::numeric_limits<int32_t>::min()),
              static_cast<int16_t>(std::numeric_limits<int32_t>::max())})});
     assertReadWithReaderAndExpected(
-        readSchema, *rowReader, expected, *leafPool_);
+        readSchema, *readSession.rowReader, expected, *leafPool_);
   }
 }
 

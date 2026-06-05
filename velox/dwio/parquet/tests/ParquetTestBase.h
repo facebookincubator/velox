@@ -38,7 +38,17 @@ using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 class ParquetTestBase;
 
-/// Builder for creating ParquetReader + RowReader pairs in unit tests.
+/// Owns a ParquetReader and RowReader created for a single read test.
+/// Declares reader before rowReader so C++ destroys rowReader first.
+struct ParquetReaderSession {
+  /// Owns file metadata and input state required by rowReader.
+  std::unique_ptr<ParquetReader> reader;
+
+  /// Reads rows from reader.
+  std::unique_ptr<dwio::common::RowReader> rowReader;
+};
+
+/// Builder for creating ParquetReader + RowReader sessions in unit tests.
 ///
 /// Construct via ParquetTestBase::readerBuilder with a data source (example
 /// file or in-memory buffer) and output projection, then apply optional
@@ -79,11 +89,8 @@ class ParquetReaderBuilder {
   ParquetReaderBuilder& options(
       const dwio::common::ReaderOptions& readerOptions);
 
-  /// Creates a ParquetReader and RowReader from the configured inputs.
-  std::pair<
-      std::unique_ptr<ParquetReader>,
-      std::unique_ptr<dwio::common::RowReader>>
-  build();
+  /// Creates a reader session from the configured inputs.
+  ParquetReaderSession build();
 
  private:
   memory::MemoryPool* pool_;
@@ -109,7 +116,6 @@ class ParquetTestBase : public testing::Test,
     rootPool_ = memory::memoryManager()->addRootPool("ParquetTests");
     leafPool_ = rootPool_->addLeafChild("ParquetTests");
     tempPath_ = TempDirectoryPath::create();
-    readerStore_.clear();
   }
 
   static RowTypePtr sampleSchema() {
@@ -272,7 +278,5 @@ class ParquetTestBase : public testing::Test,
   std::shared_ptr<TempDirectoryPath> tempPath_;
   // Stores writers created by write() helper to keep sinks alive for reading.
   std::vector<std::unique_ptr<Writer>> writers_;
-  // Stores readers whose lifetime must extend beyond the current call frame.
-  std::vector<std::unique_ptr<dwio::common::Reader>> readerStore_;
 };
 } // namespace facebook::velox::parquet
