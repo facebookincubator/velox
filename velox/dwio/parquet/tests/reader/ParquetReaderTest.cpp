@@ -2023,12 +2023,14 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
 // explicit setSize, logical size can stay stale for the current batch.
 //
 // This test exercises both LIST and MAP with two row groups:
-// RG1: 4096 rows.
-// RG2: 3336 rows.
+// RG1: 3336 rows.
+// RG2: 4096 rows.
 TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
-  constexpr vector_size_t kFirstRowGroupRows = 4096;
-  constexpr vector_size_t kSecondRowGroupRows = 3336;
+  constexpr vector_size_t kFirstRowGroupRows = 3336;
+  constexpr vector_size_t kSecondRowGroupRows = 4096;
   constexpr vector_size_t kNumRows = kFirstRowGroupRows + kSecondRowGroupRows;
+  // Observed nulls buffer capacity after ensureCapacity + memory pool rounding.
+  constexpr int64_t kExpectedNullsCapacity = 672;
 
   auto assertNullBufferSizeAcrossBatches =
       [&](const RowTypePtr& rowType, dwio::common::RowReader& rowReader) {
@@ -2041,21 +2043,17 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
           return {column, numRead};
         };
 
-        auto assertBatch = [&](vector_size_t batchSize, bool exactNullSize) {
+        auto assertBatch = [&](vector_size_t batchSize) {
           SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
           auto [column, numRead] = readBatch(batchSize);
           ASSERT_EQ(numRead, batchSize);
           ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
-          if (exactNullSize) {
-            EXPECT_EQ(column->nulls()->size(), bits::nbytes(numRead));
-          } else {
-            EXPECT_GE(column->nulls()->size(), bits::nbytes(numRead));
-          }
+          EXPECT_EQ(column->nulls()->capacity(), kExpectedNullsCapacity);
           EXPECT_NO_THROW(column->validate({}));
         };
 
-        assertBatch(kFirstRowGroupRows, false);
-        assertBatch(kSecondRowGroupRows, true);
+        assertBatch(kFirstRowGroupRows);
+        assertBatch(kSecondRowGroupRows);
       };
 
   auto runCase = [&](std::string_view traceName,
@@ -2064,13 +2062,26 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
     SCOPED_TRACE(traceName);
     parquet::WriterOptions writerOptions;
     writerOptions.memoryPool = rootPool_.get();
-    writerOptions.flushPolicyFactory = [kFirstRowGroupRows]() {
-      return std::make_unique<parquet::LambdaFlushPolicy>(
-          kFirstRowGroupRows, kBytesInRowGroup, []() { return false; });
+    // Use the second row group size as writeTable max row group length so the
+    // 4096-row batch is not split again by Arrow.
+    writerOptions.flushPolicyFactory = [kSecondRowGroupRows]() {
+      return std::make_unique<DefaultFlushPolicy>(
+          kSecondRowGroupRows, kBytesInRowGroup);
     };
-    auto data = makeRowVector({"a"}, {columnData});
-    auto* sink = write(data, writerOptions);
-    auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    auto writer = std::make_unique<parquet::Writer>(
+        std::move(sink), writerOptions, rowType);
+    writer->write(
+        makeRowVector({"a"}, {columnData->slice(0, kFirstRowGroupRows)}));
+    writer->flush();
+    writer->write(makeRowVector(
+        {"a"}, {columnData->slice(kFirstRowGroupRows, kSecondRowGroupRows)}));
+    writer->close();
+    writers_.push_back(std::move(writer));
+
+    auto [reader, rowReader] = readerBuilder(*sinkPtr, rowType).build();
     ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
     ASSERT_EQ(reader->fileMetaData().rowGroup(0).numRows(), kFirstRowGroupRows);
     ASSERT_EQ(
@@ -2083,14 +2094,13 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
       ROW("a", ARRAY(INTEGER())),
       makeArrayVector<int32_t>(
           kNumRows,
-          [&](vector_size_t rowIndex) {
-            return rowIndex < kFirstRowGroupRows ? 1 : 2;
-          },
+          [](vector_size_t /*rowIndex*/) { return 1; },
           [](vector_size_t rowIndex, vector_size_t elementIndex) {
             return rowIndex * 2 + elementIndex;
           },
           [&](vector_size_t rowIndex) {
-            return rowIndex == 100 || rowIndex == kFirstRowGroupRows + 100;
+            return rowIndex == 100 || rowIndex == kFirstRowGroupRows + 100 ||
+                rowIndex == kFirstRowGroupRows + 200;
           }));
 
   runCase(
@@ -2098,12 +2108,11 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
       ROW("a", MAP(INTEGER(), INTEGER())),
       makeMapVector<int32_t, int32_t>(
           kNumRows,
-          [&](vector_size_t rowIndex) {
-            return rowIndex < kFirstRowGroupRows ? 1 : 2;
-          },
+          [](vector_size_t /*rowIndex*/) { return 1; },
           [](vector_size_t elementIndex) { return elementIndex; },
           [](vector_size_t elementIndex) { return elementIndex + 1000; },
           [&](vector_size_t rowIndex) {
-            return rowIndex == 100 || rowIndex == kFirstRowGroupRows + 100;
+            return rowIndex == 100 || rowIndex == kFirstRowGroupRows + 100 ||
+                rowIndex == kFirstRowGroupRows + 200;
           }));
 }
