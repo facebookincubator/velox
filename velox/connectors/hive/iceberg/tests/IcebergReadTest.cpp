@@ -469,25 +469,27 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   struct RowLineageTestCase {
-    std::vector<int64_t> values;
+    std::vector<int64_t> values{};
     // Physically stored _row_id values; nullopt entries write a file null.
     // Absent means no _row_id column in the file; reader derives from
     // firstRowId. Always paired with storedSequenceNumbers.
-    std::optional<std::vector<std::optional<int64_t>>> storedRowIds;
+    std::optional<std::vector<std::optional<int64_t>>> storedRowIds =
+        std::nullopt;
     // Physically stored _last_updated_sequence_number values; nullopt entries
     // write a file null. Absent means no column in the file; reader derives
     // from dataSequenceNumber. Always paired with storedRowIds.
-    std::optional<std::vector<std::optional<int64_t>>> storedSequenceNumbers;
+    std::optional<std::vector<std::optional<int64_t>>> storedSequenceNumbers =
+        std::nullopt;
     // Passed as first_row_id in the split's info columns.
-    std::optional<int64_t> firstRowId;
+    std::optional<int64_t> firstRowId = std::nullopt;
     // Passed as data_sequence_number in the split's info columns.
-    std::optional<int64_t> dataSequenceNumber;
+    std::optional<int64_t> dataSequenceNumber = std::nullopt;
     // File positions to delete; empty means no delete file is created.
-    std::vector<int64_t> deletePositions;
+    std::vector<int64_t> deletePositions{};
     // Subfield filter expression (e.g., "c0 > 20"); empty means no filter.
-    std::string subfieldFilter;
+    std::string subfieldFilter{};
     // Expected output rows: (c0, _row_id, _last_updated_sequence_number).
-    std::vector<RowVectorPtr> expectedVectors;
+    std::vector<RowVectorPtr> expectedVectors{};
   };
 
   // Writes tc to a temp data file, executes a table scan over
