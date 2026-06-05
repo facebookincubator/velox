@@ -1711,6 +1711,75 @@ TEST_F(HiveIcebergTest, rowLineage) {
   });
 }
 
+// Tests Iceberg MERGE INTO row-id synthesis: the projection of the synthetic
+// $target_table_row_id ROW column produced at read time from the split's
+// infoColumns ($path, $spec_id, partition_data) plus the file row positions.
+// Mirrors the IcebergPageSourceProvider Java path that backs
+// MERGE_TARGET_ROW_ID_DATA.
+TEST_F(HiveIcebergTest, targetTableRowIdSynthesis) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  static const std::string kPartitionDataJson =
+      "{\"partitionValues\":[\"2024-01-01\"]}";
+
+  // Write a small data file containing only c0 (the synthetic row-id column
+  // never appears in the file).
+  std::vector<RowVectorPtr> inputVectors = {
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})})};
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), inputVectors);
+
+  std::unordered_map<std::string, std::string> infoColumns = {
+      {IcebergMetadataColumn::kSpecIdInfoColumn, "7"},
+      {IcebergMetadataColumn::kPartitionDataInfoColumn, kPartitionDataJson},
+  };
+
+  auto split = makeIcebergSplitWithInfoColumns(
+      dataFilePath->getPath(), infoColumns, /*deleteFiles=*/{});
+
+  const auto rowIdType =
+      ROW({"file_path", "row_position", "spec_id", "partition_data"},
+          {VARCHAR(), BIGINT(), INTEGER(), VARCHAR()});
+  const auto outputType =
+      ROW({"c0", IcebergMetadataColumn::kTargetTableRowIdColumnName},
+          {BIGINT(), rowIdType});
+  const auto tableDataColumns = ROW({"c0"}, {BIGINT()});
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(tableDataColumns)
+                  .endTableScan()
+                  .planNode();
+
+  // Contiguous case: row_position = file position [0, 1, 2]. file_path,
+  // spec_id, and partition_data are split-level constants.
+  auto expected = makeRowVector(
+      {"c0", IcebergMetadataColumn::kTargetTableRowIdColumnName},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeRowVector(
+              {"file_path", "row_position", "spec_id", "partition_data"},
+              {
+                  makeFlatVector<std::string>(
+                      3,
+                      [&](vector_size_t /*row*/) {
+                        return dataFilePath->getPath();
+                      }),
+                  makeFlatVector<int64_t>({0, 1, 2}),
+                  makeFlatVector<int32_t>({7, 7, 7}),
+                  makeFlatVector<std::string>(
+                      3,
+                      [&](vector_size_t /*row*/) {
+                        return kPartitionDataJson;
+                      }),
+              }),
+      });
+
+  AssertQueryBuilder(plan).splits({split}).assertResults({expected});
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 TEST_F(HiveIcebergTest, positionalDeleteFileWithRowGroupFilter) {
   // This file contains three row groups, each with about 100 rows.
