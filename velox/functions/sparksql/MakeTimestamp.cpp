@@ -16,6 +16,8 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/sparksql/AnsiMode.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -29,25 +31,37 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
     DecodedVector* dayVector,
     DecodedVector* hourVector,
     DecodedVector* minuteVector,
-    DecodedVector* microsVector) {
+    DecodedVector* microsVector,
+    bool ansiEnabled) {
   // Check hour.
   auto hour = hourVector->valueAt<int32_t>(row);
   if (hour < 0 || hour >= 24) {
-    return std::nullopt;
+    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+        ansiEnabled, "Invalid value for hour, must be in [0, 24): {}", hour);
   }
   // Check minute.
   auto minute = minuteVector->valueAt<int32_t>(row);
   if (minute < 0 || minute >= 60) {
-    return std::nullopt;
+    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+        ansiEnabled,
+        "Invalid value for minute, must be in [0, 60): {}",
+        minute);
   }
   // Check microseconds.
   auto micros = microsVector->valueAt<int64_t>(row);
   if (micros < 0) {
-    return std::nullopt;
+    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+        ansiEnabled,
+        "Invalid value for second microseconds, must be non-negative: {}",
+        micros);
   }
   auto seconds = micros / util::kMicrosPerSec;
   if (seconds > 60 || (seconds == 60 && micros % util::kMicrosPerSec != 0)) {
-    return std::nullopt;
+    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+        ansiEnabled,
+        "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: {}.{:06d}",
+        seconds,
+        micros % util::kMicrosPerSec);
   }
 
   // Year, month, day will be checked in utils::daysSinceEpochFromDate.
@@ -57,7 +71,8 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
       dayVector->valueAt<int32_t>(row));
   if (daysSinceEpoch.hasError()) {
     VELOX_DCHECK(daysSinceEpoch.error().isUserError());
-    return std::nullopt;
+    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+        ansiEnabled, "{}", daysSinceEpoch.error().message());
   }
 
   // Micros has at most 8 digits (2 for seconds + 6 for microseconds),
@@ -97,8 +112,8 @@ void setTimestampOrNull(
 
 class MakeTimestampFunction : public exec::VectorFunction {
  public:
-  MakeTimestampFunction(const tz::TimeZone* sessionTimeZone)
-      : sessionTimeZone_(sessionTimeZone) {}
+  MakeTimestampFunction(const tz::TimeZone* sessionTimeZone, bool ansiEnabled)
+      : sessionTimeZone_(sessionTimeZone), ansiEnabled_(ansiEnabled) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -130,9 +145,9 @@ class MakeTimestampFunction : public exec::VectorFunction {
           context.setErrors(rows, std::current_exception());
           return;
         }
-        rows.applyToSelected([&](vector_size_t row) {
+        context.applyToSelectedNoThrow(rows, [&](auto row) {
           auto timestamp = makeTimeStampFromDecodedArgs(
-              row, year, month, day, hour, minute, micros);
+              row, year, month, day, hour, minute, micros, ansiEnabled_);
           setTimestampOrNull(
               row, timestamp, constantTimeZone, resultFlatVector);
         });
@@ -140,15 +155,15 @@ class MakeTimestampFunction : public exec::VectorFunction {
         auto* timeZone = decodedArgs.at(6);
         context.applyToSelectedNoThrow(rows, [&](auto row) {
           auto timestamp = makeTimeStampFromDecodedArgs(
-              row, year, month, day, hour, minute, micros);
+              row, year, month, day, hour, minute, micros, ansiEnabled_);
           setTimestampOrNull(row, timestamp, timeZone, resultFlatVector);
         });
       }
     } else {
       // Otherwise use session timezone.
-      rows.applyToSelected([&](vector_size_t row) {
+      context.applyToSelectedNoThrow(rows, [&](auto row) {
         auto timestamp = makeTimeStampFromDecodedArgs(
-            row, year, month, day, hour, minute, micros);
+            row, year, month, day, hour, minute, micros, ansiEnabled_);
         setTimestampOrNull(row, timestamp, sessionTimeZone_, resultFlatVector);
       });
     }
@@ -184,6 +199,7 @@ class MakeTimestampFunction : public exec::VectorFunction {
 
  private:
   const tz::TimeZone* sessionTimeZone_;
+  const bool ansiEnabled_;
 };
 
 std::shared_ptr<exec::VectorFunction> createMakeTimestampFunction(
@@ -208,7 +224,8 @@ std::shared_ptr<exec::VectorFunction> createMakeTimestampFunction(
       "Seconds fraction must have 6 digits for microseconds but got {}",
       secondsScale);
 
-  return std::make_shared<MakeTimestampFunction>(sessionTimeZone);
+  const bool ansiEnabled = SparkQueryConfig{config}.ansiEnabled();
+  return std::make_shared<MakeTimestampFunction>(sessionTimeZone, ansiEnabled);
 }
 } // namespace
 

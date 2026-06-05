@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -28,6 +29,12 @@ class MakeTimestampTest : public SparkFunctionBaseTest {
         {core::QueryConfig::kSessionTimezone, timeZone},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
+  }
+
+  void setAnsiEnabled(bool enabled) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          enabled ? "true" : "false"}});
   }
 };
 
@@ -148,6 +155,8 @@ TEST_F(MakeTimestampTest, errors) {
       "make_timestamp requires session time zone to be set.");
 
   setQueryTimeZone("Asia/Shanghai");
+  // ANSI off: invalid input returns NULL instead of throwing.
+  setAnsiEnabled(false);
   // Invalid input returns null.
   const auto year = makeFlatVector<int32_t>(
       {facebook::velox::util::kMinYear - 1,
@@ -185,6 +194,75 @@ TEST_F(MakeTimestampTest, errors) {
       "Scalar function signature is not supported: "
       "make_timestamp(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
       "DECIMAL(16, 8)).");
+}
+
+TEST_F(MakeTimestampTest, ansiErrors) {
+  // Under ANSI mode each invalid argument throws with a field-specific
+  // message rather than returning NULL.
+  const auto microsType = DECIMAL(16, 6);
+  setQueryTimeZone("Asia/Shanghai");
+  setAnsiEnabled(true);
+
+  const auto eval = [&](int32_t year,
+                        int32_t month,
+                        int32_t day,
+                        int32_t hour,
+                        int32_t minute,
+                        int64_t micros) {
+    return evaluateOnce<Timestamp>(
+        "make_timestamp(c0, c1, c2, c3, c4, c5)",
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+        std::optional<int32_t>(year),
+        std::optional<int32_t>(month),
+        std::optional<int32_t>(day),
+        std::optional<int32_t>(hour),
+        std::optional<int32_t>(minute),
+        std::optional<int64_t>(micros));
+  };
+
+  // Hour out of range.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 24, 30, 0),
+      "Invalid value for hour, must be in [0, 24): 24");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, -1, 30, 0),
+      "Invalid value for hour, must be in [0, 24): -1");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 25, 30, 0),
+      "Invalid value for hour, must be in [0, 24): 25");
+
+  // Minute out of range.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 60, 0),
+      "Invalid value for minute, must be in [0, 60): 60");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, -1, 0),
+      "Invalid value for minute, must be in [0, 60): -1");
+
+  // Negative microseconds.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 30, -1),
+      "Invalid value for second microseconds, must be non-negative: -1");
+
+  // Seconds out of range.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 30, 61'000'000),
+      "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: 61.000000");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 30, 60'007'000),
+      "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: 60.007000");
+
+  // Invalid date components.
+  VELOX_ASSERT_USER_THROW(eval(2021, 0, 11, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(eval(2021, 13, 11, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(eval(2021, 7, 0, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(eval(2021, 7, 32, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(
+      eval(facebook::velox::util::kMinYear - 1, 7, 11, 6, 30, 0),
+      "Date out of range");
+  VELOX_ASSERT_USER_THROW(
+      eval(facebook::velox::util::kMaxYear + 1, 7, 11, 6, 30, 0),
+      "Date out of range");
 }
 
 TEST_F(MakeTimestampTest, invalidTimezone) {
