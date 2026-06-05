@@ -709,11 +709,12 @@ Hive Connector
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.
 
-Most configuration property names use kebab-case (e.g., ``max-bucket-count``)
-and most session property names use snake_case (e.g., ``max_bucket_count``).
-Parquet-specific Hive connector configuration properties use the
-``hive.parquet.`` prefix. Parquet session properties do not include a connector
-prefix because they are scoped by catalog or connector ID by the engine.
+Configuration property names use kebab-case (e.g., ``max-bucket-count``)
+and session property names use snake_case (e.g., ``max_bucket_count``).
+Format-specific Hive connector configuration properties use prefixes such as
+``hive.parquet.``, ``hive.orc.``, and ``hive.nimble.``. Format-specific session
+properties do not include a connector prefix because they are scoped by catalog
+or connector ID by the engine.
 Configuration keys use dashes and session keys use underscores.
 Properties without a session property name in the table below are fixed for the lifetime of the process
 and cannot be modified per query.
@@ -830,7 +831,7 @@ must be specified as raw byte counts.
      - parquet_writer_max_target_file_size
      - capacity
      - 0B
-     - Maximum target file size for writers. When a file exceeds this size during writing, the writer
+     - Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
        sorted writes.
@@ -996,11 +997,19 @@ must be specified as raw byte counts.
      - bool
      - true
      - Enables historical based stripe size estimation after compression.
-   * - hive.orc.max-target-file-size
+   * - hive.orc.writer.max-target-file-size
      - orc_writer_max_target_file_size
      - capacity
      - 0B
      - Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
+   * - hive.nimble.writer.max-target-file-size
+     - nimble_writer_max_target_file_size
+     - capacity
+     - 0B
+     - Maximum target file size for Nimble writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
        sorted writes.

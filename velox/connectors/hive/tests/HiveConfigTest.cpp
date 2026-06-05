@@ -221,6 +221,7 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
           std::unordered_map<std::string, std::string>{
               {HiveConfig::kParquetMaxTargetFileSize, "16MB"},
               {HiveConfig::kOrcMaxTargetFileSize, "24MB"},
+              {HiveConfig::kNimbleMaxTargetFileSize, "40MB"},
           }));
   EXPECT_EQ(
       config.maxTargetFileSizeBytes(
@@ -234,11 +235,16 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
       config.maxTargetFileSizeBytes(
           dwio::common::FileFormat::ORC, emptySession.get()),
       24UL << 20);
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::NIMBLE, emptySession.get()),
+      40UL << 20);
 
   auto session = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{
           {HiveConfig::kParquetMaxTargetFileSizeSession, "32MB"},
           {HiveConfig::kOrcMaxTargetFileSizeSession, "48MB"},
+          {HiveConfig::kNimbleMaxTargetFileSizeSession, "56MB"},
       });
   EXPECT_EQ(
       config.maxTargetFileSizeBytes(
@@ -252,4 +258,8 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
       config.maxTargetFileSizeBytes(
           dwio::common::FileFormat::ORC, session.get()),
       48UL << 20);
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::NIMBLE, session.get()),
+      56UL << 20);
 }

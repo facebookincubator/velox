@@ -77,7 +77,7 @@ class HiveConfig : public FileConfig {
       "0B",
       "Maximum ORC target file size. 0 means no limit.")
   static constexpr const char* kOrcMaxTargetFileSize =
-      "hive.orc.max-target-file-size";
+      "hive.orc.writer.max-target-file-size";
 
   VELOX_HIVE_CONFIG_PROPERTY(
       kNimbleMaxTargetFileSizeSession,
@@ -86,7 +86,7 @@ class HiveConfig : public FileConfig {
       "0B",
       "Maximum nimble target file size. 0 means no limit.")
   static constexpr const char* kNimbleMaxTargetFileSize =
-      "hive.nimble.max-target-file-size";
+      "hive.nimble.writer.max-target-file-size";
 
   // --- VELOX_HIVE_CONFIG properties ---
 
