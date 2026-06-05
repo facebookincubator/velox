@@ -992,6 +992,7 @@ struct WriterOptions {
   std::map<std::string, std::string> serdeParameters;
   std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
       flushPolicyFactory;
+  uint64_t maxTargetFileSizeBytes{0};
 
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};
