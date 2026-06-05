@@ -444,6 +444,7 @@ HiveDataSink::HiveDataSink(
           std::move(partitionIdGenerator),
           dwio::common::getWriterFactory(insertTableHandle->storageFormat()),
           hiveConfig->maxTargetFileSizeBytes(
+              insertTableHandle->storageFormat(),
               connectorQueryCtx->sessionProperties()),
           hiveConfig->isPartitionPathAsLowerCase(
               connectorQueryCtx->sessionProperties()),

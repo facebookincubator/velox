@@ -18,6 +18,10 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/HiveConfigMacrosDefine.h"
 
+namespace facebook::velox::dwio::common {
+enum class FileFormat;
+}
+
 namespace facebook::velox::connector::hive {
 
 /// Hive connector configs. Extends FileConfig with Hive-specific settings
@@ -58,12 +62,31 @@ class HiveConfig : public FileConfig {
       "sort-writer-max-output-bytes";
 
   VELOX_HIVE_CONFIG_PROPERTY(
-      kMaxTargetFileSizeSession,
-      "max_target_file_size",
+      kParquetMaxTargetFileSizeSession,
+      "parquet_writer_max_target_file_size",
       std::string,
       "0B",
       "Maximum target file size. 0 means no limit.")
-  static constexpr const char* kMaxTargetFileSize = "max-target-file-size";
+  static constexpr const char* kParquetMaxTargetFileSize =
+      "hive.parquet.writer.max-target-file-size";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kOrcMaxTargetFileSizeSession,
+      "orc_writer_max_target_file_size",
+      std::string,
+      "0B",
+      "Maximum ORC target file size. 0 means no limit.")
+  static constexpr const char* kOrcMaxTargetFileSize =
+      "hive.orc.max-target-file-size";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kNimbleMaxTargetFileSizeSession,
+      "nimble_writer_max_target_file_size",
+      std::string,
+      "0B",
+      "Maximum nimble target file size. 0 means no limit.")
+  static constexpr const char* kNimbleMaxTargetFileSize =
+      "hive.nimble.max-target-file-size";
 
   // --- VELOX_HIVE_CONFIG properties ---
 
@@ -225,7 +248,9 @@ class HiveConfig : public FileConfig {
 
   uint64_t sortWriterMaxOutputBytes(const config::ConfigBase* session) const;
 
-  uint64_t maxTargetFileSizeBytes(const config::ConfigBase* session) const;
+  uint64_t maxTargetFileSizeBytes(
+      dwio::common::FileFormat fileFormat,
+      const config::ConfigBase* session) const;
 
   explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
       : FileConfig(std::move(config)) {}

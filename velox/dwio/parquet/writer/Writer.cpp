@@ -25,6 +25,7 @@
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
@@ -688,8 +689,10 @@ void WriterOptions::processConfigs(
   // row group byte threshold so we flush earlier and rawBytesWritten() grows
   // during writes.
   auto maxTargetFileSize =
-      toParquetPageSize(session.getWithFallback<std::string>(
-          WriterConfig::kParquetSessionMaxTargetFileSize, connectorConfig));
+      toParquetPageSize(session.getLegacyWithFallback<std::string>(
+          connector::hive::HiveConfig::kParquetMaxTargetFileSizeSession,
+          connectorConfig,
+          connector::hive::HiveConfig::kParquetMaxTargetFileSize));
   if (maxTargetFileSize.has_value()) {
     if (!flushPolicyFactory) {
       auto bytesInRowGroup = std::min<int64_t>(

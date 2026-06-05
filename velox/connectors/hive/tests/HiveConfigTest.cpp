@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "gtest/gtest.h"
 #include "velox/common/config/Config.h"
+#include "velox/dwio/common/Options.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
@@ -209,4 +210,46 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
+}
+
+TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
+  auto emptySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+
+  HiveConfig config(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {HiveConfig::kParquetMaxTargetFileSize, "16MB"},
+              {HiveConfig::kOrcMaxTargetFileSize, "24MB"},
+          }));
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::PARQUET, emptySession.get()),
+      16UL << 20);
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::DWRF, emptySession.get()),
+      24UL << 20);
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::ORC, emptySession.get()),
+      24UL << 20);
+
+  auto session = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {HiveConfig::kParquetMaxTargetFileSizeSession, "32MB"},
+          {HiveConfig::kOrcMaxTargetFileSizeSession, "48MB"},
+      });
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::PARQUET, session.get()),
+      32UL << 20);
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::DWRF, session.get()),
+      48UL << 20);
+  EXPECT_EQ(
+      config.maxTargetFileSizeBytes(
+          dwio::common::FileFormat::ORC, session.get()),
+      48UL << 20);
 }
