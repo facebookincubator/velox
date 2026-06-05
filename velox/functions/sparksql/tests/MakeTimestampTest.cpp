@@ -32,9 +32,13 @@ class MakeTimestampTest : public SparkFunctionBaseTest {
   }
 
   void setAnsiEnabled(bool enabled) {
-    queryCtx_->testingOverrideConfigUnsafe(
-        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
-          enabled ? "true" : "false"}});
+    // testingOverrideConfigUnsafe replaces the entire config, so merge with
+    // existing values to avoid wiping out the session timezone or other
+    // settings established by setQueryTimeZone.
+    auto config = queryCtx_->queryConfig().rawConfigsCopy();
+    config[SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled)] =
+        enabled ? "true" : "false";
+    queryCtx_->testingOverrideConfigUnsafe(std::move(config));
   }
 };
 
