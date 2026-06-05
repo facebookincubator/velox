@@ -351,6 +351,12 @@ class Operator : public BaseRuntimeStatWriter {
     stats_.wlock()->addRuntimeStat(name, value);
   }
 
+  /// Sets a runtime metric on operator stats, overriding any existing value.
+  void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
+      override {
+    stats_.wlock()->setRuntimeStat(name, metric);
+  }
+
   /// Returns reference to the operator stats synchronized object to gain bulk
   /// read/write access to the stats.
   folly::Synchronized<OperatorStats>& stats() {

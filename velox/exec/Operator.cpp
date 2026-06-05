@@ -548,6 +548,12 @@ void OperatorStats::addRuntimeStat(
   addOperatorRuntimeStats(name, value, runtimeStats);
 }
 
+void OperatorStats::setRuntimeStat(
+    std::string_view name,
+    const RuntimeMetric& metric) {
+  setOperatorRuntimeStats(name, metric, runtimeStats);
+}
+
 void OperatorStats::add(const OperatorStats& other) {
   numSplits += other.numSplits;
   rawInputBytes += other.rawInputBytes;
