@@ -269,3 +269,40 @@ TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {
   EXPECT_EQ(concatIt->second->inputVectors, 1);
   EXPECT_EQ(concatIt->second->outputVectors, 1);
 }
+
+TEST_F(CudfBatchConcatTest, concatSplitsZeroColumnBatchesAtMaxThreshold) {
+  updateCudfConfig(/*min=*/30, /*max=*/20);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+
+  std::vector<RowVectorPtr> vectors;
+  for (int i = 0; i < 3; ++i) {
+    vectors.push_back(makeRowVector({makeFlatSequence<int64_t>(i * 10, 10)}));
+  }
+  createDuckDbTable(vectors);
+
+  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggNodeId;
+
+  auto plan = PlanBuilder(generator)
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(vectors, generator);
+                  })
+                  .filter("c0 >= 0")
+                  .project({})
+                  .singleAggregation({}, {"count(*)"})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT count(*) FROM tmp WHERE c0 >= 0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(aggNodeId);
+  auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
+  ASSERT_NE(concatIt, nodeStats.operatorStats.end());
+  EXPECT_EQ(concatIt->second->inputVectors, 3);
+  EXPECT_EQ(concatIt->second->outputVectors, 2)
+      << "30 zero-column rows should be split into 20-row and 10-row batches";
+}
