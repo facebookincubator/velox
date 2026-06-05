@@ -68,7 +68,7 @@ class TestCudaStream {
 
 struct RecordingState {
   cudaStream_t lastDeallocationStream{nullptr};
-  int deallocationCount{0};
+  std::size_t deallocationCount{0};
 };
 
 class RecordingDeviceResource {
