@@ -35,7 +35,7 @@ class CudfBatchConcat : public CudfOperatorBase {
 
   bool needsInput() const override {
     return !noMoreInput_ && outputQueue_.empty() &&
-        currentNumRows_ < targetRows_;
+        zeroColumnOutputQueue_.empty() && currentNumRows_ < targetRows_;
   }
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
@@ -52,6 +52,7 @@ class CudfBatchConcat : public CudfOperatorBase {
   exec::DriverCtx* const driverCtx_;
   std::vector<CudfVectorPtr> buffer_;
   std::queue<std::unique_ptr<cudf::table>> outputQueue_;
+  std::queue<vector_size_t> zeroColumnOutputQueue_;
   rmm::cuda_stream_view outputQueueStream_{rmm::cuda_stream_default};
   size_t currentNumRows_{0};
   const size_t targetRows_{0};
