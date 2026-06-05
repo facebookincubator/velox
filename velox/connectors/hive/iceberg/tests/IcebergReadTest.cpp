@@ -2017,4 +2017,72 @@ TEST_F(HiveIcebergTest, positionalDeleteSequenceNumberZeroDisablesFilter) {
   AssertQueryBuilder(plan).split(split).assertResults({expected});
 }
 
+TEST_F(HiveIcebergTest, flatMapAsStruct) {
+  // Write a DWRF file with a MAP<BIGINT, DOUBLE> column.
+  auto mapType = MAP(BIGINT(), DOUBLE());
+  auto dataSchema = ROW({"id", "features"}, {BIGINT(), mapType});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector(
+          {"id", "features"},
+          {makeFlatVector<int64_t>({1, 2}),
+           makeMapVector(
+               {0, 3},
+               makeFlatVector<int64_t>({1, 2, 3, 1, 2, 3}),
+               makeFlatVector<double>(
+                   {10.0, 20.0, 30.0, 100.0, 200.0, 300.0}))})});
+
+  // Build struct-encoded column handle for "features": keys {1, 2} as
+  // struct fields {"1", "2"}.
+  std::vector<common::Subfield> subfields;
+  for (auto key : {"1", "2"}) {
+    std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
+    path.push_back(std::make_unique<common::Subfield::NestedField>("features"));
+    path.push_back(
+        std::make_unique<common::Subfield::NestedField>(std::string(key)));
+    subfields.emplace_back(std::move(path));
+  }
+
+  auto structType = ROW({"1", "2"}, {DOUBLE(), DOUBLE()});
+  ColumnHandleMap assignments;
+  assignments["id"] = std::make_shared<HiveColumnHandle>(
+      "id",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{});
+  assignments["features"] = std::make_shared<HiveColumnHandle>(
+      "features",
+      HiveColumnHandle::ColumnType::kRegular,
+      mapType,
+      mapType,
+      std::move(subfields));
+
+  // Output type has ROW for the struct-encoded column.
+  auto outputType = ROW({"id", "features"}, {BIGINT(), structType});
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(dataSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto splits = makeIcebergSplits(dataFilePath->getPath());
+
+  auto expected = makeRowVector(
+      {"id", "features"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeRowVector(
+           {"1", "2"},
+           {makeFlatVector<double>({10.0, 100.0}),
+            makeFlatVector<double>({20.0, 200.0})})});
+
+  AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
 } // namespace facebook::velox::connector::hive::iceberg
