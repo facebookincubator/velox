@@ -1203,7 +1203,10 @@ CoalesceIoStats readPins(
         int32_t end,
         uint64_t offset,
         const std::vector<folly::Range<char*>>& buffers)> readFunc) {
-  return coalesceIo<CachePin, folly::Range<char*>>(
+  return coalesceIo<
+      CachePin,
+      folly::Range<char*>,
+      /*coalesceDuplicateRanges=*/false>(
       pins,
       maxGap,
       rangesPerIo,
