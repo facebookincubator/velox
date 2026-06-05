@@ -50,7 +50,16 @@ permissions:
 
 jobs:
   detect:
-    if: github.event.review.state == 'approved'
+    # Restrict to committer approvals (users with push access to the
+    # repo) to cap CI-minutes exposure from drive-by approvals on
+    # fork PRs. rerun-on-force-full re-derives the upstream event
+    # from workflow_run.id and applies the same filter to its dedup
+    # count so non-committer approvals on the same SHA don't bump
+    # the counter and dedup away a committer's first approval.
+    if: >
+      github.event.review.state == 'approved' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.review.author_association)
     runs-on: ubuntu-latest
     steps:
       - name: Log trigger (no PR-controlled output)

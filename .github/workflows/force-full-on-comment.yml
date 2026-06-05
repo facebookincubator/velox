@@ -53,14 +53,13 @@ jobs:
     # body contains `/full-build`. The `contains()` check is a cheap
     # substring pre-filter; the dedup step below applies the precise
     # line-start-anchored regex (`^/full-build(\s|$)`) that matches
-    # selective-build-plan.yml's matcher. Restricted to users with a
-    # prior relationship to the repo (CONTRIBUTOR = has had a PR
-    # merged) to cap CI-minutes exposure from drive-by commenters
-    # across the repo's open PRs.
+    # selective-build-plan.yml's matcher. Restricted to committers
+    # (users with push access to the repo) to cap CI-minutes exposure
+    # from drive-by commenters across the repo's open PRs.
     if: >
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '/full-build') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'),
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                github.event.comment.author_association)
     runs-on: ubuntu-latest
     steps:
@@ -90,10 +89,13 @@ jobs:
           fi
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
-      # Dedup: count /full-build comments on the PR. == 1 means we
-      # are the first; > 1 means an earlier /full-build already
-      # triggered the re-run for this PR. Anchored regex matches the
-      # plan workflow's matcher.
+      # Dedup: count /full-build comments on the PR from committers.
+      # == 1 means we are the first; > 1 means an earlier /full-build
+      # already triggered the re-run for this PR. Anchored regex
+      # matches the plan workflow's matcher; the author_association
+      # filter matches the if: gate above so non-committer comments
+      # don't bump the counter and dedup away a committer's first
+      # /full-build.
       - name: Dedup
         if: steps.pr.outputs.head_sha
         id: dedup
@@ -104,8 +106,13 @@ jobs:
         run: |
           source .github/scripts/gh-api-retry.sh
           count=$(gh_api --paginate "/repos/$REPO/issues/$PR/comments" \
-            --jq '[.[] | select(.body | test("^/full-build(\\s|$)"; "m"))] | length')
-          echo "/full-build comments on this PR: $count"
+            --jq '[.[]
+                   | select(.body | test("^/full-build(\\s|$)"; "m"))
+                   | select(.author_association == "OWNER"
+                            or .author_association == "MEMBER"
+                            or .author_association == "COLLABORATOR")
+                  ] | length')
+          echo "/full-build comments from committers on this PR: $count"
           if [ "$count" -eq 1 ]; then
             echo "should_rerun=true" >> "$GITHUB_OUTPUT"
           else
