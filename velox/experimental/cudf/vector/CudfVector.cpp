@@ -23,14 +23,8 @@
 #include "velox/vector/TypeAliases.h"
 
 #include <cudf/column/column.hpp>
-#include <cudf/table/table.hpp>
-
-#if __has_include(<cudf/column/column_stream.hpp>)
 #include <cudf/column/column_stream.hpp>
-#define VELOX_CUDF_HAS_COLUMN_REBIND_STREAM 1
-#else
-#define VELOX_CUDF_HAS_COLUMN_REBIND_STREAM 0
-#endif
+#include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -183,15 +177,14 @@ std::unique_ptr<cudf::table> CudfVector::release() {
 }
 
 bool CudfVector::rebindStream(rmm::cuda_stream_view stream) {
-  if (stream_.value() == stream.value()) {
-    return true;
-  }
-
-#if VELOX_CUDF_HAS_COLUMN_REBIND_STREAM
   if (auto* tablePtr =
           std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
     if (!*tablePtr) {
       return false;
+    }
+
+    if (stream_.value() == stream.value()) {
+      return true;
     }
 
     auto columns = (*tablePtr)->release();
@@ -204,7 +197,18 @@ bool CudfVector::rebindStream(rmm::cuda_stream_view stream) {
     stream_ = stream;
     return true;
   }
-#endif
+
+  if (auto* packedPtr =
+          std::get_if<std::unique_ptr<cudf::packed_table>>(&tableStorage_)) {
+    if (!*packedPtr) {
+      return false;
+    }
+
+    (*packedPtr)->data.gpu_data->set_stream(stream);
+    stream_ = stream;
+    return true;
+  }
+
   return false;
 }
 
