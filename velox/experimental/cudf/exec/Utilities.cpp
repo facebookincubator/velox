@@ -24,9 +24,42 @@
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
+#include <cuda_runtime_api.h>
+
 #include <limits>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+int getNumCudaDevices() {
+  int numDevices{};
+  CUDF_CUDA_TRY(cudaGetDeviceCount(&numDevices));
+  return numDevices;
+}
+
+int getCurrentCudaDevice() {
+  int device{};
+  CUDF_CUDA_TRY(cudaGetDevice(&device));
+  return device;
+}
+
+CudaEvent& eventForThread() {
+  // Intentionally leak per-thread, per-device events to avoid CUDA calls from
+  // thread-local destructors after CUDA context teardown.
+  thread_local static std::vector<CudaEvent*> events(getNumCudaDevices());
+  auto const device = getCurrentCudaDevice();
+  VELOX_CHECK_GE(device, 0);
+  auto const deviceIndex = static_cast<size_t>(device);
+  VELOX_CHECK_LT(deviceIndex, events.size());
+
+  if (events[deviceIndex] == nullptr) {
+    events[deviceIndex] = new CudaEvent(cudaEventDisableTiming);
+  }
+  return *events[deviceIndex];
+}
+
+} // namespace
 
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
@@ -218,8 +251,7 @@ void orderCudfVectorDeallocationsAfterStream(
   }
 
   if (!allRebound) {
-    CudaEvent event(cudaEventDisableTiming);
-    streamsWaitForStream(event, inputStreams, stream);
+    streamsWaitForStream(eventForThread(), inputStreams, stream);
   }
 }
 
