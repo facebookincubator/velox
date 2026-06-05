@@ -25,20 +25,22 @@ namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
 // Verifies the dispatch table in createWriterOptionsAdapter():
-// PARQUET, DWRF, NIMBLE return non-null adapters; everything else returns
-// null. This is the single source of truth for which file formats the
-// Iceberg DataSink supports on the write path.
+// PARQUET, ORC, DWRF, NIMBLE return non-null adapters; everything else
+// returns null. This is the single source of truth for which file formats
+// the Iceberg DataSink supports on the write path. ORC routes through the
+// same DwrfWriterOptionsAdapter because Meta's DWRF is an ORC
+// implementation.
 TEST(WriterOptionsAdapterTest, createWriterOptionsAdapterDispatch) {
   EXPECT_NE(
       createWriterOptionsAdapter(dwio::common::FileFormat::PARQUET), nullptr);
+  EXPECT_NE(createWriterOptionsAdapter(dwio::common::FileFormat::ORC), nullptr);
   EXPECT_NE(
       createWriterOptionsAdapter(dwio::common::FileFormat::DWRF), nullptr);
   EXPECT_NE(
       createWriterOptionsAdapter(dwio::common::FileFormat::NIMBLE), nullptr);
 
-  // ORC, TEXT, JSON, ALPHA, etc. are intentionally unsupported on the
+  // TEXT, JSON, ALPHA, etc. are intentionally unsupported on the
   // write path until each gets its own end-to-end coverage.
-  EXPECT_EQ(createWriterOptionsAdapter(dwio::common::FileFormat::ORC), nullptr);
   EXPECT_EQ(
       createWriterOptionsAdapter(dwio::common::FileFormat::TEXT), nullptr);
   EXPECT_EQ(
@@ -48,10 +50,10 @@ TEST(WriterOptionsAdapterTest, createWriterOptionsAdapterDispatch) {
 // Verifies isSupportedFileFormat() agrees with createWriterOptionsAdapter().
 TEST(WriterOptionsAdapterTest, isSupportedFileFormatMatchesDispatch) {
   EXPECT_TRUE(isSupportedFileFormat(dwio::common::FileFormat::PARQUET));
+  EXPECT_TRUE(isSupportedFileFormat(dwio::common::FileFormat::ORC));
   EXPECT_TRUE(isSupportedFileFormat(dwio::common::FileFormat::DWRF));
   EXPECT_TRUE(isSupportedFileFormat(dwio::common::FileFormat::NIMBLE));
 
-  EXPECT_FALSE(isSupportedFileFormat(dwio::common::FileFormat::ORC));
   EXPECT_FALSE(isSupportedFileFormat(dwio::common::FileFormat::TEXT));
   EXPECT_FALSE(isSupportedFileFormat(dwio::common::FileFormat::JSON));
 }
@@ -67,6 +69,7 @@ TEST(WriterOptionsAdapterTest, isSupportedFileFormatMatchesDispatch) {
 TEST(WriterOptionsAdapterTest, toManifestFormatString) {
   EXPECT_EQ(
       toManifestFormatString(dwio::common::FileFormat::PARQUET), "PARQUET");
+  EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::ORC), "ORC");
   EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::DWRF), "ORC");
   EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::NIMBLE), "ORC");
 }
@@ -111,14 +114,34 @@ TEST(WriterOptionsAdapterTest, dwrfPostConfigsOverridesTimestampFields) {
   EXPECT_EQ(options.sessionTimezone, nullptr);
 }
 
+// Verifies ORC routes through the same DwrfWriterOptionsAdapter as DWRF:
+// the post-config hook overrides the same dwrf::WriterOptions timestamp
+// fields. This proves that the ORC dispatch is wired to the DWRF adapter
+// (the cross-engine convention — Meta's DWRF is an ORC implementation).
+TEST(WriterOptionsAdapterTest, orcRoutesToDwrfAdapter) {
+  auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::ORC);
+  ASSERT_NE(adapter, nullptr);
+
+  EXPECT_EQ(adapter->manifestFormatString(), "ORC");
+
+  dwrf::WriterOptions options;
+  options.adjustTimestampToTimezone = true;
+  options.sessionTimezone = tz::locateZone("America/Los_Angeles");
+
+  adapter->applyPostConfigs(options);
+
+  EXPECT_FALSE(options.adjustTimestampToTimezone);
+  EXPECT_EQ(options.sessionTimezone, nullptr);
+}
+
 // Verifies toManifestFormatString() throws for unsupported formats rather
 // than silently returning an incorrect string.
 TEST(WriterOptionsAdapterTest, toManifestFormatStringThrowsForUnsupported) {
   VELOX_ASSERT_THROW(
-      toManifestFormatString(dwio::common::FileFormat::ORC),
+      toManifestFormatString(dwio::common::FileFormat::TEXT),
       "Unsupported file format for Iceberg manifest");
   VELOX_ASSERT_THROW(
-      toManifestFormatString(dwio::common::FileFormat::TEXT),
+      toManifestFormatString(dwio::common::FileFormat::JSON),
       "Unsupported file format for Iceberg manifest");
 }
 
