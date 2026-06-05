@@ -931,8 +931,13 @@ Each query can override the config by setting corresponding query session proper
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
 <p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
-<p>Configuration property names use kebab-case (e.g., <code class="docutils literal notranslate"><span class="pre">max-bucket-count</span></code>).
-Session property names use snake_case (e.g., <code class="docutils literal notranslate"><span class="pre">max_bucket_count</span></code>).
+<p>Configuration property names use kebab-case (e.g., <code class="docutils literal notranslate"><span class="pre">max-bucket-count</span></code>)
+and session property names use snake_case (e.g., <code class="docutils literal notranslate"><span class="pre">max_bucket_count</span></code>).
+Format-specific Hive connector configuration properties use prefixes such as
+<code class="docutils literal notranslate"><span class="pre">hive.parquet.</span></code>, <code class="docutils literal notranslate"><span class="pre">hive.orc.</span></code>, and <code class="docutils literal notranslate"><span class="pre">hive.nimble.</span></code>. Format-specific session
+properties do not include a connector prefix because they are scoped by catalog
+or connector ID by the engine.
+Configuration keys use dashes and session keys use underscores.
 Properties without a session property name in the table below are fixed for the lifetime of the process
 and cannot be modified per query.</p>
 <p>Properties of type <code class="docutils literal notranslate"><span class="pre">capacity</span></code> accept human-readable size strings such as <code class="docutils literal notranslate"><span class="pre">512kB</span></code>, <code class="docutils literal notranslate"><span class="pre">128MB</span></code>, <code class="docutils literal notranslate"><span class="pre">1GB</span></code>, etc.
@@ -989,6 +994,18 @@ support appending to existing partitions.</p></td>
 <td><p>false</p></td>
 <td><p>True if reading the source file column names as lower case, and planner should guarantee
 the input column name and filter is also lower case to achive case-insensitive read.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.parquet.use-column-names</p></td>
+<td><p>parquet_use_column_names</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Map Parquet table field names to file field names using names, not indices.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.parquet.allow-int32-narrowing</p></td>
+<td><p>parquet_allow_int32_narrowing</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Allow reading INT32 Parquet columns as a narrower integer type.</p></td>
 </tr>
 <tr class="row-odd"><td><p>partition_path_as_lower_case</p></td>
 <td></td>
@@ -1055,11 +1072,11 @@ disabled if files are not immutable, i.e. file content may change while file pat
 <td><p>10MB</p></td>
 <td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-target-file-size</p></td>
-<td><p>max_target_file_size</p></td>
+<tr class="row-odd"><td><p>hive.parquet.writer.max-target-file-size</p></td>
+<td><p>parquet_writer_max_target_file_size</p></td>
 <td><p>capacity</p></td>
 <td><p>0B</p></td>
-<td><p>Maximum target file size for writers. When a file exceeds this size during writing, the writer
+<td><p>Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
 closes the current file and starts writing to a new file. Accepts human-readable values like
 “1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
 sorted writes.</p></td>
@@ -1159,7 +1176,7 @@ Useful for performance analysis and identifying slow columns.</p></td>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
-<tr class="row-even"><td><p>parquet.footer-speculative-io-size</p></td>
+<tr class="row-even"><td><p>hive.parquet.footer-speculative-io-size</p></td>
 <td><p>parquet_footer_speculative_io_size</p></td>
 <td><p>integer</p></td>
 <td><p>256KB</p></td>
@@ -1167,7 +1184,7 @@ Set to 0 for adaptive mode.</p></td>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
-<tr class="row-odd"><td><p>parquet-footer-memory-tracking-threshold</p></td>
+<tr class="row-odd"><td><p>hive.parquet.footer-memory-tracking-threshold</p></td>
 <td><p>parquet_footer_memory_tracking_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>disabled (max uint64)</p></td>
@@ -1255,6 +1272,24 @@ Set to 0 for adaptive mode.</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enables historical based stripe size estimation after compression.</p></td>
+</tr>
+<tr class="row-odd"><td><p>hive.orc.writer.max-target-file-size</p></td>
+<td><p>orc_writer_max_target_file_size</p></td>
+<td><p>capacity</p></td>
+<td><p>0B</p></td>
+<td><p>Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
+closes the current file and starts writing to a new file. Accepts human-readable values like
+“1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
+sorted writes.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.nimble.writer.max-target-file-size</p></td>
+<td><p>nimble_writer_max_target_file_size</p></td>
+<td><p>capacity</p></td>
+<td><p>0B</p></td>
+<td><p>Maximum target file size for Nimble writers. When a file exceeds this size during writing, the writer
+closes the current file and starts writing to a new file. Accepts human-readable values like
+“1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
+sorted writes.</p></td>
 </tr>
 <tr class="row-odd"><td><p>hive.orc.writer.min-compression-size</p></td>
 <td><p>orc_writer_min_compression_size</p></td>
