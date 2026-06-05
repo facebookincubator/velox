@@ -718,7 +718,19 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
         }
         childSpec->setConstantValue(nullptr);
         auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
-        columnTypes[*fileTypeIdx] = outputType;
+        auto& columnType = columnTypes[*fileTypeIdx];
+        if (childSpec->isFlatMapAsStruct()) {
+          VELOX_CHECK(
+              outputType->isRow(),
+              "Unexpected output type for flat-map-as-struct column: {}.",
+              outputType->toString());
+          VELOX_CHECK(
+              columnType->isMap(),
+              "Unexpected column type for flat-map-as-struct column: {}.",
+              columnType->toString());
+        } else {
+          columnType = outputType;
+        }
       } else if (!fileTypeIdx.has_value()) {
         // Handle columns missing from the data file in several scenarios:
         // 1. Partition columns from a Hive-migrated table where partition
