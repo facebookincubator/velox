@@ -30,16 +30,6 @@ class MakeTimestampTest : public SparkFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
-
-  void setAnsiEnabled(bool enabled) {
-    // testingOverrideConfigUnsafe replaces the entire config, so merge with
-    // existing values to avoid wiping out the session timezone or other
-    // settings established by setQueryTimeZone.
-    auto config = queryCtx_->queryConfig().rawConfigsCopy();
-    config[SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled)] =
-        enabled ? "true" : "false";
-    queryCtx_->testingOverrideConfigUnsafe(std::move(config));
-  }
 };
 
 TEST_F(MakeTimestampTest, basic) {
@@ -159,9 +149,7 @@ TEST_F(MakeTimestampTest, errors) {
       "make_timestamp requires session time zone to be set.");
 
   setQueryTimeZone("Asia/Shanghai");
-  // ANSI off: invalid input returns NULL instead of throwing.
-  setAnsiEnabled(false);
-  // Invalid input returns null.
+  // Invalid input returns null (ANSI is off by default).
   const auto year = makeFlatVector<int32_t>(
       {facebook::velox::util::kMinYear - 1,
        facebook::velox::util::kMaxYear + 1,
@@ -204,8 +192,11 @@ TEST_F(MakeTimestampTest, ansiErrors) {
   // Under ANSI mode each invalid argument throws with a field-specific
   // message rather than returning NULL.
   const auto microsType = DECIMAL(16, 6);
-  setQueryTimeZone("Asia/Shanghai");
-  setAnsiEnabled(true);
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "Asia/Shanghai"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
 
   const auto eval = [&](int32_t year,
                         int32_t month,
