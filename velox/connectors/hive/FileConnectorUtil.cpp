@@ -168,6 +168,8 @@ void configureRowReaderOptions(
         fileConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setLazyColumnIo(
+        fileConfig->lazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }
