@@ -151,41 +151,41 @@ std::vector<int32_t> DirectBufferedInput::groupRequests(
   std::vector<int32_t> ends;
   ends.reserve(requests.size());
   std::vector<char> ranges;
-  const auto stats =
-      coalesceIo<LoadRequest*, char, /*coalesceDuplicateRanges=*/true>(
-          requests,
-          maxDistance,
-          // Break batches up. Better load more short ones i parallel.
-          std::numeric_limits<int32_t>::max(), // limit coalesce by size, not
-                                               // count.
-          [&](int32_t index) { return requests[index]->region.offset; },
-          [&](int32_t index) -> int32_t {
-            auto size = requests[index]->region.length;
-            if (size > loadQuantum) {
-              coalescedBytes += loadQuantum;
-              return loadQuantum;
-            }
-            coalescedBytes += size;
-            return size;
-          },
-          [&](int32_t index) {
-            if (coalescedBytes > maxCoalesceBytes) {
-              coalescedBytes = 0;
-              return kNoCoalesce;
-            }
-            return 1;
-          },
-          [&](LoadRequest* /*request*/, std::vector<char>& ranges) {
-            // ranges.size() is used in coalesceIo so we cannot leave it empty.
-            ranges.push_back(0);
-          },
-          [&](int32_t /*gap*/, std::vector<char> /*ranges*/) { /*no op*/ },
-          [&](const std::vector<LoadRequest*>& /*requests*/,
-              int32_t /*begin*/,
-              int32_t end,
-              uint64_t /*offset*/,
-              const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  const auto stats = coalesceIo<LoadRequest*, char>(
+      requests,
+      maxDistance,
+      // Break batches up. Better load more short ones i parallel.
+      std::numeric_limits<int32_t>::max(), // limit coalesce by size, not
+                                           // count.
+      [&](int32_t index) { return requests[index]->region.offset; },
+      [&](int32_t index) -> int32_t {
+        auto size = requests[index]->region.length;
+        if (size > loadQuantum) {
+          coalescedBytes += loadQuantum;
+          return loadQuantum;
+        }
+        coalescedBytes += size;
+        return size;
+      },
+      [&](int32_t index) {
+        if (coalescedBytes > maxCoalesceBytes) {
+          coalescedBytes = 0;
+          return kNoCoalesce;
+        }
+        return 1;
+      },
+      [&](LoadRequest* /*request*/, std::vector<char>& ranges) {
+        // ranges.size() is used in coalesceIo so we cannot leave it empty.
+        ranges.push_back(0);
+      },
+      [&](int32_t /*gap*/, std::vector<char> /*ranges*/) { /*no op*/ },
+      [&](const std::vector<LoadRequest*>& /*requests*/,
+          int32_t /*begin*/,
+          int32_t end,
+          uint64_t /*offset*/,
+          const std::vector<char>& /*ranges*/) { ends.push_back(end); });
   ioStatistics_->readGap().merge(stats.gaps);
+  ioStatistics_->incDuplicateRead(stats.duplicateRegions, stats.duplicateBytes);
   return ends;
 }
 
