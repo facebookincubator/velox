@@ -1222,6 +1222,16 @@ operators can compare it against actual pool usage.</p>
 of the file to load the footer and nearby metadata in a single IO operation.
 Set to 0 for adaptive mode.</p></td>
 </tr>
+<tr class="row-odd"><td><p>nimble.lazy-column-io</p></td>
+<td><p>nimble.lazy_column_io</p></td>
+<td><p>boolean</p></td>
+<td><p>false</p></td>
+<td><p>Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
+Lazy IO columns are loaded through a separate buffered input other than the one used by early
+materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
+not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn’t
+allow lazy IO across stripes.</p></td>
+</tr>
 </tbody>
 </table>
 <section id="orc-file-format-configuration">
