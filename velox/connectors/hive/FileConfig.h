@@ -206,6 +206,14 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
+      kLazyColumnIoSession,
+      lazyColumnIo,
+      "nimble.lazy_column_io",
+      bool,
+      false,
+      "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
+
+  VELOX_HIVE_CONFIG(
       kCacheMetadataSession,
       cacheMetadata,
       "cache_metadata",

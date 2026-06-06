@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -349,7 +351,7 @@ class RowReaderOptions {
     ioExecutor_ = ioExecutor;
   }
 
-  const size_t parallelUnitLoadCount() const {
+  size_t parallelUnitLoadCount() const {
     return parallelUnitLoadCount_;
   }
 
@@ -540,6 +542,23 @@ class RowReaderOptions {
     nimblePreserveDictionaryEncoding_ = value;
   }
 
+  bool lazyColumnIo() const {
+    return lazyColumnIo_;
+  }
+
+  void setLazyColumnIo(bool lazyColumnIo) {
+    lazyColumnIo_ = lazyColumnIo;
+  }
+
+  const folly::F14FastSet<std::string>& remainingFilterColumns() const {
+    return remainingFilterColumns_;
+  }
+
+  void setRemainingFilterColumns(
+      const folly::F14FastSet<std::string>& columns) {
+    remainingFilterColumns_ = columns;
+  }
+
   bool collectColumnCpuMetrics() const {
     return collectColumnCpuMetrics_;
   }
@@ -619,8 +638,11 @@ class RowReaderOptions {
   // using the non-legacy encoding path. Controlled via session property.
   bool stringDecoderZeroCopy_{false};
   // Controls whether dictionary-encoded Nimble string columns return
-  // DictionaryVector instead of FlatVector. Controlled via session property.
+  // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
+  // Defers I/O for projected columns without pushdown or remaining filters.
+  bool lazyColumnIo_{false};
+  folly::F14FastSet<std::string> remainingFilterColumns_;
   bool collectColumnCpuMetrics_{false};
 };
 

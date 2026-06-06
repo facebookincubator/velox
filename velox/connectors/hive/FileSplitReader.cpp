@@ -167,6 +167,11 @@ FileSplitReader::FileSplitReader(
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
 }
 
+void FileSplitReader::setRemainingFilterColumns(
+    const folly::F14FastSet<std::string>& columns) {
+  baseRowReaderOpts_.setRemainingFilterColumns(columns);
+}
+
 void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
   configureBaseReaderOptions();
