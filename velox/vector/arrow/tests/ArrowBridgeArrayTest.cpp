@@ -1580,9 +1580,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         });
   }
 
-  void testImportNullType() {
+  void testImportNullType(int64_t nullCount) {
     ArrowSchema arrowSchema = makeArrowSchema("n");
-    ArrowArray arrowArray = makeArrowArray(nullptr, 0, 4, 4);
+    ArrowArray arrowArray = makeArrowArray(nullptr, 0, 4, nullCount);
 
     auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
 
@@ -1592,6 +1592,30 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     EXPECT_EQ(4, *output->getNullCount());
     for (vector_size_t i = 0; i < output->size(); ++i) {
       EXPECT_TRUE(output->isNullAt(i));
+    }
+  }
+
+  void testImportDictionaryEncodedNullType() {
+    const int32_t indices[] = {0, 0, 0, 0};
+    const void* buffers[] = {nullptr, indices};
+
+    ArrowSchema arrowSchema = makeArrowSchema("i");
+    ArrowSchema dictionarySchema = makeArrowSchema("n");
+    arrowSchema.dictionary = &dictionarySchema;
+
+    ArrowArray arrowArray = makeArrowArray(buffers, 2, 4, 0);
+    ArrowArray dictionaryArray = makeArrowArray(nullptr, 0, 1, 1);
+    arrowArray.dictionary = &dictionaryArray;
+
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    ASSERT_EQ(*output->type(), *UNKNOWN());
+    EXPECT_EQ(output->size(), 4);
+
+    DecodedVector decoded(*output);
+    EXPECT_TRUE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < output->size(); ++i) {
+      EXPECT_TRUE(decoded.isNullAt(i));
     }
   }
 
@@ -2129,7 +2153,8 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
 }
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
-  testImportNullType();
+  testImportNullType(4);
+  testImportNullType(-1);
 }
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, row) {
@@ -2146,6 +2171,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, map) {
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
   testImportDictionary();
+}
+
+TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionaryEncodedNullType) {
+  testImportDictionaryEncodedNullType();
 }
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, ree) {
@@ -2243,7 +2272,8 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {
-  testImportNullType();
+  testImportNullType(4);
+  testImportNullType(-1);
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, row) {
@@ -2260,6 +2290,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {
   testImportDictionary();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionaryEncodedNullType) {
+  testImportDictionaryEncodedNullType();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, ree) {

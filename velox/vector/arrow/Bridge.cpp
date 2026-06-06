@@ -2310,9 +2310,9 @@ VectorPtr importFromArrowImpl(
   // First parse and generate a Velox type.
   auto type = importFromArrow(arrowSchema);
 
-  if (type->isUnknown()) {
+  if (type->isUnknown() && !arrowSchema.dictionary) {
     VELOX_USER_CHECK_EQ(
-        arrowArray.n_buffers, 0, "Null type expects zero buffers as input.");
+        arrowArray.n_buffers, 0, "NullType expects zero buffers as input.");
     return BaseVector::createNullConstant(type, arrowArray.length, pool);
   }
 
