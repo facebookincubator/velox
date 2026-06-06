@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 add_executable(velox_exec_vector_hasher_benchmark VectorHasherBenchmark.cpp)
 
 target_link_libraries(
@@ -50,6 +51,10 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+add_executable(velox_hash_rows_benchmark HashRowsBenchmark.cpp)
+
+target_link_libraries(velox_hash_rows_benchmark Folly::folly Folly::follybenchmark)
 
 add_executable(velox_hash_benchmark HashTableBenchmark.cpp)
 

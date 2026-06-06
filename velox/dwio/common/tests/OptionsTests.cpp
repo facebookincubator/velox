@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/Options.h"
 
 using namespace ::testing;
@@ -23,6 +25,11 @@ TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
   // appendRowNumberColumn flag should be false by default
   RowReaderOptions rowReaderOptions;
   ASSERT_EQ(std::nullopt, rowReaderOptions.rowNumberColumnInfo());
+}
+
+TEST(OptionsTests, fluxFileFormatRoundTrip) {
+  ASSERT_EQ(FileFormat::FLUX, toFileFormat("flux"));
+  ASSERT_EQ("flux", toString(FileFormat::FLUX));
 }
 
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
@@ -50,4 +57,18 @@ TEST(OptionsTests, testRowNumberColumnInfoInCopy) {
       rowReaderOptionsSecondCopy.rowNumberColumnInfo().value();
   ASSERT_EQ(rowNumberColumnInfo.insertPosition, rowNumberColumn.insertPosition);
   ASSERT_EQ(rowNumberColumnInfo.name, rowNumberColumn.name);
+}
+
+TEST(OptionsTests, cacheData) {
+  facebook::velox::memory::MemoryManager::testingSetInstance({});
+  auto pool =
+      facebook::velox::memory::memoryManager()->addRootPool("cacheDataTest");
+  facebook::velox::dwio::common::ReaderOptions options(pool.get());
+  EXPECT_TRUE(options.cacheData());
+
+  options.setCacheData(false);
+  EXPECT_FALSE(options.cacheData());
+
+  options.setCacheData(true);
+  EXPECT_TRUE(options.cacheData());
 }

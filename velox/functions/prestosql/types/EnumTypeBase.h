@@ -61,6 +61,22 @@ class EnumTypeBase : public TPhysical {
     return std::nullopt;
   }
 
+  /// Returns the value for a key name. If the key does not exist,
+  /// return std::nullopt.
+  std::optional<TValue> valueAt(const std::string& key) const {
+    const auto& map = forwardMap();
+    auto it = map.find(key);
+    if (it != map.end()) {
+      return it->second;
+    }
+    return std::nullopt;
+  }
+
+  /// Returns true if the enum has an entry for 'key'.
+  bool containsKey(const std::string& key) const {
+    return valueAt(key).has_value();
+  }
+
   const std::string& enumName() const {
     return name_;
   }
@@ -76,6 +92,14 @@ class EnumTypeBase : public TPhysical {
   /// parameters.
   template <typename EnumType>
   static std::shared_ptr<const EnumType> getCached(const TParameter& parameter);
+
+  const std::unordered_map<std::string, TValue>& forwardMap() const {
+    if constexpr (std::is_same_v<TParameter, LongEnumParameter>) {
+      return parameters_[0].longEnumLiteral->valuesMap;
+    } else {
+      return parameters_[0].varcharEnumLiteral->valuesMap;
+    }
+  }
 
   const std::vector<TypeParameter> parameters_;
   const std::string name_;

@@ -53,7 +53,8 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 
   void enableLegacyFormatter() {
     queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSparkLegacyDateFormatter, "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyDateFormatter),
+         "true"},
     });
   }
 
@@ -941,6 +942,24 @@ TEST_F(DateTimeFunctionsTest, hour) {
   EXPECT_EQ(14, hour("2024-01-08 01:23:00.001"));
   EXPECT_EQ(2, hour("2024-01-20 13:23:00.001"));
   EXPECT_EQ(2, hour("1969-01-01 13:23:00.001"));
+}
+
+TEST_F(DateTimeFunctionsTest, hourTimestampUtc) {
+  const auto hourUtc = [&](StringView timestampStr) {
+    auto ts = std::make_optional(parseTimestamp(timestampStr));
+    return evaluateOnce<int32_t>("hour(c0)", TIMESTAMP_UTC(), ts);
+  };
+
+  EXPECT_EQ(0, hourUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(1, hourUtc("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(13, hourUtc("2024-01-20 13:23:00.001"));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(0, hourUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(1, hourUtc("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(13, hourUtc("2024-01-20 13:23:00.001"));
 }
 
 TEST_F(DateTimeFunctionsTest, minute) {

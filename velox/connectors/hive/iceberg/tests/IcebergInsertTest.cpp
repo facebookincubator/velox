@@ -246,7 +246,8 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 }
 
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
-  setConnectorSessionProperty(HiveConfig::kMaxTargetFileSizeSession, "4KB");
+  setConnectorSessionProperty(
+      HiveConfig::kParquetMaxTargetFileSizeSession, "4KB");
 
   const auto outputPath = TempDirectoryPath::create()->getPath();
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});

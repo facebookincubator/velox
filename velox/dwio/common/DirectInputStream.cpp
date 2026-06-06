@@ -16,7 +16,6 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/DirectInputStream.h"
@@ -143,8 +142,6 @@ void DirectInputStream::loadSync() {
     }
   }
 
-  process::TraceContext trace("DirectInputStream::loadSync");
-
   ioStats_->incRawBytesRead(loadedRegion_.length);
   auto ranges = makeRanges(loadedRegion_.length, data_, tinyData_);
   uint64_t usecs = 0;
@@ -155,7 +152,7 @@ void DirectInputStream::loadSync() {
   ioStats_->read().increment(loadedRegion_.length);
   ioStats_->queryThreadIoLatencyUs().increment(usecs);
   ioStats_->storageReadLatencyUs().increment(usecs);
-  ioStats_->incTotalScanTime(usecs * 1'000);
+  ioStats_->incTotalScanTimeNs(usecs * 1'000);
 }
 
 void DirectInputStream::loadPosition() {

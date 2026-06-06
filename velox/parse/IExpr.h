@@ -22,7 +22,7 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 

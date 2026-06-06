@@ -158,7 +158,7 @@ class TestColumnReader : public SelectiveColumnReader {
     const auto n = static_cast<vector_size_t>(data.size());
     anyNulls_ = true;
     resultNulls_ = AlignedBuffer::allocate<bool>(
-        n + simd::kPadding * 8, memoryPool_, bits::kNotNull);
+        n + simd::kPadding * 8, pool_, bits::kNotNull);
     rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
     for (int32_t i = 0; i < n; ++i) {
       bits::setBit(rawResultNulls_, i, !nulls[i]);

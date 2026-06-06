@@ -58,6 +58,11 @@ if(VELOX_ENABLE_ARROW)
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     # Remove with Arrow upgrade to Arrow 20.
     -DARROW_CXXFLAGS=-Wno-documentation
+    # Arrow inherits the CMake build type from Velox. So a Debug build turns
+    # on additional warnings that can cause the build to fail
+    # (e.g. deprecated-literal-operator in Apple Clang 21).
+    # The SYSTEM version of Arrow is always a Release build.
+    -DBUILD_WARNING_LEVEL=PRODUCTION
   )
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/lib)
 
@@ -110,8 +115,14 @@ if(VELOX_ENABLE_ARROW)
   )
   set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow.a)
   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
+  # Mirror the path-based interface dep from CMake/FindArrow.cmake — see
+  # the SYSTEM-arrow comment there for the ODR-violation rationale that
+  # forces us to use ${ARROW_LIBDIR}/libarrow.a (path) instead of the
+  # `arrow` target name.
   set_target_properties(
     arrow_testing
-    PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow_testing.a
+    PROPERTIES
+      IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow_testing.a
+      INTERFACE_LINK_LIBRARIES ${ARROW_LIBDIR}/libarrow.a
   )
 endif()

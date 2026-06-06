@@ -62,7 +62,10 @@ class ToCudfSelectionTest : public OperatorTestBase {
     auto stats = task->taskStats();
     for (const auto& pipelineStats : stats.pipelineStats) {
       for (const auto& operatorStats : pipelineStats.operatorStats) {
-        if (operatorStats.operatorType.starts_with("CudfAggregation")) {
+        if (operatorStats.operatorType.starts_with("CudfAggregation") ||
+            operatorStats.operatorType.starts_with("CudfGroupby") ||
+            operatorStats.operatorType.starts_with("CudfReduce") ||
+            operatorStats.operatorType.starts_with("CudfDistinct")) {
           return true;
         }
       }
@@ -154,17 +157,17 @@ TEST_F(ToCudfSelectionTest, mixedSupportFallsBack) {
                   .values(vectors)
                   .aggregation(
                       {"c0"},
-                      {"sum(c1)", "stddev(c2)"},
+                      {"sum(c1)", "variance(c2)"},
                       {},
                       core::AggregationNode::Step::kSingle,
                       false)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .config("cudf.enabled", true)
-          .plan(plan)
-          .assertResults("SELECT c0, sum(c1), stddev(c2) FROM tmp GROUP BY c0");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults(
+                      "SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
@@ -263,17 +266,17 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFunctionsFallsBack) {
                   .values(vectors)
                   .aggregation(
                       {"c0"},
-                      {"sum(c1)", "stddev(c2)"},
+                      {"sum(c1)", "variance(c2)"},
                       {},
                       core::AggregationNode::Step::kSingle,
                       false)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(duckDbQueryRunner_)
-          .config("cudf.enabled", true)
-          .plan(plan)
-          .assertResults("SELECT c0, sum(c1), stddev(c2) FROM tmp GROUP BY c0");
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults(
+                      "SELECT c0, sum(c1), variance(c2) FROM tmp GROUP BY c0");
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));

@@ -17,12 +17,26 @@
 #   - centos9: Our base CI build
 #   - adapters: Based on centos9 with all optional dependencies installed
 #   - pyvelox: Image used by cibuildwheel to build pyvelox
+#
+# tzdata is pinned to a known-good version across every stage. Without
+# the pin, each docker rebuild silently picks up the latest tzdata from
+# the CentOS repos — tzdata 2026b's encoding of British Columbia's
+# permanent-PDT change broke Velox's bundled libc++ chrono::tzdb parser
+# (issue #17522). To bump intentionally: change the default below and
+# re-run the Presto-SOT fuzzers locally to confirm before merging.
+ARG CENTOS_TZDATA_VERSION=2026a-1.el9
 
 ########################
 # Stage 1: Base Build  #
 ########################
 ARG image=quay.io/centos/centos:stream9
 FROM $image AS base-build
+
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata. `dnf install` is a no-op if already at the pinned version,
+# and falls through to `downgrade` when the base image ships a newer one.
+RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch"
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
@@ -64,6 +78,12 @@ RUN bash /setup-centos9.sh && \
 # Stage 2: Base Image  #
 ########################
 FROM $image AS base-image
+
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata — see top of file for rationale. Inherited by centos9,
+# pyvelox, and (transitively, via the centos9 tag) the java images.
+RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch"
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
@@ -115,6 +135,11 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/velox_deps.conf \
 ########################
 FROM $image AS adapters-build
 
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata — see top of file for rationale.
+RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch"
+
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
@@ -151,6 +176,13 @@ RUN bash /setup-centos-adapters.sh install_cuda && \
 
 RUN bash /setup-centos-adapters.sh install_adapters_deps_from_dnf && \
       dnf clean all
+
+ARG CENTOS_TZDATA_VERSION
+# tzdata-java is pulled in by the Java install above. Pin it to match
+# the OS tzdata pinned in centos9 so the JDK and Velox C++ see the
+# same timezone rules — issue #17522 was caused by this drift.
+RUN dnf -y install "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch" || \
+      dnf -y downgrade "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch"
 
 # put CUDA binaries on the PATH
 ENV PATH=/usr/local/cuda/bin:${PATH}

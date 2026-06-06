@@ -16,8 +16,6 @@
 
 #include "velox/dwio/common/ColumnLoader.h"
 
-#include "velox/common/process/TraceContext.h"
-
 namespace facebook::velox::dwio::common {
 
 namespace {
@@ -94,7 +92,6 @@ void ColumnLoader::loadInternal(
     ValueHook* hook,
     vector_size_t resultSize,
     VectorPtr* result) {
-  process::TraceContext trace("ColumnLoader::loadInternal");
   ExceptionContextSetter exceptionContext(
       {[](VeloxException::Type /*exceptionType*/, auto* reader) {
          return static_cast<SelectiveStructColumnReaderBase*>(reader)
@@ -116,12 +113,23 @@ void ColumnLoader::loadInternal(
   }
 }
 
+void TransformColumnLoader::loadInternal(
+    RowSet rows,
+    ValueHook* hook,
+    vector_size_t resultSize,
+    VectorPtr* result) {
+  VectorPtr fileResult;
+  ColumnLoader::loadInternal(rows, hook, resultSize, &fileResult);
+  if (fileResult) {
+    *result = transform_(fileResult, fieldReader_->memoryPool());
+  }
+}
+
 void DeltaUpdateColumnLoader::loadInternal(
     RowSet rows,
     ValueHook* hook,
     vector_size_t resultSize,
     VectorPtr* result) {
-  process::TraceContext trace("DeltaUpdateColumnLoader::loadInternal");
   ExceptionContextSetter exceptionContext(
       {[](VeloxException::Type /*exceptionType*/, auto* reader) {
          return static_cast<SelectiveStructColumnReaderBase*>(reader)

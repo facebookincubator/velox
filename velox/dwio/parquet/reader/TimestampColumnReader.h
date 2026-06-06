@@ -189,7 +189,7 @@ class TimestampColumnReader : public IntegerColumnReader {
                   range->nullAllowed(),
                   filePrecision_));
         } else {
-          filters.emplace_back(filter->clone(range->nullAllowed()));
+          filters.emplace_back(filter->clone(filter->nullAllowed()));
         }
       }
       auto newMultiRange =

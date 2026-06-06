@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox {
@@ -57,6 +58,8 @@ enum class Table : uint8_t {
   TBL_WEB_SALES,
   TBL_WEB_SITE
 };
+
+VELOX_DECLARE_ENUM_NAME(Table);
 
 static const auto tables = {
     tpcds::Table::TBL_CALL_CENTER,

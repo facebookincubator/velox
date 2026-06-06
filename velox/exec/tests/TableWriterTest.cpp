@@ -2752,9 +2752,9 @@ DEBUG_ONLY_TEST_P(UnpartitionedTableWriterTest, dataSinkAbortError) {
 
   std::atomic<bool> triggerAbortErrorOnce{true};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::connector::hive::HiveDataSink::closeInternal",
-      std::function<void(const HiveDataSink*)>(
-          [&](const HiveDataSink* /*unused*/) {
+      "facebook::velox::connector::hive::FileDataSink::closeInternal",
+      std::function<void(const FileDataSink*)>(
+          [&](const FileDataSink* /*unused*/) {
             if (!triggerAbortErrorOnce.exchange(false)) {
               return;
             }

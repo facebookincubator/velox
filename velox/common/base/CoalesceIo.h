@@ -17,7 +17,11 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <vector>
+
+#include "velox/common/base/IoCounter.h"
+
 namespace facebook::velox {
 /// Utility for combining IOs to nearby location into fewer coalesced IOs. This
 /// may increase data transfer but generally reduces latency and may reduce
@@ -32,6 +36,11 @@ struct CoalesceIoStats {
   int64_t payloadBytes{0};
   /// Number of bytes read and discarded due to coalescing.
   int64_t extraBytes{0};
+
+  /// Distribution of gaps (in bytes) between consecutive items before
+  /// coalescing. Measures how spread out the read regions are on disk:
+  /// smaller gaps indicate better data locality for the access pattern.
+  io::IoCounter gaps;
 };
 
 static constexpr int32_t kNoCoalesce = -1;
@@ -49,6 +58,7 @@ static constexpr int32_t kNoCoalesce = -1;
 template <
     typename Item,
     typename Range,
+    bool coalesceDuplicateRanges,
     typename ItemOffset,
     typename ItemSize,
     typename ItemNumRanges,
@@ -68,6 +78,8 @@ CoalesceIoStats coalesceIo(
   int32_t startItem = 0;
   auto startOffset = offsetFunc(startItem);
   auto lastEndOffset = startOffset;
+  auto prevItemOffset = startOffset;
+  std::decay_t<decltype(sizeFunc(startItem))> prevItemSize{};
   std::vector<Range> ranges;
   CoalesceIoStats result;
   for (int32_t i = 0; i < items.size(); ++i) {
@@ -80,8 +92,16 @@ CoalesceIoStats coalesceIo(
         (numRangesForItem == kNoCoalesce ||
          ranges.size() + numRangesForItem >= rangesPerIo) &&
         !ranges.empty();
-    if ((lastEndOffset != itemOffset) || enoughRanges) {
+    // Some callers, e.g. Nimble Velox writer stream deduplication, can produce
+    // adjacent logical reads for the same physical range. Keep exact duplicates
+    // in the same IO only when the caller can map them to the same bytes.
+    const bool duplicateRange = coalesceDuplicateRanges && i > 0 &&
+        itemOffset == prevItemOffset && itemSize == prevItemSize;
+    if (!duplicateRange && (lastEndOffset != itemOffset || enoughRanges)) {
       const int64_t gap = itemOffset - lastEndOffset;
+      if (gap > 0) {
+        result.gaps.increment(gap);
+      }
       if (gap > 0 && gap < maxGap && !enoughRanges) {
         // The next one is after the previous and no farther than maxGap bytes,
         // we read the gap but drop the bytes.
@@ -97,6 +117,8 @@ CoalesceIoStats coalesceIo(
     }
     addRanges(item, ranges);
     lastEndOffset = itemOffset + itemSize;
+    prevItemOffset = itemOffset;
+    prevItemSize = itemSize;
   }
   ioFunc(items, startItem, items.size(), startOffset, ranges);
   ++result.numIos;

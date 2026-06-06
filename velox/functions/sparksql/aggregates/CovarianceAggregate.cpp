@@ -18,8 +18,11 @@
 
 #include <limits>
 #include "velox/functions/lib/aggregates/CovarianceAggregatesBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+using functions::sparksql::SparkQueryConfig;
 
 namespace {
 
@@ -121,7 +124,7 @@ exec::AggregateRegistrationResult registerCovariance(
             "Expected DOUBLE.",
             inputType->toString());
 
-        if (config.sparkLegacyStatisticalAggregate()) {
+        if (SparkQueryConfig{config}.legacyStatisticalAggregate()) {
           return std::make_unique<CovarianceAggregate<
               double,
               TAccumulator,

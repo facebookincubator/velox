@@ -110,6 +110,11 @@ TEST_F(TypeParserTest, varbinary) {
   ASSERT_EQ(*parseType("varbinary"), *VARBINARY());
 }
 
+TEST_F(TypeParserTest, timestamp) {
+  ASSERT_EQ(*parseType("timestamp"), *TIMESTAMP());
+  ASSERT_EQ(*parseType("timestamp utc"), *TIMESTAMP_UTC());
+}
+
 TEST_F(TypeParserTest, time) {
   ASSERT_EQ(*parseType("time"), *TIME());
   ASSERT_EQ(*parseType("time micro utc"), *TIME_MICRO_UTC());

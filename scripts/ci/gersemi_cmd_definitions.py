@@ -64,4 +64,8 @@ command_definitions = {
         "front_positional_arguments": ["var_name", "envvar_name", "default"]
     },
     "velox_sources": builtin_commands["target_sources"],
+    "velox_add_cudf_test": {
+        "one_value_keywords": ["NAME", "TIMEOUT"],
+        "multi_value_keywords": ["SOURCES", "LIBS"],
+    },
 }

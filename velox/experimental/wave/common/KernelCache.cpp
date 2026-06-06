@@ -16,6 +16,7 @@
 
 #include "velox/common/caching/CachedFactory.h"
 #include "velox/experimental/wave/common/Cuda.h"
+#include "velox/experimental/wave/common/Exception.h"
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
@@ -45,6 +46,18 @@ class FutureCompiledModule : public CompiledModule {
       void** args) override {
     ensureReady();
     module_->launch(kernelIdx, numBlocks, numThreads, shared, stream, args);
+  }
+
+  void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) override {
+    ensureReady();
+    module_->launchCooperative(
+        kernelIdx, numBlocks, numThreads, shared, stream, args);
   }
 
   KernelInfo info(int32_t kernelIdx) override {
@@ -84,6 +97,17 @@ class AsyncCompiledKernel : public CompiledKernel {
     (*ptr_)->launch(kernelIdx, numBlocks, numThreads, shared, stream, args);
   }
 
+  void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) override {
+    (*ptr_)->launchCooperative(
+        kernelIdx, numBlocks, numThreads, shared, stream, args);
+  }
+
   KernelInfo info(int32_t kernelIdx) override {
     return (*ptr_)->info(kernelIdx);
   }
@@ -107,7 +131,25 @@ class KernelGenerator {
     compilerExecutor()->add([genCopy = *gen, holder, device]() {
       setDevice(device);
       auto spec = genCopy();
-      auto module = CompiledModule::create(spec);
+      ModulePtr module;
+      try {
+        if (!spec.fromCubinPath.empty()) {
+          if (spec.loweredNames.empty()) {
+            waveError("loweredNames must be set when using fromCubinPath");
+          }
+          module = CompiledModule::fromCubin(spec.fromCubinPath, spec);
+        } else {
+          module = CompiledModule::create(spec);
+        }
+        if (spec.postCompile) {
+          spec.postCompile(spec, nullptr);
+        }
+      } catch (...) {
+        if (spec.postCompile) {
+          spec.postCompile(spec, std::current_exception());
+        }
+        throw;
+      }
       holder->promise.setValue(module);
     });
     ModulePtr result =
@@ -143,6 +185,11 @@ std::unique_ptr<CompiledKernel> CompiledKernel::getKernel(
     KernelGenFunc gen) {
   auto ptr = kernelCache().generate(key, &gen);
   return std::make_unique<AsyncCompiledKernel>(std::move(ptr));
+}
+
+// static
+void CompiledKernel::clearCache() {
+  kernelCache().clearCache();
 }
 
 } // namespace facebook::velox::wave

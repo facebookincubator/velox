@@ -91,7 +91,7 @@ class ExpressionFuzzer {
 
     // Comma-separated list of special forms to use in generated expression.
     // Supported special forms: and, or, coalesce, if, switch, cast.")
-    std::string specialForms = "and,or,cast,coalesce,if,switch";
+    std::string specialForms = "and,or,cast,coalesce,if,switch,case";
 
     // This list can include a mix of function names and function signatures.
     // Use function name to exclude all signatures of a given function from
@@ -220,6 +220,13 @@ class ExpressionFuzzer {
   /// else clause. Finally, uses the type specified in the signature to
   /// generate inputs with that return type.
   std::vector<core::TypedExprPtr> generateSwitchArgs(
+      const CallableSignature& input);
+
+  /// Generates arguments for the 'case' special form. The signature's type
+  /// variable is bounded to randomly selected types for the subject/WHEN
+  /// values and THEN/ELSE results. It randomly decides the number of cases
+  /// (up to a max of 5) and whether to include the else clause.
+  std::vector<core::TypedExprPtr> generateCaseArgs(
       const CallableSignature& input);
 
   core::TypedExprPtr getCallExprFromCallable(

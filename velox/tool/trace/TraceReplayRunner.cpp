@@ -344,6 +344,17 @@ TraceReplayRunner::createReplayer() const {
     VELOX_USER_CHECK(
         !FLAGS_table_writer_output_dir.empty(),
         "--table_writer_output_dir is required");
+    const std::string writerConnectorId = "test-hive";
+    if (!connector::ConnectorRegistry::tryGet(writerConnectorId)) {
+      connector::hive::HiveConnectorFactory factory;
+      const auto hiveConnector = factory.newConnector(
+          writerConnectorId,
+          std::make_shared<config::ConfigBase>(
+              std::unordered_map<std::string, std::string>()),
+          ioExecutor_.get());
+      connector::ConnectorRegistry::global().insert(
+          hiveConnector->connectorId(), hiveConnector);
+    }
     replayer = std::make_unique<tool::trace::TableWriterReplayer>(
         FLAGS_root_dir,
         FLAGS_query_id,

@@ -15,7 +15,9 @@
  */
 
 #include <gtest/gtest.h>
+#include <iomanip>
 #include <random>
+#include <sstream>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/RandomSeed.h"

@@ -23,6 +23,7 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using facebook::velox::exec::test::PlanBuilder;
@@ -1000,15 +1001,33 @@ TEST_F(PlanNodeToStringTest, topNDenseRank) {
 }
 
 TEST_F(PlanNodeToStringTest, markDistinct) {
-  auto op =
-      PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-          .markDistinct("marker", {"a", "b"})
-          .planNode();
-  ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
-  ASSERT_EQ(
-      "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
-      op->toString(true, false));
+  {
+    SCOPED_TRACE("single-marker");
+    auto op =
+        PlanBuilder()
+            .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+            .markDistinct("marker", {"a", "b"})
+            .planNode();
+    ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+    ASSERT_EQ(
+        "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
+        op->toString(true, false));
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    auto op =
+        PlanBuilder()
+            .tableScan(
+                ROW({"a", "b", "m0", "m1"},
+                    {VARCHAR(), BIGINT(), BOOLEAN(), BOOLEAN()}))
+            .markDistinct({"nomask", "r0", "r1"}, {"a", "b"}, {"m0", "m1"})
+            .planNode();
+    ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+    ASSERT_EQ(
+        "-- MarkDistinct[1][a, b, masks: [m0, m1]] -> a:VARCHAR, b:BIGINT, "
+        "m0:BOOLEAN, m1:BOOLEAN, nomask:BOOLEAN, r0:BOOLEAN, r1:BOOLEAN\n",
+        op->toString(true, false));
+  }
 }
 
 TEST_F(PlanNodeToStringTest, tableWrite) {
