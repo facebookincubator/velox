@@ -515,6 +515,16 @@ TEST_F(CeilFloorTest, Limits) {
   EXPECT_EQ(
       std::numeric_limits<int64_t>::min(),
       floor<double>(-std::numeric_limits<double>::infinity()));
+
+  // NaN maps to 0 (matches Spark's math.ceil(NaN).toLong behavior).
+  EXPECT_EQ(0, ceil<double>(std::numeric_limits<double>::quiet_NaN()));
+  EXPECT_EQ(0, floor<double>(std::numeric_limits<double>::quiet_NaN()));
+
+  // Null propagation.
+  EXPECT_EQ(std::nullopt, ceil<double>(std::nullopt));
+  EXPECT_EQ(std::nullopt, ceil<int64_t>(std::nullopt));
+  EXPECT_EQ(std::nullopt, floor<double>(std::nullopt));
+  EXPECT_EQ(std::nullopt, floor<int64_t>(std::nullopt));
 }
 
 TEST_F(ArithmeticTest, sinh) {

@@ -19,7 +19,6 @@ velox_add_library(
   AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregateInfo.cpp
-  AggregateWindow.cpp
   AggregationMasks.cpp
   ArrowStream.cpp
   AssignUniqueId.cpp
@@ -76,19 +75,15 @@ velox_add_library(
   OutputBufferManager.cpp
   ParallelProject.cpp
   PartitionFunction.cpp
-  PartitionStreamingWindowBuild.cpp
   PartitionedOutput.cpp
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
-  SubPartitionedSortWindowBuild.cpp
   RowContainer.cpp
   RowNumber.cpp
-  RowsStreamingWindowBuild.cpp
   ScaleWriterLocalPartition.cpp
   ScaledScanController.cpp
   SortBuffer.cpp
-  SortWindowBuild.cpp
   SortedAggregations.cpp
   SpatialJoinBuild.cpp
   SpatialJoinProbe.cpp
@@ -111,7 +106,6 @@ velox_add_library(
   Values.cpp
   VectorHasher.cpp
   Window.cpp
-  WindowBuild.cpp
   WindowFunction.cpp
   WindowPartition.cpp
   HEADERS
@@ -122,7 +116,6 @@ velox_add_library(
   AggregateCompanionSignatures.h
   AggregateFunctionRegistry.h
   AggregateInfo.h
-  AggregateWindow.h
   AggregationMasks.h
   ArrowStream.h
   AssignUniqueId.h
@@ -156,7 +149,6 @@ velox_add_library(
   IndexLookupJoin.h
   IndexLookupJoinBridge.h
   JoinBridge.h
-  KRangeFrameBound.h
   Limit.h
   LocalPartition.h
   LocalPlanner.h
@@ -182,9 +174,7 @@ velox_add_library(
   OutputBuffer.h
   OutputBufferManager.h
   ParallelProject.h
-  PeerGroupComputation.h
   PartitionFunction.h
-  PartitionStreamingWindowBuild.h
   PartitionedOutput.h
   PlanNodeStats.h
   PrefixSort.h
@@ -192,14 +182,12 @@ velox_add_library(
   RoundRobinPartitionFunction.h
   RowContainer.h
   RowNumber.h
-  RowsStreamingWindowBuild.h
   ScaleWriterLocalPartition.h
   ScaledScanController.h
   SerializedPage.h
   SetAccumulator.h
   SimpleAggregateAdapter.h
   SortBuffer.h
-  SortWindowBuild.h
   SortedAggregations.h
   SpatialIndex.h
   SpatialJoinBuild.h
@@ -211,7 +199,6 @@ velox_add_library(
   StreamingAggregation.h
   StreamingEnforceDistinct.h
   Strings.h
-  SubPartitionedSortWindowBuild.h
   TableScan.h
   TableWriteMerge.h
   TableWriter.h
@@ -229,10 +216,8 @@ velox_add_library(
   VectorHasher-inl.h
   VectorHasher.h
   Window.h
-  WindowBuild.h
   WindowFunction.h
   WindowPartition.h
-  WindowPartitionAccessor.h
 )
 
 velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)
@@ -247,6 +232,7 @@ velox_link_libraries(
   velox_connector
   velox_connector_registry
   velox_exec_spill_stats
+  velox_exec_window
   velox_expression
   velox_file
   velox_presto_serializer
@@ -279,6 +265,7 @@ endif()
 add_subdirectory(prefixsort)
 add_subdirectory(rpc)
 add_subdirectory(trace)
+add_subdirectory(window)
 
 velox_add_library(velox_aggregate_util INTERFACE HEADERS AggregateUtil.h)
 

@@ -91,13 +91,17 @@ class NimbleWriterOptionsAdapter : public WriterOptionsAdapter {
 
 std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
     dwio::common::FileFormat format) {
-  // ORC is intentionally excluded until a dedicated ORC end-to-end test
-  // exists.
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (format) {
     case dwio::common::FileFormat::PARQUET:
       return std::make_unique<ParquetWriterOptionsAdapter>();
+    case dwio::common::FileFormat::ORC:
     case dwio::common::FileFormat::DWRF:
+      // ORC and DWRF share the same on-disk family — Meta's DWRF is an
+      // ORC implementation. Iceberg manifests have no DWRF enum, so both
+      // are reported as "ORC" per the cross-engine convention shared
+      // with the Java planner (see FileFormat.DWRF.toIceberg() in
+      // presto-facebook-iceberg).
       return std::make_unique<DwrfWriterOptionsAdapter>();
     case dwio::common::FileFormat::NIMBLE:
       return std::make_unique<NimbleWriterOptionsAdapter>();

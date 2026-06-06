@@ -59,6 +59,9 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
   }
+  for (auto& [tag, pool] : customPools_) {
+    queryCtx->addCustomPool(tag, std::move(pool));
+  }
   return queryCtx;
 }
 
@@ -103,6 +106,21 @@ QueryCtx::~QueryCtx() {
   // name is unique.
   static std::atomic<int64_t> seqNum{0};
   return fmt::format("query.{}.{}", queryId, seqNum++);
+}
+
+void QueryCtx::addCustomPool(
+    std::string tag,
+    std::shared_ptr<memory::MemoryPool> pool) {
+  VELOX_CHECK(!tag.empty(), "Custom pool tag is empty");
+  VELOX_CHECK_NOT_NULL(pool, "Custom pool is null for tag: {}", tag);
+  auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
+  VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
+}
+
+std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
+    const std::string& tag) const {
+  auto it = customPools_.find(tag);
+  return it == customPools_.end() ? nullptr : it->second;
 }
 
 void QueryCtx::maybeSetReclaimer() {

@@ -457,8 +457,12 @@ MemoryPoolImpl::MemoryPoolImpl(
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
-      allocator_{manager_->allocator()},
-      arbitrator_{manager_->arbitrator()},
+      allocator_{
+          options.customAllocator != nullptr ? options.customAllocator
+                                             : manager_->allocator()},
+      arbitrator_{
+          options.customArbitrator != nullptr ? options.customArbitrator
+                                              : manager_->arbitrator()},
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
@@ -903,7 +907,9 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
           .threadSafe = threadSafe,
           .coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_,
           .getPreferredSize = getPreferredSize,
-          .debugOptions = debugOptions_});
+          .debugOptions = debugOptions_,
+          .customAllocator = allocator_,
+          .customArbitrator = arbitrator_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {

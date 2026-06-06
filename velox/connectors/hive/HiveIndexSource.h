@@ -200,7 +200,8 @@ class HiveIndexSource : public IndexSource,
   void buildPartitionGroups(
       std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits);
 
-  // Groups splits by their partition column values.
+  // Groups splits by their partition column values. Splits with NULL
+  // routing partition values are skipped.
   folly::F14FastMap<
       std::string,
       std::vector<std::shared_ptr<const HiveConnectorSplit>>>
@@ -208,7 +209,9 @@ class HiveIndexSource : public IndexSource,
       std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits) const;
 
   // Encodes a split's partition values into an opaque grouping key.
-  std::string makePartitionKey(const HiveConnectorSplit& split) const;
+  // Returns nullopt if any routing partition column has a NULL value.
+  std::optional<std::string> makePartitionKey(
+      const HiveConnectorSplit& split) const;
 
   // Splits sharing the same partition values, grouped during addSplits().
   // One group per distinct set of partition column values. Each group owns
@@ -361,6 +364,10 @@ class HiveIndexSource : public IndexSource,
   // Partition groups built during addSplits() when partition index conditions
   // are present. One group per distinct set of partition column values.
   std::vector<PartitionGroup> partitionGroups_;
+
+  // Set to true after addSplits() is called. Used to distinguish "no splits
+  // added" (programming error) from "all splits filtered out" (valid case).
+  bool splitsAdded_{false};
 
   // Cached empty output vector.
   RowVectorPtr emptyOutput_;

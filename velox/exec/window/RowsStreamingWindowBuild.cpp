@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/exec/RowsStreamingWindowBuild.h"
+#include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/WindowFunction.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 namespace {
 bool hasRangeFrame(const std::shared_ptr<const core::WindowNode>& windowNode) {
@@ -41,7 +41,7 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
   initializeRowContainer(pool);
   initializeDecodedInputVectors();
   velox::common::testutil::TestValue::adjust(
-      "facebook::velox::exec::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
       this);
 }
 
@@ -139,4 +139,4 @@ bool RowsStreamingWindowBuild::hasNextPartition() {
   return false;
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

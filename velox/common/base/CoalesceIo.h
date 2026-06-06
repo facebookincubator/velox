@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 #include "velox/common/base/IoCounter.h"
@@ -57,6 +58,7 @@ static constexpr int32_t kNoCoalesce = -1;
 template <
     typename Item,
     typename Range,
+    bool coalesceDuplicateRanges,
     typename ItemOffset,
     typename ItemSize,
     typename ItemNumRanges,
@@ -76,6 +78,8 @@ CoalesceIoStats coalesceIo(
   int32_t startItem = 0;
   auto startOffset = offsetFunc(startItem);
   auto lastEndOffset = startOffset;
+  auto prevItemOffset = startOffset;
+  std::decay_t<decltype(sizeFunc(startItem))> prevItemSize{};
   std::vector<Range> ranges;
   CoalesceIoStats result;
   for (int32_t i = 0; i < items.size(); ++i) {
@@ -88,7 +92,12 @@ CoalesceIoStats coalesceIo(
         (numRangesForItem == kNoCoalesce ||
          ranges.size() + numRangesForItem >= rangesPerIo) &&
         !ranges.empty();
-    if ((lastEndOffset != itemOffset) || enoughRanges) {
+    // Some callers, e.g. Nimble Velox writer stream deduplication, can produce
+    // adjacent logical reads for the same physical range. Keep exact duplicates
+    // in the same IO only when the caller can map them to the same bytes.
+    const bool duplicateRange = coalesceDuplicateRanges && i > 0 &&
+        itemOffset == prevItemOffset && itemSize == prevItemSize;
+    if (!duplicateRange && (lastEndOffset != itemOffset || enoughRanges)) {
       const int64_t gap = itemOffset - lastEndOffset;
       if (gap > 0) {
         result.gaps.increment(gap);
@@ -108,6 +117,8 @@ CoalesceIoStats coalesceIo(
     }
     addRanges(item, ranges);
     lastEndOffset = itemOffset + itemSize;
+    prevItemOffset = itemOffset;
+    prevItemSize = itemSize;
   }
   ioFunc(items, startItem, items.size(), startOffset, ranges);
   ++result.numIos;
