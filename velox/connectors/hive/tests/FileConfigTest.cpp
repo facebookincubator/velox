@@ -165,6 +165,46 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
 }
 
+TEST(FileConfigTest, parquetCanonicalSessionKeys) {
+  FileConfig config(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+  std::unordered_map<std::string, std::string> sessionOverride = {
+      {FileConfig::kParquetUseColumnNamesSession, "true"},
+      {FileConfig::kAllowInt32NarrowingSession, "true"},
+      {FileConfig::kParquetFooterSpeculativeIoSizeSession,
+       std::to_string(512UL << 10)},
+      {FileConfig::kParquetFooterMemoryTrackingThresholdSession, "1024"},
+  };
+  const auto session =
+      std::make_unique<config::ConfigBase>(std::move(sessionOverride));
+
+  EXPECT_TRUE(config.isParquetUseColumnNames(session.get()));
+  EXPECT_TRUE(config.allowInt32Narrowing(session.get()));
+  EXPECT_EQ(config.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);
+  EXPECT_EQ(config.parquetFooterMemoryTrackingThreshold(session.get()), 1024);
+}
+
+TEST(FileConfigTest, parquetCanonicalConfigKeys) {
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {FileConfig::kParquetUseColumnNames, "true"},
+      {FileConfig::kAllowInt32Narrowing, "true"},
+      {FileConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
+      {FileConfig::kParquetFooterMemoryTrackingThreshold, "2048"},
+  };
+  FileConfig config(
+      std::make_shared<config::ConfigBase>(std::move(configFromFile)));
+  const auto emptySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+
+  EXPECT_TRUE(config.isParquetUseColumnNames(emptySession.get()));
+  EXPECT_TRUE(config.allowInt32Narrowing(emptySession.get()));
+  EXPECT_EQ(
+      config.parquetFooterSpeculativeIoSize(emptySession.get()), 1UL << 20);
+  EXPECT_EQ(
+      config.parquetFooterMemoryTrackingThreshold(emptySession.get()), 2048);
+}
+
 TEST(FileConfigTest, nullConfig) {
   VELOX_ASSERT_THROW(
       FileConfig(nullptr), "Config is null for FileConfig initialization");

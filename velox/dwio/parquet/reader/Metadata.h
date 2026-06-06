@@ -18,6 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
 
@@ -63,6 +64,9 @@ class ColumnChunkMetaDataPtr {
 
   /// The compression.
   common::CompressionKind compression() const;
+
+  /// Returns the list of encodings used for all pages in this column chunk.
+  std::vector<thrift::Encoding::type> encodings() const;
 
   /// Total byte size of all the compressed (and potentially encrypted)
   /// column data in this row group.

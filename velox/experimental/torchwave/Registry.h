@@ -211,8 +211,22 @@ struct Metadata {
 
   bool isStandalone(NodeCP node, const ValueTypes& types) const;
 
-  /// Unit cost for scheduling, e.g. proportional block assignment.
+  /// Default per-node cost for scheduling. Used by unitCost() when
+  /// costFunction is not set.
   float cost{1.0f};
+
+  /// If set, returns the per-element cost for this node given its metadata.
+  /// Takes precedence over 'cost' when computing kernel op costs.
+  std::function<float(NodeCP, const Metadata&)> costFunction;
+
+  /// Returns the per-element cost for 'node'. If costFunction is set, calls
+  /// it; otherwise returns 'cost'.
+  float unitCost(NodeCP node) const {
+    if (costFunction) {
+      return costFunction(node, *this);
+    }
+    return cost;
+  }
 
   /// If set, the output is a view over the argument at this ordinal.
   std::optional<int32_t> viewOfArg;
@@ -444,6 +458,8 @@ class MetadataBuilder {
   MetadataBuilder& isStandaloneFunc(
       std::function<bool(NodeCP, const ValueTypes&)> func);
   MetadataBuilder& cost(float val);
+  MetadataBuilder& costFunction(
+      std::function<float(NodeCP, const Metadata&)> func);
   MetadataBuilder& viewOfArg(int32_t ordinal);
   MetadataBuilder& shapeAttr(std::string name);
   MetadataBuilder& ignoreAttrs(std::vector<std::string> attrs);

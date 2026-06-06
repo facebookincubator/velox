@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
@@ -30,6 +31,8 @@
 #include "velox/type/Type.h"
 
 #include <gtest/gtest.h>
+
+#include <string>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
@@ -50,6 +53,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
     cudf_velox::registerSparkFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
@@ -290,6 +294,46 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   // Bad: start must be constant
   auto badConst = compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
   ASSERT_FALSE(canBeEvaluatedByCudf(badConst, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
+  auto arrayRowType = ROW({
+      {"arr", ARRAY(INTEGER())},
+      {"idx_bigint", BIGINT()},
+      {"idx_integer", INTEGER()},
+  });
+
+  for (const auto& functionName : {"element_at", "subscript", "get"}) {
+    SCOPED_TRACE(functionName);
+
+    auto bigintExpr = compileExecExpr(
+        std::string(functionName) + "(arr, idx_bigint)",
+        arrayRowType,
+        execCtx_.get());
+    ASSERT_TRUE(canBeEvaluatedByCudf(bigintExpr, /*deep=*/true));
+
+    auto integerExpr = compileExecExpr(
+        std::string(functionName) + "(arr, idx_integer)",
+        arrayRowType,
+        execCtx_.get());
+    ASSERT_TRUE(canBeEvaluatedByCudf(integerExpr, /*deep=*/true));
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureSparkGetSmallIntegralIndices) {
+  auto arrayRowType = ROW({
+      {"arr", ARRAY(INTEGER())},
+      {"idx_tinyint", TINYINT()},
+      {"idx_smallint", SMALLINT()},
+  });
+
+  auto tinyintExpr =
+      compileExecExpr("get(arr, idx_tinyint)", arrayRowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(tinyintExpr, /*deep=*/true));
+
+  auto smallintExpr =
+      compileExecExpr("get(arr, idx_smallint)", arrayRowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(smallintExpr, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {

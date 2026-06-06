@@ -15,6 +15,7 @@
  */
 
 #include "velox/tpcds/gen/TpcdsGen.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/tpcds/gen/DSDGenIterator.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -27,42 +28,34 @@ namespace {
 // parent tables (TBL_CATALOG_SALES, TBL_STORE_SALES, or TBL_WEB_SALES) is 16.
 static constexpr vector_size_t kMaxParentTableRows = 16;
 
-std::unordered_map<std::string_view, Table> tpcdsTableMap() {
-  static const std::unordered_map<std::string_view, Table> map{
-      {"call_center", Table::TBL_CALL_CENTER},
-      {"catalog_page", Table::TBL_CATALOG_PAGE},
-      {"catalog_returns", Table::TBL_CATALOG_RETURNS},
-      {"catalog_sales", Table::TBL_CATALOG_SALES},
-      {"customer", Table::TBL_CUSTOMER},
-      {"customer_address", Table::TBL_CUSTOMER_ADDRESS},
-      {"customer_demographics", Table::TBL_CUSTOMER_DEMOGRAPHICS},
-      {"date_dim", Table::TBL_DATE_DIM},
-      {"household_demographics", Table::TBL_HOUSEHOLD_DEMOGRAPHICS},
-      {"income_band", Table::TBL_INCOME_BAND},
-      {"inventory", Table::TBL_INVENTORY},
-      {"item", Table::TBL_ITEM},
-      {"promotion", Table::TBL_PROMOTION},
-      {"reason", Table::TBL_REASON},
-      {"ship_mode", Table::TBL_SHIP_MODE},
-      {"store", Table::TBL_STORE},
-      {"store_returns", Table::TBL_STORE_RETURNS},
-      {"store_sales", Table::TBL_STORE_SALES},
-      {"time_dim", Table::TBL_TIME_DIM},
-      {"warehouse", Table::TBL_WAREHOUSE},
-      {"web_page", Table::TBL_WEB_PAGE},
-      {"web_returns", Table::TBL_WEB_RETURNS},
-      {"web_sales", Table::TBL_WEB_SALES},
-      {"web_site", Table::TBL_WEB_SITE},
+const folly::F14FastMap<Table, std::string_view>& tpcdsTableNames() {
+  static const folly::F14FastMap<Table, std::string_view> kNames{
+      {Table::TBL_CALL_CENTER, "call_center"},
+      {Table::TBL_CATALOG_PAGE, "catalog_page"},
+      {Table::TBL_CATALOG_RETURNS, "catalog_returns"},
+      {Table::TBL_CATALOG_SALES, "catalog_sales"},
+      {Table::TBL_CUSTOMER, "customer"},
+      {Table::TBL_CUSTOMER_ADDRESS, "customer_address"},
+      {Table::TBL_CUSTOMER_DEMOGRAPHICS, "customer_demographics"},
+      {Table::TBL_DATE_DIM, "date_dim"},
+      {Table::TBL_HOUSEHOLD_DEMOGRAPHICS, "household_demographics"},
+      {Table::TBL_INCOME_BAND, "income_band"},
+      {Table::TBL_INVENTORY, "inventory"},
+      {Table::TBL_ITEM, "item"},
+      {Table::TBL_PROMOTION, "promotion"},
+      {Table::TBL_REASON, "reason"},
+      {Table::TBL_SHIP_MODE, "ship_mode"},
+      {Table::TBL_STORE, "store"},
+      {Table::TBL_STORE_RETURNS, "store_returns"},
+      {Table::TBL_STORE_SALES, "store_sales"},
+      {Table::TBL_TIME_DIM, "time_dim"},
+      {Table::TBL_WAREHOUSE, "warehouse"},
+      {Table::TBL_WEB_PAGE, "web_page"},
+      {Table::TBL_WEB_RETURNS, "web_returns"},
+      {Table::TBL_WEB_SALES, "web_sales"},
+      {Table::TBL_WEB_SITE, "web_site"},
   };
-  return map;
-}
-
-std::unordered_map<Table, std::string_view> invertTpcdsTableMap() {
-  std::unordered_map<Table, std::string_view> inverted;
-  for (const auto& [key, value] : tpcdsTableMap()) {
-    inverted.emplace(value, key);
-  }
-  return inverted;
+  return kNames;
 }
 
 size_t getVectorSize(size_t rowCount, size_t maxRows, size_t offset) {
@@ -821,22 +814,14 @@ const RowTypePtr getTableSchema(Table table) {
   }
 }
 
+VELOX_DEFINE_ENUM_NAME(Table, tpcdsTableNames);
+
 std::string_view toTableName(Table table) {
-  auto inverted = invertTpcdsTableMap();
-  auto it = inverted.find(table);
-  if (it != inverted.end()) {
-    return inverted.at(table);
-  }
-  VELOX_UNREACHABLE("Invalid TPC-DS table: {}", static_cast<uint8_t>(table));
+  return TableName::toName(table);
 }
 
 Table fromTableName(std::string_view tableName) {
-  auto map = tpcdsTableMap();
-  auto it = map.find(tableName);
-  if (it != map.end()) {
-    return it->second;
-  }
-  VELOX_UNREACHABLE("Invalid TPC-DS table name: {}", tableName);
+  return TableName::toTable(tableName);
 }
 
 TypePtr resolveTpcdsColumn(Table table, const std::string& columnName) {

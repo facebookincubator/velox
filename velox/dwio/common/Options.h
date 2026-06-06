@@ -16,9 +16,11 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -40,6 +42,13 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
+
+namespace facebook::velox {
+struct FileHandle;
+namespace cache {
+class AsyncDataCache;
+} // namespace cache
+} // namespace facebook::velox
 
 namespace facebook::velox::dwio::common {
 
@@ -342,7 +351,7 @@ class RowReaderOptions {
     ioExecutor_ = ioExecutor;
   }
 
-  const size_t parallelUnitLoadCount() const {
+  size_t parallelUnitLoadCount() const {
     return parallelUnitLoadCount_;
   }
 
@@ -533,6 +542,23 @@ class RowReaderOptions {
     nimblePreserveDictionaryEncoding_ = value;
   }
 
+  bool lazyColumnIo() const {
+    return lazyColumnIo_;
+  }
+
+  void setLazyColumnIo(bool lazyColumnIo) {
+    lazyColumnIo_ = lazyColumnIo;
+  }
+
+  const folly::F14FastSet<std::string>& remainingFilterColumns() const {
+    return remainingFilterColumns_;
+  }
+
+  void setRemainingFilterColumns(
+      const folly::F14FastSet<std::string>& columns) {
+    remainingFilterColumns_ = columns;
+  }
+
   bool collectColumnCpuMetrics() const {
     return collectColumnCpuMetrics_;
   }
@@ -612,8 +638,11 @@ class RowReaderOptions {
   // using the non-legacy encoding path. Controlled via session property.
   bool stringDecoderZeroCopy_{false};
   // Controls whether dictionary-encoded Nimble string columns return
-  // DictionaryVector instead of FlatVector. Controlled via session property.
+  // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
+  // Defers I/O for projected columns without pushdown or remaining filters.
+  bool lazyColumnIo_{false};
+  folly::F14FastSet<std::string> remainingFilterColumns_;
   bool collectColumnCpuMetrics_{false};
 };
 
@@ -910,6 +939,31 @@ class ReaderOptions : public io::ReaderOptions {
     allowInt32Narrowing_ = value;
   }
 
+  /// File handle providing the cache key (uuid) for metadata caching in
+  /// Nimble's TabletReader. The pointer is only dereferenced during reader
+  /// construction to extract the uuid; it does not need to outlive the
+  /// reader factory call.
+  const FileHandle* fileHandle() const {
+    return fileHandle_;
+  }
+
+  void setFileHandle(const FileHandle* handle) {
+    fileHandle_ = handle;
+  }
+
+  /// Process-wide async data cache for Nimble metadata caching. When both
+  /// fileHandle and cache are set, TabletReader creates a
+  /// CachedMetadataInput that caches decompressed footer, stripes, and
+  /// index metadata across readers on the same file.
+  cache::AsyncDataCache* cache() const {
+    return cache_;
+  }
+
+  void setCache(cache::AsyncDataCache* cache) {
+    VELOX_CHECK_NOT_NULL(cache);
+    cache_ = cache;
+  }
+
  private:
   uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
   FileFormat fileFormat_{FileFormat::UNKNOWN};
@@ -936,6 +990,8 @@ class ReaderOptions : public io::ReaderOptions {
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
   bool allowInt32Narrowing_{false};
+  const FileHandle* fileHandle_{nullptr};
+  cache::AsyncDataCache* cache_{nullptr};
   uint64_t parquetFooterMemoryTrackingThreshold_{
       kDefaultParquetFooterMemoryTrackingThreshold};
 };
@@ -958,6 +1014,7 @@ struct WriterOptions {
   std::map<std::string, std::string> serdeParameters;
   std::function<std::unique_ptr<dwio::common::FlushPolicy>()>
       flushPolicyFactory;
+  uint64_t maxTargetFileSizeBytes{0};
 
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};

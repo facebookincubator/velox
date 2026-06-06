@@ -111,8 +111,9 @@ struct Tensor {
   // matching row-major linear index decomposition.
   __device__ void initIndexCalculator(const Tensor* output = nullptr) {
     const int32_t* d = output ? output->dims : dims;
+    int32_t dimOffset = output ? output->rank - rank : 0;
     for (int i = 0; i < rank; ++i) {
-      sizes[i].init(d[rank - 1 - i]);
+      sizes[i].init(d[rank - 1 - i + dimOffset]);
     }
   }
 

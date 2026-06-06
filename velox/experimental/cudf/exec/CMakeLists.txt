@@ -44,13 +44,14 @@ add_library(
 
 target_link_libraries(
   velox_cudf_exec
-  PUBLIC cudf::cudf
+  PUBLIC cudf::cudf nvtx3::nvtx3-cpp
   PRIVATE
     arrow
     velox_arrow_bridge
     velox_common_base
     velox_cudf_expression
     velox_cudf_hive_connector
+    velox_cudf_iceberg_connector
     velox_cudf_vector
     velox_exception
     velox_exec

@@ -496,6 +496,78 @@ void registerReshapeLikeOp(const char* opName, const char* shapeAttrName) {
       .registerOp();
 }
 
+float elementwiseCostFromDtype(c10::ScalarType dtype, float baseCost) {
+  auto elemSize = c10::elementSize(dtype);
+  if (c10::isFloatingType(dtype)) {
+    if (elemSize <= 4) {
+      return baseCost;
+    }
+    auto* device = facebook::velox::wave::currentDevice();
+    float ratio = device ? static_cast<float>(device->float32To64Ratio) : 2.0f;
+    return baseCost * ratio;
+  }
+  return elemSize <= 4 ? baseCost : baseCost * 2.0f;
+}
+
+c10::ScalarType nodeOutputDtype(NodeCP node) {
+  auto* wg = waveGraph();
+  if (!wg) {
+    return c10::ScalarType::Float;
+  }
+  auto& types = wg->types();
+  for (auto* output : node->outputs()) {
+    auto id = output->id();
+    if (id >= 0 && static_cast<size_t>(id) < types.types.size() &&
+        types.types[id]) {
+      return types.types[id]->dtype();
+    }
+  }
+  if (!node->inputs().empty()) {
+    auto id = node->inputs()[0].value->id();
+    if (id >= 0 && static_cast<size_t>(id) < types.types.size() &&
+        types.types[id]) {
+      return types.types[id]->dtype();
+    }
+  }
+  return c10::ScalarType::Float;
+}
+
+float arithmeticCost(NodeCP node, const Metadata& /*meta*/) {
+  return elementwiseCostFromDtype(nodeOutputDtype(node), 1.0f);
+}
+
+float mulCost(NodeCP node, const Metadata& /*meta*/) {
+  auto dtype = nodeOutputDtype(node);
+  if (c10::isIntegralType(dtype, true) && c10::elementSize(dtype) > 4) {
+    return 4.0f;
+  }
+  return elementwiseCostFromDtype(dtype, 1.0f);
+}
+
+float divCost(NodeCP node, const Metadata& /*meta*/) {
+  auto dtype = nodeOutputDtype(node);
+  if (c10::isIntegralType(dtype, true)) {
+    return c10::elementSize(dtype) > 4 ? 16.0f : 8.0f;
+  }
+  return elementwiseCostFromDtype(dtype, 2.0f);
+}
+
+float remainderCost(NodeCP node, const Metadata& /*meta*/) {
+  auto dtype = nodeOutputDtype(node);
+  if (c10::isIntegralType(dtype, true)) {
+    return c10::elementSize(dtype) > 4 ? 20.0f : 10.0f;
+  }
+  return elementwiseCostFromDtype(dtype, 3.0f);
+}
+
+float powCost(NodeCP node, const Metadata& /*meta*/) {
+  return elementwiseCostFromDtype(nodeOutputDtype(node), 8.0f);
+}
+
+float transcendentalCost(NodeCP node, const Metadata& /*meta*/) {
+  return elementwiseCostFromDtype(nodeOutputDtype(node), 4.0f);
+}
+
 } // namespace
 
 void registerBuiltins() {
@@ -503,30 +575,37 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.add.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.sub.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.mul.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(mulCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.div.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(divCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.remainder.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.fmod.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.pow.Tensor_Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(powCost)
       .registerOp();
 
   // Binary arithmetic (Tensor, Scalar).
@@ -534,70 +613,101 @@ void registerBuiltins() {
       .elementwiseFunc("__add")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.sub.Scalar")
       .elementwiseFunc("__sub")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.mul.Scalar")
       .elementwiseFunc("__mul")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(mulCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.div.Scalar")
       .elementwiseFunc("__div")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(divCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.remainder.Scalar")
       .elementwiseFunc("__remainder")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.fmod.Scalar")
       .elementwiseFunc("__fmod")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.pow.Tensor_Scalar")
       .elementwiseFunc("__pow")
       .arithmeticPromotion()
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(powCost)
       .registerOp();
 
   // Comparison.
-  MetadataBuilder("torch.ops.aten.eq.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.ne.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.lt.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.le.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.gt.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.ge.Tensor").elementwise().registerOp();
+  MetadataBuilder("torch.ops.aten.eq.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.ne.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.lt.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.le.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.gt.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.ge.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
 
   // Comparison (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.eq.Scalar")
       .elementwiseFunc("__eq")
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.ne.Scalar")
       .elementwiseFunc("__ne")
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.lt.Scalar")
       .elementwiseFunc("__lt")
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.le.Scalar")
       .elementwiseFunc("__le")
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.gt.Scalar")
       .elementwiseFunc("__gt")
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.ge.Scalar")
       .elementwiseFunc("__ge")
       .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
 
   // Bitwise.
@@ -645,36 +755,110 @@ void registerBuiltins() {
       .elementwise()
       .registerOp();
 
-  // Unary math.
-  MetadataBuilder("torch.ops.aten.abs.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.neg.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.ceil.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.floor.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.round.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.trunc.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sign.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sqrt.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.rsqrt.default").elementwise().registerOp();
+  // Unary math - cheap ops (single cycle).
+  MetadataBuilder("torch.ops.aten.abs.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.neg.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.ceil.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.floor.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.round.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.trunc.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sign.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  // Unary math - SFU ops (2-4 cycles).
+  MetadataBuilder("torch.ops.aten.sqrt.default")
+      .elementwise()
+      .cost(2.0f)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.rsqrt.default")
+      .elementwise()
+      .cost(2.0f)
+      .registerOp();
   MetadataBuilder("torch.ops.aten.reciprocal.default")
       .elementwise()
+      .cost(2.0f)
       .registerOp();
-  MetadataBuilder("torch.ops.aten.exp.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log2.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log10.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log1p.default").elementwise().registerOp();
+  MetadataBuilder("torch.ops.aten.exp.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log2.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log10.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log1p.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
 
-  // Trigonometric.
-  MetadataBuilder("torch.ops.aten.sin.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.cos.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.tan.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.asin.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.acos.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.atan.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.atan2.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sinh.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.cosh.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.tanh.default").elementwise().registerOp();
+  // Trigonometric (SFU, ~4 cycles).
+  MetadataBuilder("torch.ops.aten.sin.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.cos.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.tan.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.asin.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.acos.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.atan.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.atan2.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sinh.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.cosh.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.tanh.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
 
   // Item.
   MetadataBuilder("torch.ops.aten.item.default")
@@ -692,8 +876,14 @@ void registerBuiltins() {
       .registerOp();
 
   // Activation functions.
-  MetadataBuilder("torch.ops.aten.relu.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sigmoid.default").elementwise().registerOp();
+  MetadataBuilder("torch.ops.aten.relu.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sigmoid.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
   MetadataBuilder("torch.ops.aten.clamp.default")
       .elementwise()
       .argumentMeta(
@@ -1895,6 +2085,7 @@ void registerBuiltins() {
       .only1d()
       .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
+      .cost(25.0f)
       .registerOp();
 
   // tw.exclusive_sum_cg: (Tensor) -> (Tensor, Tensor[counts])
@@ -1927,6 +2118,7 @@ void registerBuiltins() {
       .numBarriers(2)
       .only1d()
       .outputConstraints(rank1Constraint)
+      .cost(25.0f)
       .registerOp();
 
   // tw.masked_select_cg: (Tensor, Tensor) -> (Tensor, Tensor[counts])
@@ -1958,6 +2150,7 @@ void registerBuiltins() {
       .hasBlockSizeTemplateParam()
       .numBarriers(3)
       .outputConstraints(rank1Constraint)
+      .cost(30.0f)
       .registerOp();
 
   // --- nonzero (1D) ---

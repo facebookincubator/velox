@@ -67,7 +67,7 @@ TEST(CoalesceIoTest, basic) {
   // process together.
   std::vector<std::vector<int32_t>> ioGroups;
 
-  auto stats = coalesceIo<IoUnit, Range>(
+  auto stats = coalesceIo<IoUnit, Range, /*coalesceDuplicateRanges=*/false>(
       data,
       20000,
       8,
@@ -126,6 +126,119 @@ TEST(CoalesceIoTest, basic) {
   EXPECT_EQ(270'000, stats.gaps.max());
 }
 
+TEST(CoalesceIoTest, exactDuplicateRangesCoalesce) {
+  std::vector<IoUnit> data;
+  data.emplace_back(1000, 100, 1);
+  data.emplace_back(1000, 100, 1);
+  data.emplace_back(1100, 50, 1);
+
+  std::vector<std::vector<int32_t>> ioGroups;
+  auto stats = coalesceIo<IoUnit, Range, /*coalesceDuplicateRanges=*/true>(
+      data,
+      1,
+      10,
+      [&](int32_t i) { return data[i].offset; },
+      [&](int32_t i) { return data[i].size; },
+      [&](int32_t) { return 1; },
+      [&](const IoUnit& item, std::vector<Range>& ranges) {
+        ranges.emplace_back(item.size, 1);
+      },
+      [&](int32_t skip, std::vector<Range>& ranges) {
+        ranges.emplace_back(skip, 0);
+      },
+      [&](const std::vector<IoUnit>&,
+          int32_t begin,
+          int32_t end,
+          uint64_t,
+          const std::vector<Range>&) {
+        ioGroups.emplace_back();
+        for (auto i = begin; i < end; ++i) {
+          ioGroups.back().push_back(i);
+        }
+      });
+
+  EXPECT_EQ(stats.numIos, 1);
+  EXPECT_EQ(stats.payloadBytes, 250);
+  EXPECT_EQ(stats.extraBytes, 0);
+  EXPECT_EQ(stats.gaps.count(), 0);
+  ASSERT_EQ(ioGroups.size(), 1);
+  EXPECT_EQ(ioGroups[0], (std::vector<int32_t>{0, 1, 2}));
+}
+
+TEST(CoalesceIoTest, exactDuplicateRangesDoNotCoalesceByDefault) {
+  std::vector<IoUnit> data;
+  data.emplace_back(1000, 100, 1);
+  data.emplace_back(1000, 100, 1);
+  data.emplace_back(1100, 50, 1);
+
+  std::vector<std::vector<int32_t>> ioGroups;
+  auto stats = coalesceIo<IoUnit, Range, /*coalesceDuplicateRanges=*/false>(
+      data,
+      1,
+      10,
+      [&](int32_t i) { return data[i].offset; },
+      [&](int32_t i) { return data[i].size; },
+      [&](int32_t) { return 1; },
+      [&](const IoUnit& item, std::vector<Range>& ranges) {
+        ranges.emplace_back(item.size, 1);
+      },
+      [&](int32_t skip, std::vector<Range>& ranges) {
+        ranges.emplace_back(skip, 0);
+      },
+      [&](const std::vector<IoUnit>&,
+          int32_t begin,
+          int32_t end,
+          uint64_t,
+          const std::vector<Range>&) {
+        ioGroups.emplace_back();
+        for (auto i = begin; i < end; ++i) {
+          ioGroups.back().push_back(i);
+        }
+      });
+
+  EXPECT_EQ(stats.numIos, 2);
+  ASSERT_EQ(ioGroups.size(), 2);
+  EXPECT_EQ(ioGroups[0], (std::vector<int32_t>{0}));
+  EXPECT_EQ(ioGroups[1], (std::vector<int32_t>{1, 2}));
+}
+
+TEST(CoalesceIoTest, exactDuplicateRangesIgnoreRangeLimitWhenEnabled) {
+  std::vector<IoUnit> data;
+  data.emplace_back(1000, 100, 1);
+  data.emplace_back(1000, 100, 1);
+  data.emplace_back(1100, 50, 1);
+
+  std::vector<std::vector<int32_t>> ioGroups;
+  auto stats = coalesceIo<IoUnit, Range, /*coalesceDuplicateRanges=*/true>(
+      data,
+      1,
+      2,
+      [&](int32_t i) { return data[i].offset; },
+      [&](int32_t i) { return data[i].size; },
+      [&](int32_t) { return 1; },
+      [&](const IoUnit& item, std::vector<Range>& ranges) {
+        ranges.emplace_back(item.size, 1);
+      },
+      [&](int32_t skip, std::vector<Range>& ranges) {
+        ranges.emplace_back(skip, 0);
+      },
+      [&](const std::vector<IoUnit>&,
+          int32_t begin,
+          int32_t end,
+          uint64_t,
+          const std::vector<Range>&) {
+        ioGroups.emplace_back();
+        for (auto i = begin; i < end; ++i) {
+          ioGroups.back().push_back(i);
+        }
+      });
+
+  EXPECT_EQ(stats.numIos, 2);
+  ASSERT_EQ(ioGroups.size(), 2);
+  EXPECT_EQ(ioGroups[0], (std::vector<int32_t>{0, 1}));
+  EXPECT_EQ(ioGroups[1], (std::vector<int32_t>{2}));
+}
+
 TEST(CoalesceIoTest, gaps) {
   struct TestParam {
     std::vector<IoUnit> data;
@@ -174,7 +287,7 @@ TEST(CoalesceIoTest, gaps) {
     SCOPED_TRACE(testData.debugString());
 
     const auto& data = testData.data;
-    auto stats = coalesceIo<IoUnit, Range>(
+    auto stats = coalesceIo<IoUnit, Range, /*coalesceDuplicateRanges=*/false>(
         data,
         testData.maxGap,
         10,

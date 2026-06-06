@@ -400,6 +400,10 @@ int64_t ColumnChunkMetaDataPtr::totalCompressedSize() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.total_compressed_size;
 }
 
+std::vector<thrift::Encoding::type> ColumnChunkMetaDataPtr::encodings() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+}
+
 int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.total_uncompressed_size;
 }
