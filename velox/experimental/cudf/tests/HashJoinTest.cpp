@@ -230,8 +230,6 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
   // Run two build drivers, the last driver transfers input from the other
   // driver.
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
-      // HashJoinBuilder defaults to extra spill-injection runs; this check only
-      // needs the ordinary two-driver build-input transfer path.
       .injectSpill(false)
       // Only the build side needs parallelization for this ownership transfer.
       .numDrivers(
