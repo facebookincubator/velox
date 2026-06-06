@@ -26,19 +26,23 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/type/Type.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_metadata.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/span.hpp>
+#include <cudf/wrappers/timestamps.hpp>
 
 #include <rmm/device_buffer.hpp>
 
+#include <folly/Conv.h>
 #include <folly/lang/Bits.h>
 
 #include <cstring>
@@ -571,9 +575,10 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::injectMissingColumns(
           const InjectedColumn& col) -> std::unique_ptr<cudf::scalar> {
     if (cudfType.id() != cudf::type_id::STRING and
         cudfType.id() != cudf::type_id::INT32 and
-        cudfType.id() != cudf::type_id::INT64) {
+        cudfType.id() != cudf::type_id::INT64 and
+        cudfType.id() != cudf::type_id::TIMESTAMP_DAYS) {
       VELOX_NYI(
-          "Identity partition columns are limited to VARCHAR, INTEGER, and BIGINT only. Other types are not yet supported. Column: '{}', Type: {}",
+          "Identity partition columns are limited to VARCHAR, INTEGER, BIGINT, and DATE only. Other types are not yet supported. Column: '{}', Type: {}",
           col.name,
           col.veloxType->toString());
     }
@@ -588,6 +593,23 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::injectMissingColumns(
         case cudf::type_id::INT64:
           return std::make_unique<cudf::numeric_scalar<int64_t>>(
               folly::to<int64_t>(value), true, stream_, mr);
+        case cudf::type_id::TIMESTAMP_DAYS: {
+          // DATE partition values arrive either as days-since-epoch (Iceberg
+          // native) or as a date string such as "2025-06-05" (Hive migrated).
+          // The two encodings are disjoint: DATE()->toDays() uses Presto cast
+          // semantics, which reject a bare integer, while a date string always
+          // contains '-' separators that fail integer parsing. So an all-digit
+          // value is unambiguously days-since-epoch, and anything else is
+          // parsed as a date string.
+          const int32_t days = [&] {
+            if (auto parsed = folly::tryTo<int32_t>(value)) {
+              return parsed.value();
+            }
+            return DATE()->toDays(value);
+          }();
+          return std::make_unique<cudf::timestamp_scalar<cudf::timestamp_D>>(
+              days, true, stream_, mr);
+        }
         default:
           VELOX_UNREACHABLE();
       }
