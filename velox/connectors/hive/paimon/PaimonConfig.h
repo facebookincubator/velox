@@ -24,7 +24,7 @@ namespace facebook::velox::connector::hive::paimon {
 class PaimonConfig : public FileConfig {
  public:
   explicit PaimonConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(std::move(config)) {}
+      : FileConfig(std::move(config), "paimon.") {}
 };
 
 } // namespace facebook::velox::connector::hive::paimon

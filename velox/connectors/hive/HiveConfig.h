@@ -253,7 +253,7 @@ class HiveConfig : public FileConfig {
       const config::ConfigBase* session) const;
 
   explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(std::move(config)) {}
+      : FileConfig(std::move(config), "hive.") {}
 };
 
 } // namespace facebook::velox::connector::hive

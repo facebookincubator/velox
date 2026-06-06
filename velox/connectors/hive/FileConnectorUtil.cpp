@@ -16,12 +16,45 @@
 
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
+#include <string_view>
+#include <unordered_map>
+
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
+
+namespace {
+
+std::string formatConfigPrefix(dwio::common::FileFormat format) {
+  if (format == dwio::common::FileFormat::UNKNOWN) {
+    return "";
+  }
+  return std::string(dwio::common::toString(format)) + ".";
+}
+
+config::ConfigBase filterConfigByPrefix(
+    const config::ConfigBase& config,
+    std::string_view prefix) {
+  std::unordered_map<std::string, std::string> filteredConfigs;
+  if (prefix.empty()) {
+    return config::ConfigBase(std::move(filteredConfigs));
+  }
+
+  for (const auto& [key, value] : config.rawConfigs()) {
+    if (key.size() >= prefix.size() &&
+        key.compare(0, prefix.size(), prefix) == 0) {
+      filteredConfigs.emplace(key.substr(prefix.size()), value);
+    }
+  }
+  return config::ConfigBase(std::move(filteredConfigs));
+}
+
+} // namespace
 
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -63,14 +96,6 @@ void configureReaderOptions(
           : dwio::common::ColumnMappingMode::kPosition;
       break;
     }
-    case dwio::common::FileFormat::PARQUET: {
-      columnMappingMode = fileConfig->isParquetUseColumnNames(sessionProperties)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition;
-      readerOptions.setAllowInt32Narrowing(
-          fileConfig->allowInt32Narrowing(sessionProperties));
-      break;
-    }
     default:
       columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   }
@@ -78,8 +103,6 @@ void configureReaderOptions(
   readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
-  readerOptions.setParquetFooterMemoryTrackingThreshold(
-      fileConfig->parquetFooterMemoryTrackingThreshold(sessionProperties));
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
@@ -113,8 +136,6 @@ void configureReaderOptions(
           fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::PARQUET:
-      readerOptions.setFooterSpeculativeIoSize(
-          fileConfig->parquetFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::NIMBLE:
       readerOptions.setFooterSpeculativeIoSize(
@@ -136,6 +157,19 @@ void configureReaderOptions(
   } else {
     readerOptions.setFileFormat(fileSplit->fileFormat);
   }
+
+  const auto formatPrefix = formatConfigPrefix(fileSplit->fileFormat);
+  const auto connectorFormatPrefix = formatPrefix.empty()
+      ? std::string()
+      : std::string(fileConfig->connectorConfigPrefix()) + formatPrefix;
+  auto formatConnectorConfig =
+      filterConfigByPrefix(*fileConfig->config(), connectorFormatPrefix);
+  auto formatSessionProperties =
+      filterConfigByPrefix(*sessionProperties, connectorFormatPrefix);
+  readerOptions.setFormatSpecificOptions(
+      dwio::common::getReaderFactory(fileSplit->fileFormat)
+          ->createFormatOptions(
+              formatConnectorConfig, formatSessionProperties));
 }
 
 void configureRowReaderOptions(

@@ -18,6 +18,7 @@
 
 #include <memory>
 
+#include "velox/common/config/Config.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
@@ -59,6 +60,12 @@ class ReaderFactory {
   virtual std::unique_ptr<Reader> createReader(
       std::unique_ptr<BufferedInput>,
       const ReaderOptions& options) = 0;
+
+  virtual std::shared_ptr<FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& /*connectorConfig*/,
+      const config::ConfigBase& /*session*/) const {
+    return nullptr;
+  }
 
  private:
   const FileFormat format_;

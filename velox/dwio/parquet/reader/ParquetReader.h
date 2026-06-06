@@ -16,8 +16,12 @@
 
 #pragma once
 
+#include <cstdint>
+
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 
 namespace facebook::velox::dwio::common {
@@ -34,6 +38,26 @@ enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 class StructColumnReader;
 
 class ReaderBase;
+
+/// Carries Parquet-specific options through the common reader interface.
+class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
+ public:
+  // Speculative tail-read size in bytes for reading Parquet footers.
+  uint64_t footerSpeculativeIoSize{
+      ParquetConfig::kFooterSpeculativeIoSizeSessionProperty::defaultValue};
+
+  // Allows reading INT32 physical columns as narrower integer types.
+  bool allowInt32Narrowing{
+      ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
+
+  // Serialized footer size threshold above which heap tracking is enabled.
+  uint64_t footerMemoryTrackingThreshold{
+      ParquetConfig::kDefaultFooterMemoryTrackingThreshold};
+
+  // Maps table fields to Parquet file fields by position or name.
+  dwio::common::ColumnMappingMode columnMappingMode{
+      dwio::common::ColumnMappingMode::kPosition};
+};
 
 /// Implements the RowReader interface for Parquet.
 class ParquetRowReader : public dwio::common::RowReader {
@@ -116,6 +140,10 @@ class ParquetReaderFactory : public dwio::common::ReaderFactory {
       const dwio::common::ReaderOptions& options) override {
     return std::make_unique<ParquetReader>(std::move(input), options);
   }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 void registerParquetReaderFactory();

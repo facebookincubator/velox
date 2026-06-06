@@ -19,6 +19,9 @@
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+#endif
 
 namespace facebook::velox::connector::hive {
 
@@ -63,6 +66,10 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
 
 #undef VELOX_HIVE_CONFIG_REGISTER
+
+#ifdef VELOX_ENABLE_PARQUET
+    parquet::ParquetConfig::registerProperties(properties, kLegacyPrefix);
+#endif
 
     return properties;
   }();

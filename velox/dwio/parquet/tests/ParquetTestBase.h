@@ -138,9 +138,8 @@ class ParquetTestBase : public testing::Test,
   }
 
   // Creates a ReaderOptions pre-populated with the test's shared IoStatistics
-  // and the leaf memory pool. Callers needing extra settings (e.g.
-  // setFileSchema, setAllowInt32Narrowing) should obtain a copy via this
-  // method and then apply their overrides.
+  // and the leaf memory pool. Callers needing extra settings should obtain a
+  // copy via this method and then apply their overrides.
   dwio::common::ReaderOptions makeDefaultReaderOptions() const;
 
   // Returns RowReaderOptions with a ColumnSelector for the given schema.
