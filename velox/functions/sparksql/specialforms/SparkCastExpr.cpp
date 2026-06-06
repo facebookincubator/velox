@@ -63,20 +63,12 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   const bool isTryCast =
       !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
 
-  // Only string->timestamp needs CAST policy under ANSI mode while preserving
-  // the old behavior for other cast families.
-  const bool isStringToTimestampCast =
-      fromType->isVarchar() && type->isTimestamp();
-
-  const bool allowOverflowForHooks =
-      isStringToTimestampCast ? !isTryCast : isTryCast;
-
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
       trackCpuUsage,
       isTryCast,
-      std::make_shared<SparkCastHooks>(config, allowOverflowForHooks));
+      std::make_shared<SparkCastHooks>(config, isTryCast));
 }
 
 exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
