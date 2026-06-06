@@ -855,8 +855,13 @@ jobs:
 
   asan-ubsan-adapters:
     name: Linux ASAN/UBSAN with system dependencies
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    # Full-mode only — selective coverage pre-approval comes from the
+    # adapters job. Like ubuntu-debug / fedora-debug, the sanitizer
+    # build is part of the post-approval / on-push full-coverage suite
+    # (catches memory and UB issues that the release build masks). The
+    # repo check prevents errors when forks fast-forward their main
+    # branch.
+    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
       image: ghcr.io/facebookincubator/velox-dev:adapters
@@ -989,7 +994,7 @@ jobs:
           fi
 
   asan-ubsan-build-status:
-    if: always()
+    if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
     runs-on: ubuntu-latest
     name: "BUILD: Linux sanitizers with system dependencies"
@@ -1015,7 +1020,7 @@ jobs:
           if-no-files-found: ignore
 
   asan-ubsan-test-status:
-    if: always()
+    if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
     runs-on: ubuntu-latest
     name: "TEST: Linux sanitizers with system dependencies"
