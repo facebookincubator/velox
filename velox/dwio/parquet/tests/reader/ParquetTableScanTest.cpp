@@ -804,7 +804,7 @@ TEST_F(ParquetTableScanTest, array) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
           kHiveConnectorId,
-          std::string("hive.parquet.") +
+          std::string(ParquetConfig::kSessionPrefix) +
               std::string(ParquetConfig::kUseColumnNamesSession),
           "true")
       .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
@@ -1432,7 +1432,7 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   std::string("hive.parquet.") +
+                   std::string(ParquetConfig::kSessionPrefix) +
                        std::string(ParquetConfig::kUseColumnNamesSession),
                    "true")
                .split(makeSplit(filePath))
@@ -1507,7 +1507,7 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   std::string("hive.parquet.") +
+                   std::string(ParquetConfig::kSessionPrefix) +
                        std::string(ParquetConfig::kUseColumnNamesSession),
                    "true")
                .split(makeSplit(filePath))
@@ -1979,7 +1979,7 @@ TEST_F(ParquetTableScanTest, intReadWithNarrowerType) {
       AssertQueryBuilder(op)
           .connectorSessionProperty(
               kHiveConnectorId,
-              std::string("hive.parquet.") +
+              std::string(ParquetConfig::kSessionPrefix) +
                   std::string(ParquetConfig::kAllowInt32NarrowingSession),
               "true")
           .split(split)

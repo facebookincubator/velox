@@ -364,6 +364,9 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
       std::unordered_map<std::string, std::string>{
           {"nimble.unused", "1"},
           {"parquet.unused", "2"},
+          {"parquet_footer_speculative_io_size", "7777"},
+          {"parquet_footer_memory_tracking_threshold", "6666"},
+          {"hive.parquet.footer_speculative_io_size", "8888"},
           {"unrelated.unused", "3"},
       }};
   auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
@@ -481,8 +484,8 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         readerOptions);
     auto parquetOptions = checkedPointerCast<parquet::ParquetReaderOptions>(
         readerOptions.formatSpecificOptions());
-    EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 2222);
-    EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 5555);
+    EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 7777);
+    EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 6666);
   }
 
   // Test Nimble format.

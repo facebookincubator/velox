@@ -97,6 +97,27 @@ TEST_F(ConfigTest, creation) {
   }
 }
 
+TEST_F(ConfigTest, visitMutableConfig) {
+  auto config = std::make_shared<TestConfig>(
+      std::unordered_map<std::string, std::string>{
+          {"first", "1"},
+          {"second", "2"},
+      },
+      true);
+
+  std::unordered_map<std::string, std::string> visitedConfigs;
+  config->visitConfigs([&](const auto& entry) {
+    visitedConfigs.emplace(entry.first, entry.second);
+  });
+
+  EXPECT_EQ(
+      visitedConfigs,
+      (std::unordered_map<std::string, std::string>{
+          {"first", "1"},
+          {"second", "2"},
+      }));
+}
+
 TEST_F(ConfigTest, immutableConfig) {
   // Testing default values
   auto config = std::make_shared<TestConfig>(

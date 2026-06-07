@@ -68,7 +68,7 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
 #undef VELOX_HIVE_CONFIG_REGISTER
 
 #ifdef VELOX_ENABLE_PARQUET
-    parquet::ParquetConfig::registerProperties(properties, kLegacyPrefix);
+    parquet::ParquetConfig::registerProperties(properties);
 #endif
 
     return properties;

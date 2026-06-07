@@ -30,11 +30,13 @@ namespace facebook::velox::connector::hive {
 
 namespace {
 
-std::string formatConfigPrefix(dwio::common::FileFormat format) {
+std::string formatConfigPrefix(
+    dwio::common::FileFormat format,
+    std::string_view seperator) {
   if (format == dwio::common::FileFormat::UNKNOWN) {
     return "";
   }
-  return std::string(dwio::common::toString(format)) + ".";
+  return std::string(dwio::common::toString(format)) + std::string(seperator);
 }
 
 config::ConfigBase filterConfigByPrefix(
@@ -45,12 +47,13 @@ config::ConfigBase filterConfigByPrefix(
     return config::ConfigBase(std::move(filteredConfigs));
   }
 
-  for (const auto& [key, value] : config.rawConfigs()) {
+  config.visitConfigs([&](const auto& entry) {
+    const auto& [key, value] = entry;
     if (key.size() >= prefix.size() &&
         key.compare(0, prefix.size(), prefix) == 0) {
       filteredConfigs.emplace(key.substr(prefix.size()), value);
     }
-  }
+  });
   return config::ConfigBase(std::move(filteredConfigs));
 }
 
@@ -158,14 +161,14 @@ void configureReaderOptions(
     readerOptions.setFileFormat(fileSplit->fileFormat);
   }
 
-  const auto formatPrefix = formatConfigPrefix(fileSplit->fileFormat);
+  const auto formatPrefix = formatConfigPrefix(fileSplit->fileFormat, ".");
   const auto connectorFormatPrefix = formatPrefix.empty()
       ? std::string()
       : std::string(fileConfig->connectorConfigPrefix()) + formatPrefix;
   auto formatConnectorConfig =
       filterConfigByPrefix(*fileConfig->config(), connectorFormatPrefix);
-  auto formatSessionProperties =
-      filterConfigByPrefix(*sessionProperties, connectorFormatPrefix);
+  auto formatSessionProperties = filterConfigByPrefix(
+      *sessionProperties, formatConfigPrefix(fileSplit->fileFormat, "_"));
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(

@@ -119,6 +119,14 @@ class ConfigBase : public IConfig {
 
   const std::unordered_map<std::string, std::string>& rawConfigs() const;
 
+  template <typename Visitor>
+  void visitConfigs(Visitor&& visitor) const {
+    std::shared_lock<std::shared_mutex> l(mutex_);
+    for (const auto& entry : configs_) {
+      visitor(entry);
+    }
+  }
+
   std::unordered_map<std::string, std::string> rawConfigsCopy() const final;
 
   /// Converts a session key to a config key by replacing '_' with '-'.

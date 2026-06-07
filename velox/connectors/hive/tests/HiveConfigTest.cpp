@@ -260,7 +260,7 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
 }
 
 #ifdef VELOX_ENABLE_PARQUET
-TEST(HiveConfigTest, registeredParquetPropertiesUseHivePrefix) {
+TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
 
   auto hasProperty = [&](const std::string& name) {
@@ -270,11 +270,12 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseHivePrefix) {
         });
   };
 
-  const auto useColumnNames = std::string("hive.parquet.") +
+  const auto useColumnNames =
+      std::string(parquet::ParquetConfig::kSessionPrefix) +
       std::string(parquet::ParquetConfig::kUseColumnNamesSession);
   EXPECT_TRUE(hasProperty(useColumnNames));
   EXPECT_FALSE(hasProperty(
-      std::string("parquet.") +
+      std::string("hive.parquet.") +
       std::string(parquet::ParquetConfig::kUseColumnNamesSession)));
 }
 #endif

@@ -42,19 +42,19 @@ class ReaderBase;
 /// Carries Parquet-specific options through the common reader interface.
 class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
  public:
-  // Speculative tail-read size in bytes for reading Parquet footers.
+  /// Speculative tail-read size in bytes for reading Parquet footers.
   uint64_t footerSpeculativeIoSize{
       ParquetConfig::kFooterSpeculativeIoSizeSessionProperty::defaultValue};
 
-  // Allows reading INT32 physical columns as narrower integer types.
+  /// Allows reading INT32 physical columns as narrower integer types.
   bool allowInt32Narrowing{
       ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
 
-  // Serialized footer size threshold above which heap tracking is enabled.
+  /// Serialized footer size threshold above which heap tracking is enabled.
   uint64_t footerMemoryTrackingThreshold{
       ParquetConfig::kDefaultFooterMemoryTrackingThreshold};
 
-  // Maps table fields to Parquet file fields by position or name.
+  /// Maps table fields to Parquet file fields by position or name.
   dwio::common::ColumnMappingMode columnMappingMode{
       dwio::common::ColumnMappingMode::kPosition};
 };
