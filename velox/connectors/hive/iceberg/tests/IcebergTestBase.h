@@ -18,12 +18,17 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #ifdef VELOX_ENABLE_PARQUET
@@ -68,6 +73,52 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
 
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
+
+  uint64_t getFileSize(const std::string& path) const;
+
+  std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
+      const std::string& dataFilePath,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys = {},
+      uint32_t splitCount = 1,
+      const std::unordered_map<std::string, std::string>& infoColumns = {},
+      int64_t dataSequenceNumber = 0);
+
+  std::shared_ptr<ConnectorSplit> makeIcebergSplitWithInfoColumns(
+      const std::string& dataFilePath,
+      const std::unordered_map<std::string, std::string>& infoColumns,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {},
+      int64_t dataSequenceNumber = 0);
+
+  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
+      const std::string& name,
+      const TypePtr& type,
+      int fieldId,
+      const std::string& defaultValue);
+
+  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
+      const std::string& name,
+      const TypePtr& type,
+      int fieldId,
+      FileColumnHandle::ColumnType columnType =
+          FileColumnHandle::ColumnType::kRegular);
+
+  ColumnHandleMap makeColumnHandles(
+      const RowTypePtr& rowType,
+      const std::unordered_set<int>& partitionIndices = {});
+
+  void assertTableScan(
+      const RowTypePtr& outputType,
+      const std::vector<std::shared_ptr<ConnectorSplit>>& splits,
+      const std::vector<RowVectorPtr>& expected,
+      const RowTypePtr& dataColumns = nullptr,
+      const ColumnHandleMap& assignments = {},
+      const std::string& filter = "",
+      const std::string& remainingFilter = "",
+      const std::string& subfieldFilter = "",
+      const std::unordered_map<std::string, std::string>& sessionProperties =
+          {});
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
