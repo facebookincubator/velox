@@ -81,4 +81,20 @@ TEST(IoStatisticsTest, readGap) {
   EXPECT_EQ(stats.readGap().max(), 5'000);
 }
 
+TEST(IoStatisticsTest, duplicateRead) {
+  IoStatistics stats;
+  EXPECT_EQ(stats.duplicateReadRegions(), 0);
+  EXPECT_EQ(stats.duplicateReadBytes(), 0);
+
+  stats.incDuplicateRead(2, 1'000);
+  EXPECT_EQ(stats.duplicateReadRegions(), 2);
+  EXPECT_EQ(stats.duplicateReadBytes(), 1'000);
+
+  IoStatistics stats2;
+  stats2.incDuplicateRead(3, 500);
+  stats.merge(stats2);
+  EXPECT_EQ(stats.duplicateReadRegions(), 5);
+  EXPECT_EQ(stats.duplicateReadBytes(), 1'500);
+}
+
 } // namespace facebook::velox::io

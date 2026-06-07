@@ -327,10 +327,15 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
     ASSERT_NE(stream1, nullptr);
     ASSERT_NE(stream2, nullptr);
 
+    const auto duplicateRegionsBefore = dataIoStats_->duplicateReadRegions();
+    const auto duplicateBytesBefore = dataIoStats_->duplicateReadBytes();
     input.load(LogType::TEST);
 
     EXPECT_EQ(input.testingStreamToCoalescedLoadSize(), 2);
     EXPECT_EQ(input.testingCoalescedLoads().size(), 1);
+    EXPECT_EQ(dataIoStats_->duplicateReadRegions() - duplicateRegionsBefore, 1);
+    EXPECT_EQ(
+        dataIoStats_->duplicateReadBytes() - duplicateBytesBefore, regionSize);
     EXPECT_EQ(readFile->numReads(), 0);
 
     auto next1 = getNext(*stream1);
