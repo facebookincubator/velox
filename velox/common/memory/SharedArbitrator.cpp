@@ -243,6 +243,22 @@ bool SharedArbitrator::ExtraConfig::globalArbitrationWithoutSpill(
       kDefaultGlobalArbitrationWithoutSpill);
 }
 
+bool SharedArbitrator::ExtraConfig::memoryPoolAbortScoring(
+    const std::unordered_map<std::string, std::string>& configs) {
+  return getConfig<bool>(
+      configs, kMemoryPoolAbortScoring, kDefaultMemoryPoolAbortScoring);
+}
+
+uint64_t SharedArbitrator::ExtraConfig::memoryPoolAbortScoringPriorityWeight(
+    const std::unordered_map<std::string, std::string>& configs) {
+  return config::toCapacity(
+      getConfig<std::string>(
+          configs,
+          kMemoryPoolAbortScoringPriorityWeight,
+          std::string(kDefaultMemoryPoolAbortScoringPriorityWeight)),
+      config::CapacityUnit::BYTE);
+}
+
 double SharedArbitrator::ExtraConfig::globalArbitrationAbortTimeRatio(
     const std::unordered_map<std::string, std::string>& configs) {
   return getConfig<double>(
@@ -279,6 +295,11 @@ SharedArbitrator::SharedArbitrator(const Config& config)
           ExtraConfig::globalArbitrationAbortTimeRatio(config.extraConfigs)),
       globalArbitrationWithoutSpill_(
           ExtraConfig::globalArbitrationWithoutSpill(config.extraConfigs)),
+      memoryPoolAbortScoring_(
+          ExtraConfig::memoryPoolAbortScoring(config.extraConfigs)),
+      memoryPoolAbortScoringPriorityWeight_(
+          ExtraConfig::memoryPoolAbortScoringPriorityWeight(
+              config.extraConfigs)),
       freeReservedCapacity_(reservedCapacity_),
       freeNonReservedCapacity_(capacity_ - freeReservedCapacity_) {
   VELOX_CHECK_EQ(kind_, config.kind);
@@ -641,10 +662,68 @@ SharedArbitrator::sortAndGroupSpillCandidates(
   return candidateGroups;
 }
 
+namespace {
+// Ranks an abort candidate by badness, higher = better victim. Blends the
+// capacity abort would free with priority scaled by 'priorityWeight' bytes per
+// unit; a large weight degenerates to the legacy priority-first order. Uses
+// 'currentCapacity' (abort frees the whole pool), not reclaimableUsedCapacity
+// (which is the spill path's metric). No reclaimer means lowest priority.
+__int128 abortBadnessScore(
+    const ArbitrationCandidate& candidate,
+    uint64_t priorityWeight) {
+  const auto* reclaimer = candidate.participant->pool()->reclaimer();
+  const int64_t priority = reclaimer == nullptr
+      ? std::numeric_limits<int32_t>::max()
+      : reclaimer->priority();
+  return static_cast<__int128>(candidate.currentCapacity) +
+      static_cast<__int128>(priority) * static_cast<__int128>(priorityWeight);
+}
+} // namespace
+
 // static
 std::vector<std::vector<ArbitrationCandidate>>
 SharedArbitrator::sortAndGroupAbortCandidates(
-    std::vector<ArbitrationCandidate>&& candidates) {
+    std::vector<ArbitrationCandidate>&& candidates,
+    bool scoring,
+    uint64_t priorityWeight) {
+  if (scoring) {
+    // Rank by badness score and return as one group; 'findAbortCandidate' then
+    // picks the highest-scoring victim across the whole set.
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [priorityWeight](
+            const ArbitrationCandidate& lhs, const ArbitrationCandidate& rhs) {
+          const auto lhsScore = abortBadnessScore(lhs, priorityWeight);
+          const auto rhsScore = abortBadnessScore(rhs, priorityWeight);
+          if (lhsScore != rhsScore) {
+            return lhsScore > rhsScore;
+          }
+          // Equal score: abort the younger participant (larger id) first to let
+          // the older long-running query proceed, matching the legacy order.
+          return lhs.participant->id() > rhs.participant->id();
+        });
+    if (VLOG_IS_ON(1)) {
+      for (const auto& candidate : candidates) {
+        const auto* reclaimer = candidate.participant->pool()->reclaimer();
+        VELOX_MEM_LOG(INFO)
+            << "[abort-scoring] candidate " << candidate.participant->name()
+            << " priority "
+            << (reclaimer == nullptr ? -1 : reclaimer->priority())
+            << " currentCapacity " << succinctBytes(candidate.currentCapacity)
+            << " reclaimableUsedCapacity "
+            << succinctBytes(candidate.reclaimableUsedCapacity) << " score "
+            << static_cast<int64_t>(
+                   abortBadnessScore(candidate, priorityWeight) /
+                   static_cast<__int128>(1 << 20))
+            << "MB-equiv";
+      }
+    }
+    std::vector<std::vector<ArbitrationCandidate>> candidateGroups;
+    candidateGroups.emplace_back(std::move(candidates));
+    return candidateGroups;
+  }
+
   std::sort(
       candidates.begin(),
       candidates.end(),
@@ -698,7 +777,33 @@ std::optional<ArbitrationCandidate> SharedArbitrator::findAbortCandidate(
     return std::nullopt;
   }
 
-  auto candidateGroups = sortAndGroupAbortCandidates(std::move(candidates));
+  auto candidateGroups = sortAndGroupAbortCandidates(
+      std::move(candidates),
+      memoryPoolAbortScoring_,
+      memoryPoolAbortScoringPriorityWeight_);
+
+  if (memoryPoolAbortScoring_) {
+    // Score already encodes the victim ordering, so skip the legacy
+    // capacity-bucket/age tie-breaking and take the highest-scoring candidate
+    // that still holds capacity and is not aborted.
+    VELOX_CHECK_EQ(candidateGroups.size(), 1);
+    for (auto& candidate : candidateGroups.front()) {
+      if (candidate.participant->aborted() || candidate.currentCapacity == 0) {
+        continue;
+      }
+      VELOX_MEM_LOG(INFO) << "[abort-scoring] selected victim "
+                          << candidate.participant->name()
+                          << " currentCapacity "
+                          << succinctBytes(candidate.currentCapacity);
+      return candidate;
+    }
+    if (!force) {
+      return std::nullopt;
+    }
+    // Forced: nothing eligible, fall back to the highest-scoring candidate.
+    VELOX_CHECK(!candidateGroups.front().empty());
+    return candidateGroups.front().front();
+  }
 
   for (auto& candidateGroup : candidateGroups) {
     for (uint64_t capacityLimit : globalArbitrationAbortCapacityLimits_) {

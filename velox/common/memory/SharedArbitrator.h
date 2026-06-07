@@ -242,6 +242,28 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     static bool globalArbitrationWithoutSpill(
         const std::unordered_map<std::string, std::string>& configs);
 
+    /// If true, abort victim selection ranks candidates by a combined badness
+    /// score (in the spirit of Linux oom_badness) instead of the strict
+    /// priority-then-capacity-then-age order, blending reclaimer priority with
+    /// capacity so a marginally higher priority does not unconditionally shield
+    /// a query that holds far more memory. The default weight keeps the
+    /// priority-dominant ordering for clearly separated priorities.
+    static constexpr std::string_view kMemoryPoolAbortScoring{
+        "memory-pool-abort-scoring"};
+    static constexpr bool kDefaultMemoryPoolAbortScoring{false};
+    static bool memoryPoolAbortScoring(
+        const std::unordered_map<std::string, std::string>& configs);
+
+    /// The capacity, in bytes, that one unit of priority difference is worth in
+    /// the abort badness score. A higher weight makes priority dominate (closer
+    /// to the legacy order); a lower weight lets capacity matter more.
+    static constexpr std::string_view kMemoryPoolAbortScoringPriorityWeight{
+        "memory-pool-abort-scoring-priority-weight"};
+    static constexpr std::string_view
+        kDefaultMemoryPoolAbortScoringPriorityWeight{"1GB"};
+    static uint64_t memoryPoolAbortScoringPriorityWeight(
+        const std::unordered_map<std::string, std::string>& configs);
+
     /// If true, do sanity check on the arbitrator state on destruction.
     ///
     /// TODO: deprecate this flag after all the existing memory leak use cases
@@ -508,9 +530,15 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
   // Sorts 'candidates' based on participant's reclaimer priority in descending
   // order, putting lower priority ones (with higher priority value) first, and
-  // high priority ones (with lower priority value) later.
+  // high priority ones (with lower priority value) later. When 'scoring' is
+  // true, instead ranks candidates by a combined badness score that blends
+  // priority (weighted by 'priorityWeight' bytes per priority unit) with
+  // reclaimable capacity, and returns them as a single group.
   static std::vector<std::vector<ArbitrationCandidate>>
-  sortAndGroupAbortCandidates(std::vector<ArbitrationCandidate>&& candidates);
+  sortAndGroupAbortCandidates(
+      std::vector<ArbitrationCandidate>&& candidates,
+      bool scoring = false,
+      uint64_t priorityWeight = 0);
 
   // Finds the participant victim to abort to free used memory based on the
   // participant's memory capacity and age. The function returns std::nullopt if
@@ -639,6 +667,8 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   const uint32_t globalArbitrationMemoryReclaimPct_;
   const double globalArbitrationAbortTimeRatio_;
   const bool globalArbitrationWithoutSpill_;
+  const bool memoryPoolAbortScoring_;
+  const uint64_t memoryPoolAbortScoringPriorityWeight_;
 
   // The executor used to reclaim memory from multiple participants in parallel
   // at the background for global arbitration or external memory reclamation.

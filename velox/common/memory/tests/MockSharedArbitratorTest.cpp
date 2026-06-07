@@ -468,6 +468,8 @@ class MockSharedArbitrationTest : public testing::Test {
     // Set the globalArbitrationAbortTimeRatio to be very small so that the
     // query can be aborted sooner and the test would not timeout.
     double globalArbitrationAbortTimeRatio{0.005};
+    bool memoryPoolAbortScoring{false};
+    uint64_t memoryPoolAbortScoringPriorityWeight{1ULL << 30};
   };
 
   void setupMemory(ArbitratorOptions arbitratorOptions) {
@@ -526,7 +528,13 @@ class MockSharedArbitrationTest : public testing::Test {
              arbitratorOptions.globalArbitrationWithoutSpill)},
         {std::string(ExtraConfig::kGlobalArbitrationAbortTimeRatio),
          folly::to<std::string>(
-             arbitratorOptions.globalArbitrationAbortTimeRatio)}};
+             arbitratorOptions.globalArbitrationAbortTimeRatio)},
+        {std::string(ExtraConfig::kMemoryPoolAbortScoring),
+         folly::to<std::string>(arbitratorOptions.memoryPoolAbortScoring)},
+        {std::string(ExtraConfig::kMemoryPoolAbortScoringPriorityWeight),
+         folly::to<std::string>(
+             arbitratorOptions.memoryPoolAbortScoringPriorityWeight) +
+             "B"}};
     options.arbitrationStateCheckCb =
         std::move(arbitratorOptions.arbitrationStateCheckCb);
     options.checkUsageLeak = true;
@@ -2356,6 +2364,49 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationByAbortWithPriority) {
   arbitrator_->shrinkCapacity(64 << 20, false, true);
   VELOX_ASSERT_THROW(
       std::rethrow_exception(task1->error()),
+      "Memory pool aborted to reclaim used memory");
+}
+
+// When abort scoring is enabled, the victim is chosen by a combined badness
+// score (priority blended with reclaimable capacity) rather than the strict
+// priority-first ordering. A lowest-priority but tiny participant should no
+// longer be aborted ahead of a slightly-higher-priority participant that holds
+// almost all of the memory, because aborting the tiny one reclaims almost
+// nothing. This mirrors Linux oom_badness favoring high memory footprint.
+TEST_F(MockSharedArbitrationTest, globalArbitrationByAbortWithScoring) {
+  const int64_t memoryCapacity = 512 << 20;
+  const uint64_t memoryPoolInitCapacity = memoryCapacity / 2;
+  setupMemory(
+      {.memoryCapacity = memoryCapacity,
+       .memoryPoolInitCapacity = memoryPoolInitCapacity,
+       .memoryPoolAbortCapacityLimit = memoryCapacity,
+       .globalArbitrationWithoutSpill = true,
+       // Enable badness-score victim selection with a small priority weight so
+       // that the large reclaimable capacity outweighs a one-step priority
+       // difference.
+       .memoryPoolAbortScoring = true,
+       .memoryPoolAbortScoringPriorityWeight = 32 << 20});
+
+  // 'hugeTask' has slightly higher priority (1) but holds nearly all memory.
+  auto hugeTask = addTask(448 << 20, 1);
+  auto* hugeOp = hugeTask->addMemoryOp(false);
+  hugeOp->allocate(448 << 20);
+
+  // 'tinyTask' has the lowest priority (2) but only a sliver of memory, so
+  // aborting it reclaims almost nothing.
+  auto tinyTask = addTask(64 << 20, 2);
+  auto* tinyOp = tinyTask->addMemoryOp(false);
+  tinyOp->allocate(64 << 20);
+
+  ASSERT_EQ(manager_->capacity(), manager_->getTotalBytes());
+
+  // Strict priority order would abort 'tinyTask' first (lowest priority);
+  // scoring instead aborts 'hugeTask' because it dominates the badness score.
+  arbitrator_->shrinkCapacity(64 << 20, false, true);
+  ASSERT_TRUE(tinyTask->error() == nullptr);
+  ASSERT_TRUE(hugeTask->error() != nullptr);
+  VELOX_ASSERT_THROW(
+      std::rethrow_exception(hugeTask->error()),
       "Memory pool aborted to reclaim used memory");
 }
 
