@@ -1977,7 +1977,7 @@ DEBUG_ONLY_TEST_F(
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
   auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-  setThreadLocalRunTimeStatWriter(statsWriter.get());
+  RuntimeStatWriterScopeGuard statsWriterGuard(statsWriter.get());
 
   localArbitrationOp->allocate(memoryPoolReservedCapacity);
   // Inject some delay for global arbitration.
@@ -2111,7 +2111,7 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationWithoutSpill) {
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
   auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-  setThreadLocalRunTimeStatWriter(statsWriter.get());
+  RuntimeStatWriterScopeGuard statsWriterGuard(statsWriter.get());
   triggerOp->allocate(memoryCapacity / 2);
 
   ASSERT_EQ(
@@ -2166,7 +2166,7 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationSmallParticipantLargeGrow) {
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
   auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-  setThreadLocalRunTimeStatWriter(statsWriter.get());
+  RuntimeStatWriterScopeGuard statsWriterGuard(statsWriter.get());
 
   // task0 has 256MB + 256MB (attempt) = 512MB in top abort capacity limit
   // bucket, which shall be evaluated first, and hence killed by global
