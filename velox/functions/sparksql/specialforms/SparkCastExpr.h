@@ -23,6 +23,9 @@
 
 namespace facebook::velox::functions::sparksql {
 
+inline constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+inline constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
+
 class SparkCastExpr : public exec::CastExpr {
  public:
   SparkCastExpr(
@@ -64,6 +67,13 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
       const core::QueryConfig& config) override;
 };
 
+/// Registers Spark cast special forms that preserve the cast mode on the
+/// expression instead of deriving it only from SparkQueryConfig::ansiEnabled().
+///
+/// The ANSI cast form applies ANSI behavior for casts supported by
+/// SparkCastCallToSpecialForm::isAnsiSupported() and uses try-cast behavior for
+/// cast pairs whose ANSI behavior is not supported yet. The legacy cast form
+/// applies Spark legacy cast behavior regardless of the session ANSI setting.
 void registerSparkCastModeSpecialForms(
     const std::string& ansiCastName,
     const std::string& legacyCastName);
