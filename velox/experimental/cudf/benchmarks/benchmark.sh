@@ -72,7 +72,7 @@ for query_number in ${queries}; do
       printf '%s\n' \
         "cudf.memory_resource=${VELOX_CUDF_MEMORY_RESOURCE}" \
         "cudf.memory_percent=${VELOX_CUDF_MEMORY_PERCENT}" \
-        > "${VELOX_CUDF_PROPERTIES_FILE}"
+        >"${VELOX_CUDF_PROPERTIES_FILE}"
       CUDF_FLAGS="${CUDF_FLAGS} --cudf_properties=${VELOX_CUDF_PROPERTIES_FILE}"
     fi
     ${PROFILE_CMD} \
