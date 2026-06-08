@@ -167,6 +167,18 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_rows_streaming_window_benchmark RowsStreamingWindowBenchmark.cpp)
+
+target_link_libraries(
+  velox_rows_streaming_window_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark
+)
+
 add_executable(velox_mark_sorted_benchmark MarkSortedBenchmark.cpp)
 
 target_link_libraries(

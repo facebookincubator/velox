@@ -1620,6 +1620,135 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
   run.template operator()<int64_t>();
 }
 
+TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth32) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  constexpr int64_t kStep = (1LL << 32) - 1;
+  auto vector = makeRowVector(
+      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+        return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
+      })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidthSweep) {
+  auto run = [&]<typename T>(int maxBitWidth) {
+    SCOPED_TRACE(fmt::format("T=int{}", sizeof(T) * 8));
+    constexpr vector_size_t kSize = 256;
+    std::vector<std::string> names;
+    std::vector<VectorPtr> children;
+    for (int bw = 1; bw <= maxBitWidth; ++bw) {
+      const int64_t step = (bw == 32) ? 0xFFFFFFFFLL : ((1LL << bw) - 1);
+      children.push_back(makeFlatVector<T>(kSize, [step](auto row) -> T {
+        return static_cast<T>((row / 2) * step + ((row % 2) ? step : 0));
+      }));
+      names.push_back(fmt::format("c{}", bw));
+    }
+    auto vector = makeRowVector(names, children);
+
+    WriterOptions options;
+    options.enableDictionary = false;
+    options.encoding =
+        facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+    auto file = TempFilePath::create();
+    writeToParquetFile(file->getPath(), {vector}, options);
+    loadData(vector->rowType(), vector);
+
+    assertSelect(
+        {makeSplit(file->getPath())}, std::move(names), "SELECT * FROM tmp");
+  };
+
+  run.template operator()<int32_t>(31);
+  run.template operator()<int64_t>(32);
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth33) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  constexpr int64_t kStep = 1LL << 32;
+  auto vector = makeRowVector(
+      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+        return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
+      })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedMixedMiniblockWidths) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 128;
+  auto vector =
+      makeRowVector({"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+                      auto deltaForRow = [](vector_size_t r) -> int64_t {
+                        const int mb = (r / 32) % 4;
+                        const int parity = r % 2;
+                        if (mb == 0)
+                          return parity;
+                        if (mb == 1)
+                          return parity ? 200LL : 0LL;
+                        if (mb == 2)
+                          return parity ? 50'000LL : 0LL;
+                        return parity ? 12'000'000LL : 0LL;
+                      };
+                      int64_t v = 0;
+                      for (vector_size_t i = 0; i < row; ++i) {
+                        v += deltaForRow(i);
+                      }
+                      return v;
+                    })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedFilterScalarTail) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+  options.dataPageSize = 8 * 1024;
+  options.batchSize = 1024;
+
+  constexpr vector_size_t kSize = 128 * 1024;
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int64_t>(
+           kSize, [](auto row) { return static_cast<int64_t>(row); }),
+       makeFlatVector<int64_t>(
+           kSize, [](auto row) { return 100'000LL + row * 31LL; })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelectWithFilter(
+      {makeSplit(file->getPath())},
+      {"a", "b"},
+      {"a BETWEEN 10000 AND 70000", "b > 200000"},
+      "",
+      "SELECT a, b FROM tmp WHERE a BETWEEN 10000 AND 70000 AND b > 200000");
+}
+
 TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
   WriterOptions options;
   options.enableDictionary = false;

@@ -100,6 +100,91 @@ TEST_F(IcebergDwrfInsertTest, commitMessageFormat) {
   }
 }
 
+/// Regression test for the DWRF/ORC recordCount=0 manifest bug. Before the
+/// fix, IcebergDataSink::closeWriterAndCollectStats emplaced
+/// IcebergDataFileStatistics::empty() (numRecords = 0) on every non-Parquet
+/// commit, which makes the iceberg manifest report DataFile.recordCount() == 0
+/// and silently breaks DELETE/UPDATE/MERGE planning (planner treats files as
+/// empty and skips them).
+///
+/// Writes a single batch of N rows to an unpartitioned table and asserts the
+/// resulting commit message reports metrics.recordCount = N. Without the fix
+/// the assertion fails with 0.
+TEST_F(IcebergDwrfInsertTest, recordCountUnpartitioned) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  auto rowType = ROW({"c1", "c2"}, {BIGINT(), VARCHAR()});
+  constexpr int32_t kNumRows = 100;
+  const auto vectors = createTestData(rowType, /*numBatches=*/1, kNumRows);
+  const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
+  const auto commitTasks = dataSink->close();
+
+  ASSERT_EQ(commitTasks.size(), 1);
+  auto taskJson = folly::parseJson(commitTasks[0]);
+  ASSERT_GT(taskJson.count("metrics"), 0);
+  ASSERT_GT(taskJson["metrics"].count("recordCount"), 0);
+  EXPECT_EQ(taskJson["metrics"]["recordCount"].asInt(), kNumRows);
+}
+
+/// Multi-batch single-writer accumulation. closeWriterAndCollectStats reads
+/// writerInfo_->numWrittenRows, which the FileDataSink accumulates across
+/// every appendData call to the same writer. The per-file delta should equal
+/// the SUM of all batches' rows when only one file is produced.
+TEST_F(IcebergDwrfInsertTest, recordCountMultiBatchAccumulated) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  auto rowType = ROW({"c1", "c2"}, {BIGINT(), VARCHAR()});
+  constexpr int32_t kNumBatches = 4;
+  constexpr int32_t kRowsPerBatch = 25;
+  const auto vectors = createTestData(rowType, kNumBatches, kRowsPerBatch);
+  const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
+  const auto commitTasks = dataSink->close();
+
+  ASSERT_EQ(commitTasks.size(), 1);
+  auto taskJson = folly::parseJson(commitTasks[0]);
+  EXPECT_EQ(
+      taskJson["metrics"]["recordCount"].asInt(), kNumBatches * kRowsPerBatch);
+}
+
+/// Multi-partition per-writer delta. Two partitions => two distinct writer
+/// indices => two commit messages, each with its own DataFileStatistics
+/// derived from the reportedRowsPerWriter_[index] delta. If the index
+/// bookkeeping is wrong (e.g., shared counter across writers), totals would
+/// double-count or under-count.
+///
+/// Asserts: (a) exactly 2 commits, (b) every commit reports a positive
+/// recordCount, (c) the sum across commits equals the total rows written.
+TEST_F(IcebergDwrfInsertTest, recordCountPartitionedPerWriter) {
+  auto rowType = ROW({"c1", "c2"}, {BIGINT(), VARCHAR()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  constexpr int32_t kNumBatches = 2;
+  constexpr int32_t kRowsPerBatch = 60;
+  const auto vectors = createTestData(rowType, kNumBatches, kRowsPerBatch, 0.0);
+
+  // Partition by c2 (VARCHAR). createTestData populates strings from a small
+  // randomized pool, so distinct partition values are produced reliably for
+  // 60 rows; assertions below tolerate any partition count >= 2.
+  std::vector<test::PartitionField> partitionTransforms = {
+      {1, TransformType::kIdentity, std::nullopt}};
+  const auto dataSink =
+      createDataSinkAndAppendData(vectors, dataPath, partitionTransforms);
+  const auto commitTasks = dataSink->close();
+
+  ASSERT_GE(commitTasks.size(), 2)
+      << "Expected at least 2 partition files; got " << commitTasks.size();
+
+  int64_t totalRecords = 0;
+  for (const auto& task : commitTasks) {
+    auto taskJson = folly::parseJson(task);
+    const int64_t recordCount = taskJson["metrics"]["recordCount"].asInt();
+    EXPECT_GT(recordCount, 0)
+        << "Per-partition recordCount must be positive; task: " << task;
+    totalRecords += recordCount;
+  }
+  EXPECT_EQ(totalRecords, kNumBatches * kRowsPerBatch);
+}
+
 /// Round-trips TIMESTAMP values through the DWRF write path with the session
 /// configured for non-UTC timezone and adjustTimestampToTimezone=true. The
 /// Iceberg spec requires timestamps NOT be adjusted to UTC; the DataSink

@@ -135,6 +135,7 @@ TEST_F(CompactRowTest, fixedRowSize) {
   ASSERT_EQ(1 + 4, CompactRow::fixedRowSize(ROW({INTEGER()})));
   ASSERT_EQ(1 + 2, CompactRow::fixedRowSize(ROW({SMALLINT()})));
   ASSERT_EQ(1 + 8, CompactRow::fixedRowSize(ROW({DOUBLE()})));
+  ASSERT_EQ(1 + 8, CompactRow::fixedRowSize(ROW({TIMESTAMP_UTC()})));
   ASSERT_EQ(std::nullopt, CompactRow::fixedRowSize(ROW({VARCHAR()})));
   ASSERT_EQ(std::nullopt, CompactRow::fixedRowSize(ROW({ARRAY(BIGINT())})));
   ASSERT_EQ(
@@ -346,6 +347,36 @@ TEST_F(CompactRowTest, timestamp) {
           ts(123'456),
           Timestamp::min(),
       }),
+  });
+
+  data->childAt(0)->setNull(1, true);
+  data->childAt(0)->setNull(3, true);
+
+  testRoundTrip(data);
+}
+
+TEST_F(CompactRowTest, timestampUtc) {
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {
+              ts(0),
+              ts(1),
+              ts(2),
+          },
+          TIMESTAMP_UTC()),
+  });
+
+  testRoundTrip(data);
+
+  data = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {
+              ts(0),
+              Timestamp::max(),
+              ts(123'456),
+              Timestamp::min(),
+          },
+          TIMESTAMP_UTC()),
   });
 
   data->childAt(0)->setNull(1, true);

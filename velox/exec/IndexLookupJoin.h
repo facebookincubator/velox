@@ -98,7 +98,8 @@ class IndexLookupJoin : public Operator {
         override;
 
     // Sets a runtime metric in the index source stats map. Thread-safe.
-    void setRuntimeStat(const std::string& name, const RuntimeMetric& metric);
+    void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
+        override;
 
     // Returns a snapshot of the accumulated index source runtime stats.
     std::unordered_map<std::string, RuntimeMetric> runtimeStats() const;
