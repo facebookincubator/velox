@@ -28,6 +28,8 @@ understanding the change.
   upstream maintainers' expertise.
 - **Be encouraging with new contributors.** Acknowledge the value of the
   capability they're adding.
+- **Assume competence.** The author knows C++. Explain only non-obvious
+  context — don't lecture on language basics.
 
 ## Structure
 
@@ -39,6 +41,10 @@ understanding the change.
   doesn't require the author to change something, don't include it.
 - **Drop qualifiers when the fix is obvious.** Don't explain why something is
   wrong if the fix is self-evident.
+- **Permission to be quiet.** If the PR has no meaningful issues, post a short
+  LGTM (one or two sentences) and stop. Don't manufacture nitpicks to fill
+  space — padding trains authors to ignore reviews. A clean PR getting a clean
+  review is the correct outcome.
 
 ## Rigor
 
@@ -49,6 +55,9 @@ understanding the change.
   Don't accept at face value.
 - **Check terminology.** Use precise terms. Don't conflate catalog/connector,
   function/method, etc.
+- **Focus on what CI cannot check.** Don't comment on formatting, linting, or
+  type errors — CI catches those. Spend review time on correctness, design,
+  memory safety, concurrency, and test coverage.
 
 ## Re-reviews
 

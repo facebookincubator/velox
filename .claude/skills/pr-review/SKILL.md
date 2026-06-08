@@ -5,59 +5,86 @@ description: Review Velox pull requests for code quality, memory safety, perform
 
 # Velox PR Review Skill
 
-Review Velox pull requests focusing on what CI cannot check: code quality, memory
-safety, concurrency, performance, and correctness. This is performance-critical C++
-code for a database execution engine where bugs can cause data corruption, crashes,
-or security vulnerabilities.
+Orchestrate Velox PR reviews. This skill is the single entry point for
+generating reviews — both AI-driven (this skill running locally or in
+CI) and AI-assisted (a maintainer iterating on a draft before posting).
 
-## Usage Modes
+The skill is intentionally thin on review *content*. Review style,
+rigor, tone, and what to check live in human-readable guides under
+`scripts/review/`. The skill loads those guides and walks the stages
+below.
 
-### GitHub Actions Mode
+## Required reading
 
-When invoked via `/pr-review [additional context]` on a GitHub PR, the action
-pre-fetches PR metadata and injects it into the prompt. Detect this mode by the
-presence of `<formatted_context>`, `<pr_or_issue_body>`, and `<comments>` tags in
-the prompt.
+Before drafting any review:
 
-The prompt already contains:
-- PR metadata (title, author, branch names, additions/deletions, file count)
-- PR body/description
-- All comments and review comments (with file/line references)
-- List of changed files with paths and change types
+- `CODING_STYLE.md` (repo root) — every modified line is checked
+  against it. The `Common Mistakes` section is the authoritative
+  checklist of the highest-volume real review hits.
+- `scripts/review/REVIEW_GUIDE.md` — review style, tone, rigor,
+  re-reviews, refactoring rules, and what to check. This guide is
+  the source of truth for *how* to review.
+- `scripts/review/FUNCTION_PR_GUIDE.md` — only when the diff touches
+  `velox/functions/` (see Stage 2 for the load rule and subtree
+  guard).
 
-Use git commands to get the diff and commit history. The base branch name is in the prompt context (look for PR Branch: <head> -> <base> or the baseBranch field).
+If anything in this skill ever contradicts `CODING_STYLE.md` or
+`REVIEW_GUIDE.md`, prefer those guides — the skill orchestrates, the
+guides decide.
+
+## Stages
+
+The review flow is a six-stage pipeline. Each stage is the same
+across all invocation modes; only Stage 1 (fetch transport) and
+Stages 4-6 (draft / approval gate / post transport) differ between
+local CLI and CI.
+
+### Stage 0: Mode detection
+
+Three modes:
+
+- **GitHub Actions tag mode** — invoked via `@claude /pr-review` on a
+  PR comment. Detect by the presence of `<formatted_context>`,
+  `<pr_or_issue_body>`, and `<comments>` tags in the prompt. The
+  action pre-fetches PR metadata, body, comments, reviews, and
+  changed-file list.
+- **GitHub Actions `workflow_dispatch` mode** — invoked manually
+  via the Actions UI. PR code is checked out at the merge ref; use
+  `gh pr view`, `gh pr diff`, `gh pr view --json comments,reviews`
+  to fetch data.
+- **Local CLI mode** — invoked via `/pr-review <PR number or URL>`
+  from a developer machine. Use `scripts/review/fetch.py` and
+  `scripts/review/post.py` (not `gh` directly — the scripts handle
+  pagination, error formatting, and the draft path convention).
+
+### Stage 1: Fetch
+
+**Local CLI mode:**
 
 ```bash
-# Get the full diff against the base branch
+python3 scripts/review/fetch.py <PR_NUMBER>
+# or
+python3 scripts/review/fetch.py <github-pr-url>
+```
+
+This is the only fetch needed — work from its output for all
+subsequent analysis. Do not make additional `gh api` calls.
+
+**GitHub Actions tag mode:** PR metadata is already in the prompt
+context. Get the diff and commit history via git:
+
+```bash
 git diff origin/<baseBranch>...HEAD
-
-# Get diff stats
 git diff --stat origin/<baseBranch>...HEAD
-
-# Get commit history for this PR
 git log origin/<baseBranch>..HEAD --oneline
-
-# If the base branch ref is not available, fetch it first
+# If the base branch ref is not available locally:
 git fetch origin <baseBranch> --depth=1
 ```
 
-Do NOT use `gh` CLI commands in this mode -- only git commands are available.
-All PR metadata, comments, and reviews are already in the prompt context;
-only the diff and commit log need to be fetched via git.
+Do NOT use `gh` CLI in tag mode — only git commands are available.
+All PR metadata, comments, and reviews are already injected.
 
-If the reviewer provided additional context or instructions after the `/pr-review`
-command, incorporate those into your review focus.
-
-### Local CLI Mode
-
-The user provides a PR number or URL:
-
-```
-/pr-review 12345
-/pr-review https://github.com/facebookincubator/velox/pull/12345
-```
-
-Use `gh` CLI to fetch PR data:
+**`workflow_dispatch` mode:**
 
 ```bash
 gh pr view <PR_NUMBER> --json title,body,author,baseRefName,headRefName,files,additions,deletions,commits
@@ -65,48 +92,60 @@ gh pr diff <PR_NUMBER>
 gh pr view <PR_NUMBER> --json comments,reviews
 ```
 
-## Review Workflow
+### Stage 2: Load content (one-time, conditional)
 
-### Step 1: Read Project Guidelines
+Always load `CODING_STYLE.md` and `REVIEW_GUIDE.md`.
 
-**Before reviewing, you MUST Read `CODING_STYLE.md` at the repo root in
-full.** Do not skim, do not skip — every modified line in the diff must be
-checked against it.
+**Conditional: `FUNCTION_PR_GUIDE.md`.** Load the guide when the diff
+touches any file under `velox/functions/`. After loading, apply a
+**subtree guard**: if every changed file under `velox/functions/` is
+in one of the non-function subtrees below, skip *applying* the
+checklist — the guide's questions (`.rst` doc entries, registration
+prefixes, `SimpleFunction` API) won't fit:
 
-The "Common Mistakes" section is the authoritative checklist for the
-highest-volume real review hits (`///` vs `//`, abbreviations, `*Utils`,
-undocumented headers, header-body weight, `goto`, test-first for bug
-fixes, naming conventions, assert forms, etc.).
+- `velox/functions/*/tests/`
+- `velox/functions/*/benchmarks/`
+- `velox/functions/*/fuzzer/`
+- `velox/functions/*/coverage/`
+- `velox/functions/remote/server/` (RPC infrastructure)
+- Build files (`CMakeLists.txt`)
 
-This skill does not maintain a duplicate checklist — `CODING_STYLE.md`
-is the single source of truth. If anything in this skill ever appears to
-contradict `CODING_STYLE.md`, prefer `CODING_STYLE.md`.
+If the diff touches both function code *and* one of these subtrees,
+apply the checklist to the function code portion only.
 
-### Step 2: Analyze Changes and Prior Review
+**Conditional: prior `/pr-review` comments.** Parse the `Comments`
+and `Reviews` sections of the fetch output to identify issues
+already raised by a prior reviewer (human or Claude). Do not
+re-flag those — re-flagging trains authors to ignore Claude
+reviews. If a prior comment was addressed by a follow-up commit,
+verify the fix in the diff rather than restating the original
+concern.
 
-Read through the diff systematically:
-1. Identify the purpose of the change from title/description
-2. Group changes by type (new code, tests, config, docs)
-3. Note the scope of changes (files affected, lines changed)
+**Important:** `scripts/review/fetch.py` currently exits hard on
+metadata-fetch failure but returns empty silently on comment-fetch
+or review-fetch failures. Before concluding "no prior reviews,"
+check that the fetch output contains a `Comments` and/or `Reviews`
+section header. If the headers are absent, treat it as "fetch did
+not return comment data" — ask the user to re-run `fetch.py` or
+check `gh auth status`. Don't assume silence means none exist.
 
-The `<comments>` block in the prompt context contains all prior review
-comments — including any from earlier `/pr-review` invocations on this PR.
-Read them before reviewing:
-- Do **not** re-flag issues already raised by a prior reviewer (human or
-  Claude). Re-flagging trains authors to ignore Claude reviews.
-- If a prior comment was addressed by a follow-up commit, verify the fix in
-  the diff rather than restating the original concern.
-- If `/pr-review` was invoked in reply to a specific comment thread, focus
-  the review on that thread's concerns instead of re-reviewing the whole PR.
+If `/pr-review` was invoked in reply to a specific comment thread,
+focus the review on that thread's concerns instead of re-reviewing
+the whole PR.
 
-### Step 3: Check PR Title and Description Quality
+### Stage 3: Analyze
 
-Read the PR title and body, and walk the self-check in
-`.claude/skills/write-commit-message/SKILL.md`. If **2 or more** items fail
-(e.g., long lists embedded in sentences, function-by-function walkthroughs,
-restating the diff, jargon nouns, long inline code/error strings), include a
-single short note in the summary comment asking the author to tighten the
-description. Template:
+Apply the rigor, structure, and tone rules from `REVIEW_GUIDE.md`.
+That guide enumerates what to check (correctness, memory safety,
+concurrency, performance, error handling, code quality, testing,
+documentation) — the skill does not duplicate it here.
+
+Also walk the PR title and body through the self-check in
+`.claude/skills/write-commit-message/SKILL.md`. If **2 or more**
+items fail (long lists embedded in sentences, function-by-function
+walkthroughs, restating the diff, jargon nouns, long inline
+code/error strings), include a single short note in the summary
+comment asking the author to tighten the description:
 
 ```
 The PR description would read more clearly with a rewrite. Specifically:
@@ -118,92 +157,134 @@ can help (it has a self-check + drafting workflow), but any path is fine
 as long as the result is clear.
 ```
 
-One short paragraph in the summary comment — do not file an inline comment
-per issue, and do not nag on 0–1 minor issues.
+One short paragraph in the summary — don't file an inline comment
+per issue, and don't nag on 0-1 minor issues.
 
-### Step 4: Deep Review
+**Huge diffs.** For diffs over ~3000 changed lines, fall back to
+file-by-file `Read` rather than holding the full diff in the prompt
+at once. Note in the draft that coverage was per-file so the
+maintainer knows.
 
-Trace the logic step by step. For each change, consider boundary conditions
-(empty, null, max size, first/last iteration), failure modes (allocation
-failures, exceptions, partial state), concurrency (race conditions, lock
-ordering), and memory safety (ownership, lifetimes, dangling references). Be
-strict — better to flag a potential issue than miss a real bug. The Review
-Areas table below enumerates what to check; do not duplicate it as narrative.
+### Stage 4: Draft
 
-## Review Areas
+**Local CLI mode:** Write the draft to
+`~/.claude/review-drafts/pr-NNNNN-rN-vN.md`. Auto-create the
+directory if missing.
 
-Analyze each of these areas thoroughly:
+Filename rule:
 
-| Area | Focus |
-|------|-------|
-| Correctness & Edge Cases | Logic errors, off-by-one, null/empty handling, boundary conditions, integer overflow, floating point edge cases (NaN, Inf, negative zero) |
-| Memory Safety | Use-after-free, double-free, leaks, dangling pointers/references, buffer overflows, ownership/lifetime issues, exception safety |
-| Concurrency | Race conditions, data races, deadlocks, lock ordering, thread-safety of shared state |
-| Performance | Unnecessary copies (move semantics?), inefficient algorithms, cache-unfriendly access, excessive allocations in hot paths |
-| Error Handling | All error paths handled? Exceptions caught appropriately? Informative error messages? Correct use of VELOX_CHECK_* vs VELOX_USER_CHECK_*? |
-| Code Quality | RAII, const-correctness, smart pointers, naming conventions, clear structure |
-| Testing | Sufficient tests? Edge cases covered? Error paths tested? Using gtest matchers? **Bug-fix PRs**: does the diff add a test that would fail without the fix? Flag bug fixes that ship code-only. |
+- `rN` = (number of prior `/pr-review`-authored comments on this PR
+  detected in the fetch output) + 1. Round 1 means no prior bot
+  reviews; round 2 means one prior round, etc.
+- `vN` = (number of existing drafts on disk matching
+  `pr-NNNNN-rN-*.md` for the current `rN`) + 1. First draft of the
+  round is `v1`; the next iteration after maintainer feedback is
+  `v2`.
+
+If two shells race on the same PR & round, last writer wins —
+accepted risk, low likelihood.
+
+**CI modes:** Build the comment body in memory. No draft file.
+
+### Stage 5: Approval gate
+
+**Local CLI mode:** Show the maintainer the draft path and wait.
+
+- `"post"` → proceed to Stage 6.
+- `"iterate"` (with feedback) → bump `vN`, redraft, return to
+  Stage 5.
+- Unclear feedback → ask **one** clarifying question. If the answer
+  is still unclear, redraft using your best interpretation and
+  surface the assumption explicitly in your response ("I
+  interpreted X as Y; tell me if you wanted Z instead"). Never
+  loop silently asking question after question.
+
+**CI modes:** Skip — the bot posts directly.
+
+The CI bot loses the human catch for hallucinated file paths and
+stale comments-on-issues-already-raised. Stage 2's prior-comment
+parsing is the bot's only defense, which is why the fetch-header
+check in Stage 2 matters more in CI than locally.
+
+### Stage 6: Post
+
+**Local CLI mode:** Before invoking `post.py`, verify the draft file
+exists and is non-empty. If missing or empty, surface a clear
+message and offer to redraft — do NOT invoke `post.py` on a
+missing/empty file (it would crash with an unfriendly
+`FileNotFoundError`).
+
+```bash
+python3 scripts/review/post.py <PR> <event> <body-file>
+# Events: APPROVE, REQUEST_CHANGES, COMMENT
+```
+
+Post inline comments separately via `mcp__github_inline_comment__create_inline_comment`
+(see Inline Comments below). `post.py` posts the summary body only.
+
+**GitHub Actions modes:** Post via `gh pr comment` for the summary
+and `mcp__github_inline_comment__create_inline_comment` for inline
+comments.
 
 ## Output Format
 
-The output should be a markdown-formatted summary and should follow the following markdown format exactly:
+The summary comment is markdown formatted as follows. Within the
+`Issues Found` section, order points big-picture first per
+`REVIEW_GUIDE.md` (documentation, design questions, code, tests).
 
 ```markdown
 ### Summary
-Brief overall assessment (1-2 sentences)
+Brief overall assessment (1-2 sentences).
 
 ### Issues Found
-List any issue, categorized by severity:
- - 🔴 **Critical**: Must fix before merge
- - 🟡 **Suggestion**: Should consider
- - 🟢 **Nitpick**: Minor style issues
+List issues, categorized by severity:
+ - 🔴 **Critical**: Must fix before merge.
+ - 🟡 **Suggestion**: Should consider.
+ - 🟢 **Nitpick**: Minor style issues.
 
-Each issue should also include:
-- File and line reference
-- Description of the issue
-- Suggested fix if applicable
+Each issue should include:
+- File and line reference.
+- Description of the issue.
+- Suggested fix if applicable.
 
 ### Positive Observations
-Note any particularly good patterns or improvements.
+Optional. Only if there's something specific worth calling out.
 ```
 
 ## Inline Comments
 
-Use the `mcp__github_inline_comment__create_inline_comment` tool to post
-comments directly on specific lines in the PR diff. Inline comments should
-be used whenever pointing at the exact line adds clarity beyond the summary
-comment.
+Use `mcp__github_inline_comment__create_inline_comment` to post
+comments on specific lines in the PR diff. Inline comments should
+be used whenever pointing at the exact line adds clarity beyond
+the summary comment.
 
 **Use inline comments for:**
-- Concrete bugs or incorrect logic
-- Memory safety issues (use-after-free, dangling references, leaks)
-- Off-by-one errors or boundary condition mistakes
-- Incorrect use of VELOX_CHECK_* vs VELOX_USER_CHECK_*
+
+- Concrete bugs or incorrect logic.
+- Memory safety issues (use-after-free, dangling references, leaks).
+- Off-by-one errors or boundary condition mistakes.
+- Incorrect use of `VELOX_CHECK_*` vs. `VELOX_USER_CHECK_*`.
 
 **Do NOT use inline comments for:**
-- Style nitpicks or naming suggestions
-- General architectural feedback
-- Positive observations
-- Anything that applies broadly rather than to a specific line
 
-**Always post a summary comment** with the overall review. Inline comments
-supplement the summary — they do not replace it.
+- Style nitpicks or naming suggestions.
+- General architectural feedback.
+- Positive observations.
+- Anything that applies broadly rather than to a specific line.
 
-## Key Principles
+**No repetition.** Each observation appears in exactly one place —
+either inline or in the summary, never both. Inline comments
+supplement the summary; they do not duplicate it. Always post a
+summary comment with the overall review.
 
-1. **No repetition** - Each observation appears in exactly one place
-2. **Focus on what CI cannot check** - Don't comment on formatting, linting, or type errors
-3. **Be specific** - Reference file paths and line numbers
-4. **Be actionable** - Provide concrete suggestions, not vague concerns
-5. **Be proportionate** - Minor issues shouldn't block, but note them
-6. **Assume competence** - The author knows C++; explain only non-obvious context
-7. **Permission to be quiet** - If the PR has no meaningful issues, post a
-   short LGTM (one or two sentences) and stop. Do not manufacture nitpicks
-   to fill space — padding trains authors to ignore Claude reviews. A clean
-   PR getting a clean and high-signal review is the correct outcome.
-
-## Files to Reference
+## Files to reference
 
 When reviewing, consult these project files for context:
-- `CLAUDE.md` - Coding style and project guidelines
-- `CODING_STYLE.md` - Complete coding style guide
+
+- `CODING_STYLE.md` — complete coding style guide.
+- `.claude/CLAUDE.md` — project-level rules and review scripts.
+- `scripts/review/REVIEW_GUIDE.md` — review style and rigor.
+- `scripts/review/FUNCTION_PR_GUIDE.md` — function-PR checklist.
+- `scripts/review/SELF_REVIEW.md` — contributor pre-review checklist
+  (useful context for what the author was expected to run before
+  requesting review).
