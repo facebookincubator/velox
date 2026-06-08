@@ -2030,40 +2030,42 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
   constexpr vector_size_t kSecondRowGroupRows = 4096;
   constexpr vector_size_t kNumRows = kFirstRowGroupRows + kSecondRowGroupRows;
 
-  auto assertNullBufferSizeAcrossBatches =
-      [&](const RowTypePtr& rowType, dwio::common::RowReader& rowReader) {
-        VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-        const auto numRead = rowReader.next(kFirstRowGroupRows, result);
-        ASSERT_EQ(numRead, kFirstRowGroupRows);
-        const auto& column = BaseVector::loadedVectorShared(
-            result->asUnchecked<RowVector>()->childAt(0));
-        ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
+  auto assertNullBufferSize = [&](const RowTypePtr& rowType,
+                                  dwio::common::RowReader& rowReader) {
+    {
+      SCOPED_TRACE(fmt::format("batchSize={}", kFirstRowGroupRows));
+      VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+      const auto numRead = rowReader.next(kFirstRowGroupRows, result);
+      ASSERT_EQ(numRead, kFirstRowGroupRows);
+      const auto& column = BaseVector::loadedVectorShared(
+          result->asUnchecked<RowVector>()->childAt(0));
+      ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
 
-        auto nulls = column->nulls();
-        // Without the fix, this stale size would persist into RG2 and cause a
-        // crash.
-        ASSERT_LT(nulls->size(), bits::nbytes(kSecondRowGroupRows))
-            << "RG1 null buffer must be smaller than what RG2 needs";
-        // Buffer must have enough physical capacity to be reused for RG2,
-        // otherwise the pool reallocates and the bug doesn't trigger.
-        ASSERT_GE(nulls->capacity(), bits::nbytes(kSecondRowGroupRows))
-            << "RG1 null buffer capacity must be large enough for RG2 reuse";
-        EXPECT_NO_THROW(column->validate({}));
+      auto nulls = column->nulls();
+      // Without the fix, this stale size would persist into RG2 and cause a
+      // crash.
+      ASSERT_LT(nulls->size(), bits::nbytes(kSecondRowGroupRows))
+          << "RG1 null buffer must be smaller than what RG2 needs";
+      // Buffer must have enough physical capacity to be reused for RG2,
+      // otherwise the pool reallocates and the bug doesn't trigger.
+      ASSERT_GE(nulls->capacity(), bits::nbytes(kSecondRowGroupRows))
+          << "RG1 null buffer capacity must be large enough for RG2 reuse";
+      EXPECT_NO_THROW(column->validate({}));
+    }
+    {
+      SCOPED_TRACE(fmt::format("batchSize={}", kSecondRowGroupRows));
+      VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+      const auto numRead = rowReader.next(kSecondRowGroupRows, result);
+      ASSERT_EQ(numRead, kSecondRowGroupRows);
+      const auto& column = BaseVector::loadedVectorShared(
+          result->asUnchecked<RowVector>()->childAt(0));
+      ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
+      EXPECT_NO_THROW(column->validate({}));
+    }
+  };
 
-        SCOPED_TRACE(fmt::format("batchSize={}", kSecondRowGroupRows));
-        result = BaseVector::create(rowType, 0, leafPool_.get());
-        const auto numRead2 = rowReader.next(kSecondRowGroupRows, result);
-        ASSERT_EQ(numRead2, kSecondRowGroupRows);
-        const auto& column2 = BaseVector::loadedVectorShared(
-            result->asUnchecked<RowVector>()->childAt(0));
-        ASSERT_TRUE(column2->nulls()) << "Test data must contain nulls";
-        EXPECT_NO_THROW(column2->validate({}));
-      };
-
-  auto runCase = [&](std::string_view traceName,
-                     const RowTypePtr& rowType,
-                     const VectorPtr& columnData) {
-    SCOPED_TRACE(traceName);
+  auto verifyType = [&](const RowTypePtr& rowType,
+                        const VectorPtr& columnData) {
     parquet::WriterOptions writerOptions;
     writerOptions.memoryPool = rootPool_.get();
     // Use the second row group size as writeTable max row group length so the
@@ -2077,32 +2079,40 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
          makeRowVector(
              {"a"},
              {columnData->slice(kFirstRowGroupRows, kSecondRowGroupRows)})},
-        writerOptions,
-        rowType);
+        writerOptions);
     auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
     ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
     ASSERT_EQ(reader->fileMetaData().rowGroup(0).numRows(), kFirstRowGroupRows);
     ASSERT_EQ(
         reader->fileMetaData().rowGroup(1).numRows(), kSecondRowGroupRows);
-    assertNullBufferSizeAcrossBatches(rowType, *rowReader);
+    assertNullBufferSize(rowType, *rowReader);
+  };
+
+  const auto isNullRow = [](vector_size_t row) {
+    return row == 100 || row == kFirstRowGroupRows + 100 ||
+        row == kFirstRowGroupRows + 200;
   };
 
   // kNumRows 1-element arrays, 3 of which are null — one in RG1, two in RG2.
   auto arrays = makeArrayVector<int32_t>(
-      kNumRows, [](auto) { return 1; }, [](auto i) { return i; });
-  arrays->setNull(100, true);
-  arrays->setNull(kFirstRowGroupRows + 100, true);
-  arrays->setNull(kFirstRowGroupRows + 200, true);
-  runCase("list", ROW("a", ARRAY(INTEGER())), arrays);
+      kNumRows,
+      [&](auto row) { return isNullRow(row) ? 0 : 1; },
+      [](auto i) { return i; },
+      isNullRow);
+  {
+    SCOPED_TRACE("list");
+    verifyType(ROW("a", ARRAY(INTEGER())), arrays);
+  }
 
   // kNumRows 1-element maps, 3 of which are null — one in RG1, two in RG2.
   auto maps = makeMapVector<int32_t, int32_t>(
       kNumRows,
-      [](auto) { return 1; },
+      [&](auto row) { return isNullRow(row) ? 0 : 1; },
       [](auto i) { return i; },
-      [](auto i) { return i; });
-  maps->setNull(100, true);
-  maps->setNull(kFirstRowGroupRows + 100, true);
-  maps->setNull(kFirstRowGroupRows + 200, true);
-  runCase("map", ROW("a", MAP(INTEGER(), INTEGER())), maps);
+      [](auto i) { return i; },
+      isNullRow);
+  {
+    SCOPED_TRACE("map");
+    verifyType(ROW("a", MAP(INTEGER(), INTEGER())), maps);
+  }
 }
