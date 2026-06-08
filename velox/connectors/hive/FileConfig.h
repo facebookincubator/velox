@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <limits>
 #include <string>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
@@ -48,7 +49,7 @@ class FileConfig {
       kParquetUseColumnNames,
       isParquetUseColumnNames,
       "parquet_use_column_names",
-      "parquet.use-column-names",
+      "hive.parquet.use-column-names",
       bool,
       false,
       "Map Parquet table field names to file field names using names, not indices.")
@@ -57,8 +58,8 @@ class FileConfig {
       kAllowInt32NarrowingSession,
       kAllowInt32Narrowing,
       allowInt32Narrowing,
-      "allow_int32_narrowing",
-      "parquet.allow-int32-narrowing",
+      "parquet_allow_int32_narrowing",
+      "hive.parquet.allow-int32-narrowing",
       bool,
       false,
       "Allow reading INT32 Parquet columns as a narrower integer type.")
@@ -108,7 +109,7 @@ class FileConfig {
       kParquetFooterSpeculativeIoSize,
       parquetFooterSpeculativeIoSize,
       "parquet_footer_speculative_io_size",
-      "parquet.footer-speculative-io-size",
+      "hive.parquet.footer-speculative-io-size",
       uint64_t,
       256UL << 10,
       "Speculative tail-read size in bytes for Parquet files.")
@@ -205,6 +206,14 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
+      kLazyColumnIoSession,
+      lazyColumnIo,
+      "nimble.lazy_column_io",
+      bool,
+      false,
+      "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
+
+  VELOX_HIVE_CONFIG(
       kCacheMetadataSession,
       cacheMetadata,
       "cache_metadata",
@@ -247,6 +256,18 @@ class FileConfig {
       bool,
       true,
       "Enable selective Nimble reader.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kParquetFooterMemoryTrackingThresholdSession,
+      kParquetFooterMemoryTrackingThreshold,
+      parquetFooterMemoryTrackingThreshold,
+      "parquet_footer_memory_tracking_threshold",
+      "hive.parquet.footer-memory-tracking-threshold",
+      uint64_t,
+      std::numeric_limits<uint64_t>::max(),
+      "Serialized footer size in bytes beyond which the Parquet reader "
+      "estimates and reports the deserialized footer's heap footprint to "
+      "the memory pool. Defaults to disabled (max uint64).")
 
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 

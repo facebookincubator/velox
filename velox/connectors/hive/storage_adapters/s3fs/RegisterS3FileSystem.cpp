@@ -47,6 +47,7 @@ FileSystemMap& fileSystems() {
 }
 
 CacheKeyFn cacheKeyFunc;
+S3FileSystemFactory fileSystemFactory;
 
 std::shared_ptr<FileSystem> fileSystemGenerator(
     std::shared_ptr<const config::ConfigBase> properties,
@@ -86,7 +87,13 @@ std::shared_ptr<FileSystem> fileSystemGenerator(
             static_cast<std::optional<std::string>>(
                 properties->get<std::string>(S3Config::kS3LogLocation));
         initializeS3(logLevel, logLocation);
-        auto fs = std::make_shared<S3FileSystem>(bucketName, properties);
+        std::shared_ptr<FileSystem> fs;
+        if (fileSystemFactory) {
+          fs = fileSystemFactory(bucketName, properties);
+        } else {
+          fs = std::make_shared<S3FileSystem>(bucketName, properties);
+        }
+        VELOX_CHECK_NOT_NULL(fs, "S3 file system factory returned nullptr");
         instanceMap.insert({cacheKey, fs});
         return fs;
       });
@@ -109,11 +116,14 @@ std::unique_ptr<velox::dwio::common::FileSink> s3WriteFileSinkGenerator(
 }
 #endif
 
-void registerS3FileSystem(CacheKeyFn identityFunction) {
+void registerS3FileSystem(
+    CacheKeyFn identityFunction,
+    S3FileSystemFactory fileSystemFactoryInput) {
 #ifdef VELOX_ENABLE_S3
   fileSystems().withWLock([&](auto& instanceMap) {
     if (instanceMap.empty()) {
       cacheKeyFunc = identityFunction;
+      fileSystemFactory = fileSystemFactoryInput;
       registerFileSystem(isS3File, std::function(fileSystemGenerator));
       dwio::common::FileSink::registerFactory(
           std::function(s3WriteFileSinkGenerator));

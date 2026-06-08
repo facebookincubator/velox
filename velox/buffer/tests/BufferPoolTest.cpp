@@ -33,14 +33,14 @@ class BufferPoolTest : public ::testing::Test {
 };
 
 TEST_F(BufferPoolTest, emptyPool) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
   EXPECT_EQ(bufferPool.size(), 0);
   EXPECT_EQ(bufferPool.get(), nullptr);
   EXPECT_EQ(bufferPool.get(100), nullptr);
 }
 
 TEST_F(BufferPoolTest, recycleAndGet) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
   auto buffer = AlignedBuffer::allocate<char>(1'024, pool_.get());
   auto* rawPtr = buffer.get();
   const auto capacity = buffer->capacity();
@@ -56,7 +56,7 @@ TEST_F(BufferPoolTest, recycleAndGet) {
 }
 
 TEST_F(BufferPoolTest, getWithMinBytes) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
 
   auto small = AlignedBuffer::allocate<char>(128, pool_.get());
   auto large = AlignedBuffer::allocate<char>(4'096, pool_.get());
@@ -79,7 +79,7 @@ TEST_F(BufferPoolTest, getWithMinBytes) {
 }
 
 TEST_F(BufferPoolTest, getWithMinBytesNoMatch) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
 
   auto small = AlignedBuffer::allocate<char>(128, pool_.get());
   bufferPool.release(std::move(small));
@@ -90,14 +90,14 @@ TEST_F(BufferPoolTest, getWithMinBytesNoMatch) {
 }
 
 TEST_F(BufferPoolTest, recycleNullptr) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
   BufferPtr nullBuffer;
   bufferPool.release(std::move(nullBuffer));
   EXPECT_EQ(bufferPool.size(), 0);
 }
 
 TEST_F(BufferPoolTest, releaseNonUniqueBuffer) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
   auto buffer = AlignedBuffer::allocate<char>(1'024, pool_.get());
   auto copy = buffer;
   EXPECT_FALSE(buffer->unique());
@@ -106,7 +106,7 @@ TEST_F(BufferPoolTest, releaseNonUniqueBuffer) {
 }
 
 TEST_F(BufferPoolTest, releaseMoveSemantics) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
   auto buffer = AlignedBuffer::allocate<char>(1'024, pool_.get());
   auto* rawPtr = buffer.get();
   EXPECT_TRUE(buffer->unique());
@@ -118,21 +118,38 @@ TEST_F(BufferPoolTest, releaseMoveSemantics) {
   EXPECT_EQ(retrieved.get(), rawPtr);
 }
 
-TEST_F(BufferPoolTest, maxCachedLimit) {
-  BufferPool bufferPool;
+TEST_F(BufferPoolTest, defaultCapacity) {
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
 
-  // Fill beyond the max cached limit.
-  for (size_t i = 0; i < 40; ++i) {
+  // Fill beyond the default cap.
+  for (size_t i = 0; i < BufferPool::kDefaultCapacity * 2; ++i) {
     auto buffer = AlignedBuffer::allocate<char>(64, pool_.get());
     bufferPool.release(std::move(buffer));
   }
 
-  // Should be capped at 32.
-  EXPECT_EQ(bufferPool.size(), 32);
+  EXPECT_EQ(bufferPool.size(), BufferPool::kDefaultCapacity);
+}
+
+TEST_F(BufferPoolTest, customCapacity) {
+  // Capacity above kDefaultCapacity is honored as-is.
+  BufferPool bufferPool{/*capacity=*/64};
+  for (size_t i = 0; i < 128; ++i) {
+    bufferPool.release(AlignedBuffer::allocate<char>(64, pool_.get()));
+  }
+  EXPECT_EQ(bufferPool.size(), 64);
+}
+
+TEST_F(BufferPoolTest, capacityClampedToDefault) {
+  // Capacity below kDefaultCapacity is silently bumped up to the default.
+  BufferPool bufferPool{/*capacity=*/0};
+  for (size_t i = 0; i < BufferPool::kDefaultCapacity * 2; ++i) {
+    bufferPool.release(AlignedBuffer::allocate<char>(64, pool_.get()));
+  }
+  EXPECT_EQ(bufferPool.size(), BufferPool::kDefaultCapacity);
 }
 
 TEST_F(BufferPoolTest, multipleRecycleAndGet) {
-  BufferPool bufferPool;
+  BufferPool bufferPool{BufferPool::kDefaultCapacity};
 
   for (int i = 0; i < 5; ++i) {
     auto buffer = AlignedBuffer::allocate<char>((i + 1) * 256, pool_.get());

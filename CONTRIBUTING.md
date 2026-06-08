@@ -347,6 +347,8 @@ with a benchmark.
    Note: Fuzzer is under active development and the commands below may not work as is.
    Consult the CircleCI configuration in .circleci/config.yml for the up-to-date command
    line arguments.
+   For Spark aggregate fuzzer tests, including how to start Spark Connect,
+   see [Spark Query Runner Usage](https://github.com/facebookincubator/velox/blob/main/velox/docs/develop/testing/spark-query-runner.rst#usage).
 
    ```
    # Test the new function in isolation. Use --only flag to restrict the set of functions

@@ -35,6 +35,17 @@ VELOX_UCX_VERSION=${UCX_VERSION:-"1.20.1"}
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-centos9.sh
 
+function configure_dnf_for_cuda {
+  # CUDA 13.3 renamed cuda-cccl to cccl, and the new package obsoletes the
+  # CUDA 12.9 package that the installed 12.9 devel packages still require.
+  # This workaround can be dropped when updating to CUDA >=13.3.
+  if grep -q '^best=' /etc/dnf/dnf.conf; then
+    sed -i 's/^best=.*/best=False/' /etc/dnf/dnf.conf
+  else
+    echo "best=False" >>/etc/dnf/dnf.conf
+  fi
+}
+
 function install_ucx {
   dnf_install rdma-core-devel
   local UCX_REPO_NAME="openucx/ucx"
@@ -68,12 +79,11 @@ function install_ucx {
   )
 }
 
-function install_cuda {
+function setup_cuda_repo {
   # See https://developer.nvidia.com/cuda-downloads
   local arch
   arch="$(uname -m)"
   local repo_url
-  version="${1:-$VELOX_CUDA_VERSION}"
 
   if [[ $arch == "x86_64" ]]; then
     repo_url="https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
@@ -85,9 +95,15 @@ function install_cuda {
     return 1
   fi
 
+  configure_dnf_for_cuda
   dnf config-manager --add-repo "$repo_url"
+}
+
+function install_cuda {
+  local version="${1:-$VELOX_CUDA_VERSION}"
   local dashed
   dashed="$(echo "$version" | tr '.' '-')"
+  setup_cuda_repo || return 1
   dnf_install \
     cuda-compat-"$dashed" \
     cuda-driver-devel-"$dashed" \
@@ -97,6 +113,22 @@ function install_cuda {
     libnvjitlink-devel-"$dashed" \
     cuda-nvml-devel-"$dashed" \
     numactl-devel
+}
+
+function install_cuda_runtime {
+  # Installs only CUDA runtime libraries (no -devel packages).
+  # For use in runtime containers that don't need headers/static libs.
+  local version="${1:-$VELOX_CUDA_VERSION}"
+  local dashed
+  dashed="$(echo "$version" | tr '.' '-')"
+  setup_cuda_repo || return 1
+  dnf_install \
+    cuda-cudart-"$dashed" \
+    cuda-compat-"$dashed" \
+    cuda-nvrtc-"$dashed" \
+    libcufile-"$dashed" \
+    libnvjitlink-"$dashed" \
+    numactl-libs
 }
 
 function install_adapters_deps_from_dnf {

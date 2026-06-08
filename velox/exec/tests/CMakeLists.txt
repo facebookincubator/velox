@@ -149,6 +149,7 @@ set(
   AssignUniqueIdTest.cpp
   FilterProjectTest.cpp
   AsyncConnectorTest.cpp
+  VectorWindowPartitionTest.cpp
 )
 
 set(

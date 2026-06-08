@@ -169,19 +169,30 @@ class DecimalUtil {
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
     if (scaleDifference >= 0) {
+      VELOX_RETURN_IF(
+          scaleDifference > LongDecimalType::kMaxPrecision,
+          Status::UserError(
+              "Decimal scale difference is too large: {} vs max {}.",
+              scaleDifference,
+              LongDecimalType::kMaxPrecision));
       isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
     } else {
       scaleDifference = -scaleDifference;
-      const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
-      rescaledValue /= scalingFactor;
-      int128_t remainder = inputValue % scalingFactor;
-      if (inputValue >= 0 && remainder >= scalingFactor / 2) {
-        ++rescaledValue;
-      } else if (remainder <= -scalingFactor / 2) {
-        --rescaledValue;
+      if (scaleDifference > LongDecimalType::kMaxPrecision) {
+        rescaledValue = 0;
+      } else {
+        VELOX_DCHECK_LT(scaleDifference, std::size(DecimalUtil::kPowersOfTen));
+        const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
+        rescaledValue /= scalingFactor;
+        int128_t remainder = inputValue % scalingFactor;
+        if (inputValue >= 0 && remainder >= scalingFactor / 2) {
+          ++rescaledValue;
+        } else if (remainder <= -scalingFactor / 2) {
+          --rescaledValue;
+        }
       }
     }
     // Check overflow.
