@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <string_view>
+
+#include "velox/functions/Udf.h"
 #include "velox/functions/lib/Utf8Utils.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -72,6 +75,12 @@ struct Split {
   }
 
  private:
+  enum class FastPathKind {
+    kNone,
+    kSingleChar,
+    kLiteralString,
+  };
+
   void doCall(
       out_type<Array<Varchar>>& result,
       const arg_type<Varchar>& input,
@@ -142,30 +151,43 @@ struct Split {
   // characters ".$|()[{^?*+\\", or
   // (2)two-char string and the first char is the backslash and the second is
   // not the ascii digit or ascii letter, or
-  // (3)octal string that falls within the range of ASCII characters.
+  // (3)octal string that falls within the range of ASCII characters, or
+  // (4)non-empty plain string without any RegEx meta character.
   void initializeFastPath(const char* delimiterStr, size_t delimiterSize) {
     // Referencing from
     // https://github.com/openjdk/jdk8/blob/master/jdk/src/share/classes/java/lang/String.java#L2325
     // to align with Spark.
-    const std::string reservedChars = ".$|()[{^?*+\\";
+    static constexpr std::string_view kReservedChars = ".$|()[{^?*+\\";
 
     if (delimiterSize == 1) {
       singleCharDelimiter_ = delimiterStr[0];
-      if (reservedChars.find(singleCharDelimiter_) == std::string::npos) {
-        fastPath_ = true;
+      if (kReservedChars.find(singleCharDelimiter_) == std::string_view::npos) {
+        fastPathKind_ = FastPathKind::kSingleChar;
+        return;
       }
     } else if (delimiterSize == 2 && delimiterStr[0] == '\\') {
       singleCharDelimiter_ = delimiterStr[1];
-      if (!std::isdigit(singleCharDelimiter_) &&
-          !std::isalpha(singleCharDelimiter_)) {
-        fastPath_ = true;
+      const auto delimiterChar =
+          static_cast<unsigned char>(singleCharDelimiter_);
+      if (!std::isdigit(delimiterChar) && !std::isalpha(delimiterChar)) {
+        fastPathKind_ = FastPathKind::kSingleChar;
+        return;
       }
     } else if (isOctalString(
                    delimiterStr, singleCharDelimiter_, delimiterSize)) {
-      fastPath_ = true;
-    } else {
-      fastPath_ = false;
+      fastPathKind_ = FastPathKind::kSingleChar;
+      return;
     }
+
+    if (delimiterSize > 1 &&
+        std::string_view{delimiterStr, delimiterSize}.find_first_of(
+            kReservedChars) == std::string_view::npos) {
+      fastPathKind_ = FastPathKind::kLiteralString;
+      literalDelimiter_.assign(delimiterStr, delimiterSize);
+      return;
+    }
+
+    fastPathKind_ = FastPathKind::kNone;
   }
 
   // Split with a non-empty delimiter. If limit > 0, The resulting array's
@@ -197,7 +219,7 @@ struct Split {
       initializeFastPath(delimiter.data(), delimiter.size());
     }
 
-    if (fastPath_) {
+    if (fastPathKind_ == FastPathKind::kSingleChar) {
       for (size_t i = 0; i < end; ++i) {
         if (start[i] == singleCharDelimiter_) {
           result.add_item().setNoCopy(StringView(start + pos, i - pos));
@@ -206,6 +228,24 @@ struct Split {
           if (addedElements + 1 == limit) {
             break;
           }
+        }
+      }
+    } else if (fastPathKind_ == FastPathKind::kLiteralString) {
+      std::string_view inputView{start, end};
+      std::string_view delimiterView{literalDelimiter_};
+      while (true) {
+        const size_t found = inputView.find(delimiterView, pos);
+        if (found == std::string_view::npos) {
+          break;
+        }
+
+        result.add_item().setNoCopy(StringView(start + pos, found - pos));
+        pos = found + literalDelimiter_.size();
+
+        ++addedElements;
+        // If the next element should be the last, leave the loop.
+        if (addedElements + 1 == limit) {
+          break;
         }
       }
     } else {
@@ -261,9 +301,11 @@ struct Split {
   }
 
   mutable facebook::velox::functions::detail::ReCache cache_;
-  bool fastPath_{false};
+  FastPathKind fastPathKind_{FastPathKind::kNone};
   // Single character delimiter for fast path.
   char singleCharDelimiter_;
+  // Non-empty delimiter for the literal-string fast path.
+  std::string literalDelimiter_;
   bool isConstantDelimiter_{false};
 };
 } // namespace facebook::velox::functions::sparksql

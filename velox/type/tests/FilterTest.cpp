@@ -1514,6 +1514,19 @@ void testMergeWithFloat(Filter* left, Filter* right) {
     float f = i * 0.1;
     ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
   }
+  for (float f : {
+           -3.4f,
+           -1.2f,
+           -0.5f,
+           0.5f,
+           1.2f,
+           2.0f,
+           2.5f,
+           3.4f,
+           std::numeric_limits<float>::quiet_NaN(),
+       }) {
+    ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
+  }
 }
 
 void testMergeWithBytes(Filter* left, Filter* right) {
@@ -1940,6 +1953,10 @@ TEST(FilterTest, mergeMultiRange) {
       orFilter(lessThanOrEqualFloat(1.2), greaterThanOrEqualFloat(3.4)));
   filters.push_back(
       orFilter(lessThanOrEqualFloat(1.2), greaterThanOrEqualFloat(3.4), true));
+
+  filters.push_back(lessThanFloat(2.0));
+  filters.push_back(greaterThanOrEqualFloat(0.5));
+  filters.push_back(betweenFloat(-0.5, 2.5));
 
   for (const auto& left : filters) {
     for (const auto& right : filters) {

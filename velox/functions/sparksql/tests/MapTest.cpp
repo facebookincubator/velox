@@ -493,5 +493,6 @@ TEST_F(MapTest, resultSize) {
       {keys, values, condition},
       mapVector);
 }
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

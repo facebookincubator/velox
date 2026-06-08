@@ -1555,6 +1555,41 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
       "WHERE t.c0 < u.c0) FROM t");
 }
 
+// Test empty build always consumes probe input.
+// Verifies that probe input is consumed to prevent upstream exchange hanging,
+// matching CPU NLJ behavior (addresses PR#17113 review comment #3229357599).
+TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
+  // Probe: 3 batches of 100 rows each = 300 total rows
+  auto probeVectors = {
+      makeRowVector({sequence<int32_t>(100, 0)}),
+      makeRowVector({sequence<int32_t>(100, 100)}),
+      makeRowVector({sequence<int32_t>(100, 200)}),
+  };
+
+  // Build: empty
+  auto buildVectors = {makeRowVector({makeFlatVector<int32_t>({})})};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors})
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      {"c0", "u_c0"})
+                  .planNode();
+
+  AssertQueryBuilder builder{plan, duckDbQueryRunner_};
+  auto task = builder.assertEmptyResults();
+
+  // Verify all 300 probe rows were consumed (matches CPU NLJ behavior).
+  // Pipeline 0, operator 1 is the NLJ probe (operator 0 is Values).
+  auto inputPositions =
+      task->taskStats().pipelineStats[0].operatorStats[1].inputPositions;
+  ASSERT_EQ(inputPositions, 300);
+}
+
 // TODO: Zero-column build side is not yet supported. cudf::table with zero
 // columns reports num_rows() == 0, causing the operator to treat a non-empty
 // build as empty. Fixing this requires the bridge to carry row counts

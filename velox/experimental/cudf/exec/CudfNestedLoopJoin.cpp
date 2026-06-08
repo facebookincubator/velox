@@ -328,6 +328,11 @@ bool CudfNestedLoopJoinProbe::needsInput() const {
 }
 
 void CudfNestedLoopJoinProbe::doAddInput(RowVectorPtr input) {
+  // Skip input processing when build is empty for join types with no output.
+  if (skipInput_) {
+    VELOX_CHECK_NULL(input_);
+    return;
+  }
   VELOX_CHECK_NULL(input_, "Probe input already set");
   input_ = std::move(input);
   probeMatchedFlags_.reset();
@@ -466,12 +471,11 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
 
   if (buildData_.value()->num_rows() == 0) {
     buildEmpty_ = true;
-    // For inner/right join, empty build produces no output. For left/full
-    // join, probe rows are emitted with null build columns. For
-    // kLeftSemiProject, probe rows are emitted with false match column.
-    if (joinType_ == core::JoinType::kInner ||
-        joinType_ == core::JoinType::kRight) {
-      finished_ = true;
+    // For inner/right join, set skipInput_ to consume probe batches without
+    // processing (prevents upstream exchange hanging). Match CPU NLJ behavior
+    // which always consumes input rather than finishing early.
+    if (skipProbeOnEmptyBuild()) {
+      skipInput_ = true;
     }
   }
 

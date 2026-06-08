@@ -82,18 +82,8 @@ jobs:
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
         run: |
-          EXTRA_CMAKE_FLAGS=(
-            "-DCMAKE_LINK_LIBRARIES_STRATEGY=REORDER_FREELY"
-            "-DVELOX_ENABLE_BENCHMARKS=ON"
-            "-DVELOX_ENABLE_EXAMPLES=ON"
-            "-DVELOX_ENABLE_ARROW=ON"
-            "-DVELOX_ENABLE_GEO=ON"
-            "-DVELOX_ENABLE_PARQUET=ON"
-            "-DVELOX_MONO_LIBRARY=ON"
-            "-DVELOX_BUILD_SHARED=ON"
-            "-DVELOX_ENABLE_FAISS=ON"
-            "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
-          )
+          BUILD_PROFILE=ubuntu-bundled-deps source .github/scripts/cmake-flags.sh
+          export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug
 
       - name: CCache after

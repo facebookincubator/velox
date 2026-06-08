@@ -38,6 +38,11 @@ struct WriterConfig {
       "hive.parquet.writer.enable_dictionary";
   static constexpr const char* kParquetHiveConnectorEnableDictionary =
       "hive.parquet.writer.enable-dictionary";
+  static constexpr const char* kParquetSessionEnableStoreDecimalAsInteger =
+      "hive.parquet.writer.enable_store_decimal_as_integer";
+  static constexpr const char*
+      kParquetHiveConnectorEnableStoreDecimalAsInteger =
+          "hive.parquet.writer.enable-store-decimal-as-integer";
   static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
       "hive.parquet.writer.dictionary_page_size_limit";
   static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
@@ -57,11 +62,6 @@ struct WriterConfig {
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
 
-  // Use the same property name from HiveConfig::kMaxTargetFileSize.
-  static constexpr const char* kParquetConnectorMaxTargetFileSize =
-      "max-target-file-size";
-  static constexpr const char* kParquetSessionMaxTargetFileSize =
-      "max_target_file_size";
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
   // The timezone key accepts a timezone string or empty string to disable

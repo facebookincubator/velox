@@ -237,12 +237,15 @@ void BufferedInput::mergeRegions() {
 bool BufferedInput::tryMerge(Region& first, const Region& second) {
   VELOX_CHECK_GE(second.offset, first.offset, "regions should be sorted.");
   const int64_t gap = second.offset - first.offset - first.length;
-
   // Duplicate regions (extension==0) is the only case allowed to merge for
   // useVRead()
   const int64_t extension = gap + second.length;
   if (useVRead()) {
     return extension == 0;
+  }
+
+  if (gap > 0 && input_->getStats() != nullptr) {
+    input_->getStats()->readGap().increment(gap);
   }
 
   // compare with 0 since it's comparison in different types

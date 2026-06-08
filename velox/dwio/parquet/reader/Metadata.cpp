@@ -19,6 +19,128 @@
 
 namespace facebook::velox::parquet {
 
+namespace {
+
+// Returns the heap bytes held by `s`, skipping SSO strings whose buffer is
+// inline within the std::string object and already counted by the containing
+// struct's sizeof. Detects SSO by checking whether s.data() points inside the
+// std::string itself. This relies on the standard library placing the SSO
+// buffer inside the object, which is true on libc++, libstdc++, and MSVC —
+// the implementations Velox supports — but is not guaranteed by the C++
+// standard. On a hypothetical implementation that stored SSO data outside
+// the object, the check would simply treat short strings as heap-allocated
+// and slightly over-report, never under-report.
+size_t heapStringSize(const std::string& s) {
+  const auto* data = reinterpret_cast<const char*>(s.data());
+  const auto* begin = reinterpret_cast<const char*>(&s);
+  if (data >= begin && data < begin + sizeof(std::string)) {
+    return 0;
+  }
+  return s.capacity();
+}
+
+// Returns the dynamically-allocated byte size held by a thrift key/value
+// metadata vector — the inline thrift::KeyValue array bytes plus the heap
+// storage backing each key and value string.
+size_t keyValueMetadataSize(const std::vector<thrift::KeyValue>& keyValues) {
+  size_t size = keyValues.size() * sizeof(thrift::KeyValue);
+  for (const auto& kv : keyValues) {
+    size += heapStringSize(kv.key);
+    size += heapStringSize(kv.value);
+  }
+  return size;
+}
+
+// Returns the estimated total bytes held by `column`:
+// sizeof(thrift::ColumnChunk) plus every dynamically allocated vector and
+// string reachable through it. Inline sub-structs (thrift::ColumnMetaData,
+// thrift::Statistics, thrift::ColumnCryptoMetaData) live inside
+// sizeof(ColumnChunk) and are NOT counted again here; only their dynamically
+// allocated payloads (vectors and string buffers) are added.
+size_t columnMetadataSize(const thrift::ColumnChunk& column) {
+  size_t size = sizeof(thrift::ColumnChunk);
+  // Optional heap-backed strings on ColumnChunk itself.
+  if (column.__isset.file_path) {
+    size += heapStringSize(column.file_path);
+  }
+  if (column.__isset.encrypted_column_metadata) {
+    size += heapStringSize(column.encrypted_column_metadata);
+  }
+  // Optional crypto metadata. The union's inner structs are inline within
+  // ColumnChunk via __isset, so only their heap-backed payloads are added.
+  if (column.__isset.crypto_metadata &&
+      column.crypto_metadata.__isset.ENCRYPTION_WITH_COLUMN_KEY) {
+    const auto& key = column.crypto_metadata.ENCRYPTION_WITH_COLUMN_KEY;
+    size += key.path_in_schema.size() * sizeof(std::string);
+    for (const auto& path : key.path_in_schema) {
+      size += heapStringSize(path);
+    }
+    if (key.__isset.key_metadata) {
+      size += heapStringSize(key.key_metadata);
+    }
+  }
+  // Heap-backed vectors and the strings they contain inside ColumnMetaData.
+  size += column.meta_data.encodings.size() * sizeof(thrift::Encoding::type);
+  size += column.meta_data.path_in_schema.size() * sizeof(std::string);
+  for (const auto& path : column.meta_data.path_in_schema) {
+    size += heapStringSize(path);
+  }
+  size += keyValueMetadataSize(column.meta_data.key_value_metadata);
+  if (column.meta_data.__isset.encoding_stats) {
+    size += column.meta_data.encoding_stats.size() *
+        sizeof(thrift::PageEncodingStats);
+  }
+
+  // thrift::Statistics is an inline member of thrift::ColumnMetaData. Its POD
+  // fields (null_count, distinct_count) are already in sizeof(ColumnChunk).
+  // Only the heap-backed string payloads need to be added here.
+  if (column.meta_data.__isset.statistics) {
+    const auto& stats = column.meta_data.statistics;
+    if (stats.__isset.min) {
+      size += heapStringSize(stats.min);
+    }
+    if (stats.__isset.max) {
+      size += heapStringSize(stats.max);
+    }
+    if (stats.__isset.min_value) {
+      size += heapStringSize(stats.min_value);
+    }
+    if (stats.__isset.max_value) {
+      size += heapStringSize(stats.max_value);
+    }
+  }
+  return size;
+}
+
+// Estimates the heap memory held by `metadata` after thrift deserialization.
+// Returns sizeof(thrift::FileMetaData) plus the bytes of every dynamically
+// allocated vector and string reachable through it. Inline POD members and
+// inline thrift sub-structs (e.g. thrift::EncryptionAlgorithm,
+// thrift::SchemaElement::logicalType) are part of the parent sizeof and are
+// not double-counted here.
+size_t fileMetadataSize(const thrift::FileMetaData& metadata) {
+  size_t totalSize = sizeof(thrift::FileMetaData);
+  // Schema vector heap allocation plus per-element name strings.
+  totalSize += metadata.schema.size() * sizeof(thrift::SchemaElement);
+  for (const auto& schema : metadata.schema) {
+    totalSize += heapStringSize(schema.name);
+  }
+  // Row groups vector heap allocation plus the columns vectors it owns.
+  totalSize += metadata.row_groups.size() * sizeof(thrift::RowGroup);
+  for (const auto& rowGroup : metadata.row_groups) {
+    for (const auto& column : rowGroup.columns) {
+      totalSize += columnMetadataSize(column);
+    }
+  }
+  totalSize += keyValueMetadataSize(metadata.key_value_metadata);
+  totalSize += heapStringSize(metadata.created_by);
+  totalSize += metadata.column_orders.size() * sizeof(thrift::ColumnOrder);
+  totalSize += heapStringSize(metadata.footer_signing_key_metadata);
+  return totalSize;
+}
+
+} // namespace
+
 template <typename T>
 inline const T load(const char* ptr) {
   T ret;
@@ -278,6 +400,10 @@ int64_t ColumnChunkMetaDataPtr::totalCompressedSize() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.total_compressed_size;
 }
 
+std::vector<thrift::Encoding::type> ColumnChunkMetaDataPtr::encodings() const {
+  return thriftColumnChunkPtr(ptr_)->meta_data.encodings;
+}
+
 int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return thriftColumnChunkPtr(ptr_)->meta_data.total_uncompressed_size;
 }
@@ -388,6 +514,14 @@ std::string FileMetaDataPtr::keyValueMetadataValue(
 
 std::string FileMetaDataPtr::createdBy() const {
   return thriftFileMetaDataPtr(ptr_)->created_by;
+}
+
+size_t ColumnChunkMetaDataPtr::estimateColumnMetadataSize() const {
+  return columnMetadataSize(*thriftColumnChunkPtr(ptr_));
+}
+
+size_t FileMetaDataPtr::estimateFileMetadataSize() const {
+  return fileMetadataSize(*thriftFileMetaDataPtr(ptr_));
 }
 
 } // namespace facebook::velox::parquet

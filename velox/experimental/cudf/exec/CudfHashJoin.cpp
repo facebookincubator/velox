@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/type/TypeUtil.h"
@@ -52,6 +53,8 @@
 #include <rmm/exec_policy.hpp>
 
 #include <nvtx3/nvtx3.hpp>
+
+#include <iterator>
 
 namespace facebook::velox::cudf_velox {
 
@@ -193,7 +196,15 @@ void CudfHashJoinBuild::doNoMoreInput() {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
+    inputs_.insert(
+        inputs_.end(),
+        std::make_move_iterator(build->inputs_.begin()),
+        std::make_move_iterator(build->inputs_.end()));
+    build->inputs_.clear();
+    auto retainedInputBatches = build->inputs_.size();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+        &retainedInputBatches);
   }
 
   SCOPE_EXIT {

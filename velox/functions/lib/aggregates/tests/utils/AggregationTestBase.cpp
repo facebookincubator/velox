@@ -1039,8 +1039,8 @@ void AggregationTestBase::testAggregationsImpl(
     auto partialStats = taskStats.at(partialNodeId).customStats;
     auto intermediateStats = taskStats.at(intermediateNodeId).customStats;
     if (inputVectors > 1) {
-      EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
-      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregation").count);
+      EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
+      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregationRows").sum);
     }
   }
 

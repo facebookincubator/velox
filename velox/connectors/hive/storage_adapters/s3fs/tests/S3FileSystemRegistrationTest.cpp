@@ -26,11 +26,25 @@ std::string cacheKeyFunc(
   return config->get<std::string>("hive.s3.endpoint").value();
 }
 
+class CustomS3FileSystem : public S3FileSystem {
+ public:
+  CustomS3FileSystem(
+      std::string_view bucketName,
+      std::shared_ptr<const config::ConfigBase> config)
+      : S3FileSystem(bucketName, config) {}
+};
+
+std::shared_ptr<FileSystem> s3FileSystemFactory(
+    std::string bucketName,
+    std::shared_ptr<const config::ConfigBase> config) {
+  return std::make_shared<CustomS3FileSystem>(bucketName, config);
+}
+
 class S3FileSystemRegistrationTest : public S3Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    filesystems::registerS3FileSystem(cacheKeyFunc);
+    filesystems::registerS3FileSystem(cacheKeyFunc, s3FileSystemFactory);
   }
 
   static void TearDownTestCase() {
@@ -83,6 +97,13 @@ TEST_F(S3FileSystemRegistrationTest, cacheKey) {
   auto s3fs_new = filesystems::getFileSystem(kDummyPath2, hiveConfig);
   // The cacheKeyFunc function allows fs caching based on the endpoint value.
   ASSERT_EQ(s3fs, s3fs_new);
+}
+
+TEST_F(S3FileSystemRegistrationTest, customFileSystemFactory) {
+  auto hiveConfig = minioServer_->hiveConfig();
+  auto s3fs = filesystems::getFileSystem(kDummyPath, hiveConfig);
+  auto customS3fs = std::dynamic_pointer_cast<CustomS3FileSystem>(s3fs);
+  VELOX_CHECK_NOT_NULL(customS3fs);
 }
 
 TEST_F(S3FileSystemRegistrationTest, finalize) {
