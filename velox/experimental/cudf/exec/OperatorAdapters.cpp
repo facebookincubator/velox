@@ -1258,11 +1258,20 @@ void registerAllOperatorAdapters() {
   registry.clear();
 
   // Register UcxOutputQueueManager with the output buffer manager registry so
-  // Task.cpp dispatches initializeTask to it for UCX transport nodes.
-  exec::OutputBufferManagerRegistry::global().insert(
-      std::string{core::TransportKind::kUcx},
-      ucx_exchange::UcxOutputQueueManager::getInstanceRef(),
-      true);
+  // Task.cpp dispatches initializeTask to it for UCX transport nodes. Only
+  // register when UCX exchange is enabled: the coordinator assigns the UCX
+  // transport type to PartitionedOutput nodes regardless of whether this worker
+  // runs UCX exchange. When it is disabled, the UCX PartitionedOutput
+  // replacement does not happen and the stock CPU PartitionedOutput uses the
+  // default HTTP OutputBufferManager. Leaving the UCX manager unregistered
+  // makes Task.cpp fall back to the default manager for those nodes, so the
+  // task is initialized in the same manager the operator writes to.
+  if (CudfConfig::getInstance().exchange) {
+    exec::OutputBufferManagerRegistry::global().insert(
+        std::string{core::TransportKind::kUcx},
+        ucx_exchange::UcxOutputQueueManager::getInstanceRef(),
+        true);
+  }
 
   // Register all adapters
   registry.registerAdapter(std::make_unique<TableScanAdapter>());
