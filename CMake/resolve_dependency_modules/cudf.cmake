@@ -30,12 +30,12 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 8718418 from 2026-06-03
+# rmm commit f3310cb from 2026-06-04
 set(VELOX_rmm_VERSION 26.06)
-set(VELOX_rmm_COMMIT 871841839b94c67a61c8ed0d31feecfd92a07156)
+set(VELOX_rmm_COMMIT f3310cb85b3fe15fd21f550adbbf7eeb1e374588)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  a7050545e84629d51f88c17bf1ba72d4ea4e69caa0285f46b2af8cd41b1fd186
+  d2d78501e54e17119f4f0c4028e90684f356be557ee06bdb73bad75a3bb3ffeb
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
@@ -74,12 +74,12 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit 2e37c84 from 2026-05-29 (release/0.50 branch)
+  # ucxx commit b12cd9f from 2026-06-08 (release/0.50 branch)
   set(VELOX_ucxx_VERSION 0.50)
-  set(VELOX_ucxx_COMMIT 2e37c8463544064e680e51820c47bfec69f55b69)
+  set(VELOX_ucxx_COMMIT b12cd9f094979fcb8ab4dc016ce29194f9f6126a)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    b0172dd8278f95c85f68ba9d35a01445965f33edb6ea3e344c7cb7e0cb8ce3e2
+    24fec4bfeaf2a39866371d22f81107e5ad6b896fa260048f7021f2b478dbd1c9
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
