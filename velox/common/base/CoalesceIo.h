@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 #include "velox/common/base/IoCounter.h"
@@ -35,6 +36,10 @@ struct CoalesceIoStats {
   int64_t payloadBytes{0};
   /// Number of bytes read and discarded due to coalescing.
   int64_t extraBytes{0};
+  /// Number of items with the same offset and size as the previous item.
+  int64_t duplicateRegions{0};
+  /// Number of payload bytes requested by duplicate regions.
+  int64_t duplicateBytes{0};
 
   /// Distribution of gaps (in bytes) between consecutive items before
   /// coalescing. Measures how spread out the read regions are on disk:
@@ -76,6 +81,8 @@ CoalesceIoStats coalesceIo(
   int32_t startItem = 0;
   auto startOffset = offsetFunc(startItem);
   auto lastEndOffset = startOffset;
+  auto prevItemOffset = startOffset;
+  std::decay_t<decltype(sizeFunc(startItem))> prevItemSize{};
   std::vector<Range> ranges;
   CoalesceIoStats result;
   for (int32_t i = 0; i < items.size(); ++i) {
@@ -88,7 +95,15 @@ CoalesceIoStats coalesceIo(
         (numRangesForItem == kNoCoalesce ||
          ranges.size() + numRangesForItem >= rangesPerIo) &&
         !ranges.empty();
-    if ((lastEndOffset != itemOffset) || enoughRanges) {
+    // Some callers can produce adjacent logical reads for the same physical
+    // range. Exact duplicates stay in the same IO group.
+    const bool duplicateRange =
+        i > 0 && itemOffset == prevItemOffset && itemSize == prevItemSize;
+    if (duplicateRange) {
+      ++result.duplicateRegions;
+      result.duplicateBytes += itemSize;
+    }
+    if (!duplicateRange && (lastEndOffset != itemOffset || enoughRanges)) {
       const int64_t gap = itemOffset - lastEndOffset;
       if (gap > 0) {
         result.gaps.increment(gap);
@@ -108,6 +123,8 @@ CoalesceIoStats coalesceIo(
     }
     addRanges(item, ranges);
     lastEndOffset = itemOffset + itemSize;
+    prevItemOffset = itemOffset;
+    prevItemSize = itemSize;
   }
   ioFunc(items, startItem, items.size(), startOffset, ranges);
   ++result.numIos;
