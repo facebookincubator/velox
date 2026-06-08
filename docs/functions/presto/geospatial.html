@@ -54,7 +54,7 @@ Geometry type is a plane. The shortest path between two points on the plane is a
 straight line. That means calculations on geometries (areas, distances, lengths,
 intersections, etc) can be calculated using cartesian mathematics and straight
 line vectors.</p>
-<p>Functions that begin with the <a href="#id3"><span class="problematic" id="id4">ST_</span></a> prefix are compliant with the <a href="#id5"><span class="problematic" id="id6">`SQL/MM Part 3:
+<p>Functions that begin with the <a href="#id4"><span class="problematic" id="id5">ST_</span></a> prefix are compliant with the <a href="#id6"><span class="problematic" id="id7">`SQL/MM Part 3:
 Spatial`_</span></a> specification`. As such, many Geometry functions assume that
 geometries that are operated on are both simple and valid. Functions may raise
 an exception or return an arbitrary value for non-simple or non-valid
@@ -368,14 +368,14 @@ operation.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsValid">
 <span class="sig-name descname"><span class="pre">ST_IsValid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">valid:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsValid" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id7"><span class="problematic" id="id8">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is valid, according to <a href="#id8"><span class="problematic" id="id9">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-valid geometries include Polygons with self-intersecting shells.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="ST_IsSimple">
 <span class="sig-name descname"><span class="pre">ST_IsSimple</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geometry</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Geometry</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">simple:</span> <span class="pre">bool</span></span></span><a class="headerlink" href="#ST_IsSimple" title="Link to this definition">¶</a></dt>
-<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id9"><span class="problematic" id="id10">`SQL/MM Part 3: Spatial`_</span></a>.
+<dd><p>Returns if <code class="docutils literal notranslate"><span class="pre">geometry</span></code> is simple, according to <a href="#id10"><span class="problematic" id="id11">`SQL/MM Part 3: Spatial`_</span></a>.
 Examples of non-simple geometries include LineStrings with self-intersections,
 Polygons with empty rings for holes, and more.</p>
 </dd></dl>
@@ -987,6 +987,49 @@ recommended for a reasonable approximation.</p>
 </dd></dl>
 
 </section>
+<section id="google-polyline-functions">
+<h2>Google Polyline Functions<a class="headerlink" href="#google-polyline-functions" title="Link to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="google_polyline_decode">
+<span class="sig-name descname"><span class="pre">google_polyline_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">encoded:</span> <span class="pre">varchar)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#google_polyline_decode" title="Link to this definition">¶</a></dt>
+<dd><p>Decodes a Google Polyline encoded string into an array of Point geometries.
+Uses a fixed precision of 10^5 (100,000), which assumes coordinates were
+encoded with 5 decimal places of precision.
+See <a class="reference external" href="https://developers.google.com/maps/documentation/utilities/polylinealgorithm">https://developers.google.com/maps/documentation/utilities/polylinealgorithm</a>
+for details on the encoding format.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">google_polyline_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">encoded:</span> <span class="pre">varchar</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">precision_exponent:</span> <span class="pre">bigint)</span> <span class="pre">-&gt;</span> <span class="pre">points:</span> <span class="pre">array(geometry</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Link to this definition">¶</a></dt>
+<dd><p>Decodes a Google Polyline encoded string into an array of Point geometries
+using the specified precision exponent. The precision exponent must be between
+1 and 16 (inclusive). The precision used for decoding is 10^precision_exponent.
+See <a class="reference external" href="https://developers.google.com/maps/documentation/utilities/polylinealgorithm">https://developers.google.com/maps/documentation/utilities/polylinealgorithm</a>
+for details on the encoding format.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="google_polyline_encode">
+<span class="sig-name descname"><span class="pre">google_polyline_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">points</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">array</span><span class="p"><span class="pre">(</span></span><span class="pre">Geometry</span><span class="p"><span class="pre">)</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">encoded:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#google_polyline_encode" title="Link to this definition">¶</a></dt>
+<dd><p>Encodes an array of Point geometries into a Google Polyline encoded string.
+Uses a fixed precision of 10^5 (100,000), which rounds coordinates to
+5 decimal places.
+See <a class="reference external" href="https://developers.google.com/maps/documentation/utilities/polylinealgorithm">https://developers.google.com/maps/documentation/utilities/polylinealgorithm</a>
+for details on the encoding format.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">google_polyline_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">points</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">array</span><span class="p"><span class="pre">(</span></span><span class="pre">Geometry</span><span class="p"><span class="pre">)</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">precision_exponent</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bigint</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">encoded:</span> <span class="pre">varchar</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
+<dd><p>Encodes an array of Point geometries into a Google Polyline encoded string
+using the specified precision exponent. The precision exponent must be between
+1 and 16 (inclusive). The precision used for encoding is 10^precision_exponent.
+See <a class="reference external" href="https://developers.google.com/maps/documentation/utilities/polylinealgorithm">https://developers.google.com/maps/documentation/utilities/polylinealgorithm</a>
+for details on the encoding format.</p>
+</dd></dl>
+
+</section>
 </section>
 
 
@@ -1107,6 +1150,13 @@ recommended for a reasonable approximation.</p>
 <li><a class="reference internal" href="#s2_cell_parent"><code class="docutils literal notranslate"><span class="pre">s2_cell_parent()</span></code></a></li>
 <li><a class="reference internal" href="#s2_cell_to_token"><code class="docutils literal notranslate"><span class="pre">s2_cell_to_token()</span></code></a></li>
 <li><a class="reference internal" href="#s2_cells"><code class="docutils literal notranslate"><span class="pre">s2_cells()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#google-polyline-functions">Google Polyline Functions</a><ul>
+<li><a class="reference internal" href="#google_polyline_decode"><code class="docutils literal notranslate"><span class="pre">google_polyline_decode()</span></code></a></li>
+<li><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">google_polyline_decode()</span></code></a></li>
+<li><a class="reference internal" href="#google_polyline_encode"><code class="docutils literal notranslate"><span class="pre">google_polyline_encode()</span></code></a></li>
+<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">google_polyline_encode()</span></code></a></li>
 </ul>
 </li>
 </ul>
