@@ -83,7 +83,6 @@ jobs:
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
-          fi
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
       - name: Cache ccache
