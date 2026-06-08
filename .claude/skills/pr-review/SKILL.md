@@ -155,8 +155,11 @@ Brief overall assessment (1-2 sentences)
 ### Issues Found
 List any issue, categorized by severity:
  - 🔴 **Critical**: Must fix before merge
- - 🟡 **Suggestion**: Should consider
- - 🟢 **Nitpick**: Minor style issues
+ - 🟡 **Suggestion**: Design, structure, and maintainability concerns —
+   abstraction boundaries, duplicated ownership, over-general APIs, coupling
+   that undercuts the PR's goal. "It works" does not downgrade these.
+ - 🟢 **Nitpick**: Cosmetic only — typos, formatting, a single local name.
+   Structural concerns are never 🟢.
 
 Each issue should also include:
 - File and line reference
