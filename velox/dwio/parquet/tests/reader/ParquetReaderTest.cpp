@@ -2022,38 +2022,42 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
 // bits::nbytes(numLists). ensureCapacity only guarantees capacity; without an
 // explicit setSize, logical size can stay stale for the current batch.
 //
-// This test exercises both LIST and MAP with two row groups:
-// RG1: 3336 rows.
-// RG2: 4096 rows.
+// This test exercises both LIST and MAP with two row groups. RG1 must be
+// smaller than RG2 so the null buffer's logical size is insufficient for RG2,
+// but the allocation must round up to a capacity large enough for reuse.
 TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
   constexpr vector_size_t kFirstRowGroupRows = 3336;
   constexpr vector_size_t kSecondRowGroupRows = 4096;
   constexpr vector_size_t kNumRows = kFirstRowGroupRows + kSecondRowGroupRows;
-  // Observed nulls buffer capacity after ensureCapacity + memory pool rounding.
-  constexpr int64_t kExpectedNullsCapacity = 672;
 
   auto assertNullBufferSizeAcrossBatches =
       [&](const RowTypePtr& rowType, dwio::common::RowReader& rowReader) {
-        auto readBatch = [&](vector_size_t batchSize)
-            -> std::pair<VectorPtr, vector_size_t> {
-          VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-          const auto numRead = rowReader.next(batchSize, result);
-          const auto& column = BaseVector::loadedVectorShared(
-              result->asUnchecked<RowVector>()->childAt(0));
-          return {column, numRead};
-        };
+        VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+        const auto numRead = rowReader.next(kFirstRowGroupRows, result);
+        ASSERT_EQ(numRead, kFirstRowGroupRows);
+        const auto& column = BaseVector::loadedVectorShared(
+            result->asUnchecked<RowVector>()->childAt(0));
+        ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
 
-        auto assertBatch = [&](vector_size_t batchSize) {
-          SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
-          auto [column, numRead] = readBatch(batchSize);
-          ASSERT_EQ(numRead, batchSize);
-          ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
-          EXPECT_EQ(column->nulls()->capacity(), kExpectedNullsCapacity);
-          EXPECT_NO_THROW(column->validate({}));
-        };
+        auto nulls = column->nulls();
+        // Without the fix, this stale size would persist into RG2 and cause a
+        // crash.
+        ASSERT_LT(nulls->size(), bits::nbytes(kSecondRowGroupRows))
+            << "RG1 null buffer must be smaller than what RG2 needs";
+        // Buffer must have enough physical capacity to be reused for RG2,
+        // otherwise the pool reallocates and the bug doesn't trigger.
+        ASSERT_GE(nulls->capacity(), bits::nbytes(kSecondRowGroupRows))
+            << "RG1 null buffer capacity must be large enough for RG2 reuse";
+        EXPECT_NO_THROW(column->validate({}));
 
-        assertBatch(kFirstRowGroupRows);
-        assertBatch(kSecondRowGroupRows);
+        SCOPED_TRACE(fmt::format("batchSize={}", kSecondRowGroupRows));
+        result = BaseVector::create(rowType, 0, leafPool_.get());
+        const auto numRead2 = rowReader.next(kSecondRowGroupRows, result);
+        ASSERT_EQ(numRead2, kSecondRowGroupRows);
+        const auto& column2 = BaseVector::loadedVectorShared(
+            result->asUnchecked<RowVector>()->childAt(0));
+        ASSERT_TRUE(column2->nulls()) << "Test data must contain nulls";
+        EXPECT_NO_THROW(column2->validate({}));
       };
 
   auto runCase = [&](std::string_view traceName,
@@ -2068,20 +2072,14 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
       return std::make_unique<DefaultFlushPolicy>(
           kSecondRowGroupRows, kBytesInRowGroup);
     };
-    auto sink = std::make_unique<MemorySink>(
-        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-    auto* sinkPtr = sink.get();
-    auto writer = std::make_unique<parquet::Writer>(
-        std::move(sink), writerOptions, rowType);
-    writer->write(
-        makeRowVector({"a"}, {columnData->slice(0, kFirstRowGroupRows)}));
-    writer->flush();
-    writer->write(makeRowVector(
-        {"a"}, {columnData->slice(kFirstRowGroupRows, kSecondRowGroupRows)}));
-    writer->close();
-    writers_.push_back(std::move(writer));
-
-    auto [reader, rowReader] = readerBuilder(*sinkPtr, rowType).build();
+    auto* sink = write(
+        {makeRowVector({"a"}, {columnData->slice(0, kFirstRowGroupRows)}),
+         makeRowVector(
+             {"a"},
+             {columnData->slice(kFirstRowGroupRows, kSecondRowGroupRows)})},
+        writerOptions,
+        rowType);
+    auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
     ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
     ASSERT_EQ(reader->fileMetaData().rowGroup(0).numRows(), kFirstRowGroupRows);
     ASSERT_EQ(
@@ -2089,30 +2087,22 @@ TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
     assertNullBufferSizeAcrossBatches(rowType, *rowReader);
   };
 
-  runCase(
-      "list",
-      ROW("a", ARRAY(INTEGER())),
-      makeArrayVector<int32_t>(
-          kNumRows,
-          [](vector_size_t /*rowIndex*/) { return 1; },
-          [](vector_size_t rowIndex, vector_size_t elementIndex) {
-            return rowIndex * 2 + elementIndex;
-          },
-          [&](vector_size_t rowIndex) {
-            return rowIndex == 100 || rowIndex == kFirstRowGroupRows + 100 ||
-                rowIndex == kFirstRowGroupRows + 200;
-          }));
+  // kNumRows 1-element arrays, 3 of which are null — one in RG1, two in RG2.
+  auto arrays = makeArrayVector<int32_t>(
+      kNumRows, [](auto) { return 1; }, [](auto i) { return i; });
+  arrays->setNull(100, true);
+  arrays->setNull(kFirstRowGroupRows + 100, true);
+  arrays->setNull(kFirstRowGroupRows + 200, true);
+  runCase("list", ROW("a", ARRAY(INTEGER())), arrays);
 
-  runCase(
-      "map",
-      ROW("a", MAP(INTEGER(), INTEGER())),
-      makeMapVector<int32_t, int32_t>(
-          kNumRows,
-          [](vector_size_t /*rowIndex*/) { return 1; },
-          [](vector_size_t elementIndex) { return elementIndex; },
-          [](vector_size_t elementIndex) { return elementIndex + 1000; },
-          [&](vector_size_t rowIndex) {
-            return rowIndex == 100 || rowIndex == kFirstRowGroupRows + 100 ||
-                rowIndex == kFirstRowGroupRows + 200;
-          }));
+  // kNumRows 1-element maps, 3 of which are null — one in RG1, two in RG2.
+  auto maps = makeMapVector<int32_t, int32_t>(
+      kNumRows,
+      [](auto) { return 1; },
+      [](auto i) { return i; },
+      [](auto i) { return i; });
+  maps->setNull(100, true);
+  maps->setNull(kFirstRowGroupRows + 100, true);
+  maps->setNull(kFirstRowGroupRows + 200, true);
+  runCase("map", ROW("a", MAP(INTEGER(), INTEGER())), maps);
 }

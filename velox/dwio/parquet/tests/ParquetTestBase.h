@@ -212,6 +212,11 @@ class ParquetTestBase : public testing::Test,
       const RowTypePtr& rowType = nullptr);
 
   dwio::common::MemorySink* write(
+      const std::vector<RowVectorPtr>& batches,
+      const WriterOptions& writerOptions,
+      const RowTypePtr& rowType = nullptr);
+
+  dwio::common::MemorySink* write(
       const RowVectorPtr& data,
       std::unordered_map<std::string, std::string> configFromFile = {},
       std::unordered_map<std::string, std::string> sessionProperties = {});
