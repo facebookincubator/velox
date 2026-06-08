@@ -43,9 +43,12 @@ namespace {
 class TestCudaStream {
  public:
   TestCudaStream() {
-    VELOX_CHECK_EQ(
-        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
-        cudaSuccess);
+    auto status = cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+    VELOX_CHECK(
+        status == cudaSuccess,
+        "cudaStreamCreateWithFlags failed: {} ({})",
+        cudaGetErrorString(status),
+        static_cast<int>(status));
   }
 
   ~TestCudaStream() {
@@ -143,12 +146,13 @@ std::unique_ptr<cudf::table> makeTable(
       stream.value()));
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(std::make_unique<cudf::column>(
-      cudf::data_type{cudf::type_id::INT32},
-      static_cast<cudf::size_type>(values.size()),
-      std::move(data),
-      rmm::device_buffer{},
-      0));
+  columns.push_back(
+      std::make_unique<cudf::column>(
+          cudf::data_type{cudf::type_id::INT32},
+          static_cast<cudf::size_type>(values.size()),
+          std::move(data),
+          rmm::device_buffer{},
+          0));
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
