@@ -92,7 +92,6 @@ fedora-debug)
   # fedora-debug is always GCC; no USE_CLANG branch needed.
   CMAKE_FLAGS=(
     -DVELOX_ENABLE_PARQUET=ON
-    -DARROW_THRIFT_USE_SHARED=ON
     -DVELOX_ENABLE_EXAMPLES=ON
     -DVELOX_ENABLE_FAISS=ON
   )
