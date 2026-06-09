@@ -27,21 +27,22 @@ CudfEnforceSingleRow::CudfEnforceSingleRow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::EnforceSingleRowNode>& planNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "CudfEnforceSingleRow"),
-      CudfOperator(operatorId, planNode->id()) {}
+          "CudfEnforceSingleRow",
+          nvtx3::rgb{255, 127, 80}, // Coral
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          planNode) {}
 
 bool CudfEnforceSingleRow::needsInput() const {
   return true;
 }
 
-void CudfEnforceSingleRow::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+void CudfEnforceSingleRow::doAddInput(RowVectorPtr input) {
   // Cast to CudfVector to access GPU data
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(
@@ -65,9 +66,7 @@ void CudfEnforceSingleRow::addInput(RowVectorPtr input) {
   }
 }
 
-void CudfEnforceSingleRow::noMoreInput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+void CudfEnforceSingleRow::doNoMoreInput() {
   if (!noMoreInput_ && input_ == nullptr) {
     // We have not seen any data. Return a single row of all nulls.
     auto nullRow = BaseVector::create<RowVector>(outputType_, 1, pool());
@@ -85,12 +84,10 @@ void CudfEnforceSingleRow::noMoreInput() {
         pool(), outputType_, 1, std::move(cudfTable), stream);
   }
 
-  exec::Operator::noMoreInput();
+  Operator::noMoreInput();
 }
 
-RowVectorPtr CudfEnforceSingleRow::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfEnforceSingleRow::doGetOutput() {
   if (!noMoreInput_) {
     return nullptr;
   }

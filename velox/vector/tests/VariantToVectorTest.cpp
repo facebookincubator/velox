@@ -71,6 +71,8 @@ class VariantToVectorTest : public testing::Test, public test::VectorTestBase {
     VELOX_EXPECT_EQ_TYPES(vector->type(), type);
     EXPECT_EQ(vector->size(), values.size());
 
+    vector->validate();
+
     for (auto i = 0; i < values.size(); ++i) {
       EXPECT_EQ(values[i], vector->variantAt(i));
       EXPECT_TRUE(vector->variantAt(i).isTypeCompatible(type));
@@ -273,6 +275,19 @@ TEST_F(VariantToVectorTest, createFromVariantsRow) {
   testFromVariants(
       ROW({"a", "b"}, {INTEGER(), DOUBLE()}),
       {Variant::row({1, 1.0}), Variant::row({2, 2.0})});
+
+  // All nulls.
+  testFromVariants(
+      ROW({"a", "b"}, {INTEGER(), DOUBLE()}),
+      {Variant::null(TypeKind::ROW), Variant::null(TypeKind::ROW)});
+
+  // Mixed nulls and values.
+  testFromVariants(
+      ROW({"a", "b"}, {INTEGER(), DOUBLE()}),
+      {Variant::row({1, 1.0}),
+       Variant::null(TypeKind::ROW),
+       Variant::row({2, 2.0}),
+       Variant::null(TypeKind::ROW)});
 }
 
 TEST_F(VariantToVectorTest, createFromVariantsEmpty) {

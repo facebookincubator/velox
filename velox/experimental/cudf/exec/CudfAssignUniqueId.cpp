@@ -29,16 +29,16 @@ CudfAssignUniqueId::CudfAssignUniqueId(
     const std::shared_ptr<const core::AssignUniqueIdNode>& planNode,
     int32_t uniqueTaskId,
     std::shared_ptr<std::atomic_int64_t> rowIdPool)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "CudfAssignUniqueId"),
-      NvtxHelper(
+          "CudfAssignUniqueId",
           nvtx3::rgb{160, 82, 45}, // Sienna
-          operatorId,
-          fmt::format("[{}]", planNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          planNode),
       rowIdPool_(std::move(rowIdPool)) {
   VELOX_USER_CHECK_LT(
       uniqueTaskId,
@@ -50,17 +50,14 @@ CudfAssignUniqueId::CudfAssignUniqueId(
   maxRowIdCounterValue_ = 0;
 }
 
-void CudfAssignUniqueId::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfAssignUniqueId::doAddInput(RowVectorPtr input) {
   auto numInput = input->size();
   VELOX_CHECK_NE(
       numInput, 0, "CudfAssignUniqueId::addInput received empty set of rows");
   input_ = std::move(input);
 }
 
-RowVectorPtr CudfAssignUniqueId::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfAssignUniqueId::doGetOutput() {
   if (input_ == nullptr) {
     return nullptr;
   }

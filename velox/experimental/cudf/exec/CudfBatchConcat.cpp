@@ -26,20 +26,20 @@ CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::PlanNode> planNode)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "CudfBatchConcat"),
-      CudfOperator(
-          operatorId,
-          planNode->id(),
-          nvtx3::rgb{211, 211, 211} /* LightGrey */),
+          "CudfBatchConcat",
+          nvtx3::rgb{211, 211, 211}, /* LightGrey */
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          planNode),
       driverCtx_(driverCtx),
       targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
 
-void CudfBatchConcat::addInput(RowVectorPtr input) {
+void CudfBatchConcat::doAddInput(RowVectorPtr input) {
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfVector, "CudfBatchConcat expects CudfVector input");
 
@@ -48,8 +48,7 @@ void CudfBatchConcat::addInput(RowVectorPtr input) {
   buffer_.push_back(std::move(cudfVector));
 }
 
-RowVectorPtr CudfBatchConcat::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfBatchConcat::doGetOutput() {
   // Drain the queue if there is any output to be flushed
   if (!outputQueue_.empty()) {
     auto table = std::move(outputQueue_.front());

@@ -141,12 +141,23 @@ cudf:			   	         #: Build with cuDF GPU support
 	$(MAKE) cmake-cudf BUILD_DIR=release BUILD_TYPE=release
 	$(MAKE) build BUILD_DIR=release
 
+cmake-torchwave:
+	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_TORCHWAVE=ON ${EXTRA_CMAKE_CUDA_FLAGS}" cmake
+
+torchwave:			         #: Build with TorchWave GPU support
+	$(MAKE) cmake-torchwave BUILD_DIR=release BUILD_TYPE=release
+	$(MAKE) build BUILD_DIR=release
+
 wave-debug:			 #: Build with debugging symbols and Wave GPU support
 	$(MAKE) cmake-wave BUILD_DIR=debug BUILD_TYPE=debug
 	$(MAKE) build BUILD_DIR=debug
 
 cudf-debug:			 #: Build with debugging symbols and cuDF GPU support
 	$(MAKE) cmake-cudf BUILD_DIR=debug BUILD_TYPE=debug
+	$(MAKE) build BUILD_DIR=debug
+
+torchwave-debug:		 #: Build with debugging symbols and TorchWave GPU support
+	$(MAKE) cmake-torchwave BUILD_DIR=debug BUILD_TYPE=debug
 	$(MAKE) build BUILD_DIR=debug
 
 dwio:						#: Minimal build with dwio enabled.

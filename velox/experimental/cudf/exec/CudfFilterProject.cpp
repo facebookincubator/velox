@@ -133,16 +133,17 @@ CudfFilterProject::CudfFilterProject(
     velox::exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           project ? project->outputType() : filter->outputType(),
-          operatorId,
           project ? project->id() : filter->id(),
-          "CudfFilterProject"),
-      NvtxHelper(
+          "CudfFilterProject",
           nvtx3::rgb{220, 20, 60}, // Crimson
-          operatorId,
-          fmt::format("[{}]", project ? project->id() : filter->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          project ? std::static_pointer_cast<const core::PlanNode>(project)
+                  : std::static_pointer_cast<const core::PlanNode>(filter)),
       hasFilter_(filter != nullptr),
       project_(project),
       filter_(filter) {
@@ -227,13 +228,11 @@ void CudfFilterProject::initialize() {
   project_.reset();
 }
 
-void CudfFilterProject::addInput(RowVectorPtr input) {
+void CudfFilterProject::doAddInput(RowVectorPtr input) {
   input_ = std::move(input);
 }
 
-RowVectorPtr CudfFilterProject::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
-
+RowVectorPtr CudfFilterProject::doGetOutput() {
   if (allInputProcessed()) {
     return nullptr;
   }

@@ -19,6 +19,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(
     velox_hive_paimon_split_test
     velox_hive_paimon_split
+    velox_dwio_common
     GTest::gtest
     GTest::gtest_main
     GTest::gmock

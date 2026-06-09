@@ -19,13 +19,15 @@ velox_link_libraries(velox_type_signature velox_common_base)
 velox_add_library(
   velox_expression_functions
   FunctionSignature.cpp
-  SignatureBinder.cpp
   ReverseSignatureBinder.cpp
+  SignatureBinder.cpp
+  VectorFunctionListener.cpp
   HEADERS
   FunctionMetadata.h
   FunctionSignature.h
   ReverseSignatureBinder.h
   SignatureBinder.h
+  VectorFunctionListener.h
 )
 
 velox_link_libraries(
@@ -39,6 +41,7 @@ velox_link_libraries(
 velox_add_library(
   velox_expression
   BooleanMix.cpp
+  CaseExpr.cpp
   CastExpr.cpp
   CastHooks.cpp
   CoalesceExpr.cpp
@@ -55,6 +58,7 @@ velox_add_library(
   FunctionCallToSpecialForm.cpp
   GenericWriter.cpp
   LambdaExpr.cpp
+  NullIfExpr.cpp
   PeeledEncoding.cpp
   PrestoCastHooks.cpp
   RegisterSpecialForm.cpp
@@ -69,6 +73,7 @@ velox_add_library(
   VectorFunction.cpp
   HEADERS
   BooleanMix.h
+  CaseExpr.h
   CastExpr-inl.h
   CastExpr.h
   CastHooks.h
@@ -94,6 +99,7 @@ velox_add_library(
   FunctionCallToSpecialForm.h
   KindToSimpleType.h
   LambdaExpr.h
+  NullIfExpr.h
   PeeledEncoding.h
   PrestoCastHooks.h
   RegisterSpecialForm.h
@@ -121,6 +127,7 @@ velox_link_libraries(
   velox_common_base
   velox_expression_functions
   velox_functions_util
+  velox_trace
   velox_type_tz
   double-conversion::double-conversion
   Folly::folly

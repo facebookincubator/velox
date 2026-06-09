@@ -76,5 +76,11 @@ void registerTDigestFunctions(const std::string& prefix) {
       SimpleTDigest<double>,
       double,
       double>({prefix + "trimmed_mean"});
+  registerFunction<
+      WinsorizedMeanFunction,
+      double,
+      SimpleTDigest<double>,
+      double,
+      double>({prefix + "winsorized_mean"});
 }
 } // namespace facebook::velox::functions

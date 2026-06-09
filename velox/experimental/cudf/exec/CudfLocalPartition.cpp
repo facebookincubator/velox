@@ -58,16 +58,16 @@ CudfLocalPartition::CudfLocalPartition(
     int32_t operatorId,
     exec::DriverCtx* ctx,
     const std::shared_ptr<const core::LocalPartitionNode>& planNode)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           ctx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "CudfLocalPartition"),
-      NvtxHelper(
+          "CudfLocalPartition",
           nvtx3::rgb{255, 215, 0}, // Gold
-          operatorId,
-          fmt::format("[{}]", planNode->id())),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          planNode),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()} {
@@ -179,9 +179,8 @@ void CudfLocalPartition::enqueuePartition(
   }
 }
 
-void CudfLocalPartition::addInput(RowVectorPtr input) {
+void CudfLocalPartition::doAddInput(RowVectorPtr input) {
   flushVectorPool();
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   recordOutputStats(input);
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK(cudfVector, "Input must be a CudfVector");
@@ -278,7 +277,7 @@ exec::BlockingReason CudfLocalPartition::isBlocked(ContinueFuture* future) {
   return exec::BlockingReason::kNotBlocked;
 }
 
-void CudfLocalPartition::noMoreInput() {
+void CudfLocalPartition::doNoMoreInput() {
   Operator::noMoreInput();
   for (const auto& queue : queues_) {
     queue->noMoreData();

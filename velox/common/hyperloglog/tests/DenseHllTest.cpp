@@ -19,8 +19,7 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/common/encode/Base64.h"
 

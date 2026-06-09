@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -23,7 +23,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-class CudfAssignUniqueId : public exec::Operator, public NvtxHelper {
+class CudfAssignUniqueId : public CudfOperatorBase {
  public:
   CudfAssignUniqueId(
       int32_t operatorId,
@@ -44,10 +44,6 @@ class CudfAssignUniqueId : public exec::Operator, public NvtxHelper {
     return input_ == nullptr;
   }
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
-
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -58,6 +54,10 @@ class CudfAssignUniqueId : public exec::Operator, public NvtxHelper {
   }
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
 
  private:
   std::unique_ptr<cudf::column> generateIdColumn(

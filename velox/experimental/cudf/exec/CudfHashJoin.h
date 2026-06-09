@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -90,24 +90,23 @@ class CudfHashJoinBridge : public exec::JoinBridge {
  * only one driver performs the final hash table construction. The constructed
  * hash tables are transferred to probe operators via CudfHashJoinBridge.
  */
-class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
+class CudfHashJoinBuild : public CudfOperatorBase {
  public:
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
-  void addInput(RowVectorPtr input) override;
-
   bool needsInput() const override;
-
-  RowVectorPtr getOutput() override;
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
@@ -126,7 +125,7 @@ class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
  * manages right join state across multiple drivers, and supports batched
  * processing for large datasets.
  */
-class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
+class CudfHashJoinProbe : public CudfOperatorBase {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
 
@@ -135,15 +134,9 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
+  void initialize() override;
+
   bool needsInput() const override;
-
-  void addInput(RowVectorPtr input) override;
-
-  void noMoreInput() override;
-
-  RowVectorPtr getOutput() override;
-
-  void close() override;
 
   bool skipProbeOnEmptyBuild() const;
 
@@ -170,12 +163,21 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
+  void doClose() override;
+
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
 
   // Filter related members
+  /** @brief Whether to use AST-based filtering (false if filter spans both
+   * sides or if filter deals with decimal types) */
+  bool useAstFilter_{true};
   /** @brief CUDF AST tree for join filter evaluation */
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
@@ -256,6 +258,7 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   std::optional<rmm::cuda_stream_view> lastProbeStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
+
   /**
    * @brief Performs inner join between probe table and all build tables.
    * @param leftTable Probe-side table to join

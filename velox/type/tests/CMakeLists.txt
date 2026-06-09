@@ -18,6 +18,7 @@ add_executable(
   CastRegistryTest.cpp
   ConversionsTest.cpp
   DecimalTest.cpp
+  FastDateTest.cpp
   FilterTest.cpp
   FilterSerDeTest.cpp
   FloatingPointUtilTest.cpp
@@ -39,6 +40,7 @@ target_link_libraries(
   velox_type
   velox_type_test_lib
   velox_common_base
+  velox_expression
   Folly::folly
   GTest::gtest
   GTest::gtest_main
@@ -121,6 +123,17 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
+    glog::glog
+  )
+
+  add_executable(velox_date_conversion_benchmark DateConversionBenchmark.cpp)
+
+  target_link_libraries(
+    velox_date_conversion_benchmark
+    velox_type
+    velox_external_date
+    Folly::folly
+    Folly::follybenchmark
     glog::glog
   )
 endif()

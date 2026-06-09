@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -22,20 +24,25 @@
 #include "velox/common/memory/Memory.h"
 
 namespace {
-// Simple wrapper for test compatibility - assumes kSingle step
+// Simple wrapper for test compatibility - checks if an aggregation function
+// is supported in either the groupby or reduce registry (kSingle step).
 bool canAggregationBeEvaluatedByCudf(
     const facebook::velox::core::CallTypedExpr& call,
     facebook::velox::core::QueryCtx* queryCtx) {
-  // For tests, assume kSingle step and extract input types from the call
   std::vector<facebook::velox::TypePtr> rawInputTypes;
   for (const auto& input : call.inputs()) {
     rawInputTypes.push_back(input->type());
   }
-  return facebook::velox::cudf_velox::canAggregationBeEvaluatedByCudf(
-      call,
-      facebook::velox::core::AggregationNode::Step::kSingle,
-      rawInputTypes,
-      queryCtx);
+  return facebook::velox::cudf_velox::canGroupbyAggregationBeEvaluatedByCudf(
+             call,
+             facebook::velox::core::AggregationNode::Step::kSingle,
+             rawInputTypes,
+             queryCtx) ||
+      facebook::velox::cudf_velox::canReduceAggregationBeEvaluatedByCudf(
+             call,
+             facebook::velox::core::AggregationNode::Step::kSingle,
+             rawInputTypes,
+             queryCtx);
 }
 } // namespace
 #include "velox/core/QueryCtx.h"
@@ -131,6 +138,14 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
   ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
+// Test stddev_samp is supported
+TEST_F(CudfAggregationSelectionTest, stddevSampSupported) {
+  auto aggregationNode =
+      createAggregationNode({"c0"}, {"stddev_samp(c1)", "stddev_samp(c5)"});
+
+  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+}
+
 // Test unsupported aggregation functions
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
   auto aggregationNode =
@@ -143,7 +158,7 @@ TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
 // function is unsupported
 TEST_F(CudfAggregationSelectionTest, mixedSupportedUnsupportedFunctions) {
   auto aggregationNode =
-      createAggregationNode({"c0"}, {"sum(c1)", "stddev(c2)"});
+      createAggregationNode({"c0"}, {"sum(c1)", "variance(c2)"});
 
   ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
@@ -155,10 +170,10 @@ TEST_F(CudfAggregationSelectionTest, supportedGroupingKeyExpressions) {
   ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
-// Test unsupported aggregation functions (using stddev as example)
+// Test unsupported aggregation functions (using variance as example)
 TEST_F(CudfAggregationSelectionTest, unsupportedGroupingKeyExpressions) {
   auto aggregationNode =
-      createAggregationNode({"c0"}, {"sum(c1)", "stddev(c2)"});
+      createAggregationNode({"c0"}, {"sum(c1)", "variance(c2)"});
 
   ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
@@ -202,9 +217,12 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
               makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
           })})
           .project(
-              {"c0", "c1", "abs(c0) AS abs_c0"}) // abs is unsupported by CUDF
+              {"c0",
+               "c1",
+               "to_big_endian_64(c0) AS endian_c0"}) // to_big_endian_64 is
+                                                     // unsupported by CUDF
           .aggregation(
-              {"abs_c0"},
+              {"endian_c0"},
               {"sum(c1)"},
               {},
               core::AggregationNode::Step::kSingle,
@@ -352,19 +370,12 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationNotAllowedToNotAllowed) {
 
 // Test unsupported aggregation function signatures
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctionSignatures) {
-  auto stddevExpr = std::make_shared<core::CallTypedExpr>(
-      DOUBLE(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
-      "stddev");
-
   auto varianceExpr = std::make_shared<core::CallTypedExpr>(
       DOUBLE(),
       std::vector<core::TypedExprPtr>{
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
       "variance");
 
-  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(*stddevExpr, queryCtx_.get()));
   ASSERT_FALSE(canAggregationBeEvaluatedByCudf(*varianceExpr, queryCtx_.get()));
 }
 

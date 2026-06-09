@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 // #include <functional>
-#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/functions/lib/TDigest.h"
+#include "velox/functions/prestosql/aggregates/TDigestAccumulator.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox::exec;
@@ -24,14 +23,6 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::aggregate::prestosql {
 
 namespace {
-
-struct TDigestAccumulator {
-  explicit TDigestAccumulator(HashStringAllocator* allocator)
-      : digest(StlAllocator<double>(allocator)) {}
-
-  double compression = 0.0;
-  facebook::velox::functions::TDigest<StlAllocator<double>> digest;
-};
 
 template <typename T>
 class TDigestAggregate : public exec::Aggregate {

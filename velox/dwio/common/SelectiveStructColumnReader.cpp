@@ -16,7 +16,6 @@
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
@@ -321,7 +320,6 @@ void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
     const Mutation* mutation) {
-  process::TraceContext trace("SelectiveStructColumnReaderBase::next");
   mutation_ = mutation;
   hasDeletion_ = common::hasDeletion(mutation);
   const RowSet rows(iota(numValues, rows_), numValues);
@@ -425,7 +423,11 @@ void SelectiveStructColumnReaderBase::read(
   }
 
   const auto& childSpecs = scanSpec_->children();
-  VELOX_CHECK(!childSpecs.empty());
+  // When using name-based mapping, empty child specs are valid
+  // (e.g., when all struct fields are renamed/deleted).
+  if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
+    VELOX_CHECK(!childSpecs.empty());
+  }
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     const auto& childSpec = childSpecs[i];
 
@@ -451,7 +453,7 @@ void SelectiveStructColumnReaderBase::read(
     auto* reader = children_.at(fieldIndex);
     if (reader->isTopLevel() && childSpec->projectOut() &&
         !childSpec->hasFilter() && generateLazyChildren_) {
-      // Will make a LazyVector.
+      // Will make a LazyVector (with or without transform).
       continue;
     }
 
@@ -524,13 +526,29 @@ bool SelectiveStructColumnReaderBase::isChildMissing(
                                                   // row type that doesn't exist
                                                   // in the output.
        fileType_->type()->kind() !=
-           TypeKind::MAP && // If this is the case it means this is a flat map,
-                            // so it can't have "missing" fields.
-       childSpec.channel() >= fileType_->size());
+           TypeKind::MAP // If this is the case it means this is a flat map,
+                         // so it can't have "missing" fields.
+       ) &&
+      // Name-based missing-field check applies only to row types, not flat
+      // maps.
+      ((fileType_->type()->isRow() &&
+        columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName)
+           ? !asRowType(fileType_->type())->containsChild(childSpec.fieldName())
+           : childSpec.channel() >= fileType_->size());
 }
 
 std::unique_ptr<velox::dwio::common::ColumnLoader>
 SelectiveStructColumnReaderBase::makeColumnLoader(vector_size_t index) {
+  // Check if the child at this index has a transform with kNone extraction.
+  // If so, return a TransformColumnLoader to apply the transform lazily.
+  for (const auto& childSpec : scanSpec_->children()) {
+    if (childSpec->subscript() == index && childSpec->hasTransform() &&
+        childSpec->extractionType() ==
+            velox::common::ScanSpec::ExtractionType::kNone) {
+      return std::make_unique<velox::dwio::common::TransformColumnLoader>(
+          this, children_[index], numReads_, childSpec->transform());
+    }
+  }
   return std::make_unique<velox::dwio::common::ColumnLoader>(
       this, children_[index], numReads_);
 }
@@ -538,9 +556,43 @@ SelectiveStructColumnReaderBase::makeColumnLoader(vector_size_t index) {
 void SelectiveStructColumnReaderBase::getValues(
     const RowSet& rows,
     VectorPtr* result) {
-  VELOX_CHECK(!scanSpec_->children().empty());
+  // See comment in read().
+  if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
+    VELOX_CHECK(!scanSpec_->children().empty());
+  }
   VELOX_CHECK_NOT_NULL(
       *result, "SelectiveStructColumnReaderBase expects a non-null result");
+
+  // When deltaUpdate is set, skip kField extraction so the reader produces
+  // the full struct.  The extraction transform is applied after the delta
+  // update.
+  if (!isRoot_ &&
+      scanSpec_->extractionType() ==
+          velox::common::ScanSpec::ExtractionType::kField &&
+      !scanSpec_->deltaUpdate()) {
+    auto fieldIdx = scanSpec_->extractionFieldIndex();
+    for (const auto& childSpec : scanSpec_->children()) {
+      if (childSpec->channel() == fieldIdx && !childSpec->isConstant()) {
+        auto index = static_cast<vector_size_t>(childSpec->subscript());
+        if (childSpec->hasFilter() || !children_[index]->isTopLevel() ||
+            !generateLazyChildren_) {
+          children_[index]->getValues(rows, result);
+        } else {
+          // Lazy loading: create a LazyVector for the extracted field.
+          setOutputRowsForLazy(rows);
+          setLazyField(
+              makeColumnLoader(index),
+              children_[index]->requestedType(),
+              static_cast<vector_size_t>(rows.size()),
+              pool_,
+              *result);
+        }
+        return;
+      }
+    }
+    VELOX_UNREACHABLE();
+  }
+
   VELOX_CHECK(
       result->get()->type()->isRow(),
       "Struct reader expects a result of type ROW.");
@@ -577,8 +629,17 @@ void SelectiveStructColumnReaderBase::getValues(
                 this, children_[index], numReads_),
             resultRow->type()->childAt(channel),
             rows.size(),
-            memoryPool_,
+            pool_,
             childResult);
+      }
+      // If the column also has an extraction transform (e.g., MapKeys on a
+      // MAP_CONCAT delta-updated column), apply it after the delta update.
+      // The delta update modifies the column (e.g., MAP_CONCAT adds entries),
+      // and extraction should see the updated data.
+      if (childSpec->hasTransform() && childResult) {
+        // Force-load lazy vectors so the transform can process them.
+        childResult = BaseVector::loadedVectorShared(childResult);
+        childResult = childSpec->transform()(childResult, pool_);
       }
       continue;
     }
@@ -618,13 +679,16 @@ void SelectiveStructColumnReaderBase::getValues(
 
     // LazyVector result.
     setOutputRowsForLazy(rows);
+    // When the child has a transform (e.g., extraction pushdown), the lazy
+    // vector type is the transform's output type, not the file column type.
+    auto lazyType =
+        (childSpec->hasTransform() && childSpec->transformOutputType())
+        ? childSpec->transformOutputType()
+        : resultRow->type()->childAt(channel);
     setLazyField(
-        makeColumnLoader(index),
-        resultRow->type()->childAt(channel),
-        rows.size(),
-        memoryPool_,
-        childResult);
+        makeColumnLoader(index), lazyType, rows.size(), pool_, childResult);
   }
+
   resultRow->updateContainsLazyNotLoaded();
 }
 

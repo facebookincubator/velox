@@ -43,7 +43,8 @@ void registerFactories(folly::Executor* ioExecutor) {
   auto hiveConnector = factory.newConnector(
       TableEvolutionFuzzer::connectorId(),
       std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()),
+          std::unordered_map<std::string, std::string>{
+              {connector::hive::HiveConfig::kEnableFileHandleCache, "false"}}),
       ioExecutor);
   connector::ConnectorRegistry::global().insert(
       hiveConnector->connectorId(), hiveConnector);

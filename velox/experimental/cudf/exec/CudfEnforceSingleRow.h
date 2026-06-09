@@ -34,7 +34,7 @@ namespace facebook::velox::cudf_velox {
  * This is a pass-through operator that performs validation on GPU metadata
  * (row count) without transferring data between host and device.
  */
-class CudfEnforceSingleRow : public exec::Operator, public CudfOperator {
+class CudfEnforceSingleRow : public CudfOperatorBase {
  public:
   CudfEnforceSingleRow(
       int32_t operatorId,
@@ -51,17 +51,16 @@ class CudfEnforceSingleRow : public exec::Operator, public CudfOperator {
 
   bool needsInput() const override;
 
-  void addInput(RowVectorPtr input) override;
-
-  void noMoreInput() override;
-
-  RowVectorPtr getOutput() override;
-
   bool isFinished() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
 };
 
 } // namespace facebook::velox::cudf_velox

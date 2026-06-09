@@ -75,21 +75,30 @@ CudfFromVelox::CudfFromVelox(
     RowTypePtr outputType,
     exec::DriverCtx* driverCtx,
     std::string planNodeId)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           outputType,
-          operatorId,
           planNodeId,
-          "CudfFromVelox"),
-      NvtxHelper(
+          "CudfFromVelox",
           nvtx3::rgb{255, 140, 0}, // Orange
-          operatorId,
-          fmt::format("[{}]", planNodeId)),
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          std::nullopt),
       timestampTimeZone_(driverCtx->queryConfig().get<std::string>(
-          facebook::velox::core::QueryConfig::kSessionTimezone)) {}
+          facebook::velox::core::QueryConfig::kSessionTimezone)) {
+  auto parentId = planNodeId.substr(0, planNodeId.find("-from-velox"));
+  stats_.withWLock([&](auto& stats) {
+    stats.setStatSplitter(
+        [parentId = std::move(parentId)](const auto& combinedStats) {
+          auto result = combinedStats;
+          result.planNodeId = parentId;
+          return std::vector<exec::OperatorStats>{std::move(result)};
+        });
+  });
+}
 
-void CudfFromVelox::addInput(RowVectorPtr input) {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+void CudfFromVelox::doAddInput(RowVectorPtr input) {
   if (input->size() > 0) {
     // Materialize lazy vectors
     for (auto& child : input->children()) {
@@ -103,8 +112,7 @@ void CudfFromVelox::addInput(RowVectorPtr input) {
   }
 }
 
-RowVectorPtr CudfFromVelox::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfFromVelox::doGetOutput() {
   const auto targetOutputSize =
       preferredGpuBatchSizeRows(operatorCtx_->driverCtx()->queryConfig());
 
@@ -145,26 +153,25 @@ RowVectorPtr CudfFromVelox::getOutput() {
   // Get a stream from the global stream pool
   auto stream = cudfGlobalStreamPool().get_stream();
 
-  // Convert RowVector to cudf table
+  // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
+  // internally before releasing Arrow host buffers, so no additional sync
+  // is needed here.
   auto tbl = with_arrow::toCudfTable(
       input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
-
-  // Synchronize to ensure toCudfTable finishes reading from input's CPU buffers
-  // before input goes out of scope
-  stream.synchronize();
 
   VELOX_CHECK_NOT_NULL(tbl);
 
   // Return a CudfVector that owns the cudf table
   const auto size = tbl->num_rows();
+
   return std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
 }
 
-void CudfFromVelox::close() {
+void CudfFromVelox::doClose() {
   // TODO(kn): Remove default stream after redesign of CudfFromVelox
   cudf::get_default_stream(cudf::allow_default_stream).synchronize();
-  exec::Operator::close();
+  Operator::close();
   inputs_.clear();
 }
 
@@ -173,23 +180,33 @@ CudfToVelox::CudfToVelox(
     RowTypePtr outputType,
     exec::DriverCtx* driverCtx,
     std::string planNodeId)
-    : exec::Operator(
+    : CudfOperatorBase(
+          operatorId,
           driverCtx,
           outputType,
-          operatorId,
           planNodeId,
-          "CudfToVelox"),
-      NvtxHelper(
+          "CudfToVelox",
           nvtx3::rgb{148, 0, 211}, // Purple
-          operatorId,
-          fmt::format("[{}]", planNodeId)) {}
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          std::nullopt) {
+  auto parentId = planNodeId.substr(0, planNodeId.find("-to-velox"));
+  stats_.withWLock([&](auto& stats) {
+    stats.setStatSplitter(
+        [parentId = std::move(parentId)](const auto& combinedStats) {
+          auto result = combinedStats;
+          result.planNodeId = parentId;
+          return std::vector<exec::OperatorStats>{std::move(result)};
+        });
+  });
+}
 
 bool CudfToVelox::isPassthroughMode() const {
   return operatorCtx_->driverCtx()->queryConfig().get<bool>(
       kPassthroughMode, true);
 }
 
-void CudfToVelox::addInput(RowVectorPtr input) {
+void CudfToVelox::doAddInput(RowVectorPtr input) {
   // Accumulate inputs
   if (input->size() > 0) {
     auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
@@ -245,8 +262,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox() {
 //
 // In both cases exactly one toVeloxColumn + stream.synchronize() is issued
 // per output batch, regardless of how many GPU inputs were consumed.
-RowVectorPtr CudfToVelox::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr CudfToVelox::doGetOutput() {
   if (finished_) {
     return nullptr;
   }
@@ -348,8 +364,8 @@ RowVectorPtr CudfToVelox::getOutput() {
   return slice;
 }
 
-void CudfToVelox::close() {
-  exec::Operator::close();
+void CudfToVelox::doClose() {
+  Operator::close();
   inputs_.clear();
   veloxBuffer_.reset();
 }

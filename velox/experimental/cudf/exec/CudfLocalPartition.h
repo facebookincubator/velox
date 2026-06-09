@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/LocalPartition.h"
@@ -29,7 +29,7 @@ enum class PartitionFunctionType {
   kRoundRobinRow,
 };
 
-class CudfLocalPartition : public exec::Operator, public NvtxHelper {
+class CudfLocalPartition : public CudfOperatorBase {
  public:
   CudfLocalPartition(
       int32_t operatorId,
@@ -42,12 +42,6 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
 
   void recordOutputStats(RowVectorPtr& input);
 
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override {
-    return nullptr;
-  }
-
   /// Always true but the caller will check isBlocked before adding input, hence
   /// the blocked state does not accumulate input.
   bool needsInput() const override {
@@ -56,12 +50,19 @@ class CudfLocalPartition : public exec::Operator, public NvtxHelper {
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
-  void noMoreInput() override;
-
   bool isFinished() override;
 
   static bool shouldReplace(
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  RowVectorPtr doGetOutput() override {
+    return nullptr;
+  }
+
+  void doNoMoreInput() override;
 
  private:
   void enqueuePartition(int partitionIndex, const CudfVectorPtr& cudfVector);

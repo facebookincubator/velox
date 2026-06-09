@@ -246,6 +246,10 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NOT_NULL(hiveSplit_);
 
   dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
+  // TODO: Use separate IoStatistics for data and metadata.
+  readerOpts.setDataIoStats(ioStatistics_);
+  readerOpts.setMetadataIoStats(ioStatistics_);
+  readerOpts.setIndexIoStats(ioStatistics_);
   hive::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
@@ -253,6 +257,7 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
       hiveSplit_,
       hiveSplit_->serdeParameters,
       readerOpts);
+  readerOpts.setLoadClusterIndex(true);
   readerOpts.setScanSpec(scanSpec_);
   readerOpts.setFileFormat(hiveSplit_->fileFormat);
   VELOX_CHECK_NULL(readerOpts.randomSkip());
@@ -314,6 +319,10 @@ FileIndexReader::createIndexReader() {
 void FileIndexReader::startLookup(
     const Request& request,
     const Options& options) {
+  // Empty files have no cluster index, so indexReader_ is null.
+  if (indexReader_ == nullptr) {
+    return;
+  }
   VELOX_CHECK(
       !indexReader_->hasNext(),
       "Previous request not finished. Call next() first.");
@@ -410,18 +419,33 @@ serializer::IndexBounds FileIndexReader::buildRequestIndexBounds(
 }
 
 bool FileIndexReader::hasNext() {
-  return indexReader_->hasNext();
+  return indexReader_ != nullptr && indexReader_->hasNext();
 }
 
 std::unique_ptr<FileIndexReader::Result> FileIndexReader::next(
     vector_size_t maxOutputRows) {
-  return indexReader_->next(maxOutputRows);
+  VELOX_CHECK_NOT_NULL(indexReader_);
+  auto result = indexReader_->next(maxOutputRows);
+  if (result != nullptr) {
+    numIndexOutputRows_ += result->size();
+  }
+  return result;
 }
 
 std::unordered_map<std::string, RuntimeMetric> FileIndexReader::runtimeStats() {
-  // TODO: Populate with format-specific stats in a follow-up.
-  // File-based IO stats are tracked externally via IoStatistics.
-  return {};
+  std::unordered_map<std::string, RuntimeMetric> stats;
+  if (numIndexOutputRows_ != 0) {
+    stats[std::string(kNumIndexReaderOutputRows)] = RuntimeMetric(
+        static_cast<int64_t>(numIndexOutputRows_), RuntimeCounter::Unit::kNone);
+  }
+  if (indexReader_ != nullptr) {
+    for (auto& [key, metric] : indexReader_->stats()) {
+      auto [_, inserted] = stats.emplace(key, metric);
+      VELOX_CHECK(
+          inserted, "Duplicate runtime stat '{}' from index reader", key);
+    }
+  }
+  return stats;
 }
 
 std::string FileIndexReader::toString() const {

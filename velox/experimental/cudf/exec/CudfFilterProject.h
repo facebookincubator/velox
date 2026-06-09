@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -28,7 +28,7 @@
 namespace facebook::velox::cudf_velox {
 
 // TODO: Does not support Filter yet.
-class CudfFilterProject : public exec::Operator, public NvtxHelper {
+class CudfFilterProject : public CudfOperatorBase {
  public:
   CudfFilterProject(
       int32_t operatorId,
@@ -36,16 +36,11 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project);
 
-  // Some is copied from operator FilterProject.
   void initialize() override;
 
   bool needsInput() const override {
     return !input_;
   }
-
-  void addInput(RowVectorPtr input) override;
-
-  RowVectorPtr getOutput() override;
 
   void filter(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
@@ -61,7 +56,11 @@ class CudfFilterProject : public exec::Operator, public NvtxHelper {
 
   bool isFinished() override;
 
-  void close() override {
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+
+  void doClose() override {
     Operator::close();
     projectEvaluators_.clear();
     filterEvaluator_.reset();

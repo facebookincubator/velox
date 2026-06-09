@@ -269,6 +269,55 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
       INTERVAL_DAY_TIME(), Variant(value.value() * multiplier), alias);
 }
 
+// DuckDB parses struct literals {'x': 1, 'y': 2} as struct_pack(1 AS x, 2 AS
+// y) and ROW(1, 2) as row(1, 2). Folds into a ROW constant when all arguments
+// are constants. Returns nullptr otherwise.
+core::ExprPtr tryFoldRowConstant(
+    const std::vector<core::ExprPtr>& inputs,
+    const std::optional<std::string>& alias) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  std::vector<Variant> values;
+  names.reserve(inputs.size());
+  types.reserve(inputs.size());
+  values.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    auto* constant = input->as<core::ConstantExpr>();
+    if (!constant) {
+      return nullptr;
+    }
+    names.push_back(constant->alias().value_or(""));
+    types.push_back(constant->type());
+    values.push_back(constant->value());
+  }
+  return std::make_shared<const core::ConstantExpr>(
+      ROW(std::move(names), std::move(types)),
+      Variant::row(std::move(values)),
+      alias);
+}
+
+// DuckDB parses [1, 2, 3] as list_value(1, 2, 3). Folds into an ARRAY constant
+// when all arguments are constants. Returns nullptr otherwise.
+core::ExprPtr tryFoldArrayConstant(
+    const std::vector<core::ExprPtr>& inputs,
+    const std::optional<std::string>& alias) {
+  std::vector<Variant> elements;
+  elements.reserve(inputs.size());
+  TypePtr elementType = UNKNOWN();
+  for (const auto& input : inputs) {
+    auto* constant = input->as<core::ConstantExpr>();
+    if (!constant) {
+      return nullptr;
+    }
+    elements.push_back(constant->value());
+    if (!constant->value().isNull()) {
+      elementType = constant->type();
+    }
+  }
+  return std::make_shared<const core::ConstantExpr>(
+      ARRAY(elementType), Variant::array(std::move(elements)), alias);
+}
+
 // Parse a function call (avg(a), func(1, b), etc).
 // Arithmetic operators also follow this path (a + b, a * b, etc).
 core::ExprPtr parseFunctionExpr(
@@ -286,6 +335,20 @@ core::ExprPtr parseFunctionExpr(
   if (params.size() == 1) {
     if (auto interval = tryParseInterval(func, params[0], getAlias(expr))) {
       return interval;
+    }
+  }
+
+  if (func == "struct_pack" || func == "row") {
+    if (auto rowConstant = tryFoldRowConstant(params, getAlias(expr))) {
+      return rowConstant;
+    }
+  }
+
+  // DuckDB parses [1, 2, 3] as list_value(1, 2, 3). Fold into an ARRAY
+  // constant when all arguments are constants.
+  if (func == "list_value") {
+    if (auto arrayConstant = tryFoldArrayConstant(params, getAlias(expr))) {
+      return arrayConstant;
     }
   }
 
@@ -391,6 +454,10 @@ core::ExprPtr parseOperatorExpr(
         if (auto constantExpr =
                 dynamic_cast<ConstantExpression*>(child.get())) {
           auto& value = constantExpr->value;
+          if (value.type().id() == LogicalTypeId::INTEGER &&
+              options.parseIntegerAsBigint) {
+            value = Value::BIGINT(value.GetValue<int32_t>());
+          }
           if (options.parseDecimalAsDouble &&
               value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
             value = Value::DOUBLE(value.GetValue<double>());
@@ -553,6 +620,68 @@ core::ExprPtr parseCaseExpr(
     return callExpr("if", std::move(params), getAlias(expr), options);
   }
 
+  // Detect simple CASE: DuckDB rewrites `CASE subject WHEN val THEN res` into
+  // a searched CASE where each when_expr is `COMPARE_EQUAL(subject_copy, val)`.
+  // The original form is lost in the AST (DuckDB's CaseExpression has no field
+  // to distinguish the two). We reverse-engineer it by checking whether all
+  // when_exprs are equality comparisons with a structurally identical left-hand
+  // side (the subject), and if so emit "case" instead of "switch". CaseExpr
+  // evaluates the subject exactly once and reuses the cached vector for each
+  // WHEN comparison, avoiding re-evaluation of non-deterministic subjects
+  // (e.g. rand()).
+  //
+  // Note: this detection can also match a user-written searched CASE whose
+  // conditions happen to be `x = v1`, `x = v2`, ... with the same LHS. This
+  // is semantically equivalent to `CASE x WHEN v1 ... WHEN v2 ...` for
+  // deterministic subjects. For non-deterministic subjects the evaluation
+  // count changes from per-branch to once, but writing a searched CASE with
+  // repeated non-deterministic equality checks against the same expression
+  // is unlikely in practice.
+  {
+    bool allEqWithSameSubject = true;
+    const ComparisonExpression* firstComp =
+        dynamic_cast<const ComparisonExpression*>(checks[0].when_expr.get());
+    const std::string subjectStr =
+        (firstComp && firstComp->type == ExpressionType::COMPARE_EQUAL)
+        ? firstComp->left->ToString()
+        : "";
+
+    if (!subjectStr.empty()) {
+      for (size_t i = 1; i < checks.size(); i++) {
+        const auto* comp = dynamic_cast<const ComparisonExpression*>(
+            checks[i].when_expr.get());
+        if (!comp || comp->type != ExpressionType::COMPARE_EQUAL ||
+            comp->left->ToString() != subjectStr) {
+          allEqWithSameSubject = false;
+          break;
+        }
+      }
+    } else {
+      allEqWithSameSubject = false;
+    }
+
+    if (allEqWithSameSubject) {
+      // Emit: case(subject, when_val_0, then_0, when_val_1, then_1,
+      //                       ..., [else])
+      std::vector<core::ExprPtr> inputs;
+      inputs.reserve(checks.size() * 2 + 2);
+      // Subject — parse from the left side of the first condition.
+      inputs.emplace_back(parseExpr(*firstComp->left, options));
+      for (const auto& check : checks) {
+        const auto& comp =
+            dynamic_cast<const ComparisonExpression&>(*check.when_expr);
+        inputs.emplace_back(parseExpr(*comp.right, options)); // WHEN value
+        inputs.emplace_back(parseExpr(*check.then_expr, options)); // THEN
+      }
+      auto elseExpr = parseExpr(*caseExpr.else_expr, options);
+      if (!isNullConstant(elseExpr)) {
+        inputs.emplace_back(elseExpr);
+      }
+      return callExpr("case", std::move(inputs), getAlias(expr), options);
+    }
+  }
+
+  // Searched CASE (or simple CASE that could not be detected): emit "switch".
   std::vector<core::ExprPtr> inputs;
   inputs.reserve(checks.size() * 2 + 1);
   for (auto& check : checks) {
@@ -606,6 +735,23 @@ core::ExprPtr parseCastExpr(
             Variant::create<TypeKind::BOOLEAN>(false),
             getAlias(expr));
       }
+    }
+
+    // DuckDB parses DATE '...' and '...'::date as cast(varchar as DATE).
+    // Fold into a DATE constant.
+    if (targetType->isDate() && constant->type()->isVarchar()) {
+      const auto& value = constant->value().value<TypeKind::VARCHAR>();
+      return std::make_shared<const core::ConstantExpr>(
+          DATE(),
+          Variant::create<TypeKind::INTEGER>(DATE()->toDays(value)),
+          getAlias(expr));
+    }
+
+    // ROW(1, 2)::struct(x bigint, y bigint) — re-type the ROW constant with
+    // the target type (which carries field names). Child types must match.
+    if (targetType->isRow() && targetType->equivalent(*constant->type())) {
+      return std::make_shared<const core::ConstantExpr>(
+          targetType, constant->value(), getAlias(expr));
     }
   }
 

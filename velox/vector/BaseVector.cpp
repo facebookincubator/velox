@@ -1054,6 +1054,9 @@ struct VariantToVector<TypeKind::ROW> {
     for (size_t i = 0; i < data.size(); ++i) {
       if (data[i].isNull()) {
         bits::setNull(rawNulls, i, true);
+        for (auto j{0u}; j < childCount; ++j) {
+          children[j].push_back(Variant::null(type->childAt(j)->kind()));
+        }
         continue;
       }
       const auto& row = data[i].row();

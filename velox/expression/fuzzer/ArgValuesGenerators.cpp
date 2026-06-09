@@ -19,6 +19,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/core/Expressions.h"
+#include "velox/functions/prestosql/S2CellOperations.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -639,4 +640,67 @@ std::vector<core::TypedExprPtr> SetDigestArgValuesGenerator::generate(
   }
   return inputExpressions;
 }
+namespace {
+
+// Generates a random valid S2 cell ID.
+// Picks random face (0-5), level (0-30), and Hilbert curve position.
+// S2CellId::FromFacePosLevel clamps the position, so any uint64_t is safe.
+int64_t randomS2CellId(FuzzerGenerator& rng) {
+  auto face = static_cast<int>(rand<uint64_t>(rng, 0, 5));
+  auto level = static_cast<int>(rand<uint64_t>(rng, 0, 30));
+  auto position = rand<uint64_t>(rng);
+  return functions::S2CellOp::cellIdFromFacePositionLevel(
+      face, position, level);
+}
+
+} // namespace
+
+std::vector<core::TypedExprPtr> S2CellIdArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& /*options*/,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_GE(signature.args.size(), 1);
+  populateInputTypesAndNames(signature, state);
+
+  std::vector<core::TypedExprPtr> inputExpressions{
+      signature.args.size(), nullptr};
+  VELOX_CHECK(!inputExpressions.empty());
+
+  // Generate valid constants for each argument based on type:
+  // BIGINT arguments are cell IDs, INTEGER arguments are levels (0-30).
+  for (size_t i = 0; i < inputExpressions.size(); ++i) {
+    state.customInputGenerators_.emplace_back(nullptr);
+    if (signature.args.at(i)->kind() == TypeKind::BIGINT) {
+      inputExpressions[i] = std::make_shared<core::ConstantTypedExpr>(
+          BIGINT(), variant(randomS2CellId(rng)));
+    } else if (signature.args.at(i)->kind() == TypeKind::INTEGER) {
+      auto level = static_cast<int32_t>(rand<uint64_t>(rng, 0, 30));
+      inputExpressions[i] =
+          std::make_shared<core::ConstantTypedExpr>(INTEGER(), variant(level));
+    }
+  }
+
+  return inputExpressions;
+}
+
+std::vector<core::TypedExprPtr> S2CellTokenArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& /*options*/,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_EQ(signature.args.size(), 1);
+  populateInputTypesAndNames(signature, state);
+
+  std::vector<core::TypedExprPtr> inputExpressions{1, nullptr};
+
+  // Generate a random valid cell ID, then convert to token.
+  auto token = functions::S2CellOp::toToken(randomS2CellId(rng));
+  state.customInputGenerators_.emplace_back(nullptr);
+  inputExpressions[0] =
+      std::make_shared<core::ConstantTypedExpr>(VARCHAR(), variant(token));
+
+  return inputExpressions;
+}
+
 } // namespace facebook::velox::fuzzer

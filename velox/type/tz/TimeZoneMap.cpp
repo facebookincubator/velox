@@ -38,6 +38,24 @@ using TTimeZoneIndex = folly::F14FastMap<std::string, const TimeZone*>;
 extern const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries();
 
 namespace {
+
+// Returns true if the OS-level IANA timezone database can be loaded via
+// tzdb::get_tzdb(). Result is cached in a static; supports TestValue injection
+// for exercising the missing-database fallback in tests.
+bool hasTimeZoneDatabase() {
+  static const bool available = [] {
+    try {
+      (void)tzdb::get_tzdb();
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }();
+  bool result = available;
+  TestValue::adjust("facebook::velox::tz::hasTimeZoneDatabase", &result);
+  return result;
+}
+
 // Returns the offset in minutes for a specific time zone offset in the
 // database. Do not call for tzID 0 (UTC / "+00:00").
 inline std::chrono::minutes getTimeZoneOffset(int16_t tzID) {
@@ -63,16 +81,20 @@ TTimeZoneDatabase buildTimeZoneDatabase(
     std::unique_ptr<TimeZone> timeZonePtr;
 
     if (entry.first == 0) {
-      timeZonePtr =
-          std::make_unique<TimeZone>("UTC", entry.first, locateZoneImpl("UTC"));
+      if (hasTimeZoneDatabase()) {
+        timeZonePtr = std::make_unique<TimeZone>(
+            "UTC", entry.first, locateZoneImpl("UTC"));
+      } else {
+        timeZonePtr = std::make_unique<TimeZone>(
+            "UTC", entry.first, std::chrono::minutes{0});
+      }
     } else if (entry.first <= 1680) {
-      std::chrono::minutes offset = getTimeZoneOffset(entry.first);
-      timeZonePtr =
-          std::make_unique<TimeZone>(entry.second, entry.first, offset);
+      timeZonePtr = std::make_unique<TimeZone>(
+          entry.second, entry.first, getTimeZoneOffset(entry.first));
     }
     // Every single other time zone entry (outside of offsets) needs to be
     // available in external/date or this will throw.
-    else {
+    else if (hasTimeZoneDatabase()) {
       const tzdb::time_zone* zone;
       try {
         zone = locateZoneImpl(entry.second);
@@ -501,4 +523,11 @@ std::string TimeZone::getLongName(
     TimeZone::TChoose choose) const {
   return getName<true>(timestamp, choose, tz_, timeZoneName_);
 }
+
+// Exposed for testing only; see header for full documentation.
+std::vector<std::unique_ptr<TimeZone>> testingBuildTimeZoneDatabase(
+    const std::vector<std::pair<int16_t, std::string>>& dbInput) {
+  return buildTimeZoneDatabase(dbInput);
+}
+
 } // namespace facebook::velox::tz

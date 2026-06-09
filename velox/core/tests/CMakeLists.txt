@@ -40,11 +40,18 @@ target_link_libraries(
     GTest::gtest_main
 )
 
+add_executable(velox_query_config_provider_test QueryConfigProviderTest.cpp)
+add_test(velox_query_config_provider_test velox_query_config_provider_test)
+target_link_libraries(
+  velox_query_config_provider_test
+  PRIVATE velox_query_config_provider velox_core GTest::gtest GTest::gtest_main
+)
+
 add_executable(velox_core_plan_consistency_checker_test PlanConsistencyCheckerTest.cpp)
 
 add_test(velox_core_plan_consistency_checker_test velox_core_plan_consistency_checker_test)
 
 target_link_libraries(
   velox_core_plan_consistency_checker_test
-  PRIVATE velox_core GTest::gtest GTest::gtest_main
+  PRIVATE velox_core velox_exec GTest::gtest GTest::gtest_main
 )

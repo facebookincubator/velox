@@ -30,7 +30,8 @@ class ReverseSignatureBinder : private SignatureBinderBase {
   ReverseSignatureBinder(
       const exec::FunctionSignature& signature,
       const TypePtr& returnType)
-      : SignatureBinderBase{signature}, returnType_{returnType} {}
+      : SignatureBinderBase{signature, TypeCoercer::defaults()},
+        returnType_{returnType} {}
 
   /// Try bind returnType_ to the return type of the function signature. Return
   /// true if the binding succeeds, or false otherwise.
