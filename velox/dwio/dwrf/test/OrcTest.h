@@ -98,16 +98,20 @@ class MockStripeStreams : public StripeStreams {
   MOCK_METHOD2(
       genMockDictDataSetter,
       std::function<void(BufferPtr&, MemoryPool*)>(uint32_t, uint32_t));
-  MOCK_METHOD0(
+  MOCK_METHOD(
+      std::shared_ptr<StripeDictionaryCache>,
       getStripeDictionaryCache,
-      std::shared_ptr<StripeDictionaryCache>());
+      (),
+      (override));
   MOCK_CONST_METHOD1(getEncodingProxy, proto::ColumnEncoding*(uint64_t));
   MOCK_CONST_METHOD1(
       getEncodingOrcProxy,
       proto::orc::ColumnEncoding*(uint64_t));
-  MOCK_CONST_METHOD2(
+  MOCK_METHOD(
+      uint32_t,
       visitStreamsOfNode,
-      uint32_t(uint32_t, std::function<void(const StreamInformation&)>));
+      (uint32_t, std::function<void(const StreamInformation&)>),
+      (const, override));
   MOCK_CONST_METHOD3(
       getStreamProxy,
       dwio::common::SeekableInputStream*(uint32_t, proto::Stream_Kind, bool));
