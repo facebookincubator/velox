@@ -51,6 +51,10 @@ struct LoadRequest {
   std::string tinyData;
   /// Number of bytes in 'data/tinyData'.
   int32_t loadSize{0};
+  // Set after getData() moves 'data/tinyData' to the owning stream. Duplicate
+  // regions share an offset, so getData() skips consumed buffers to find the
+  // next duplicate buffer.
+  bool bufferConsumed{false};
 };
 
 /// Represents planned loads that should be performed as a single IO.

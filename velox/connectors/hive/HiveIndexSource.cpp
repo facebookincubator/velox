@@ -459,7 +459,10 @@ class EmptyIterator : public IndexSource::ResultIterator {
   std::optional<std::unique_ptr<IndexSource::Result>> next(
       vector_size_t /*size*/,
       ContinueFuture& /*future*/) override {
-    return std::nullopt;
+    // Return a null Result to signal "done", not std::nullopt which means
+    // "async started, wait on future" and trips lookupFuture.valid() in
+    // IndexLookupJoin.
+    return std::unique_ptr<IndexSource::Result>(nullptr);
   }
 };
 

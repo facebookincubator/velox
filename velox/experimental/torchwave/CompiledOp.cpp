@@ -366,6 +366,14 @@ int32_t makeGrid(
   sv.maxBlocks.resize(launches.size());
   const int32_t elementsPerBlock = blockSize * kMinElementsPerThread;
   for (size_t i = 0; i < launches.size(); ++i) {
+    // alwaysSingleBlock ops fold their cross-block barriers into __syncthreads
+    // and are only correct when run as a single block. Cap maxBlocks at 1 so
+    // neither the pro-rata assignment nor the latency-balancing pass below can
+    // grow them past one block.
+    if (launches[i].launch->op && launches[i].launch->op->alwaysSingleBlock()) {
+      sv.maxBlocks[i] = 1;
+      continue;
+    }
     sv.maxBlocks[i] = static_cast<int32_t>(
         (launches[i].numElements + elementsPerBlock - 1) / elementsPerBlock);
     if (sv.maxBlocks[i] < 1) {

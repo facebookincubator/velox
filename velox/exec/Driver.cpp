@@ -122,6 +122,25 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
       planNodeId, splitGroupId, pipelineId, driverId, operatorType);
 }
 
+std::unordered_map<std::string, velox::memory::MemoryPool*>
+DriverCtx::addCustomOperatorPools(
+    const core::PlanNodeId& planNodeId,
+    const std::string& operatorType) {
+  std::unordered_map<std::string, velox::memory::MemoryPool*> result;
+  const auto& customRoots = task->queryCtx()->customPools();
+  if (customRoots.empty()) {
+    return result;
+  }
+  result.reserve(customRoots.size());
+  for (const auto& [tag, _] : customRoots) {
+    result.emplace(
+        tag,
+        task->addCustomOperatorPool(
+            tag, planNodeId, splitGroupId, pipelineId, driverId, operatorType));
+  }
+  return result;
+}
+
 namespace {
 bool isHashJoinSpillOperator(std::string_view operatorType) {
   return operatorType == OperatorType::kHashBuild ||

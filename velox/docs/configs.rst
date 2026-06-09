@@ -709,8 +709,13 @@ Hive Connector
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.
 
-Configuration property names use kebab-case (e.g., ``max-bucket-count``).
-Session property names use snake_case (e.g., ``max_bucket_count``).
+Configuration property names use kebab-case (e.g., ``max-bucket-count``)
+and session property names use snake_case (e.g., ``max_bucket_count``).
+Format-specific Hive connector configuration properties use prefixes such as
+``hive.parquet.``, ``hive.orc.``, and ``hive.nimble.``. Format-specific session
+properties do not include a connector prefix because they are scoped by catalog
+or connector ID by the engine.
+Configuration keys use dashes and session keys use underscores.
 Properties without a session property name in the table below are fixed for the lifetime of the process
 and cannot be modified per query.
 
@@ -757,6 +762,16 @@ must be specified as raw byte counts.
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
+   * - hive.parquet.use-column-names
+     - parquet_use_column_names
+     - bool
+     - false
+     - Map Parquet table field names to file field names using names, not indices.
+   * - hive.parquet.allow-int32-narrowing
+     - parquet_allow_int32_narrowing
+     - bool
+     - false
+     - Allow reading INT32 Parquet columns as a narrower integer type.
    * - partition_path_as_lower_case
      -
      - bool
@@ -812,11 +827,11 @@ must be specified as raw byte counts.
      - capacity
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
-   * - max-target-file-size
-     - max_target_file_size
+   * - hive.parquet.writer.max-target-file-size
+     - parquet_writer_max_target_file_size
      - capacity
      - 0B
-     - Maximum target file size for writers. When a file exceeds this size during writing, the writer
+     - Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
        sorted writes.
@@ -903,14 +918,14 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - parquet.footer-speculative-io-size
+   * - hive.parquet.footer-speculative-io-size
      - parquet_footer_speculative_io_size
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - parquet-footer-memory-tracking-threshold
+   * - hive.parquet.footer-memory-tracking-threshold
      - parquet_footer_memory_tracking_threshold
      - integer
      - disabled (max uint64)
@@ -947,6 +962,15 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
+   * - nimble.lazy-column-io
+     - nimble.lazy_column_io
+     - boolean
+     - false
+     - Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
+       Lazy IO columns are loaded through a separate buffered input other than the one used by early
+       materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
+       not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
+       allow lazy IO across stripes.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -984,6 +1008,22 @@ must be specified as raw byte counts.
      - bool
      - true
      - Enables historical based stripe size estimation after compression.
+   * - hive.orc.writer.max-target-file-size
+     - orc_writer_max_target_file_size
+     - capacity
+     - 0B
+     - Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
+   * - hive.nimble.writer.max-target-file-size
+     - nimble_writer_max_target_file_size
+     - capacity
+     - 0B
+     - Maximum target file size for Nimble writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
    * - hive.orc.writer.min-compression-size
      - orc_writer_min_compression_size
      - integer

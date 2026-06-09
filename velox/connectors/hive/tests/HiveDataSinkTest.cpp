@@ -1334,7 +1334,7 @@ TEST_F(HiveDataSinkTest, fileRotationBasic) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "1MB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "1MB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "256KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1375,7 +1375,7 @@ TEST_F(HiveDataSinkTest, fileRotationNoEmptyTrailingFile) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "1KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "1KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1409,7 +1409,7 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledForBucketedTables) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "100KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "100KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
 
@@ -1456,7 +1456,7 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledForBucketedTables) {
 TEST_F(HiveDataSinkTest, fileRotationDisabledByDefault) {
   const auto outputDirectory = TempDirectoryPath::create();
 
-  // Don't set max-target-file-size (use default which is disabled)
+  // Don't set max target file size (use default which is disabled)
   auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
 
   // Write a lot of data
@@ -1517,7 +1517,7 @@ TEST_F(HiveDataSinkTest, fileRotationIoStatsAccumulation) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "1MB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "1MB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "256KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1572,7 +1572,7 @@ TEST_F(HiveDataSinkTest, fileRotationFileInfoConsistency) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "500KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "500KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "128KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1649,7 +1649,7 @@ TEST_F(HiveDataSinkTest, fileRotationStatsProgressDuringWrite) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "256KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "256KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "64KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1689,7 +1689,7 @@ TEST_F(HiveDataSinkTest, fileRotationWithPartitionedTable) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "256KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "256KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "64KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1757,7 +1757,7 @@ TEST_F(HiveDataSinkTest, fileRotationWriteIOTimeAccumulation) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "512KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "512KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "128KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1794,7 +1794,7 @@ TEST_F(HiveDataSinkTest, fileRotationWithMemoryReclaim) {
 
   std::unordered_map<std::string, std::string> connectorConfig;
   // Use small file size to trigger multiple rotations
-  connectorConfig.emplace("max-target-file-size", "256KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "256KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "64KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
