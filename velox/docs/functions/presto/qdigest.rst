@@ -33,6 +33,7 @@ Functions
 ---------
 
 .. function:: merge(qdigest<T>) -> qdigest<T>
+   :noindex:
 
     Merges all input ``qdigest``\ s into a single ``qdigest``.
 

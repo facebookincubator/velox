@@ -117,6 +117,8 @@ jobs:
       spark_error: ${{ steps.sig-check.outputs.spark_error }}
       presto_aggregate_bias: ${{ steps.sig-check.outputs.presto_aggregate_functions }}
       presto_aggregate_error: ${{ steps.sig-check.outputs.presto_aggregate_error }}
+      spark_aggregate_bias: ${{ steps.sig-check.outputs.spark_aggregate_functions }}
+      spark_aggregate_error: ${{ steps.sig-check.outputs.spark_aggregate_error }}
       signatures_checked: ${{ steps.sig-paths.outputs.signatures }}
 
     steps:
@@ -226,6 +228,7 @@ jobs:
           $PIP install deepdiff
           python3 scripts/ci/signature.py export --spark /tmp/signatures/spark_signatures_main.json
           python3 scripts/ci/signature.py export --presto /tmp/signatures/presto_signatures_main.json
+          python3 scripts/ci/signature.py export_aggregates --spark /tmp/signatures/spark_aggregate_signatures_main.json
           python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
 
       - name: Save Function Signature Stash
@@ -301,8 +304,12 @@ jobs:
           PIP=$(command -v uv > /dev/null 2>&1 && echo "uv pip" || echo "python3 -m pip")
           $PIP install deepdiff
           python3 scripts/ci/signature.py gh_bias_check presto spark
+          python3 scripts/ci/signature.py export_aggregates --spark /tmp/signatures/spark_aggregate_signatures_contender.json
+          python3 scripts/ci/signature.py bias_aggregates --group spark /tmp/signatures/spark_aggregate_signatures_main.json \
+           /tmp/signatures/spark_aggregate_signatures_contender.json /tmp/signatures/spark_aggregate_bias_functions \
+           /tmp/signatures/spark_aggregate_errors
           python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json
-          python3 scripts/ci/signature.py bias_aggregates  /tmp/signatures/presto_aggregate_signatures_main.json \
+          python3 scripts/ci/signature.py bias_aggregates --group presto /tmp/signatures/presto_aggregate_signatures_main.json \
            /tmp/signatures/presto_aggregate_signatures_contender.json /tmp/signatures/presto_aggregate_bias_functions \
            /tmp/signatures/presto_aggregate_errors
 
@@ -675,6 +682,7 @@ jobs:
 
   spark-aggregate-fuzzer-run:
     name: Spark Aggregate Fuzzer
+    if: ${{ needs.compile.outputs.spark_aggregate_bias  != 'true' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:spark-server
     needs: compile
@@ -721,6 +729,68 @@ jobs:
           name: spark-agg-fuzzer-failure-artifacts
           path: |
             /tmp/spark_aggregate_fuzzer_repro
+
+  spark-bias-aggregate-fuzzer-run:
+    name: Spark Bias Aggregate Fuzzer
+    runs-on: ubuntu-latest
+    container: ghcr.io/facebookincubator/velox-dev:spark-server
+    needs: compile
+    if: ${{ needs.compile.outputs.spark_aggregate_bias  == 'true' }}
+    timeout-minutes: 60
+    steps:
+
+      - name: Download spark aggregation fuzzer
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: spark_aggregation_fuzzer
+
+      - name: Download libvelox
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: libvelox
+      - name: Download fuzzer scripts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: fuzzer-scripts
+
+      - name: Download Signatures
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: signatures
+          path: /tmp/signatures
+
+      - name: Run Spark Bias Aggregate Fuzzer
+        run: |
+          ls /tmp/signatures
+          mkdir -p /tmp/spark_bias_aggregate_fuzzer_repro/logs/
+          chmod -R 777 /tmp/spark_bias_aggregate_fuzzer_repro
+          bash /opt/start-spark.sh
+          # Sleep for 120 seconds to allow Spark server to start.
+          sleep 120
+          export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
+          chmod +x spark_aggregation_fuzzer_test
+          random_seed=${RANDOM}
+          echo "Random seed: ${random_seed}"
+          echo "Biased functions: $(< /tmp/signatures/spark_aggregate_bias_functions)"
+          ./spark_aggregation_fuzzer_test \
+                --seed ${random_seed} \
+                --duration_sec $DURATION \
+                --enable_sorted_aggregations=false \
+                --enable_streaming_aggregations=false \
+                --minloglevel=0 \
+                --stderrthreshold=2 \
+                --log_dir=/tmp/spark_bias_aggregate_fuzzer_repro/logs \
+                --only=$(< /tmp/signatures/spark_aggregate_bias_functions) \
+                --repro_persist_path=/tmp/spark_bias_aggregate_fuzzer_repro \
+            && echo -e "\n\nSpark Aggregate Fuzzer run finished successfully."
+
+      - name: Archive Spark bias aggregate production artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: spark-bias-agg-fuzzer-failure-artifacts
+          path: |
+            /tmp/spark_bias_aggregate_fuzzer_repro
 
   spark-bias-fuzzer:
     name: Spark Bias Fuzzer
@@ -1491,6 +1561,12 @@ jobs:
         if: ${{ needs.compile.outputs.presto_aggregate_error == 'true' }}
         run: |
           cat /tmp/signatures/presto_aggregate_errors
+          exit 1
+
+      - name: Surface Spark aggregate function signature errors
+        if: ${{ needs.compile.outputs.spark_aggregate_error == 'true' }}
+        run: |
+          cat /tmp/signatures/spark_aggregate_errors
           exit 1
 
   presto-java-window-fuzzer-run:

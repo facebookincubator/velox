@@ -39,6 +39,8 @@
 #include <fmt/format.h>
 #include <re2/re2.h>
 
+#include <atomic>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -210,6 +212,40 @@ TEST_P(MultiThreadedHashJoinTest, emptyProbe) {
         }
       })
       .run();
+}
+
+DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
+  std::atomic_size_t sourceDriversChecked{0};
+  std::atomic_size_t sourceDriversWithRetainedInputs{0};
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+      std::function<void(size_t*)>([&](size_t* retainedInputBatches) {
+        ++sourceDriversChecked;
+        if (*retainedInputBatches != 0) {
+          ++sourceDriversWithRetainedInputs;
+        }
+      }));
+
+  // Run two build drivers, the last driver transfers input from the other
+  // driver.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      // Only the build side needs parallelization for this ownership transfer.
+      .numDrivers(
+          2,
+          /*runParallelProbe=*/false,
+          /*runParallelBuild=*/true)
+      .keyTypes({BIGINT()})
+      .probeVectors(10, 1)
+      .buildVectors(10, 1)
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
+      .run();
+
+  EXPECT_EQ(sourceDriversChecked.load(), 1);
+  EXPECT_EQ(sourceDriversWithRetainedInputs.load(), 0)
+      << "Source build drivers retained input batches after transfer";
 }
 
 TEST_P(MultiThreadedHashJoinTest, normalizedKey) {

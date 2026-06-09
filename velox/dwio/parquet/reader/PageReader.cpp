@@ -33,6 +33,10 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::parquet {
 
+static_assert(
+    PageReader::kPageReadPadding >= DeltaBpDecoder::kRequiredTrailingPadding,
+    "PageReader::kPageReadPadding must cover DeltaBpDecoder's SIMD over-read");
+
 using thrift::Encoding;
 using thrift::PageHeader;
 
@@ -126,7 +130,9 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
       bufferStart_ = reinterpret_cast<const char*>(buffer);
       bufferEnd_ = bufferStart_ + bufferSize;
     }
-    if (bufferEnd_ - bufferStart_ >= size) {
+    // Fall through to the AlignedBuffer copy when the stream buffer does
+    // not have kPageReadPadding trailing bytes past 'size'.
+    if (bufferEnd_ - bufferStart_ >= size + kPageReadPadding) {
       bufferStart_ += size;
       return bufferStart_ - size;
     }
@@ -844,15 +850,20 @@ void PageReader::makeDecoder() {
       break;
     case Encoding::DELTA_BYTE_ARRAY:
       if (parquetType == thrift::Type::BYTE_ARRAY) {
-        deltaByteArrDecoder_ =
-            std::make_unique<DeltaByteArrayDecoder>(pageData_);
+        if (!deltaByteArrDecoder_) {
+          deltaByteArrDecoder_ = std::make_unique<DeltaByteArrayDecoder>();
+        }
+        deltaByteArrDecoder_->reset(pageData_);
         break;
       }
       [[fallthrough]];
     case Encoding::DELTA_LENGTH_BYTE_ARRAY:
       if (parquetType == thrift::Type::BYTE_ARRAY) {
-        deltaLengthByteArrDecoder_ =
-            std::make_unique<DeltaLengthByteArrayDecoder>(pageData_);
+        if (!deltaLengthByteArrDecoder_) {
+          deltaLengthByteArrDecoder_ =
+              std::make_unique<DeltaLengthByteArrayDecoder>();
+        }
+        deltaLengthByteArrDecoder_->reset(pageData_);
         break;
       }
       [[fallthrough]];

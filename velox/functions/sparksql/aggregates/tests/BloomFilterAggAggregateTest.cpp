@@ -19,9 +19,13 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
+
+using functions::sparksql::SparkQueryConfig;
+
 namespace {
 class BloomFilterAggAggregateTest
     : public aggregate::test::AggregationTestBase {
@@ -96,7 +100,8 @@ TEST_F(BloomFilterAggAggregateTest, config) {
       {},
       {"bloom_filter_agg(c0)"},
       expected,
-      {{core::QueryConfig::kSparkBloomFilterMaxNumBits, "1600"}});
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kBloomFilterMaxNumBits),
+        "1600"}});
 
   // Test fails without setting the config.
   auto planNode = exec::test::PlanBuilder(pool())

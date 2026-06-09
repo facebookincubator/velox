@@ -16,6 +16,40 @@ and have I verified the claims?" If the answer is no, dig deeper before
 drafting. The most common mistake is focusing on code details before
 understanding the change.
 
+## Design pass (do this before the mechanical review)
+
+Mechanical correctness — does it compile, is CI green, are prior comments
+addressed — is **necessary but never sufficient**. It answers "does it work,"
+not "is it right." Never let green CI or "addressed all comments" shortcut this
+pass or justify an approve. Do the design pass first; it sets the verdict.
+
+1. **State the PR's goal/invariant in one sentence** — in your own words, from
+   the description and the code (e.g., "generic code must not know about
+   formats"). If you can't, the description isn't clear enough — say so.
+
+2. **Hunt the diff for violations of that invariant.** This is the highest-yield
+   step. Make it concrete: grep for the pattern the PR claims to remove. If a PR
+   says it removes format knowledge from generic code, grep the generic files
+   for `switch.*Format`, `format ==`, and format-name string literals. A
+   surviving hit is usually the most important finding in the review.
+
+3. **Check the refactor is complete, not carved out.** Did it convert every
+   instance of the pattern, or migrate one case (e.g., Parquet) and leave the
+   siblings (ORC, DWRF, Nimble) on the old path? A partial migration that leaves
+   one concept with **two homes** (a shared field *and* a format-owned field for
+   the same value) is a finding, not a detail. If the split is intentional, the
+   PR must say so.
+
+4. **Scrutinize new API on shared/core types.** For each new public method or
+   field added to a widely-used class: how many callers does it have (one caller
+   for a general API is a smell)? Does it need to be that general? Does it expose
+   internals — locks, raw iteration, arbitrary callbacks — to outside code?
+
+5. **Grep each new public symbol for usages.** Dead constants/methods (declared,
+   never referenced) ship surprisingly often. Flag them.
+
+Only after this pass, move to the mechanical checks below.
+
 ## Tone
 
 - **Opening:** "Thank you for the fix/contribution!" — then straight to the
@@ -72,7 +106,41 @@ Then list the remaining issues. Don't re-explain items that were already
 explained with code snippets in the previous round — just say "not fixed"
 and refer back.
 
+### Refactoring PRs
+
+Refactoring PRs require extra scrutiny beyond "does the code compile and
+tests pass":
+
+- **Re-read the PR description as a cold reader.** If you can't explain
+  the before/after component responsibilities from the description alone,
+  send it back.
+- **Read new files end-to-end.** Verify that class names match file names,
+  APIs are minimal (no private methods promoted to public), and
+  abstractions are clean. Don't trust "I renamed X and extracted Y" —
+  verify the result is well-designed, not just mechanically reorganized.
+- **Check that the refactoring is pure.** No behavioral changes, no new
+  tests (unless closing a pre-existing coverage gap in a separate PR).
+
 ## What to check
+
+### Maintainability & structure (not nits)
+
+This code is read far more than it is written and lives for years. Structure is
+a primary review dimension, co-equal with correctness — not a cosmetic
+afterthought. The following are **design findings, never 🟢 nits**:
+
+- Wrong or leaky abstraction boundary; generic code depending on specific code.
+- One concept with two owners (duplicated state, parallel sources of truth).
+- A new API more general than its single caller needs.
+- Hardcoded values that should be supplied by the caller/registrar.
+- Coupling that violates the change's own stated goal.
+- Code that works but a maintainer would misread (e.g., an empty switch case
+  with no explanation — though the fix may be to remove the case, not comment
+  it).
+
+True 🟢 nits are cosmetic only: typos, formatting, a single local variable's
+name. If a comment is about how the code is *organized* or *who owns what*, it
+is not a nit — rank it as a suggestion or higher and lead with it.
 
 ### Correctness
 

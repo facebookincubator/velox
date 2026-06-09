@@ -50,9 +50,9 @@ void IndexLookupJoin::IndexStatWriter::addRuntimeStat(
 }
 
 void IndexLookupJoin::IndexStatWriter::setRuntimeStat(
-    const std::string& name,
+    std::string_view name,
     const RuntimeMetric& metric) {
-  runtimeStats_.wlock()->insert_or_assign(name, metric);
+  runtimeStats_.wlock()->insert_or_assign(std::string(name), metric);
 }
 
 std::unordered_map<std::string, RuntimeMetric>
