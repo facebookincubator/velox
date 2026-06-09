@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "velox/dwio/parquet/reader/Metadata.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
 
@@ -34,43 +34,40 @@ constexpr size_t kStatsValueLen = 32;
 
 thrift::ColumnChunk makeColumn(size_t pathDepth) {
   thrift::ColumnChunk column;
-  std::vector<std::string> path;
-  path.reserve(pathDepth);
   for (size_t i = 0; i < pathDepth; ++i) {
-    path.emplace_back(kPathSegmentLen, 'p');
+    column.meta_data().ensure().path_in_schema()->push_back(
+        std::string(kPathSegmentLen, 'p'));
   }
-  column.meta_data.path_in_schema = std::move(path);
-  column.meta_data.encodings = {
-      thrift::Encoding::PLAIN,
-      thrift::Encoding::RLE,
-      thrift::Encoding::RLE_DICTIONARY,
-  };
-  column.meta_data.__isset.statistics = true;
-  column.meta_data.statistics.__set_min(std::string(kStatsValueLen, 'm'));
-  column.meta_data.statistics.__set_max(std::string(kStatsValueLen, 'M'));
-  column.meta_data.statistics.__set_min_value(std::string(kStatsValueLen, 'a'));
-  column.meta_data.statistics.__set_max_value(std::string(kStatsValueLen, 'z'));
-  column.meta_data.num_values = 1'000'000;
-  column.meta_data.total_compressed_size = 1 << 20;
-  column.meta_data.total_uncompressed_size = 2 << 20;
+  column.meta_data().ensure().encodings()->push_back(thrift::Encoding::PLAIN);
+  column.meta_data()->encodings()->push_back(thrift::Encoding::RLE);
+  column.meta_data()->encodings()->push_back(thrift::Encoding::RLE_DICTIONARY);
+
+  auto& stats = column.meta_data().ensure().statistics().ensure();
+  stats.min() = std::string(kStatsValueLen, 'm');
+  stats.max() = std::string(kStatsValueLen, 'M');
+  stats.min_value() = std::string(kStatsValueLen, 'a');
+  stats.max_value() = std::string(kStatsValueLen, 'z');
+  column.meta_data()->num_values() = 1'000'000;
+  column.meta_data()->total_compressed_size() = 1 << 20;
+  column.meta_data()->total_uncompressed_size() = 2 << 20;
   return column;
 }
 
 thrift::FileMetaData makeFooter(size_t numColumns, size_t numRowGroups) {
   thrift::FileMetaData metadata;
-  metadata.created_by = "velox-benchmark";
-  metadata.num_rows = static_cast<int64_t>(numColumns) * numRowGroups;
-  metadata.schema.resize(numColumns + 1);
-  metadata.schema[0].name = "root";
-  metadata.schema[0].num_children = static_cast<int32_t>(numColumns);
+  metadata.created_by() = "velox-benchmark";
+  metadata.num_rows() = static_cast<int64_t>(numColumns) * numRowGroups;
+  metadata.schema()->resize(numColumns + 1);
+  (*metadata.schema())[0].name() = "root";
+  (*metadata.schema())[0].num_children() = static_cast<int32_t>(numColumns);
   for (size_t i = 0; i < numColumns; ++i) {
-    metadata.schema[i + 1].name = "col_" + std::to_string(i);
+    (*metadata.schema())[i + 1].name() = "col_" + std::to_string(i);
   }
-  metadata.row_groups.resize(numRowGroups);
-  for (auto& rowGroup : metadata.row_groups) {
-    rowGroup.columns.reserve(numColumns);
+  metadata.row_groups()->resize(numRowGroups);
+  for (auto& rowGroup : *metadata.row_groups()) {
+    rowGroup.columns()->reserve(numColumns);
     for (size_t i = 0; i < numColumns; ++i) {
-      rowGroup.columns.push_back(makeColumn(/*pathDepth=*/2));
+      rowGroup.columns()->push_back(makeColumn(/*pathDepth=*/2));
     }
   }
   return metadata;

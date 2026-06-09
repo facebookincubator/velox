@@ -95,7 +95,7 @@ jobs:
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/czentgr/czentgr-test:thrift-deps
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -684,7 +684,7 @@ jobs:
     name: Spark Aggregate Fuzzer
     if: ${{ needs.compile.outputs.spark_aggregate_bias  != 'true' }}
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:spark-server
+    container: ghcr.io/czentgr/czentgr-test:spark-server
     needs: compile
     timeout-minutes: 30
     steps:
