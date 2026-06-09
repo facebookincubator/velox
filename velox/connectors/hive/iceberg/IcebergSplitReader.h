@@ -56,6 +56,30 @@ class IcebergSplitReader : public FileSplitReader {
 
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
+ protected:
+  // Override checkIfSplitIsEmpty to use Iceberg-specific filter testing that
+  // considers initial-default values.
+  bool checkIfSplitIsEmpty(dwio::common::RuntimeStatistics& runtimeStats);
+
+ private:
+  // Test filters for Iceberg tables, considering initial-default values.
+  // This method is similar to testFilters() but handles columns with
+  // initial-default values specially. For columns missing from the file,
+  // if they have an initial-default value, the filter is evaluated against
+  // the default value to properly reject splits at pruning time.
+  bool testFiltersForIceberg(
+      const dwio::common::Reader* reader,
+      const std::string& filePath,
+      dwio::common::RuntimeStatistics& runtimeStats) const;
+
+  // Test a filter against a constant string value.
+  // Returns true if the filter matches the value, false otherwise.
+  // This follows the same pattern as partition filter testing.
+  static bool testFilterOnConstant(
+      const common::Filter* filter,
+      const TypePtr& type,
+      const std::string& value);
+
  private:
   /// Adapts the data file schema to match the table schema expected by the
   /// query.

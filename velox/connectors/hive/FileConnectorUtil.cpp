@@ -288,14 +288,85 @@ bool testFilters(
               child->filter(),
               asLocalTime);
         }
-        // Column is missing, most likely due to schema evolution. Or it's a
-        // partition key but the partition value is NULL.
-        if (child->filter()->isDeterministic() &&
-            !child->filter()->testNull()) {
-          VLOG(1) << "Skipping " << filePath
-                  << " because the filter testNull() failed for column "
+        // Column is missing from the file. Check if it has a constant value
+        // (e.g., initial-default for schema evolution, or partition key with
+        // NULL value).
+        if (child->isConstant()) {
+          // Column has a constant value (e.g., initial-default). Test the
+          // filter against this constant value.
+          auto constantVec = child->constantValue();
+          if (constantVec->isNullAt(0)) {
+            // Constant is NULL, test if filter accepts NULL
+            if (child->filter()->isDeterministic() &&
+                !child->filter()->testNull()) {
+              VLOG(1)
+                  << "Skipping " << filePath
+                  << " because the filter testNull() failed for constant column "
                   << child->fieldName();
-          return false;
+              return false;
+            }
+          } else {
+            // Constant has a value, test the filter against it using the
+            // type-specific test methods
+            bool filterPassed = false;
+            const auto& type = constantVec->type();
+            switch (type->kind()) {
+              case TypeKind::BIGINT:
+              case TypeKind::INTEGER:
+              case TypeKind::SMALLINT:
+              case TypeKind::TINYINT: {
+                // DATE is also represented as INTEGER (days since epoch)
+                auto value =
+                    constantVec->as<SimpleVector<int64_t>>()->valueAt(0);
+                filterPassed = applyFilter(*child->filter(), value);
+                break;
+              }
+              case TypeKind::REAL:
+              case TypeKind::DOUBLE: {
+                auto value =
+                    constantVec->as<SimpleVector<double>>()->valueAt(0);
+                filterPassed = applyFilter(*child->filter(), value);
+                break;
+              }
+              case TypeKind::BOOLEAN: {
+                auto value = constantVec->as<SimpleVector<bool>>()->valueAt(0);
+                filterPassed = applyFilter(*child->filter(), value);
+                break;
+              }
+              case TypeKind::TIMESTAMP: {
+                auto value =
+                    constantVec->as<SimpleVector<Timestamp>>()->valueAt(0);
+                filterPassed = applyFilter(*child->filter(), value);
+                break;
+              }
+              case TypeKind::VARCHAR: {
+                auto value =
+                    constantVec->as<SimpleVector<StringView>>()->valueAt(0);
+                filterPassed = applyFilter(*child->filter(), value);
+                break;
+              }
+              default:
+                // For unsupported types, conservatively assume filter passes
+                filterPassed = true;
+                break;
+            }
+            if (!filterPassed) {
+              VLOG(1) << "Skipping " << filePath
+                      << " because the filter failed for constant column "
+                      << child->fieldName();
+              return false;
+            }
+          }
+        } else {
+          // Column is missing and has no constant value. Test if filter
+          // accepts NULL.
+          if (child->filter()->isDeterministic() &&
+              !child->filter()->testNull()) {
+            VLOG(1) << "Skipping " << filePath
+                    << " because the filter testNull() failed for column "
+                    << child->fieldName();
+            return false;
+          }
         }
       } else {
         const auto& typeWithId = fileTypeWithId->childByName(name);

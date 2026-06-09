@@ -133,6 +133,112 @@ IcebergSplitReader::IcebergSplitReader(
       deleteBitmap_(nullptr),
       columnHandles_(std::move(columnHandles)) {}
 
+bool IcebergSplitReader::testFilterOnConstant(
+    const common::Filter* filter,
+    const TypePtr& type,
+    const std::string& value) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN: {
+      return filter->testBool(folly::to<bool>(value));
+    }
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT: {
+      return filter->testInt64(folly::to<int64_t>(value));
+    }
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE: {
+      return filter->testDouble(folly::to<double>(value));
+    }
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
+      return filter->testBytes(value.data(), value.size());
+    }
+    default:
+      return true;
+  }
+}
+
+bool IcebergSplitReader::testFiltersForIceberg(
+    const dwio::common::Reader* reader,
+    const std::string& filePath,
+    dwio::common::RuntimeStatistics& runtimeStats) const {
+  // For Iceberg, we need to handle columns with initial-default values
+  // specially. If a column is missing from the file but has an initial-default,
+  // we should evaluate the filter against the default value to properly reject
+  // splits at pruning time.
+  const auto& rowType = reader->rowType();
+  for (const auto& child : scanSpec_->children()) {
+    if (child->filter()) {
+      const auto& name = child->fieldName();
+      // If column exists in file, use normal filter testing
+      if (rowType->containsChild(name)) {
+        continue;
+      }
+      // Column is missing from file - check if it has an initial-default
+      std::optional<std::string> initialDefaultValue;
+      TypePtr columnType;
+      if (columnHandles_) {
+        for (const auto& [outputName, handle] : *columnHandles_) {
+          if (handle->name() == name) {
+            auto icebergColumnHandle =
+                checkedPointerCast<const IcebergColumnHandle>(handle);
+            if (icebergColumnHandle->initialDefaultValue().has_value()) {
+              initialDefaultValue = icebergColumnHandle->initialDefaultValue();
+              columnType = icebergColumnHandle->dataType();
+              break;
+            }
+          }
+        }
+      }
+      if (initialDefaultValue.has_value()) {
+        // Column has initial-default - evaluate filter against the default
+        // value
+        if (child->filter()->isDeterministic()) {
+          try {
+            bool matches = testFilterOnConstant(
+                child->filter(), columnType, initialDefaultValue.value());
+            if (!matches) {
+              return false;
+            }
+          } catch (const std::exception& e) {
+            // If we can't parse the default value, conservatively keep the
+            // split
+            VLOG(1)
+                << "Failed to test filter against initial-default value for column "
+                << name << ": " << e.what();
+          }
+        }
+      } else {
+        // No initial-default - use normal NULL testing
+        if (child->filter()->isDeterministic() &&
+            !child->filter()->testNull()) {
+          return false;
+        }
+      }
+    }
+  }
+  ++runtimeStats.processedSplits;
+  return true;
+}
+
+bool IcebergSplitReader::checkIfSplitIsEmpty(
+    dwio::common::RuntimeStatistics& runtimeStats) {
+  // emptySplit_ may already be set if the data file is not found. In this case
+  // we don't need to test further.
+  if (emptySplit_) {
+    return true;
+  }
+  // Use Iceberg-specific filter testing that considers initial-default values
+  if (!baseReader_ || baseReader_->numberOfRows() == 0 ||
+      !testFiltersForIceberg(
+          baseReader_.get(), fileSplit_->filePath, runtimeStats)) {
+    emptySplit_ = true;
+  }
+  return emptySplit_;
+}
+
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
