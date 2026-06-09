@@ -93,8 +93,8 @@ uint64_t XxHash64::hashBytes(const StringView& input, uint64_t seed) {
   uint32_t length = input.size();
   auto offset = i + (length & -8);
   if (offset + 4L <= end) {
-    hash ^= (*reinterpret_cast<const uint64_t*>(offset) & 0xFFFFFFFFL) *
-        PRIME64_1;
+    hash ^=
+        (*reinterpret_cast<const uint64_t*>(offset) & 0xFFFFFFFFL) * PRIME64_1;
     hash = bits::rotateLeft64(hash, 23) * PRIME64_2 + PRIME64_3;
     offset += 4L;
   }
