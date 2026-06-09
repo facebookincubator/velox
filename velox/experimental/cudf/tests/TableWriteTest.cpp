@@ -138,7 +138,7 @@ struct TestParam {
   std::string toString() const {
     return fmt::format(
         "FileFormat[{}] TestMode[{}] commitStrategy[{}] multiDrivers[{}] compression[{}]",
-        dwio::common::toString((fileFormat())),
+        dwio::common::FileFormatName::toName((fileFormat())),
         testModeString(testMode()),
         CommitStrategyName::toName(commitStrategy()),
         multiDrivers(),
