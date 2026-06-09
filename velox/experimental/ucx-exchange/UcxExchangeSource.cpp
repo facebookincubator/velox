@@ -516,7 +516,8 @@ void UcxExchangeSource::onMetadata(
     ptr->stream = stream;
     try {
       ptr->dataBuf = std::make_unique<rmm::device_buffer>(
-          ptr->metadata.dataSizeBytes, stream,
+          ptr->metadata.dataSizeBytes,
+          stream,
           cudf::get_current_device_resource_ref());
     } catch (const rmm::bad_alloc& e) {
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
