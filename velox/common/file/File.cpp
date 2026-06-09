@@ -321,7 +321,11 @@ uint64_t LocalReadFile::memoryUsage() const {
   // source code it looks like it has only a single integer? Probably
   // we need to go deeper and see how much system memory is being taken
   // by the file descriptor the integer refers to?
+#ifdef __EMSCRIPTEN__
+  return 0;
+#else
   return sizeof(FILE);
+#endif
 }
 
 bool LocalWriteFile::Attributes::cowDisabled(

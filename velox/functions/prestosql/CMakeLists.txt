@@ -160,8 +160,9 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   FastFloat::fast_float
-  stemmer::stemmer
 )
+
+velox_link_libraries(velox_functions_prestosql_impl stemmer::stemmer)
 
 if(VELOX_ENABLE_FAISS)
   velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)

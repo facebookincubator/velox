@@ -39,8 +39,12 @@ message(STATUS "Building boost from source")
 
 # required for Boost::thread
 if(NOT TARGET Threads::Threads)
-  set(THREADS_PREFER_PTHREAD_FLAG ON)
-  find_package(Threads REQUIRED)
+  if(EMSCRIPTEN)
+    add_library(Threads::Threads INTERFACE IMPORTED)
+  else()
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    find_package(Threads REQUIRED)
+  endif()
 endif()
 
 FetchContent_Declare(

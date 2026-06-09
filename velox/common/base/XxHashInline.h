@@ -16,5 +16,15 @@
 
 #pragma once
 
+// xxhash with XXH_INLINE_ALL is not compatible with WASM native SIMD APIs
+// (__wasm_simd128__) so we hide it to fall back to SSE2 compatibility bindings,
+// which compile to the same WASM SIMD128 instructions.
+#ifdef __EMSCRIPTEN__
+#pragma push_macro("__wasm_simd128__")
+#undef __wasm_simd128__
+#endif
 #define XXH_INLINE_ALL
 #include <xxhash.h> // @manual=third-party//xxHash:xxhash
+#ifdef __EMSCRIPTEN__
+#pragma pop_macro("__wasm_simd128__")
+#endif

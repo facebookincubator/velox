@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,32 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-# for generated headers
-include_directories(.)
-velox_add_library(
-  velox_file
-  File.cpp
-  FileInputStream.cpp
-  FileIoTracer.cpp
-  HEADERS
-  File.h
-  FileInputStream.h
-  FileIoTracer.h
-  FileSystems.h
-  FileUtils.h
-  PlainUserNameTokenProvider.h
-  Region.h
-  TokenProvider.h
-)
-velox_sources(velox_file PRIVATE FileSystems.cpp FileUtils.cpp)
-
-velox_link_libraries(
-  velox_file
-  PUBLIC velox_exception Folly::folly
-  PRIVATE velox_buffer velox_common_base fmt::fmt glog::glog
-)
-
-if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_TEST_UTILS})
-  add_subdirectory(tests)
-endif()
+set -euo pipefail
+NODE="$1"
+shift
+exec "$NODE" --max-old-space-size=4096 "$@"

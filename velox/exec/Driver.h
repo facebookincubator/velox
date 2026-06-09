@@ -138,9 +138,9 @@ struct ThreadState {
       totalOffThreadTimeMs += startExecTimeMs - endExecTimeMs;
       endExecTimeMs = 0;
     }
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
     // This is a debugging feature disabled on the Mac since syscall
-    // is deprecated on that platform.
+    // is deprecated on that platform, and on WASM which has no syscall.
     tid = syscall(FOLLY_SYS_gettid);
 #endif
   }

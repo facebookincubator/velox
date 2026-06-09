@@ -187,6 +187,24 @@ option(
   OFF
 )
 
+# Disable features unavailable or unnecessary in WASM builds.
+if(EMSCRIPTEN)
+  set(VELOX_BUILD_TESTING OFF)
+  set(VELOX_ENABLE_GEO OFF) # Requires GEOS native library.
+  set(VELOX_ENABLE_FAISS OFF) # Requires FAISS native library.
+  set(VELOX_ENABLE_PARQUET OFF) # Requires Thrift/Arrow.
+  set(VELOX_ENABLE_S3 OFF) # Requires AWS SDK.
+  set(VELOX_ENABLE_GCS OFF) # Requires Google Cloud SDK.
+  set(VELOX_ENABLE_ABFS OFF) # Requires Azure SDK.
+  set(VELOX_ENABLE_HDFS OFF) # Requires HDFS client.
+  set(VELOX_ENABLE_HIVE_CONNECTOR OFF) # Pulls lz4/snappy/zstd/protobuf — none in emsdk.
+  set(VELOX_ENABLE_REMOTE_FUNCTIONS OFF)
+  set(VELOX_ENABLE_SUBSTRAIT OFF)
+  set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
+  set(VELOX_ENABLE_EXAMPLES OFF)
+  set(VELOX_ENABLE_BENCHMARKS OFF)
+endif()
+
 if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
@@ -295,8 +313,11 @@ if(DEFINED ENV{INSTALL_PREFIX})
 endif()
 
 # We look for OpenSSL here to cache the result enforce the version across our
-# dependencies.
-find_package(OpenSSL REQUIRED)
+# dependencies. WASM builds intentionally exclude folly's SSL helpers and all
+# other OpenSSL-dependent libraries, so skip the lookup under Emscripten.
+if(NOT EMSCRIPTEN)
+  find_package(OpenSSL REQUIRED)
+endif()
 
 if(
   VELOX_ENABLE_CCACHE
@@ -407,20 +428,22 @@ if(
   )
 endif()
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS
-)
+if(NOT EMSCRIPTEN)
+  execute_process(
+    COMMAND
+      bash -c
+      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+    RESULT_VARIABLE COMMAND_STATUS
+  )
 
-if(COMMAND_STATUS EQUAL "1")
-  message(FATAL_ERROR "Unable to determine compiler flags!")
+  if(COMMAND_STATUS EQUAL "1")
+    message(FATAL_ERROR "Unable to determine compiler flags!")
+  endif()
+  message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 endif()
-message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
@@ -559,20 +582,25 @@ velox_resolve_dependency(
   COMPONENTS data i18n io uc tu
 )
 
-set(
-  BOOST_COMPONENTS
-  atomic
-  context
-  date_time
-  filesystem
-  program_options
-  regex
-  thread
-)
-set(
-  BOOST_OPTIONAL_COMPONENTS
-  system # Boost.System is header only since Boost 1.89
-)
+if(EMSCRIPTEN)
+  set(BOOST_COMPONENTS filesystem program_options regex)
+  set(BOOST_OPTIONAL_COMPONENTS)
+else()
+  set(
+    BOOST_COMPONENTS
+    atomic
+    context
+    date_time
+    filesystem
+    program_options
+    regex
+    thread
+  )
+  set(
+    BOOST_OPTIONAL_COMPONENTS
+    system # Boost.System is header only since Boost 1.89
+  )
+endif()
 
 velox_set_source(Boost)
 velox_resolve_dependency(
@@ -771,7 +799,9 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
 endif()
 find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
-find_package(double-conversion 3.1.5 REQUIRED)
+if(NOT EMSCRIPTEN)
+  find_package(double-conversion 3.1.5 REQUIRED)
+endif()
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
