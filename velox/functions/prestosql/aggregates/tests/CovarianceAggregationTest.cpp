@@ -69,6 +69,32 @@ class CovarianceAggregationTest
                     .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(sql);
   }
+
+  // DuckDB 1.4.4 returns NaN for corr/regr_slope on constant inputs, while
+  // Presto returns NULL. Verify against expected results directly.
+  void testReturnsNull(const std::string& aggName, const RowVectorPtr& data) {
+    auto agg = fmt::format("{}(c1, c2)", aggName);
+    auto globalExpected = makeRowVector({makeAllNullFlatVector<float>(1)});
+    auto groupByExpected = makeRowVector({
+        makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6}),
+        makeAllNullFlatVector<float>(7),
+    });
+
+    testAggregations({data}, {}, {agg}, {globalExpected});
+    testAggregations({data}, {"c0"}, {agg}, {groupByExpected});
+
+    auto distinctAgg = fmt::format("{}(distinct c1, c2)", aggName);
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({}, {distinctAgg})
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults({globalExpected});
+    plan = PlanBuilder()
+               .values({data})
+               .singleAggregation({"c0"}, {distinctAgg})
+               .planNode();
+    AssertQueryBuilder(plan).assertResults({groupByExpected});
+  }
 };
 
 TEST_P(CovarianceAggregationTest, doubleNoNulls) {
@@ -156,6 +182,12 @@ TEST_P(CovarianceAggregationTest, allSameValue) {
   createDuckDbTable({data});
 
   auto aggName = GetParam();
+  // DuckDB 1.4.4 returns 'NaN' for some aggregations but Velox returns null
+  // according to the Presto convention.
+  if (aggName == "corr" || aggName == "regr_slope") {
+    testReturnsNull(aggName, data);
+    return;
+  }
   testGlobalAgg(aggName, data);
   testGroupBy(aggName, data);
   testDistinctGlobalAgg(aggName, data);
@@ -173,6 +205,12 @@ TEST_P(CovarianceAggregationTest, constantY) {
   createDuckDbTable({data});
 
   auto aggName = GetParam();
+  // DuckDB 1.4.4 returns 'NaN' for some aggregations but Velox returns null
+  // according to the Presto convention.
+  if (aggName == "corr") {
+    testReturnsNull(aggName, data);
+    return;
+  }
   testGlobalAgg(aggName, data);
   testGroupBy(aggName, data);
   testDistinctGlobalAgg(aggName, data);

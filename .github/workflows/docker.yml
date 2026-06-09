@@ -51,7 +51,7 @@ jobs:
         os:
           - {runner: ubuntu-24.04-arm, platform: arm64}
           - {runner: ubuntu-24.04, platform: amd64}
-        target: [ci, pyvelox, ubuntu, fedora]
+        target: [ci, pyvelox, ubuntu, fedora, staging, ubuntu-staging, fedora-staging]
 
     steps:
       - name: Free Disk Space
@@ -148,8 +148,11 @@ jobs:
           # into the skip list
           echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora"];
             . | to_entries[] | select(.value | has("image.name")) |
-            .key | split("-")[0] |
-            if . as $name | skip | index($name) != null then empty else . end' | \
+            .key |
+            if test("staging") then empty
+            else split("-")[0] |
+              if . as $name | skip | index($name) != null then empty else . end
+            end' | \
             while read -r image_name; do
               touch "$image_name"
             done

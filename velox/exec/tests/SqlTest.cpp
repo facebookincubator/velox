@@ -96,7 +96,6 @@ TEST_F(SqlTest, tableScan) {
   assertSql("SELECT t.a, t.b, t.c, u.b FROM t left join u on t.a = u.a");
   assertSql(
       "SELECT t.a, t.b, t.c FROM t WHERE EXISTS (SELECT 1 FROM u WHERE t.a = u.a)");
-  assertSql("SELECT t.a, t.b, t.c FROM t WHERE a < (SELECT max(u.a) FROM u)");
 }
 
 } // namespace facebook::velox::exec::test

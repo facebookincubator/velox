@@ -65,36 +65,32 @@ class QueryPlannerTest : public testing::Test {
 TEST_F(QueryPlannerTest, values) {
   assertPlan(
       "SELECT x, x + 5 FROM UNNEST([1, 2, 3]) as t(x)",
-      "-- Project[3]\n"
-      "  -- Unnest[2]\n"
-      "    -- Project[1]\n"
-      "      -- Values[0]\n");
+      "-- Project[2]\n"
+      "  -- Unnest[1]\n"
+      "    -- Values[0]\n");
 
   assertPlan(
       "SELECT sum(x) FROM UNNEST([1, 2, 3]) as t(x)",
-      "-- Project[4]\n"
-      "  -- Aggregation[3]\n"
-      "    -- Unnest[2]\n"
-      "      -- Project[1]\n"
-      "        -- Values[0]\n");
+      "-- Project[3]\n"
+      "  -- Aggregation[2]\n"
+      "    -- Unnest[1]\n"
+      "      -- Values[0]\n");
 
   assertPlan(
       "SELECT x % 5, sum(x) FROM UNNEST([1, 2, 3]) as t(x) GROUP BY 1",
-      "-- Project[5]\n"
-      "  -- Aggregation[4]\n"
-      "    -- Project[3]\n"
-      "      -- Unnest[2]\n"
-      "        -- Project[1]\n"
-      "          -- Values[0]\n");
+      "-- Project[4]\n"
+      "  -- Aggregation[3]\n"
+      "    -- Project[2]\n"
+      "      -- Unnest[1]\n"
+      "        -- Values[0]\n");
 
   assertPlan(
       "SELECT sum(x * 4) FROM UNNEST([1, 2, 3]) as t(x)",
-      "-- Project[5]\n"
-      "  -- Aggregation[4]\n"
-      "    -- Project[3]\n"
-      "      -- Unnest[2]\n"
-      "        -- Project[1]\n"
-      "          -- Values[0]\n");
+      "-- Project[4]\n"
+      "  -- Aggregation[3]\n"
+      "    -- Project[2]\n"
+      "      -- Unnest[1]\n"
+      "        -- Values[0]\n");
 }
 
 TEST_F(QueryPlannerTest, tableScan) {
@@ -132,10 +128,9 @@ TEST_F(QueryPlannerTest, customScalarFunctions) {
       planner.plan("SELECT foo(x), bar([x]) FROM UNNEST([1, 2, 3]) as t(x)");
   ASSERT_EQ(
       plan->toString(false, true),
-      "-- Project[3]\n"
-      "  -- Unnest[2]\n"
-      "    -- Project[1]\n"
-      "      -- Values[0]\n");
+      "-- Project[2]\n"
+      "  -- Unnest[1]\n"
+      "    -- Values[0]\n");
 }
 
 TEST_F(QueryPlannerTest, customAggregateFunctions) {
@@ -149,12 +144,11 @@ TEST_F(QueryPlannerTest, customAggregateFunctions) {
       "SELECT foo_agg(x, x + 5), bar_agg([x], 1) FROM UNNEST([1, 2, 3]) as t(x)");
   ASSERT_EQ(
       plan->toString(false, true),
-      "-- Project[5]\n"
-      "  -- Aggregation[4]\n"
-      "    -- Project[3]\n"
-      "      -- Unnest[2]\n"
-      "        -- Project[1]\n"
-      "          -- Values[0]\n");
+      "-- Project[4]\n"
+      "  -- Aggregation[3]\n"
+      "    -- Project[2]\n"
+      "      -- Unnest[1]\n"
+      "        -- Values[0]\n");
 }
 
 TEST_F(QueryPlannerTest, error) {

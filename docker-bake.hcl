@@ -44,6 +44,56 @@ group "default" {
   targets = []
 }
 
+# Staging targets for dependency upgrades.
+# These produce images with "-staging" tags so that PRs with breaking
+# dependency changes can reference them without affecting production images.
+# See .github/README.md for the full process.
+
+group "staging-amd64" {
+  targets = ["centos9-staging-amd64", "adapters-staging-amd64"]
+}
+
+group "staging-arm64" {
+  targets = []
+}
+
+target "centos9-staging-amd64" {
+  inherits   = ["base", "centos-cpp"]
+  tags       = ["${tag}:centos9-staging"]
+  cache-from = cache-from-arch("centos9", "amd64")
+  args       = { VELOX_STAGING = "true" }
+}
+
+target "adapters-staging-amd64" {
+  inherits   = ["base", "adapters-cpp"]
+  tags       = ["${tag}:adapters-staging"]
+  cache-from = cache-from-arch("adapters", "amd64")
+  args       = { VELOX_STAGING = "true" }
+}
+
+target "ubuntu-staging-amd64" {
+  inherits   = ["base", "ubuntu-cpp"]
+  tags       = ["${tag}:ubuntu-staging"]
+  cache-from = cache-from-arch("ubuntu", "amd64")
+  args       = { VELOX_STAGING = "true" }
+}
+
+group "ubuntu-staging-arm64" {
+  targets = []
+}
+
+target "fedora-staging-amd64" {
+  inherits   = ["base", "fedora"]
+  dockerfile = "scripts/docker/fedora.dockerfile"
+  tags       = ["${tag}:fedora-staging"]
+  cache-from = cache-from-arch("fedora", "amd64")
+  args       = { VELOX_STAGING = "true" }
+}
+
+group "fedora-staging-arm64" {
+  targets = []
+}
+
 target "base" {
   output = [
     DOCKER_UPLOAD_CACHE ? {
