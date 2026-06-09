@@ -605,9 +605,9 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
   VELOX_CHECK_EQ(
       output.size(),
       outputType_->size(),
-      "Mismatch between number of columns in the output schema and the assembled Iceberg table. Output schema: {}, Assembled table: {}",
+      "Mismatch between number of columns in the output schema and the assembled Iceberg table. Output schema: {}, Assembled columns: {}",
       outputType_->toString(),
-      table->schema().toString());
+      output.size());
 
   VELOX_CHECK_EQ(
       output.size() + extraEqualityColumns_.size(),
@@ -616,7 +616,7 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
       "Read columns: {}, Consumed: {}, Equality columns: {}",
       fileColumnIndex_.size(),
       output.size(),
-      extraEqualityColumns_.size(), );
+      extraEqualityColumns_.size());
 
   return std::make_unique<cudf::table>(std::move(output));
 }
