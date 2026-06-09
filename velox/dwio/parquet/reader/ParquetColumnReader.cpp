@@ -29,6 +29,7 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/reader/TimeColumnReader.h"
 #include "velox/dwio/parquet/reader/TimestampColumnReader.h"
+#include "velox/dwio/parquet/reader/TimestampWithTimeZoneColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 
 namespace facebook::velox::parquet {
@@ -60,6 +61,19 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
     case TypeKind::HUGEINT:
+      if (isTimestampWithTimeZoneType(requestedType)) {
+        const auto parquetType =
+            std::static_pointer_cast<const ParquetTypeWithId>(fileType)
+                ->parquetType_;
+        VELOX_CHECK(parquetType);
+        switch (parquetType.value()) {
+          case thrift::Type::INT64:
+            return std::make_unique<TimestampWithTimeZoneColumnReader<int64_t>>(
+                requestedType, fileType, params, scanSpec);
+          default:
+            VELOX_UNREACHABLE();
+        }
+      }
       return std::make_unique<IntegerColumnReader>(
           requestedType, fileType, params, scanSpec);
 
@@ -102,6 +116,15 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
           std::static_pointer_cast<const ParquetTypeWithId>(fileType)
               ->parquetType_;
       VELOX_CHECK(parquetType);
+      if (isTimestampWithTimeZoneType(requestedType)) {
+        switch (parquetType.value()) {
+          case thrift::Type::INT64:
+            return std::make_unique<TimestampWithTimeZoneColumnReader<int64_t>>(
+                requestedType, fileType, params, scanSpec);
+          default:
+            VELOX_UNREACHABLE();
+        }
+      }
       switch (parquetType.value()) {
         case thrift::Type::INT64:
           return std::make_unique<TimestampColumnReader<int64_t>>(

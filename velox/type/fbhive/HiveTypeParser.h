@@ -39,6 +39,7 @@ enum class TokenType {
   Double,
   String,
   Binary,
+  TimestampWithTimeZone,
   Timestamp,
   Opaque,
   List,

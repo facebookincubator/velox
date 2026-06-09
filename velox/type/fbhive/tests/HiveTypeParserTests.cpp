@@ -21,6 +21,7 @@
 #include "gtest/gtest-test-part.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/OpaqueCustomTypes.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
@@ -81,6 +82,25 @@ TEST(FbHive, date) {
   auto t = parser.parse("date");
   ASSERT_EQ(t, DATE());
   ASSERT_EQ(t->kind(), TypeKind::INTEGER);
+}
+
+TEST(FbHive, timestamptz) {
+  HiveTypeParser parser;
+
+  auto t = parser.parse("timestamp with local time zone");
+  ASSERT_EQ(t, TIMESTAMP_WITH_TIME_ZONE());
+  ASSERT_EQ(t->toString(), "TIMESTAMP WITH TIME ZONE");
+
+  auto t2 = parser.parse("TIMESTAMP WITH LOCAL TIME ZONE");
+  ASSERT_EQ(t2, TIMESTAMP_WITH_TIME_ZONE());
+  VELOX_ASSERT_THROW(
+      parser.parse("timestamp with local"),
+      "Input remaining after parsing the Hive type \"timestamp with local\"\nRemaining: \" with local\"");
+
+  // extra blanks between words
+  VELOX_ASSERT_THROW(
+      parser.parse("timestamp  with  local  time  zone"),
+      "Input remaining after parsing the Hive type \"timestamp  with  local  time  zone\"");
 }
 
 TEST(FbHive, list) {
