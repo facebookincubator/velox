@@ -201,7 +201,7 @@ class BooleanStatisticsBuilder : public virtual StatisticsBuilder,
 };
 
 class IntegerStatisticsBuilder : public virtual StatisticsBuilder,
-                                 public IntegerColumnStatistics {
+                                 public IntegerColumnStatistics<> {
  public:
   explicit IntegerStatisticsBuilder(const StatisticsBuilderOptions& options)
       : StatisticsBuilder{options} {

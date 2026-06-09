@@ -75,6 +75,7 @@ bool testFilters(
         partitionKey,
     const std::unordered_map<std::string, FileColumnHandlePtr>&
         partitionKeysHandle,
-    bool asLocalTime);
+    bool asLocalTime,
+    dwio::common::FileFormat fileFormat);
 
 } // namespace facebook::velox::connector::hive
