@@ -136,34 +136,55 @@ std::string stripPrefix(const std::string& input, const std::string& prefix) {
 
 using Op = cudf::ast::ast_operator;
 const std::unordered_map<std::string, Op> prestoBinaryOps = {
+    // Arithmetic operators
     {"plus", Op::ADD},
     {"minus", Op::SUB},
     {"multiply", Op::MUL},
     {"divide", Op::DIV},
+    // Only supports floating type
+    {"mod", Op::MOD},
+
+    // Comparison operators
     {"eq", Op::EQUAL},
     {"neq", Op::NOT_EQUAL},
     {"lt", Op::LESS},
     {"gt", Op::GREATER},
     {"lte", Op::LESS_EQUAL},
     {"gte", Op::GREATER_EQUAL},
+
+    // Logical operators
     {"and", Op::NULL_LOGICAL_AND},
     {"or", Op::NULL_LOGICAL_OR},
-    {"mod", Op::MOD},
+
+    // Bitwise operators
+    {"bitwise_and", Op::BITWISE_AND},
+    {"bitwise_or", Op::BITWISE_OR},
+    {"bitwise_xor", Op::BITWISE_XOR},
 };
 
 const std::unordered_map<std::string, Op> sparkBinaryOps = {
+    // Arithmetic operators
     {"add", Op::ADD},
     {"subtract", Op::SUB},
     {"multiply", Op::MUL},
     {"divide", Op::DIV},
+    {"remainder", Op::MOD},
+
+    // Comparison operators
     {"equalto", Op::EQUAL},
     {"lessthan", Op::LESS},
     {"greaterthan", Op::GREATER},
     {"lessthanorequal", Op::LESS_EQUAL},
     {"greaterthanorequal", Op::GREATER_EQUAL},
+
+    // Logical operators
     {"and", Op::NULL_LOGICAL_AND},
     {"or", Op::NULL_LOGICAL_OR},
-    {"mod", Op::MOD},
+
+    // Bitwise operators
+    {"bitwise_and", Op::BITWISE_AND},
+    {"bitwise_or", Op::BITWISE_OR},
+    {"bitwise_xor", Op::BITWISE_XOR},
 };
 
 const std::unordered_map<std::string, Op> binaryOps = [] {
@@ -352,6 +373,28 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
         }
       }
       return true;
+    }
+    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor") {
+      // Spark result type is same with the input type, Presto result type is
+      // int64_t
+      // Spark case and Presto int64_t case
+      if (expr->type()->equivalent(*(expr->inputs()[0]->type()))) {
+        // For tinyint, the result type is tinyint in Spark but is integer in cudf
+        return expr->type()->kind() == TypeKind::BIGINT || expr->type()->kind() == TypeKind::INTEGER;
+      }
+      return isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+    }
+    if (name == "mod" || name == "remainder") {
+      // | Engine | SQL Function Name | Input Type Category  | Underlying Implementation |
+      // | ------ | ----------------- | -------------------- | ------------------------- |
+      // | Presto | `mod`             | Integral types       | `checked_mod`             |
+      // | Presto | `mod`             | Floating-point types | `mod`                     |
+      // | Spark  | `remainder`       | Integral types       | `mod`                     |
+      // | Spark  | `remainder`       | Floating-point types | `mod`                     |
+      // Float input returns double which Velox CPU requires float.
+      return expr->type()->kind() == TypeKind::DOUBLE ||
+          expr->type()->kind() == TypeKind::BIGINT ||
+          expr->type()->kind() == TypeKind::INTEGER;
     }
     return len == 2 &&
         isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
@@ -616,7 +659,14 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     VELOX_CHECK_EQ(len, 2);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);
     auto const& op2 = pushExprToTree(expr->inputs()[1]);
-    return tree.push(Operation{binaryOps.at(name), op1, op2});
+    auto const& op3 = tree.push(Operation{binaryOps.at(name), op1, op2});
+    if (name == "bitwise_and" || name == "bitwise_or" || name == "bitwise_xor") {
+      if (expr->type()->kind() == TypeKind::BIGINT &&
+          expr->inputs()[0]->type()->kind() != TypeKind::BIGINT) {
+        return tree.push(Operation{Op::CAST_TO_INT64, op3});
+      }
+    }
+    return op3;
   } else if (unaryOps.find(name) != unaryOps.end()) {
     VELOX_CHECK_EQ(len, 1);
     auto const& op1 = pushExprToTree(expr->inputs()[0]);

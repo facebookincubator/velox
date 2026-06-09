@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <limits>
+
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
@@ -640,7 +642,8 @@ TEST_F(CudfFilterProjectTest, divideScalarVariants) {
   testDivideScalarVariants(vectors);
 }
 
-TEST_F(CudfFilterProjectTest, moduloOperation) {
+// mod for integral is checkedModulus which is not supported in cudf.
+TEST_F(CudfFilterProjectTest, DISABLED_moduloOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
   createDuckDbTable(vectors);
@@ -2237,6 +2240,73 @@ TEST_F(CudfFilterProjectTest, DISABLED_andAndAndWithDecimalDivideBelowExpr) {
       makeNullableFlatVector<bool>({true, false, false, false}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, mod) {
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {TINYINT(), TINYINT()})));
+  EXPECT_FALSE(
+      canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {SMALLINT(), SMALLINT()})));
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {INTEGER(), INTEGER()})));
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {BIGINT(), BIGINT()})));
+  EXPECT_FALSE(canEvaluateWithAst("mod(c0, c1)", ROW({"c0", "c1"}, {REAL(), REAL()})));
+
+  auto modResult = evaluateOnceValue<double, double>("c0 % 10.0", 47);
+  EXPECT_EQ(modResult, 7);
+
+  std::vector<double> numerDouble = {0, 6, 0, -7, -1, -9, 9, 10.1};
+  std::vector<double> denomDouble = {1, 2, -1, 3, -1, -3, -3, -99.9};
+  auto input = makeRowVector(
+      {makeFlatVector<double>(numerDouble), makeFlatVector<double>(denomDouble)});
+  assertExpressionMatchesCpu("mod(c0, c1)", input, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+
+  auto specialInput = makeRowVector(
+      {makeFlatVector<double>({5.1, std::numeric_limits<double>::quiet_NaN(), 5.1, std::numeric_limits<double>::infinity(), 5.1}),
+       makeFlatVector<double>({0.0, 5.1, std::numeric_limits<double>::quiet_NaN(), 5.1, std::numeric_limits<double>::infinity()})});
+  assertExpressionMatchesCpu(
+      "mod(c0, c1)", specialInput, ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+}
+
+
+TEST_F(CudfSimpleFilterProjectTest, bitwiseOperators) {
+    // Test with int16_t
+    {
+      std::vector<int16_t> a = {31, std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()};
+      std::vector<int16_t> b = {15, std::numeric_limits<int16_t>::max(), std::numeric_limits<int16_t>::max()};
+      auto input = makeRowVector({makeFlatVector<int16_t>(a), makeFlatVector<int16_t>(b)});
+      assertExpressionMatchesCpu("bitwise_and(c0, c1)", input, ROW({{"c0", SMALLINT()}, {"c1", SMALLINT()}}));
+      assertExpressionMatchesCpu("bitwise_or(c0, c1)", input, ROW({{"c0", SMALLINT()}, {"c1", SMALLINT()}}));
+      assertExpressionMatchesCpu("bitwise_xor(c0, c1)", input, ROW({{"c0", SMALLINT()}, {"c1", SMALLINT()}}));
+    }
+    // Test with int64_t
+    {
+      std::vector<int64_t> a = {31, std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()};
+      std::vector<int64_t> b = {15, std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::max()};
+      auto input = makeRowVector({makeFlatVector<int64_t>(a), makeFlatVector<int64_t>(b)});
+      assertExpressionMatchesCpu("bitwise_and(c0, c1)", input, ROW({{"c0", BIGINT()}, {"c1", BIGINT()}}));
+      assertExpressionMatchesCpu("bitwise_or(c0, c1)", input, ROW({{"c0", BIGINT()}, {"c1", BIGINT()}}));
+      assertExpressionMatchesCpu("bitwise_xor(c0, c1)", input, ROW({{"c0", BIGINT()}, {"c1", BIGINT()}}));
+    }
+  // Test bitwise_and
+  {
+    std::vector<int32_t> a = {31, 0, 3, -4, 60, std::numeric_limits<int32_t>::min()};
+    std::vector<int32_t> b = {15, -1, 8, 12, 21, std::numeric_limits<int32_t>::max()};
+    auto input = makeRowVector({makeFlatVector<int32_t>(a), makeFlatVector<int32_t>(b)});
+    assertExpressionMatchesCpu("bitwise_and(c0, c1)", input, ROW({{"c0", INTEGER()}, {"c1", INTEGER()}}));
+  }
+  // Test bitwise_or
+  {
+    std::vector<int32_t> a = {16, 0, 3, -4, 60, std::numeric_limits<int32_t>::min()};
+    std::vector<int32_t> b = {15, -1, 8, 12, 21, std::numeric_limits<int32_t>::max()};
+    auto input = makeRowVector({makeFlatVector<int32_t>(a), makeFlatVector<int32_t>(b)});
+    assertExpressionMatchesCpu("bitwise_or(c0, c1)", input, ROW({{"c0", INTEGER()}, {"c1", INTEGER()}}));
+  }
+  // Test bitwise_xor
+  {
+    std::vector<int32_t> a = {31, 0, 3, -4, 60, std::numeric_limits<int32_t>::min()};
+    std::vector<int32_t> b = {15, -1, 8, 12, 21, std::numeric_limits<int32_t>::max()};
+    auto input = makeRowVector({makeFlatVector<int32_t>(a), makeFlatVector<int32_t>(b)});
+    assertExpressionMatchesCpu("bitwise_xor(c0, c1)", input, ROW({{"c0", INTEGER()}, {"c1", INTEGER()}}));
+  }
 }
 
 } // namespace

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -72,6 +73,36 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
         cudf::get_current_device_resource_ref());
     result->setType(outputType);
     return result->childAt(0);
+  }
+
+  template <typename TReturn, typename... TArgs>
+  TReturn evaluateOnceValue(
+      const std::string& expr,
+      std::optional<TArgs>... args) {
+    auto result = evaluateOnce<TReturn, TArgs...>(expr, args...);
+
+    VELOX_CHECK(result.has_value(), "Expression returned null: {}", expr);
+
+    return result.value();
+  }
+
+  template <typename TReturn, typename... TArgs>
+  TReturn evaluateOnceValue(
+      const std::string& expr,
+      const std::initializer_list<TypePtr>& types,
+      std::optional<TArgs>... args) {
+    auto result = evaluateOnce<TReturn, TArgs...>(expr, types, args...);
+
+    VELOX_CHECK(result.has_value(), "Expression returned null: {}", expr);
+
+    return result.value();
+  }
+
+  bool canEvaluateWithAst(
+      const std::string& expr,
+      const RowTypePtr& rowType) {
+    auto exprSet = compileExpression(expr, rowType);
+    return ASTExpression::canEvaluate(exprSet->expr(0));
   }
 };
 
