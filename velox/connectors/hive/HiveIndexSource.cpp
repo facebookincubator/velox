@@ -1286,7 +1286,7 @@ void HiveIndexSource::createReadersFromSplits(
               hiveSplit->fileFormat == dwio::common::FileFormat::FLUX ||
               hiveSplit->fileFormat == dwio::common::FileFormat::SST,
           "No IndexReaderFactory registered for format: {}",
-          dwio::common::toString(hiveSplit->fileFormat));
+          dwio::common::FileFormatName::toName(hiveSplit->fileFormat));
       createFileIndexReader(std::move(hiveSplit), scanSpec);
     }
   }
@@ -1668,7 +1668,7 @@ void HiveIndexSource::createCustomIndexReader(
   VELOX_CHECK_NOT_NULL(
       reader,
       "IndexReaderFactory returned null for format: {}",
-      dwio::common::toString(split->fileFormat));
+      dwio::common::FileFormatName::toName(split->fileFormat));
   readers_.push_back(std::move(reader));
 }
 
