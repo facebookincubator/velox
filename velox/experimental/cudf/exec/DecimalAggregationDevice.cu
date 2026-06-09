@@ -64,7 +64,7 @@ template <typename OffsetT>
 struct FillOffsetsFunctor {
   cuda::std::span<OffsetT> offsets;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     int64_t offset = static_cast<int64_t>(idx) * detail::kDecimalSumStateSize;
     offsets[idx] = static_cast<OffsetT>(offset);
   }
@@ -77,7 +77,7 @@ struct PackStateFunctor {
   cuda::std::span<const OffsetT> offsets;
   uint8_t* chars;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
     auto* state = reinterpret_cast<DecimalSumState*>(chars + offset);
     int64_t upper;
@@ -97,7 +97,7 @@ struct UnpackStateFunctor {
   cuda::std::span<__int128_t> sums;
   cuda::std::span<int64_t> counts;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     int64_t offset = static_cast<int64_t>(offsets[idx]);
     auto* state = reinterpret_cast<const DecimalSumState*>(chars + offset);
     counts[idx] = state->count;
@@ -112,7 +112,7 @@ struct AvgRoundFunctor {
   cuda::std::span<const int64_t> counts;
   cuda::std::span<SumT> out;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     auto count = counts[idx];
     if (count == 0) {
       out[idx] = SumT{0};

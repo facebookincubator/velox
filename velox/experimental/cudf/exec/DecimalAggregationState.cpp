@@ -37,7 +37,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
   VELOX_CHECK(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column (type is {})",
-      static_cast<int>(stateCol.type().id()));
+      cudf::type_to_name(stateCol.type()));
   // The decoded sum/count columns are consumed by the next groupby/reduce and
   // never leave the operator and should use the temporary memory resource.
   auto const mr = get_temp_mr();
@@ -200,7 +200,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       sumType == cudf::type_id::DECIMAL64 ||
           sumType == cudf::type_id::DECIMAL128,
       "Unsupported decimal sum column type (type is {})",
-      static_cast<int>(sumType));
+      cudf::type_to_name(sumCol.type()));
   const void* sumPtr = sumType == cudf::type_id::DECIMAL64
       ? static_cast<const void*>(sumCol.data<int64_t>())
       : static_cast<const void*>(sumCol.data<__int128_t>());
@@ -231,12 +231,12 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal average requires INT64 count column (type is {})",
-      static_cast<int>(countCol.type().id()));
+      cudf::type_to_name(countCol.type()));
   VELOX_CHECK(
       sumCol.type().id() == cudf::type_id::DECIMAL64 ||
           sumCol.type().id() == cudf::type_id::DECIMAL128,
       "Decimal average requires DECIMAL64 or DECIMAL128 sum column (type is {})",
-      static_cast<int>(sumCol.type().id()));
+      cudf::type_to_name(sumCol.type()));
   VELOX_CHECK_EQ(
       sumCol.size(),
       countCol.size(),

@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox::detail {
 // Size in bytes of each row's packed decimal SUM intermediate state in the
 // strings payload (count, overflow placeholder, and 128-bit sum split into
 // words).
-constexpr int32_t kDecimalSumStateSize = 32;
+constexpr size_t kDecimalSumStateSize = 32;
 
 // Writes strings-style prefix offsets: offset[i] == i * kDecimalSumStateSize.
 // @param use64BitOffsets whether offsets are INT64 (else INT32).
@@ -40,7 +40,7 @@ constexpr int32_t kDecimalSumStateSize = 32;
 void fillOffsetsForDecimalSumState(
     bool use64BitOffsets,
     void* offsetsMutable,
-    int32_t numRows,
+    cudf::size_type numRows,
     rmm::cuda_stream_view stream);
 
 // Encodes each row's partial sum and count into the fixed-width device layout
@@ -60,7 +60,7 @@ void packDecimalSumState(
     const int64_t* countPtr,
     const void* offsetsPtr,
     uint8_t* chars,
-    int32_t numRows,
+    cudf::size_type numRows,
     rmm::cuda_stream_view stream);
 
 // Inverse of packDecimalSumState.
@@ -77,7 +77,7 @@ void unpackDecimalSumState(
     const uint8_t* chars,
     __int128_t* sums,
     int64_t* counts,
-    int32_t numRows,
+    cudf::size_type numRows,
     rmm::cuda_stream_view stream);
 
 // Per-row half-up integer divide of sum by count; count == 0 writes zero
@@ -93,7 +93,7 @@ void averageRoundDecimalSum(
     const void* sums,
     const int64_t* counts,
     void* out,
-    int32_t numRows,
+    cudf::size_type numRows,
     rmm::cuda_stream_view stream);
 
 // Builds a null mask for rows where sum and count are both valid and count is
