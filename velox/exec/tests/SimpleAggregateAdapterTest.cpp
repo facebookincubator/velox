@@ -572,10 +572,10 @@ class SimpleConstantInputForwardingAggregationTest
 TEST_F(SimpleConstantInputForwardingAggregationTest, forwardsConstantInputs) {
   auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
   auto expected = makeRowVector({makeConstant<int64_t>(36, 1)});
-  // '10' is a constant arg -> AggregateInfo discovers it and calls
+  // BIGINT '10' is a constant arg -> AggregateInfo discovers it and calls
   // setConstantInputs(), which the adapter forwards to the simple function.
   testAggregations(
-      {input}, {}, {"simple_const_fwd(c0, 10::bigint)"}, {expected});
+      {input}, {}, {"simple_const_fwd(c0, BIGINT '10')"}, {expected});
 }
 
 // A testing simple avg aggregate function, and it is used to check for
