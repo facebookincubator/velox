@@ -276,6 +276,12 @@ class FileConfig {
 
   virtual ~FileConfig() = default;
 
+  /// Returns the connector-owned config prefix. For example, "hive" returns
+  /// "hive.".
+  static std::string makeConnectorConfigPrefix(std::string_view connectorName) {
+    return std::string(connectorName) + ".";
+  }
+
   int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
   int32_t prefetchRowGroups() const;

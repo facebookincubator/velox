@@ -58,9 +58,6 @@ namespace facebook::velox::parquet {
 /// Defines Parquet reader config and session properties.
 class ParquetConfig {
  public:
-  static constexpr std::string_view kPrefix = "parquet.";
-  static constexpr std::string_view kSessionPrefix = "parquet_";
-
   VELOX_PARQUET_CONFIG(
       kUseColumnNamesSession,
       kUseColumnNames,
@@ -107,19 +104,24 @@ class ParquetConfig {
 
   /// Registers Parquet reader session properties with a config provider.
   static void registerProperties(
-      std::vector<config::ConfigProperty>& properties) {
-    registerProperty<kUseColumnNamesSessionProperty>(properties);
-    registerProperty<kFooterSpeculativeIoSizeSessionProperty>(properties);
-    registerProperty<kAllowInt32NarrowingSessionProperty>(properties);
-    registerProperty<kFooterMemoryTrackingThresholdSessionProperty>(properties);
+      std::vector<config::ConfigProperty>& properties,
+      std::string_view sessionPrefix) {
+    registerProperty<kUseColumnNamesSessionProperty>(properties, sessionPrefix);
+    registerProperty<kFooterSpeculativeIoSizeSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kAllowInt32NarrowingSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kFooterMemoryTrackingThresholdSessionProperty>(
+        properties, sessionPrefix);
   }
 
  private:
   template <typename Property>
   static void registerProperty(
-      std::vector<config::ConfigProperty>& properties) {
+      std::vector<config::ConfigProperty>& properties,
+      std::string_view sessionPrefix) {
     properties.push_back({
-        std::string(kSessionPrefix) + std::string(Property::key),
+        std::string(sessionPrefix) + std::string(Property::key),
         config::detail::configPropertyTypeOf<typename Property::type>(),
         config::detail::configPropertyDefaultToString<typename Property::type>(
             Property::defaultValue),

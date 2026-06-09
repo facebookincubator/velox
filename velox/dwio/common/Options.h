@@ -76,6 +76,11 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
+/// Returns a format-scoped config prefix using the file format's canonical
+/// string token. For example, PARQUET with "." returns "parquet.", while
+/// PARQUET with "_" returns "parquet_".
+std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
+
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.
 enum class ColumnMappingMode {

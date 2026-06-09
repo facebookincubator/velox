@@ -97,25 +97,23 @@ TEST_F(ConfigTest, creation) {
   }
 }
 
-TEST_F(ConfigTest, visitMutableConfig) {
+TEST_F(ConfigTest, rawConfigsWithPrefix) {
   auto config = std::make_shared<TestConfig>(
       std::unordered_map<std::string, std::string>{
-          {"first", "1"},
-          {"second", "2"},
+          {"parquet.first", "1"},
+          {"parquet.second", "2"},
+          {"orc.first", "3"},
       },
       true);
 
-  std::unordered_map<std::string, std::string> visitedConfigs;
-  config->visitConfigs([&](const auto& entry) {
-    visitedConfigs.emplace(entry.first, entry.second);
-  });
-
   EXPECT_EQ(
-      visitedConfigs,
+      config->rawConfigsWithPrefix("parquet."),
       (std::unordered_map<std::string, std::string>{
           {"first", "1"},
           {"second", "2"},
       }));
+  EXPECT_TRUE(config->rawConfigsWithPrefix("missing.").empty());
+  EXPECT_TRUE(config->rawConfigsWithPrefix("").empty());
 }
 
 TEST_F(ConfigTest, immutableConfig) {

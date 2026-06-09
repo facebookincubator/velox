@@ -252,8 +252,12 @@ class HiveConfig : public FileConfig {
       dwio::common::FileFormat fileFormat,
       const config::ConfigBase* session) const;
 
+  static constexpr std::string_view kConnectorName = "hive";
+
   explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(std::move(config), "hive.") {}
+      : FileConfig(
+            std::move(config),
+            makeConnectorConfigPrefix(kConnectorName)) {}
 };
 
 } // namespace facebook::velox::connector::hive

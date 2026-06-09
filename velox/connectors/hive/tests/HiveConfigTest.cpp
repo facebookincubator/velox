@@ -271,7 +271,7 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   };
 
   const auto useColumnNames =
-      std::string(parquet::ParquetConfig::kSessionPrefix) +
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_") +
       std::string(parquet::ParquetConfig::kUseColumnNamesSession);
   EXPECT_TRUE(hasProperty(useColumnNames));
   EXPECT_FALSE(hasProperty(
