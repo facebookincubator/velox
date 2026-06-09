@@ -48,28 +48,38 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
 }
 
 template <typename T>
-Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(T seconds) const {
-  // Spark internally use microsecond precision for timestamp.
-  // To avoid overflow, we need to check the range of seconds.
-  static constexpr int64_t maxSeconds =
-      std::numeric_limits<int64_t>::max() / Timestamp::kMicrosecondsInSecond;
-  if (seconds > maxSeconds) {
-    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
-  }
-  if (seconds < -maxSeconds) {
-    return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
+Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(
+    T value,
+    bool allowOverflow) const {
+  static constexpr long double kMaxTimestampMicros =
+      static_cast<long double>(std::numeric_limits<int64_t>::max());
+  static constexpr long double kMinTimestampMicros =
+      static_cast<long double>(std::numeric_limits<int64_t>::min());
+
+  const long double micros =
+      static_cast<long double>(value) * Timestamp::kMicrosecondsInSecond;
+
+  if (micros > kMaxTimestampMicros) {
+    if (allowOverflow) {
+      return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::max());
+    }
+    return folly::makeUnexpected(Status::UserError(
+        "The value cannot be cast to TIMESTAMP due to an overflow."));
   }
 
-  if constexpr (std::is_floating_point_v<T>) {
-    return Timestamp::fromMicrosNoError(
-        static_cast<int64_t>(seconds * Timestamp::kMicrosecondsInSecond));
+  if (micros < kMinTimestampMicros) {
+    if (allowOverflow) {
+      return Timestamp::fromMicrosNoError(std::numeric_limits<int64_t>::min());
+    }
+    return folly::makeUnexpected(Status::UserError(
+        "The value cannot be cast to TIMESTAMP due to an overflow."));
   }
 
-  return Timestamp(seconds, 0);
+  return Timestamp::fromMicrosNoError(static_cast<int64_t>(micros));
 }
 
 Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
-  return castNumberToTimestamp(seconds);
+  return castNumberToTimestamp(seconds, !config_.sparkAnsiEnabled());
 }
 
 Expected<int64_t> SparkCastHooks::castTimestampToInt(
@@ -88,7 +98,11 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
       return std::nullopt;
     }
-    return castNumberToTimestamp(value);
+    auto result = castNumberToTimestamp(value, true);
+    if (result.hasError()) {
+      return folly::makeUnexpected(result.error());
+    }
+    return result.value();
   }
 
   if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
@@ -96,20 +110,11 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
         "The value cannot be cast to TIMESTAMP because it is malformed."));
   }
 
-  static constexpr long double kMaxTimestampMicros =
-      static_cast<long double>(std::numeric_limits<int64_t>::max());
-  static constexpr long double kMinTimestampMicros =
-      static_cast<long double>(std::numeric_limits<int64_t>::min());
-
-  const long double micros =
-      static_cast<long double>(value) * Timestamp::kMicrosecondsInSecond;
-
-  if (micros > kMaxTimestampMicros || micros < kMinTimestampMicros) {
-    return folly::makeUnexpected(Status::UserError(
-        "The value cannot be cast to TIMESTAMP due to an overflow."));
+  auto result = castNumberToTimestamp(value, false);
+  if (result.hasError()) {
+    return folly::makeUnexpected(result.error());
   }
-
-  return Timestamp::fromMicrosNoError(static_cast<int64_t>(micros));
+  return result.value();
 }
 
 Expected<Timestamp> SparkCastHooks::castBooleanToTimestamp(bool val) const {
