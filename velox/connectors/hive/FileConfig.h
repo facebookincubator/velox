@@ -267,8 +267,8 @@ class FileConfig {
 
   explicit FileConfig(
       std::shared_ptr<const config::ConfigBase> config,
-      std::string connectorConfigPrefix)
-      : connectorConfigPrefix_(std::move(connectorConfigPrefix)) {
+      std::string connectorName)
+      : connectorName_(std::move(connectorName)) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for FileConfig initialization");
     config_ = std::move(config);
@@ -276,10 +276,8 @@ class FileConfig {
 
   virtual ~FileConfig() = default;
 
-  /// Returns the connector-owned config prefix. For example, "hive" returns
-  /// "hive.".
-  static std::string makeConnectorConfigPrefix(std::string_view connectorName) {
-    return std::string(connectorName) + ".";
+  std::string_view connectorName() const {
+    return connectorName_;
   }
 
   int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
@@ -295,10 +293,6 @@ class FileConfig {
 
   const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
-  }
-
-  std::string_view connectorConfigPrefix() const {
-    return connectorConfigPrefix_;
   }
 
  protected:
@@ -335,7 +329,7 @@ class FileConfig {
   }
 
   std::shared_ptr<const config::ConfigBase> config_;
-  const std::string connectorConfigPrefix_;
+  const std::string connectorName_;
 };
 
 } // namespace facebook::velox::connector::hive

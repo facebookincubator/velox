@@ -45,9 +45,10 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   using OperatorTestBase::assertQuery;
 
   static std::string parquetSessionProperty(std::string_view key) {
-    return dwio::common::formatConfigPrefix(
-               dwio::common::FileFormat::PARQUET, "_") +
-        std::string(key);
+    return fmt::format(
+        "{}_{}",
+        dwio::common::FileFormatName::toName(dwio::common::FileFormat::PARQUET),
+        key);
   }
 
   void SetUp() override {

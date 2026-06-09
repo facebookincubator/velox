@@ -18,6 +18,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/common/ParquetConfig.h"
@@ -41,6 +42,9 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 }
 
 } // namespace
+
+HiveConfig::HiveConfig(std::shared_ptr<const config::ConfigBase> config)
+    : FileConfig(std::move(config), HiveConnectorFactory::kHiveConnectorName) {}
 
 const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
@@ -70,8 +74,10 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
 #ifdef VELOX_ENABLE_PARQUET
     parquet::ParquetConfig::registerProperties(
         properties,
-        dwio::common::formatConfigPrefix(
-            dwio::common::FileFormat::PARQUET, "_"));
+        fmt::format(
+            "{}_",
+            dwio::common::FileFormatName::toName(
+                dwio::common::FileFormat::PARQUET)));
 #endif
 
     return properties;

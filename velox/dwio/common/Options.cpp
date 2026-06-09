@@ -63,13 +63,6 @@ FileFormat toFileFormat(std::string_view s) {
   return FileFormatName::tryToFileFormat(s).value_or(FileFormat::UNKNOWN);
 }
 
-std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
-  if (fmt == FileFormat::UNKNOWN) {
-    return "";
-  }
-  return std::string(toString(fmt)) + std::string(separator);
-}
-
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
   columnReaderOptions.columnMappingMode_ = options.columnMappingMode();

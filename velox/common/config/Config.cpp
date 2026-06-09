@@ -148,8 +148,7 @@ std::unordered_map<std::string, std::string> ConfigBase::rawConfigsWithPrefix(
 
   std::shared_lock<std::shared_mutex> l(mutex_);
   for (const auto& [key, value] : configs_) {
-    if (key.size() >= prefix.size() &&
-        key.compare(0, prefix.size(), prefix) == 0) {
+    if (key.starts_with(prefix)) {
       filteredConfigs.emplace(key.substr(prefix.size()), value);
     }
   }

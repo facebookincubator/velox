@@ -29,6 +29,7 @@ velox_link_libraries(velox_hive_paimon_split velox_connector velox_hive_connecto
 
 velox_add_library(
   velox_hive_paimon_connector
+  PaimonConfig.cpp
   PaimonConnector.cpp
   PaimonDataSource.cpp
   PaimonSplitReader.cpp

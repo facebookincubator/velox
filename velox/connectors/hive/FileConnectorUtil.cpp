@@ -140,16 +140,16 @@ void configureReaderOptions(
     readerOptions.setFileFormat(fileSplit->fileFormat);
   }
 
-  const auto formatPrefix =
-      dwio::common::formatConfigPrefix(fileSplit->fileFormat, ".");
-  const auto connectorFormatPrefix = formatPrefix.empty()
-      ? std::string()
-      : std::string(fileConfig->connectorConfigPrefix()) + formatPrefix;
-  auto formatConnectorConfig =
-      filterConfigByPrefix(*fileConfig->config(), connectorFormatPrefix);
+  auto formatConnectorConfig = filterConfigByPrefix(
+      *fileConfig->config(),
+      fmt::format(
+          "{}.{}.",
+          fileConfig->connectorName(),
+          dwio::common::FileFormatName::toName(fileSplit->fileFormat)));
   auto formatSessionProperties = filterConfigByPrefix(
       *sessionProperties,
-      dwio::common::formatConfigPrefix(fileSplit->fileFormat, "_"));
+      fmt::format(
+          "{}_", dwio::common::FileFormatName::toName(fileSplit->fileFormat)));
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(

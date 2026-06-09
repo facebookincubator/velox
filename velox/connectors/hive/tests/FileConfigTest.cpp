@@ -157,7 +157,7 @@ TEST(FileConfigTest, overrideSession) {
 
 TEST(FileConfigTest, nullConfig) {
   VELOX_ASSERT_THROW(
-      FileConfig(nullptr, "hive."),
+      FileConfig(nullptr, "hive"),
       "Config is null for FileConfig initialization");
 }
 
@@ -165,7 +165,7 @@ TEST(FileConfigTest, invalidTimestampUnit) {
   FileConfig config(
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>()),
-      "hive.");
+      "hive");
   std::unordered_map<std::string, std::string> sessionOverride = {
       {FileConfig::kReadTimestampUnitSession, "5"},
   };

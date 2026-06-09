@@ -13,17 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/paimon/PaimonConfig.h"
+
+#include "velox/connectors/hive/paimon/PaimonConnector.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Paimon-specific connector configuration.
-/// Extends FileConfig with Paimon-specific settings.
-class PaimonConfig : public FileConfig {
- public:
-  explicit PaimonConfig(std::shared_ptr<const config::ConfigBase> config);
-};
+PaimonConfig::PaimonConfig(std::shared_ptr<const config::ConfigBase> config)
+    : FileConfig(
+          std::move(config),
+          PaimonConnectorFactory::kPaimonConnectorName) {}
 
 } // namespace facebook::velox::connector::hive::paimon
