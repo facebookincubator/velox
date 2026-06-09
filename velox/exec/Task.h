@@ -407,6 +407,38 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t driverId,
       const std::string& operatorType);
 
+  /// Returns the node-level aggregate pool under the custom root for 'tag'
+  /// and 'planNodeId', creating it if needed. Throws if 'tag' has no
+  /// registered custom root on this query's QueryCtx.
+  memory::MemoryPool* getOrAddCustomNodePool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId);
+
+  /// Hash-join variant of getOrAddCustomNodePool. Mirrors
+  /// getOrAddJoinNodePool: keys the node pool by '<planNodeId>[<splitGroup>]'
+  /// for grouped execution.
+  memory::MemoryPool* getOrAddCustomJoinNodePool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId,
+      uint32_t splitGroupId);
+
+  /// Returns a new leaf operator pool under the custom root for 'tag',
+  /// mirroring addOperatorPool. Selects the join or non-join node parent
+  /// based on 'operatorType'.
+  memory::MemoryPool* addCustomOperatorPool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId,
+      uint32_t splitGroupId,
+      int pipelineId,
+      uint32_t driverId,
+      const std::string& operatorType);
+
+  /// Read-only accessor for the cached custom node pool under 'tag' and
+  /// 'planNodeId', or nullptr if absent.
+  memory::MemoryPool* customNodePool(
+      const std::string& tag,
+      const core::PlanNodeId& planNodeId) const;
+
   /// Creates new instance of MemoryPool with aggregate kind for the connector
   /// use, stores it in the task to ensure lifetime and returns a raw pointer.
   /// Not thread safe, e.g. must be called from the Operator's constructor.
@@ -614,6 +646,16 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Adds per driver statistics.  Called from Drivers upon their closure.
   void addDriverStats(int pipelineId, DriverStats stats);
+
+  /// Accumulates driver lifecycle timing (queued, on-thread, blocked) for gap
+  /// analysis. Same-index drivers across split groups are summed together.
+  /// Called from Driver::closeOperators() upon driver closure.
+  void addDriverLifecycleStats(
+      uint32_t pipelineId,
+      uint32_t driverIndex,
+      uint64_t queuedNanos,
+      uint64_t onThreadNanos,
+      uint64_t blockedNanos);
 
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the
@@ -881,6 +923,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // Invoked to initialize the memory pool for this task on creation.
   void initTaskPool();
 
+  // Creates the per-tag 'task.<id>.<tag>' aggregate child under every
+  // custom root pool registered on the QueryCtx. Called from initTaskPool
+  // after the default task pool is created.
+  void initCustomTaskPools();
+
   // Creates a scaled scan controller for a given table scan node.
   void addScaledScanControllerLocked(
       uint32_t splitGroupId,
@@ -1050,6 +1097,12 @@ class Task : public std::enable_shared_from_this<Task> {
       std::unique_ptr<SplitsStore>& splitsStore,
       std::unique_ptr<SplitsStore> newSplitsStore);
 
+  // Returns the splits store for the given group, creating one if it doesn't
+  // exist.
+  SplitsStore* getOrCreateSplitsStoreLocked(
+      SplitsState& splitsState,
+      uint32_t splitGroupId);
+
   // Invoked when all the driver threads are off thread. The function returns
   // 'threadFinishPromises_' to fulfill.
   std::vector<ContinuePromise> allThreadsFinishedLocked();
@@ -1197,6 +1250,23 @@ class Task : public std::enable_shared_from_this<Task> {
   //
   // NOTE: 'childPools_' holds the ownerships of node memory pools.
   std::unordered_map<std::string, memory::MemoryPool*> nodePools_;
+
+  // Aggregate child of each registered custom root pool. Keyed by resource
+  // tag. Lifetime is held in 'customChildPools_'.
+  std::unordered_map<std::string, memory::MemoryPool*> customTaskPools_;
+
+  // Node-level aggregate pools under each custom root, keyed first by
+  // resource tag, then by plan node id. Lifetime is held in
+  // 'customChildPools_'.
+  std::unordered_map<
+      std::string,
+      std::unordered_map<std::string, memory::MemoryPool*>>
+      customNodePools_;
+
+  // Owns the shared_ptrs to all custom task/node/operator pools mirrored
+  // under registered custom roots. Kept separate from 'childPools_' so the
+  // default hierarchy is unchanged.
+  std::vector<std::shared_ptr<memory::MemoryPool>> customChildPools_;
 
   // Set to true by OutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
@@ -1361,6 +1431,27 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
+
+  // Per-pipeline driver lifecycle timing accumulator. For each pipeline, holds
+  // a vector of per-driver timing indexed by driver index within the pipeline.
+  // In grouped execution, same-index drivers across groups accumulate into the
+  // same entry, giving the total time for a logical driver across all groups.
+  // Reported as RuntimeMetrics at task close via taskStats().
+  struct DriverLifecycleTiming {
+    uint64_t queuedNanos{0};
+    uint64_t onThreadNanos{0};
+    uint64_t blockedNanos{0};
+  };
+
+  struct PipelineLifecycleStats {
+    std::string sourceOperatorType;
+    core::PlanNodeId sourcePlanNodeId;
+    std::vector<DriverLifecycleTiming> driverTimes;
+  };
+  std::vector<PipelineLifecycleStats> pipelineLifecycleStats_;
+
+  /// Initializes pipelineLifecycleStats_ from driverFactories_.
+  void initDriverLifecycleStatsLocked();
 
   // Stores inter-operator state (exchange, bridges) per split group. During
   // ungrouped execution we use the [0] entry in this vector.

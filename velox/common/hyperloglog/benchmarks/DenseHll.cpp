@@ -18,8 +18,7 @@
 #include <folly/init/Init.h>
 #include "velox/common/memory/HashStringAllocator.h"
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 using namespace facebook::velox;
 

@@ -41,44 +41,51 @@ class CustomTypeCoercionTest : public testing::Test {
 };
 
 TEST_F(CustomTypeCoercionTest, timestampWithTimeZone) {
-  auto coercion = TypeCoercer::coerceTypeBase(
+  auto coercion = TypeCoercer::defaults().coerceTypeBase(
       TIMESTAMP(), TIMESTAMP_WITH_TIME_ZONE()->name());
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, TIMESTAMP_WITH_TIME_ZONE());
   EXPECT_EQ(coercion->cost, 1);
 
-  coercion =
-      TypeCoercer::coerceTypeBase(DATE(), TIMESTAMP_WITH_TIME_ZONE()->name());
+  coercion = TypeCoercer::defaults().coerceTypeBase(
+      DATE(), TIMESTAMP_WITH_TIME_ZONE()->name());
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, TIMESTAMP_WITH_TIME_ZONE());
   EXPECT_EQ(coercion->cost, 2);
 
   // Reverse directions are explicit-only, not coercible.
   ASSERT_FALSE(
-      TypeCoercer::coerceTypeBase(
+      TypeCoercer::defaults().coerceTypeBase(
           TIMESTAMP_WITH_TIME_ZONE(), TIMESTAMP()->name()));
   ASSERT_FALSE(
-      TypeCoercer::coerceTypeBase(TIMESTAMP_WITH_TIME_ZONE(), DATE()->name()));
+      TypeCoercer::defaults().coerceTypeBase(
+          TIMESTAMP_WITH_TIME_ZONE(), DATE()->name()));
 }
 
 TEST_F(CustomTypeCoercionTest, timeWithTimeZone) {
-  auto coercion =
-      TypeCoercer::coerceTypeBase(TIME(), TIME_WITH_TIME_ZONE()->name());
+  auto coercion = TypeCoercer::defaults().coerceTypeBase(
+      TIME(), TIME_WITH_TIME_ZONE()->name());
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, TIME_WITH_TIME_ZONE());
 
   // Reverse directions are explicit-only, not coercible.
   ASSERT_FALSE(
-      TypeCoercer::coerceTypeBase(TIME_WITH_TIME_ZONE(), TIME()->name()));
+      TypeCoercer::defaults().coerceTypeBase(
+          TIME_WITH_TIME_ZONE(), TIME()->name()));
   ASSERT_FALSE(
-      TypeCoercer::coerceTypeBase(TIME_WITH_TIME_ZONE(), DATE()->name()));
+      TypeCoercer::defaults().coerceTypeBase(
+          TIME_WITH_TIME_ZONE(), DATE()->name()));
 }
 
 TEST_F(CustomTypeCoercionTest, digests) {
   EXPECT_FALSE(
-      TypeCoercer::coerceTypeBase(TDIGEST(DOUBLE()), "QDIGEST").has_value());
+      TypeCoercer::defaults()
+          .coerceTypeBase(TDIGEST(DOUBLE()), "QDIGEST")
+          .has_value());
   EXPECT_FALSE(
-      TypeCoercer::coerceTypeBase(QDIGEST(DOUBLE()), "TDIGEST").has_value());
+      TypeCoercer::defaults()
+          .coerceTypeBase(QDIGEST(DOUBLE()), "TDIGEST")
+          .has_value());
 }
 
 } // namespace

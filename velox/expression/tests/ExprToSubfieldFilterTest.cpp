@@ -129,6 +129,30 @@ TEST_F(ExprToSubfieldFilterTest, neq) {
   VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
 }
 
+TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
+  {
+    auto call = parseCallExpr("a <> 9223372036854775807", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(lessThan(std::numeric_limits<int64_t>::max()), filter);
+  }
+
+  {
+    auto call =
+        parseCallExpr("a <> -9223372036854775807 - 1", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(
+        greaterThan(std::numeric_limits<int64_t>::min()), filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, lte) {
   auto call = parseCallExpr("a <= 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
@@ -476,6 +500,68 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRange) {
             between("FRANCE", "FRANCE"),
             between("GERMANY", "GERMANY"),
             between("JAPAN", "JAPAN")));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRangeBounded) {
+  // a between 'A' and 'C' OR a between 'F' and 'J'
+  {
+    auto expected = orFilter(between("A", "C"), between("F", "J"));
+    VELOX_ASSERT_FILTER(expected, makeOr(between("A", "C"), between("F", "J")));
+    VELOX_ASSERT_FILTER(expected, makeOr(between("F", "J"), between("A", "C")));
+  }
+
+  // a > 'A' and a < 'C' OR a > 'F' and a < 'J'
+  {
+    auto expected =
+        orFilter(betweenExclusive("A", "C"), betweenExclusive("F", "J"));
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(betweenExclusive("A", "C"), betweenExclusive("F", "J")));
+  }
+
+  // a < 'C' OR a >= 'F'
+  {
+    auto expected = orFilter(lessThan("C"), greaterThanOrEqual("F"));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(lessThan("C"), greaterThanOrEqual("F")));
+  }
+
+  // a between 'A' and 'C' OR a between 'F' and 'J' OR a between 'M' and 'P'
+  {
+    std::vector<std::unique_ptr<common::Filter>> expectedRanges;
+    expectedRanges.emplace_back(between("A", "C"));
+    expectedRanges.emplace_back(between("F", "J"));
+    expectedRanges.emplace_back(between("M", "P"));
+    auto expected = std::make_unique<common::MultiRange>(
+        std::move(expectedRanges), /*nullAllowed=*/false);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(between("A", "C"), between("F", "J"), between("M", "P")));
+  }
+
+  // nullAllowed on any disjunct propagates.
+  {
+    auto expected = orFilter(
+        between("A", "C"),
+        between("F", "J", /*nullAllowed=*/true),
+        /*nullAllowed=*/true);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(between("A", "C"), between("F", "J", /*nullAllowed=*/true)));
+  }
+
+  // a < 'C' OR a < 'F'
+  {
+    auto expected = orFilter(lessThan("C"), lessThan("F"));
+    VELOX_ASSERT_FILTER(expected, makeOr(lessThan("C"), lessThan("F")));
+  }
+
+  // a < 'C' OR a between 'F' and 'J'
+  {
+    auto expected = orFilter(lessThan("C"), between("F", "J"));
+    VELOX_ASSERT_FILTER(expected, makeOr(lessThan("C"), between("F", "J")));
+    VELOX_ASSERT_FILTER(expected, makeOr(between("F", "J"), lessThan("C")));
   }
 }
 

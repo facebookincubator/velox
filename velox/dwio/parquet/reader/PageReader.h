@@ -36,6 +36,13 @@ namespace facebook::velox::parquet {
 /// continuous stream accessible via readWithVisitor().
 class PageReader {
  public:
+  /// Trailing readable bytes past readBytes()'s returned size. Sized
+  /// for bits::detail::loadBits<uint64_t>, which touches bytes
+  /// [offset, offset + 9) when the bit field straddles the 8-byte word
+  /// boundary. For any value within a miniblock 'offset < size', so the
+  /// furthest byte is at most 'size + 7' — 8 trailing bytes suffice.
+  static constexpr int kPageReadPadding = 8;
+
   PageReader(
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
@@ -216,9 +223,10 @@ class PageReader {
   // 'hasChunkRepDefs_' is false.
   void readPageDefLevels();
 
-  // Returns a pointer to contiguous space for the next 'size' bytes
-  // from current position. Copies data into 'copy' if the range
-  // straddles buffers. Allocates or resizes 'copy' as needed.
+  // Returns a pointer to contiguous space for the next 'size' bytes from
+  // current position, with at least 'kPageReadPadding' readable trailing
+  // bytes past 'size'. Copies into 'copy' if needed; allocates or resizes
+  // 'copy' as needed.
   const char* readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
@@ -318,6 +326,9 @@ class PageReader {
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
         nullsFromFastPath = false;
         deltaByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+        nullsFromFastPath = false;
+        deltaLengthByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         nullsFromFastPath = false;
         stringDecoder_->readWithVisitor<true>(nulls, visitor);
@@ -328,6 +339,8 @@ class PageReader {
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
         deltaByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_LENGTH_BYTE_ARRAY) {
+        deltaLengthByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         stringDecoder_->readWithVisitor<false>(nulls, visitor);
       }
@@ -522,6 +535,7 @@ class PageReader {
   std::unique_ptr<BooleanDecoder> booleanDecoder_;
   std::unique_ptr<DeltaBpDecoder> deltaBpDecoder_;
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
+  std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
   // Add decoders for other encodings here.
 };

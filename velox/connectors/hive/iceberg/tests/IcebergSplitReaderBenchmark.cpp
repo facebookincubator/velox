@@ -108,7 +108,7 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
   return std::make_shared<HiveIcebergSplit>(
       kHiveConnectorId,
       dataFilePath,
-      fileFomat_,
+      fileFormat_,
       0,
       fileSize,
       partitionKeys,
@@ -175,7 +175,7 @@ IcebergSplitReaderBenchmark::createIcebergSplitsWithPositionalDelete(
       IcebergDeleteFile deleteFile(
           FileContent::kPositionalDeletes,
           deleteFilePath,
-          fileFomat_,
+          fileFormat_,
           deleteRowsCount,
           testing::internal::GetFileSize(
               std::fopen(deleteFilePath.c_str(), "r")));
@@ -294,6 +294,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   const RowTypePtr readerOutputType;
   const std::shared_ptr<io::IoStatistics> ioStatistics =
       std::make_shared<io::IoStatistics>();
+  const std::shared_ptr<io::IoStatistics> metadataIoStatistics =
+      std::make_shared<io::IoStatistics>();
   const std::shared_ptr<IoStats> ioStats = std::make_shared<IoStats>();
 
   std::shared_ptr<memory::MemoryPool> root =
@@ -341,10 +343,12 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             hiveConfig,
             rowType,
             ioStatistics,
+            metadataIoStatistics,
             ioStats,
             &fileHandleFactory,
             nullptr,
-            scanSpec);
+            scanSpec,
+            nullptr);
 
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
     icebergSplitReader->configureReaderOptions(randomSkip);

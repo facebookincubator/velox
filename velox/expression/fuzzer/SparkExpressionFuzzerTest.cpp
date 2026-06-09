@@ -26,6 +26,7 @@
 #include "velox/expression/fuzzer/FuzzerRunner.h"
 #include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
 #include "velox/functions/prestosql/fuzzer/FloorCeilRoundArgTypesGenerator.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/fuzzer/AddSubtractArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/DivideArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MakeTimestampArgTypesGenerator.h"
@@ -34,6 +35,7 @@
 #include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox::functions::sparksql::fuzzer;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 using facebook::velox::fuzzer::ArgTypesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
@@ -62,6 +64,8 @@ int main(int argc, char** argv) {
       "regexp_extract",
       // https://github.com/facebookincubator/velox/issues/8438
       "regexp_replace",
+      // https://github.com/facebookincubator/velox/issues/17697
+      "regexp_instr",
       "rlike",
       "chr",
       "replace",
@@ -79,7 +83,7 @@ int main(int argc, char** argv) {
 
   // Required by spark_partition_id function.
   std::unordered_map<std::string, std::string> queryConfigs = {
-      {facebook::velox::core::QueryConfig::kSparkPartitionId, "123"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId), "123"},
       {facebook::velox::core::QueryConfig::kSessionTimezone,
        "America/Los_Angeles"}};
 

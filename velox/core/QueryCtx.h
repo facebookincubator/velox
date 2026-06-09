@@ -27,12 +27,13 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
 namespace facebook::velox::exec::trace {
 class TraceCtx;
-}
+} // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::core {
 
@@ -179,6 +180,19 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    /// Registers a caller-built root pool under 'tag' on the resulting
+    /// QueryCtx. Throws if 'tag' is already present or 'pool' is null. The
+    /// pool is typically built through MemoryManager::addCustomRootPool.
+    Builder& customPool(
+        std::string tag,
+        std::shared_ptr<memory::MemoryPool> pool) {
+      VELOX_CHECK(!tag.empty(), "Custom pool tag is empty");
+      VELOX_CHECK_NOT_NULL(pool, "Custom pool is null for tag: {}", tag);
+      auto [_, inserted] = customPools_.emplace(tag, std::move(pool));
+      VELOX_CHECK(inserted, "Duplicate custom pool tag: {}", tag);
+      return *this;
+    }
+
     /// Adds a callback to be invoked when the QueryCtx is destroyed.
     /// Multiple callbacks can be added by calling this method multiple times.
     Builder& releaseCallback(ReleaseCallback callback) {
@@ -208,6 +222,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
+    std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
+        customPools_;
   };
 
   /// Generates a unique memory pool name for a query.
@@ -321,6 +337,15 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     traceCtxProvider_ = std::move(provider);
   }
 
+  /// Sets an optional callback fired by TableScan after each non-empty batch.
+  void setScanBatchCallback(ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  const ScanBatchCallback& scanBatchCallback() const {
+    return scanBatchCallback_;
+  }
+
   /// Store a per-query registry override. Each subsystem defines its own key
   /// (e.g., "connectors", "vectorFunctions"). The registry is stored as a
   /// type-erased shared_ptr; callers must use the same type T for setRegistry
@@ -367,6 +392,23 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
+  }
+
+  /// Tracks an additional root pool keyed by 'tag'. The pool's allocator
+  /// and arbitrator are borrowed from the CustomMemoryResource the caller
+  /// passed to MemoryManager::addCustomRootPool; the resource's lifetime
+  /// is governed externally. Throws if 'tag' is already present or 'pool'
+  /// is null.
+  void addCustomPool(std::string tag, std::shared_ptr<memory::MemoryPool> pool);
+
+  /// Returns the custom root pool for the given resource tag, or nullptr if
+  /// none is registered under that tag for this query.
+  std::shared_ptr<memory::MemoryPool> customPool(const std::string& tag) const;
+
+  /// Returns all custom root pools for this query, keyed by resource tag.
+  const std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>&
+  customPools() const {
+    return customPools_;
   }
 
   /// Indicates if the query is under memory arbitration or not.
@@ -461,6 +503,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
       connectorSessionProperties_;
   std::shared_ptr<memory::MemoryPool> pool_;
+
   QueryConfig queryConfig_;
   std::atomic<uint64_t> numSpilledBytes_{0};
   std::atomic<uint64_t> numTracedBytes_{0};
@@ -477,6 +520,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // A function that constructs a custom trace ctx object.
   TraceCtxProvider traceCtxProvider_;
 
+  // Optional per-batch scan stats callback.
+  ScanBatchCallback scanBatchCallback_;
+
   // Type-erased registry entry for per-query overrides.
   struct RegistryEntry {
     std::shared_ptr<void> ptr;
@@ -486,6 +532,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // Per-query registry overrides keyed by subsystem name.
   folly::Synchronized<folly::F14FastMap<std::string, RegistryEntry>>
       registries_;
+
+  // Custom root memory pools keyed by tag.
+  std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
+      customPools_;
 };
 
 // Represents the state of one thread of query execution.
@@ -512,6 +562,7 @@ class ExecCtx {
           !queryConfig.debugDisableExpressionsWithMemoization() &&
           exprEvalCacheEnabled;
       peelingEnabled = !queryConfig.debugDisableExpressionsWithPeeling();
+      minRowsForPeeling = queryConfig.minRowsForPeeling();
       sharedSubExpressionReuseEnabled =
           !queryConfig.debugDisableCommonSubExpressions();
       deferredLazyLoadingEnabled =
@@ -531,6 +582,9 @@ class ExecCtx {
     bool dictionaryMemoizationEnabled;
     /// True if peeling is enabled during experssion evaluation.
     bool peelingEnabled;
+    /// Minimum number of rows required for peeling to be applied during
+    /// expression evaluation.
+    int32_t minRowsForPeeling;
     /// True if shared subexpression reuse is enabled during experssion
     /// evaluation.
     bool sharedSubExpressionReuseEnabled;

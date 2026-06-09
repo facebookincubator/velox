@@ -20,10 +20,19 @@ namespace facebook::velox::dwrf {
 
 template <typename DataT>
 SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
+    const TypePtr& requestedType,
     const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec) {
+    // Read using requestedType so that values are materialized at the
+    // table-schema scale rather than the file-footer scale. See the header
+    // comment for the Hive ORC DECIMAL(38, 18) footer behavior this works
+    // around.
+    : SelectiveColumnReader(requestedType, fileType, params, scanSpec) {
+  VELOX_CHECK(
+      requestedType_->isDecimal(),
+      "SelectiveDecimalColumnReader requires a decimal requestedType, got {}",
+      requestedType_->toString());
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   if constexpr (std::is_same_v<DataT, std::int64_t>) {
@@ -51,7 +60,7 @@ SelectiveDecimalColumnReader<DataT>::SelectiveDecimalColumnReader(
   scaleDecoder_ = createRleDecoder</*isSigned*/ true>(
       stripe.getStream(secondary, params.streamLabels().label(), true),
       version_,
-      *memoryPool_,
+      *pool_,
       stripe.getUseVInts(secondary),
       LONG_BYTE_SIZE);
 }
@@ -95,7 +104,7 @@ void SelectiveDecimalColumnReader<DataT>::readHelper(
   }
 
   // copy scales into scaleBuffer_
-  ensureCapacity<int64_t>(scaleBuffer_, numValues_, memoryPool_);
+  ensureCapacity<int64_t>(scaleBuffer_, numValues_, pool_);
   scaleBuffer_->setSize(numValues_ * sizeof(int64_t));
   memcpy(
       scaleBuffer_->asMutable<char>(),
@@ -249,7 +258,7 @@ void SelectiveDecimalColumnReader<DataT>::read(
     // Make sure a dedicated resultNulls_ is allocated with enough capacity as
     // RleDecoder always assumes it is available and 'prepareRead' skips
     // allocation when the column is not projected.
-    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), memoryPool_);
+    resultNulls_ = AlignedBuffer::allocate<bool>(rows.size(), pool_);
     rawResultNulls_ = resultNulls_->asMutable<uint64_t>();
   }
   rawValues_ = values_->asMutable<char>();

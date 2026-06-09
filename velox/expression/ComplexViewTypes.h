@@ -815,6 +815,7 @@ class MapView {
 
   materialize_t materialize() const {
     materialize_t result;
+    result.reserve(size());
     for (const auto& [key, value] : *this) {
       if constexpr (returnsOptionalValues) {
         if (value.has_value()) {

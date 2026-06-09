@@ -45,6 +45,10 @@ class SplitIndexReader {
   using Result = IndexSource::Result;
   using Options = dwio::common::IndexReader::Options;
 
+  /// The total number of output rows returned across all next() calls.
+  static constexpr std::string_view kNumIndexReaderOutputRows{
+      "numIndexReaderOutputRows"};
+
   virtual ~SplitIndexReader() = default;
 
   /// Initializes a lookup for the given probe request.

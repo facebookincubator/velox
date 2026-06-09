@@ -184,7 +184,7 @@ TEST_F(BufferedInputTest, cachedRegion) {
   {
     StringIdLease fileId(ids, "exclusiveTestFile");
     cache::RawFileCacheKey key{fileId.id(), 0};
-    auto pin = dataCache->findOrCreate(key, 100, nullptr);
+    auto pin = dataCache->findOrCreate(key, 100);
     ASSERT_FALSE(pin.empty());
     ASSERT_TRUE(pin.checkedEntry()->isExclusive());
     VELOX_ASSERT_THROW(
@@ -226,17 +226,17 @@ TEST_F(BufferedInputTest, cachedRegion) {
 
     StringIdLease fileId(ids, fmt::format("cachedRegionTestFile_{}", i));
     cache::RawFileCacheKey key{fileId.id(), 0};
-    auto pin = dataCache->findOrCreate(key, entrySize, nullptr);
+    auto pin = dataCache->findOrCreate(key, entrySize);
     ASSERT_FALSE(pin.empty());
     auto* entry = pin.checkedEntry();
     ASSERT_TRUE(entry->isExclusive());
 
     // Populate the entry with test data.
     if (testData.expectTinyData) {
-      ASSERT_NE(entry->tinyData(), nullptr);
-      memcpy(entry->tinyData(), expected.data(), entrySize);
+      ASSERT_TRUE(entry->hasContiguousData());
+      memcpy(entry->contiguousData(), expected.data(), entrySize);
     } else {
-      auto& allocation = entry->data();
+      auto& allocation = entry->nonContiguousData();
       ASSERT_GT(allocation.numRuns(), 0);
       uint64_t offset = 0;
       for (int i = 0; i < allocation.numRuns() && offset < entrySize; ++i) {
@@ -773,6 +773,10 @@ class CustomBufferedInputTest : public testing::Test {
   }
 
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+  std::shared_ptr<facebook::velox::io::IoStatistics> dataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
+  std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_{
+      std::make_shared<facebook::velox::io::IoStatistics>()};
 };
 
 } // namespace
@@ -780,6 +784,8 @@ class CustomBufferedInputTest : public testing::Test {
 TEST_F(CustomBufferedInputTest, basic) {
   facebook::velox::FileHandle fileHandle;
   facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   auto ioStatistics = std::make_shared<facebook::velox::io::IoStatistics>();
   auto ioStats = std::make_shared<facebook::velox::IoStats>();
   auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
@@ -789,4 +795,50 @@ TEST_F(CustomBufferedInputTest, basic) {
           ->create(
               fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
       "Not implemented in CustomBufferedInputBuilder");
+}
+
+TEST_F(BufferedInputTest, readGapTracking) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(content);
+
+  struct TestCase {
+    std::vector<Region> regions;
+    uint64_t expectedGapCount;
+    uint64_t expectedGapSum;
+    uint64_t expectedGapMin;
+    uint64_t expectedGapMax;
+    std::string debugString() const {
+      return fmt::format(
+          "regions {}, expectedGapCount {}", regions.size(), expectedGapCount);
+    }
+  };
+
+  std::vector<TestCase> testCases = {
+      // Scattered regions: gaps of 9'900 and 39'900 bytes.
+      {{{0, 100}, {10'000, 100}, {50'000, 100}}, 2, 49'800, 9'900, 39'900},
+      // Contiguous regions: no gaps.
+      {{{0, 100}, {100, 100}, {200, 100}},
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
+    BufferedInput input(readFile, *pool_, MetricsLog::voidLog(), ioStats.get());
+
+    for (const auto& region : testCase.regions) {
+      input.enqueue(region);
+    }
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(ioStats->readGap().count(), testCase.expectedGapCount);
+    EXPECT_EQ(ioStats->readGap().sum(), testCase.expectedGapSum);
+    EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
+    EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
+  }
 }
