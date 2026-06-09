@@ -17,6 +17,24 @@ cmake_minimum_required(VERSION 3.28)
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat CONFIG REQUIRED)
 
+if(EMSCRIPTEN)
+  # Folly's bundled FindFastFloat.cmake uses find_path/find_library, which
+  # can't reliably locate the FetchContent-built headers under Emscripten.
+  # Force-set the cache var to the actual include directory so folly's
+  # find_package(FastFloat MODULE) succeeds.
+  FetchContent_GetProperties(fastfloat SOURCE_DIR FASTFLOAT_SOURCE_DIR)
+  set(
+    FASTFLOAT_INCLUDE_DIR
+    ${FASTFLOAT_SOURCE_DIR}/include
+    CACHE PATH
+    "fast_float include directory"
+    FORCE
+  )
+
+  velox_set_source(double-conversion)
+  velox_resolve_dependency(double-conversion CONFIG REQUIRED)
+endif()
+
 set(VELOX_FOLLY_BUILD_VERSION v2026.01.05.00)
 set(
   VELOX_FOLLY_BUILD_SHA256_CHECKSUM
@@ -40,11 +58,16 @@ if(gflags_SOURCE STREQUAL "BUNDLED")
   set(FOLLY_GFLAGS_NAMESPACE gflags)
 endif()
 
+if(EMSCRIPTEN)
+  set(emscripten_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-emscripten.patch)
+endif()
+
 FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
+  PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch} ${emscripten_patch}
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL

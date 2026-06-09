@@ -301,6 +301,7 @@ class ByteSinkAppender {
 };
 } // namespace detail
 
+#if FOLLY_HAVE_GROUP_VARINT
 // Import GroupVarint encoding / decoding code from folly
 
 typedef folly::GroupVarint32 GroupVarint32;
@@ -313,5 +314,6 @@ typedef folly::GroupVarintEncoder<uint64_t, detail::ByteSinkAppender>
 
 typedef folly::GroupVarintDecoder<uint32_t> GroupVarint32Decoder;
 typedef folly::GroupVarintDecoder<uint64_t> GroupVarint64Decoder;
+#endif
 
 } // namespace facebook::velox

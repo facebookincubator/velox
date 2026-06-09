@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
-  velox_functions_prestosql
+set(
+  _PRESTOSQL_REGISTRATION_SRCS
   ArrayConcatRegistration.cpp
   ArrayFunctionsRegistration.cpp
   ArrayNGramsRegistration.cpp
@@ -38,11 +38,17 @@ velox_add_library(
   ProbabilityTrigonometricFunctionsRegistration.cpp
   RegistrationFunctions.cpp
   SetDigestFunctionsRegistration.cpp
-  SfmSketchFunctionsRegistration.cpp
   StringFunctionsRegistration.cpp
   TDigestFunctionsRegistration.cpp
   QDigestFunctionsRegistration.cpp
   URLFunctionsRegistration.cpp
+)
+
+list(APPEND _PRESTOSQL_REGISTRATION_SRCS SfmSketchFunctionsRegistration.cpp)
+
+velox_add_library(
+  velox_functions_prestosql
+  ${_PRESTOSQL_REGISTRATION_SRCS}
   HEADERS
   RegistrationFunctions.h
 )
@@ -59,10 +65,7 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 if(VELOX_ENABLE_FAISS)
-  set_source_files_properties(
-    MathematicalFunctionsRegistration.cpp
-    PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS
-  )
+  velox_compile_definitions(velox_functions_prestosql PRIVATE VELOX_ENABLE_FAISS)
 endif()
 
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends

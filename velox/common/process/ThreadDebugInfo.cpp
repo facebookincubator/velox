@@ -16,12 +16,16 @@
 
 #include "velox/common/process/ThreadDebugInfo.h"
 
-#include <folly/debugging/symbolizer/SignalHandler.h>
 #include <glog/logging.h>
+
+#ifndef __EMSCRIPTEN__
+#include <folly/debugging/symbolizer/SignalHandler.h>
+#endif
 
 namespace facebook::velox::process {
 thread_local const ThreadDebugInfo* threadDebugInfo = nullptr;
 
+#ifndef __EMSCRIPTEN__
 // Flag to ensure that printCurrentQueryId() only invokes the callback in
 // ThreadDebugInfo once. This is to prevent callback from being recursively
 // called in case it induces a fatal signal which ends up calling
@@ -49,6 +53,7 @@ static void printCurrentQueryId() {
   }
   write(STDERR_FILENO, "\n", 1);
 }
+#endif
 
 const ThreadDebugInfo* GetThreadDebugInfo() {
   return threadDebugInfo;
@@ -73,11 +78,13 @@ ScopedThreadDebugInfo::~ScopedThreadDebugInfo() {
 }
 
 void addDefaultFatalSignalHandler() {
+#ifndef __EMSCRIPTEN__
   static bool initialized = false;
   if (!initialized) {
     folly::symbolizer::addFatalSignalCallback(&printCurrentQueryId);
     initialized = true;
   }
+#endif
 }
 
 } // namespace facebook::velox::process
