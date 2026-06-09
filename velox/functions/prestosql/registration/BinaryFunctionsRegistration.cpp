@@ -61,6 +61,8 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<FromBase64Function, Varbinary, Varbinary>(
       {prefix + "from_base64"});
 
+  registerFunction<ToBase32Function, Varchar, Varbinary>(
+      {prefix + "to_base32"});
   registerFunction<FromBase32Function, Varbinary, Varchar>(
       {prefix + "from_base32"});
   registerFunction<FromBase32Function, Varbinary, Varbinary>(

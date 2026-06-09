@@ -20,9 +20,11 @@ velox_add_library(
   velox_encode
   Base64.cpp
   Base32.cpp
+  BaseEncoderUtils.cpp
   HEADERS
   Base32.h
   Base64.h
+  BaseEncoderUtils.h
 )
 velox_link_libraries(velox_encode PUBLIC velox_status Folly::folly)
 
