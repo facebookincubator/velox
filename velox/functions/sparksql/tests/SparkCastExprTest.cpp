@@ -35,6 +35,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   static void SetUpTestCase() {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
+    functions::sparksql::registerSparkCastModeSpecialForms(
+        kSparkAnsiCast, kSparkLegacyCast);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 

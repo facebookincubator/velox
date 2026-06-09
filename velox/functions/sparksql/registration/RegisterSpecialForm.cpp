@@ -47,8 +47,6 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
       expression::kCast, std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       expression::kTryCast, std::make_unique<SparkTryCastCallToSpecialForm>());
-  registerSparkCastModeSpecialForms(
-      prefix + kSparkAnsiCast, prefix + kSparkLegacyCast);
   exec::registerFunctionCallToSpecialForm(
       FromJsonCallToSpecialForm::kFromJson,
       std::make_unique<FromJsonCallToSpecialForm>());
