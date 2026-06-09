@@ -82,7 +82,6 @@ void registerCommonAggregationFunctions(
           .argumentType("double")
           .build()};
 
-  // Decimal sum signatures.
   auto decimalSumSingle = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .integerVariable("a_precision")
@@ -343,7 +342,6 @@ void registerCommonAggregationFunctions(
           .argumentType("double")
           .build()};
 
-  // Decimal avg signatures.
   auto decimalAvgSingle = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
           .integerVariable("a_precision")
