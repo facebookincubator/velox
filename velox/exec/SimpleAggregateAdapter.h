@@ -287,6 +287,8 @@ class SimpleAggregateAdapter : public Aggregate {
       const std::vector<VectorPtr>& constantInputs) override {
     if constexpr (support_set_constant_inputs_) {
       fn_->setConstantInputs(constantInputs);
+    } else {
+      Aggregate::setConstantInputs(constantInputs);
     }
   }
 

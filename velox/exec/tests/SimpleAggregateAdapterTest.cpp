@@ -530,48 +530,52 @@ class ConstantInputForwardingAggregate {
   int64_t offset_{0};
 };
 
+const char* const kSimpleConstFwd = "simple_const_fwd";
+
+exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
+    const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("bigint")
+          .argumentType("bigint")
+          .build()};
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_EQ(argTypes.size(), 2, "{} takes exactly two arguments", name);
+        return std::make_unique<
+            SimpleAggregateAdapter<ConstantInputForwardingAggregate>>(
+            step, argTypes, resultType);
+      },
+      false /*registerCompanionFunctions*/,
+      true /*overwrite*/);
+}
+
 class SimpleConstantInputForwardingAggregationTest
-    : public AggregationTestBase {};
+    : public AggregationTestBase {
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    registerSimpleConstantForwardingAggregate(kSimpleConstFwd);
+  }
+};
 
 TEST_F(SimpleConstantInputForwardingAggregationTest, forwardsConstantInputs) {
-  SimpleAggregateAdapter<ConstantInputForwardingAggregate> aggregate(
-      core::AggregationNode::Step::kSingle, {BIGINT(), BIGINT()}, BIGINT());
-
-  HashStringAllocator stringAllocator{pool()};
-  aggregate.setAllocator(&stringAllocator);
-
-  int32_t rowSizeOffset = bits::nbytes(1);
-  int32_t offset = rowSizeOffset + sizeof(uint32_t);
-  offset = bits::roundUp(offset, aggregate.accumulatorAlignmentSize());
-  aggregate.setOffsets(
-      offset,
-      RowContainer::nullByte(0),
-      RowContainer::nullMask(0),
-      RowContainer::initializedByte(0),
-      RowContainer::initializedMask(0),
-      rowSizeOffset);
-
-  auto constantInput = makeConstant<int64_t>(10, 1);
-  aggregate.setConstantInputs(std::vector<VectorPtr>{nullptr, constantInput});
-
-  std::vector<char> group(offset + aggregate.accumulatorFixedWidthSize());
-  std::vector<char*> groups{group.data()};
-  std::vector<vector_size_t> indices{0};
-  aggregate.initializeNewGroups(groups.data(), indices);
-
-  auto input = makeFlatVector<int64_t>({1, 2, 3});
-  auto constantArg =
-      BaseVector::wrapInConstant(input->size(), 0, constantInput);
-  aggregate.addSingleGroupRawInput(
-      group.data(),
-      SelectivityVector(input->size()),
-      {input, constantArg},
-      false);
-
-  auto result = BaseVector::create(BIGINT(), 1, pool());
-  aggregate.extractValues(groups.data(), 1, &result);
-
-  ASSERT_EQ(result->as<FlatVector<int64_t>>()->valueAt(0), 36);
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto expected = makeRowVector({makeConstant<int64_t>(36, 1)});
+  // '10' is a constant arg -> AggregateInfo discovers it and calls
+  // setConstantInputs(), which the adapter forwards to the simple function.
+  testAggregations(
+      {input}, {}, {"simple_const_fwd(c0, 10::bigint)"}, {expected});
 }
 
 // A testing simple avg aggregate function, and it is used to check for
