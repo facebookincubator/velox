@@ -42,6 +42,17 @@ exec::ExprPtr makeSparkCastExpr(
       std::make_shared<SparkCastHooks>(config, allowOverflow));
 }
 
+/// Per-expression ANSI cast special form. Spark cast support has four special
+/// forms:
+/// - `cast` uses ANSI behavior only when SparkQueryConfig::ansiEnabled() is
+///   true and the cast pair is supported; otherwise it uses legacy behavior.
+/// - `try_cast` returns NULL on cast failures and disables overflow truncation.
+/// - This form forces ANSI behavior for supported cast pairs regardless of the
+///   session ANSI setting. Unsupported cast pairs fall back to legacy behavior.
+/// - SparkLegacyCastCallToSpecialForm forces legacy behavior regardless of the
+///   session ANSI setting.
+/// Legacy behavior means cast failures return NULL and overflow truncation is
+/// allowed where Spark permits it.
 class SparkAnsiCastCallToSpecialForm : public exec::CastCallToSpecialForm {
  public:
   exec::ExprPtr constructSpecialForm(

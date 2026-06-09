@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
-#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 #include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;

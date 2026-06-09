@@ -71,7 +71,7 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
 /// expression instead of deriving it only from SparkQueryConfig::ansiEnabled().
 ///
 /// The ANSI cast form applies ANSI behavior for casts supported by
-/// SparkCastCallToSpecialForm::isAnsiSupported() and uses try-cast behavior for
+/// SparkCastCallToSpecialForm::isAnsiSupported() and uses legacy behavior for
 /// cast pairs whose ANSI behavior is not supported yet. The legacy cast form
 /// applies Spark legacy cast behavior regardless of the session ANSI setting.
 void registerSparkCastModeSpecialForms(
