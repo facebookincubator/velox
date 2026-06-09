@@ -74,12 +74,12 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit b12cd9f from 2026-06-08 (release/0.50 branch)
+  # ucxx commit dc57333 from 2026-06-09 (release/0.50 branch)
   set(VELOX_ucxx_VERSION 0.50)
-  set(VELOX_ucxx_COMMIT b12cd9f094979fcb8ab4dc016ce29194f9f6126a)
+  set(VELOX_ucxx_COMMIT dc573338cdc651ed520bd4f3de8b350462c20bed)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    24fec4bfeaf2a39866371d22f81107e5ad6b896fa260048f7021f2b478dbd1c9
+    0f9ab9f4124766259f3ab06dc5fad0e5fe100724390eaba17112afc75444af68
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
