@@ -31,9 +31,9 @@ bool isIntegralType(const TypePtr& type) {
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  // String to Boolean, Integer, or Date types support ANSI mode.
+  // String to Boolean, Integer, Date, or Time types support ANSI mode.
   if (fromType->isVarchar()) {
-    if (toType->isBoolean() || toType->isDate()) {
+    if (toType->isBoolean() || toType->isDate() || toType->isTime()) {
       return true;
     }
     if (isIntegralType(toType)) {
