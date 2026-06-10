@@ -28,13 +28,28 @@ constexpr const int64_t kMillisInMinute = 60 * kMillisInSecond;
 constexpr const int64_t kMillisInHour = 60 * kMillisInMinute;
 constexpr const int64_t kMillisInDay = 24 * kMillisInHour;
 
-/// Represents parsed time components
+/// Represents parsed time components.
 struct TimeComponents {
   int32_t hour = 0;
   int32_t minute = 0;
   int32_t second = 0;
   int32_t millis = 0;
 };
+
+/// Parse time components from a TIME string.
+/// @param buf Pointer to the TIME string.
+/// @param len Length of the string.
+/// @param requireSeconds If true, requires a seconds component (default:
+/// false).
+/// @param fractionalPrecision Max fractional digits to accept (default: 3 for
+/// milliseconds).
+/// @return Parsed time components with fractional part scaled to
+/// fractionalPrecision and stored in TimeComponents::millis.
+Expected<TimeComponents> parseTimeComponents(
+    const char* buf,
+    size_t len,
+    bool requireSeconds = false,
+    int32_t fractionalPrecision = 3);
 
 /// Parse a TIME string (H:m[:s[.SSS]] format)
 /// Supports formats:
