@@ -728,6 +728,10 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Explicitly enable folly coroutines when compiler supports them.
   # This is required for folly::coro::AsyncGenerator to work correctly.
   add_compile_definitions(FOLLY_HAS_COROUTINES=1)
+elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "AppleClang")
+  # Handle Apple toolchain Clang change of name of variable.
+  # Remove when upgrading to the latest FBOS version where this has been addressed.
+  add_compile_options(-D_LIBCPP_HAS_NO_ASAN)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
