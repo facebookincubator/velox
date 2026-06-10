@@ -41,6 +41,7 @@ def main() -> None:
     input_f = (torch.arange(n, dtype=torch.float) % 13 + 50).float()
     scalar_val = torch.tensor([42.0])
     scalar_mask = torch.tensor([True])
+    scalar_flags = torch.tensor([True])
 
     # 2D [90, 130] tensor with int32/long indices, 500 scatter positions.
     dest2d = torch.zeros(90, 130, dtype=torch.float)
@@ -59,6 +60,7 @@ def main() -> None:
         input_f,
         scalar_val,
         scalar_mask,
+        scalar_flags,
         dest2d,
         idx2d_0,
         idx2d_1,
@@ -66,7 +68,9 @@ def main() -> None:
     )
 
     module = MaskedPutTest()
-    results = module(*inputs)
+    # The module mutates scalar_val in place (c8), so run eager and export on
+    # fresh clones; the embedded example inputs must match the reference results.
+    results = module(*tuple(t.clone() for t in inputs))
     print(f"Eager results ({len(results)} outputs):")
     for i, r in enumerate(results):
         print(f"  [{i}] shape={r.shape}, dtype={r.dtype}")
@@ -84,7 +88,7 @@ def main() -> None:
     with torch.no_grad():
         exported_program = torch.export.export(
             module,
-            inputs,
+            tuple(t.clone() for t in inputs),
             strict=False,
         )
     print(f"Export successful, graph has {len(exported_program.graph.nodes)} nodes")

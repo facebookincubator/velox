@@ -439,6 +439,50 @@ __device__ inline T __clamp(T a1, TLo lo, THi hi) {
   return result;
 }
 
+// In-place variants. The mutated argument is bound by reference so the write
+// lands directly in the self tensor's storage (the codegen passes
+// storage<T>(self)[idx], an lvalue). PyTorch preserves these ops in
+// non-functionalized graphs (e.g. feature-transform normalization:
+// x.add_(mean).mul_(inv_std), x[:, :k].clamp_(lo, hi)), so torchwave must
+// execute them. The computation reuses the functional helper and assigns the
+// result back to self (keeping self's dtype, matching in-place semantics); the
+// returned value also flows to the result register when the output is used.
+
+template <typename T, typename T2, typename TAlpha>
+__device__ inline T __add_(T& a1, T2 a2, TAlpha alpha) {
+  a1 = __add<T, T2, TAlpha>(a1, a2, alpha);
+  return a1;
+}
+
+template <typename T, typename T2, typename TAlpha>
+__device__ inline T __sub_(T& a1, T2 a2, TAlpha alpha) {
+  a1 = __sub<T, T2, TAlpha>(a1, a2, alpha);
+  return a1;
+}
+
+template <typename T, typename T2 = T>
+__device__ inline T __mul_(T& a1, T2 a2) {
+  a1 = __mul<T, T2>(a1, a2);
+  return a1;
+}
+
+template <typename T, typename T2 = T>
+__device__ inline T __div_(T& a1, T2 a2) {
+  a1 = static_cast<T>(__div<T, T2>(a1, a2));
+  return a1;
+}
+
+template <
+    bool kHasMin = true,
+    bool kHasMax = true,
+    typename T,
+    typename TLo = T,
+    typename THi = T>
+__device__ inline T __clamp_(T& a1, TLo lo, THi hi) {
+  a1 = __clamp<kHasMin, kHasMax, T, TLo, THi>(a1, lo, hi);
+  return a1;
+}
+
 // NaN/Inf replacement.
 
 template <typename T>
