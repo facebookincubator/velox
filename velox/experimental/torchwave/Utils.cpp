@@ -811,6 +811,66 @@ void saveReferenceFrame(
   serializeReferenceFrame(items, path);
 }
 
+void saveReferenceFrame(
+    const nativert::ExecutionFrame& frame,
+    const nativert::Graph& graph,
+    const std::unordered_map<int64_t, at::Tensor>& capturedTensors,
+    const std::string& path) {
+  std::vector<std::pair<int32_t, c10::IValue>> items;
+  for (const auto* value : graph.values()) {
+    if (!value) {
+      continue;
+    }
+    auto id = static_cast<int64_t>(value->id());
+    // Prefer the copy captured the instant the node ran; it cannot have been
+    // corrupted by a later in-place write.
+    auto it = capturedTensors.find(id);
+    if (it != capturedTensors.end()) {
+      if (it->second.numel() > 0) {
+        items.emplace_back(static_cast<int32_t>(id), c10::IValue(it->second));
+      }
+      continue;
+    }
+    const auto& iv = frame.getIValue(value->id());
+    if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+      items.emplace_back(static_cast<int32_t>(id), iv);
+    }
+  }
+  serializeReferenceFrame(items, path);
+}
+
+void saveTensorList(
+    const std::vector<at::Tensor>& tensors,
+    const std::string& path) {
+  c10::List<at::Tensor> list;
+  for (const auto& t : tensors) {
+    if (t.defined()) {
+      list.push_back(t.cpu());
+    }
+  }
+  auto data = torch::jit::pickle_save(c10::IValue(list));
+  std::ofstream out(path, std::ios::binary);
+  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
+std::vector<at::Tensor> loadTensorList(const std::string& path) {
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  if (!in.good()) {
+    return {};
+  }
+  auto size = in.tellg();
+  in.seekg(0);
+  std::vector<char> data(size);
+  in.read(data.data(), size);
+  auto ivalue = torch::jit::pickle_load(data);
+  TORCH_CHECK(ivalue.isList(), "Expected list in tensor list file");
+  std::vector<at::Tensor> result;
+  for (const auto& element : ivalue.toListRef()) {
+    result.push_back(element.toTensor());
+  }
+  return result;
+}
+
 std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(
     const std::string& path) {
   int fd = ::open(path.c_str(), O_RDONLY);
@@ -965,6 +1025,136 @@ bool isInPlaceMutation(NodeCP node, ValueCP value) {
   auto target = std::string(node->target());
   return target.find("_.") != std::string::npos ||
       (target.size() > 1 && target.back() == '_');
+}
+
+namespace {
+// True if two alias annotations name a common alias set (i.e. the values share
+// storage), e.g. self Tensor(a!) and return Tensor(a!) on add_.
+bool aliasSetsIntersect(const c10::AliasInfo& a, const c10::AliasInfo& b) {
+  for (const auto& sym : a.beforeSets()) {
+    if (b.beforeSets().count(sym) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
+ValueCP viewStorageBase(ValueCP value) {
+  // Follow storage-aliasing edges from a value to its base. Two kinds of edge
+  // alias an output to an input: a view (output is a view of input 'viewOfArg')
+  // and an in-place op (the FunctionSchema gives the output and the mutated
+  // self the same alias set, e.g. add_/clamp_ Tensor(a!) -> Tensor(a!)). Both
+  // must be followed so that a, a.view(), and a.add_(...) all resolve to the
+  // same base. Bounded by the graph's acyclicity.
+  while (value != nullptr) {
+    auto* producer = value->producer();
+    if (producer == nullptr) {
+      break;
+    }
+    ValueCP next = nullptr;
+
+    // 1. torchwave view metadata (static op property, no thread WaveGraph
+    // needed, so this works in GraphTool too).
+    const auto* meta = Registry::metadata(producer->target());
+    if (meta != nullptr && meta->viewOfArg.has_value()) {
+      auto ordinal = *meta->viewOfArg;
+      if (ordinal >= 0 &&
+          static_cast<size_t>(ordinal) < producer->inputs().size()) {
+        next = producer->inputs()[ordinal].value;
+      }
+    }
+
+    // 2. Schema alias: the output 'value' shares an alias set with an input.
+    if (next == nullptr) {
+      const auto* schema = findFunctionSchema(producer->target());
+      if (schema != nullptr) {
+        const auto& outputs = producer->outputs();
+        int32_t outIdx = -1;
+        for (size_t i = 0; i < outputs.size(); ++i) {
+          if (outputs[i] == value) {
+            outIdx = static_cast<int32_t>(i);
+            break;
+          }
+        }
+        if (outIdx >= 0 &&
+            static_cast<size_t>(outIdx) < schema->returns().size()) {
+          const auto* outAlias = schema->returns()[outIdx].alias_info();
+          if (outAlias != nullptr) {
+            const auto& args = schema->arguments();
+            const auto& inputs = producer->inputs();
+            for (size_t j = 0; j < inputs.size() && j < args.size(); ++j) {
+              const auto* inAlias = args[j].alias_info();
+              if (inAlias != nullptr &&
+                  aliasSetsIntersect(*inAlias, *outAlias)) {
+                next = inputs[j].value;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (next == nullptr || next == value) {
+      break;
+    }
+    value = next;
+  }
+  return value;
+}
+
+std::vector<ValueCP> dataMutatedInputs(NodeCP node) {
+  std::vector<ValueCP> result;
+  auto target = node->target();
+  // detach_/lift_fresh_ carry a write-alias annotation but do not change tensor
+  // data (autograd bookkeeping only); ignore them for data dependencies.
+  if (target.find("detach") != std::string_view::npos ||
+      target.find("lift_fresh") != std::string_view::npos) {
+    return result;
+  }
+  const auto* schema = findFunctionSchema(target);
+  if (schema == nullptr) {
+    // No schema: fall back to the trailing-underscore convention used by
+    // isInPlaceMutation, assuming the first input is the mutated self.
+    bool inPlace = target.find("_.") != std::string_view::npos ||
+        (!target.empty() && target.back() == '_');
+    if (inPlace && !node->inputs().empty() && node->inputs()[0].value) {
+      result.push_back(node->inputs()[0].value);
+    }
+    return result;
+  }
+  const auto& inputs = node->inputs();
+  const auto& args = schema->arguments();
+  for (size_t i = 0; i < inputs.size() && i < args.size(); ++i) {
+    const auto* aliasInfo = args[i].alias_info();
+    if (aliasInfo != nullptr && aliasInfo->isWrite() && inputs[i].value) {
+      result.push_back(inputs[i].value);
+    }
+  }
+  return result;
+}
+
+bool baseMutatedAfter(
+    const nativert::Graph& graph,
+    NodeCP afterNode,
+    ValueCP value) {
+  auto* base = viewStorageBase(value);
+  bool seenAfter = false;
+  for (const auto& node : graph.nodes()) {
+    if (!seenAfter) {
+      if (&node == afterNode) {
+        seenAfter = true;
+      }
+      continue;
+    }
+    for (auto* mutated : dataMutatedInputs(&node)) {
+      if (viewStorageBase(mutated) == base) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 TraceState parseTraceValues(const std::string& csv) {

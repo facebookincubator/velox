@@ -1988,6 +1988,14 @@ bool isAllViews(
 }
 
 std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
+  // ProjectOperations are deduplicated only within a single compiled node.
+  // opStorage_ (which owns the ProjectOperations) is moved into this node's
+  // CompositeKernel at the end of this function, so any ProjectOperation*
+  // recorded in projectOps_ from a previous node points into a kernel that no
+  // longer belongs to the node being compiled. Reusing it here would launch an
+  // opcode whose case is absent from this node's kernel. Clear the map so dedup
+  // never crosses node boundaries.
+  projectOps_.clear();
   placedBeforeNode_ = placed_;
   inputs_ = &project.inputs();
   currentNodeId_ = project.id();
