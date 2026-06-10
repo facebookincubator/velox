@@ -82,28 +82,46 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
   return util::fromDatetime(daysSinceEpoch.value(), localMicros);
 }
 
-void setTimestampOrNull(
-    int32_t row,
-    std::optional<Timestamp> timestamp,
-    DecodedVector* timeZoneVector,
-    FlatVector<Timestamp>* result) {
-  const auto timeZoneName = timeZoneVector->valueAt<StringView>(row);
-  const auto* timeZone = tz::locateZone(std::string_view(timeZoneName));
-  if (timestamp.has_value()) {
-    toGMTWithGapCorrection(timestamp.value(), *timeZone);
-    result->set(row, *timestamp);
-  } else {
-    result->setNull(row, true);
+// Builds the timestamp from the datetime fields and adjusts it to GMT using
+// 'timeZone'. 'timeZone' is nullptr when the timezone argument did not resolve
+// to a known zone; this follows the same ANSI rule as invalid datetime fields.
+// Fields are validated before the timezone to match Spark's evaluation order.
+std::optional<Timestamp> makeTimestampWithTimeZone(
+    vector_size_t row,
+    DecodedVector* yearVector,
+    DecodedVector* monthVector,
+    DecodedVector* dayVector,
+    DecodedVector* hourVector,
+    DecodedVector* minuteVector,
+    DecodedVector* microsVector,
+    const tz::TimeZone* timeZone,
+    std::string_view timeZoneName,
+    bool ansiEnabled) {
+  auto timestamp = makeTimeStampFromDecodedArgs(
+      row,
+      yearVector,
+      monthVector,
+      dayVector,
+      hourVector,
+      minuteVector,
+      microsVector,
+      ansiEnabled);
+  if (!timestamp.has_value()) {
+    return std::nullopt;
   }
+  if (timeZone == nullptr) {
+    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+        ansiEnabled, "Unknown time zone: '{}'", timeZoneName);
+  }
+  toGMTWithGapCorrection(timestamp.value(), *timeZone);
+  return timestamp;
 }
 
 void setTimestampOrNull(
     int32_t row,
     std::optional<Timestamp> timestamp,
-    const tz::TimeZone* timeZone,
     FlatVector<Timestamp>* result) {
   if (timestamp.has_value()) {
-    toGMTWithGapCorrection(timestamp.value(), *timeZone);
     result->set(row, *timestamp);
   } else {
     result->setNull(row, true);
@@ -136,35 +154,60 @@ class MakeTimestampFunction : public exec::VectorFunction {
       // If the timezone argument is specified, treat the input timestamp as the
       // time in that timezone.
       if (args[6]->isConstantEncoding()) {
-        auto tz =
+        const auto timeZoneName =
             args[6]->asUnchecked<ConstantVector<StringView>>()->valueAt(0);
-        const tz::TimeZone* constantTimeZone = nullptr;
-        try {
-          constantTimeZone = tz::locateZone(std::string_view(tz));
-        } catch (const VeloxException&) {
-          context.setErrors(rows, std::current_exception());
-          return;
-        }
+        const auto* constantTimeZone = tz::locateZone(
+            std::string_view(timeZoneName), /*failOnError=*/false);
         context.applyToSelectedNoThrow(rows, [&](auto row) {
-          auto timestamp = makeTimeStampFromDecodedArgs(
-              row, year, month, day, hour, minute, micros, ansiEnabled_);
-          setTimestampOrNull(
-              row, timestamp, constantTimeZone, resultFlatVector);
+          auto timestamp = makeTimestampWithTimeZone(
+              row,
+              year,
+              month,
+              day,
+              hour,
+              minute,
+              micros,
+              constantTimeZone,
+              std::string_view(timeZoneName),
+              ansiEnabled_);
+          setTimestampOrNull(row, timestamp, resultFlatVector);
         });
       } else {
         auto* timeZone = decodedArgs.at(6);
         context.applyToSelectedNoThrow(rows, [&](auto row) {
-          auto timestamp = makeTimeStampFromDecodedArgs(
-              row, year, month, day, hour, minute, micros, ansiEnabled_);
-          setTimestampOrNull(row, timestamp, timeZone, resultFlatVector);
+          const auto timeZoneName = timeZone->valueAt<StringView>(row);
+          const auto* rowTimeZone = tz::locateZone(
+              std::string_view(timeZoneName), /*failOnError=*/false);
+          auto timestamp = makeTimestampWithTimeZone(
+              row,
+              year,
+              month,
+              day,
+              hour,
+              minute,
+              micros,
+              rowTimeZone,
+              std::string_view(timeZoneName),
+              ansiEnabled_);
+          setTimestampOrNull(row, timestamp, resultFlatVector);
         });
       }
     } else {
-      // Otherwise use session timezone.
+      // Otherwise use session timezone, which is validated at function
+      // creation and is never null.
       context.applyToSelectedNoThrow(rows, [&](auto row) {
-        auto timestamp = makeTimeStampFromDecodedArgs(
-            row, year, month, day, hour, minute, micros, ansiEnabled_);
-        setTimestampOrNull(row, timestamp, sessionTimeZone_, resultFlatVector);
+        auto timestamp = makeTimestampWithTimeZone(
+            row,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            micros,
+            sessionTimeZone_,
+            /*timeZoneName=*/{},
+            ansiEnabled_);
+        setTimestampOrNull(row, timestamp, resultFlatVector);
       });
     }
   }

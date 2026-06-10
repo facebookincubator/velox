@@ -261,14 +261,17 @@ TEST_F(MakeTimestampTest, ansiErrors) {
 }
 
 TEST_F(MakeTimestampTest, invalidTimezone) {
+  // Use valid datetime fields throughout so the timezone is the only invalid
+  // argument. Fields are validated before the timezone, so an invalid field
+  // would mask the timezone error under ANSI mode.
   const auto microsType = DECIMAL(16, 6);
-  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021, 2021, 2021});
-  const auto month = makeFlatVector<int32_t>({7, 7, 7, 7, 7});
-  const auto day = makeFlatVector<int32_t>({11, 11, 11, 11, 11});
-  const auto hour = makeFlatVector<int32_t>({6, 6, 6, -6, 6});
-  const auto minute = makeFlatVector<int32_t>({30, 30, 30, 30, 30});
-  const auto micros = makeNullableFlatVector<int64_t>(
-      {45678000, 1e6, 6e7, 59999999, std::nullopt}, microsType);
+  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021});
+  const auto month = makeFlatVector<int32_t>({7, 7, 7});
+  const auto day = makeFlatVector<int32_t>({11, 11, 11});
+  const auto hour = makeFlatVector<int32_t>({6, 6, 6});
+  const auto minute = makeFlatVector<int32_t>({30, 30, 30});
+  const auto micros = makeFlatVector<int64_t>(
+      {45'678'000, 1'000'000, 60'000'000}, microsType);
   auto data = makeRowVector({year, month, day, hour, minute, micros});
 
   // Time zone is not set.
@@ -276,8 +279,33 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
       evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data),
       "make_timestamp requires session time zone to be set.");
 
-  // Invalid constant time zone.
+  const auto allNull = makeNullableFlatVector<Timestamp>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  const auto invalidTimeZones =
+      makeFlatVector<StringView>({"Invalid", "", "Bad/Zone"});
+  auto dataWithTimeZones =
+      makeRowVector({year, month, day, hour, minute, micros, invalidTimeZones});
+
+  // ANSI off: invalid timezone yields NULL, matching Spark's codegen
+  // semantics.
   setQueryTimeZone("GMT");
+  for (auto timeZone : {"Invalid", ""}) {
+    SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
+    auto result = evaluate(
+        fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timeZone),
+        data);
+    facebook::velox::test::assertEqualVectors(allNull, result);
+  }
+  auto result =
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones);
+  facebook::velox::test::assertEqualVectors(allNull, result);
+
+  // ANSI on: invalid timezone throws.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "GMT"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
   for (auto timeZone : {"Invalid", ""}) {
     SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
     VELOX_ASSERT_USER_THROW(
@@ -287,21 +315,9 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
             data),
         fmt::format("Unknown time zone: '{}'", timeZone));
   }
-
-  // Invalid timezone from vector.
-  auto timeZones = makeFlatVector<StringView>(
-      {"GMT", "CET", "Asia/Shanghai", "Invalid", "GMT"});
-  data = makeRowVector({year, month, day, hour, minute, micros, timeZones});
   VELOX_ASSERT_USER_THROW(
-      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data),
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones),
       "Unknown time zone: 'Invalid'");
-
-  timeZones =
-      makeFlatVector<StringView>({"GMT", "CET", "Asia/Shanghai", "", "GMT"});
-  data = makeRowVector({year, month, day, hour, minute, micros, timeZones});
-  VELOX_ASSERT_USER_THROW(
-      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data),
-      "Unknown time zone: ''");
 }
 
 } // namespace
