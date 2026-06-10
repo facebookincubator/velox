@@ -24,10 +24,10 @@
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_for.cuh>
+#include <cuda/iterator>
 #include <cuda/std/span>
 #include <cuda/std/type_traits>
 #include <cuda_runtime.h>
-#include <thrust/iterator/counting_iterator.h>
 #include <thrust/transform.h>
 
 #include <cstdint>
@@ -134,7 +134,7 @@ void launchFillOffsets(
     rmm::cuda_stream_view stream) {
   FillOffsetsFunctor<OffsetT> op{offsets};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+      cuda::counting_iterator{0},
       static_cast<int32_t>(offsets.size()),
       op,
       stream.value());
@@ -150,7 +150,7 @@ void launchPackState(
     rmm::cuda_stream_view stream) {
   PackStateFunctor<SumT, OffsetT> op{sums, counts, offsets, chars};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+      cuda::counting_iterator{0},
       static_cast<int32_t>(sums.size()),
       op,
       stream.value());
@@ -166,7 +166,7 @@ void launchUnpackState(
     rmm::cuda_stream_view stream) {
   UnpackStateFunctor<OffsetT> op{offsets, chars, sums, counts};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+      cuda::counting_iterator{0},
       static_cast<int32_t>(sums.size()),
       op,
       stream.value());
@@ -181,7 +181,7 @@ void launchAvgRound(
     rmm::cuda_stream_view stream) {
   AvgRoundFunctor<SumT> op{sums, counts, out};
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+      cuda::counting_iterator{0},
       static_cast<int32_t>(out.size()),
       op,
       stream.value());
@@ -219,10 +219,11 @@ std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMaskImpl(
       cudf::mask_state::UNALLOCATED,
       stream,
       mr);
+  auto iter = cuda::counting_iterator{0};
   thrust::transform(
       rmm::exec_policy(stream),
-      thrust::make_counting_iterator<cudf::size_type>(0),
-      thrust::make_counting_iterator<cudf::size_type>(numRows),
+      iter,
+      iter + numRows,
       bools->mutable_view().begin<bool>(),
       pred);
   auto [mask, nullCount] = cudf::bools_to_mask(bools->view(), stream, mr);
