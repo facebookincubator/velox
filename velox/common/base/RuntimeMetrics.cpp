@@ -120,4 +120,12 @@ void addThreadLocalRuntimeStat(
   }
 }
 
+void setThreadLocalRuntimeStat(
+    std::string_view name,
+    const RuntimeMetric& metric) {
+  if (localRuntimeStatWriter) {
+    localRuntimeStatWriter->setRuntimeStat(name, metric);
+  }
+}
+
 } // namespace facebook::velox

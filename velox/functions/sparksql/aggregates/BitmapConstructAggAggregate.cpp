@@ -26,12 +26,6 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 namespace {
 
-// Spark bitmap_construct_agg uses a fixed-size bitmap of 4096 bytes (32768
-// bits). Each input value in [0, 32767] maps to a single bit in the bitmap.
-// See org.apache.spark.sql.catalyst.expressions.BitmapConstructAgg.
-constexpr int32_t kBitmapNumBytes = 4096;
-constexpr int64_t kBitmapNumBits = static_cast<int64_t>(kBitmapNumBytes) * 8;
-
 // Validates that a bitmap position is within [0, kBitmapNumBits).
 void validateBitmapPosition(int64_t position) {
   VELOX_USER_CHECK_GE(position, 0, "Bitmap position out of bounds");

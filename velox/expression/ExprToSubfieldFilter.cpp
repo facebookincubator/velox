@@ -796,6 +796,34 @@ std::unique_ptr<common::Filter> tryMergeFloatingPointRanges(
       });
 }
 
+std::unique_ptr<common::Filter> tryMergeBytesRanges(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBytesRange(filter);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+  std::sort(
+      disjuncts.begin(), disjuncts.end(), [](const auto& lhs, const auto& rhs) {
+        const auto* lhsRange = lhs->template as<common::BytesRange>();
+        const auto* rhsRange = rhs->template as<common::BytesRange>();
+        if (lhsRange->isLowerUnbounded() && rhsRange->isLowerUnbounded()) {
+          return false;
+        }
+        if (lhsRange->isLowerUnbounded()) {
+          return true;
+        }
+        if (rhsRange->isLowerUnbounded()) {
+          return false;
+        }
+        return lhsRange->lower() < rhsRange->lower();
+      });
+  return std::make_unique<common::MultiRange>(
+      std::move(disjuncts), nullAllowed);
+}
+
 std::unique_ptr<common::Filter> tryMergeBytesValues(
     std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
   if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
@@ -842,6 +870,10 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
   }
 
   if (auto merged = tryMergeBytesValues(disjuncts)) {
+    return merged;
+  }
+
+  if (auto merged = tryMergeBytesRanges(disjuncts)) {
     return merged;
   }
 
