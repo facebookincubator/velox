@@ -104,7 +104,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_config_test
   SOURCES Main.cpp ConfigTest.cpp
-  LIBS velox_cudf_exec Folly::folly
+  LIBS velox_cudf_exec
 )
 
 velox_add_cudf_test(
@@ -147,7 +147,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_hash_join_test
   SOURCES HashJoinTest.cpp Main.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer Folly::folly fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
 )
 
 velox_add_cudf_test(
@@ -165,7 +165,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_local_partition_test
   SOURCES Main.cpp LocalPartitionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(
@@ -183,7 +183,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_order_by_test
   SOURCES Main.cpp OrderByTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 if(VELOX_ENABLE_S3)
@@ -253,7 +253,13 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_window_test
+  SOURCES Main.cpp WindowTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 add_subdirectory(iceberg)

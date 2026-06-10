@@ -33,6 +33,7 @@
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -58,6 +59,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/Window.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -968,6 +970,123 @@ class CallbackSinkAdapter : public OperatorAdapter {
   }
 };
 
+// WindowAdapter - Replaces with CudfWindow
+class WindowAdapter : public OperatorAdapter {
+ public:
+  WindowAdapter() : OperatorAdapter("Window") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::Window*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto windowNode =
+        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+    if (!windowNode) {
+      return false;
+    }
+    const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
+    for (const auto& func : windowNode->windowFunctions()) {
+      const auto baseName =
+          stripFunctionPrefix(func.functionCall->name(), prefix);
+      if (!CudfWindow::isSupportedWindowFunction(
+              baseName, func.functionCall->inputs().size())) {
+        LOG_FALLBACK(
+            "Unsupported window function: {}, PlanNode id: {}",
+            func.functionCall->name(),
+            planNode->id());
+        return false;
+      }
+
+      // Check for non-constant lag/lead offset (2nd argument).
+      if ((baseName == "lag" || baseName == "lead") &&
+          func.functionCall->inputs().size() >= 2) {
+        if (!std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                func.functionCall->inputs()[1])) {
+          LOG_FALLBACK(
+              "Non-constant offset for {} not supported, PlanNode id: {}",
+              baseName,
+              planNode->id());
+          return false;
+        }
+      }
+
+      // Functions that use frame bounds: first_value, last_value, and
+      // aggregates (sum, min, max, count, avg).
+      // Rank functions (row_number, rank, dense_rank) and lag/lead ignore
+      // frames.
+      bool usesFrame = baseName == "first_value" || baseName == "last_value" ||
+          baseName == "sum" || baseName == "min" || baseName == "max" ||
+          baseName == "count" || baseName == "avg";
+
+      if (usesFrame) {
+        // Check frame type - RANGE with non-trivial bounds is not supported.
+        // Only these RANGE combinations are supported (equivalent to ROWS):
+        // - UNBOUNDED PRECEDING to CURRENT ROW
+        // - UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
+        if (func.frame.type == core::WindowNode::WindowType::kRange) {
+          bool startOk = func.frame.startType ==
+              core::WindowNode::BoundType::kUnboundedPreceding;
+          bool endOk = func.frame.endType ==
+                  core::WindowNode::BoundType::kUnboundedFollowing ||
+              func.frame.endType == core::WindowNode::BoundType::kCurrentRow;
+          if (!startOk || !endOk) {
+            LOG_FALLBACK(
+                "RANGE frame with non-unbounded/current bounds not supported, PlanNode id: {}",
+                planNode->id());
+            return false;
+          }
+        }
+
+        // Check for non-constant frame bounds (column references).
+        auto isConstantBound = [](core::WindowNode::BoundType type,
+                                  const core::TypedExprPtr& value) {
+          if (type == core::WindowNode::BoundType::kPreceding ||
+              type == core::WindowNode::BoundType::kFollowing) {
+            return !value ||
+                std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                    value) != nullptr;
+          }
+          return true;
+        };
+        if (!isConstantBound(func.frame.startType, func.frame.startValue) ||
+            !isConstantBound(func.frame.endType, func.frame.endValue)) {
+          LOG_FALLBACK(
+              "Non-constant frame bound not supported, PlanNode id: {}",
+              planNode->id());
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto windowPlanNode =
+        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfWindow>(operatorId, ctx, windowPlanNode));
+    return result;
+  }
+};
+
 /// GroupIdAdapter - Replaces with CudfGroupId
 class GroupIdAdapter : public OperatorAdapter {
  public:
@@ -1035,6 +1154,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<GroupIdAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
+  registry.registerAdapter(std::make_unique<WindowAdapter>());
 }
 
 } // namespace facebook::velox::cudf_velox
