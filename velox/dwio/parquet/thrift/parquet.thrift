@@ -37,10 +37,7 @@
  * File format description for the parquet file format
  */
 
-include "thrift/annotation/thrift.thrift"
-
 namespace cpp2 facebook.velox.parquet.thrift
-namespace java org.apache.parquet.format
 
 /**
  * Types supported by Parquet.  These types are intended to be used in combination
