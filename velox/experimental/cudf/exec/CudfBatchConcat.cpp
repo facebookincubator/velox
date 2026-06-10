@@ -20,7 +20,34 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace facebook::velox::cudf_velox {
+namespace {
+
+RowTypePtr getConcatOutputType(
+    const std::shared_ptr<const core::PlanNode>& planNode) {
+  VELOX_CHECK_EQ(
+      planNode->sources().size(),
+      1,
+      "CudfBatchConcat expects a single-source plan node");
+  return planNode->sources()[0]->outputType();
+}
+
+size_t maxConcatRows() {
+  const auto& config = CudfConfig::getInstance();
+  if (config.batchSizeMaxThreshold) {
+    VELOX_CHECK_GT(
+        config.batchSizeMaxThreshold.value(),
+        0,
+        "CudfBatchConcat max batch size must be positive");
+    return static_cast<size_t>(config.batchSizeMaxThreshold.value());
+  }
+  return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+}
+
+} // namespace
 
 CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
@@ -29,7 +56,7 @@ CudfBatchConcat::CudfBatchConcat(
     : CudfOperatorBase(
           operatorId,
           driverCtx,
-          planNode->outputType(),
+          getConcatOutputType(planNode),
           planNode->id(),
           "CudfBatchConcat",
           nvtx3::rgb{211, 211, 211}, /* LightGrey */
@@ -40,15 +67,77 @@ CudfBatchConcat::CudfBatchConcat(
       targetRows_(CudfConfig::getInstance().batchSizeMinThreshold) {}
 
 void CudfBatchConcat::doAddInput(RowVectorPtr input) {
+  if (input->size() == 0) {
+    return;
+  }
+
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfVector, "CudfBatchConcat expects CudfVector input");
 
   // Push input cudf table to buffer
-  currentNumRows_ += cudfVector->getTableView().num_rows();
+  currentNumRows_ += cudfVector->size();
   buffer_.push_back(std::move(cudfVector));
 }
 
 RowVectorPtr CudfBatchConcat::doGetOutput() {
+  if (outputType_->size() == 0) {
+    if (!zeroColumnOutputQueue_.empty()) {
+      const auto rowCount = zeroColumnOutputQueue_.front();
+      zeroColumnOutputQueue_.pop();
+      return std::make_shared<CudfVector>(
+          pool(),
+          outputType_,
+          rowCount,
+          makeEmptyTable(outputType_),
+          outputQueueStream_);
+    }
+
+    if (buffer_.empty() || (currentNumRows_ < targetRows_ && !noMoreInput_)) {
+      return nullptr;
+    }
+
+    outputQueueStream_ = buffer_[0]->stream();
+    auto remainingRows = currentNumRows_;
+    buffer_.clear();
+    currentNumRows_ = 0;
+    const auto maxRows = maxConcatRows();
+
+    while (remainingRows > 0) {
+      const auto chunkRows = std::min(remainingRows, maxRows);
+      remainingRows -= chunkRows;
+
+      VELOX_CHECK_LE(
+          chunkRows,
+          static_cast<size_t>(std::numeric_limits<vector_size_t>::max()),
+          "CudfBatchConcat zero-column output exceeds vector size limit");
+
+      if (!noMoreInput_ && remainingRows == 0 && chunkRows < targetRows_) {
+        currentNumRows_ = chunkRows;
+        buffer_.push_back(std::make_shared<CudfVector>(
+            pool(),
+            outputType_,
+            static_cast<vector_size_t>(chunkRows),
+            makeEmptyTable(outputType_),
+            outputQueueStream_));
+      } else {
+        zeroColumnOutputQueue_.push(static_cast<vector_size_t>(chunkRows));
+      }
+    }
+
+    if (!zeroColumnOutputQueue_.empty()) {
+      const auto rowCount = zeroColumnOutputQueue_.front();
+      zeroColumnOutputQueue_.pop();
+      return std::make_shared<CudfVector>(
+          pool(),
+          outputType_,
+          rowCount,
+          makeEmptyTable(outputType_),
+          outputQueueStream_);
+    }
+
+    return nullptr;
+  }
+
   // Drain the queue if there is any output to be flushed
   if (!outputQueue_.empty()) {
     auto table = std::move(outputQueue_.front());
@@ -81,13 +170,8 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
 
     if (!noMoreInput_ && rowCount < targetRows_) {
       currentNumRows_ = rowCount;
-      buffer_.push_back(
-          std::make_shared<CudfVector>(
-              pool(),
-              outputType_,
-              rowCount,
-              std::move(last),
-              outputQueueStream_));
+      buffer_.push_back(std::make_shared<CudfVector>(
+          pool(), outputType_, rowCount, std::move(last), outputQueueStream_));
     } else {
       outputQueue_.push(std::move(last));
     }
@@ -106,7 +190,8 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
 }
 
 bool CudfBatchConcat::isFinished() {
-  return noMoreInput_ && buffer_.empty() && outputQueue_.empty();
+  return noMoreInput_ && buffer_.empty() && outputQueue_.empty() &&
+      zeroColumnOutputQueue_.empty();
 }
 
 } // namespace facebook::velox::cudf_velox
