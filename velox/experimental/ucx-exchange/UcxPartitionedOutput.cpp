@@ -19,6 +19,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/concatenate.hpp>
@@ -52,8 +53,7 @@ static void getRemapping(
 UcxPartitionedOutput::UcxPartitionedOutput(
     int32_t operatorId,
     exec::DriverCtx* ctx,
-    const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
-    bool eagerFlush)
+    const std::shared_ptr<const core::PartitionedOutputNode>& planNode)
     : Operator(
           ctx,
           planNode->outputType(),
@@ -68,7 +68,9 @@ UcxPartitionedOutput::UcxPartitionedOutput(
       numPartitions_(planNode->numPartitions()),
       pipelineId_(ctx->pipelineId),
       driverId_(ctx->driverId),
-      targetRowsPerChunk_(ctx->queryConfig().ucxPartitionedOutputBatchRows()) {
+      targetRowsPerChunk_(ctx->queryConfig().get<int64_t>(
+          CudfConfig::kUcxPartitionedOutputBatchRows,
+          CudfConfig::getInstance().partitionedOutputBatchRows)) {
   this->initPartitionKeys(planNode);
   auto sources = planNode->sources();
   std::vector<std::string> inNames, outNames;
