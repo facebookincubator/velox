@@ -41,9 +41,6 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
-    if (toType->isTime()) {
-      return true;
-    }
   }
 
   return false;
