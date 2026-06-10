@@ -22,10 +22,20 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 namespace facebook::velox::cudf_velox::detail {
+
+template <typename T>
+inline constexpr bool isDecimalSumStorageType =
+    std::is_same_v<T, int64_t> || std::is_same_v<T, __int128_t>;
+
+template <typename T>
+inline constexpr bool isOffsetStorageType =
+    std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>;
 
 // Size in bytes of each row's packed decimal SUM intermediate state in the
 // strings payload (count, overflow placeholder, and 128-bit sum split into
@@ -35,78 +45,128 @@ constexpr size_t kDecimalSumStateSize = 32;
 /**
  * Writes strings-style prefix offsets: offset[i] == i * kDecimalSumStateSize.
  *
- * @param use64BitOffsets whether offsets are INT64 (else INT32).
- * @param offsetsMutable output buffer of numRows + 1 offset elements.
+ * @param offsetsView output offsets column of numRows + 1 elements.
  * @param numRows number of payload rows.
  * @param stream CUDA stream for the launch.
  */
-void fillOffsetsForDecimalSumState(
-    bool use64BitOffsets,
-    void* offsetsMutable,
-    cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+struct fillOffsetsForDecimalSumState {
+  template <
+      typename OffsetT,
+      std::enable_if_t<isOffsetStorageType<OffsetT>, int> = 0>
+  void operator()(
+      cudf::mutable_column_view offsetsView,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const;
+
+  template <
+      typename OffsetT,
+      std::enable_if_t<!isOffsetStorageType<OffsetT>, int> = 0>
+  void operator()(
+      cudf::mutable_column_view offsetsView,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const {}
+};
 
 /**
  * Encodes each row's partial sum and count into the fixed-width device layout
  * used for VARBINARY interchange.
  *
- * @param sumType element type of sumPtr (DECIMAL64 or DECIMAL128).
- * @param use64BitOffsets whether offsetsPtr is INT64 (else INT32).
- * @param sumPtr per-row sums.
- * @param countPtr per-row int64 counts.
- * @param offsetsPtr per-row byte offsets into chars.
+ * @param sumCol per-row sums.
+ * @param counts per-row int64 counts.
+ * @param offsetsView per-row byte offsets into chars.
  * @param chars output payload buffer.
  * @param numRows number of rows.
  * @param stream CUDA stream for the launch.
  */
-void packDecimalSumState(
-    cudf::type_id sumType,
-    bool use64BitOffsets,
-    const void* sumPtr,
-    const int64_t* countPtr,
-    const void* offsetsPtr,
-    uint8_t* chars,
-    cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+struct packDecimalSumState {
+  template <
+      typename SumT,
+      std::enable_if_t<isDecimalSumStorageType<SumT>, int> = 0>
+  void operator()(
+      cudf::column_view sumCol,
+      const int64_t* counts,
+      cudf::column_view offsetsView,
+      uint8_t* chars,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const;
+
+  template <
+      typename SumT,
+      std::enable_if_t<!isDecimalSumStorageType<SumT>, int> = 0>
+  void operator()(
+      cudf::column_view sumCol,
+      const int64_t* counts,
+      cudf::column_view offsetsView,
+      uint8_t* chars,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const {}
+};
 
 /**
  * Inverse of packDecimalSumState.
  *
- * @param offsets64 whether offsetsPtr is INT64 (else INT32).
- * @param offsetsPtr per-row byte offsets into chars.
+ * @param offsetsView per-row byte offsets into chars.
  * @param chars packed payload buffer.
- * @param sums output per-row DECIMAL128 sums.
- * @param counts output per-row counts.
+ * @param sumView output per-row DECIMAL128 sums.
+ * @param countView output per-row counts.
  * @param numRows number of rows.
  * @param stream CUDA stream for the launch.
  */
-void unpackDecimalSumState(
-    bool offsets64,
-    const void* offsetsPtr,
-    const uint8_t* chars,
-    __int128_t* sums,
-    int64_t* counts,
-    cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+struct unpackDecimalSumState {
+  template <
+      typename OffsetT,
+      std::enable_if_t<isOffsetStorageType<OffsetT>, int> = 0>
+  void operator()(
+      cudf::column_view offsetsView,
+      const uint8_t* chars,
+      cudf::mutable_column_view sumView,
+      cudf::mutable_column_view countView,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const;
+
+  template <
+      typename OffsetT,
+      std::enable_if_t<!isOffsetStorageType<OffsetT>, int> = 0>
+  void operator()(
+      cudf::column_view offsetsView,
+      const uint8_t* chars,
+      cudf::mutable_column_view sumView,
+      cudf::mutable_column_view countView,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const {}
+};
 
 /**
  * Per-row half-up integer divide of sum by count; count == 0 writes zero
  * (validity is applied separately).
  *
- * @param sumType element type of sums/out (DECIMAL64 or DECIMAL128).
- * @param sums per-row sums.
+ * @param sumCol per-row sums.
  * @param counts per-row counts.
- * @param out output per-row averages.
+ * @param outView output per-row averages.
  * @param numRows number of rows.
  * @param stream CUDA stream for the launch.
  */
-void averageRoundDecimalSum(
-    cudf::type_id sumType,
-    const void* sums,
-    const int64_t* counts,
-    void* out,
-    cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+struct averageRoundDecimalSum {
+  template <
+      typename SumT,
+      std::enable_if_t<isDecimalSumStorageType<SumT>, int> = 0>
+  void operator()(
+      cudf::column_view sumCol,
+      const int64_t* counts,
+      cudf::mutable_column_view outView,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const;
+
+  template <
+      typename SumT,
+      std::enable_if_t<!isDecimalSumStorageType<SumT>, int> = 0>
+  void operator()(
+      cudf::column_view sumCol,
+      const int64_t* counts,
+      cudf::mutable_column_view outView,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream) const {}
+};
 
 /**
  * Builds a null mask for rows where sum and count are both valid and count is
