@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -228,6 +229,27 @@ bool applyPartitionFilter(
   }
 }
 
+// BytesValues does not override testNonNull(); dispatch by type directly.
+template <TypeKind KIND>
+bool applyFilterForKind(
+    const DecodedVector& decoded,
+    const common::Filter& filter) {
+  return common::applyFilter(
+      filter, decoded.valueAt<typename TypeTraits<KIND>::NativeType>(0));
+}
+
+bool testFilterOnConstant(
+    const VectorPtr& constant,
+    const common::Filter& filter) {
+  VELOX_DCHECK_NOT_NULL(constant);
+  if (constant->isNullAt(0)) {
+    return filter.testNull();
+  }
+  DecodedVector decoded(*constant);
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      applyFilterForKind, constant->typeKind(), decoded, filter);
+}
+
 } // namespace
 
 bool testFilters(
@@ -261,6 +283,18 @@ bool testFilters(
               handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
               child->filter(),
               asLocalTime);
+        }
+        // Column has a default constant; test the filter against it rather than
+        // assuming null.
+        if (child->isConstant()) {
+          if (child->filter()->isDeterministic() &&
+              !testFilterOnConstant(child->constantValue(), *child->filter())) {
+            VLOG(1) << "Skipping " << filePath
+                    << " because constant value failed filter for column "
+                    << child->fieldName();
+            return false;
+          }
+          continue;
         }
         // Column is missing, most likely due to schema evolution. Or it's a
         // partition key but the partition value is NULL.

@@ -1402,6 +1402,86 @@ TEST_F(HiveIcebergTest, defaultValueWithDeletesAndFilters) {
   }
 }
 
+// Test that default column values are applied correctly when the column is used
+// only as a filter (not projected in the output). This is the "count query"
+// scenario: COUNT(*) WHERE default_col = X should find all rows in old files
+// because the default value satisfies the filter, rather than treating the
+// missing column as NULL and returning zero rows.
+TEST_F(HiveIcebergTest, defaultValueFilterOnlyColumn) {
+  // Old data file has only c0 — 'country' was added later with default 'IN'.
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  auto tableSchema = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+  auto outputType = ROW({"c0"}, {BIGINT()});
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+
+  // Declared as HiveColumnHandlePtr so it fits filterColumnHandles() directly;
+  // the underlying object is an IcebergColumnHandle for the dynamic_cast in
+  // IcebergSplitReader::adaptColumns to succeed.
+  HiveColumnHandlePtr countryHandle =
+      makeIcebergHandle("country", VARCHAR(), 2, "IN");
+
+  std::vector<RowVectorPtr> allRows;
+  allRows.push_back(
+      makeRowVector(outputType->names(), {makeFlatVector<int64_t>({1, 2, 3})}));
+
+  // country IS NOT NULL: default 'IN' is non-null → all 3 rows pass.
+  {
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(tableSchema)
+                    .assignments(assignments)
+                    .filterColumnHandles({countryHandle})
+                    .remainingFilter("country IS NOT NULL")
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(makeIcebergSplits(dataFilePath->getPath()))
+        .assertResults(allRows);
+  }
+
+  // country = 'IN': default matches → all 3 rows pass.
+  {
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(tableSchema)
+                    .assignments(assignments)
+                    .filterColumnHandles({countryHandle})
+                    .remainingFilter("country = 'IN'")
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(makeIcebergSplits(dataFilePath->getPath()))
+        .assertResults(allRows);
+  }
+
+  // country = 'US': default 'IN' does not match → no rows pass.
+  {
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(tableSchema)
+                    .assignments(assignments)
+                    .filterColumnHandles({countryHandle})
+                    .remainingFilter("country = 'US'")
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(makeIcebergSplits(dataFilePath->getPath()))
+        .assertEmptyResults();
+  }
+}
+
 // Test reading partition columns from Hive-migrated tables.
 // This tests the adaptColumns method handling partition columns that are not
 // stored in the data file but provided via partitionKeys map.

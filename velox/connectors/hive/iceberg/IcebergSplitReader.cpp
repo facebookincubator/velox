@@ -896,42 +896,61 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                    partitionIt != fileSplit_->partitionKeys.end()) {
           setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
         } else {
-          // Check if column has an initial-default value (Iceberg V3)
-          bool hasDefaultValue = false;
+          // Check if column has an initial-default value (Iceberg V3).
+          //
+          // For queries that do not project this column (e.g. COUNT(*) with
+          // WHERE default_col = X), the column won't appear in columnHandles_
+          // (which only covers projected output columns). In that case, fall
+          // back to tableHandle_->filterColumnHandles(), which holds predicate
+          // columns including their IcebergColumnHandle default values.
+          //
           // The columnHandles_ map is keyed by output name (which may be an
           // alias). We need to find the column handle where the handle's name()
           // matches fieldName. fieldName is the table column name from
           // readerOutputType_.
+
+          auto tryApplyDefault = [&](const auto& columnHandle) -> bool {
+            auto icebergHandle =
+                std::dynamic_pointer_cast<const IcebergColumnHandle>(
+                    columnHandle);
+            if (!icebergHandle ||
+                !icebergHandle->initialDefaultValue().has_value()) {
+              return false;
+            }
+            auto columnType = tableSchema->findChild(fieldName);
+            VELOX_CHECK_NOT_NULL(
+                columnType, "Column not found in table schema: {}", fieldName);
+            childSpec->setConstantValue(newConstantFromString(
+                columnType,
+                icebergHandle->initialDefaultValue().value(),
+                connectorQueryCtx_->memoryPool(),
+                readTimestampAsLocalTime,
+                false));
+            return true;
+          };
+
+          bool hasDefaultValue = false;
           for (const auto& [outputName, handle] : *columnHandles_) {
-            if (handle->name() == fieldName) {
-              auto icebergColumnHandle =
-                  std::dynamic_pointer_cast<const IcebergColumnHandle>(handle);
-              if (icebergColumnHandle &&
-                  icebergColumnHandle->initialDefaultValue().has_value()) {
-                // Use initial-default value for schema evolution.
-                auto columnType = tableSchema->findChild(fieldName);
-                VELOX_CHECK_NOT_NULL(
-                    columnType,
-                    "Column '{}' not found in table schema",
-                    fieldName);
-                auto constant = newConstantFromString(
-                    columnType,
-                    icebergColumnHandle->initialDefaultValue().value(),
-                    connectorQueryCtx_->memoryPool(),
-                    readTimestampAsLocalTime,
-                    false);
-                childSpec->setConstantValue(constant);
+            if (handle->name() == fieldName && tryApplyDefault(handle)) {
+              hasDefaultValue = true;
+              break;
+            }
+          }
+          if (!hasDefaultValue) {
+            for (const auto& filterHandle :
+                 tableHandle_->filterColumnHandles()) {
+              if (filterHandle->name() == fieldName &&
+                  tryApplyDefault(filterHandle)) {
                 hasDefaultValue = true;
                 break;
               }
             }
           }
 
-          // Fall back to NULL if no default value
           if (!hasDefaultValue) {
             auto columnType = tableSchema->findChild(fieldName);
             VELOX_CHECK_NOT_NULL(
-                columnType, "Column '{}' not found in table schema", fieldName);
+                columnType, "Column not found in table schema: {}", fieldName);
             childSpec->setConstantValue(
                 BaseVector::createNullConstant(
                     columnType, 1, connectorQueryCtx_->memoryPool()));
