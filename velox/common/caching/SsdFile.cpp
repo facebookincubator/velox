@@ -409,6 +409,8 @@ void SsdFile::write(std::vector<CachePin>& pins) {
     SCOPE_EXIT {
       unpinRegion(regionStartOffset);
     };
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cache::SsdFile::write", this);
     int32_t numWrittenEntries = 0;
     uint64_t writeOffset = offset;
     int32_t writeLength = 0;
