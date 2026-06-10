@@ -578,6 +578,661 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
   }
 }
 
+TEST_F(IndexLookupJoinTest, pairedBetweenJoinCondition) {
+  TestIndexTableHandle::registerSerDe();
+  auto indexConnectorHandle = makeIndexTableHandle(nullptr, true);
+
+  // Probe input shaped to cover all paired BETWEEN scenarios:
+  //   sid           BIGINT             - left key
+  //   event_types   ARRAY<INTEGER>     - IN list + BETWEEN pairedColumn
+  //   regions       ARRAY<VARCHAR>     - second IN list + second pairedColumn
+  //   lower_ts      ARRAY<BIGINT>      - BETWEEN lower bound array
+  //   upper_ts      ARRAY<BIGINT>      - BETWEEN upper bound array
+  //   lower_users   ARRAY<INTEGER>     - second BETWEEN lower bound array
+  //   upper_users   ARRAY<INTEGER>     - second BETWEEN upper bound array
+  auto left = makeRowVector(
+      {"sid",
+       "event_types",
+       "regions",
+       "lower_ts",
+       "upper_ts",
+       "lower_users",
+       "upper_users"},
+      {makeFlatVector<int64_t>({1}),
+       makeArrayVector<int32_t>(
+           1, [](auto) { return 1; }, [](auto, auto idx) { return idx; }),
+       makeArrayVector<StringView>(
+           1,
+           [](auto) { return 1; },
+           [](auto, auto /*idx*/) { return StringView("us"); }),
+       makeArrayVector<int64_t>(
+           1, [](auto) { return 1; }, [](auto, auto idx) { return idx; }),
+       makeArrayVector<int64_t>(
+           1, [](auto) { return 1; }, [](auto, auto idx) { return idx + 100; }),
+       makeArrayVector<int32_t>(
+           1, [](auto) { return 1; }, [](auto, auto idx) { return idx; }),
+       makeArrayVector<int32_t>(
+           1,
+           [](auto) { return 1; },
+           [](auto, auto idx) { return idx + 100; })});
+
+  auto right = makeRowVector(
+      {"u_sid", "event_type", "region", "ts", "ts2", "user_count"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<int32_t>({1}),
+       makeFlatVector<StringView>({StringView("us")}),
+       makeFlatVector<int64_t>({100}),
+       makeFlatVector<int64_t>({200}),
+       makeFlatVector<int32_t>({50})});
+
+  auto planBuilder = PlanBuilder();
+  auto indexTableScan = std::dynamic_pointer_cast<const core::TableScanNode>(
+      PlanBuilder::TableScanBuilder(planBuilder)
+          .tableHandle(indexConnectorHandle)
+          .outputType(asRowType(right->type()))
+          .endTableScan()
+          .planNode());
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto probeNode = PlanBuilder(planNodeIdGenerator).values({left}).planNode();
+
+  auto eventTypesField = std::make_shared<core::FieldAccessTypedExpr>(
+      ARRAY(INTEGER()), "event_types");
+  auto lowerTsField =
+      std::make_shared<core::FieldAccessTypedExpr>(ARRAY(BIGINT()), "lower_ts");
+  auto upperTsField =
+      std::make_shared<core::FieldAccessTypedExpr>(ARRAY(BIGINT()), "upper_ts");
+
+  auto inCondition = std::make_shared<core::InIndexLookupCondition>(
+      std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "event_type"),
+      eventTypesField);
+
+  auto buildPlan = [&](std::vector<core::IndexLookupConditionPtr> conditions) {
+    return std::make_shared<core::IndexLookupJoinNode>(
+        planNodeIdGenerator->next(),
+        core::JoinType::kInner,
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid")},
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u_sid")},
+        std::move(conditions),
+        /*filter=*/nullptr,
+        /*hasMarker=*/false,
+        probeNode,
+        indexTableScan,
+        ROW({"sid", "ts"}, {BIGINT(), BIGINT()}));
+  };
+
+  // Happy path: paired BETWEEN with a matching IN sibling. Serde round-trips
+  // the pairedColumn field.
+  {
+    auto pairedBetween = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+        lowerTsField,
+        upperTsField,
+        eventTypesField);
+    auto plan = buildPlan({inCondition, pairedBetween});
+    ASSERT_EQ(plan->joinConditions().size(), 2);
+    const auto between =
+        std::dynamic_pointer_cast<const core::BetweenIndexLookupCondition>(
+            plan->joinConditions()[1]);
+    ASSERT_NE(between->pairedColumn, nullptr);
+    ASSERT_EQ(between->pairedColumn->name(), "event_types");
+    testSerde(plan);
+  }
+
+  // Reject: paired BETWEEN with a scalar (non-ARRAY) lower bound. The
+  // BetweenIndexLookupCondition constructor's validate() catches it.
+  {
+    auto scalarLower =
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid");
+    VELOX_ASSERT_THROW(
+        std::make_shared<core::BetweenIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+            scalarLower,
+            upperTsField,
+            eventTypesField),
+        "Paired between lower bound must be of type ARRAY");
+  }
+
+  // Reject: paired BETWEEN with a constant ARRAY lower bound. Constant bounds
+  // are disallowed because they would force the per-row size check to
+  // special-case "constant array size vs varying IN-list size"; requiring
+  // FieldAccess keeps the invariant uniform across rows.
+  {
+    auto constantLower = std::make_shared<core::ConstantTypedExpr>(
+        ARRAY(BIGINT()),
+        velox::Variant::array({
+            velox::Variant(int64_t(10)),
+            velox::Variant(int64_t(20)),
+        }));
+    VELOX_ASSERT_THROW(
+        std::make_shared<core::BetweenIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+            constantLower,
+            upperTsField,
+            eventTypesField),
+        "Paired between lower bound must be a column reference");
+  }
+
+  // Reject: paired BETWEEN with a constant ARRAY upper bound. Mirror of the
+  // case above — confirms both bounds are checked.
+  {
+    auto constantUpper = std::make_shared<core::ConstantTypedExpr>(
+        ARRAY(BIGINT()),
+        velox::Variant::array({
+            velox::Variant(int64_t(100)),
+            velox::Variant(int64_t(200)),
+        }));
+    VELOX_ASSERT_THROW(
+        std::make_shared<core::BetweenIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+            lowerTsField,
+            constantUpper,
+            eventTypesField),
+        "Paired between upper bound must be a column reference");
+  }
+
+  // Reject: paired BETWEEN without a matching IN sibling. The
+  // IndexLookupJoinNode constructor's cross-condition check catches it.
+  {
+    auto pairedBetween = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+        lowerTsField,
+        upperTsField,
+        eventTypesField);
+    VELOX_ASSERT_THROW(
+        buildPlan({pairedBetween}),
+        "must also appear as the list of a sibling IN condition");
+  }
+
+  // Happy path: two paired BETWEENs paired with different IN columns. Each
+  // BETWEEN's pairedColumn names its own partner, so the validation handles
+  // them independently.
+  {
+    auto regionsField = std::make_shared<core::FieldAccessTypedExpr>(
+        ARRAY(VARCHAR()), "regions");
+    auto lowerUsersField = std::make_shared<core::FieldAccessTypedExpr>(
+        ARRAY(INTEGER()), "lower_users");
+    auto upperUsersField = std::make_shared<core::FieldAccessTypedExpr>(
+        ARRAY(INTEGER()), "upper_users");
+    auto inRegions = std::make_shared<core::InIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "region"),
+        regionsField);
+    auto betweenTs = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+        lowerTsField,
+        upperTsField,
+        eventTypesField);
+    auto betweenUsers = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "user_count"),
+        lowerUsersField,
+        upperUsersField,
+        regionsField);
+    auto plan = buildPlan({inCondition, inRegions, betweenTs, betweenUsers});
+    ASSERT_EQ(plan->joinConditions().size(), 4);
+    testSerde(plan);
+  }
+
+  // Happy path: two paired BETWEENs sharing the same paired column. One IN
+  // condition is enough to satisfy both.
+  {
+    auto betweenTs = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+        lowerTsField,
+        upperTsField,
+        eventTypesField);
+    auto betweenTs2 = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts2"),
+        lowerTsField,
+        upperTsField,
+        eventTypesField);
+    auto plan = buildPlan({inCondition, betweenTs, betweenTs2});
+    ASSERT_EQ(plan->joinConditions().size(), 3);
+    testSerde(plan);
+  }
+
+  // Happy path: a paired BETWEEN and an unpaired BETWEEN in the same join.
+  // The unpaired BETWEEN's bounds are scalars; it does not need any IN
+  // sibling. The cross-condition check should only fire for the paired one.
+  {
+    auto pairedBetween = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+        lowerTsField,
+        upperTsField,
+        eventTypesField);
+    auto unpairedBetween = std::make_shared<core::BetweenIndexLookupCondition>(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts2"),
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid"),
+        std::make_shared<core::ConstantTypedExpr>(
+            BIGINT(), velox::Variant(int64_t(1000))));
+    auto plan = buildPlan({inCondition, pairedBetween, unpairedBetween});
+    ASSERT_EQ(plan->joinConditions().size(), 3);
+    testSerde(plan);
+  }
+}
+
+// Exercises the operator's runtime path for paired BETWEEN:
+// IndexLookupJoin::addBetweenConditionBound is called with isPaired=true,
+// which validates that each bound's probe-input column has type
+// ARRAY(indexKeyType). Plan-construction tests above don't reach this code
+// path because they stop at validate()/serde without running the operator.
+TEST_F(IndexLookupJoinTest, pairedBetweenOperatorRuntime) {
+  TestIndexTableHandle::registerSerDe();
+
+  // TestIndexTable requires every column referenced by a join condition's key
+  // to live in keyData (beyond the numEqualJoinKeys prefix). `event_type` (IN
+  // key) and `ts` (BETWEEN key) go in keyData; valueData carries a placeholder
+  // because valueType must have at least one column.
+  auto keyData = makeRowVector(
+      {"u_sid", "event_type", "ts"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<int32_t>({1}),
+       makeFlatVector<int64_t>({150})});
+  auto valueData = makeRowVector({"_unused"}, {makeFlatVector<int64_t>({0})});
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1, keyData, valueData, *pool());
+  const auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*asyncLookup=*/true);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto scanOutputType =
+      ROW({"u_sid", "event_type", "ts"}, {BIGINT(), INTEGER(), BIGINT()});
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      scanOutputType,
+      makeIndexColumnHandles({"u_sid", "event_type", "ts"}));
+
+  auto probeInput = makeRowVector(
+      {"sid", "event_types", "lower_ts", "upper_ts"},
+      {makeFlatVector<int64_t>({1}),
+       makeArrayVector<int32_t>(
+           1, [](auto) { return 1; }, [](auto, auto) { return 1; }),
+       makeArrayVector<int64_t>(
+           1, [](auto) { return 1; }, [](auto, auto) { return 100; }),
+       makeArrayVector<int64_t>(
+           1, [](auto) { return 1; }, [](auto, auto) { return 200; })});
+  auto probeNode =
+      PlanBuilder(planNodeIdGenerator).values({probeInput}).planNode();
+
+  auto eventTypesField = std::make_shared<core::FieldAccessTypedExpr>(
+      ARRAY(INTEGER()), "event_types");
+  std::vector<core::IndexLookupConditionPtr> conditions = {
+      std::make_shared<core::InIndexLookupCondition>(
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "event_type"),
+          eventTypesField),
+      std::make_shared<core::BetweenIndexLookupCondition>(
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(BIGINT()), "lower_ts"),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(BIGINT()), "upper_ts"),
+          eventTypesField),
+  };
+
+  auto plan = std::make_shared<core::IndexLookupJoinNode>(
+      planNodeIdGenerator->next(),
+      core::JoinType::kInner,
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid")},
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u_sid")},
+      std::move(conditions),
+      /*filter=*/nullptr,
+      /*hasMarker=*/false,
+      probeNode,
+      indexScanNode,
+      ROW({"sid", "ts"}, {BIGINT(), BIGINT()}));
+
+  // Running the plan drives the operator's initLookupInput, which calls
+  // addBetweenConditionBound for both `lower_ts` and `upper_ts` with
+  // isPaired=true. The test passes if the operator's type check accepts
+  // ARRAY(BIGINT) for both bounds against the BIGINT index key `ts`.
+  ASSERT_NO_THROW(
+      exec::test::AssertQueryBuilder(plan).copyResults(pool_.get()));
+}
+
+// Null in any of the IN list / lower / upper probe columns: the row is
+// deselected upstream by decodeAndDetectNonNullKeys (every paired-BETWEEN
+// probe column is in lookupKeyOrConditionHashers_), so
+// validatePairedBetweenSizes never sees it. Each sub-case nulls a different
+// column to prove the upstream filter covers all three; if a future refactor
+// drops one from the hasher set this test flips red.
+TEST_F(IndexLookupJoinTest, pairedBetweenNullRowSkipped) {
+  TestIndexTableHandle::registerSerDe();
+
+  auto keyData = makeRowVector(
+      {"u_sid", "event_type", "ts"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<int32_t>({1, 1}),
+       makeFlatVector<int64_t>({150, 150})});
+  auto valueData =
+      makeRowVector({"_unused"}, {makeFlatVector<int64_t>({0, 0})});
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1, keyData, valueData, *pool());
+  const auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*asyncLookup=*/true);
+
+  // For each null-column choice, row 0 is valid (sizes 1/1/1) and row 1 has
+  // a null in the named column with bound sizes that would mismatch if the
+  // size check ever ran on row 1. The runtime should not throw.
+  enum class NullColumn { kIn, kLower, kUpper };
+  auto runWithNullColumn = [&](NullColumn nullColumn) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        ROW({"u_sid", "event_type", "ts"}, {BIGINT(), INTEGER(), BIGINT()}),
+        makeIndexColumnHandles({"u_sid", "event_type", "ts"}));
+
+    // Row 1's non-null arrays are size 2; the would-be IN-list size for that
+    // row (if it weren't null) is 1. Asymmetric sizes ensure any branch that
+    // reads row 1 hits a mismatch. Use makeArrayVector in the non-null branch
+    // to avoid an overload-resolution ambiguity with makeNullableArrayVector
+    // when no std::nullopt is present.
+    auto eventTypes = nullColumn == NullColumn::kIn
+        ? makeNullableArrayVector<int32_t>({{{1}}, std::nullopt})
+        : makeArrayVector<int32_t>({{1}, {1}});
+    auto lowerTs = nullColumn == NullColumn::kLower
+        ? makeNullableArrayVector<int64_t>({{{100}}, std::nullopt})
+        : makeArrayVector<int64_t>({{100}, {100, 110}});
+    auto upperTs = nullColumn == NullColumn::kUpper
+        ? makeNullableArrayVector<int64_t>({{{200}}, std::nullopt})
+        : makeArrayVector<int64_t>({{200}, {200, 210}});
+
+    auto probeInput = makeRowVector(
+        {"sid", "event_types", "lower_ts", "upper_ts"},
+        {makeFlatVector<int64_t>({1, 2}), eventTypes, lowerTs, upperTs});
+    auto probeNode =
+        PlanBuilder(planNodeIdGenerator).values({probeInput}).planNode();
+
+    auto eventTypesField = std::make_shared<core::FieldAccessTypedExpr>(
+        ARRAY(INTEGER()), "event_types");
+    std::vector<core::IndexLookupConditionPtr> conditions = {
+        std::make_shared<core::InIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(
+                INTEGER(), "event_type"),
+            eventTypesField),
+        std::make_shared<core::BetweenIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+            std::make_shared<core::FieldAccessTypedExpr>(
+                ARRAY(BIGINT()), "lower_ts"),
+            std::make_shared<core::FieldAccessTypedExpr>(
+                ARRAY(BIGINT()), "upper_ts"),
+            eventTypesField),
+    };
+
+    auto plan = std::make_shared<core::IndexLookupJoinNode>(
+        planNodeIdGenerator->next(),
+        core::JoinType::kInner,
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid")},
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u_sid")},
+        std::move(conditions),
+        /*filter=*/nullptr,
+        /*hasMarker=*/false,
+        probeNode,
+        indexScanNode,
+        ROW({"sid", "ts"}, {BIGINT(), BIGINT()}));
+
+    ASSERT_NO_THROW(
+        exec::test::AssertQueryBuilder(plan).copyResults(pool_.get()));
+  };
+
+  runWithNullColumn(NullColumn::kIn);
+  runWithNullColumn(NullColumn::kLower);
+  runWithNullColumn(NullColumn::kUpper);
+}
+
+// Null rows must not mask a real size mismatch elsewhere in the same batch.
+// Row 0 is valid, row 1 has a null IN list (gets filtered upstream), and
+// row 2 has non-null arrays whose sizes disagree. The operator must still
+// throw and must name row 2 in the error so the offending row is identifiable.
+// Guards against a future refactor that accidentally short-circuits the whole
+// check when any row in the batch is null.
+TEST_F(IndexLookupJoinTest, pairedBetweenNullDoesNotMaskMismatch) {
+  TestIndexTableHandle::registerSerDe();
+
+  auto keyData = makeRowVector(
+      {"u_sid", "event_type", "ts"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({1, 1, 1}),
+       makeFlatVector<int64_t>({150, 150, 150})});
+  auto valueData =
+      makeRowVector({"_unused"}, {makeFlatVector<int64_t>({0, 0, 0})});
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1, keyData, valueData, *pool());
+  const auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*asyncLookup=*/true);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      ROW({"u_sid", "event_type", "ts"}, {BIGINT(), INTEGER(), BIGINT()}),
+      makeIndexColumnHandles({"u_sid", "event_type", "ts"}));
+
+  // Row 0: valid (sizes 1/1/1).
+  // Row 1: event_types null — upstream filter drops this row.
+  // Row 2: event_types size 2, lower/upper size 1 — must trigger the throw.
+  auto probeInput = makeRowVector(
+      {"sid", "event_types", "lower_ts", "upper_ts"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeNullableArrayVector<int32_t>({{{1}}, std::nullopt, {{1, 2}}}),
+       makeArrayVector<int64_t>({{100}, {100}, {100}}),
+       makeArrayVector<int64_t>({{200}, {200}, {200}})});
+  auto probeNode =
+      PlanBuilder(planNodeIdGenerator).values({probeInput}).planNode();
+
+  auto eventTypesField = std::make_shared<core::FieldAccessTypedExpr>(
+      ARRAY(INTEGER()), "event_types");
+  std::vector<core::IndexLookupConditionPtr> conditions = {
+      std::make_shared<core::InIndexLookupCondition>(
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "event_type"),
+          eventTypesField),
+      std::make_shared<core::BetweenIndexLookupCondition>(
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(BIGINT()), "lower_ts"),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(BIGINT()), "upper_ts"),
+          eventTypesField),
+  };
+
+  auto plan = std::make_shared<core::IndexLookupJoinNode>(
+      planNodeIdGenerator->next(),
+      core::JoinType::kInner,
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid")},
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u_sid")},
+      std::move(conditions),
+      /*filter=*/nullptr,
+      /*hasMarker=*/false,
+      probeNode,
+      indexScanNode,
+      ROW({"sid", "ts"}, {BIGINT(), BIGINT()}));
+
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(plan).copyResults(pool_.get()),
+      "row 2: IN list size 2 vs lower bound size 1");
+}
+
+// Per-row size invariant: the IN list and BETWEEN bound arrays must agree in
+// length on every row, because the connector pairs the i-th IN-list element
+// with the i-th lower/upper bound. The operator catches a mismatch in
+// prepareLookup before dispatching to the connector. Each sub-case targets a
+// different shape of mismatch (IN vs lower, IN vs upper, multi-row,
+// empty-array) to make sure no direction or batch position slips through.
+TEST_F(IndexLookupJoinTest, pairedBetweenSizeMismatchRejected) {
+  TestIndexTableHandle::registerSerDe();
+
+  auto keyData = makeRowVector(
+      {"u_sid", "event_type", "ts"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<int32_t>({1, 1}),
+       makeFlatVector<int64_t>({150, 150})});
+  auto valueData =
+      makeRowVector({"_unused"}, {makeFlatVector<int64_t>({0, 0})});
+  const auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1, keyData, valueData, *pool());
+  const auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*asyncLookup=*/true);
+
+  // Builds a one-row probe + plan for a given (inSize, lowerSize, upperSize)
+  // triple. Returns the plan; caller asserts the expected throw.
+  auto buildOneRowPlan = [&](vector_size_t inSize,
+                             vector_size_t lowerSize,
+                             vector_size_t upperSize) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        ROW({"u_sid", "event_type", "ts"}, {BIGINT(), INTEGER(), BIGINT()}),
+        makeIndexColumnHandles({"u_sid", "event_type", "ts"}));
+    auto probeInput = makeRowVector(
+        {"sid", "event_types", "lower_ts", "upper_ts"},
+        {makeFlatVector<int64_t>({1}),
+         makeArrayVector<int32_t>(
+             1,
+             [inSize](auto) { return inSize; },
+             [](auto, auto idx) { return idx + 1; }),
+         makeArrayVector<int64_t>(
+             1,
+             [lowerSize](auto) { return lowerSize; },
+             [](auto, auto) { return 100; }),
+         makeArrayVector<int64_t>(
+             1,
+             [upperSize](auto) { return upperSize; },
+             [](auto, auto) { return 200; })});
+    auto probeNode =
+        PlanBuilder(planNodeIdGenerator).values({probeInput}).planNode();
+    auto eventTypesField = std::make_shared<core::FieldAccessTypedExpr>(
+        ARRAY(INTEGER()), "event_types");
+    std::vector<core::IndexLookupConditionPtr> conditions = {
+        std::make_shared<core::InIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(
+                INTEGER(), "event_type"),
+            eventTypesField),
+        std::make_shared<core::BetweenIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+            std::make_shared<core::FieldAccessTypedExpr>(
+                ARRAY(BIGINT()), "lower_ts"),
+            std::make_shared<core::FieldAccessTypedExpr>(
+                ARRAY(BIGINT()), "upper_ts"),
+            eventTypesField),
+    };
+    return std::make_shared<core::IndexLookupJoinNode>(
+        planNodeIdGenerator->next(),
+        core::JoinType::kInner,
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid")},
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u_sid")},
+        std::move(conditions),
+        /*filter=*/nullptr,
+        /*hasMarker=*/false,
+        probeNode,
+        indexScanNode,
+        ROW({"sid", "ts"}, {BIGINT(), BIGINT()}));
+  };
+
+  // 1. IN list larger than lower bound (IN=2, lower=1, upper=1). Lower is
+  //    checked first, so the error reports the lower-bound size mismatch.
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(buildOneRowPlan(2, 1, 1))
+          .copyResults(pool_.get()),
+      "IN list size 2 vs lower bound size 1");
+
+  // 2. IN list smaller than lower bound (IN=1, lower=2, upper=1). Same lower
+  //    check fires, but with the inequality reversed.
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(buildOneRowPlan(1, 2, 1))
+          .copyResults(pool_.get()),
+      "IN list size 1 vs lower bound size 2");
+
+  // 3. Upper bound mismatches IN, lower matches (IN=1, lower=1, upper=2).
+  //    Lower passes, so the failure must come from the upper-bound check.
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(buildOneRowPlan(1, 1, 2))
+          .copyResults(pool_.get()),
+      "IN list size 1 vs upper bound size 2");
+
+  // 4. IN agrees with lower but not upper (IN=2, lower=2, upper=3). Confirms
+  //    we don't only catch when the inequality bracket is "lower != IN".
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(buildOneRowPlan(2, 2, 3))
+          .copyResults(pool_.get()),
+      "IN list size 2 vs upper bound size 3");
+
+  // 5. Empty IN list with a non-empty bound (IN=0, lower=1, upper=1).
+  //    Catches the boundary case where the IN list has no elements.
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(buildOneRowPlan(0, 1, 1))
+          .copyResults(pool_.get()),
+      "IN list size 0 vs lower bound size 1");
+
+  // 6. Mismatch on the second row of a multi-row batch (row 0 OK, row 1 bad).
+  //    Confirms the check iterates all rows, not just the first, and the
+  //    error message names the offending row index.
+  {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto indexScanNode = makeIndexScanNode(
+        planNodeIdGenerator,
+        indexTableHandle,
+        ROW({"u_sid", "event_type", "ts"}, {BIGINT(), INTEGER(), BIGINT()}),
+        makeIndexColumnHandles({"u_sid", "event_type", "ts"}));
+    auto probeInput = makeRowVector(
+        {"sid", "event_types", "lower_ts", "upper_ts"},
+        {makeFlatVector<int64_t>({1, 2}),
+         // Row 0: IN size 1; row 1: IN size 2.
+         makeArrayVector<int32_t>(
+             2,
+             [](auto row) { return row == 0 ? 1 : 2; },
+             [](auto, auto idx) { return idx + 1; }),
+         // Both rows have lower/upper size 1 — row 1 is the mismatch.
+         makeArrayVector<int64_t>(
+             2, [](auto) { return 1; }, [](auto, auto) { return 100; }),
+         makeArrayVector<int64_t>(
+             2, [](auto) { return 1; }, [](auto, auto) { return 200; })});
+    auto probeNode =
+        PlanBuilder(planNodeIdGenerator).values({probeInput}).planNode();
+    auto eventTypesField = std::make_shared<core::FieldAccessTypedExpr>(
+        ARRAY(INTEGER()), "event_types");
+    std::vector<core::IndexLookupConditionPtr> conditions = {
+        std::make_shared<core::InIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(
+                INTEGER(), "event_type"),
+            eventTypesField),
+        std::make_shared<core::BetweenIndexLookupCondition>(
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "ts"),
+            std::make_shared<core::FieldAccessTypedExpr>(
+                ARRAY(BIGINT()), "lower_ts"),
+            std::make_shared<core::FieldAccessTypedExpr>(
+                ARRAY(BIGINT()), "upper_ts"),
+            eventTypesField),
+    };
+    auto plan = std::make_shared<core::IndexLookupJoinNode>(
+        planNodeIdGenerator->next(),
+        core::JoinType::kInner,
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "sid")},
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "u_sid")},
+        std::move(conditions),
+        /*filter=*/nullptr,
+        /*hasMarker=*/false,
+        probeNode,
+        indexScanNode,
+        ROW({"sid", "ts"}, {BIGINT(), BIGINT()}));
+    VELOX_ASSERT_THROW(
+        exec::test::AssertQueryBuilder(plan).copyResults(pool_.get()),
+        "row 1: IN list size 2 vs lower bound size 1");
+  }
+}
+
 TEST_P(IndexLookupJoinTest, DISABLED_equalJoin) {
   struct {
     std::vector<int> keyCardinalities;

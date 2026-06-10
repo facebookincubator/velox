@@ -206,6 +206,12 @@ class IndexLookupJoin : public Operator {
   void ensureInputLoaded(const InputBatchState& batch);
   // Prepare index source lookup for a given 'input_'.
   void prepareLookup(InputBatchState& batch);
+  // For each paired BETWEEN whose IN list and bounds are FieldAccess, verify
+  // that every selected row's IN-list, lower-bound, and upper-bound arrays
+  // have the same length. The connector relies on this invariant to pair the
+  // i-th IN-list element with the i-th bound; a mismatch makes the pairing
+  // ill-defined.
+  void validatePairedBetweenSizes(const InputBatchState& batch) const;
   void startLookup(InputBatchState& batch);
 
   // Helper function to merge batch.partialOutputs into a single

@@ -3590,7 +3590,10 @@ struct InIndexLookupCondition : public IndexLookupCondition {
 using InIndexLookupConditionPtr = std::shared_ptr<InIndexLookupCondition>;
 
 /// Represents BETWEEN index lookup condition: 'key' between 'lower' and
-/// 'upper'. 'lower' and 'upper' have the same type of 'key'.
+/// 'upper'. 'lower' and 'upper' have the same type of 'key' when
+/// 'pairedColumn' is null. When 'pairedColumn' is set, 'lower' and 'upper'
+/// are ARRAY-typed and pair element-wise with the values of the named
+/// paired column.
 struct BetweenIndexLookupCondition : public IndexLookupCondition {
   /// The between bound either reference to a probe input column or a constant
   /// value.
@@ -3599,13 +3602,23 @@ struct BetweenIndexLookupCondition : public IndexLookupCondition {
   TypedExprPtr lower;
   TypedExprPtr upper;
 
+  /// Optional. When set, the BETWEEN runs per element instead of per row.
+  /// The i-th value of 'pairedColumn' is tested against the bounds at
+  /// 'lower[i]' and 'upper[i]'. Both 'lower' and 'upper' must therefore
+  /// be arrays (Velox type ARRAY(elementType)) whose element type matches
+  /// 'key'. A sibling InIndexLookupCondition must reference the same
+  /// column as its list.
+  FieldAccessTypedExprPtr pairedColumn;
+
   BetweenIndexLookupCondition(
       FieldAccessTypedExprPtr _key,
       TypedExprPtr _lower,
-      TypedExprPtr _upper)
+      TypedExprPtr _upper,
+      FieldAccessTypedExprPtr _pairedColumn = nullptr)
       : IndexLookupCondition(std::move(_key)),
         lower(std::move(_lower)),
-        upper(std::move(_upper)) {
+        upper(std::move(_upper)),
+        pairedColumn(std::move(_pairedColumn)) {
     validate();
   }
 

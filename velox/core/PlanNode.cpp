@@ -1904,6 +1904,56 @@ IndexLookupJoinNode::IndexLookupJoinNode(
         "Index lookup koin key types on the left and right sides must match");
   }
 
+  // A paired BETWEEN must have a matching IN condition in the same join.
+  // If the BETWEEN says "pair me with column X", a sibling IN condition
+  // must use X as its list.
+  //
+  // Example: this join is valid because both conditions reference
+  // `event_types`:
+  //     event_type IN event_types
+  //     AND ts BETWEEN lower_ts AND upper_ts (paired with event_types)
+  //
+  // Why it matters: the IN condition is what brings `event_types` into the
+  // connector's lookup input. Without it the connector would receive the
+  // bound arrays but have no per-row values to pair them against, and the
+  // paired BETWEEN would be meaningless.
+  //
+  // The check lives here (not in BetweenIndexLookupCondition::validate())
+  // because a single condition only sees itself, not its siblings.
+  folly::F14FastSet<std::string> inListNames;
+  for (const auto& condition : joinConditions_) {
+    if (const auto inCondition =
+            std::dynamic_pointer_cast<const InIndexLookupCondition>(
+                condition)) {
+      if (inCondition->list != nullptr &&
+          inCondition->list->isFieldAccessKind()) {
+        inListNames.insert(
+            std::dynamic_pointer_cast<const FieldAccessTypedExpr>(
+                inCondition->list)
+                ->name());
+      }
+    }
+  }
+  for (const auto& condition : joinConditions_) {
+    const auto betweenCondition =
+        std::dynamic_pointer_cast<const BetweenIndexLookupCondition>(condition);
+    if (betweenCondition == nullptr ||
+        betweenCondition->pairedColumn == nullptr) {
+      continue;
+    }
+    const auto& pairedName = betweenCondition->pairedColumn->name();
+    VELOX_CHECK(
+        leftType->containsChild(pairedName),
+        "Paired between column not found in probe input: {}",
+        pairedName);
+    VELOX_CHECK_EQ(
+        inListNames.count(pairedName),
+        1,
+        "Paired between column {} must also appear as the list of a sibling "
+        "IN condition in the same join.",
+        pairedName);
+  }
+
   auto numOutputColumns = outputType_->size();
   if (hasMarker_) {
     VELOX_USER_CHECK(
@@ -4172,15 +4222,26 @@ folly::dynamic BetweenIndexLookupCondition::serialize() const {
   obj["type"] = "between";
   obj["lower"] = lower->serialize();
   obj["upper"] = upper->serialize();
+  if (pairedColumn != nullptr) {
+    obj["pairedColumn"] = pairedColumn->serialize();
+  }
   return obj;
 }
 
 std::string BetweenIndexLookupCondition::toString() const {
+  if (pairedColumn == nullptr) {
+    return fmt::format(
+        "{} BETWEEN {} AND {}",
+        key->toString(),
+        lower->toString(),
+        upper->toString());
+  }
   return fmt::format(
-      "{} BETWEEN {} AND {}",
+      "{} BETWEEN {} AND {} PAIRED WITH {}",
       key->toString(),
       lower->toString(),
-      upper->toString());
+      upper->toString(),
+      pairedColumn->toString());
 }
 
 IndexLookupConditionPtr BetweenIndexLookupCondition::create(
@@ -4188,10 +4249,16 @@ IndexLookupConditionPtr BetweenIndexLookupCondition::create(
     void* context) {
   auto key =
       ISerializable::deserialize<FieldAccessTypedExpr>(obj["key"], context);
+  FieldAccessTypedExprPtr pairedColumn;
+  if (obj.count("pairedColumn")) {
+    pairedColumn = ISerializable::deserialize<FieldAccessTypedExpr>(
+        obj["pairedColumn"], context);
+  }
   return std::make_shared<BetweenIndexLookupCondition>(
       key,
       ISerializable::deserialize<ITypedExpr>(obj["lower"], context),
-      ISerializable::deserialize<ITypedExpr>(obj["upper"], context));
+      ISerializable::deserialize<ITypedExpr>(obj["upper"], context),
+      std::move(pairedColumn));
 }
 
 void BetweenIndexLookupCondition::validate() const {
@@ -4208,15 +4275,52 @@ void BetweenIndexLookupCondition::validate() const {
       "Invalid upper between condition {}",
       upper->toString());
 
-  VELOX_CHECK_EQ(
-      key->type()->kind(),
-      lower->type()->kind(),
-      "Index key and lower condition must have the same type");
+  if (pairedColumn == nullptr) {
+    VELOX_CHECK_EQ(
+        key->type()->kind(),
+        lower->type()->kind(),
+        "Index key and lower condition must have the same type");
 
+    VELOX_CHECK_EQ(
+        key->type()->kind(),
+        upper->type()->kind(),
+        "Index key and upper condition must have the same type");
+    return;
+  }
+
+  // Paired BETWEEN: bounds must be arrays (ARRAY type) whose element type
+  // matches the index key. The per-row pairing happens connector-side; the
+  // operator just forwards the bound arrays and the paired column to the
+  // connector.
+  VELOX_CHECK(
+      lower->type()->isArray(),
+      "Paired between lower bound must be of type ARRAY, got {}",
+      lower->type()->toString());
+  VELOX_CHECK(
+      upper->type()->isArray(),
+      "Paired between upper bound must be of type ARRAY, got {}",
+      upper->type()->toString());
   VELOX_CHECK_EQ(
       key->type()->kind(),
-      upper->type()->kind(),
-      "Index key and upper condition must have the same type");
+      lower->type()->asArray().elementType()->kind(),
+      "Index key and paired lower bound element type must match");
+  VELOX_CHECK_EQ(
+      key->type()->kind(),
+      upper->type()->asArray().elementType()->kind(),
+      "Index key and paired upper bound element type must match");
+  // Constant bounds would make per-row size validation against the IN list
+  // a special case (constant array size vs varying IN-list size). Requiring
+  // FieldAccess keeps the size invariant uniform: the operator can compare
+  // the three array vectors row-by-row without branching on whether a bound
+  // is shared across rows.
+  VELOX_CHECK(
+      lower->isFieldAccessKind(),
+      "Paired between lower bound must be a column reference, got {}",
+      lower->toString());
+  VELOX_CHECK(
+      upper->isFieldAccessKind(),
+      "Paired between upper bound must be a column reference, got {}",
+      upper->toString());
 }
 
 bool EqualIndexLookupCondition::isFilter() const {
