@@ -528,6 +528,37 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitter) {
   EXPECT_EQ(joinStats.backgroundTiming.count, 0);
   EXPECT_EQ(joinStats.backgroundTiming.cpuNanos, 0);
   EXPECT_EQ(joinStats.backgroundTiming.wallNanos, 0);
+
+  // Verify that index source stats are present in the raw operator-level
+  // Verify index source stats are copied into the operator's runtimeStats
+  // with the "indexSource." prefix for task-level stats visibility.
+  const auto rawTaskStats = task->taskStats();
+  bool foundJoinOp = false;
+  for (const auto& pipeline : rawTaskStats.pipelineStats) {
+    for (const auto& opStats : pipeline.operatorStats) {
+      if (opStats.operatorType == "IndexLookupJoin") {
+        foundJoinOp = true;
+        EXPECT_TRUE(opStats.runtimeStats.count(
+            fmt::format(
+                "indexSource.{}", IndexLookupJoin::kConnectorLookupWallTime)))
+            << "IndexLookupJoin operator runtimeStats should contain index "
+               "source stats for task-level stats reporting";
+        break;
+      }
+    }
+    if (foundJoinOp) {
+      break;
+    }
+  }
+  EXPECT_TRUE(foundJoinOp) << "IndexLookupJoin operator not found in raw stats";
+
+  // After splitStats (via toPlanStats above), the join node's customStats
+  // should NOT contain index source stats — they belong to IndexSource.
+  EXPECT_EQ(
+      joinStats.customStats.count(
+          std::string(IndexLookupJoin::kConnectorLookupWallTime)),
+      0)
+      << "Join node should not have index source stats after splitStats";
 }
 
 /// Verifies that IndexSource stats report rows BEFORE the join filter is

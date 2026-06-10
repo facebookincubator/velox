@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -156,8 +157,9 @@ struct UnixTimestampParseFunction {
       const arg_type<Varchar>* /*input*/) {
     auto formatter = detail::getDateTimeFormatter(
         kDefaultFormat_,
-        config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
-                                          : DateTimeFormatterType::JODA);
+        SparkQueryConfig{config}.legacyDateFormatter()
+            ? DateTimeFormatterType::STRICT_SIMPLE
+            : DateTimeFormatterType::JODA);
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
     setTimezone(config);
@@ -208,7 +210,7 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     if (format != nullptr) {
       auto formatter = detail::getDateTimeFormatter(
           std::string_view(format->data(), format->size()),
@@ -301,7 +303,7 @@ struct FromUnixtimeFunction {
       const core::QueryConfig& config,
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
@@ -422,7 +424,7 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
@@ -883,13 +885,26 @@ struct NextDayFunction {
   bool invalidFormat_{false};
 };
 
-template <typename T>
+template <typename T, typename TTimestamp>
 struct HourFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<TTimestamp>* timestamp) {
+    if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      // TIMESTAMP UTC represents a timestamp in UTC, not subject to session
+      // timezone adjustment.
+      this->timeZone_ = nullptr;
+    } else {
+      InitSessionTimezone<T>::initialize(inputTypes, config, timestamp);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
+      const arg_type<TTimestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
   }
 };
@@ -1198,7 +1213,7 @@ struct DateFormatFunction {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*timestamp*/,
       const arg_type<Varchar>* formatString) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (formatString != nullptr) {
       auto formatter = detail::initializeFormatter(

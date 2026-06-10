@@ -15,8 +15,10 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -138,6 +140,71 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
     // Run the test
     runTest(plan, "SELECT c0 = 1 OR c1 = 2.0 AS result FROM tmp");
+  }
+
+  void testLogicalShortCircuitWithLiterals(
+      const std::vector<RowVectorPtr>& input) {
+    // Constant false as first conjunct: LogicalFunction short-circuits to
+    // false.
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"false AND (c0 = 1) AS result"})
+                    .planNode();
+    runTest(plan, "SELECT false AND (c0 = 1) AS result FROM tmp");
+
+    // Constant true as first disjunct: LogicalFunction short-circuits to true.
+    plan = PlanBuilder()
+               .values(input)
+               .project({"true OR (c0 = 1) AS result"})
+               .planNode();
+    runTest(plan, "SELECT true OR (c0 = 1) AS result FROM tmp");
+  }
+
+  void testLogicalAndOrLiteralsAndMixed(
+      const std::vector<RowVectorPtr>& input) {
+    // Literal-only (exercises LogicalFunction scalar/scalar and broadcast
+    // paths).
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .project({"true AND false AS r1", "true OR false AS r2"})
+                    .planNode();
+    runTest(plan, "SELECT true AND false AS r1, true OR false AS r2 FROM tmp");
+
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"false AND true AS r1",
+                    "false OR true AS r2",
+                    "true AND true AS r3",
+                    "false OR false AS r4"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT false AND true AS r1, false OR true AS r2, true AND true AS r3, false OR false AS r4 FROM tmp");
+
+    // Literal on the left or right of a column predicate.
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"(c0 = 1) AND true AS r1",
+                    "true AND (c0 = 1) AS r2",
+                    "(c0 = 1) OR false AS r3",
+                    "false OR (c0 = 1) AS r4"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT (c0 = 1) AND true AS r1, true AND (c0 = 1) AS r2, (c0 = 1) OR false AS r3, false OR (c0 = 1) AS r4 FROM tmp");
+
+    // Three-way mix: literals and columns interleaved.
+    plan = PlanBuilder()
+               .values(input)
+               .project(
+                   {"(c0 = 1) AND true AND (c1 = 2.0) AS r1",
+                    "false OR (c0 = 1) OR (c1 = 2.0) AS r2"})
+               .planNode();
+    runTest(
+        plan,
+        "SELECT (c0 = 1) AND true AND (c1 = 2.0) AS r1, false OR (c0 = 1) OR (c1 = 2.0) AS r2 FROM tmp");
   }
 
   void testYearFunction(const std::vector<RowVectorPtr>& input) {
@@ -627,6 +694,22 @@ TEST_F(CudfFilterProjectTest, orOperation) {
   createDuckDbTable(vectors);
 
   testOrOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, logicalShortCircuitWithLiterals) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLogicalShortCircuitWithLiterals(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, logicalAndOrLiteralsAndMixed) {
+  vector_size_t batchSize = 1000;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  testLogicalAndOrLiteralsAndMixed(vectors);
 }
 
 TEST_F(CudfFilterProjectTest, lengthFunction) {
@@ -1392,10 +1475,93 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
   }
 
   static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
+  }
+
+  template <typename T>
+  ArrayVectorPtr makeArrayAccessNumericTestVector(
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return makeNullableArrayVector<T>(
+        {
+            {{static_cast<T>(1), static_cast<T>(2), static_cast<T>(3)}},
+            {{static_cast<T>(4), std::nullopt, static_cast<T>(6)}},
+            std::nullopt,
+            {{static_cast<T>(7), static_cast<T>(8)}},
+        },
+        arrayType);
+  }
+
+  void assertArrayAccessElementTypeMatchesCpu(
+      const std::string& label,
+      const ArrayVectorPtr& arrays) {
+    SCOPED_TRACE(label);
+
+    auto assertMatchesCpu = [&](const std::string& expression,
+                                const RowVectorPtr& input) {
+      SCOPED_TRACE(expression);
+      assertExpressionMatchesCpu(expression, input, input->rowType());
+    };
+
+    // Presto array access currently registers INTEGER and BIGINT index
+    // signatures. Exercise both variable-index paths for element_at and
+    // subscript.
+    auto integerIndices = makeFlatVector<int32_t>({2, 2, 1, 1});
+    auto bigintIndices = makeFlatVector<int64_t>({2, 2, 1, 1});
+    for (const auto& indices :
+         std::vector<VectorPtr>{integerIndices, bigintIndices}) {
+      auto input = makeRowVector({arrays, indices});
+      assertMatchesCpu("element_at(c0, c1)", input);
+      assertMatchesCpu("subscript(c0, c1)", input);
+    }
+
+    // Literal-index calls use the scalar-index cuDF extraction path. Null
+    // literal indexes are handled separately from non-null literals.
+    auto input = makeRowVector({arrays});
+    for (const auto& expression : {
+             "element_at(c0, cast(2 as integer))",
+             "element_at(c0, cast(2 as bigint))",
+             "subscript(c0, cast(2 as integer))",
+             "subscript(c0, cast(2 as bigint))",
+             "element_at(c0, cast(null as integer))",
+             "element_at(c0, cast(null as bigint))",
+             "subscript(c0, cast(null as integer))",
+             "subscript(c0, cast(null as bigint))",
+         }) {
+      assertMatchesCpu(expression, input);
+    }
+  }
+
+  void assertConstantArrayAccessMatchesCpu(
+      const std::string& label,
+      const std::string& arraySql) {
+    SCOPED_TRACE(label);
+
+    // A literal array is not passed as an input column to cuDF. These cases
+    // cover the repeated-literal-array branch plus both Presto index types.
+    auto integerIndices = makeFlatVector<int32_t>({1, 2, 3, 2});
+    auto bigintIndices = makeFlatVector<int64_t>({1, 2, 3, 2});
+    for (const auto& indices :
+         std::vector<VectorPtr>{integerIndices, bigintIndices}) {
+      auto input = makeRowVector({indices});
+      for (const auto& functionName : {"element_at", "subscript"}) {
+        auto expression = std::string(functionName) + "(" + arraySql + ", c0)";
+        SCOPED_TRACE(expression);
+        assertExpressionMatchesCpu(expression, input, input->rowType());
+      }
+    }
+
+    // element_at is the Presto flavor that supports negative indexes from the
+    // end of the array.
+    auto negativeIndices = makeFlatVector<int64_t>({-1, -2, -3});
+    auto input = makeRowVector({negativeIndices});
+    auto expression = std::string("element_at(") + arraySql + ", c0)";
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, input, input->rowType());
   }
 };
 
@@ -1436,6 +1602,641 @@ TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
 
   // Absolute value
   testUnaryFunction("abs(c0)", -5.5, 5.5);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayWithDictionaryElements) {
+  auto elementsIndices = makeIndices({6, 5, 4, 3, 2, 1, 0});
+  auto elements = wrapInDictionary(
+      elementsIndices, makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6}));
+
+  auto arrays = makeArrayVector({0, 3, 6}, elements);
+  auto indices = makeFlatVector<int64_t>({3, -3, 1});
+  auto input = makeRowVector({arrays, indices});
+
+  assertExpressionMatchesCpu("element_at(c0, c1)", input, input->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayConstantInput) {
+  auto arrays = makeArrayVector<int64_t>({
+      {1, 2, 3, 4, 5, 6, 7},
+      {1, 2, 7},
+      {1, 2, 3, 5, 6, 7},
+  });
+  auto input = makeRowVector({arrays});
+
+  assertExpressionMatchesCpu("element_at(c0, 2)", input, input->rowType());
+  assertExpressionMatchesCpu("element_at(c0, -1)", input, input->rowType());
+
+  auto variableSizeArrays = makeArrayVector<int64_t>({
+      {1, 2, 6, 0},
+      {1},
+      {9, 100, 10043, 44, 22, 2},
+      {-1, -10, 3},
+  });
+  auto variableSizeInput = makeRowVector({variableSizeArrays});
+
+  assertExpressionMatchesCpu(
+      "element_at(c0, -1)", variableSizeInput, variableSizeInput->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVariableInput) {
+  constexpr vector_size_t kArrayAccessVectorSize{1'000};
+
+  auto fixedIndices = makeFlatVector<int64_t>(
+      kArrayAccessVectorSize, [](vector_size_t row) { return 1 + row % 7; });
+
+  auto fixedSizeAt = [](vector_size_t /*row*/) { return 7; };
+  auto oneBasedValueAt = [](vector_size_t /*row*/, vector_size_t idx) {
+    return 1 + idx;
+  };
+  auto fixedArrays = makeArrayVector<int64_t>(
+      kArrayAccessVectorSize, fixedSizeAt, oneBasedValueAt);
+  auto fixedInput = makeRowVector({fixedArrays, fixedIndices});
+
+  assertExpressionMatchesCpu(
+      "element_at(c0, c1)", fixedInput, fixedInput->rowType());
+
+  auto mixedIndices =
+      makeFlatVector<int64_t>(kArrayAccessVectorSize, [](vector_size_t row) {
+        if (row % 7 == 0) {
+          return 8;
+        }
+        if (row % 7 == 4) {
+          return -3;
+        }
+        return 1 + row % 7;
+      });
+
+  auto variableSizeAt = [](vector_size_t row) { return row % 7 + 1; };
+  auto zeroBasedValueAt = [](vector_size_t /*row*/, vector_size_t idx) {
+    return idx;
+  };
+  auto mixedArrays = makeArrayVector<int64_t>(
+      kArrayAccessVectorSize, variableSizeAt, zeroBasedValueAt);
+  auto mixedInput = makeRowVector({mixedArrays, mixedIndices});
+
+  assertExpressionMatchesCpu(
+      "element_at(c0, c1)", mixedInput, mixedInput->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVarcharVariableInput) {
+  constexpr vector_size_t kArrayAccessVectorSize{1'000};
+
+  auto indices = makeFlatVector<int64_t>(
+      kArrayAccessVectorSize, [](vector_size_t row) { return 1 + row % 7; });
+
+  auto arrays = makeArrayVector<std::string>(
+      kArrayAccessVectorSize,
+      [](vector_size_t /*row*/) { return 7; },
+      [](vector_size_t /*row*/, vector_size_t idx) {
+        return std::to_string(idx + 1);
+      });
+  auto input = makeRowVector({arrays, indices});
+
+  assertExpressionMatchesCpu("element_at(c0, c1)", input, input->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayAllIndicesGreaterThanSize) {
+  constexpr vector_size_t kArrayAccessVectorSize{1'000};
+
+  auto indices = makeFlatVector<int64_t>(
+      kArrayAccessVectorSize, [](vector_size_t /*row*/) { return 2; });
+  auto arrays = makeArrayVector<int64_t>(
+      kArrayAccessVectorSize,
+      [](vector_size_t /*row*/) { return 1; },
+      [](vector_size_t /*row*/, vector_size_t /*idx*/) { return 1; });
+  auto input = makeRowVector({arrays, indices});
+
+  assertExpressionMatchesCpu("element_at(c0, c1)", input, input->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayColumnIndexZeroFails) {
+  constexpr vector_size_t kArrayAccessVectorSize{1'000};
+
+  auto indices =
+      makeFlatVector<int64_t>(kArrayAccessVectorSize, [](vector_size_t row) {
+        if (row == 40) {
+          return 0;
+        }
+        return 1 + row % 7;
+      });
+  auto arrays = makeArrayVector<int64_t>(
+      kArrayAccessVectorSize,
+      [](vector_size_t row) { return 2 + row % 7; },
+      [](vector_size_t /*row*/, vector_size_t idx) { return 1 + idx; });
+
+  VELOX_ASSERT_THROW(
+      functions::test::FunctionBaseTest::evaluate(
+          "element_at(c0, c1)", makeRowVector({arrays, indices})),
+      "SQL array indices start at 1. Got 0.");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{10, 20, 30}},
+      {{4, 5}},
+      std::nullopt,
+      {{7, std::nullopt, 9}},
+  });
+
+  auto input = makeRowVector({arrays});
+
+  for (const auto& expression : {
+           "element_at(c0, 2)",
+           "element_at(c0, cast(2 as bigint))",
+           "subscript(c0, 2)",
+           "subscript(c0, cast(2 as bigint))",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, input, input->rowType());
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessNullConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{10, 20, 30}},
+      {{4, 5}},
+      std::nullopt,
+  });
+
+  auto input = makeRowVector({arrays});
+
+  for (const auto& expression : {
+           "element_at(c0, cast(null as integer))",
+           "element_at(c0, cast(null as bigint))",
+           "subscript(c0, cast(null as integer))",
+           "subscript(c0, cast(null as bigint))",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, input, input->rowType());
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessSupportedScalarElementTypes) {
+  // Cover all scalar ARRAY element types supported by Velox-cuDF conversion.
+  assertArrayAccessElementTypeMatchesCpu(
+      "tinyint", makeArrayAccessNumericTestVector<int8_t>());
+  assertArrayAccessElementTypeMatchesCpu(
+      "smallint", makeArrayAccessNumericTestVector<int16_t>());
+  assertArrayAccessElementTypeMatchesCpu(
+      "integer", makeArrayAccessNumericTestVector<int32_t>());
+  assertArrayAccessElementTypeMatchesCpu(
+      "bigint", makeArrayAccessNumericTestVector<int64_t>());
+  assertArrayAccessElementTypeMatchesCpu(
+      "real", makeArrayAccessNumericTestVector<float>());
+  assertArrayAccessElementTypeMatchesCpu(
+      "double", makeArrayAccessNumericTestVector<double>());
+  assertArrayAccessElementTypeMatchesCpu(
+      "date", makeArrayAccessNumericTestVector<int32_t>(ARRAY(DATE())));
+  assertArrayAccessElementTypeMatchesCpu(
+      "short decimal",
+      makeArrayAccessNumericTestVector<int64_t>(ARRAY(DECIMAL(10, 2))));
+  assertArrayAccessElementTypeMatchesCpu(
+      "long decimal",
+      makeArrayAccessNumericTestVector<int128_t>(ARRAY(DECIMAL(20, 4))));
+
+  auto booleanArrays = makeNullableArrayVector<bool>({
+      {{true, false, true}},
+      {{false, std::nullopt, true}},
+      std::nullopt,
+      {{true, true}},
+  });
+  assertArrayAccessElementTypeMatchesCpu("boolean", booleanArrays);
+
+  auto varcharArrays = makeNullableArrayVector<std::string>({
+      {{"alpha", "beta", "gamma"}},
+      {{"delta", std::nullopt, "zeta"}},
+      std::nullopt,
+      {{"eta", "theta"}},
+  });
+  assertArrayAccessElementTypeMatchesCpu("varchar", varcharArrays);
+
+  auto varbinaryArrays = makeNullableArrayVector<std::string>(
+      {
+          {{"alpha", "beta", "gamma"}},
+          {{"delta", std::nullopt, "zeta"}},
+          std::nullopt,
+          {{"eta", "theta"}},
+      },
+      ARRAY(VARBINARY()));
+  assertArrayAccessElementTypeMatchesCpu("varbinary", varbinaryArrays);
+
+  auto timestampArrays = makeNullableArrayVector<Timestamp>({
+      {{Timestamp(1, 0), Timestamp(2, 0), Timestamp(3, 0)}},
+      {{Timestamp(4, 0), std::nullopt, Timestamp(6, 0)}},
+      std::nullopt,
+      {{Timestamp(7, 0), Timestamp(8, 0)}},
+  });
+  assertArrayAccessElementTypeMatchesCpu("timestamp", timestampArrays);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessSupportedComplexElementTypes) {
+  // Cover complex ARRAY element types that cuDF list extraction can return.
+  using OptionalIntArray = std::optional<std::vector<std::optional<int32_t>>>;
+  using OptionalNestedArray = std::optional<std::vector<OptionalIntArray>>;
+
+  std::vector<OptionalNestedArray> nestedArrayData = {
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{1, 2},
+          std::vector<std::optional<int32_t>>{3},
+          std::vector<std::optional<int32_t>>{4, 5},
+      },
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{6},
+          std::vector<std::optional<int32_t>>{7, 8},
+          std::vector<std::optional<int32_t>>{9},
+      },
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{10},
+          std::vector<std::optional<int32_t>>{11, 12},
+      },
+      std::vector<OptionalIntArray>{
+          std::vector<std::optional<int32_t>>{13},
+          std::vector<std::optional<int32_t>>{14, 15},
+      },
+  };
+  assertArrayAccessElementTypeMatchesCpu(
+      "array", makeNullableNestedArrayVector<int32_t>(nestedArrayData));
+
+  auto rowArrays = makeArrayOfRowVector(
+      ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
+      {
+          {variant::row({1, "alpha"}),
+           variant::row({2, "beta"}),
+           variant::row({3, "gamma"})},
+          {variant::row({4, "delta"}),
+           variant::row({5, "epsilon"}),
+           variant::row({6, "zeta"})},
+          {variant::row({7, "eta"}), variant::row({8, "theta"})},
+          {variant::row({9, "iota"}), variant::row({10, "kappa"})},
+      });
+  assertArrayAccessElementTypeMatchesCpu("row", rowArrays);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessConstantArraySupportedTypes) {
+  // Constant array literals take a different input-column path from array
+  // columns, so repeat the supported element-type matrix here.
+  assertConstantArrayAccessMatchesCpu(
+      "tinyint",
+      "array[cast(1 as tinyint), cast(2 as tinyint), cast(3 as tinyint)]");
+  assertConstantArrayAccessMatchesCpu(
+      "smallint",
+      "array[cast(1 as smallint), cast(2 as smallint), cast(3 as smallint)]");
+  assertConstantArrayAccessMatchesCpu(
+      "integer",
+      "array[cast(1 as integer), cast(2 as integer), cast(3 as integer)]");
+  assertConstantArrayAccessMatchesCpu(
+      "bigint",
+      "array[cast(1 as bigint), cast(2 as bigint), cast(3 as bigint)]");
+  assertConstantArrayAccessMatchesCpu(
+      "real",
+      "array[cast(1.25 as real), cast(2.5 as real), cast(3.75 as real)]");
+  assertConstantArrayAccessMatchesCpu(
+      "double",
+      "array[cast(1.25 as double), "
+      "cast(2.5 as double), "
+      "cast(3.75 as double)]");
+  assertConstantArrayAccessMatchesCpu("boolean", "array[true, false, true]");
+  assertConstantArrayAccessMatchesCpu(
+      "varchar", "array['alpha', 'beta', 'gamma']");
+  assertConstantArrayAccessMatchesCpu(
+      "varbinary",
+      "array[cast('alpha' as varbinary), "
+      "cast('beta' as varbinary), "
+      "cast('gamma' as varbinary)]");
+  assertConstantArrayAccessMatchesCpu(
+      "date", "array[DATE '2020-01-01', DATE '2020-01-02', DATE '2020-01-03']");
+  assertConstantArrayAccessMatchesCpu(
+      "timestamp",
+      "array[cast('2020-01-01 00:00:00' as timestamp), "
+      "cast('2020-01-02 00:00:00' as timestamp), "
+      "cast('2020-01-03 00:00:00' as timestamp)]");
+  assertConstantArrayAccessMatchesCpu(
+      "short decimal",
+      "array[cast('1.00' as decimal(10, 2)), "
+      "cast('2.00' as decimal(10, 2)), "
+      "cast('3.00' as decimal(10, 2))]");
+  assertConstantArrayAccessMatchesCpu(
+      "long decimal",
+      "array[cast('1.0000' as decimal(20, 4)), "
+      "cast('2.0000' as decimal(20, 4)), "
+      "cast('3.0000' as decimal(20, 4))]");
+  assertConstantArrayAccessMatchesCpu(
+      "array",
+      "array_constructor("
+      "array_constructor(1, 2), "
+      "array_constructor(3), "
+      "array_constructor(4, 5))");
+  assertConstantArrayAccessMatchesCpu(
+      "row",
+      "array_constructor("
+      "row_constructor(1, 'alpha'), "
+      "row_constructor(2, 'beta'), "
+      "row_constructor(3, 'gamma'))");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, subscriptConstantArrayVariableIndex) {
+  auto groupIds = makeFlatVector<int64_t>({0, 1, 2});
+  auto input = makeRowVector({groupIds});
+
+  assertExpressionMatchesCpu(
+      "subscript(array[1, 1, 0], c0 + 1)", input, input->rowType());
+  assertExpressionMatchesCpu(
+      "subscript(array[1, 0, 0], c0 + 1)", input, input->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVariableIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7, 8}},
+      {{9, 10, 11}},
+  });
+  auto integerIndices =
+      makeNullableFlatVector<int32_t>({3, -2, std::nullopt, 4, -4});
+  auto integerInput = makeRowVector({arrays, integerIndices});
+  assertExpressionMatchesCpu(
+      "element_at(c0, c1)", integerInput, integerInput->rowType());
+
+  auto bigintIndices =
+      makeNullableFlatVector<int64_t>({3, -2, std::nullopt, 4, -4});
+  auto bigintInput = makeRowVector({arrays, bigintIndices});
+  assertExpressionMatchesCpu(
+      "element_at(c0, c1)", bigintInput, bigintInput->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessVariableIndexSupportedTypes) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7, 8}},
+      {{9, 10, 11}},
+  });
+  auto integerIndices = makeFlatVector<int32_t>({3, 2, 1, 2, 1});
+  auto integerInput = makeRowVector({arrays, integerIndices});
+  for (const auto& expression : {"element_at(c0, c1)", "subscript(c0, c1)"}) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(
+        expression, integerInput, integerInput->rowType());
+  }
+
+  auto bigintIndices = makeFlatVector<int64_t>({3, 2, 1, 2, 1});
+  auto bigintInput = makeRowVector({arrays, bigintIndices});
+  for (const auto& expression : {"element_at(c0, c1)", "subscript(c0, c1)"}) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, bigintInput, bigintInput->rowType());
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayNegativeConstantIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7}},
+  });
+  auto input = makeRowVector({arrays});
+
+  assertExpressionMatchesCpu("element_at(c0, -1)", input, input->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtArrayNegativeVariableIndex) {
+  auto arrays = makeNullableArrayVector<int32_t>({
+      {{1, 2, 3}},
+      {{4, std::nullopt, 6}},
+      std::nullopt,
+      {{7}},
+  });
+
+  auto integerIndices = makeFlatVector<int32_t>({-1, -1, -1, -1});
+  auto integerInput = makeRowVector({arrays, integerIndices});
+  assertExpressionMatchesCpu(
+      "element_at(c0, c1)", integerInput, integerInput->rowType());
+
+  auto bigintIndices = makeFlatVector<int64_t>({-1, -1, -1, -1});
+  auto bigintInput = makeRowVector({arrays, bigintIndices});
+  assertExpressionMatchesCpu(
+      "element_at(c0, c1)", bigintInput, bigintInput->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, arrayAccessRejectsInvalidIndex) {
+  auto arrays = makeArrayVector<int32_t>({{1, 2, 3}});
+
+  auto input = makeRowVector({arrays});
+  VELOX_ASSERT_THROW(
+      functions::test::FunctionBaseTest::evaluate("element_at(c0, 0)", input),
+      "SQL array indices start at 1. Got 0.");
+
+  VELOX_ASSERT_THROW(
+      functions::test::FunctionBaseTest::evaluate("subscript(c0, -1)", input),
+      "Array subscript index cannot be negative");
+
+  VELOX_ASSERT_THROW(
+      functions::test::FunctionBaseTest::evaluate("subscript(c0, 4)", input),
+      "Array subscript index out of bounds");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, elementAtReturnsNullForOutOfBoundsIndex) {
+  auto arrays = makeArrayVector<int32_t>({{1, 2, 3}});
+  auto input = makeRowVector({arrays});
+
+  assertExpressionMatchesCpu("element_at(c0, 4)", input, input->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalAnd) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  // All 9 combinations of {true, false, null} x {true, false, null}.
+  auto c0 = makeNullableFlatVector<bool>({
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto c1 = makeNullableFlatVector<bool>({
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+  });
+  auto input = makeRowVector({c0, c1});
+  assertExpressionMatchesCpu("c0 AND c1", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalOr) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  auto c1 = makeNullableFlatVector<bool>({
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+      true,
+      false,
+      std::nullopt,
+  });
+  auto input = makeRowVector({c0, c1});
+  assertExpressionMatchesCpu("c0 OR c1", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalAndThreeArg) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}, {"c2", BOOLEAN()}});
+  // (true AND null) AND false -> false; (null AND true) AND false -> false.
+  auto c0 = makeNullableFlatVector<bool>({true, std::nullopt, false});
+  auto c1 = makeNullableFlatVector<bool>({std::nullopt, true, true});
+  auto c2 = makeNullableFlatVector<bool>({false, false, true});
+  auto input = makeRowVector({c0, c1, c2});
+  assertExpressionMatchesCpu("c0 AND c1 AND c2", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullLogicalOrThreeArg) {
+  const auto rowType =
+      ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}, {"c2", BOOLEAN()}});
+  // (false OR null) OR true -> true; (null OR false) OR true -> true.
+  auto c0 = makeNullableFlatVector<bool>({false, std::nullopt, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({std::nullopt, false, false});
+  auto c2 = makeNullableFlatVector<bool>({true, true, true});
+  auto input = makeRowVector({c0, c1, c2});
+  assertExpressionMatchesCpu("c0 OR c1 OR c2", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndAllLiterals) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto input = makeRowVector({makeFlatVector<bool>({true})});
+  for (const auto& expr :
+       {"true AND true",
+        "true AND false",
+        "false AND true",
+        "false AND false"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrAllLiterals) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto input = makeRowVector({makeFlatVector<bool>({true})});
+  for (const auto& expr :
+       {"true OR true", "true OR false", "false OR true", "false OR false"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndColumnWithLiteral) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto c0 =
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+  for (const auto& expr :
+       {"c0 AND true", "true AND c0", "c0 AND false", "false AND c0"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrColumnWithLiteral) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}});
+  auto c0 =
+      makeNullableFlatVector<bool>({true, false, std::nullopt, std::nullopt});
+  auto input = makeRowVector({c0});
+  for (const auto& expr :
+       {"c0 OR true", "true OR c0", "c0 OR false", "false OR c0"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalAndThreeArgLiteralsMixed) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({true, false, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({false, true, true});
+  auto input = makeRowVector({c0, c1});
+  for (const auto& expr :
+       {"c0 AND true AND c1",
+        "true AND c0 AND c1",
+        "c0 AND c1 AND false",
+        "false AND c0 AND c1"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfSimpleFilterProjectTest, logicalOrThreeArgLiteralsMixed) {
+  const auto rowType = ROW({{"c0", BOOLEAN()}, {"c1", BOOLEAN()}});
+  auto c0 = makeNullableFlatVector<bool>({false, true, std::nullopt});
+  auto c1 = makeNullableFlatVector<bool>({false, false, true});
+  auto input = makeRowVector({c0, c1});
+  for (const auto& expr :
+       {"c0 OR false OR c1",
+        "false OR c0 OR c1",
+        "c0 OR c1 OR true",
+        "true OR c0 OR c1"}) {
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, andAndAndExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"(c0 > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+// TODO(mattgara, simoneves): Disabled by mhaseeb123 as it requires changes from
+// commit
+// https://github.com/facebookincubator/velox/pull/17704/changes/f6a86f6f2204ed5b7426185f29931834b28ef732
+// but doing so results in failure in Presto-as-source-of-truth tests.
+TEST_F(CudfFilterProjectTest, DISABLED_andAndAndWithDecimalDivideBelowExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, 100}, DECIMAL(17, 2)),
+       makeFlatVector<int64_t>({100, -100, -100, -100}, DECIMAL(17, 2))});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"(CAST((c0 / CAST(3.0 AS DECIMAL(17,2))) AS DECIMAL(17, 2)) > CAST(0.0 AS DECIMAL(17, 2))) AND (c1 > CAST(0.0 AS DECIMAL(17, 2))) AND (c2 > CAST(0.0 AS DECIMAL(17, 2))) AND (c3 > CAST(0.0 AS DECIMAL(17, 2))) AS result"})
+          .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<bool>({true, false, false, false}),
+  });
+  facebook::velox::test::assertEqualVectors(expected, result);
 }
 
 } // namespace

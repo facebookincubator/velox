@@ -50,7 +50,12 @@ cudf::ast::literal createLiteral(
   variant value =
       VELOX_DYNAMIC_TYPE_DISPATCH(getVariant, kind, vector, atIndex);
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      makeScalarAndLiteral, kind, type, value, scalars);
+      makeScalarAndLiteral,
+      kind,
+      type,
+      value,
+      vector->isNullAt(atIndex),
+      scalars);
 }
 
 // Helper function to extract literals from array elements based on type
@@ -421,9 +426,42 @@ struct AstContext {
       const std::shared_ptr<velox::exec::Expr>& expr);
   static bool canBeEvaluated(const std::shared_ptr<velox::exec::Expr>& expr);
   // Determines which side (0=left, 1=right) an expression references by
-  // examining its field references. Returns -1 if no fields found.
+  // examining its field references. Returns -1 if no fields found, -2 if spans
+  // both sides.
   int findExpressionSide(const std::shared_ptr<velox::exec::Expr>& expr) const;
 };
+
+/// Checks if an expression contains sub-expressions that:
+/// 1. Cannot be represented natively in cuDF AST (need precomputation)
+/// 2. AND reference fields from both sides of a join
+/// Returns true only if such problematic sub-expressions exist.
+inline bool hasNonAstSubexprSpanningBothSides(
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const RowTypePtr& leftSchema,
+    const RowTypePtr& rightSchema) {
+  // Check if the expression is natively supported by AST
+  // If it is, we don't need to precompute it, so cross-side references are fine
+  if (detail::isAstExprSupported(expr)) {
+    // Recursively check children
+    for (const auto& child : expr->inputs()) {
+      if (hasNonAstSubexprSpanningBothSides(child, leftSchema, rightSchema)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Expression needs precomputation - check if it spans both sides
+  bool hasLeft = false, hasRight = false;
+  for (const auto* field : expr->distinctFields()) {
+    hasLeft |= leftSchema->containsChild(field->field());
+    hasRight |= rightSchema->containsChild(field->field());
+    if (hasLeft && hasRight) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // get nested column indices
 std::vector<int> getNestedColumnIndices(
@@ -524,6 +562,13 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       // Children will be recursively handled by createCudfExpression
       // Determine which side this expression references
       int sideIdx = findExpressionSide(expr);
+      if (sideIdx == -2) {
+        // Expression spans both sides of the join - cannot precompute on one
+        // side
+        VELOX_FAIL(
+            "Expression spans both join sides and cannot be precomputed: " +
+            name);
+      }
       if (sideIdx < 0) {
         sideIdx = 0; // Default to left side if no fields found
       }
@@ -542,11 +587,17 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto value = c->value();
     VELOX_CHECK(value->isConstantEncoding());
 
+    // Materialize NULL literals via make_column_from_scalar so the output
+    // column preserves nullness for downstream operators like count(column).
+    //
+    // Also keep the standalone literal workaround: cudf::compute_column can
+    // produce spurious nulls for root literal expressions. See comment below.
+    //
     // TODO: There is a scalar stream synchronization bug that causes
     // cudf::compute_column to produce spurious nulls for standalone
     // literal expressions.  Work around it by materialising via
     // make_column_from_scalar instead.
-    if (expr == rootExpr) {
+    if (value->isNullAt(0) || expr == rootExpr) {
       // convert to cudf scalar and store it
       createLiteral(value, scalars);
       // The scalar index is scalars.size() - 1 since we just added it
@@ -669,16 +720,24 @@ cudf::ast::expression const& AstContext::pushExprToTree(
   }
 }
 
+// Returns: 0 = left only, 1 = right only, -1 = no fields, -2 = spans both sides
 int AstContext::findExpressionSide(
     const std::shared_ptr<velox::exec::Expr>& expr) const {
+  int foundSide = -1;
   for (const auto* field : expr->distinctFields()) {
     for (size_t sideIdx = 0; sideIdx < inputRowSchema.size(); ++sideIdx) {
       if (inputRowSchema[sideIdx].get()->containsChild(field->field())) {
-        return static_cast<int>(sideIdx);
+        if (foundSide == -1) {
+          foundSide = static_cast<int>(sideIdx);
+        } else if (foundSide != static_cast<int>(sideIdx)) {
+          // Expression spans both sides
+          return -2;
+        }
+        break;
       }
     }
   }
-  return -1;
+  return foundSide;
 }
 
 std::vector<ColumnOrView> precomputeSubexpressions(

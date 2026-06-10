@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h" // @manual
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
@@ -104,7 +105,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
         .connectorSessionProperty(
             kHiveConnectorId,
             HiveConfig::kReadTimestampUnitSession,
-            std::to_string(static_cast<int>(timestampPrecision_)))
+            std::to_string(static_cast<int>(readTimestampPrecision_)))
         .splits(splits)
         .assertResults(sql);
   }
@@ -169,6 +170,8 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   void loadDataWithRowType(const std::string& filePath, RowVectorPtr data) {
     auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
     dwio::common::ReaderOptions readerOpts{pool.get()};
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<facebook::velox::dwio::common::BufferedInput>(
             std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
@@ -211,10 +214,6 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
         rootPool_->addAggregateChild("ParquetTableScanTest.Writer");
     options.memoryPool = childPool.get();
 
-    if (options.parquetWriteTimestampUnit.has_value()) {
-      timestampPrecision_ = options.parquetWriteTimestampUnit.value();
-    }
-
     auto writer = std::make_unique<Writer>(
         std::move(sink), options, asRowType(data[0]->type()));
 
@@ -224,44 +223,30 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     writer->close();
   }
 
-  void testTimestampRead(const WriterOptions& options) {
-    auto stringToTimestamp = [](std::string_view view) {
-      return util::fromTimestampString(
-                 view.data(),
-                 view.size(),
-                 util::TimestampParseMode::kPrestoCast)
-          .thenOrThrow(folly::identity, [&](const Status& status) {
-            VELOX_USER_FAIL("{}", status.message());
-          });
-    };
-    std::vector<std::string_view> views = {
-        "2015-06-01 19:34:56.007",
-        "2015-06-02 19:34:56.12306",
-        "2001-02-03 03:34:06.056",
-        "1998-03-01 08:01:06.996669",
-        "2022-12-23 03:56:01",
-        "1980-01-24 00:23:07",
-        "1999-12-08 13:39:26.123456",
-        "2023-04-21 09:09:34.5",
-        "2000-09-12 22:36:29",
-        "2007-12-12 04:27:56.999",
-    };
-    std::vector<Timestamp> values;
-    values.reserve(views.size());
-    for (auto view : views) {
-      values.emplace_back(stringToTimestamp(view));
-    }
-
+  void testTimestampRead(
+      const WriterOptions& options,
+      TimestampPrecision readTimestampPrecision) {
+    VELOX_CHECK(options.parquetWriteTimestampUnit.has_value());
+    const auto [values, expectedValues] = timestampValues(
+        options.parquetWriteTimestampUnit.value(), readTimestampPrecision);
     auto vector = makeRowVector(
         {"t"},
         {
             makeFlatVector<Timestamp>(values),
         });
-    auto schema = asRowType(vector->type());
     auto file = TempFilePath::create();
     writeToParquetFile(file->getPath(), {vector}, options);
-    loadData(schema, vector);
+    loadData(
+        asRowType(vector->type()),
+        makeRowVector(
+            {"t"},
+            {
+                makeFlatVector<Timestamp>(expectedValues),
+            }));
 
+    readTimestampPrecision_ = readTimestampPrecision;
+    auto guard = folly::makeGuard(
+        [&] { readTimestampPrecision_ = kDefaultReadTimestampPrecision; });
     assertSelectWithFilter(
         {makeSplit(file->getPath())}, {"t"}, {}, "", "SELECT t from tmp");
     assertSelectWithFilter(
@@ -302,6 +287,38 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
         "SELECT t from tmp where t != TIMESTAMP '2000-09-12 22:36:29'");
   }
 
+  void testTimestampUtcRead(
+      const WriterOptions& options,
+      TimestampPrecision readTimestampPrecision) {
+    VELOX_CHECK(options.parquetWriteTimestampUnit.has_value());
+    const auto [values, expectedValues] = timestampValues(
+        options.parquetWriteTimestampUnit.value(), readTimestampPrecision);
+    auto vector = makeRowVector(
+        {"t"},
+        {
+            makeFlatVector<Timestamp>(values, TIMESTAMP_UTC()),
+        });
+    auto file = TempFilePath::create();
+    writeToParquetFile(file->getPath(), {vector}, options);
+
+    loadData(
+        ROW({"t"}, {TIMESTAMP_UTC()}),
+        makeRowVector(
+            {"t"},
+            {
+                // Expect values are used for creating duckdb table, so keep
+                // using TIMESTAMP here.
+                makeFlatVector<Timestamp>(expectedValues),
+            }));
+
+    readTimestampPrecision_ = readTimestampPrecision;
+    auto guard = folly::makeGuard(
+        [&] { readTimestampPrecision_ = kDefaultReadTimestampPrecision; });
+
+    assertSelectWithFilter(
+        {makeSplit(file->getPath())}, {"t"}, {}, "", "SELECT t from tmp");
+  }
+
  private:
   RowTypePtr getRowType(std::vector<std::string>&& outputColumnNames) const {
     std::vector<TypePtr> types;
@@ -312,8 +329,66 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     return ROW(std::move(outputColumnNames), std::move(types));
   }
 
+  std::pair<std::vector<Timestamp>, std::vector<Timestamp>> timestampValues(
+      TimestampPrecision writeTimestampPrecision,
+      TimestampPrecision readTimestampPrecision) {
+    auto stringToTimestamp = [](std::string_view view) {
+      return util::fromTimestampString(
+                 view.data(),
+                 view.size(),
+                 util::TimestampParseMode::kPrestoCast)
+          .value();
+    };
+    std::vector<std::string_view> views = {
+        "2015-06-01 19:34:56.007",
+        "2015-06-02 19:34:56.12306",
+        "2001-02-03 03:34:06.056",
+        "1998-03-01 08:01:06.996669",
+        "2022-12-23 03:56:01",
+        "1980-01-24 00:23:07",
+        "1999-12-08 13:39:26.123456",
+        "2023-04-21 09:09:34.5",
+        "2000-09-12 22:36:29",
+        "2007-12-12 04:27:56.999",
+    };
+
+    std::vector<Timestamp> values;
+    std::vector<Timestamp> expectedValues;
+    values.reserve(views.size());
+    for (auto view : views) {
+      auto ts = stringToTimestamp(view);
+      values.emplace_back(ts);
+      if (readTimestampPrecision == TimestampPrecision::kMilliseconds) {
+        expectedValues.emplace_back(Timestamp::fromMillis(ts.toMillis()));
+        continue;
+      }
+      if (readTimestampPrecision == TimestampPrecision::kMicroseconds) {
+        if (writeTimestampPrecision == TimestampPrecision::kMilliseconds) {
+          expectedValues.emplace_back(
+              Timestamp::fromMicros(ts.toMillis() * 1'000));
+          continue;
+        }
+        if (writeTimestampPrecision == TimestampPrecision::kMicroseconds) {
+          expectedValues.emplace_back(Timestamp::fromMicros(ts.toMicros()));
+          continue;
+        }
+      }
+      VELOX_NYI(
+          "Not implemented, read precision: {}, write precision: {}",
+          static_cast<int>(readTimestampPrecision),
+          static_cast<int>(writeTimestampPrecision));
+    }
+    return {values, expectedValues};
+  }
+
   RowTypePtr rowType_;
-  TimestampPrecision timestampPrecision_ = TimestampPrecision::kMicroseconds;
+  const TimestampPrecision kDefaultReadTimestampPrecision =
+      TimestampPrecision::kMicroseconds;
+  TimestampPrecision readTimestampPrecision_ = kDefaultReadTimestampPrecision;
+  std::shared_ptr<io::IoStatistics> dataIoStats_ =
+      std::make_shared<io::IoStatistics>();
+  std::shared_ptr<io::IoStatistics> metadataIoStats_ =
+      std::make_shared<io::IoStatistics>();
 };
 
 TEST_F(ParquetTableScanTest, basic) {
@@ -1087,45 +1162,83 @@ TEST_F(ParquetTableScanTest, sessionTimezone) {
       "Asia/Shanghai");
 }
 
-TEST_F(ParquetTableScanTest, timestampInt64Dictionary) {
+TEST_F(ParquetTableScanTest, timestampInt64DictionaryMicro) {
   WriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
-  testTimestampRead(options);
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
 }
 
-TEST_F(ParquetTableScanTest, timestampInt64Plain) {
+TEST_F(ParquetTableScanTest, timestampInt64DictionaryMilli) {
+  WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampInt64PlainMicro) {
   WriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
-  testTimestampRead(options);
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
 }
 
-TEST_F(ParquetTableScanTest, timestampInt96Dictionary) {
+TEST_F(ParquetTableScanTest, timestampInt64PlainMilli) {
+  WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampInt96DictionaryMicro) {
   WriterOptions options;
   options.writeInt96AsTimestamp = true;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
-  testTimestampRead(options);
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
 }
 
-TEST_F(ParquetTableScanTest, timestampInt96Plain) {
+TEST_F(ParquetTableScanTest, timestampInt96DictionaryMilli) {
+  WriterOptions options;
+  options.writeInt96AsTimestamp = true;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampInt96PlainMicro) {
   WriterOptions options;
   options.writeInt96AsTimestamp = true;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
-  testTimestampRead(options);
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampInt96PlainMilli) {
+  WriterOptions options;
+  options.writeInt96AsTimestamp = true;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampRead(options, TimestampPrecision::kMilliseconds);
 }
 
 TEST_F(ParquetTableScanTest, timestampConvertedType) {
   auto stringToTimestamp = [](std::string_view view) {
     return util::fromTimestampString(
                view.data(), view.size(), util::TimestampParseMode::kPrestoCast)
-        .thenOrThrow(folly::identity, [&](const Status& status) {
-          VELOX_USER_FAIL("{}", status.message());
-        });
+        .value();
   };
   std::vector<std::string_view> expected = {
       "1970-01-01 00:00:00.010",
@@ -1183,6 +1296,42 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
     });
     assertEqualResults({expected}, {result});
   }
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcPlainMicro) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  testTimestampUtcRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampUtcRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcDictionaryMicro) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  testTimestampUtcRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampUtcRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcPlainMilli) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = false;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampUtcRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampUtcRead(options, TimestampPrecision::kMilliseconds);
+}
+
+TEST_F(ParquetTableScanTest, timestampUtcDictionaryMilli) {
+  parquet::WriterOptions options;
+  options.writeInt96AsTimestamp = false;
+  options.enableDictionary = true;
+  options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
+  testTimestampUtcRead(options, TimestampPrecision::kMicroseconds);
+  testTimestampUtcRead(options, TimestampPrecision::kMilliseconds);
 }
 
 TEST_F(ParquetTableScanTest, testColumnNotExists) {
@@ -1425,6 +1574,199 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
       {makeSplit(getExampleFilePath("delta_byte_array.parquet"))},
       {"a"},
       "SELECT a from expected");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  auto vector = makeRowVector(
+      {"c"},
+      {makeFlatVector<int64_t>(kSize, [](auto row) { return 100 + 7 * row; })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
+  auto run = [&]<typename T>() {
+    constexpr vector_size_t kSize = 4096;
+    auto vector = makeRowVector({"c"}, {makeFlatVector<T>(kSize, [](auto row) {
+                                  return static_cast<T>(row + row / 2);
+                                })});
+
+    for (bool useV2 : {false, true}) {
+      SCOPED_TRACE(fmt::format("T=int{} useV2={}", sizeof(T) * 8, useV2));
+      WriterOptions options;
+      options.enableDictionary = false;
+      options.encoding =
+          facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+      options.useParquetDataPageV2 = useV2;
+      options.compressionKind = common::CompressionKind::CompressionKind_NONE;
+
+      auto file = TempFilePath::create();
+      writeToParquetFile(file->getPath(), {vector}, options);
+      loadData(vector->rowType(), vector);
+      assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+    }
+  };
+
+  run.template operator()<int32_t>();
+  run.template operator()<int64_t>();
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth32) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  constexpr int64_t kStep = (1LL << 32) - 1;
+  auto vector = makeRowVector(
+      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+        return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
+      })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidthSweep) {
+  auto run = [&]<typename T>(int maxBitWidth) {
+    SCOPED_TRACE(fmt::format("T=int{}", sizeof(T) * 8));
+    constexpr vector_size_t kSize = 256;
+    std::vector<std::string> names;
+    std::vector<VectorPtr> children;
+    for (int bw = 1; bw <= maxBitWidth; ++bw) {
+      const int64_t step = (bw == 32) ? 0xFFFFFFFFLL : ((1LL << bw) - 1);
+      children.push_back(makeFlatVector<T>(kSize, [step](auto row) -> T {
+        return static_cast<T>((row / 2) * step + ((row % 2) ? step : 0));
+      }));
+      names.push_back(fmt::format("c{}", bw));
+    }
+    auto vector = makeRowVector(names, children);
+
+    WriterOptions options;
+    options.enableDictionary = false;
+    options.encoding =
+        facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+    auto file = TempFilePath::create();
+    writeToParquetFile(file->getPath(), {vector}, options);
+    loadData(vector->rowType(), vector);
+
+    assertSelect(
+        {makeSplit(file->getPath())}, std::move(names), "SELECT * FROM tmp");
+  };
+
+  run.template operator()<int32_t>(31);
+  run.template operator()<int64_t>(32);
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth33) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  constexpr int64_t kStep = 1LL << 32;
+  auto vector = makeRowVector(
+      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+        return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
+      })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedMixedMiniblockWidths) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 128;
+  auto vector =
+      makeRowVector({"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+                      auto deltaForRow = [](vector_size_t r) -> int64_t {
+                        const int mb = (r / 32) % 4;
+                        const int parity = r % 2;
+                        if (mb == 0)
+                          return parity;
+                        if (mb == 1)
+                          return parity ? 200LL : 0LL;
+                        if (mb == 2)
+                          return parity ? 50'000LL : 0LL;
+                        return parity ? 12'000'000LL : 0LL;
+                      };
+                      int64_t v = 0;
+                      for (vector_size_t i = 0; i < row; ++i) {
+                        v += deltaForRow(i);
+                      }
+                      return v;
+                    })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedFilterScalarTail) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+  options.dataPageSize = 8 * 1024;
+  options.batchSize = 1024;
+
+  constexpr vector_size_t kSize = 128 * 1024;
+  auto vector = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int64_t>(
+           kSize, [](auto row) { return static_cast<int64_t>(row); }),
+       makeFlatVector<int64_t>(
+           kSize, [](auto row) { return 100'000LL + row * 31LL; })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelectWithFilter(
+      {makeSplit(file->getPath())},
+      {"a", "b"},
+      {"a BETWEEN 10000 AND 70000", "b > 200000"},
+      "",
+      "SELECT a, b FROM tmp WHERE a BETWEEN 10000 AND 70000 AND b > 200000");
+}
+
+TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
+  WriterOptions options;
+  options.enableDictionary = false;
+  options.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
+
+  constexpr vector_size_t kSize = 1024;
+  auto vector = makeRowVector(
+      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+        const int64_t steps[] = {
+            -1'000'000'000LL, 2'000'000'000LL, -500'000LL, 1'500'000'000LL};
+        return steps[row % 4] * row;
+      })});
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, options);
+  loadData(vector->rowType(), vector);
+
+  assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
 }
 
 TEST_F(ParquetTableScanTest, booleanRle) {

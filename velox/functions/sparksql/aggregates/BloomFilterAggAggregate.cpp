@@ -19,9 +19,12 @@
 #include "velox/common/base/BloomFilter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+using functions::sparksql::SparkQueryConfig;
 
 namespace {
 
@@ -64,10 +67,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const TypePtr& resultType,
       const core::QueryConfig& config)
       : Aggregate(resultType),
-        defaultExpectedNumItems_(config.sparkBloomFilterExpectedNumItems()),
-        defaultNumBits_(config.sparkBloomFilterNumBits()),
-        maxNumBits_(config.sparkBloomFilterMaxNumBits()),
-        maxNumItems_(config.sparkBloomFilterMaxNumItems()) {}
+        defaultExpectedNumItems_(
+            SparkQueryConfig{config}.bloomFilterExpectedNumItems()),
+        defaultNumBits_(SparkQueryConfig{config}.bloomFilterNumBits()),
+        maxNumBits_(SparkQueryConfig{config}.bloomFilterMaxNumBits()),
+        maxNumItems_(SparkQueryConfig{config}.bloomFilterMaxNumItems()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(BloomFilterAccumulator);
