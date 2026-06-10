@@ -27,6 +27,8 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
+#include <folly/ScopeGuard.h>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -1603,6 +1605,67 @@ TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampWithTimezone) {
   EXPECT_EQ(result, Timestamp(1705334400, 0));
 }
 
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampDstBoundary) {
+  setTimezone("America/Los_Angeles");
+
+  // Spring forward: at 2023-03-12 02:00 PST the clocks jump to 03:00 PDT, so
+  // 02:30 never occurs. This matches Timestamp::toGMT, which fails on a
+  // nonexistent local time.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<Timestamp, std::string>(
+          "cast(c0 as timestamp)", "2023-03-12 02:30:00"),
+      "does not exist");
+
+  // Fall back: at 2023-11-05 02:00 PDT the clocks return to 01:00 PST, so 01:30
+  // occurs twice. Both the CPU path and the GPU table resolve the ambiguity to
+  // the earliest instant (PDT, UTC-7), so the two agree.
+  auto overlap = makeRowVector({makeFlatVector<std::string>(
+      std::vector<std::string>{"2023-11-05 01:30:00"})});
+  assertExpressionMatchesCpu(
+      "cast(c0 as timestamp)", overlap, overlap->rowType());
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampWithTimezoneMicros) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto savedUnit = config.timestampUnit;
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  SCOPE_EXIT {
+    config.timestampUnit = savedUnit;
+  };
+
+  setTimezone("America/Los_Angeles");
+
+  // The 7-hour PDT offset is applied at the timestamp's own (microsecond)
+  // resolution, so the fractional .123456 seconds survive the conversion
+  // unchanged. Guards against reinterpreting the count at the wrong scale.
+  auto result = evaluateOnce<Timestamp, std::string>(
+      "cast(c0 as timestamp)", "2024-03-14 12:30:00.123456");
+  EXPECT_EQ(result, Timestamp(1710444600, 123'456'000));
+}
+
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampTimezoneParity) {
+  // local->UTC compared against CPU Velox across several zones: a
+  // northern-hemisphere DST zone (including its fall-back overlap), a
+  // southern-hemisphere DST zone, a no-DST zone, and a fixed-offset zone. Gap
+  // (nonexistent) local times are covered by castVarcharToTimestampDstBoundary.
+  auto input =
+      makeRowVector({makeFlatVector<std::string>(std::vector<std::string>{
+          "2024-01-15 08:00:00",
+          "2024-07-15 08:00:00.500000",
+          "2023-11-05 01:30:00",
+          "2023-11-05 03:30:00",
+          "1995-06-01 12:00:00",
+          "2150-03-20 10:00:00",
+      })});
+  for (const auto* zone :
+       {"America/Los_Angeles", "Australia/Sydney", "Asia/Kolkata", "+05:30"}) {
+    SCOPED_TRACE(zone);
+    setTimezone(zone);
+    assertExpressionMatchesCpu(
+        "cast(c0 as timestamp)", input, input->rowType());
+  }
+}
+
 TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampNull) {
   auto result = evaluateOnce<Timestamp, std::string>(
       "cast(c0 as timestamp)", std::optional<std::string>(std::nullopt));
@@ -1808,6 +1871,36 @@ TEST_F(CudfSimpleFilterProjectTest, dateFormatWithTimezone) {
       "date_format(c0, '%H:%i:%S')",
       std::optional<Timestamp>(Timestamp(1705334400, 0)));
   EXPECT_EQ(result, "08:00:00");
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateFormatTimezoneParitySweep) {
+  // UTC->local is always well-defined, so a dense sweep of UTC instants across
+  // DST transitions can be compared directly against CPU Velox. The same
+  // instants run through northern- and southern-hemisphere DST zones, a no-DST
+  // zone, and a fixed-offset zone.
+  std::vector<Timestamp> instants;
+  for (const auto* base : {
+           "2023-03-12 08:00:00", // Around the LA spring-forward transition.
+           "2023-11-05 07:00:00", // Around the LA fall-back transition.
+           "2023-10-01 14:00:00", // Around the Sydney spring-forward
+                                  // transition.
+           "2023-04-02 14:00:00", // Around the Sydney fall-back transition.
+           "1970-01-01 00:00:00",
+           "2200-06-15 12:00:00", // Far future, still within nanosecond range.
+       }) {
+    const auto start = parseTimestamp(base);
+    for (int step = 0; step < 12; ++step) {
+      instants.emplace_back(start.getSeconds() + step * 1800, 0);
+    }
+  }
+  auto input = makeRowVector({makeFlatVector<Timestamp>(instants)});
+  for (const auto* zone :
+       {"America/Los_Angeles", "Australia/Sydney", "Asia/Kolkata", "+05:30"}) {
+    SCOPED_TRACE(zone);
+    setTimezone(zone);
+    assertExpressionMatchesCpu(
+        "date_format(c0, '%Y-%m-%d %H:%i:%S')", input, input->rowType());
+  }
 }
 
 // Test unary math functions

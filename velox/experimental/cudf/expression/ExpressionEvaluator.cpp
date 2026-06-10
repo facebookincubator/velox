@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/TimeZoneOffset.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/QueryConfig.h"
@@ -26,7 +27,6 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/DecimalUtil.h"
-#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/BaseVector.h"
@@ -405,93 +405,6 @@ class SplitFunction : public CudfFunction {
   cudf::size_type maxSplitCount_;
 };
 
-std::vector<int64_t> copyTimestampToHost(
-    cudf::column_view col,
-    rmm::cuda_stream_view stream) {
-  auto numRows = col.size();
-  std::vector<int64_t> hostData(numRows);
-  if (numRows > 0) {
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        hostData.data(),
-        col.data<int64_t>(),
-        numRows * sizeof(int64_t),
-        cudaMemcpyDeviceToHost,
-        stream.value()));
-    stream.synchronize();
-  }
-  return hostData;
-}
-
-std::unique_ptr<cudf::column> buildTimestampFromHost(
-    const std::vector<int64_t>& hostData,
-    cudf::column_view originalCol,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto numRows = static_cast<cudf::size_type>(hostData.size());
-  auto result = cudf::make_fixed_width_column(
-      originalCol.type(), numRows, cudf::mask_state::UNALLOCATED, stream, mr);
-  if (numRows > 0) {
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        result->mutable_view().data<int64_t>(),
-        hostData.data(),
-        numRows * sizeof(int64_t),
-        cudaMemcpyHostToDevice,
-        stream.value()));
-  }
-  if (originalCol.nullable()) {
-    auto mask = cudf::copy_bitmask(originalCol, stream, mr);
-    result->set_null_mask(std::move(mask), originalCol.null_count());
-  }
-  stream.synchronize();
-  return result;
-}
-
-std::unique_ptr<cudf::column> convertLocalToUtc(
-    std::unique_ptr<cudf::column> localTs,
-    const tz::TimeZone* tz,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto view = localTs->view();
-  auto hostData = copyTimestampToHost(view, stream);
-  bool isMicroseconds =
-      view.type().id() == cudf::type_id::TIMESTAMP_MICROSECONDS;
-  for (auto& val : hostData) {
-    if (isMicroseconds) {
-      Timestamp ts = Timestamp::fromMicros(val);
-      ts.toGMT(*tz);
-      val = ts.toMicros();
-    } else {
-      Timestamp ts = Timestamp::fromNanos(val);
-      ts.toGMT(*tz);
-      val = ts.toNanos();
-    }
-  }
-  return buildTimestampFromHost(hostData, view, stream, mr);
-}
-
-std::unique_ptr<cudf::column> convertUtcToLocal(
-    std::unique_ptr<cudf::column> utcTs,
-    const tz::TimeZone* tz,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto view = utcTs->view();
-  auto hostData = copyTimestampToHost(view, stream);
-  bool isMicroseconds =
-      view.type().id() == cudf::type_id::TIMESTAMP_MICROSECONDS;
-  for (auto& val : hostData) {
-    if (isMicroseconds) {
-      Timestamp ts = Timestamp::fromMicros(val);
-      ts.toTimezone(*tz);
-      val = ts.toMicros();
-    } else {
-      Timestamp ts = Timestamp::fromNanos(val);
-      ts.toTimezone(*tz);
-      val = ts.toNanos();
-    }
-  }
-  return buildTimestampFromHost(hostData, view, stream, mr);
-}
-
 class CastFunction : public CudfFunction {
  public:
   enum class CastMode {
@@ -565,8 +478,8 @@ class CastFunction : public CudfFunction {
         // cudf::strings::to_timestamps treats strings as UTC, but Presto
         // treats bare timestamps as local time. Convert local->UTC.
         if (sessionTimeZone_ != nullptr) {
-          return convertLocalToUtc(
-              std::move(result), sessionTimeZone_, stream, mr);
+          return TimeZoneOffsetTable::get(sessionTimeZone_)
+              ->toUtc(result->view(), stream, mr);
         }
         return result;
       }
@@ -632,9 +545,8 @@ class DateFormatFunction : public CudfFunction {
     // cudf::strings::from_timestamps formats in UTC, so convert first.
     std::unique_ptr<cudf::column> localCol;
     if (sessionTimeZone_ != nullptr) {
-      auto inputOwned = std::make_unique<cudf::column>(inputCol, stream, mr);
-      localCol = convertUtcToLocal(
-          std::move(inputOwned), sessionTimeZone_, stream, mr);
+      localCol = TimeZoneOffsetTable::get(sessionTimeZone_)
+                     ->toLocal(inputCol, stream, mr);
       inputCol = localCol->view();
     }
 

@@ -25,6 +25,7 @@ add_library(
   PrestoFunctions.cpp
   SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
+  TimeZoneOffset.cpp
 )
 
 target_link_libraries(
