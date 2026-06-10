@@ -334,11 +334,12 @@ VectorPtr CastExpr::castToTime(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType) {
+    const TypePtr& fromType,
+    const TypePtr& toType) {
   switch (fromType->kind()) {
     case TypeKind::VARCHAR: {
       VectorPtr castResult;
-      context.ensureWritable(rows, TIME(), castResult);
+      context.ensureWritable(rows, toType, castResult);
       (*castResult).clearNulls(rows);
 
       // Get session timezone and start time for timezone conversions
@@ -351,20 +352,30 @@ VectorPtr CastExpr::castToTime(
       auto* resultFlatVector = castResult->as<FlatVector<int64_t>>();
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+        bool wrapException = true;
         try {
-          const auto inputString = inputVector->valueAt(row);
-          int64_t result =
-              TIME()->valueToTime(inputString, timeZone, sessionStartTimeMs);
-          resultFlatVector->set(row, result);
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
+          const auto inputString =
+              hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+          const auto result = hooks_->castStringToTime(
+              inputString, timeZone, sessionStartTimeMs);
+          setResultOrError(
+              row,
+              result,
+              [&](const std::string& details) {
+                return makeErrorMessage(input, row, toType, details);
+              },
+              context,
+              resultFlatVector,
+              wrapException);
+        } catch (const VeloxUserError& ue) {
+          if (!wrapException) {
             throw;
           }
           VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + ue.message());
+              makeErrorMessage(input, row, toType) + " " + ue.message());
         } catch (const std::exception& e) {
           VELOX_USER_FAIL(
-              makeErrorMessage(input, row, TIME()) + " " + e.what());
+              makeErrorMessage(input, row, toType) + " " + e.what());
         }
       });
 
@@ -372,6 +383,8 @@ VectorPtr CastExpr::castToTime(
     }
     case TypeKind::TIMESTAMP: {
       VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
+      // Only support TIMESTAMP -> TIME, not TIMESTAMP -> TIME_MICRO_UTC
+      VELOX_DCHECK(toType->equivalent(*TIME()));
       VectorPtr castResult;
       context.ensureWritable(rows, TIME(), castResult);
       (*castResult).clearNulls(rows);
@@ -838,11 +851,9 @@ void CastExpr::applyPeeled(
         fromType->toString(),
         toType->toString());
   } else if (fromType->isTime()) {
-    VELOX_DCHECK(fromType->equivalent(*TIME()));
     result = castFromTime(rows, input, context, toType);
   } else if (toType->isTime()) {
-    VELOX_DCHECK(toType->equivalent(*TIME()));
-    result = castToTime(rows, input, context, fromType);
+    result = castToTime(rows, input, context, fromType, toType);
   } else if (toType->isShortDecimal()) {
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {

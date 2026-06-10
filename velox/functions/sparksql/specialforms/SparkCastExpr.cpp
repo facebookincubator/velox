@@ -117,6 +117,9 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+    if (toType->isTime()) {
+      return true;
+    }
   }
   if (fromType->isTimestamp() && isIntegralType(toType)) {
     return true;
@@ -141,6 +144,10 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
       compiledChildren.size());
 
   const auto& fromType = compiledChildren[0]->type();
+  VELOX_USER_CHECK(
+      !type->isTime() || type->equivalent(*TIME_MICRO_UTC()),
+      "Spark only supports TIME_MICRO_UTC for time type casts, got {}",
+      type->toString());
 
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
@@ -167,6 +174,11 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       "TRY_CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
 
+  VELOX_USER_CHECK(
+      !type->isTime() || type->equivalent(*TIME_MICRO_UTC()),
+      "Spark only supports TIME_MICRO_UTC for time type casts, got {}",
+      type->toString());
+  // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
