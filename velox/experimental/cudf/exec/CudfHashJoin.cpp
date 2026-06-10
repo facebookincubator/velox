@@ -82,6 +82,27 @@ cudf::table_view createExtendedTableView(
   return cudf::table_view(allViews);
 }
 
+vector_size_t filteredOutputNumRows(
+    bool zeroColumnOutput,
+    cudf::column_view filterColumn,
+    const std::vector<std::unique_ptr<cudf::column>>& joinedCols,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref tempMr) {
+  if (!zeroColumnOutput) {
+    return joinedCols.empty() ? 0 : joinedCols[0]->size();
+  }
+
+  auto trueCountScalar = cudf::reduce(
+      filterColumn,
+      *cudf::make_sum_aggregation<cudf::reduce_aggregation>(),
+      cudf::data_type{cudf::type_id::INT32},
+      stream,
+      tempMr);
+  return static_cast<vector_size_t>(
+      static_cast<cudf::numeric_scalar<int32_t>*>(trueCountScalar.get())
+          ->value(stream));
+}
+
 } // namespace
 
 void CudfHashJoinProbe::doClose() {
@@ -721,22 +742,13 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
       filterEvaluator_->eval(joinedColViews, stream, get_output_mr());
   auto filterColumn = asView(filterColumns);
 
-  vector_size_t numRows = 0;
-  if (outputType_->size() == 0) {
-    auto trueCountScalar = cudf::reduce(
-        filterColumn,
-        *cudf::make_sum_aggregation<cudf::reduce_aggregation>(),
-        cudf::data_type{cudf::type_id::INT32},
-        stream,
-        get_temp_mr());
-    numRows = static_cast<cudf::numeric_scalar<int32_t>*>(trueCountScalar.get())
-                  ->value(stream);
-  }
-
   joinedCols = func(std::move(joinedCols), filterColumn);
-  if (outputType_->size() != 0) {
-    numRows = joinedCols.empty() ? 0 : joinedCols[0]->size();
-  }
+  auto const numRows = filteredOutputNumRows(
+      outputType_->size() == 0,
+      filterColumn,
+      joinedCols,
+      stream,
+      get_temp_mr());
 
   auto filteredjoinedCols =
       std::vector<std::unique_ptr<cudf::column>>(outputType_->names().size());
