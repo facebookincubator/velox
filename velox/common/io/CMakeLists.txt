@@ -14,10 +14,8 @@
 
 velox_add_library(
   velox_common_io
-  AsyncIoContext.cpp
   IoStatistics.cpp
   HEADERS
-  AsyncIoContext.h
   IoStatistics.h
   Options.h
 )
