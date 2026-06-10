@@ -1588,8 +1588,7 @@ TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestamp) {
 }
 
 TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampWithTimezone) {
-  cudf_velox::SessionTimeZoneScope tzScope(
-      tz::locateZone("America/Los_Angeles"));
+  setTimezone("America/Los_Angeles");
 
   // 2024-03-14 12:30:00 in America/Los_Angeles is UTC-7 (PDT in March)
   // so UTC = 12:30 + 7:00 = 19:30 = 1710444600
@@ -1796,8 +1795,7 @@ TEST_F(CudfSimpleFilterProjectTest, dateFormatLiteralPercent) {
 }
 
 TEST_F(CudfSimpleFilterProjectTest, dateFormatWithTimezone) {
-  cudf_velox::SessionTimeZoneScope tzScope(
-      tz::locateZone("America/Los_Angeles"));
+  setTimezone("America/Los_Angeles");
 
   // 2024-03-14 19:30:00 UTC is 12:30:00 PDT (UTC-7 in March)
   auto result = evaluateOnce<std::string>(

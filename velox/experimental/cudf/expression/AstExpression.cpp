@@ -35,9 +35,15 @@ cudf::ast::expression const& createAstTree(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precomputeInstructions) {
+    std::vector<PrecomputeInstruction>& precomputeInstructions,
+    const tz::TimeZone* sessionTimeZone) {
   AstContext context{
-      tree, scalars, {inputRowSchema}, {precomputeInstructions}, expr};
+      tree,
+      scalars,
+      {inputRowSchema},
+      {precomputeInstructions},
+      expr,
+      sessionTimeZone};
   return context.pushExprToTree(expr);
 }
 
@@ -48,22 +54,30 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions) {
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
+    const tz::TimeZone* sessionTimeZone) {
   AstContext context{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
       {leftPrecomputeInstructions, rightPrecomputeInstructions},
-      expr};
+      expr,
+      sessionTimeZone};
   return context.pushExprToTree(expr);
 }
 
 ASTExpression::ASTExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema)
+    const RowTypePtr& inputRowSchema,
+    const tz::TimeZone* sessionTimeZone)
     : expr_(expr), inputRowSchema_(inputRowSchema) {
   createAstTree(
-      expr, cudfTree_, scalars_, inputRowSchema, precomputeInstructions_);
+      expr,
+      cudfTree_,
+      scalars_,
+      inputRowSchema,
+      precomputeInstructions_,
+      sessionTimeZone);
 }
 
 void ASTExpression::close() {
@@ -134,8 +148,11 @@ void registerAstEvaluator(int priority) {
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return ASTExpression::canEvaluate(expr);
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-        return std::make_shared<ASTExpression>(std::move(expr), row);
+      [](std::shared_ptr<velox::exec::Expr> expr,
+         const RowTypePtr& row,
+         const tz::TimeZone* sessionTimeZone) {
+        return std::make_shared<ASTExpression>(
+            std::move(expr), row, sessionTimeZone);
       },
       /*overwrite=*/false);
 }

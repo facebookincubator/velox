@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/FunctionSignature.h"
@@ -208,8 +209,11 @@ static void ensureBuiltinExpressionEvaluatorsRegistered() {
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return FunctionExpression::canEvaluate(std::move(expr));
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-        return FunctionExpression::create(std::move(expr), row);
+      [](std::shared_ptr<velox::exec::Expr> expr,
+         const RowTypePtr& row,
+         const tz::TimeZone* sessionTimeZone) {
+        return FunctionExpression::create(
+            std::move(expr), row, sessionTimeZone);
       },
       /*overwrite=*/false);
 
@@ -240,19 +244,15 @@ getCudfFunctionRegistry() {
   return registry;
 }
 
-static thread_local const tz::TimeZone* g_sessionTimeZone = nullptr;
-
-SessionTimeZoneScope::SessionTimeZoneScope(const tz::TimeZone* tz)
-    : saved_(g_sessionTimeZone) {
-  g_sessionTimeZone = tz;
-}
-
-SessionTimeZoneScope::~SessionTimeZoneScope() {
-  g_sessionTimeZone = saved_;
-}
-
-const tz::TimeZone* getSessionTimeZone() {
-  return g_sessionTimeZone;
+const tz::TimeZone* sessionTimeZoneFromConfig(const core::QueryConfig& config) {
+  if (!config.adjustTimestampToTimezone()) {
+    return nullptr;
+  }
+  const auto tzName = config.sessionTimezone();
+  if (tzName.empty()) {
+    return nullptr;
+  }
+  return tz::locateZone(tzName);
 }
 
 namespace {
@@ -501,7 +501,10 @@ class CastFunction : public CudfFunction {
     kIntToString,
   };
 
-  CastFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  CastFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      const tz::TimeZone* sessionTimeZone)
+      : sessionTimeZone_(sessionTimeZone) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
     targetCudfType_ = cudf_velox::veloxToCudfDataType(expr->type());
@@ -561,9 +564,9 @@ class CastFunction : public CudfFunction {
 
         // cudf::strings::to_timestamps treats strings as UTC, but Presto
         // treats bare timestamps as local time. Convert local->UTC.
-        const auto* tz = getSessionTimeZone();
-        if (tz != nullptr) {
-          return convertLocalToUtc(std::move(result), tz, stream, mr);
+        if (sessionTimeZone_ != nullptr) {
+          return convertLocalToUtc(
+              std::move(result), sessionTimeZone_, stream, mr);
         }
         return result;
       }
@@ -590,11 +593,17 @@ class CastFunction : public CudfFunction {
  private:
   CastMode castMode_{CastMode::kFixedWidth};
   cudf::data_type targetCudfType_;
+  // Session timezone for VARCHAR->TIMESTAMP local-to-UTC conversion, or nullptr
+  // if timestamps are not adjusted to a session timezone.
+  const tz::TimeZone* sessionTimeZone_;
 };
 
 class DateFormatFunction : public CudfFunction {
  public:
-  DateFormatFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  DateFormatFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      const tz::TimeZone* sessionTimeZone)
+      : sessionTimeZone_(sessionTimeZone) {
     using velox::exec::ConstantExpr;
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "date_format expects exactly 2 inputs");
@@ -621,11 +630,11 @@ class DateFormatFunction : public CudfFunction {
 
     // Presto's date_format formats timestamps in the session timezone.
     // cudf::strings::from_timestamps formats in UTC, so convert first.
-    const auto* tz = getSessionTimeZone();
     std::unique_ptr<cudf::column> localCol;
-    if (tz != nullptr) {
+    if (sessionTimeZone_ != nullptr) {
       auto inputOwned = std::make_unique<cudf::column>(inputCol, stream, mr);
-      localCol = convertUtcToLocal(std::move(inputOwned), tz, stream, mr);
+      localCol = convertUtcToLocal(
+          std::move(inputOwned), sessionTimeZone_, stream, mr);
       inputCol = localCol->view();
     }
 
@@ -641,6 +650,9 @@ class DateFormatFunction : public CudfFunction {
 
  private:
   std::string cudfFormat_;
+  // Session timezone for UTC-to-local conversion before formatting, or nullptr
+  // if timestamps are not adjusted to a session timezone.
+  const tz::TimeZone* sessionTimeZone_;
 };
 
 class CardinalityFunction : public CudfFunction {
@@ -2112,7 +2124,8 @@ void registerCudfFunctions(
 
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const tz::TimeZone* sessionTimeZone) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
   if (it == registry.end()) {
@@ -2123,7 +2136,7 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     // the special case of cast
     if (spec.signatures.empty() ||
         matchCallAgainstSignatures(*expr, spec.signatures)) {
-      return spec.factory(name, expr);
+      return spec.factory(name, expr, sessionTimeZone);
     }
   }
   return nullptr;
@@ -2134,9 +2147,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "split",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SplitFunction>(expr);
-      },
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) { return std::make_shared<SplitFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("array(varchar)")
            .argumentType("varchar")
@@ -2155,7 +2168,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "cardinality",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<CardinalityFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2165,7 +2180,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunctions(
       {prefix + "substr", prefix + "substring"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<SubstrFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2183,7 +2200,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // Coalesce is special form and doesn't have a prefix in its name.
   registerCudfFunction(
       "coalesce",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<CoalesceFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2195,7 +2214,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       "and",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<LogicalFunction>(
             expr, cudf::binary_operator::NULL_LOGICAL_AND);
       },
@@ -2207,7 +2228,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       "or",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<LogicalFunction>(
             expr, cudf::binary_operator::NULL_LOGICAL_OR);
       },
@@ -2219,9 +2242,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "round",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<RoundFunction>(expr);
-      },
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) { return std::make_shared<RoundFunction>(expr); },
       {FunctionSignatureBuilder()
            .integerVariable("p")
            .integerVariable("s")
@@ -2274,9 +2297,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "year",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<YearFunction>(expr);
-      },
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) { return std::make_shared<YearFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("integer")
            .argumentType("timestamp")
@@ -2288,7 +2311,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "length",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<LengthFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2298,9 +2323,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "lower",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LowerFunction>(expr);
-      },
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) { return std::make_shared<LowerFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
@@ -2308,9 +2333,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "upper",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<UpperFunction>(expr);
-      },
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) { return std::make_shared<UpperFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("varchar")
            .argumentType("varchar")
@@ -2318,9 +2343,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "like",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<LikeFunction>(expr);
-      },
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) { return std::make_shared<LikeFunction>(expr); },
       {FunctionSignatureBuilder()
            .returnType("boolean")
            .argumentType("varchar")
@@ -2335,7 +2360,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "startswith",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<StartswithFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2346,7 +2373,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "endswith",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<EndswithFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2357,7 +2386,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "contains",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<ContainsFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2368,7 +2399,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "concat",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<ConcatFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2380,7 +2413,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // No prefix because switch and if are special form
   registerCudfFunctions(
       {"switch", "if"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<SwitchFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2394,8 +2429,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.
       {"try_cast", "cast"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<CastFunction>(expr);
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone* sessionTimeZone) {
+        return std::make_shared<CastFunction>(expr, sessionTimeZone);
       },
       {
           // Cast needs special handling dynamically using cudf.
@@ -2425,7 +2462,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         aliases,
         [op](
             const std::string&,
-            const std::shared_ptr<velox::exec::Expr>& expr) {
+            const std::shared_ptr<velox::exec::Expr>& expr,
+            const tz::TimeZone*) {
           return std::make_shared<BinaryFunction>(expr, op);
         },
         {FunctionSignatureBuilder()
@@ -2454,7 +2492,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         aliases,
         [op](
             const std::string&,
-            const std::shared_ptr<velox::exec::Expr>& expr) {
+            const std::shared_ptr<velox::exec::Expr>& expr,
+            const tz::TimeZone*) {
           return std::make_shared<BinaryFunction>(expr, op);
         },
         {FunctionSignatureBuilder()
@@ -2498,7 +2537,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         aliases,
         [op](
             const std::string&,
-            const std::shared_ptr<velox::exec::Expr>& expr) {
+            const std::shared_ptr<velox::exec::Expr>& expr,
+            const tz::TimeZone*) {
           return std::make_shared<UnaryFunction>(expr, op);
         },
         {FunctionSignatureBuilder()
@@ -2529,7 +2569,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "between",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<BetweenFunction>(expr);
       },
       {FunctionSignatureBuilder()
@@ -2553,7 +2595,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "greatest",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<GreatestLeastFunction>(
             expr, cudf::binary_operator::NULL_MAX);
       },
@@ -2572,7 +2616,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "least",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone*) {
         return std::make_shared<GreatestLeastFunction>(
             expr, cudf::binary_operator::NULL_MIN);
       },
@@ -2591,8 +2637,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "date_format",
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<DateFormatFunction>(expr);
+      [](const std::string&,
+         const std::shared_ptr<velox::exec::Expr>& expr,
+         const tz::TimeZone* sessionTimeZone) {
+        return std::make_shared<DateFormatFunction>(expr, sessionTimeZone);
       },
       {FunctionSignatureBuilder()
            .returnType("varchar")
@@ -2605,19 +2653,20 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const std::shared_ptr<velox::exec::Expr>& expr,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    const tz::TimeZone* sessionTimeZone) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
 
   auto name = expr->name();
-  node->function_ = createCudfFunction(name, expr);
+  node->function_ = createCudfFunction(name, expr, sessionTimeZone);
 
   if (node->function_) {
     for (const auto& input : expr->inputs()) {
       if (input->name() != "literal") {
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema));
+            createCudfExpression(input, inputRowSchema, sessionTimeZone));
       }
     }
   }
@@ -2756,7 +2805,8 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    const tz::TimeZone* sessionTimeZone) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
@@ -2770,10 +2820,10 @@ std::shared_ptr<CudfExpression> createCudfExpression(
   }
 
   if (best != nullptr) {
-    return best->create(expr, inputRowSchema);
+    return best->create(expr, inputRowSchema, sessionTimeZone);
   }
 
-  return FunctionExpression::create(expr, inputRowSchema);
+  return FunctionExpression::create(expr, inputRowSchema, sessionTimeZone);
 }
 
 void unregisterFunctions() {

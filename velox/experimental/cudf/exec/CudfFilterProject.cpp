@@ -206,23 +206,29 @@ void CudfFilterProject::initialize() {
       debugPrintTree(expr, 0, LOG(INFO));
     }
   }
+  // Resolve the session timezone once so timezone-sensitive CudfFunctions
+  // (e.g. CastFunction for VARCHAR->TIMESTAMP) receive it at construction.
+  const auto* sessionTimeZone = cudf_velox::sessionTimeZoneFromConfig(
+      operatorCtx_->driverCtx()->queryConfig());
+
   if (hasFilter_) {
     // First expr is Filter, rest are Project
-    filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
+    filterEvaluator_ =
+        createCudfExpression(expr->exprs()[0], inputType, sessionTimeZone);
     std::transform(
         expr->exprs().begin() + 1,
         expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [inputType, sessionTimeZone](const auto& expr) {
+          return createCudfExpression(expr, inputType, sessionTimeZone);
         });
   } else {
     std::transform(
         expr->exprs().begin(),
         expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [inputType, sessionTimeZone](const auto& expr) {
+          return createCudfExpression(expr, inputType, sessionTimeZone);
         });
   }
 
@@ -235,20 +241,6 @@ void CudfFilterProject::doAddInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFilterProject::doGetOutput() {
-  // Propagate the session timezone so that timezone-sensitive CudfFunctions
-  // (e.g. CastFunction for VARCHAR->TIMESTAMP) can access it.
-  const tz::TimeZone* sessionTz = nullptr;
-  {
-    const auto& config = operatorCtx_->driverCtx()->queryConfig();
-    if (config.adjustTimestampToTimezone()) {
-      const auto tzName = config.sessionTimezone();
-      if (!tzName.empty()) {
-        sessionTz = tz::locateZone(tzName);
-      }
-    }
-  }
-  cudf_velox::SessionTimeZoneScope tzScope(sessionTz);
-
   if (allInputProcessed()) {
     return nullptr;
   }

@@ -113,8 +113,18 @@ CudfHiveDataSource::CudfHiveDataSource(
     }
 
     auto const remainingFilterType = getTableRowType();
+    // Resolve the session timezone so timezone-sensitive CudfFunctions in the
+    // remaining filter receive it at construction. The connector exposes the
+    // timezone directly rather than through a QueryConfig.
+    const tz::TimeZone* sessionTimeZone = nullptr;
+    if (connectorQueryCtx_->adjustTimestampToTimezone() &&
+        !connectorQueryCtx_->sessionTimezone().empty()) {
+      sessionTimeZone = tz::locateZone(connectorQueryCtx_->sessionTimezone());
+    }
     cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
-        remainingFilterExprSet_->exprs()[0], remainingFilterType);
+        remainingFilterExprSet_->exprs()[0],
+        remainingFilterType,
+        sessionTimeZone);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }

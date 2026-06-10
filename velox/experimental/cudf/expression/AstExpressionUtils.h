@@ -407,6 +407,10 @@ struct AstContext {
       precomputeInstructions;
   const std::shared_ptr<velox::exec::Expr>
       rootExpr; // Track the root expression
+  // Session timezone threaded into timezone-sensitive functions built on the
+  // precompute path, or nullptr if timestamps are not adjusted to a session
+  // timezone.
+  const tz::TimeZone* sessionTimeZone;
   bool allowPureAstOnly;
 
   cudf::ast::expression const& pushExprToTree(
@@ -572,7 +576,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       if (sideIdx < 0) {
         sideIdx = 0; // Default to left side if no fields found
       }
-      auto node = createCudfExpression(expr, inputRowSchema[sideIdx]);
+      auto node =
+          createCudfExpression(expr, inputRowSchema[sideIdx], sessionTimeZone);
       return addPrecomputeInstructionOnSide(sideIdx, 0, name, "", node);
     }
     VELOX_FAIL("Unsupported expression: {}", name);

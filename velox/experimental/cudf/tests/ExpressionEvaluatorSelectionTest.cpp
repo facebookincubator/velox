@@ -87,7 +87,8 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
   CudfConfig::getInstance().astExpressionEnabled = true;
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
-  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto cudfExpr =
+      createCudfExpression(expr, rowType_, /*sessionTimeZone=*/nullptr);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -98,7 +99,8 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto expr = compileExecExpr("lower(name)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
-  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto cudfExpr =
+      createCudfExpression(expr, rowType_, /*sessionTimeZone=*/nullptr);
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -111,7 +113,8 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
   auto expr = compileExecExpr(
       "(year(date) > 2020) AND (length(name) < 10)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
-  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto cudfExpr =
+      createCudfExpression(expr, rowType_, /*sessionTimeZone=*/nullptr);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -123,7 +126,8 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   auto expr =
       compileExecExpr("lower(substr(name, 1, 5))", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
-  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto cudfExpr =
+      createCudfExpression(expr, rowType_, /*sessionTimeZone=*/nullptr);
 
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
@@ -138,7 +142,8 @@ TEST_F(CudfExpressionSelectionTest, DISABLED_functionTopLevelWithNestedAst) {
       rowType_,
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto cudfExpr =
+      createCudfExpression(expr, rowType_, /*sessionTimeZone=*/nullptr);
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }

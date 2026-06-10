@@ -29,7 +29,8 @@ cudf::ast::expression const& createAstTree(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::vector<PrecomputeInstruction>& precomputeInstructions);
+    std::vector<PrecomputeInstruction>& precomputeInstructions,
+    const tz::TimeZone* sessionTimeZone);
 
 cudf::ast::expression const& createAstTree(
     const std::shared_ptr<velox::exec::Expr>& expr,
@@ -38,7 +39,8 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& leftRowSchema,
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
-    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions);
+    std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
+    const tz::TimeZone* sessionTimeZone);
 
 // Evaluates the expression tree
 class ASTExpression : public CudfExpression {
@@ -48,7 +50,8 @@ class ASTExpression : public CudfExpression {
   // precompute instructions and stores them
   ASTExpression(
       std::shared_ptr<velox::exec::Expr> expr,
-      const RowTypePtr& inputRowSchema);
+      const RowTypePtr& inputRowSchema,
+      const tz::TimeZone* sessionTimeZone);
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(

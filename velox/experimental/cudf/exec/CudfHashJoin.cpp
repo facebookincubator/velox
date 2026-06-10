@@ -445,12 +445,19 @@ void CudfHashJoinProbe::initialize() {
         "AST expression evaluation must be enabled for semi-filter and anti joins.");
   }
 
+  // Resolve the session timezone once so timezone-sensitive CudfFunctions
+  // receive it at construction.
+  const auto* sessionTimeZone = cudf_velox::sessionTimeZoneFromConfig(
+      operatorCtx_->driverCtx()->queryConfig());
+
   // Create a reusable evaluator for the filter column. This is expensive to
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
   filterEvaluator_ = createCudfExpression(
-      exprs.exprs()[0], facebook::velox::type::concatRowTypes(filterRowTypes));
+      exprs.exprs()[0],
+      facebook::velox::type::concatRowTypes(filterRowTypes),
+      sessionTimeZone);
 
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
@@ -479,7 +486,8 @@ void CudfHashJoinProbe::initialize() {
           buildType_,
           probeType_,
           rightPrecomputeInstructions_,
-          leftPrecomputeInstructions_);
+          leftPrecomputeInstructions_,
+          sessionTimeZone);
     } else {
       createAstTree(
           exprs.exprs()[0],
@@ -488,7 +496,8 @@ void CudfHashJoinProbe::initialize() {
           probeType_,
           buildType_,
           leftPrecomputeInstructions_,
-          rightPrecomputeInstructions_);
+          rightPrecomputeInstructions_,
+          sessionTimeZone);
     }
   }
 }
@@ -2036,18 +2045,6 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
     return nullptr;
   }
 
-  const tz::TimeZone* sessionTz = nullptr;
-  {
-    const auto& config = operatorCtx_->driverCtx()->queryConfig();
-    if (config.adjustTimestampToTimezone()) {
-      const auto tzName = config.sessionTimezone();
-      if (!tzName.empty()) {
-        sessionTz = tz::locateZone(tzName);
-      }
-    }
-  }
-  cudf_velox::SessionTimeZoneScope tzScope(sessionTz);
-
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
@@ -2191,18 +2188,6 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 
   // Precompute right table columns if filter exists (once when build is done)
   if (joinNode_->filter() && !rightPrecomputeInstructions_.empty()) {
-    const tz::TimeZone* sessionTz = nullptr;
-    {
-      const auto& config = operatorCtx_->driverCtx()->queryConfig();
-      if (config.adjustTimestampToTimezone()) {
-        const auto tzName = config.sessionTimezone();
-        if (!tzName.empty()) {
-          sessionTz = tz::locateZone(tzName);
-        }
-      }
-    }
-    cudf_velox::SessionTimeZoneScope tzScope(sessionTz);
-
     auto& rightTablesInit = hashObject_.value().first;
     cachedRightPrecomputed_.clear();
     cachedExtendedRightViews_.clear();
