@@ -207,9 +207,14 @@ class HiveIndexSource : public IndexSource,
 
   // A group of splits sharing a scan spec. For partitioned tables, one
   // group per distinct set of partition column values. For non-partitioned
-  // tables, a single group holds all splits.
+  // tables, a single group holds all splits. Readers are created lazily
+  // on first access to avoid opening files for groups that are never probed.
   struct SplitGroup {
-    // Raw pointers into readers_; ownership stays with readers_.
+    // Splits and scan spec stored at addSplits() time. Consumed by
+    // ensureReadersCreated() on first access.
+    std::vector<std::shared_ptr<const HiveConnectorSplit>> splits;
+    std::shared_ptr<common::ScanSpec> scanSpec;
+    // Raw pointers into readers_; populated by ensureReadersCreated().
     std::vector<SplitIndexReader*> readers;
     // Typed constants aligned with partitionIndexConditions_, used by
     // findSplitGroup() to match against probe row values. Empty for the
@@ -219,11 +224,16 @@ class HiveIndexSource : public IndexSource,
 
   // Builds a SplitGroup from a set of splits sharing the same partition and
   // appends it to splitGroups_: builds the scan spec and routing constants
-  // from the splits' partition values, and creates the readers (via registered
-  // IndexReaderFactory or FileIndexReader, owned by readers_). The routing
-  // constants are empty for the non-partitioned path.
+  // from the splits' partition values, and stores the splits for lazy reader
+  // creation. The routing constants are empty for the non-partitioned path.
   void createSplitGroup(
       std::vector<std::shared_ptr<const HiveConnectorSplit>> splits);
+
+  // Creates readers for a split group on first access (via registered
+  // IndexReaderFactory or FileIndexReader, owned by readers_) and populates
+  // the group's reader pointers. No-op if readers have already been created
+  // (splits vector empty).
+  void ensureReadersCreated(SplitGroup& group);
 
   // Finds the split group whose partition values match the given probe
   // row's partition column values. Returns nullptr if no group matches.
@@ -354,7 +364,8 @@ class HiveIndexSource : public IndexSource,
   // constants via the scan spec's setConstantValue().
   RowTypePtr readerOutputType_;
   // All index readers (both built-in and external). Owns every reader
-  // regardless of partitioned vs non-partitioned path. Created by addSplits().
+  // regardless of partitioned vs non-partitioned path. Populated lazily
+  // via ensureReadersCreated().
   std::vector<std::unique_ptr<SplitIndexReader>> readers_;
   // Split groups built during addSplits(). For non-partitioned tables,
   // contains a single group. For partitioned tables, one group per
