@@ -235,6 +235,7 @@ velox_link_libraries(
   velox_core
   velox_connector
   velox_connector_registry
+  velox_custom_memory_resource_registry
   velox_exec_spill_stats
   velox_exec_window
   velox_expression
