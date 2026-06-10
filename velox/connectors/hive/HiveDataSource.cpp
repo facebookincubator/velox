@@ -165,7 +165,8 @@ HiveDataSource::getRuntimeStats() {
   }
   for (const auto& [format, count] : numSplitsByFileFormat_) {
     result.insert(
-        {fmt::format("{}{}", kFileFormat, dwio::common::toString(format)),
+        {fmt::format(
+             "{}{}", kFileFormat, dwio::common::FileFormatName::toName(format)),
          RuntimeMetric(count)});
   }
   return result;
