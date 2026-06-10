@@ -270,8 +270,8 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
   const auto day = makeFlatVector<int32_t>({11, 11, 11});
   const auto hour = makeFlatVector<int32_t>({6, 6, 6});
   const auto minute = makeFlatVector<int32_t>({30, 30, 30});
-  const auto micros = makeFlatVector<int64_t>(
-      {45'678'000, 1'000'000, 60'000'000}, microsType);
+  const auto micros =
+      makeFlatVector<int64_t>({45'678'000, 1'000'000, 60'000'000}, microsType);
   auto data = makeRowVector({year, month, day, hour, minute, micros});
 
   // Time zone is not set.
