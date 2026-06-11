@@ -45,6 +45,16 @@ class IOutputBufferManager {
 
   virtual std::optional<OutputBuffer::Stats> stats(
       const std::string& taskId) = 0;
+
+  virtual bool updateNumDrivers(
+      const std::string& taskId,
+      uint32_t newNumDrivers) = 0;
+
+  virtual double getUtilization(const std::string& taskId) = 0;
+
+  virtual bool isOverutilized(const std::string& taskId) = 0;
+
+  virtual std::string toString(const std::string& taskId) = 0;
 };
 
 } // namespace facebook::velox::exec

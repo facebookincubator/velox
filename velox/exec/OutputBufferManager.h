@@ -46,7 +46,8 @@ class OutputBufferManager : public IOutputBufferManager {
   /// When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
   /// Returns true if the buffer exists for a given taskId, else returns false.
-  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers);
+  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers)
+      override;
 
   /// Adds data to the outgoing queue for 'destination'. 'data' must not be
   /// nullptr. 'data' is always added but if the buffers are full the future is
@@ -116,13 +117,15 @@ class OutputBufferManager : public IOutputBufferManager {
 
   std::string toString();
 
+  std::string toString(const std::string& taskId) override;
+
   // Gets the memory utilization ratio for the output buffer from a task of
   // taskId, if the task of this taskId is not found, return 0.
-  double getUtilization(const std::string& taskId);
+  double getUtilization(const std::string& taskId) override;
 
   // If the output buffer from a task of taskId is over-utilized and blocks its
   // producers. When the task of this taskId is not found, return false.
-  bool isOverutilized(const std::string& taskId);
+  bool isOverutilized(const std::string& taskId) override;
 
   // Returns nullopt when the specified output buffer doesn't exist.
   std::optional<OutputBuffer::Stats> stats(const std::string& taskId) override;
