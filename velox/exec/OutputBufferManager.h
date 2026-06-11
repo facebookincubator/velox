@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include "velox/exec/OutputBuffer.h"
 #include "velox/exec/IOutputBufferManager.h"
+#include "velox/exec/OutputBuffer.h"
 
 namespace facebook::velox::exec {
 
