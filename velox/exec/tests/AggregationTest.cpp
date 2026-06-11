@@ -1637,6 +1637,80 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
       }));
 }
 
+namespace {
+// Builds a multi-driver (LocalPartition) single-step global-grouping-set
+// aggregation. singleAggregation() only attaches global sets on a GroupIdNode
+// input, so the aggregation is captured over a GroupId and re-parented onto the
+// LocalPartition. 'filter' "a < 0" empties the input, "a >= 0" keeps it.
+core::PlanNodePtr makeMultiDriverGlobalGroupingSetPlan(
+    const std::shared_ptr<core::PlanNodeIdGenerator>& idGenerator,
+    const std::vector<RowVectorPtr>& data,
+    const std::string& filter) {
+  // Built standalone so singleAggregation() sees a GroupIdNode input.
+  std::shared_ptr<const core::AggregationNode> aggTemplate;
+  PlanBuilder(idGenerator)
+      .values(data)
+      .filter(filter)
+      .groupId({"a"}, {{"a"}, {}}, {})
+      .singleAggregation({"a", "group_id"}, {"count(1) as count_1"})
+      .capturePlanNode(aggTemplate);
+
+  auto source = PlanBuilder(idGenerator)
+                    .values(data)
+                    .filter(filter)
+                    .groupId({"a"}, {{"a"}, {}}, {})
+                    .planNode();
+
+  return PlanBuilder(idGenerator)
+      .localPartition({"a", "group_id"}, {source})
+      .addNode([&](std::string nodeId, core::PlanNodePtr localPartition) {
+        return core::AggregationNode::Builder(*aggTemplate)
+            .id(nodeId)
+            .source(localPartition)
+            .build();
+      })
+      .planNode();
+}
+} // namespace
+
+// Multi-driver empty input emits exactly one grand-total default row for the ()
+// set, not one per empty driver.
+TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
+  auto data = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4})});
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      makeMultiDriverGlobalGroupingSetPlan(idGenerator, {data}, "a < 0");
+
+  // One default row: a null for the () set, group_id 1, count 0.
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{1}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{0}),
+  });
+  AssertQueryBuilder(plan).maxDrivers(4).assertResults(expected);
+}
+
+// Skewed non-empty input (all rows on one key) must not emit a spurious
+// count==0 default row from the starved drivers.
+TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
+  auto data = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1})});
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      makeMultiDriverGlobalGroupingSetPlan(idGenerator, {data}, "a >= 0");
+
+  // Two rows: per-key (1, 0, 4) and grand total (null, 1, 4). No count==0 row.
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{0, 1}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{4, 4}),
+  });
+  AssertQueryBuilder(plan).maxDrivers(4).assertResults(expected);
+}
+
 TEST_F(AggregationTest, disableNonBooleanMasks) {
   auto data = makeRowVector(
       {"c0", "c1"},

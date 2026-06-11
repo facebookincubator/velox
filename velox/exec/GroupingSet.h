@@ -114,6 +114,11 @@ class GroupingSet {
     return table_ ? table_->numDistinct() : 0;
   }
 
+  /// Returns the number of raw input rows received.
+  uint64_t numInputRows() const {
+    return numInputRows_;
+  }
+
   /// Returns number of global grouping sets rows if there is default output.
   std::optional<vector_size_t> numDefaultGlobalGroupingSetRows() const {
     if (hasDefaultGlobalGroupingSetOutput()) {
