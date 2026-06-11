@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 #include "folly/synchronization/EventCount.h"
@@ -65,7 +66,7 @@ class OutputBufferManagerTest : public testing::Test {
 
   void SetUp() override {
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
-    bufferManager_ = OutputBufferManager::getInstanceRef();
+    bufferManager_ = OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default");
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();

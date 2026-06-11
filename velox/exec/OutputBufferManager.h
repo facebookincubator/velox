@@ -16,10 +16,11 @@
 #pragma once
 
 #include "velox/exec/OutputBuffer.h"
+#include "velox/exec/IOutputBufferManager.h"
 
 namespace facebook::velox::exec {
 
-class OutputBufferManager {
+class OutputBufferManager : public IOutputBufferManager {
  public:
   /// Options for shuffle. This is initialized once and affects both
   /// PartitionedOutput and Exchange. This can be used for controlling
@@ -33,14 +34,14 @@ class OutputBufferManager {
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers) override;
 
   /// Updates the number of buffers. Returns true if the buffer exists for a
   /// given taskId, else returns false.
   bool updateOutputBuffers(
       const std::string& taskId,
       int numBuffers,
-      bool noMoreBuffers);
+      bool noMoreBuffers) override;
 
   /// When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
@@ -92,7 +93,7 @@ class OutputBufferManager {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
-  void removeTask(const std::string& taskId);
+  void removeTask(const std::string& taskId) override;
 
   static const std::shared_ptr<OutputBufferManager>& getInstanceRef();
 
@@ -124,7 +125,7 @@ class OutputBufferManager {
   bool isOverutilized(const std::string& taskId);
 
   // Returns nullopt when the specified output buffer doesn't exist.
-  std::optional<OutputBuffer::Stats> stats(const std::string& taskId);
+  std::optional<OutputBuffer::Stats> stats(const std::string& taskId) override;
 
   // Retrieves the set of buffers for a query if exists.
   // Returns NULL if task not found.
