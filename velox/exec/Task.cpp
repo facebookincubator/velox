@@ -37,6 +37,7 @@
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
@@ -46,6 +47,19 @@ using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 namespace {
+
+std::vector<std::pair<std::string, std::weak_ptr<IOutputBufferManager>>>
+toWeakPairs(
+    std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
+        strong) {
+  std::vector<std::pair<std::string, std::weak_ptr<IOutputBufferManager>>>
+      result;
+  result.reserve(strong.size());
+  for (auto& [id, ptr] : strong) {
+    result.emplace_back(std::move(id), std::move(ptr));
+  }
+  return result;
+}
 
 // RAII helper class to satisfy given promises and notify listeners of an event
 // connected to the promises outside of the mutex that guards the promises.
@@ -439,7 +453,13 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(OutputBufferManager::getInstanceRef()) {
+      bufferManagers_(
+          toWeakPairs(OutputBufferManagerRegistry::getAll(*queryCtx_))) {
+  if (bufferManagers_.empty()) {
+    bufferManagers_.emplace_back(
+        std::string(OutputBufferManagerRegistry::kDefaultId),
+        OutputBufferManager::getInstanceRef());
+  }
   ++numCreatedTasks_;
   // Validate that any per-node transport type annotations refer to the right
   // kind of plan node before they are used to select exchange transports.
@@ -1274,11 +1294,6 @@ void Task::initializePartitionOutput() {
       taskId_,
       errorMessageLocked());
 
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "PartitionedOutputBufferManager was already destructed");
   std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
       nullptr};
   int numOutputDrivers{0};
@@ -1322,11 +1337,15 @@ void Task::initializePartitionOutput() {
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
-    bufferManager->initializeTask(
-        shared_from_this(),
-        partitionedOutputNode->kind(),
-        partitionedOutputNode->numPartitions(),
-        numOutputDrivers);
+    for (auto& [_, weakMgr] : bufferManagers_) {
+      auto mgr = weakMgr.lock();
+      VELOX_CHECK_NOT_NULL(mgr, "OutputBufferManager was already destructed");
+      mgr->initializeTask(
+          shared_from_this(),
+          partitionedOutputNode->kind(),
+          partitionedOutputNode->numPartitions(),
+          numOutputDrivers);
+    }
   }
 }
 
@@ -2127,9 +2146,13 @@ bool Task::checkNoMoreSplitGroupsLocked() {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
     if (groupedPartitionedOutput_) {
-      auto bufferManager = bufferManager_.lock();
-      bufferManager->updateNumDrivers(
-          taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      for (auto& [_, weakMgr] : bufferManagers_) {
+        if (auto mgr = weakMgr.lock()) {
+          mgr->updateNumDrivers(
+              taskId(),
+              numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+        }
+      }
     }
 
     return checkIfFinishedLocked();
@@ -2316,22 +2339,23 @@ bool Task::isFinishedLocked() const {
 }
 
 bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "OutputBufferManager was already destructed");
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (noMoreOutputBuffers_) {
-      // Ignore messages received after no-more-buffers message.
       return false;
     }
     if (noMoreBuffers) {
       noMoreOutputBuffers_ = true;
     }
   }
-  return bufferManager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  bool result = true;
+  for (auto& [_, weakMgr] : bufferManagers_) {
+    if (auto mgr = weakMgr.lock()) {
+      result = mgr->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers) &&
+          result;
+    }
+  }
+  return result;
 }
 
 int Task::getOutputPipelineId() const {
@@ -2824,15 +2848,27 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
-    if (auto bufferManager = bufferManager_.lock()) {
-      // Capture output buffer stats before deleting the buffer.
-      {
-        std::lock_guard<std::timed_mutex> l(mutex_);
-        if (!taskStats_.outputBufferStats.has_value()) {
-          taskStats_.outputBufferStats = bufferManager->stats(taskId_);
+    {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      if (!taskStats_.outputBufferStats.has_value()) {
+        for (auto& [_, weakMgr] : bufferManagers_) {
+          if (auto mgr = weakMgr.lock()) {
+            auto s = mgr->stats(taskId_);
+            if (s.has_value()) {
+              if (taskStats_.outputBufferStats.has_value()) {
+                taskStats_.outputBufferStats->add(s.value());
+              } else {
+                taskStats_.outputBufferStats = s;
+              }
+            }
+          }
         }
       }
-      bufferManager->removeTask(taskId_);
+    }
+    for (auto& [_, weakMgr] : bufferManagers_) {
+      if (auto mgr = weakMgr.lock()) {
+        mgr->removeTask(taskId_);
+      }
     }
   }
 }
@@ -3001,7 +3037,27 @@ TaskStats Task::taskStats() const {
   taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
   if (!taskStats.outputBufferStats.has_value()) {
     taskStats.outputBufferStats = bufferManager->stats(taskId_);
+  // Needs review for the logic again.
+  double maxUtilization = 0.0;
+  bool anyOverutilized = false;
+  for (auto& [_, weakMgr] : bufferManagers_) {
+    if (auto mgr = weakMgr.lock()) {
+      maxUtilization = std::max(maxUtilization, mgr->getUtilization(taskId_));
+      anyOverutilized = anyOverutilized || mgr->isOverutilized(taskId_);
+      if (!taskStats.outputBufferStats.has_value()) {
+        auto s = mgr->stats(taskId_);
+        if (s.has_value()) {
+          if (taskStats.outputBufferStats.has_value()) {
+            taskStats.outputBufferStats->add(s.value());
+          } else {
+            taskStats.outputBufferStats = s;
+          }
+        }
+      }
+    }
   }
+  taskStats.outputBufferUtilization = maxUtilization;
+  taskStats.outputBufferOverutilized = anyOverutilized;
   return taskStats;
 }
 
@@ -3260,11 +3316,16 @@ folly::dynamic Task::toJson() const {
   }
   obj["drivers"] = drivers;
 
-  if (auto buffers = bufferManager_.lock()) {
-    if (auto buffer = buffers->getBufferIfExists(taskId_)) {
-      obj["buffer"] = buffer->toString();
+  folly::dynamic bufferManagers = folly::dynamic::object;
+  for (auto& [id, weakMgr] : bufferManagers_) {
+    if (auto mgr = weakMgr.lock()) {
+      auto s = mgr->toString(taskId_);
+      if (!s.empty()) {
+        bufferManagers[id] = s;
+      }
     }
   }
+  obj["bufferManagers"] = bufferManagers;
 
   folly::dynamic exchangeClients = folly::dynamic::object;
   for (const auto& [id, client] : exchangeClientByPlanNode_) {
