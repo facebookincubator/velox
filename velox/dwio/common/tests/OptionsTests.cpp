@@ -29,7 +29,7 @@ TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
 
 TEST(OptionsTests, fluxFileFormatRoundTrip) {
   ASSERT_EQ(FileFormat::FLUX, toFileFormat("flux"));
-  ASSERT_EQ("flux", toString(FileFormat::FLUX));
+  ASSERT_EQ("flux", FileFormatName::toName(FileFormat::FLUX));
 }
 
 TEST(OptionsTests, setRowNumberColumnInfoTest) {

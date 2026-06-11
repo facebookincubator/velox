@@ -181,6 +181,17 @@ class ExecutorTestBase : public ::testing::Test {
   // Used to verify that the wave frame has the same slots populated.
   std::unordered_map<int32_t, std::string> serialFrameSnapshot_;
 
+  // TorchWave debug: deep copies of every node output captured the instant the
+  // node ran in the serial (CPU nativert) reference run. Saved as the reference
+  // frame so that later in-place corruption of a value's storage cannot poison
+  // the recorded reference. Populated only when saving a reference.
+  std::unordered_map<int64_t, at::Tensor> capturedRefOutputs_;
+
+  // TorchWave debug: CPU copies of the serial (CPU nativert) run's final model
+  // outputs. Compared against the wave run's final outputs to check end-to-end
+  // correctness independent of intermediate dead-value noise.
+  std::vector<at::Tensor> nativertOutputs_;
+
   /// Loads sample inputs from the .pt2 package.
   std::vector<c10::IValue> loadSampleInputs(ModelFixture& fixture);
 

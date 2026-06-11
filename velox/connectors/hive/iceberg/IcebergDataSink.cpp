@@ -104,7 +104,8 @@ std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
   if (targetFileName.empty()) {
     targetFileName = fmt::format("{}", makeUuid());
   }
-  auto fileFormat = dwio::common::toString(insertTableHandle->storageFormat());
+  auto fileFormat =
+      dwio::common::FileFormatName::toName(insertTableHandle->storageFormat());
   auto fileName = fmt::format("{}.{}", targetFileName, fileFormat);
   return {fileName, fileName};
 }
@@ -158,7 +159,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
   VELOX_USER_CHECK(
       isSupportedFileFormat(tableStorageFormat),
       "Unsupported file format for writing Iceberg tables: {}",
-      dwio::common::toString(tableStorageFormat));
+      dwio::common::FileFormatName::toName(tableStorageFormat));
 }
 
 namespace {

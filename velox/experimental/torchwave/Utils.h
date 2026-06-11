@@ -299,6 +299,27 @@ std::string standaloneToString(NodeCP node);
 /// 'value'. Falls back to checking for "_." in the target name.
 bool isInPlaceMutation(NodeCP node, ValueCP value);
 
+/// Resolves 'value' to its underlying storage base by following view chains
+/// (the viewOfArg metadata). Views-on-views collapse to the ultimate base; a
+/// value with no view producer is its own base.
+ValueCP viewStorageBase(ValueCP value);
+
+/// Returns the input values that 'node' mutates in place (writes their
+/// storage), per the c10 FunctionSchema write-alias annotations (Tensor(a!)).
+/// Pure-aliasing no-ops that do not change data (e.g. detach_) are excluded so
+/// callers can use this for data-dependency analysis. Empty for non-mutating
+/// ops.
+std::vector<ValueCP> dataMutatedInputs(NodeCP node);
+
+/// Returns true if any node after 'afterNode' in 'graph' program order mutates
+/// the storage base of 'value' (per dataMutatedInputs). Used to keep clone()
+/// from being eliminated when its source is mutated later (the clone is a
+/// required snapshot).
+bool baseMutatedAfter(
+    const nativert::Graph& graph,
+    NodeCP afterNode,
+    ValueCP value);
+
 /// Returns a debug string showing up to 'maxElements' elements of a tensor
 /// after flattening to 1-D, plus the shape and dtype. 0 means no limit.
 std::string tensorDebugString(const at::Tensor& t, int32_t maxElements = 0);
@@ -331,6 +352,26 @@ void saveReferenceFrame(
     const nativert::ExecutionFrame& frame,
     int32_t numValues,
     const std::string& path);
+
+/// Saves a reference frame using tensor values captured the instant each node
+/// ran ('capturedTensors', keyed by ValueId), falling back to the frame for
+/// scalar slots. Using captured copies makes the saved reference immune to a
+/// later in-place overwrite of a value's storage during the reference run.
+void saveReferenceFrame(
+    const nativert::ExecutionFrame& frame,
+    const nativert::Graph& graph,
+    const std::unordered_map<int64_t, at::Tensor>& capturedTensors,
+    const std::string& path);
+
+/// Saves a list of CPU tensors to a .pt file (pickled list). Used to store the
+/// reference run's final model outputs.
+void saveTensorList(
+    const std::vector<at::Tensor>& tensors,
+    const std::string& path);
+
+/// Loads a list of tensors saved by saveTensorList. Returns an empty vector if
+/// the file does not exist.
+std::vector<at::Tensor> loadTensorList(const std::string& path);
 
 /// Loads a reference frame from a .pt file into a map keyed by ValueId.
 std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(

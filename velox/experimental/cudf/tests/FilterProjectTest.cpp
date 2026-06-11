@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -26,6 +27,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/Time.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -47,12 +49,15 @@ class CudfFilterProjectTest : public OperatorTestBase {
     filesystems::registerLocalFileSystem();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
     rng_.seed(123);
 
     rowType_ = ROW({{"c0", INTEGER()}, {"c1", DOUBLE()}, {"c2", VARCHAR()}});
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     OperatorTestBase::TearDown();
   }
@@ -561,6 +566,66 @@ class CudfFilterProjectTest : public OperatorTestBase {
         "SELECT 'standalone_string' AS str_literal, 42 AS int_literal, c2 = 'comparison_string' AS bool_result FROM tmp");
   }
 
+  void assertFilterIds(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<int32_t>& expectedIds) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .filter(filter)
+                    .project({"event_id"})
+                    .planNode();
+    auto expected = makeRowVector({makeFlatVector<int32_t>(expectedIds)});
+    assertQuery(plan, expected);
+  }
+
+  int32_t toDateDays(const std::string& dateStr) const {
+    return DATE()->toDays(dateStr);
+  }
+
+  RowVectorPtr runFilterPlan(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .filter(filter)
+                    .project(projections)
+                    .planNode();
+    return AssertQueryBuilder(plan).copyResults(pool());
+  }
+
+  void assertFilterMatchesVelox(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& filter,
+      const std::vector<std::string>& projections = {"event_id"}) {
+    auto cudfResult = runFilterPlan(input, filter, projections);
+
+    cudf_velox::unregisterCudf();
+    auto veloxResult = runFilterPlan(input, filter, projections);
+    cudf_velox::registerCudf();
+    facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
+  }
+
+  RowVectorPtr runPlan(const core::PlanNodePtr& plan) {
+    return AssertQueryBuilder(plan).copyResults(pool());
+  }
+
+  void assertPlanMatchesVelox(const core::PlanNodePtr& plan) {
+    auto cudfResult = runPlan(plan);
+    cudf_velox::unregisterCudf();
+    auto veloxResult = runPlan(plan);
+    cudf_velox::registerCudf();
+    facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
+  }
+
+  void assertProjectMatchesVelox(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& projections) {
+    auto plan = PlanBuilder().values(input).project(projections).planNode();
+    assertPlanMatchesVelox(plan);
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -578,6 +643,33 @@ class CudfFilterProjectTest : public OperatorTestBase {
       vectors.push_back(vector);
     }
     return vectors;
+  }
+
+  std::vector<RowVectorPtr> makeTimestampExtractVectors() {
+    std::vector<std::optional<Timestamp>> timestamps = {
+        Timestamp(1609459199, 0), // 2020-12-31 23:59:59
+        Timestamp(1609459200, 0), // 2021-01-01 00:00:00
+        Timestamp(1609718400, 0), // 2021-01-04 00:00:00
+        Timestamp(1709183167, 0), // 2024-02-29 05:06:07
+        Timestamp(1736942461, 123000000), // 2025-01-15 12:01:01.123
+        Timestamp(1738367999, 999000000), // 2025-01-31 23:59:59.999
+        std::nullopt};
+
+    std::vector<std::optional<int32_t>> dates = {
+        toDateDays("2020-12-31"),
+        toDateDays("2021-01-01"),
+        toDateDays("2021-01-04"),
+        toDateDays("2024-02-29"),
+        toDateDays("2025-01-15"),
+        toDateDays("2025-01-31"),
+        std::nullopt};
+
+    auto data = makeRowVector(
+        {"event_id", "event_ts", "event_date"},
+        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+         makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
+         makeNullableFlatVector<int32_t>(dates, DATE())});
+    return {data};
   }
 
   folly::Random::DefaultGenerator rng_;
@@ -740,6 +832,396 @@ TEST_F(CudfFilterProjectTest, yearFunction) {
 
   createDuckDbTable(vectors);
   testYearFunction(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, timestampLiteralFilter) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .filter(
+              "event_ts >= TIMESTAMP '2025-01-01 00:00:00' AND event_ts < TIMESTAMP '2025-02-01 00:00:00'")
+          .project({"event_id"})
+          .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>({2, 3, 4})});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.filter);
+    assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateLiteralComparisons) {
+  std::vector<int32_t> dates = {
+      toDateDays("2024-12-31"),
+      toDateDays("2025-01-01"),
+      toDateDays("2025-01-15"),
+      toDateDays("2025-01-31"),
+      toDateDays("2025-02-01"),
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_date"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<int32_t>(dates, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_date = DATE '2025-01-01'", {2}},
+      {"event_date <> DATE '2025-01-01'", {1, 3, 4, 5}},
+      {"event_date < DATE '2025-01-01'", {1}},
+      {"event_date <= DATE '2025-01-01'", {1, 2}},
+      {"event_date > DATE '2025-01-31'", {5}},
+      {"event_date >= DATE '2025-01-31'", {4, 5}},
+      {"event_date >= DATE '2025-01-01' AND event_date < DATE '2025-02-01'",
+       {2, 3, 4}}};
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.filter);
+    assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+// TODO: Re-enable once https://github.com/facebookincubator/velox/pull/17314
+// (NotFunction, IsNullFunction, IsNotNullFunction) lands. AST/JIT cannot
+// evaluate timestamp expressions, so IS [NOT] NULL and NOT BETWEEN over
+// TIMESTAMP rely on the function-registry path provided by that PR.
+TEST_F(CudfFilterProjectTest, DISABLED_timestampBetweenAndNullSemantics) {
+  std::vector<std::optional<Timestamp>> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      std::nullopt,
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      std::nullopt,
+      Timestamp(1738367999, 0) // 2025-01-31 23:59:59
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> filters{
+      "event_ts BETWEEN TIMESTAMP '2025-01-01 00:00:00' AND TIMESTAMP '2025-01-31 23:59:59'",
+      "event_ts NOT BETWEEN TIMESTAMP '2025-01-01 00:00:00' AND TIMESTAMP '2025-01-31 23:59:59'",
+      "event_ts IS NULL",
+      "event_ts IS NOT NULL",
+      "event_ts < TIMESTAMP '2025-01-01 00:00:00'",
+      "event_ts >= TIMESTAMP '2025-01-15 12:00:00'"};
+
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox(vectors, filter);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateBetweenAndNullSemantics) {
+  std::vector<std::optional<int32_t>> dates = {
+      toDateDays("2024-12-31"),
+      std::nullopt,
+      toDateDays("2025-01-01"),
+      toDateDays("2025-01-15"),
+      std::nullopt,
+      toDateDays("2025-01-31"),
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_date"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeNullableFlatVector<int32_t>(dates, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> filters{
+      "event_date BETWEEN DATE '2025-01-01' AND DATE '2025-01-31'",
+      "event_date NOT BETWEEN DATE '2025-01-01' AND DATE '2025-01-31'",
+      "event_date IS NULL",
+      "event_date IS NOT NULL",
+      "event_date < DATE '2025-01-01'",
+      "event_date >= DATE '2025-01-15'"};
+
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertFilterMatchesVelox(vectors, filter);
+  }
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalOneDay) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"),
+            toDateDays("2025-02-28"),
+            toDateDays("2024-02-29")},
+           DATE()),
+       makeConstant<int64_t>(kMillisInDay, 3, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-01"),
+       toDateDays("2024-03-01")},
+      DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalMultipleDays) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"), toDateDays("2024-02-29")}, DATE()),
+       makeConstant<int64_t>(365 * kMillisInDay, 2, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2026-01-01"), toDateDays("2025-02-28")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalNegative) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-10"), toDateDays("2025-03-01")}, DATE()),
+       makeConstant<int64_t>(-3 * kMillisInDay, 2, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-07"), toDateDays("2025-02-26")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalZero) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>({toDateDays("2025-06-15")}, DATE()),
+       makeConstant<int64_t>(0, 1, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({toDateDays("2025-06-15")}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2025-01-01"), std::nullopt, toDateDays("2025-03-01")},
+           DATE()),
+       makeNullableFlatVector<int64_t>(
+           {kMillisInDay, kMillisInDay, std::nullopt}, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeNullableFlatVector<int32_t>(
+      {toDateDays("2025-01-02"), std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
+// Regression test for the literal-null interval path. Constructing
+// DatePlusIntervalFunction with a constant-null interval used to silently
+// treat it as +0 days (the validity bit was unconditionally set to true), so
+// the row-wise output came back as the input dates instead of NULL.
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project(
+              {"plus(event_date, CAST(NULL AS INTERVAL DAY TO SECOND)) AS result"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>({toDateDays("2025-01-01")}, DATE()),
+       makeConstant<int64_t>(
+           kMillisInDay + 12 * kMillisInHour, 1, INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Cannot add hours, minutes, seconds or milliseconds to a date");
+}
+
+TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_ts) AS year",
+      "quarter(event_ts) AS quarter",
+      "month(event_ts) AS month",
+      "week(event_ts) AS week",
+      "week_of_year(event_ts) AS week_of_year",
+      "day(event_ts) AS day",
+      "day_of_week(event_ts) AS day_of_week",
+      "dow(event_ts) AS dow",
+      "day_of_year(event_ts) AS day_of_year",
+      "doy(event_ts) AS doy",
+      "year_of_week(event_ts) AS year_of_week",
+      "yow(event_ts) AS yow",
+      "hour(event_ts) AS hour",
+      "minute(event_ts) AS minute",
+      "second(event_ts) AS second",
+      "millisecond(event_ts) AS millisecond"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, extractDateComponents) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_date) AS year",
+      "quarter(event_date) AS quarter",
+      "month(event_date) AS month",
+      "week(event_date) AS week",
+      "week_of_year(event_date) AS week_of_year",
+      "day(event_date) AS day",
+      "day_of_week(event_date) AS day_of_week",
+      "dow(event_date) AS dow",
+      "day_of_year(event_date) AS day_of_year",
+      "doy(event_date) AS doy",
+      "year_of_week(event_date) AS year_of_week",
+      "yow(event_date) AS yow",
+      "hour(event_date) AS hour",
+      "minute(event_date) AS minute",
+      "second(event_date) AS second",
+      "millisecond(event_date) AS millisecond"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, extractGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "year(event_ts) AS year",
+      "quarter(event_ts) AS quarter",
+      "month(event_ts) AS month",
+      "week(event_ts) AS week",
+      "day(event_ts) AS day",
+      "day_of_week(event_ts) AS dow",
+      "day_of_year(event_ts) AS doy",
+      "year_of_week(event_ts) AS yow",
+      "hour(event_ts) AS hour",
+      "minute(event_ts) AS minute",
+      "second(event_ts) AS second",
+      "millisecond(event_ts) AS millisecond"};
+
+  const std::vector<std::string> groupingKeys{
+      "year",
+      "quarter",
+      "month",
+      "week",
+      "day",
+      "dow",
+      "doy",
+      "yow",
+      "hour",
+      "minute",
+      "second",
+      "millisecond"};
+
+  std::vector<std::string> orderByKeys;
+  orderByKeys.reserve(groupingKeys.size());
+  for (const auto& key : groupingKeys) {
+    orderByKeys.push_back(key + " ASC NULLS LAST");
+  }
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
 }
 
 // The result mismatches.
@@ -1155,13 +1637,7 @@ TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   testMixedLiteralProjection(vectors);
 }
 
-// This test checks for CudfExpression's ability to handle nested field
-// references. However, to test this, we need to disable CPU fallback, otherwise
-// the test could pass by using CPU, having not exercised the CudfExpression at
-// all. But this test relies on row_constructor to construct the nested fields,
-// which CudfExpression doesn't support. Disabling this until we have a better
-// test
-TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
+TEST_F(CudfFilterProjectTest, dereference) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
   auto vectors = makeVectors(rowType, 10, 100);
@@ -1181,6 +1657,21 @@ TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
              .project({"c1_c2.c1", "c1_c2.c2"})
              .planNode();
   assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+}
+
+TEST_F(CudfFilterProjectTest, dereferenceWithLiteralAndNullFields) {
+  vector_size_t batchSize = 128;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project({"row_constructor(c0, cast(null as integer), 'x') AS r"})
+          .project({"r.c1", "r.c2", "r.c3"})
+          .planNode();
+
+  assertQuery(plan, "SELECT c0, CAST(NULL AS INTEGER), 'x' FROM tmp");
 }
 
 TEST_F(CudfFilterProjectTest, cardinality) {
@@ -1376,6 +1867,72 @@ TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
   runTest(plan, "SELECT coalesce(c0, 100, c1) AS result FROM tmp");
 }
 
+TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
+  auto data = makeRowVector(
+      {"event_date", "interval_val"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2025-01-01"),
+            toDateDays("2025-02-28"),
+            toDateDays("2024-02-29")},
+           DATE()),
+       makeFlatVector<int64_t>(
+           {1 * kMillisInDay, 5 * kMillisInDay, 30 * kMillisInDay},
+           INTERVAL_DAY_TIME())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"plus(event_date, interval_val) AS result"})
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-05"),
+       toDateDays("2024-03-30")},
+      DATE())});
+  assertQuery(plan, expected);
+}
+
+TEST_F(CudfFilterProjectTest, datePlusIntervalConstantLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2025-01-01"),
+           toDateDays("2025-02-28"),
+           toDateDays("2024-02-29")},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  // Build expression tree programmatically with a constant interval literal,
+  // matching how a query planner delivers date + INTERVAL '1' DAY.
+  auto dateField =
+      std::make_shared<core::FieldAccessTypedExpr>(DATE(), "event_date");
+  auto intervalConst = std::make_shared<core::ConstantTypedExpr>(
+      INTERVAL_DAY_TIME(), variant(static_cast<int64_t>(kMillisInDay)));
+  auto plusExpr = std::make_shared<core::CallTypedExpr>(
+      DATE(),
+      std::vector<core::TypedExprPtr>{dateField, intervalConst},
+      "plus");
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .addNode([&](auto nodeId, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        nodeId,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{plusExpr},
+                        source);
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int32_t>(
+      {toDateDays("2025-01-02"),
+       toDateDays("2025-03-01"),
+       toDateDays("2024-03-01")},
+      DATE())});
+  assertQuery(plan, expected);
+}
+
 TEST_F(CudfFilterProjectTest, switchExpr) {
   auto data = makeRowVector(
       {makeFlatVector<double>({45676567.78, 6789098767.90876, -2.34}),
@@ -1475,93 +2032,21 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::registerCudf();
-    cudf_velox::registerPrestoFunctions("");
   }
 
   static void TearDownTestCase() {
-    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
   }
 
-  template <typename T>
-  ArrayVectorPtr makeArrayAccessNumericTestVector(
-      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
-    return makeNullableArrayVector<T>(
-        {
-            {{static_cast<T>(1), static_cast<T>(2), static_cast<T>(3)}},
-            {{static_cast<T>(4), std::nullopt, static_cast<T>(6)}},
-            std::nullopt,
-            {{static_cast<T>(7), static_cast<T>(8)}},
-        },
-        arrayType);
-  }
-
-  void assertArrayAccessElementTypeMatchesCpu(
-      const std::string& label,
-      const ArrayVectorPtr& arrays) {
-    SCOPED_TRACE(label);
-
-    auto assertMatchesCpu = [&](const std::string& expression,
-                                const RowVectorPtr& input) {
-      SCOPED_TRACE(expression);
-      assertExpressionMatchesCpu(expression, input, input->rowType());
-    };
-
-    // Presto array access currently registers INTEGER and BIGINT index
-    // signatures. Exercise both variable-index paths for element_at and
-    // subscript.
-    auto integerIndices = makeFlatVector<int32_t>({2, 2, 1, 1});
-    auto bigintIndices = makeFlatVector<int64_t>({2, 2, 1, 1});
-    for (const auto& indices :
-         std::vector<VectorPtr>{integerIndices, bigintIndices}) {
-      auto input = makeRowVector({arrays, indices});
-      assertMatchesCpu("element_at(c0, c1)", input);
-      assertMatchesCpu("subscript(c0, c1)", input);
-    }
-
-    // Literal-index calls use the scalar-index cuDF extraction path. Null
-    // literal indexes are handled separately from non-null literals.
-    auto input = makeRowVector({arrays});
-    for (const auto& expression : {
-             "element_at(c0, cast(2 as integer))",
-             "element_at(c0, cast(2 as bigint))",
-             "subscript(c0, cast(2 as integer))",
-             "subscript(c0, cast(2 as bigint))",
-             "element_at(c0, cast(null as integer))",
-             "element_at(c0, cast(null as bigint))",
-             "subscript(c0, cast(null as integer))",
-             "subscript(c0, cast(null as bigint))",
-         }) {
-      assertMatchesCpu(expression, input);
-    }
-  }
-
-  void assertConstantArrayAccessMatchesCpu(
-      const std::string& label,
-      const std::string& arraySql) {
-    SCOPED_TRACE(label);
-
-    // A literal array is not passed as an input column to cuDF. These cases
-    // cover the repeated-literal-array branch plus both Presto index types.
-    auto integerIndices = makeFlatVector<int32_t>({1, 2, 3, 2});
-    auto bigintIndices = makeFlatVector<int64_t>({1, 2, 3, 2});
-    for (const auto& indices :
-         std::vector<VectorPtr>{integerIndices, bigintIndices}) {
-      auto input = makeRowVector({indices});
-      for (const auto& functionName : {"element_at", "subscript"}) {
-        auto expression = std::string(functionName) + "(" + arraySql + ", c0)";
-        SCOPED_TRACE(expression);
-        assertExpressionMatchesCpu(expression, input, input->rowType());
-      }
-    }
-
-    // element_at is the Presto flavor that supports negative indexes from the
-    // end of the array.
-    auto negativeIndices = makeFlatVector<int64_t>({-1, -2, -3});
-    auto input = makeRowVector({negativeIndices});
-    auto expression = std::string("element_at(") + arraySql + ", c0)";
-    SCOPED_TRACE(expression);
-    assertExpressionMatchesCpu(expression, input, input->rowType());
+  void assertExpressionMatchesCpu(
+      const std::string& expr,
+      const RowVectorPtr& input,
+      const RowTypePtr& rowType) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
   }
 };
 
@@ -1571,6 +2056,95 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", VARCHAR()}});
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c1", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 1).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 'z').c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c1",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c2",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, cast(null as varchar)), 1).c1.c2",
+      input,
+      rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
+  auto rowType = ROW({{"r", ROW({{"a", INTEGER()}, {"b", VARCHAR()}})}});
+  auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
+  auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
+  auto nullableStruct = makeRowVector({a, b}, nullEvery(2));
+  auto input = makeRowVector({"r"}, {nullableStruct});
+
+  assertExpressionMatchesCpu("r.a", input, rowType);
+  assertExpressionMatchesCpu("r.b", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByIndex) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto unnamedRowType = ROW({{"", INTEGER()}, {"", VARCHAR()}});
+  auto typed = std::make_shared<core::DereferenceTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          unnamedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      1);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByName) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto namedRowType = ROW({{"left", INTEGER()}, {"right", VARCHAR()}});
+  auto typed = std::make_shared<core::FieldAccessTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          namedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      "right");
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
 }
 
 // Test unary math functions
@@ -1602,447 +2176,6 @@ TEST_F(CudfSimpleFilterProjectTest, unaryMathFunctions) {
 
   // Absolute value
   testUnaryFunction("abs(c0)", -5.5, 5.5);
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayWithDictionaryElements) {
-  auto elementsIndices = makeIndices({6, 5, 4, 3, 2, 1, 0});
-  auto elements = wrapInDictionary(
-      elementsIndices, makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6}));
-
-  auto arrays = makeArrayVector({0, 3, 6}, elements);
-  auto indices = makeFlatVector<int64_t>({3, -3, 1});
-  auto input = makeRowVector({arrays, indices});
-
-  assertExpressionMatchesCpu("element_at(c0, c1)", input, input->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayConstantInput) {
-  auto arrays = makeArrayVector<int64_t>({
-      {1, 2, 3, 4, 5, 6, 7},
-      {1, 2, 7},
-      {1, 2, 3, 5, 6, 7},
-  });
-  auto input = makeRowVector({arrays});
-
-  assertExpressionMatchesCpu("element_at(c0, 2)", input, input->rowType());
-  assertExpressionMatchesCpu("element_at(c0, -1)", input, input->rowType());
-
-  auto variableSizeArrays = makeArrayVector<int64_t>({
-      {1, 2, 6, 0},
-      {1},
-      {9, 100, 10043, 44, 22, 2},
-      {-1, -10, 3},
-  });
-  auto variableSizeInput = makeRowVector({variableSizeArrays});
-
-  assertExpressionMatchesCpu(
-      "element_at(c0, -1)", variableSizeInput, variableSizeInput->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVariableInput) {
-  constexpr vector_size_t kArrayAccessVectorSize{1'000};
-
-  auto fixedIndices = makeFlatVector<int64_t>(
-      kArrayAccessVectorSize, [](vector_size_t row) { return 1 + row % 7; });
-
-  auto fixedSizeAt = [](vector_size_t /*row*/) { return 7; };
-  auto oneBasedValueAt = [](vector_size_t /*row*/, vector_size_t idx) {
-    return 1 + idx;
-  };
-  auto fixedArrays = makeArrayVector<int64_t>(
-      kArrayAccessVectorSize, fixedSizeAt, oneBasedValueAt);
-  auto fixedInput = makeRowVector({fixedArrays, fixedIndices});
-
-  assertExpressionMatchesCpu(
-      "element_at(c0, c1)", fixedInput, fixedInput->rowType());
-
-  auto mixedIndices =
-      makeFlatVector<int64_t>(kArrayAccessVectorSize, [](vector_size_t row) {
-        if (row % 7 == 0) {
-          return 8;
-        }
-        if (row % 7 == 4) {
-          return -3;
-        }
-        return 1 + row % 7;
-      });
-
-  auto variableSizeAt = [](vector_size_t row) { return row % 7 + 1; };
-  auto zeroBasedValueAt = [](vector_size_t /*row*/, vector_size_t idx) {
-    return idx;
-  };
-  auto mixedArrays = makeArrayVector<int64_t>(
-      kArrayAccessVectorSize, variableSizeAt, zeroBasedValueAt);
-  auto mixedInput = makeRowVector({mixedArrays, mixedIndices});
-
-  assertExpressionMatchesCpu(
-      "element_at(c0, c1)", mixedInput, mixedInput->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVarcharVariableInput) {
-  constexpr vector_size_t kArrayAccessVectorSize{1'000};
-
-  auto indices = makeFlatVector<int64_t>(
-      kArrayAccessVectorSize, [](vector_size_t row) { return 1 + row % 7; });
-
-  auto arrays = makeArrayVector<std::string>(
-      kArrayAccessVectorSize,
-      [](vector_size_t /*row*/) { return 7; },
-      [](vector_size_t /*row*/, vector_size_t idx) {
-        return std::to_string(idx + 1);
-      });
-  auto input = makeRowVector({arrays, indices});
-
-  assertExpressionMatchesCpu("element_at(c0, c1)", input, input->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayAllIndicesGreaterThanSize) {
-  constexpr vector_size_t kArrayAccessVectorSize{1'000};
-
-  auto indices = makeFlatVector<int64_t>(
-      kArrayAccessVectorSize, [](vector_size_t /*row*/) { return 2; });
-  auto arrays = makeArrayVector<int64_t>(
-      kArrayAccessVectorSize,
-      [](vector_size_t /*row*/) { return 1; },
-      [](vector_size_t /*row*/, vector_size_t /*idx*/) { return 1; });
-  auto input = makeRowVector({arrays, indices});
-
-  assertExpressionMatchesCpu("element_at(c0, c1)", input, input->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayColumnIndexZeroFails) {
-  constexpr vector_size_t kArrayAccessVectorSize{1'000};
-
-  auto indices =
-      makeFlatVector<int64_t>(kArrayAccessVectorSize, [](vector_size_t row) {
-        if (row == 40) {
-          return 0;
-        }
-        return 1 + row % 7;
-      });
-  auto arrays = makeArrayVector<int64_t>(
-      kArrayAccessVectorSize,
-      [](vector_size_t row) { return 2 + row % 7; },
-      [](vector_size_t /*row*/, vector_size_t idx) { return 1 + idx; });
-
-  VELOX_ASSERT_THROW(
-      functions::test::FunctionBaseTest::evaluate(
-          "element_at(c0, c1)", makeRowVector({arrays, indices})),
-      "SQL array indices start at 1. Got 0.");
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessConstantIndex) {
-  auto arrays = makeNullableArrayVector<int32_t>({
-      {{10, 20, 30}},
-      {{4, 5}},
-      std::nullopt,
-      {{7, std::nullopt, 9}},
-  });
-
-  auto input = makeRowVector({arrays});
-
-  for (const auto& expression : {
-           "element_at(c0, 2)",
-           "element_at(c0, cast(2 as bigint))",
-           "subscript(c0, 2)",
-           "subscript(c0, cast(2 as bigint))",
-       }) {
-    SCOPED_TRACE(expression);
-    assertExpressionMatchesCpu(expression, input, input->rowType());
-  }
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessNullConstantIndex) {
-  auto arrays = makeNullableArrayVector<int32_t>({
-      {{10, 20, 30}},
-      {{4, 5}},
-      std::nullopt,
-  });
-
-  auto input = makeRowVector({arrays});
-
-  for (const auto& expression : {
-           "element_at(c0, cast(null as integer))",
-           "element_at(c0, cast(null as bigint))",
-           "subscript(c0, cast(null as integer))",
-           "subscript(c0, cast(null as bigint))",
-       }) {
-    SCOPED_TRACE(expression);
-    assertExpressionMatchesCpu(expression, input, input->rowType());
-  }
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessSupportedScalarElementTypes) {
-  // Cover all scalar ARRAY element types supported by Velox-cuDF conversion.
-  assertArrayAccessElementTypeMatchesCpu(
-      "tinyint", makeArrayAccessNumericTestVector<int8_t>());
-  assertArrayAccessElementTypeMatchesCpu(
-      "smallint", makeArrayAccessNumericTestVector<int16_t>());
-  assertArrayAccessElementTypeMatchesCpu(
-      "integer", makeArrayAccessNumericTestVector<int32_t>());
-  assertArrayAccessElementTypeMatchesCpu(
-      "bigint", makeArrayAccessNumericTestVector<int64_t>());
-  assertArrayAccessElementTypeMatchesCpu(
-      "real", makeArrayAccessNumericTestVector<float>());
-  assertArrayAccessElementTypeMatchesCpu(
-      "double", makeArrayAccessNumericTestVector<double>());
-  assertArrayAccessElementTypeMatchesCpu(
-      "date", makeArrayAccessNumericTestVector<int32_t>(ARRAY(DATE())));
-  assertArrayAccessElementTypeMatchesCpu(
-      "short decimal",
-      makeArrayAccessNumericTestVector<int64_t>(ARRAY(DECIMAL(10, 2))));
-  assertArrayAccessElementTypeMatchesCpu(
-      "long decimal",
-      makeArrayAccessNumericTestVector<int128_t>(ARRAY(DECIMAL(20, 4))));
-
-  auto booleanArrays = makeNullableArrayVector<bool>({
-      {{true, false, true}},
-      {{false, std::nullopt, true}},
-      std::nullopt,
-      {{true, true}},
-  });
-  assertArrayAccessElementTypeMatchesCpu("boolean", booleanArrays);
-
-  auto varcharArrays = makeNullableArrayVector<std::string>({
-      {{"alpha", "beta", "gamma"}},
-      {{"delta", std::nullopt, "zeta"}},
-      std::nullopt,
-      {{"eta", "theta"}},
-  });
-  assertArrayAccessElementTypeMatchesCpu("varchar", varcharArrays);
-
-  auto varbinaryArrays = makeNullableArrayVector<std::string>(
-      {
-          {{"alpha", "beta", "gamma"}},
-          {{"delta", std::nullopt, "zeta"}},
-          std::nullopt,
-          {{"eta", "theta"}},
-      },
-      ARRAY(VARBINARY()));
-  assertArrayAccessElementTypeMatchesCpu("varbinary", varbinaryArrays);
-
-  auto timestampArrays = makeNullableArrayVector<Timestamp>({
-      {{Timestamp(1, 0), Timestamp(2, 0), Timestamp(3, 0)}},
-      {{Timestamp(4, 0), std::nullopt, Timestamp(6, 0)}},
-      std::nullopt,
-      {{Timestamp(7, 0), Timestamp(8, 0)}},
-  });
-  assertArrayAccessElementTypeMatchesCpu("timestamp", timestampArrays);
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessSupportedComplexElementTypes) {
-  // Cover complex ARRAY element types that cuDF list extraction can return.
-  using OptionalIntArray = std::optional<std::vector<std::optional<int32_t>>>;
-  using OptionalNestedArray = std::optional<std::vector<OptionalIntArray>>;
-
-  std::vector<OptionalNestedArray> nestedArrayData = {
-      std::vector<OptionalIntArray>{
-          std::vector<std::optional<int32_t>>{1, 2},
-          std::vector<std::optional<int32_t>>{3},
-          std::vector<std::optional<int32_t>>{4, 5},
-      },
-      std::vector<OptionalIntArray>{
-          std::vector<std::optional<int32_t>>{6},
-          std::vector<std::optional<int32_t>>{7, 8},
-          std::vector<std::optional<int32_t>>{9},
-      },
-      std::vector<OptionalIntArray>{
-          std::vector<std::optional<int32_t>>{10},
-          std::vector<std::optional<int32_t>>{11, 12},
-      },
-      std::vector<OptionalIntArray>{
-          std::vector<std::optional<int32_t>>{13},
-          std::vector<std::optional<int32_t>>{14, 15},
-      },
-  };
-  assertArrayAccessElementTypeMatchesCpu(
-      "array", makeNullableNestedArrayVector<int32_t>(nestedArrayData));
-
-  auto rowArrays = makeArrayOfRowVector(
-      ROW({"a", "b"}, {INTEGER(), VARCHAR()}),
-      {
-          {variant::row({1, "alpha"}),
-           variant::row({2, "beta"}),
-           variant::row({3, "gamma"})},
-          {variant::row({4, "delta"}),
-           variant::row({5, "epsilon"}),
-           variant::row({6, "zeta"})},
-          {variant::row({7, "eta"}), variant::row({8, "theta"})},
-          {variant::row({9, "iota"}), variant::row({10, "kappa"})},
-      });
-  assertArrayAccessElementTypeMatchesCpu("row", rowArrays);
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessConstantArraySupportedTypes) {
-  // Constant array literals take a different input-column path from array
-  // columns, so repeat the supported element-type matrix here.
-  assertConstantArrayAccessMatchesCpu(
-      "tinyint",
-      "array[cast(1 as tinyint), cast(2 as tinyint), cast(3 as tinyint)]");
-  assertConstantArrayAccessMatchesCpu(
-      "smallint",
-      "array[cast(1 as smallint), cast(2 as smallint), cast(3 as smallint)]");
-  assertConstantArrayAccessMatchesCpu(
-      "integer",
-      "array[cast(1 as integer), cast(2 as integer), cast(3 as integer)]");
-  assertConstantArrayAccessMatchesCpu(
-      "bigint",
-      "array[cast(1 as bigint), cast(2 as bigint), cast(3 as bigint)]");
-  assertConstantArrayAccessMatchesCpu(
-      "real",
-      "array[cast(1.25 as real), cast(2.5 as real), cast(3.75 as real)]");
-  assertConstantArrayAccessMatchesCpu(
-      "double",
-      "array[cast(1.25 as double), "
-      "cast(2.5 as double), "
-      "cast(3.75 as double)]");
-  assertConstantArrayAccessMatchesCpu("boolean", "array[true, false, true]");
-  assertConstantArrayAccessMatchesCpu(
-      "varchar", "array['alpha', 'beta', 'gamma']");
-  assertConstantArrayAccessMatchesCpu(
-      "varbinary",
-      "array[cast('alpha' as varbinary), "
-      "cast('beta' as varbinary), "
-      "cast('gamma' as varbinary)]");
-  assertConstantArrayAccessMatchesCpu(
-      "date", "array[DATE '2020-01-01', DATE '2020-01-02', DATE '2020-01-03']");
-  assertConstantArrayAccessMatchesCpu(
-      "timestamp",
-      "array[cast('2020-01-01 00:00:00' as timestamp), "
-      "cast('2020-01-02 00:00:00' as timestamp), "
-      "cast('2020-01-03 00:00:00' as timestamp)]");
-  assertConstantArrayAccessMatchesCpu(
-      "short decimal",
-      "array[cast('1.00' as decimal(10, 2)), "
-      "cast('2.00' as decimal(10, 2)), "
-      "cast('3.00' as decimal(10, 2))]");
-  assertConstantArrayAccessMatchesCpu(
-      "long decimal",
-      "array[cast('1.0000' as decimal(20, 4)), "
-      "cast('2.0000' as decimal(20, 4)), "
-      "cast('3.0000' as decimal(20, 4))]");
-  assertConstantArrayAccessMatchesCpu(
-      "array",
-      "array_constructor("
-      "array_constructor(1, 2), "
-      "array_constructor(3), "
-      "array_constructor(4, 5))");
-  assertConstantArrayAccessMatchesCpu(
-      "row",
-      "array_constructor("
-      "row_constructor(1, 'alpha'), "
-      "row_constructor(2, 'beta'), "
-      "row_constructor(3, 'gamma'))");
-}
-
-TEST_F(CudfSimpleFilterProjectTest, subscriptConstantArrayVariableIndex) {
-  auto groupIds = makeFlatVector<int64_t>({0, 1, 2});
-  auto input = makeRowVector({groupIds});
-
-  assertExpressionMatchesCpu(
-      "subscript(array[1, 1, 0], c0 + 1)", input, input->rowType());
-  assertExpressionMatchesCpu(
-      "subscript(array[1, 0, 0], c0 + 1)", input, input->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayVariableIndex) {
-  auto arrays = makeNullableArrayVector<int32_t>({
-      {{1, 2, 3}},
-      {{4, std::nullopt, 6}},
-      std::nullopt,
-      {{7, 8}},
-      {{9, 10, 11}},
-  });
-  auto integerIndices =
-      makeNullableFlatVector<int32_t>({3, -2, std::nullopt, 4, -4});
-  auto integerInput = makeRowVector({arrays, integerIndices});
-  assertExpressionMatchesCpu(
-      "element_at(c0, c1)", integerInput, integerInput->rowType());
-
-  auto bigintIndices =
-      makeNullableFlatVector<int64_t>({3, -2, std::nullopt, 4, -4});
-  auto bigintInput = makeRowVector({arrays, bigintIndices});
-  assertExpressionMatchesCpu(
-      "element_at(c0, c1)", bigintInput, bigintInput->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessVariableIndexSupportedTypes) {
-  auto arrays = makeNullableArrayVector<int32_t>({
-      {{1, 2, 3}},
-      {{4, std::nullopt, 6}},
-      std::nullopt,
-      {{7, 8}},
-      {{9, 10, 11}},
-  });
-  auto integerIndices = makeFlatVector<int32_t>({3, 2, 1, 2, 1});
-  auto integerInput = makeRowVector({arrays, integerIndices});
-  for (const auto& expression : {"element_at(c0, c1)", "subscript(c0, c1)"}) {
-    SCOPED_TRACE(expression);
-    assertExpressionMatchesCpu(
-        expression, integerInput, integerInput->rowType());
-  }
-
-  auto bigintIndices = makeFlatVector<int64_t>({3, 2, 1, 2, 1});
-  auto bigintInput = makeRowVector({arrays, bigintIndices});
-  for (const auto& expression : {"element_at(c0, c1)", "subscript(c0, c1)"}) {
-    SCOPED_TRACE(expression);
-    assertExpressionMatchesCpu(expression, bigintInput, bigintInput->rowType());
-  }
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayNegativeConstantIndex) {
-  auto arrays = makeNullableArrayVector<int32_t>({
-      {{1, 2, 3}},
-      {{4, std::nullopt, 6}},
-      std::nullopt,
-      {{7}},
-  });
-  auto input = makeRowVector({arrays});
-
-  assertExpressionMatchesCpu("element_at(c0, -1)", input, input->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtArrayNegativeVariableIndex) {
-  auto arrays = makeNullableArrayVector<int32_t>({
-      {{1, 2, 3}},
-      {{4, std::nullopt, 6}},
-      std::nullopt,
-      {{7}},
-  });
-
-  auto integerIndices = makeFlatVector<int32_t>({-1, -1, -1, -1});
-  auto integerInput = makeRowVector({arrays, integerIndices});
-  assertExpressionMatchesCpu(
-      "element_at(c0, c1)", integerInput, integerInput->rowType());
-
-  auto bigintIndices = makeFlatVector<int64_t>({-1, -1, -1, -1});
-  auto bigintInput = makeRowVector({arrays, bigintIndices});
-  assertExpressionMatchesCpu(
-      "element_at(c0, c1)", bigintInput, bigintInput->rowType());
-}
-
-TEST_F(CudfSimpleFilterProjectTest, arrayAccessRejectsInvalidIndex) {
-  auto arrays = makeArrayVector<int32_t>({{1, 2, 3}});
-
-  auto input = makeRowVector({arrays});
-  VELOX_ASSERT_THROW(
-      functions::test::FunctionBaseTest::evaluate("element_at(c0, 0)", input),
-      "SQL array indices start at 1. Got 0.");
-
-  VELOX_ASSERT_THROW(
-      functions::test::FunctionBaseTest::evaluate("subscript(c0, -1)", input),
-      "Array subscript index cannot be negative");
-
-  VELOX_ASSERT_THROW(
-      functions::test::FunctionBaseTest::evaluate("subscript(c0, 4)", input),
-      "Array subscript index out of bounds");
-}
-
-TEST_F(CudfSimpleFilterProjectTest, elementAtReturnsNullForOutOfBoundsIndex) {
-  auto arrays = makeArrayVector<int32_t>({{1, 2, 3}});
-  auto input = makeRowVector({arrays});
-
-  assertExpressionMatchesCpu("element_at(c0, 4)", input, input->rowType());
 }
 
 TEST_F(CudfSimpleFilterProjectTest, nullLogicalAnd) {
@@ -2215,11 +2348,7 @@ TEST_F(CudfFilterProjectTest, andAndAndExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-// TODO(mattgara, simoneves): Disabled by mhaseeb123 as it requires changes from
-// commit
-// https://github.com/facebookincubator/velox/pull/17704/changes/f6a86f6f2204ed5b7426185f29931834b28ef732
-// but doing so results in failure in Presto-as-source-of-truth tests.
-TEST_F(CudfFilterProjectTest, DISABLED_andAndAndWithDecimalDivideBelowExpr) {
+TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
   auto data = makeRowVector(
       {makeFlatVector<int64_t>({100, 100, 100, 100}, DECIMAL(17, 2)),
        makeFlatVector<int64_t>({100, -100, 100, 100}, DECIMAL(17, 2)),

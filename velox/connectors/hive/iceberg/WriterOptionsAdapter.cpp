@@ -119,7 +119,7 @@ std::string toManifestFormatString(dwio::common::FileFormat format) {
   VELOX_CHECK_NOT_NULL(
       adapter,
       "Unsupported file format for Iceberg manifest: {}",
-      dwio::common::toString(format));
+      dwio::common::FileFormatName::toName(format));
   return adapter->manifestFormatString();
 }
 

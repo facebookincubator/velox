@@ -72,15 +72,9 @@ enum class FileFormat {
           // Iceberg connector via FileSystem::pread of the blob byte-range.
 };
 
-FileFormat toFileFormat(std::string_view s);
-std::string_view toString(FileFormat fmt);
+VELOX_DECLARE_ENUM_NAME(FileFormat);
 
-FOLLY_ALWAYS_INLINE std::ostream& operator<<(
-    std::ostream& output,
-    const FileFormat& fmt) {
-  output << toString(fmt);
-  return output;
-}
+FileFormat toFileFormat(std::string_view s);
 
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.
@@ -1045,7 +1039,7 @@ struct fmt::formatter<facebook::velox::dwio::common::FileFormat>
   auto format(facebook::velox::dwio::common::FileFormat fmt, FormatContext& ctx)
       const {
     return formatter<std::string_view>::format(
-        facebook::velox::dwio::common::toString(fmt), ctx);
+        facebook::velox::dwio::common::FileFormatName::toName(fmt), ctx);
   }
 };
 

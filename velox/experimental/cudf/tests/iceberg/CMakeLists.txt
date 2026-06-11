@@ -53,6 +53,7 @@ velox_add_cudf_test(
   NAME velox_cudf_iceberg_deletion_vector_test
   SOURCES CudfDeletionVectorReaderTest.cpp
   LIBS
+    velox_cudf_iceberg_test_lib
     velox_cudf_iceberg_connector
     velox_cudf_exec_test_lib
     velox_exec
