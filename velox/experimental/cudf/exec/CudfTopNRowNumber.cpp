@@ -20,9 +20,11 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
+#include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/rolling.hpp>
 #include <cudf/sorting.hpp>
+#include <cudf/stream_compaction.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -163,11 +165,12 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
   auto partKeys = makePartitionKeys(
       sortedView, partitionKeyIndices_, stream, mr, singlePartitionCol);
   auto firstCol = sortedView.column(0);
-  auto countAgg = cudf::make_count_aggregation(cudf::null_policy::INCLUDE);
+  auto rowNumberAgg =
+      cudf::make_row_number_aggregation<cudf::rolling_aggregation>();
   auto unbounded = cudf::window_bounds::unbounded();
-  auto current = cudf::window_bounds::get(1);
+  auto currentRow = cudf::window_bounds::get(0);
   auto rowNums = cudf::grouped_rolling_window(
-      partKeys, firstCol, unbounded, current, 1, *countAgg, stream, mr);
+      partKeys, firstCol, unbounded, currentRow, 1, *rowNumberAgg, stream, mr);
 
   auto limitScalar =
       cudf::numeric_scalar<int64_t>(limit_, true, stream, mr);
@@ -195,9 +198,9 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
         filtPartKeys,
         filtFirstCol,
         unbounded,
-        current,
+        currentRow,
         1,
-        *countAgg,
+        *rowNumberAgg,
         stream,
         mr);
 
