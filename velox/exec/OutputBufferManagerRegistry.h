@@ -50,9 +50,6 @@ class OutputBufferManagerRegistry {
   /// Registry key for per-query output buffer manager overrides on QueryCtx.
   static constexpr std::string_view kRegistryKey = "outputBufferManagers";
 
-  /// Well-known ID for the default OutputBufferManager.
-  static constexpr std::string_view kDefaultId = "default";
-
   /// Return the global registry (root scope).
   static Registry& global();
 
