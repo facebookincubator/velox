@@ -181,9 +181,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
   auto offsetsView = offsetsCol->mutable_view();
 
   rmm::device_buffer charsBuf(
-      static_cast<size_t>(numRows) * detail::kDecimalSumStateSize,
-      stream,
-      mr);
+      static_cast<size_t>(numRows) * detail::kDecimalSumStateSize, stream, mr);
 
   detail::fillOffsetsForDecimalSumState(
       useLargeOffsets,
@@ -248,11 +246,7 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
 
   auto numRows = sumCol.size();
   auto out = cudf::make_fixed_width_column(
-      sumCol.type(),
-      numRows,
-      cudf::mask_state::UNALLOCATED,
-      stream,
-      mr);
+      sumCol.type(), numRows, cudf::mask_state::UNALLOCATED, stream, mr);
 
   if (numRows > 0) {
     auto const rowCount = static_cast<int32_t>(numRows);

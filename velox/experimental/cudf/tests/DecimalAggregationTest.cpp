@@ -1247,7 +1247,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
@@ -1283,7 +1284,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
@@ -1318,7 +1320,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64MostNegativeSum) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 0, &valid, stream);
   auto countCol = makeInt64Column(counts, &valid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
   EXPECT_EQ(outAvg[0], kMin);
@@ -1336,7 +1339,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128MostNegativeSum) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 0, &valid, stream);
   auto countCol = makeInt64Column(counts, &valid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
   EXPECT_EQ(outAvg[0], kMin);
@@ -1352,7 +1356,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64AllValid) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1388,7 +1393,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128AllValid) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1421,7 +1427,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64NonNullableInputs) {
   ASSERT_FALSE(sumCol->nullable());
   ASSERT_FALSE(countCol->nullable());
 
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1457,7 +1464,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128NonNullableInputs) {
   ASSERT_FALSE(sumCol->nullable());
   ASSERT_FALSE(countCol->nullable());
 
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);

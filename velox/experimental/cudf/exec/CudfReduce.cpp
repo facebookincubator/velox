@@ -76,8 +76,7 @@ using facebook::velox::cudf_velox::validateIntermediateColumnType;
           cudfOutputType,                                                      \
           stream,                                                              \
           get_temp_mr());                                                      \
-      return cudf::make_column_from_scalar(                                    \
-          *resultScalar, 1, stream, mr);                          \
+      return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);      \
     }                                                                          \
   };
 
@@ -125,8 +124,7 @@ struct ReduceCountAggregator : ReduceAggregator {
       auto resultScalar =
           cudf::numeric_scalar<int64_t>(count, true, stream, get_temp_mr());
 
-      return cudf::make_column_from_scalar(
-          resultScalar, 1, stream, mr);
+      return cudf::make_column_from_scalar(resultScalar, 1, stream, mr);
     } else {
       // For non-raw input (intermediate/final), use sum aggregation
       auto const aggRequest =
@@ -139,8 +137,7 @@ struct ReduceCountAggregator : ReduceAggregator {
           stream,
           get_temp_mr());
       resultScalar->set_valid_async(true, stream);
-      return cudf::make_column_from_scalar(
-          *resultScalar, 1, stream, mr);
+      return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);
     }
   }
 
@@ -173,8 +170,7 @@ struct ReduceMeanAggregator : ReduceAggregator {
             cudfOutputType,
             stream,
             get_temp_mr());
-        return cudf::make_column_from_scalar(
-            *resultScalar, 1, stream, mr);
+        return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);
       }
       case core::AggregationNode::Step::kPartial: {
         VELOX_CHECK(outputType->isRow());
@@ -193,8 +189,8 @@ struct ReduceMeanAggregator : ReduceAggregator {
             cudfSumType,
             stream,
             get_temp_mr());
-        auto sumCol = cudf::make_column_from_scalar(
-            *sumResultScalar, 1, stream, mr);
+        auto sumCol =
+            cudf::make_column_from_scalar(*sumResultScalar, 1, stream, mr);
 
         // libcudf doesn't have a count agg for reduce. What we want is to
         // count the number of valid rows.
@@ -231,8 +227,8 @@ struct ReduceMeanAggregator : ReduceAggregator {
             cudf::make_sum_aggregation<cudf::reduce_aggregation>();
         auto const sumResultScalar = cudf::reduce(
             sumCol, *sumAggRequest, sumCol.type(), stream, get_temp_mr());
-        auto sumResultCol = cudf::make_column_from_scalar(
-            *sumResultScalar, 1, stream, mr);
+        auto sumResultCol =
+            cudf::make_column_from_scalar(*sumResultScalar, 1, stream, mr);
 
         // sum the counts
         auto const countAggRequest =
@@ -264,8 +260,7 @@ cudf_velox::DecimalSumStateColumns makeSumCountColumns(
     rmm::device_async_resource_ref mr) {
   cudf_velox::DecimalSumStateColumns cols;
   cols.sum = cudf::make_column_from_scalar(sumScalar, 1, stream, mr);
-  cols.count =
-      cudf::make_column_from_scalar(countScalar, 1, stream, mr);
+  cols.count = cudf::make_column_from_scalar(countScalar, 1, stream, mr);
   return cols;
 }
 
@@ -377,8 +372,7 @@ std::unique_ptr<cudf::column> singleOrRawDecimalSumWithCast(
   }
   auto const resultScalar =
       cudf::reduce(inputCol, *sumAgg, cudfOutType, stream, get_temp_mr());
-  return cudf::make_column_from_scalar(
-      *resultScalar, 1, stream, mr);
+  return cudf::make_column_from_scalar(*resultScalar, 1, stream, mr);
 }
 
 std::unique_ptr<cudf::column> reduceIntermediateDecimalFromSerializedColumn(

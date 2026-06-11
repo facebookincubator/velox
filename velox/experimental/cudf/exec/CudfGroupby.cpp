@@ -397,8 +397,7 @@ struct GroupbyCountAggregator : GroupbyAggregator {
     auto col = std::move(results[outputIndex_].results[0]);
     if (inputKind_ == CountInputKind::kNullConstant) {
       auto zero = cudf::numeric_scalar<int64_t>(0, true, stream, get_temp_mr());
-      col = cudf::make_column_from_scalar(
-          zero, col->size(), stream, mr);
+      col = cudf::make_column_from_scalar(zero, col->size(), stream, mr);
     }
     // cudf produces int32 for count but velox expects int64.
     const auto cudfOutputType = cudf_velox::veloxToCudfDataType(resultType);
@@ -487,12 +486,11 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         auto const cudfCountType =
             cudf_velox::veloxToCudfDataType(outputType->childAt(1));
         if (sum->type() != cudf::data_type(cudfSumType)) {
-          sum = cudf::cast(
-              *sum, cudf::data_type(cudfSumType), stream, mr);
+          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream, mr);
         }
         if (count->type() != cudf::data_type(cudfCountType)) {
-          count = cudf::cast(
-              *count, cudf::data_type(cudfCountType), stream, mr);
+          count =
+              cudf::cast(*count, cudf::data_type(cudfCountType), stream, mr);
         }
 
         auto children = std::vector<std::unique_ptr<cudf::column>>();
@@ -525,12 +523,11 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         auto const cudfCountType =
             cudf_velox::veloxToCudfDataType(outputType->childAt(1));
         if (sum->type() != cudf::data_type(cudfSumType)) {
-          sum = cudf::cast(
-              *sum, cudf::data_type(cudfSumType), stream, mr);
+          sum = cudf::cast(*sum, cudf::data_type(cudfSumType), stream, mr);
         }
         if (count->type() != cudf::data_type(cudfCountType)) {
-          count = cudf::cast(
-              *count, cudf::data_type(cudfCountType), stream, mr);
+          count =
+              cudf::cast(*count, cudf::data_type(cudfCountType), stream, mr);
         }
 
         auto children = std::vector<std::unique_ptr<cudf::column>>();
@@ -651,12 +648,12 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
 
         // Types don't match - need to copy and cast (use output_mr since
         // these become part of the output)
-        auto count = std::make_unique<cudf::column>(
-            mergedView.child(0), stream, mr);
-        auto mean = std::make_unique<cudf::column>(
-            mergedView.child(1), stream, mr);
-        auto m2 = std::make_unique<cudf::column>(
-            mergedView.child(2), stream, mr);
+        auto count =
+            std::make_unique<cudf::column>(mergedView.child(0), stream, mr);
+        auto mean =
+            std::make_unique<cudf::column>(mergedView.child(1), stream, mr);
+        auto m2 =
+            std::make_unique<cudf::column>(mergedView.child(2), stream, mr);
         return makeM2StructColumn(
             std::move(count), std::move(mean), std::move(m2), stream, mr);
       }
@@ -704,8 +701,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         // Apply mask: where count < 2, result is NULL
         cudf::numeric_scalar<double> nullDouble(
             0.0, false, stream, get_temp_mr());
-        return cudf::copy_if_else(
-            *stddev, nullDouble, *validMask, stream, mr);
+        return cudf::copy_if_else(*stddev, nullDouble, *validMask, stream, mr);
       }
       default:
         VELOX_NYI("Unsupported aggregation step for stddev_samp");
@@ -987,7 +983,7 @@ void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
       aggregators_,
       bufferedResultType_,
       inputTableStream,
-        get_output_mr());
+      get_output_mr());
 
   // If we already have partial output, concatenate the new results with it.
   if (bufferedResult_) {
@@ -1144,8 +1140,7 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
     aggregator->addGroupbyRequest(tableView, requests, stream);
   }
 
-  auto [groupKeys, results] =
-      groupByOwner.aggregate(requests, stream, mr);
+  auto [groupKeys, results] = groupByOwner.aggregate(requests, stream, mr);
   // flatten the results
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
 
