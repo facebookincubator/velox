@@ -121,7 +121,7 @@ TEST_F(HashJoinTest, countStarOverRightSemiFilterJoinWithZeroColumnOutput) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-TEST_F(HashJoinTest, countStarOverFilteredJoinWithZeroColumnOutput) {
+TEST_F(HashJoinTest, countStarOverAstFilteredJoinWithZeroColumnOutput) {
   auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
   auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
 
@@ -129,6 +129,28 @@ TEST_F(HashJoinTest, countStarOverFilteredJoinWithZeroColumnOutput) {
       probe, build, core::JoinType::kInner, "k + u_k > 4");
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({1})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3}),
+       makeFlatVector<double>({1.0, 6.0, 10.0, -1.0})});
+  auto build = makeRowVector(
+      {"u_k", "u_val"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<double>({2.0, 5.0, 1.0, 1.0})});
+
+  // The cross-side CASE expression is not AST-supported, so this exercises
+  // filteredOutput() instead of the filteredOutputIndices() path.
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "CASE WHEN t_val > 0.0 THEN t_val / u_val ELSE 0.0 END > 2.0");
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2})});
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
