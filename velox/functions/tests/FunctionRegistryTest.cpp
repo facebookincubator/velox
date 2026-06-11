@@ -1063,6 +1063,35 @@ TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
       {BIGINT(), BIGINT(), nullptr, BIGINT()});
 }
 
+TEST_F(FunctionRegistryTest, unknownArgToParameterizedFunction) {
+  functions::prestosql::registerAllScalarFunctions();
+
+  // cardinality(UNKNOWN) — bare NULL to a function with array(T) and map(K,V)
+  // overloads; the array overload (fewer type parameters) is preferred.
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveFunctionOrCallableSpecialFormWithCoercions(
+        "cardinality", {UNKNOWN()}, coercions, TypeCoercer::defaults());
+    ASSERT_NE(result, nullptr) << "cardinality(UNKNOWN) should resolve";
+    ASSERT_EQ(*result, *BIGINT());
+    ASSERT_EQ(coercions.size(), 1);
+    ASSERT_NE(coercions[0], nullptr);
+    ASSERT_EQ(*coercions[0], *ARRAY(UNKNOWN()));
+  }
+
+  // map_keys(UNKNOWN) — bare NULL to map(K,V) -> array(K).
+  {
+    std::vector<TypePtr> coercions;
+    auto result = resolveFunctionOrCallableSpecialFormWithCoercions(
+        "map_keys", {UNKNOWN()}, coercions, TypeCoercer::defaults());
+    ASSERT_NE(result, nullptr) << "map_keys(UNKNOWN) should resolve";
+    ASSERT_EQ(*result, *ARRAY(UNKNOWN()));
+    ASSERT_EQ(coercions.size(), 1);
+    ASSERT_NE(coercions[0], nullptr);
+    ASSERT_EQ(*coercions[0], *MAP(UNKNOWN(), UNKNOWN()));
+  }
+}
+
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
   auto result = resolveFunctionOrCallableSpecialForm(
       "row_constructor", {INTEGER(), BOOLEAN(), DOUBLE()});

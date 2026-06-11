@@ -1680,6 +1680,111 @@ TEST(SignatureBinderTest, unknownInComplexTypes) {
   }
 }
 
+TEST(SignatureBinderTest, unknownAsArgToGenericComplexType) {
+  // Bare UNKNOWN as argument to array(T) -> bigint (e.g. cardinality(null)).
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("bigint")
+                         .argumentType("array(T)")
+                         .build();
+
+    testCoercions(signature, {UNKNOWN()}, {ARRAY(UNKNOWN())}, BIGINT());
+  }
+
+  // Bare UNKNOWN as argument to map(K,V) -> bigint (e.g. cardinality(null)).
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("K")
+                         .typeVariable("V")
+                         .returnType("bigint")
+                         .argumentType("map(K,V)")
+                         .build();
+
+    testCoercions(
+        signature, {UNKNOWN()}, {MAP(UNKNOWN(), UNKNOWN())}, BIGINT());
+  }
+
+  // Bare UNKNOWN where return type depends on type variable: array(T) -> T.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("array(T)")
+                         .build();
+
+    testCoercions(signature, {UNKNOWN()}, {ARRAY(UNKNOWN())}, UNKNOWN());
+  }
+
+  // Bare UNKNOWN as argument to array(T) -> array(T) (e.g. array_sort(null)).
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("array(T)")
+                         .argumentType("array(T)")
+                         .build();
+
+    testCoercions(signature, {UNKNOWN()}, {ARRAY(UNKNOWN())}, ARRAY(UNKNOWN()));
+  }
+
+  // UNKNOWN should NOT bind without coercions (exact match must fail).
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("bigint")
+                         .argumentType("array(T)")
+                         .build();
+
+    assertCannotBind(signature, {UNKNOWN()});
+  }
+
+  // UNKNOWN cannot bind to decimal(P,S): precision and scale stay unbound.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .integerVariable("a_precision")
+                         .integerVariable("a_scale")
+                         .returnType("bigint")
+                         .argumentType("decimal(a_precision, a_scale)")
+                         .build();
+
+    assertCannotBind(signature, {UNKNOWN()}, /*allowCoercion=*/true);
+  }
+
+  // Multi-argument: foo(array(T), T) with (UNKNOWN, INTEGER). T resolves to
+  // INTEGER via leastCommonSuperType.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("array(T)")
+                         .argumentType("T")
+                         .build();
+
+    testCoercions(
+        signature,
+        {UNKNOWN(), INTEGER()},
+        {ARRAY(INTEGER()), nullptr},
+        INTEGER());
+  }
+
+  // Reversed arg order: foo(T, array(T)) with (INTEGER, UNKNOWN).
+  // Same result — verifies order independence.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("T")
+                         .argumentType("array(T)")
+                         .build();
+
+    testCoercions(
+        signature,
+        {INTEGER(), UNKNOWN()},
+        {nullptr, ARRAY(INTEGER())},
+        INTEGER());
+  }
+}
+
 TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
   auto makeSignature = [](const std::string& returnType,
                           const std::vector<std::string>& argTypes) {
