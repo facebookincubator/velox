@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBufferManager.h"
-#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -127,8 +126,7 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
     params.planNode = builder.partitionedOutput({}, 1).planNode();
     auto cursor = TaskCursor::create(params);
     ASSERT_FALSE(cursor->moveNext());
-    auto bufferManager = exec::OutputBufferManagerRegistry::getManagerAs<
-        exec::OutputBufferManager>("default");
+    auto bufferManager = exec::OutputBufferManager::getInstanceRef();
     auto [numPagesPromise, numPagesFuture] = folly::makePromiseContract<int>();
     ASSERT_TRUE(bufferManager->getData(
         cursor->task()->taskId(),
