@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -212,6 +213,10 @@ class CompositeKernel {
 
   void warmup();
 
+  const std::vector<std::unique_ptr<KernelOperation>>& kernelOps() const {
+    return kernelOpStorage_;
+  }
+
  private:
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
   std::string entryPoint_;
@@ -280,6 +285,9 @@ struct LaunchData {
   std::vector<nativert::Type::Kind> returnTypes;
 
   std::vector<TensorListParam> tensorLists;
+
+  float costAdjustFactor{1};
+  float expectedFraction{0};
 };
 
 class CompositeInvocation {

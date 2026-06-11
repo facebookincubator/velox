@@ -62,11 +62,6 @@ struct WriterConfig {
   static constexpr const char* kParquetHiveConnectorCreatedBy =
       "hive.parquet.writer.created-by";
 
-  // Use the same property name from HiveConfig::kMaxTargetFileSize.
-  static constexpr const char* kParquetConnectorMaxTargetFileSize =
-      "max-target-file-size";
-  static constexpr const char* kParquetSessionMaxTargetFileSize =
-      "max_target_file_size";
   // Serde parameter keys for timestamp settings. These can be set via
   // serdeParameters map to override the default timestamp behavior.
   // The timezone key accepts a timezone string or empty string to disable

@@ -173,9 +173,27 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: hour(timestamp) -> integer
 
-    Returns the hour of ``timestamp``.::
+    Returns the hour of ``timestamp``, subject to the session timezone.
 
-        SELECT hour('2009-07-30 12:58:59'); -- 12
+    Under session timezone UTC: ::
+
+        SELECT hour('2009-07-30 19:58:59'); -- 19
+
+    Under session timezone ``America/Los_Angeles`` (UTC-7): ::
+
+        SELECT hour('2009-07-30 19:58:59 UTC'); -- 12
+
+.. spark:function:: hour(timestamp_utc) -> integer
+
+    Returns the hour of ``timestamp_utc``, not subject to the session timezone. ::
+
+    Under session timezone UTC: ::
+
+        SELECT hour(TIMESTAMP_NTZ '2009-07-30 19:58:59'); -- 19
+
+    Under session timezone ``America/Los_Angeles`` (UTC-7): ::
+
+        SELECT hour(TIMESTAMP_NTZ '2009-07-30 19:58:59 UTC'); -- 19
 
 .. spark:function:: last_day(date) -> date
 
@@ -474,6 +492,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
 
 .. function:: week_of_year(x) -> integer
+   :noindex:
 
     Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
     A week is considered to start on a Monday and week 1 is the first week with >3 days.

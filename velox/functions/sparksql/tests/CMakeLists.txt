@@ -37,11 +37,13 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   DecimalCompareTest.cpp
+  DecimalCeilFloorTest.cpp
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
   FactorialTest.cpp
   FilterTest.cpp
+  FormatNumberTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
   GetArrayStructFieldsTest.cpp
@@ -81,6 +83,7 @@ add_executable(
   ToJsonTest.cpp
   ToPrettyStringTest.cpp
   TransformTest.cpp
+  TransformValuesTest.cpp
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp

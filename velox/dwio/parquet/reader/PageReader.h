@@ -36,6 +36,13 @@ namespace facebook::velox::parquet {
 /// continuous stream accessible via readWithVisitor().
 class PageReader {
  public:
+  /// Trailing readable bytes past readBytes()'s returned size. Sized
+  /// for bits::detail::loadBits<uint64_t>, which touches bytes
+  /// [offset, offset + 9) when the bit field straddles the 8-byte word
+  /// boundary. For any value within a miniblock 'offset < size', so the
+  /// furthest byte is at most 'size + 7' — 8 trailing bytes suffice.
+  static constexpr int kPageReadPadding = 8;
+
   PageReader(
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
@@ -216,9 +223,23 @@ class PageReader {
   // 'hasChunkRepDefs_' is false.
   void readPageDefLevels();
 
-  // Returns a pointer to contiguous space for the next 'size' bytes
-  // from current position. Copies data into 'copy' if the range
-  // straddles buffers. Allocates or resizes 'copy' as needed.
+  // Updates bufferStart_ and bufferEnd_ based on deserialization result.
+  // Handles both refiller and non-refiller cases.
+  void updateBufferPointersAfterDeserialization(
+      const thrift::DeserializeResult& result);
+
+  static inline const char* toCharPtr(const uint8_t* ptr) {
+    return reinterpret_cast<const char*>(ptr);
+  }
+
+  static inline const char* toCharPtr(const void* ptr) {
+    return static_cast<const char*>(ptr);
+  }
+
+  // Returns a pointer to contiguous space for the next 'size' bytes from
+  // current position, with at least 'kPageReadPadding' readable trailing
+  // bytes past 'size'. Copies into 'copy' if needed; allocates or resizes
+  // 'copy' as needed.
   const char* readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
@@ -395,6 +416,9 @@ class PageReader {
   const int64_t chunkSize_;
   const char* bufferStart_{nullptr};
   const char* bufferEnd_{nullptr};
+  // Holds the buffer from the last Thrift deserialization to keep
+  // deserialized data pointers valid
+  std::unique_ptr<folly::IOBuf> thriftBuffer_;
   BufferPtr tempNulls_;
   BufferPtr nullsInReadRange_;
   BufferPtr multiPageNulls_;
@@ -439,7 +463,7 @@ class PageReader {
   raw_vector<uint64_t> leafNulls_;
 
   // Encoding of current page.
-  thrift::Encoding::type encoding_;
+  thrift::Encoding encoding_;
 
   // Row number of first value in current page from start of ColumnChunk.
   int64_t rowOfPage_{0};
@@ -463,7 +487,7 @@ class PageReader {
 
   // Dictionary contents.
   dwio::common::DictionaryValues dictionary_;
-  thrift::Encoding::type dictionaryEncoding_;
+  thrift::Encoding dictionaryEncoding_;
 
   // Offset of current page's header from start of ColumnChunk.
   uint64_t pageStart_{0};

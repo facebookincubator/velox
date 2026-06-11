@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/parquet/reader/SemanticVersion.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
 
@@ -29,7 +29,7 @@ struct ParquetStatsContext : dwio::common::StatsContext {
   ParquetStatsContext(const std::optional<SemanticVersion>& version)
       : parquetVersion(version) {}
 
-  bool shouldIgnoreStatistics(thrift::Type::type type) const {
+  bool shouldIgnoreStatistics(thrift::Type type) const {
     if (!parquetVersion.has_value()) {
       return true;
     }

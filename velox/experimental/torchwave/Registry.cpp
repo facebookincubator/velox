@@ -161,7 +161,9 @@ void Registry::registerElementwise(std::string_view qualifiedName) {
   md.inPlaceIfLastUse = true;
   md.argumentMeta.resize(
       schema->arguments().size(), ArgumentMeta{.isRegister = true});
-  md.returnMeta = {ArgumentMeta{.isRegister = true, .sizeArgs = {{0}, {}}}};
+  // No sizeArgs: elementwise output size is the broadcast of the operands,
+  // computed from the collected leaves in KernelOperation::makeSizeExpr.
+  md.returnMeta = {ArgumentMeta{.isRegister = true}};
   md.elementwise = std::make_unique<ElementwiseOp>();
   md.elementwise->functionName = fmt::format("__{}", opName);
 
@@ -182,7 +184,9 @@ void Registry::registerElementwiseOp(
   md.isStandalone_ = isStandalone;
   md.argumentMeta.resize(
       schema->arguments().size(), ArgumentMeta{.isRegister = true});
-  md.returnMeta = {ArgumentMeta{.isRegister = true, .sizeArgs = {{0}, {}}}};
+  // No sizeArgs: elementwise output size is the broadcast of the operands,
+  // computed from the collected leaves in KernelOperation::makeSizeExpr.
+  md.returnMeta = {ArgumentMeta{.isRegister = true}};
   md.elementwise = std::make_unique<ElementwiseOp>();
   md.elementwise->functionName = std::string(elementwiseFuncName);
 
@@ -332,6 +336,12 @@ MetadataBuilder& MetadataBuilder::cost(float val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::costFunction(
+    std::function<float(NodeCP, const Metadata&)> func) {
+  md_.costFunction = std::move(func);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::viewOfArg(int32_t ordinal) {
   md_.viewOfArg = ordinal;
   return *this;
@@ -455,16 +465,16 @@ MetadataBuilder& MetadataBuilder::elementwise() {
   TORCH_CHECK(atoms.size() >= 3, "Invalid qualified op name: ", name_);
   auto opName = atoms[atoms.size() - 2];
   ensureElementwise().functionName = fmt::format("__{}", opName);
-  builderSizeArgs_.ordinal = {0};
-  sizeArgsSet_ = true;
+  // No sizeArgs: the output size of an elementwise op is the broadcast of its
+  // operands, computed from the collected elementwise leaves in
+  // KernelOperation::makeSizeExpr, not from returnMeta.sizeArgs.
   md_.inPlaceIfLastUse = true;
   return *this;
 }
 
 MetadataBuilder& MetadataBuilder::elementwiseFunc(std::string funcName) {
   ensureElementwise().functionName = std::move(funcName);
-  builderSizeArgs_.ordinal = {0};
-  sizeArgsSet_ = true;
+  // No sizeArgs; see elementwise().
   md_.inPlaceIfLastUse = true;
   return *this;
 }

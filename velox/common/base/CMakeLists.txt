@@ -41,6 +41,7 @@ velox_add_library(
   SplitBlockBloomFilter.cpp
   StatsReporter.cpp
   SuccinctPrinter.cpp
+  YyFlexLexerShim.cpp
   HEADERS
   AdmissionController.h
   BitSet.h

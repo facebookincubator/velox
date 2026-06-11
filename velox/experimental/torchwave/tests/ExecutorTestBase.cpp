@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <unordered_set>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h> // @manual
@@ -128,6 +129,10 @@ DEFINE_bool(
     debug_single_ops,
     false,
     "Launch kernel once per block for debugging, waiting after each launch");
+DEFINE_bool(
+    auto_adjust_cost,
+    false,
+    "Adjust per-op cost multipliers after each execution based on actual thread block clocks");
 
 namespace torch::wave {
 
@@ -478,6 +483,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().continueAfterMismatch = FLAGS_continue_after_mismatch;
   WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
+  WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -500,6 +506,24 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
     }
   }
 
+  // Values used as the 'self' (first) input of an index_put node are scratch
+  // buffers (a clone or div result) that the wave rewrites to an in-place
+  // tw.masked_put_, reusing that buffer. The serial run keeps them functional,
+  // so their recorded value would never match the wave's reused buffer, and
+  // they are dead after the index_put. Skip recording them to avoid false
+  // positives.
+  std::unordered_set<int64_t> inPlaceSelfIds;
+  if (!FLAGS_save_reference_frame.empty()) {
+    for (size_t scanIdx = 1; scanIdx + 1 < nodeKernels.size(); ++scanIdx) {
+      auto* scanNode = nodeKernels[scanIdx]->node();
+      std::string target(scanNode->target());
+      if (target.find("index_put") != std::string::npos &&
+          !scanNode->inputs().empty() && scanNode->inputs()[0].value) {
+        inPlaceSelfIds.insert(scanNode->inputs()[0].value->id());
+      }
+    }
+  }
+
   for (size_t nodeIdx = 1; nodeIdx + 1 < nodeKernels.size(); ++nodeIdx) {
     auto* node = nodeKernels[nodeIdx]->node();
     nodeKernels[nodeIdx]->compute(frame);
@@ -509,6 +533,16 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
     }
     for (auto* output : node->outputs()) {
       if (output) {
+        // Capture a deep copy of each output the instant its node ran, so a
+        // later in-place overwrite of its storage cannot corrupt the reference.
+        // Skip scratch self-args of index_put (see inPlaceSelfIds above).
+        if (!FLAGS_save_reference_frame.empty() &&
+            !inPlaceSelfIds.count(output->id())) {
+          const auto& iv = frame.getIValue(output->id());
+          if (iv.isTensor() && iv.toTensor().numel() > 0) {
+            capturedRefOutputs_[output->id()] = iv.toTensor().detach().clone();
+          }
+        }
         std::vector<nativert::ValueId> ids = {output->id()};
         traceFrameValues("serial out", ids, frame, traceState);
       }
@@ -560,7 +594,10 @@ RunTiming ExecutorTestBase::runSerial(
 
   auto start = Clock::now();
   std::vector<c10::IValue> outputs;
-  if (traceSerial) {
+  // When saving a reference, run node-by-node so each output is captured at the
+  // moment its node assigns it (see capturedRefOutputs_).
+  bool nodeByNode = traceSerial || !FLAGS_save_reference_frame.empty();
+  if (nodeByNode) {
     auto traceKernels = fixture.makeKernels();
     nativert::SerialGraphExecutor tempExecutor(
         graph, std::move(traceKernels), serialConfig);
@@ -625,15 +662,8 @@ RunTiming ExecutorTestBase::runSerialOnDevice(
                        Clock::now() - start)
                        .count();
 
-  if (!FLAGS_save_reference_frame.empty()) {
-    saveReferenceFrame(
-        *frame,
-        static_cast<int32_t>(graph.numValues()),
-        FLAGS_save_reference_frame);
-    LOG(INFO) << "Saved GPU reference frame (" << graph.numValues()
-              << " slots) to " << FLAGS_save_reference_frame;
-  }
-
+  // The CPU serial run (runSerial) saves the authoritative reference; the
+  // GPU-serial path intentionally does not save, so it cannot overwrite it.
   auto hostOutputs = outputsToHost(outputs, "serial-gpu");
   verifyOutputs(hostOutputs, expected, "serial-gpu");
   return {dataMovUs, executeUs, {}};
@@ -878,6 +908,12 @@ void ExecutorTestBase::runTestWithFixture(
       waveSum += us;
       if (i == repeats - 1) {
         lastDebugInfo = waveThreadInfo().debugInfo;
+      }
+      if (WaveConfig::get().trace & WaveConfig::kTiming) {
+        const auto& report = waveThreadInfo().perfReport;
+        if (!report.empty()) {
+          std::cout << "--- repeat " << i << " ---\n" << report << std::endl;
+        }
       }
     }
 

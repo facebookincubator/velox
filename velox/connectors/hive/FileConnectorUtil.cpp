@@ -131,8 +131,8 @@ void configureReaderOptions(
     VELOX_CHECK(
         readerOptions.fileFormat() == fileSplit->fileFormat,
         "HiveDataSource received splits of different formats: {} and {}",
-        dwio::common::toString(readerOptions.fileFormat()),
-        dwio::common::toString(fileSplit->fileFormat));
+        dwio::common::FileFormatName::toName(readerOptions.fileFormat()),
+        dwio::common::FileFormatName::toName(fileSplit->fileFormat));
   } else {
     readerOptions.setFileFormat(fileSplit->fileFormat);
   }
@@ -168,6 +168,8 @@ void configureRowReaderOptions(
         fileConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setLazyColumnIo(
+        fileConfig->lazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }
