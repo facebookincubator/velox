@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
@@ -25,6 +26,7 @@
 #include <cudf/rolling.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -200,6 +202,13 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
         *rowNumberAgg,
         stream,
         mr);
+    // cuDF row_number is int32; Velox expects bigint.
+    const auto rowNumberCudfType = cudf::data_type(cudf_velox::veloxToCudfTypeId(
+        outputType_->childAt(outputType_->size() - 1)));
+    if (filtRowNums->type() != rowNumberCudfType) {
+      filtRowNums =
+          cudf::cast(*filtRowNums, rowNumberCudfType, stream, mr);
+    }
 
     auto cols = filteredTable->release();
     cols.push_back(std::move(filtRowNums));
