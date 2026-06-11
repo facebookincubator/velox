@@ -337,6 +337,19 @@ These functions support TIMESTAMP and DATE input types.
         SELECT timestampadd(SECOND, 10, '2019-03-01 10:00:00.500'); -- 2019-03-01 10:00:10.500
         SELECT timestampadd(MICROSECOND, 500, '2019-02-28 10:01:00.500999'); -- 2019-02-28 10:01:00.501499
 
+.. spark:function:: timestampadd(unit, value, timestamp_utc) -> timestamp_utc
+
+    Adds an int or bigint interval ``value`` of type ``unit`` to ``timestamp_utc``,
+    not subject to the session timezone. Returns a ``timestamp_utc``.
+    Subtraction can be performed by using a negative ``value``.
+    Throws exception if ``unit`` is invalid.
+    ``unit`` is case insensitive and must be one of the following:
+    ``YEAR``, ``QUARTER``, ``MONTH``, ``WEEK``, ``DAY``, ``DAYOFYEAR``, ``HOUR``, ``MINUTE``, ``SECOND``,
+    ``MILLISECOND``, ``MICROSECOND``. ::
+
+        SELECT timestampadd(SECOND, 10, TIMESTAMP_NTZ '2019-03-01 10:00:00.500'); -- 2019-03-01 10:00:10.500
+        SELECT timestampadd(DAY, 1, TIMESTAMP_NTZ '2020-02-29 10:00:00.500'); -- 2020-03-01 10:00:00.500
+
 .. spark:function:: timestampdiff(unit, timestamp1, timestamp2) -> bigint
 
     Returns ``timestamp2`` - ``timestamp1`` expressed in terms of ``unit``, the fraction
