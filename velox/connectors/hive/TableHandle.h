@@ -188,7 +188,10 @@ class HiveTableHandle : public FileTableHandle {
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
-      std::string dbName = "");
+      std::string dbName = "",
+      bool isChangelogQuery = false,
+      const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+          dataColumnHandles = {});
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
@@ -255,8 +258,17 @@ class HiveTableHandle : public FileTableHandle {
     return filterColumnHandles_;
   }
 
+  const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+  getDataColumnHandles() const {
+    return dataColumnHandles_;
+  }
+
   const std::string& dbName() const override {
     return dbName_;
+  }
+
+  bool isChangelogQuery() const {
+    return isChangelogQuery_;
   }
 
   std::string toString() const override;
@@ -279,6 +291,9 @@ class HiveTableHandle : public FileTableHandle {
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
   const std::string dbName_;
+  const bool isChangelogQuery_;
+  const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>
+      dataColumnHandles_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
