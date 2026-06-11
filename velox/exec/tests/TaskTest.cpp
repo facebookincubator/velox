@@ -543,11 +543,15 @@ class TestOutputBufferManager : public IOutputBufferManager {
 
   void removeTask(const std::string& /*taskId*/) override {
     ++removeCount;
+    removed_ = true;
   }
 
   std::optional<OutputBuffer::Stats> stats(
       const std::string& /*taskId*/) override {
     ++statsCount;
+    if (removed_) {
+      return std::nullopt;
+    }
     return stats_;
   }
 
@@ -579,6 +583,7 @@ class TestOutputBufferManager : public IOutputBufferManager {
   OutputBuffer::Stats stats_;
   double utilization_;
   bool overutilized_;
+  bool removed_{false};
 };
 } // namespace
 
@@ -1557,6 +1562,67 @@ TEST_F(TaskTest, taskStatsUseSelectedOutputBufferManager) {
 
   task->requestCancel();
   waitForTaskCompletion(task.get());
+}
+
+TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
+  core::PlanNodeId outputNodeId;
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputNodeId)
+                  .planFragment();
+  const std::string transportType{"test-output-manager-final-stats"};
+  plan.outputTransportTypes[outputNodeId] = transportType;
+
+  OutputBuffer::Stats expectedStats(
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*_noMoreBuffers=*/true,
+      /*_noMoreData=*/true,
+      /*_finished=*/true,
+      /*_bufferedBytes=*/456,
+      /*_bufferedPages=*/7,
+      /*_totalBytesSent=*/2'048,
+      /*_totalRowsSent=*/64,
+      /*_totalPagesSent=*/16,
+      /*_averageBufferTimeMs=*/23,
+      /*_numTopBuffers=*/3,
+      /*_buffersStats=*/{});
+  auto selectedManager =
+      std::make_shared<TestOutputBufferManager>(expectedStats, 0.75, true);
+  auto queryRegistry = OutputBufferManagerRegistry::create(
+      &OutputBufferManagerRegistry::global());
+  queryRegistry->insert(transportType, selectedManager);
+
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(
+      OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
+  auto task = Task::create(
+      "task-selected-output-manager-final-stats",
+      plan,
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  task->start(1, 1);
+
+  task->requestCancel();
+  waitForTaskCompletion(task.get());
+
+  EXPECT_EQ(selectedManager->removeCount, 1);
+  const auto taskStats = task->taskStats();
+  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
+  const auto& outputStats = taskStats.outputBufferStats.value();
+  EXPECT_EQ(outputStats.kind, expectedStats.kind);
+  EXPECT_EQ(outputStats.noMoreBuffers, expectedStats.noMoreBuffers);
+  EXPECT_EQ(outputStats.noMoreData, expectedStats.noMoreData);
+  EXPECT_EQ(outputStats.finished, expectedStats.finished);
+  EXPECT_EQ(outputStats.bufferedBytes, expectedStats.bufferedBytes);
+  EXPECT_EQ(outputStats.bufferedPages, expectedStats.bufferedPages);
+  EXPECT_EQ(outputStats.totalBytesSent, expectedStats.totalBytesSent);
+  EXPECT_EQ(outputStats.totalRowsSent, expectedStats.totalRowsSent);
+  EXPECT_EQ(outputStats.totalPagesSent, expectedStats.totalPagesSent);
+  EXPECT_EQ(outputStats.averageBufferTimeMs, expectedStats.averageBufferTimeMs);
+  EXPECT_EQ(outputStats.numTopBuffers, expectedStats.numTopBuffers);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
