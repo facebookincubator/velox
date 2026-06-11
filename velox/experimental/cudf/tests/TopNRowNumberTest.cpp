@@ -50,8 +50,7 @@ class TopNRowNumberTest : public OperatorTestBase {
     return false;
   }
 
-  static bool wasCpuTopNRowNumberUsed(
-      const std::shared_ptr<exec::Task>& task) {
+  static bool wasCpuTopNRowNumberUsed(const std::shared_ptr<exec::Task>& task) {
     auto stats = task->taskStats();
     for (const auto& pipelineStats : stats.pipelineStats) {
       for (const auto& operatorStats : pipelineStats.operatorStats) {
@@ -176,9 +175,11 @@ TEST_F(TopNRowNumberTest, multiBatch) {
   for (int32_t batch = 0; batch < 3; ++batch) {
     vectors.push_back(makeRowVector({
         makeFlatVector<int64_t>(
-            batchSize, [&](vector_size_t row) { return (batch * batchSize + row) % 5; }),
+            batchSize,
+            [&](vector_size_t row) { return (batch * batchSize + row) % 5; }),
         makeFlatVector<int64_t>(
-            batchSize, [&](vector_size_t row) { return batch * batchSize + row; }),
+            batchSize,
+            [&](vector_size_t row) { return batch * batchSize + row; }),
         makeFlatVector<int64_t>(
             batchSize, [&](vector_size_t row) { return row; }),
     }));

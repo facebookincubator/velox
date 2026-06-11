@@ -72,8 +72,7 @@ CudfTopNRowNumber::CudfTopNRowNumber(
   const auto inputType = node->sources()[0]->outputType();
   partitionKeyIndices_.reserve(node->partitionKeys().size());
   for (const auto& key : node->partitionKeys()) {
-    partitionKeyIndices_.push_back(
-        exec::exprToChannel(key.get(), inputType));
+    partitionKeyIndices_.push_back(exec::exprToChannel(key.get(), inputType));
   }
 
   sortKeyIndices_.reserve(node->sortingKeys().size());
@@ -84,8 +83,7 @@ CudfTopNRowNumber::CudfTopNRowNumber(
         exec::exprToChannel(node->sortingKeys()[i].get(), inputType));
     const auto& order = node->sortingOrders()[i];
     sortOrders_.push_back(
-        order.isAscending() ? cudf::order::ASCENDING
-                            : cudf::order::DESCENDING);
+        order.isAscending() ? cudf::order::ASCENDING : cudf::order::DESCENDING);
     nullOrders_.push_back(
         (order.isNullsFirst() ^ !order.isAscending())
             ? cudf::null_order::BEFORE
@@ -150,8 +148,8 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
   }
 
   auto keyTable = allView.select(allSortKeys);
-  auto indices = cudf::stable_sorted_order(
-      keyTable, allOrders, allNullOrders, stream, mr);
+  auto indices =
+      cudf::stable_sorted_order(keyTable, allOrders, allNullOrders, stream, mr);
   auto sortedData = cudf::gather(
       allView,
       indices->view(),
@@ -172,8 +170,7 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
   auto rowNums = cudf::grouped_rolling_window(
       partKeys, firstCol, unbounded, currentRow, 1, *rowNumberAgg, stream, mr);
 
-  auto limitScalar =
-      cudf::numeric_scalar<int64_t>(limit_, true, stream, mr);
+  auto limitScalar = cudf::numeric_scalar<int64_t>(limit_, true, stream, mr);
   auto mask = cudf::binary_operation(
       rowNums->view(),
       limitScalar,
