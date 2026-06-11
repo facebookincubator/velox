@@ -480,14 +480,18 @@ class ConstantInputForwardingAggregate {
   using OutputType = int64_t;
 
   void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
-    VELOX_CHECK_EQ(constantInputs.size(), 2);
+    // The hook fires for each aggregation step. In the final aggregation
+    // step the only argument is the intermediate column, so there are no
+    // constants to read.
+    if (constantInputs.size() != 2) {
+      return;
+    }
     VELOX_CHECK_NULL(constantInputs[0]);
     VELOX_CHECK_NOT_NULL(constantInputs[1]);
     auto* constant = constantInputs[1]->as<ConstantVector<int64_t>>();
     VELOX_CHECK_NOT_NULL(constant);
 
     offset_ = constant->valueAt(0);
-    hasOffset_ = true;
   }
 
   struct Accumulator {
@@ -503,7 +507,6 @@ class ConstantInputForwardingAggregate {
         HashStringAllocator* /*allocator*/,
         exec::arg_type<int64_t> value,
         exec::arg_type<int64_t> /*constantValue*/) {
-      VELOX_CHECK(fn->hasOffset_);
       sum += value + fn->offset_;
     }
 
@@ -526,7 +529,8 @@ class ConstantInputForwardingAggregate {
 
   using AccumulatorType = Accumulator;
 
-  bool hasOffset_{false};
+  // Read from the constant second argument; 0 when constants are not
+  // forwarded, which makes the aggregate result detectably wrong.
   int64_t offset_{0};
 };
 
@@ -551,7 +555,8 @@ exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(argTypes.size(), 2, "{} takes exactly two arguments", name);
+        VELOX_CHECK_EQ(
+            argTypes.size(), 2, "{} takes exactly two arguments", name);
         return std::make_unique<
             SimpleAggregateAdapter<ConstantInputForwardingAggregate>>(
             step, argTypes, resultType);
@@ -572,10 +577,11 @@ class SimpleConstantInputForwardingAggregationTest
 TEST_F(SimpleConstantInputForwardingAggregationTest, forwardsConstantInputs) {
   auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
   auto expected = makeRowVector({makeConstant<int64_t>(36, 1)});
-  // BIGINT '10' is a constant arg -> AggregateInfo discovers it and calls
-  // setConstantInputs(), which the adapter forwards to the simple function.
-  testAggregations(
-      {input}, {}, {"simple_const_fwd(c0, BIGINT '10')"}, {expected});
+  // The literal 10 parses to a BIGINT constant -> AggregateInfo discovers it
+  // and calls setConstantInputs(), which the adapter forwards to the simple
+  // function. A cast expression like BIGINT '10' would be rejected by
+  // AggregateInfo, which only accepts field accesses, constants, and lambdas.
+  testAggregations({input}, {}, {"simple_const_fwd(c0, 10)"}, {expected});
 }
 
 // A testing simple avg aggregate function, and it is used to check for
