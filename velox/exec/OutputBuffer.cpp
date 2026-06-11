@@ -831,6 +831,25 @@ int32_t countTopBuffers(
 
 } // namespace
 
+void OutputBuffer::Stats::add(const Stats& other) {
+  kind = other.kind;
+  noMoreBuffers = other.noMoreBuffers;
+  noMoreData = other.noMoreData;
+  finished = other.finished;
+
+  bufferedBytes += other.bufferedBytes;
+  bufferedPages += other.bufferedPages;
+  totalBytesSent += other.totalBytesSent;
+  totalRowsSent += other.totalRowsSent;
+  totalPagesSent += other.totalPagesSent;
+  averageBufferTimeMs = (averageBufferTimeMs * totalBytesSent +
+                         other.averageBufferTimeMs * other.totalBytesSent) /
+      (totalBytesSent + other.totalBytesSent);
+  numTopBuffers += other.numTopBuffers;
+  buffersStats.insert(
+      buffersStats.end(), other.buffersStats.begin(), other.buffersStats.end());
+}
+
 OutputBuffer::Stats OutputBuffer::stats() {
   std::lock_guard<std::mutex> l(mutex_);
   std::vector<DestinationBuffer::Stats> bufferStats;

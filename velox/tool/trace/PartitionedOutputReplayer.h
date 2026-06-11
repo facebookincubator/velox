@@ -21,6 +21,7 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 namespace facebook::velox::tool::trace {
@@ -64,7 +65,7 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
   const core::PartitionedOutputNode* const originalNode_;
   const std::string serdeKind_;
   const std::shared_ptr<exec::OutputBufferManager> bufferManager_{
-      exec::OutputBufferManager::getInstanceRef()};
+      exec::OutputBufferManagerRegistry::getManagerAs<exec::OutputBufferManager>("default")};
   const std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency(),

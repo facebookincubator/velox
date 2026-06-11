@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -1357,7 +1358,7 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
                   .project({"c0 % 10"})
                   .partitionedOutputBroadcast({})
                   .planFragment();
-  auto bufferManager = OutputBufferManager::getInstanceRef();
+  auto bufferManager = OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default");
   {
     auto task = Task::create(
         "t0",
