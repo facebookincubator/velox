@@ -65,7 +65,8 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
   const core::PartitionedOutputNode* const originalNode_;
   const std::string serdeKind_;
   const std::shared_ptr<exec::OutputBufferManager> bufferManager_{
-      exec::OutputBufferManagerRegistry::getManagerAs<exec::OutputBufferManager>("default")};
+      exec::OutputBufferManagerRegistry::getManagerAs<
+          exec::OutputBufferManager>("default")};
   const std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency(),

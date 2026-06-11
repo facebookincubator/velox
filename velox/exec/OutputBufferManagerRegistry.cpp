@@ -43,12 +43,11 @@ void OutputBufferManagerRegistry::registerManager(
 }
 
 bool OutputBufferManagerRegistry::unregisterManager(const std::string& name) {
-  return managers().withLock(
-      [&](auto& map) { return map.erase(name) > 0; });
+  return managers().withLock([&](auto& map) { return map.erase(name) > 0; });
 }
 
-std::shared_ptr<IOutputBufferManager>
-OutputBufferManagerRegistry::getManager(const std::string& name) {
+std::shared_ptr<IOutputBufferManager> OutputBufferManagerRegistry::getManager(
+    const std::string& name) {
   return managers().withLock(
       [&](auto& map) -> std::shared_ptr<IOutputBufferManager> {
         auto it = map.find(name);
@@ -69,8 +68,7 @@ OutputBufferManagerRegistry::getAllManagers() {
 }
 
 bool OutputBufferManagerRegistry::hasManager(const std::string& name) {
-  return managers().withLock(
-      [&](auto& map) { return map.count(name) > 0; });
+  return managers().withLock([&](auto& map) { return map.count(name) > 0; });
 }
 
 void OutputBufferManagerRegistry::clear() {

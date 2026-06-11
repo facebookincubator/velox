@@ -216,7 +216,9 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default")),
+      bufferManager_(
+          OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
+              "default")),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,

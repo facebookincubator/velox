@@ -461,10 +461,7 @@ add_test(
 )
 target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
 
-add_executable(
-  velox_output_buffer_manager_registry_test
-  OutputBufferManagerRegistryTest.cpp
-)
+add_executable(velox_output_buffer_manager_registry_test OutputBufferManagerRegistryTest.cpp)
 add_test(
   NAME velox_output_buffer_manager_registry_test
   COMMAND velox_output_buffer_manager_registry_test
