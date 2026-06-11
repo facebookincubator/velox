@@ -133,7 +133,8 @@ DecimalSumStateColumns deserializeDecimalSumState(
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal sum state requires INT64 count column (type is {})",
@@ -176,13 +177,13 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       numRows + 1,
       cudf::mask_state::UNALLOCATED,
       stream,
-      get_output_mr());
+      mr);
   auto offsetsView = offsetsCol->mutable_view();
 
   rmm::device_buffer charsBuf(
       static_cast<size_t>(numRows) * detail::kDecimalSumStateSize,
       stream,
-      get_output_mr());
+      mr);
 
   detail::fillOffsetsForDecimalSumState(
       useLargeOffsets,
@@ -215,7 +216,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       stream);
 
   auto [nullMask, nullCount] =
-      detail::buildStateValidityMask(sumCol, countCol, stream, get_output_mr());
+      detail::buildStateValidityMask(sumCol, countCol, stream, mr);
   return cudf::make_strings_column(
       static_cast<cudf::size_type>(numRows),
       std::move(offsetsCol),
@@ -227,7 +228,8 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream) {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal average requires INT64 count column (type is {})",
@@ -250,7 +252,7 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream,
-      get_output_mr());
+      mr);
 
   if (numRows > 0) {
     auto const rowCount = static_cast<int32_t>(numRows);
@@ -266,7 +268,7 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
   }
 
   auto [nullMask, nullCount] =
-      detail::buildStateValidityMask(sumCol, countCol, stream, get_output_mr());
+      detail::buildStateValidityMask(sumCol, countCol, stream, mr);
   if (nullCount > 0) {
     out->set_null_mask(std::move(nullMask), nullCount);
   }

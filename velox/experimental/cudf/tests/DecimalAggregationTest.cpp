@@ -1076,6 +1076,7 @@ TEST_F(CudfDecimalTest, decimalSumGlobalIntermediateVarbinaryAllNulls) {
 
 TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<int64_t> sums = {100, -200, 300};
   std::vector<int64_t> counts = {1, 2, 0};
   std::vector<bool> sumValid = {true, false, true};
@@ -1084,7 +1085,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
   auto sumAndCount = deserializeDecimalSumState(stateCol->view(), 2, stream);
   auto stateMask = copyNullMask(stateCol->view(), stream);
   auto sumMask = copyNullMask(sumAndCount.sum->view(), stream);
@@ -1102,6 +1103,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal64) {
 
 TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<__int128_t> sums = {
       static_cast<__int128_t>(123450),
       static_cast<__int128_t>(-25000),
@@ -1114,7 +1116,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
   auto sumAndCount = deserializeDecimalSumState(stateCol->view(), 3, stream);
   auto stateMask = copyNullMask(stateCol->view(), stream);
   auto sumMask = copyNullMask(sumAndCount.sum->view(), stream);
@@ -1177,6 +1179,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
 
 TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   ScopedEnvVar enableLargeStrings("LIBCUDF_LARGE_STRINGS_ENABLED", "1");
   ScopedEnvVar threshold("LIBCUDF_LARGE_STRINGS_THRESHOLD", "1");
 
@@ -1186,7 +1189,7 @@ TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, nullptr, stream);
   auto countCol = makeInt64Column(counts, nullptr, stream);
   auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
 
   cudf::strings_column_view strings(stateCol->view());
   EXPECT_EQ(strings.offsets().type().id(), cudf::type_id::INT64);
@@ -1194,6 +1197,7 @@ TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
 
 TEST_F(CudfDecimalTest, decimalSumStateRoundTripUsesInt64Offsets) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   ScopedEnvVar enableLargeStrings("LIBCUDF_LARGE_STRINGS_ENABLED", "1");
   ScopedEnvVar threshold("LIBCUDF_LARGE_STRINGS_THRESHOLD", "1");
 
@@ -1205,7 +1209,7 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripUsesInt64Offsets) {
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
 
   cudf::strings_column_view strings(stateCol->view());
   EXPECT_EQ(strings.offsets().type().id(), cudf::type_id::INT64);
@@ -1235,6 +1239,7 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripUsesInt64Offsets) {
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<int64_t> sums = {100, 105, 250, -125};
   std::vector<int64_t> counts = {4, 2, 0, 2};
   std::vector<bool> sumValid = {true, true, true, true};
@@ -1242,7 +1247,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
@@ -1266,6 +1271,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<__int128_t> sums = {
       static_cast<__int128_t>(123450),
       static_cast<__int128_t>(-25000),
@@ -1277,7 +1283,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
@@ -1304,6 +1310,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64MostNegativeSum) {
   // sign must be handled in the unsigned domain. avg of one INT64_MIN is
   // itself.
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
   std::vector<int64_t> sums = {kMin};
   std::vector<int64_t> counts = {1};
@@ -1311,7 +1318,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64MostNegativeSum) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 0, &valid, stream);
   auto countCol = makeInt64Column(counts, &valid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
   EXPECT_EQ(outAvg[0], kMin);
@@ -1320,6 +1327,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64MostNegativeSum) {
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128MostNegativeSum) {
   // Same regression at the __int128 boundary. avg of one -2^127 is itself.
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   const __int128_t kMin =
       static_cast<__int128_t>(static_cast<unsigned __int128>(1) << 127);
   std::vector<__int128_t> sums = {kMin};
@@ -1328,7 +1336,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128MostNegativeSum) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 0, &valid, stream);
   auto countCol = makeInt64Column(counts, &valid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   auto outAvg = copyColumnData<__int128_t>(avgCol->view(), stream);
   EXPECT_EQ(outAvg[0], kMin);
@@ -1336,6 +1344,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128MostNegativeSum) {
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64AllValid) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<int64_t> sums = {100, 200, -150};
   std::vector<int64_t> counts = {4, 5, 3};
   std::vector<bool> sumValid = {true, true, true};
@@ -1343,7 +1352,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64AllValid) {
 
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1367,6 +1376,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64AllValid) {
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128AllValid) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<__int128_t> sums = {
       static_cast<__int128_t>(90000),
       static_cast<__int128_t>(-5000),
@@ -1378,7 +1388,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128AllValid) {
 
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1402,6 +1412,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128AllValid) {
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64NonNullableInputs) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<int64_t> sums = {80, -40, 1000};
   std::vector<int64_t> counts = {2, 4, 10};
 
@@ -1410,7 +1421,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64NonNullableInputs) {
   ASSERT_FALSE(sumCol->nullable());
   ASSERT_FALSE(countCol->nullable());
 
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1434,6 +1445,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64NonNullableInputs) {
 
 TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128NonNullableInputs) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<__int128_t> sums = {
       static_cast<__int128_t>(600),
       static_cast<__int128_t>(-99),
@@ -1445,7 +1457,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128NonNullableInputs) {
   ASSERT_FALSE(sumCol->nullable());
   ASSERT_FALSE(countCol->nullable());
 
-  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream);
+  auto avgCol = computeDecimalAverage(sumCol->view(), countCol->view(), stream, mr);
 
   EXPECT_EQ(avgCol->view().null_count(), 0);
   auto avgMask = copyNullMask(avgCol->view(), stream);
@@ -1469,6 +1481,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal128NonNullableInputs) {
 
 TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal64) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<int64_t> sums = {100, -200, 300, 400};
   std::vector<int64_t> counts = {1, 0, 2, 3};
   std::vector<bool> sumValid = {true, true, false, true};
@@ -1477,7 +1490,7 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal64) {
   auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
   auto stateMask = copyNullMask(stateCol->view(), stream);
 
   auto sumAndCount = deserializeDecimalSumState(stateCol->view(), 2, stream);
@@ -1503,6 +1516,7 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal64) {
 
 TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal128) {
   auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
   std::vector<__int128_t> sums = {
       static_cast<__int128_t>(123450),
       static_cast<__int128_t>(-25000),
@@ -1515,7 +1529,7 @@ TEST_F(CudfDecimalTest, decimalSumStateRoundTripDecimal128) {
   auto sumCol = makeDecimalColumn<__int128_t>(sums, 3, &sumValid, stream);
   auto countCol = makeInt64Column(counts, &countValid, stream);
   auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream);
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
   auto stateMask = copyNullMask(stateCol->view(), stream);
 
   auto sumAndCount = deserializeDecimalSumState(stateCol->view(), 3, stream);

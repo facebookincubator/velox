@@ -47,7 +47,8 @@ cudf::column_view castDecimal64InputToDecimal128(
 // output) when the incoming type differs.
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 // Normalizes the count column to INT64, then encodes sum and count into a
 // single STRING column of fixed-width per-row payloads (delegates to
@@ -56,7 +57,8 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
 std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 // Normalizes the count column to INT64, computes a per-row decimal average
 // from intermediate sum/count (delegates to computeDecimalAverage), then casts
@@ -66,6 +68,7 @@ std::unique_ptr<cudf::column> finalizeDecimalAverage(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
     const TypePtr& resultType,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

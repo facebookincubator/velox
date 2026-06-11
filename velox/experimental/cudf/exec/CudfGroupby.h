@@ -35,7 +35,8 @@ struct GroupbyAggregator {
 
   virtual std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
-      rmm::cuda_stream_view stream) = 0;
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) = 0;
 
   virtual ~GroupbyAggregator() = default;
 
@@ -101,7 +102,8 @@ class CudfGroupby : public CudfOperatorBase {
       std::vector<column_index_t> const& groupByKeys,
       std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators,
       TypePtr const& outputType,
-      rmm::cuda_stream_view stream);
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
 
   CudfVectorPtr releaseAndResetBufferedResult();
 

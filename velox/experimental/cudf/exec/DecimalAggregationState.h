@@ -49,7 +49,8 @@ DecimalSumStateColumns deserializeDecimalSumState(
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 // Finalizes AVG from intermediate SUM state: divides each sum by its count
 // on device with decimal-specific rounding (see averageRoundDecimalSum),
@@ -59,6 +60,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream);
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox
