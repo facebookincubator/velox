@@ -151,6 +151,9 @@ block(SCOPE_FOR VARIABLES)
   endif()
 
   FetchContent_MakeAvailable(cudf)
+  if(VELOX_ENABLE_UCX_EXCHANGE)
+    FetchContent_MakeAvailable(ucxx)
+  endif()
 
   if(UCX_FOUND)
     FetchContent_MakeAvailable(ucxx)
