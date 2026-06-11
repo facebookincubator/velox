@@ -63,6 +63,26 @@ bool isAbfsPath([[maybe_unused]] const std::string_view path) {
 #endif
 }
 
+// Returns true if the column has a decimal type mismatch that requires casting.
+bool needsDecimalCast(cudf::column_view const& col, const TypePtr& veloxType) {
+  if (veloxType->isDecimal()) {
+    return col.type() != veloxToCudfDataType(veloxType);
+  }
+  if (veloxType->kind() == TypeKind::ROW) {
+    auto const& rowType = veloxType->asRow();
+    auto numChildren = std::min<size_t>(col.num_children(), rowType.size());
+    for (size_t i = 0; i < numChildren; ++i) {
+      if (needsDecimalCast(col.child(i), rowType.childAt(i))) {
+        return true;
+      }
+    }
+  }
+  if (veloxType->kind() == TypeKind::ARRAY && col.num_children() > 1) {
+    return needsDecimalCast(col.child(1), veloxType->childAt(0));
+  }
+  return false;
+}
+
 // Casts decimal columns from the physical type read by cuDF (e.g. DECIMAL32)
 // to the type expected by Velox (e.g. DECIMAL64), recursing into nested types.
 std::unique_ptr<cudf::column> maybeCastDecimalColumn(
@@ -84,8 +104,7 @@ std::unique_ptr<cudf::column> maybeCastDecimalColumn(
     auto contents = col->release();
     auto& children = contents.children;
     auto const& rowType = veloxType->asRow();
-    auto numChildren =
-        std::min<size_t>(children.size(), rowType.size());
+    auto numChildren = std::min<size_t>(children.size(), rowType.size());
     for (size_t i = 0; i < numChildren; ++i) {
       children[i] = maybeCastDecimalColumn(
           std::move(children[i]), rowType.childAt(i), stream, mr);
@@ -105,10 +124,7 @@ std::unique_ptr<cudf::column> maybeCastDecimalColumn(
     auto contents = col->release();
     auto offsets = std::move(contents.children[0]);
     auto child = maybeCastDecimalColumn(
-        std::move(contents.children[1]),
-        veloxType->childAt(0),
-        stream,
-        mr);
+        std::move(contents.children[1]), veloxType->childAt(0), stream, mr);
     return cudf::make_lists_column(
         numRows,
         std::move(offsets),
@@ -125,8 +141,20 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     const RowTypePtr& rowType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
+  auto tableView = table->view();
+  auto numColumns = std::min<size_t>(tableView.num_columns(), rowType->size());
+  bool anyCastNeeded = false;
+  for (size_t i = 0; i < numColumns; ++i) {
+    if (needsDecimalCast(tableView.column(i), rowType->childAt(i))) {
+      anyCastNeeded = true;
+      break;
+    }
+  }
+  if (!anyCastNeeded) {
+    return table;
+  }
+
   auto columns = table->release();
-  auto numColumns = std::min<size_t>(columns.size(), rowType->size());
   for (size_t i = 0; i < numColumns; ++i) {
     columns[i] = maybeCastDecimalColumn(
         std::move(columns[i]), rowType->childAt(i), stream, mr);
