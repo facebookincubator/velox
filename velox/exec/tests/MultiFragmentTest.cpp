@@ -264,7 +264,8 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
   std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default")};
+      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
+          "default")};
 };
 
 TEST_P(MultiFragmentTest, aggregationSingleKey) {
@@ -2650,7 +2651,8 @@ class DataFetcher {
   folly::EventCount bufferFullOrDoneWait_;
 
   std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default")};
+      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
+          "default")};
 };
 
 /// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB

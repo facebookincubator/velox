@@ -63,7 +63,9 @@ class ExchangeClientTest : public testing::Test,
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    bufferManager_ = OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default");
+    bufferManager_ =
+        OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
+            "default");
 
     common::testutil::TestValue::enable();
   }

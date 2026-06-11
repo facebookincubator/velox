@@ -1358,7 +1358,8 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
                   .project({"c0 % 10"})
                   .partitionedOutputBroadcast({})
                   .planFragment();
-  auto bufferManager = OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default");
+  auto bufferManager =
+      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default");
   {
     auto task = Task::create(
         "t0",
