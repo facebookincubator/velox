@@ -17,6 +17,7 @@
 #pragma once
 
 #include <deque>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -57,14 +58,23 @@ struct SizeExpr {
   std::vector<nativert::ValueId> values;
   std::vector<SizeExpr> args;
 
+  /// True when the referenced values are broadcast against each other (a
+  /// multi-input elementwise op whose operands differ in shape/rank). When set,
+  /// the size is the broadcast shape of all operands rather than the largest
+  /// single operand: dims() returns the broadcast shape and numElements()
+  /// returns its product. Only meaningful for kMax.
+  bool broadcast{false};
+
   /// Accesses all Values and calls recursively on args and combines the
   /// results (numel() of Values) by 'op'. (max or sum). If largestOut is
   /// not null and op is kMax, assigns the ValueId with the largest numel.
+  /// When 'broadcast' is set, returns the product of the broadcast dims().
   int64_t numElements(FrameP frame, nativert::ValueId* largestOut = nullptr)
       const;
 
-  /// Returns the dims of the largest tensor among the referenced values. Only
-  /// valid for kMax. Errors on kSum.
+  /// For kMax: returns the broadcast shape of the referenced values when
+  /// 'broadcast' is set, otherwise the dims of the largest tensor. Errors on
+  /// kSum.
   std::vector<Dim> dims(FrameP frame) const;
 
   /// Substitutes Values in 'this' according to 'bindings' and returns a deep
@@ -102,6 +112,14 @@ struct OutputDesc {
   /// If set, this output is produced by executing a standalone view node
   /// (e.g. view, reshape) rather than allocating a new tensor.
   NodeCP viewNode{nullptr};
+
+  /// If set, this output is the result of an in-place op (e.g. add_/clamp_)
+  /// whose return aliases its mutated self argument. Instead of allocating a
+  /// fresh buffer, the output is reserved as a view sharing self's storage, so
+  /// the returned tensor reflects self (including later in-place mutations),
+  /// matching eager Tensor(a!) semantics. Holds the self Value id (formal at
+  /// build time, translated to actual by toActual / LaunchData construction).
+  std::optional<nativert::ValueId> aliasSelfId;
 
   /// Shortcut for all elementwise, where we already know the largest input and
   /// can set the output shape by that.

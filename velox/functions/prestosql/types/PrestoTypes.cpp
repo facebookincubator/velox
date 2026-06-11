@@ -20,6 +20,8 @@
 #include <velox/common/base/Exceptions.h>
 #include <iomanip>
 #include <sstream>
+#include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -88,6 +90,14 @@ std::string PrestoTypes::toSql(const TypePtr& type) {
     }
     sql << ")";
     return sql.str();
+  }
+
+  if (isBigintEnumType(*type)) {
+    return asBigintEnum(type)->toSql();
+  }
+
+  if (isVarcharEnumType(*type)) {
+    return asVarcharEnum(type)->toSql();
   }
 
   // Primitive types and custom types (e.g. IPPREFIX, BINGTILE).

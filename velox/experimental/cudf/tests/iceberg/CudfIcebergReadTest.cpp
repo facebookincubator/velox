@@ -1180,4 +1180,70 @@ TEST_F(CudfIcebergReadTest, partitionColumnsFromHive) {
   AssertQueryBuilder(plan).splits(icebergSplits).assertResults({expected});
 }
 
+// Test reading a DATE identity partition column. DATE partition values arrive
+// in two encodings: Hive-migrated tables store a date string ("2025-06-05")
+// while Iceberg-native tables store days-since-epoch ("20244"). Both must
+// decode to the same DATE result.
+TEST_F(CudfIcebergReadTest, partitionColumnsDate) {
+  auto fileRowType = ROW({"c0"}, {BIGINT()});
+  auto tableRowType = ROW({"c0", "partitiondate"}, {BIGINT(), DATE()});
+
+  // Write a data file with only the non-partition column c0.
+  auto dataVector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVector);
+
+  // 2025-06-05 is 20244 days since the Unix epoch.
+  const int32_t kDays = DATE()->toDays("2025-06-05");
+
+  // Build column handles marking partitiondate as a partition key.
+  facebook::velox::connector::ColumnHandleMap assignments;
+  for (uint32_t i = 0; i < tableRowType->size(); ++i) {
+    const auto& name = tableRowType->nameOf(i);
+    auto columnType = (i >= fileRowType->size())
+        ? HiveColumnHandle::ColumnType::kPartitionKey
+        : HiveColumnHandle::ColumnType::kRegular;
+    assignments[name] = std::make_shared<HiveColumnHandle>(
+        name,
+        columnType,
+        tableRowType->childAt(i),
+        tableRowType->childAt(i),
+        std::vector<common::Subfield>{});
+  }
+
+  auto expected = makeRowVector(
+      tableRowType->names(),
+      {
+          dataVector->childAt(0),
+          makeFlatVector<int32_t>({kDays, kDays, kDays}, DATE()),
+      });
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(tableRowType)
+                  .dataColumns(tableRowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  // Encoding 1: Hive-migrated date string.
+  {
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+    partitionKeys["partitiondate"] = "2025-06-05";
+    auto splits = makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
+    AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+  }
+
+  // Encoding 2: Iceberg-native days-since-epoch.
+  {
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+    partitionKeys["partitiondate"] = folly::to<std::string>(kDays);
+    auto splits = makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys);
+    AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+  }
+}
+
 } // namespace facebook::velox::cudf_velox::exec::test

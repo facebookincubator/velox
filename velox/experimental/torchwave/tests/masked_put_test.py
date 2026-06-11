@@ -25,6 +25,9 @@ class MaskedPutTest(nn.Module):
     3. Chained: where(flags2, input, where(flags1, values, source) + input)
     4. Broadcast: where with scalar mask (True) and scalar value
     5. 2D index_put_ with int indices on a [90, 130] tensor
+    6. In-place bool-mask index_put_ on scalar_val (an input that is also read
+       by c5 before the mutation and returned as c7 after it), plus a functional
+       index_put with the negated mask.
     """
 
     def forward(
@@ -38,11 +41,12 @@ class MaskedPutTest(nn.Module):
         input_f: Tensor,
         scalar_val: Tensor,
         scalar_mask: Tensor,
+        scalar_flags: Tensor,
         dest2d: Tensor,
         idx2d_0: Tensor,
         idx2d_1: Tensor,
         vals2d: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         c1 = torch.where(flags1, values_f, source_f)
         c2 = torch.where(flags2, values_l, source_l)
         c3 = torch.where(flags1, values_f, source_f) + input_f
@@ -52,4 +56,8 @@ class MaskedPutTest(nn.Module):
         c6 = dest2d.clone()
         c6.index_put_([idx2d_0, idx2d_1], vals2d)
 
-        return c1, c2, c4, c5, c6
+        c7 = scalar_val
+        c8 = scalar_val.index_put_([scalar_flags], scalar_val + 1)
+        c9 = scalar_val.index_put([torch.bitwise_not(scalar_flags)], scalar_val + 10)
+
+        return c1, c2, c4, c5, c6, c7, c8, c9

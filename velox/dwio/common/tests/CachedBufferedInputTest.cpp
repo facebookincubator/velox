@@ -167,6 +167,8 @@ class CachedBufferedInputTest : public testing::Test {
     const auto ssdStatsBefore =
         useSsd ? cache_->ssdCache()->stats() : SsdCacheStats{};
 
+    // Disable async prefetch so the shared coalesced load is consumed by the
+    // first stream access below.
     CachedBufferedInput input(
         readFile,
         MetricsLog::voidLog(),
@@ -176,7 +178,7 @@ class CachedBufferedInputTest : public testing::Test {
         std::move(groupId),
         dataIoStats_,
         nullptr,
-        executor_.get(),
+        nullptr,
         readerOptions);
 
     auto stream1 = input.enqueue(common::Region{kOffset, kRegionSize}, nullptr);

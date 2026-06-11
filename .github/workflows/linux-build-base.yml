@@ -82,7 +82,7 @@ jobs:
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:adapters
+    container: ghcr.io/czentgr/czentgr-test:thrift-deps
     defaults:
       run:
         shell: bash
@@ -116,7 +116,7 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+          VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             echo "Removing previous AWS SDK and s2n installations to avoid conflicts..."
@@ -128,6 +128,8 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
+            bash /setup-centos-adapters.sh configure_dnf_for_cuda
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-centos9.sh
 
@@ -476,7 +478,8 @@ jobs:
 
       - name: Install Dependencies
         env:
-          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+          VELOX_BUILD_SHARED: "ON"
+          VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -485,6 +488,7 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
 
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             USE_CLANG=false bash /setup-ubuntu.sh
 
             cd /
@@ -501,6 +505,26 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p "$CCACHE_DIR"
+
+      - uses: actions/checkout@v5
+        with:
+          path: velox
+          persist-credentials: false
+
+      - name: Install Dependencies
+        run: |
+          source scripts/setup-ubuntu.sh
+          install_apt_deps
+          install_faiss_deps
+          # We can remove them once we bundle FBThrift.
+          install_fmt
+          install_boost
+          install_fast_float
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
 
       - name: Clear CCache Statistics
         run: |
@@ -676,7 +700,7 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_ARROW_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch
+          VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -685,7 +709,9 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
 
-            # Install basic deps with GCC.
+            # Use absolute path within the container for patches
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+            # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-fedora.sh
 
             cd /
@@ -712,7 +738,6 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
-          fmt_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
@@ -774,7 +799,7 @@ jobs:
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
-      image: ghcr.io/facebookincubator/velox-dev:adapters
+      image: ghcr.io/czentgr/czentgr-test:thrift-deps
       volumes:
         - /usr:/host_usr
         - /opt:/host_opt

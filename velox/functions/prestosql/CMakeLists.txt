@@ -46,6 +46,7 @@ velox_add_library(
   FilterFunctions.cpp
   FindFirst.cpp
   FromUtf8.cpp
+  GooglePolylineFunctions.cpp
   InPredicate.cpp
   JsonFunctions.cpp
   Map.cpp
@@ -97,6 +98,7 @@ velox_add_library(
   Fail.h
   FloatingPointFunctions.h
   GeometryFunctions.h
+  GooglePolylineFunctions.h
   GreatestLeast.h
   HyperLogLogFunctions.h
   IPAddressFunctions.h

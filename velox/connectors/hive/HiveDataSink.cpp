@@ -892,7 +892,8 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
 
   obj["inputColumns"] = arr;
   obj["locationHandle"] = locationHandle_->serialize();
-  obj["tableStorageFormat"] = dwio::common::toString(storageFormat_);
+  obj["tableStorageFormat"] =
+      dwio::common::FileFormatName::toName(storageFormat_);
 
   if (bucketProperty_) {
     obj["bucketProperty"] = bucketProperty_->serialize();
@@ -976,7 +977,8 @@ void HiveInsertTableHandle::registerSerDe() {
 
 std::string HiveInsertTableHandle::toString() const {
   std::ostringstream out;
-  out << "HiveInsertTableHandle [" << dwio::common::toString(storageFormat_);
+  out << "HiveInsertTableHandle ["
+      << dwio::common::FileFormatName::toName(storageFormat_);
   if (compressionKind_.has_value()) {
     out << " " << common::compressionKindToString(compressionKind_.value());
   } else {

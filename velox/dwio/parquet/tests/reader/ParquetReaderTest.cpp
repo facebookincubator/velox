@@ -19,7 +19,7 @@
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/SemanticVersion.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
