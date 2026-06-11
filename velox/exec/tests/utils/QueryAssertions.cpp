@@ -339,9 +339,7 @@ variant nullVariant(const TypePtr& type) {
   return variant(type->kind());
 }
 
-variant arrayVariantAt(
-    const ::duckdb::Value& vector,
-    const TypePtr& arrayType);
+variant arrayVariantAt(const ::duckdb::Value& vector, const TypePtr& arrayType);
 
 variant rowVariantAt(const ::duckdb::Value& vector, const TypePtr& rowType) {
   std::vector<variant> values;
