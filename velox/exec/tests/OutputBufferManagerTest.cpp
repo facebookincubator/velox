@@ -19,7 +19,6 @@
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
@@ -66,9 +65,7 @@ class OutputBufferManagerTest : public testing::Test {
 
   void SetUp() override {
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
-    bufferManager_ =
-        OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
-            "default");
+    bufferManager_ = OutputBufferManager::getInstanceRef();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();

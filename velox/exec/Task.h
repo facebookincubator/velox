@@ -32,7 +32,7 @@
 
 namespace facebook::velox::exec {
 
-class IOutputBufferManager;
+class OutputBufferManager;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
@@ -794,7 +794,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// folder could not be created.
   const std::string& getOrCreateSpillDirectory();
 
-  /// True if produces output via an output buffer manager.
+  /// True if produces output via OutputBufferManager.
   bool hasPartitionedOutput() const {
     return numDriversInPartitionedOutput_ > 0;
   }
@@ -1457,7 +1457,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
-  std::vector<std::shared_ptr<IOutputBufferManager>> bufferManagers_;
+  std::weak_ptr<OutputBufferManager> bufferManager_;
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.

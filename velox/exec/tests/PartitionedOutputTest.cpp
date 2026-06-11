@@ -16,7 +16,6 @@
 #include "velox/exec/PartitionedOutput.h"
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -88,8 +87,7 @@ class PartitionedOutputTest : public OperatorTestBase,
 
  private:
   const std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
-          "default")};
+      OutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(PartitionedOutputTest, flush) {
