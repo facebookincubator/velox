@@ -92,6 +92,15 @@ class OperatorAdapter {
     return false;
   }
 
+  /// Context-aware version for operators whose "keep" decision depends on
+  /// runtime state (e.g., exchange transport type per task).
+  virtual bool keepOperator(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const {
+    return keepOperator();
+  }
+
   /// Get the name of this adapter for debugging.
   const std::string& name() const {
     return name_;
