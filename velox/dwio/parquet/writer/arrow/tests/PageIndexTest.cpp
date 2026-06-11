@@ -34,44 +34,45 @@ struct PageIndexRanges {
 
 using RowGroupRanges = std::vector<PageIndexRanges>;
 
-/// Creates an FileMetaData object w/ single row group based on data in.
-/// 'Row_group_ranges'. It sets the offsets and sizes of the column index and.
-/// Offset index members of the row group. It doesn't set the member if the.
-/// Input value is -1.
-std::shared_ptr<FileMetaData> constructFakeMetaData(
-    const RowGroupRanges& rowGroupRanges) {
-  facebook::velox::parquet::thrift::RowGroup rowGroup;
-  for (auto& pageIndexRanges : rowGroupRanges) {
-    facebook::velox::parquet::thrift::ColumnChunk colChunk;
-    if (pageIndexRanges.columnIndexOffset != -1) {
-      colChunk.__set_column_index_offset(pageIndexRanges.columnIndexOffset);
+/// Creates an FileMetaData object w/ single row group based on data in
+/// 'row_group_ranges'. It sets the offsets and sizes of the column index and
+/// offset index members of the row group. It doesn't set the member if the
+/// input value is -1.
+std::shared_ptr<FileMetaData> ConstructFakeMetaData(
+    const RowGroupRanges& row_group_ranges) {
+  facebook::velox::parquet::thrift::RowGroup row_group;
+  for (auto& page_index_ranges : row_group_ranges) {
+    facebook::velox::parquet::thrift::ColumnChunk col_chunk;
+    if (page_index_ranges.columnIndexOffset != -1) {
+      col_chunk.column_index_offset() = page_index_ranges.columnIndexOffset;
     }
-    if (pageIndexRanges.columnIndexLength != -1) {
-      colChunk.__set_column_index_length(
-          static_cast<int32_t>(pageIndexRanges.columnIndexLength));
+    if (page_index_ranges.columnIndexLength != -1) {
+      col_chunk.column_index_length() =
+          static_cast<int32_t>(page_index_ranges.columnIndexLength);
     }
-    if (pageIndexRanges.offsetIndexOffset != -1) {
-      colChunk.__set_offset_index_offset(pageIndexRanges.offsetIndexOffset);
+    if (page_index_ranges.offsetIndexOffset != -1) {
+      col_chunk.offset_index_offset() = page_index_ranges.offsetIndexOffset;
     }
-    if (pageIndexRanges.offsetIndexLength != -1) {
-      colChunk.__set_offset_index_length(
-          static_cast<int32_t>(pageIndexRanges.offsetIndexLength));
+    if (page_index_ranges.offsetIndexLength != -1) {
+      col_chunk.offset_index_length() =
+          static_cast<int32_t>(page_index_ranges.offsetIndexLength);
     }
-    rowGroup.columns.push_back(colChunk);
+    col_chunk.meta_data().ensure();
+    row_group.columns()->push_back(col_chunk);
   }
 
   facebook::velox::parquet::thrift::FileMetaData metadata;
-  metadata.row_groups.push_back(rowGroup);
+  metadata.row_groups()->push_back(row_group);
 
-  metadata.schema.emplace_back();
+  metadata.schema()->emplace_back();
   schema::NodeVector fields;
-  for (size_t i = 0; i < rowGroupRanges.size(); ++i) {
+  for (size_t i = 0; i < row_group_ranges.size(); ++i) {
     fields.push_back(schema::int64(std::to_string(i)));
-    metadata.schema.emplace_back();
-    fields.back()->toParquet(&metadata.schema.back());
+    metadata.schema()->emplace_back();
+    fields.back()->toParquet(&metadata.schema()->back());
   }
   schema::GroupNode::make("schema", Repetition::kRepeated, fields)
-      ->toParquet(&metadata.schema.front());
+      ->toParquet(&metadata.schema()->front());
 
   auto sink = createOutputStream();
   ThriftSerializer{}.serialize(&metadata, sink.get());
@@ -92,7 +93,7 @@ void validatePageIndexRange(
     int expectedCiSize,
     int expectedOiStart,
     int expectedOiSize) {
-  auto fileMetadata = constructFakeMetaData(rowGroupRanges);
+  auto fileMetadata = ConstructFakeMetaData(rowGroupRanges);
   auto readRange = PageIndexReader::determinePageIndexRangesInRowGroup(
       *fileMetadata->rowGroup(0), columnIndices);
   ASSERT_EQ(expectedHasColumnIndex, readRange.columnIndex.has_value());

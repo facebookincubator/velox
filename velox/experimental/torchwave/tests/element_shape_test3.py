@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_dwio_parquet_thrift_test ThriftTransportTest.cpp)
+from torch import nn, Tensor
 
-add_test(velox_dwio_parquet_thrift_test velox_dwio_parquet_thrift_test)
-target_link_libraries(
-  velox_dwio_parquet_thrift_test
-  arrow
-  thrift
-  velox_link_libs
-  GTest::gtest
-  GTest::gtest_main
-)
+
+class ElementShapeTest3(nn.Module):
+    """Three-way broadcast across operands of different rank.
+
+    t1 is [100], t2 is [20, 1], t3 is [10, 1, 1]; t1 + t2 + t3 broadcasts to
+    [10, 20, 100]. The caller initializes each tensor with arange and reshapes
+    it to its final shape before calling forward.
+    """
+
+    def forward(self, t1: Tensor, t2: Tensor, t3: Tensor) -> Tensor:
+        return t1 + t2 + t3

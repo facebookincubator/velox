@@ -15,9 +15,11 @@
  */
 #pragma once
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 
 #include "velox/expression/ConstantExpr.h"
+#include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -26,6 +28,7 @@
 #include <cudf/ast/expressions.hpp>
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -100,8 +103,26 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
   // the scalar, causing use-before-alloc.  Synchronising here is
   // cheap (one-time cost per scalar) and guarantees the memory is
   // available on every stream.
-
-  if constexpr (cudf::is_fixed_width<T>()) {
+  if constexpr (std::is_same_v<T, Timestamp>) {
+    auto unit = CudfConfig::getInstance().timestampUnit;
+    if (unit == cudf::type_id::TIMESTAMP_MICROSECONDS) {
+      using CudfTimestampType = cudf::timestamp_us;
+      auto micros = isNull ? 0 : value.toMicros();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_NANOSECONDS) {
+      using CudfTimestampType = cudf::timestamp_ns;
+      auto nanos = isNull ? 0 : value.toNanos();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else {
+      VELOX_FAIL("Unsupported timestamp unit: {}", static_cast<int32_t>(unit));
+    }
+  } else if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       // Velox DECIMAL scale is positive for fractional digits
       // cuDF scale is negative for fractional digits
@@ -221,6 +242,33 @@ cudf::ast::literal makeScalarAndLiteral(
     const variant& var,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
   return makeScalarAndLiteral<kind>(type, var, false, scalars);
+}
+
+/// Returns true if expr is non-null and its output type is one the AST/JIT
+/// evaluator does not support (currently TIMESTAMP and DECIMAL).
+inline bool isAstUnsupportedType(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  return expr && expr->type() &&
+      (expr->type()->isTimestamp() || expr->type()->isDecimal());
+}
+
+/// Returns true if expr's own output type or any direct input type is one
+/// the AST/JIT evaluator does not support. Intentionally shallow: callers
+/// that recurse over subexpressions (e.g. pushExprToTree) re-check at every
+/// level, so a deep walk here would be wasted work.
+inline bool containsAstUnsupportedType(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (isAstUnsupportedType(expr)) {
+    return true;
+  }
+  if (expr) {
+    for (const auto& input : expr->inputs()) {
+      if (isAstUnsupportedType(input)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -21,6 +21,7 @@
 #include <gflags/gflags.h>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Utils.h"
@@ -32,11 +33,23 @@
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 
+// Forward declaration of the CUDA runtime call used to synchronize the default
+// stream. This translation unit is built in a CPU-configured target without the
+// CUDA headers; the symbol resolves from the CUDA runtime linked into the final
+// binary. PyTorch dispatches eager standalone ops to the default stream.
+extern "C" int cudaStreamSynchronize(void* stream);
+
 namespace torch::wave {
 
 namespace {
 
 thread_local WaveThreadInfo threadInfo;
+
+// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
+// ops are dispatched, so they are complete before executeWave returns.
+void syncTorchDefaultStream() {
+  cudaStreamSynchronize(nullptr);
+}
 
 struct GlobalResources {
   std::unique_ptr<facebook::velox::wave::GpuArena> deviceArena;
@@ -559,7 +572,12 @@ void WaveGraphExecutor::executeWave(
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
   }
+  // Sync the wave stream and the PyTorch default stream: eager standalone ops
+  // run on the default stream while fused kernels run on the wave stream, and
+  // the two are otherwise unordered. Both must complete before executeWave
+  // returns so all results this invocation produced are visible to the caller.
   state.stream->wait();
+  syncTorchDefaultStream();
   auto wallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - wallStart)
                     .count();

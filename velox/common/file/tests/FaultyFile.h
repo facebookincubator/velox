@@ -69,6 +69,10 @@ class FaultyReadFile : public ReadFile {
     return delegatedFile_->hasPreadvAsync();
   }
 
+  bool directIo(uint64_t& alignment) const override {
+    return delegatedFile_->directIo(alignment);
+  }
+
   folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers,
