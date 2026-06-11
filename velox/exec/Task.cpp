@@ -1198,9 +1198,13 @@ void Task::initializePartitionOutput() {
         ? it->second
         : std::string{core::TransportKind::kHttp};
     auto mgr = OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
-    if (!mgr) {
+    if (!mgr && transportType == core::TransportKind::kHttp) {
       mgr = OutputBufferManager::getInstanceRef();
     }
+    VELOX_CHECK_NOT_NULL(
+        mgr,
+        "OutputBufferManager not registered for transport type: {}",
+        transportType);
     bufferManager_ = mgr;
     mgr->initializeTask(
         shared_from_this(),

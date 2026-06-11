@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/IOutputBufferManager.h"
 #include "velox/exec/OutputBufferManager.h"
@@ -104,25 +105,25 @@ TEST(OutputBufferManagerRegistryTest, registryOperations) {
   EXPECT_TRUE(OutputBufferManagerRegistry::getAll().empty());
 }
 
-TEST(OutputBufferManagerRegistryTest, selfRegistration) {
+TEST(OutputBufferManagerRegistryTest, selfRegistrationUsesHttpTransport) {
   // Calling getInstanceRef() triggers self-registration into the global
   // registry, even if a prior test cleared it via unregisterAll().
   auto instance = OutputBufferManager::getInstanceRef();
 
-  auto defaultMgr = OutputBufferManagerRegistry::tryGet(
-      std::string(OutputBufferManagerRegistry::kDefaultId));
-  EXPECT_NE(defaultMgr, nullptr);
+  auto httpMgr = OutputBufferManagerRegistry::tryGet(
+      std::string(core::TransportKind::kHttp));
+  EXPECT_EQ(httpMgr, instance);
 
   auto all = OutputBufferManagerRegistry::getAll();
   EXPECT_GE(all.size(), 1);
 
-  bool foundDefault = false;
+  bool foundHttp = false;
   for (auto& [key, _] : all) {
-    if (key == OutputBufferManagerRegistry::kDefaultId) {
-      foundDefault = true;
+    if (key == core::TransportKind::kHttp) {
+      foundHttp = true;
     }
   }
-  EXPECT_TRUE(foundDefault);
+  EXPECT_TRUE(foundHttp);
 }
 
 class OutputBufferManagerRegistryFixture : public testing::Test {

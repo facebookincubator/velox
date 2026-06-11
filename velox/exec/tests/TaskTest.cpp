@@ -1467,6 +1467,33 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
   }
 }
 
+TEST_F(TaskTest, taskUsesHttpOutputBufferManagerAfterRegistryClear) {
+  OutputBufferManagerRegistry::unregisterAll();
+
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .project({"c0 % 10"})
+                  .partitionedOutputBroadcast({})
+                  .planFragment();
+  auto task = Task::create(
+      "task-http-output-manager-after-registry-clear",
+      plan,
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(1, 1);
+
+  auto httpMgr = OutputBufferManagerRegistry::tryGet(
+      std::string(core::TransportKind::kHttp));
+  EXPECT_NE(httpMgr, nullptr);
+  EXPECT_TRUE(task->updateOutputBuffers(10, true /*noMoreBuffers*/));
+
+  task->requestCancel();
+  waitForTaskCompletion(task.get());
+}
+
 TEST_F(TaskTest, taskStatsUseSelectedOutputBufferManager) {
   core::PlanNodeId outputNodeId;
   auto plan = PlanBuilder()
