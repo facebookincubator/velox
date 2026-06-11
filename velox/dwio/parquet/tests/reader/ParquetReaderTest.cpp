@@ -30,19 +30,13 @@ using namespace facebook::velox::parquet;
 
 class ParquetReaderTest : public ParquetTestBase {
  public:
-  ParquetReaderSession createReadSession(
-      const std::string& fileName,
-      const RowTypePtr& rowType) {
-    return readerBuilder(fileName, rowType).build();
-  }
-
   void assertReadWithExpected(
       const std::string& fileName,
       const RowTypePtr& rowType,
       const RowVectorPtr& expected) {
-    auto readSession = createReadSession(fileName, rowType);
+    auto readerBundle = readerBuilder(fileName, rowType).build();
     assertReadWithReaderAndExpected(
-        rowType, *readSession.rowReader, expected, *pool_);
+        rowType, *readerBundle.rowReader, expected, *pool_);
   }
 
   void assertReadWithFilters(
@@ -70,11 +64,10 @@ TEST_F(ParquetReaderTest, parseSample) {
   // Data is in plain uncompressed format:
   //   a: [1..20]
   //   b: [1.0..20.0]
-  ParquetReaderSession readSession =
-      readerBuilder("sample.parquet", sampleSchema()).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 20ULL);
+  auto readerBundle = readerBuilder("sample.parquet", sampleSchema()).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 20ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type()->kind(), TypeKind::BIGINT);
@@ -89,7 +82,7 @@ TEST_F(ParquetReaderTest, parseSample) {
   });
 
   assertReadWithReaderAndExpected(
-      sampleSchema(), *readSession.rowReader, expected, *leafPool_);
+      sampleSchema(), *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parquetFieldIdColumnMappingNotImplemented) {
@@ -122,12 +115,12 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
   // All 1000 rows in one row group.
   // Data is in RLE_DICTIONARY Snappy format.
   auto schema = ROW("msg", ROW("a", ROW("b", ARRAY(INTEGER()))));
-  auto readSession =
-      createReadSession("parse_empty_nested_list.parquet", schema);
-  EXPECT_EQ(readSession.reader->numberOfRows(), 1000ULL);
+  auto readerBundle =
+      readerBuilder("parse_empty_nested_list.parquet", schema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 1000ULL);
 
   // Ensure the intact data structure
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto colMsg = type->childAt(0);
   EXPECT_EQ(colMsg->type()->kind(), TypeKind::ROW);
@@ -159,7 +152,7 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
           [](auto) { return false; })})})});
 
   assertReadWithReaderAndExpected(
-      schema, *readSession.rowReader, expected, *leafPool_);
+      schema, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseUnannotatedList) {
@@ -367,35 +360,35 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
-  auto readSession =
+  auto readerBundle =
       readerBuilder("sample.parquet", sampleSchema()).byteRange(0, 200).build();
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1; }),
       makeFlatVector<double>(10, [](auto row) { return row + 1; }),
   });
   assertReadWithReaderAndExpected(
-      sampleSchema(), *readSession.rowReader, expected, *leafPool_);
+      sampleSchema(), *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange2) {
-  auto readSession = readerBuilder("sample.parquet", sampleSchema())
-                         .byteRange(200, 500)
-                         .build();
+  auto readerBundle = readerBuilder("sample.parquet", sampleSchema())
+                          .byteRange(200, 500)
+                          .build();
   auto expected = makeRowVector({
       makeFlatVector<int64_t>(10, [](auto row) { return row + 11; }),
       makeFlatVector<double>(10, [](auto row) { return row + 11; }),
   });
   assertReadWithReaderAndExpected(
-      sampleSchema(), *readSession.rowReader, expected, *leafPool_);
+      sampleSchema(), *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
-  auto readSession = readerBuilder("sample.parquet", sampleSchema())
-                         .byteRange(300, 10)
-                         .build();
+  auto readerBundle = readerBuilder("sample.parquet", sampleSchema())
+                          .byteRange(300, 10)
+                          .build();
 
   VectorPtr result;
-  EXPECT_EQ(readSession.rowReader->next(1000, result), 0);
+  EXPECT_EQ(readerBundle.rowReader->next(1000, result), 0);
 }
 
 TEST_F(ParquetReaderTest, parseReadAsLowerCase) {
@@ -495,11 +488,11 @@ TEST_F(ParquetReaderTest, parseInt) {
   // Data is in plain uncompressed format:
   //   int: [100 .. 109]
   //   bigint: [1000 .. 1009]
-  auto readSession = createReadSession("int.parquet", intSchema());
+  auto readerBundle = readerBuilder("int.parquet", intSchema()).build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 10ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 10ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type()->kind(), TypeKind::INTEGER);
@@ -511,7 +504,7 @@ TEST_F(ParquetReaderTest, parseInt) {
       makeFlatVector<int64_t>(10, [](auto row) { return row + 1000; }),
   });
   assertReadWithReaderAndExpected(
-      intSchema(), *readSession.rowReader, expected, *leafPool_);
+      intSchema(), *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseUnsignedInt1) {
@@ -525,9 +518,9 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
   auto rowType =
       ROW({"uint8", "uint16", "uint32", "uint64"},
           {TINYINT(), SMALLINT(), INTEGER(), BIGINT()});
-  auto readSession = createReadSession("uint.parquet", rowType);
-  EXPECT_EQ(readSession.reader->numberOfRows(), 3ULL);
-  auto type = readSession.reader->typeWithId();
+  auto readerBundle = readerBuilder("uint.parquet", rowType).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 3ULL);
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 4ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type()->kind(), TypeKind::TINYINT);
@@ -547,7 +540,7 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
             2000000000000000000ULL,
             3000000000000000000ULL})});
   assertReadWithReaderAndExpected(
-      rowType, *readSession.rowReader, expected, *pool_);
+      rowType, *readerBundle.rowReader, expected, *pool_);
 }
 
 TEST_F(ParquetReaderTest, parseUnsignedInt2) {
@@ -615,11 +608,11 @@ TEST_F(ParquetReaderTest, parseDate) {
   // 25 rows.
   // Data is in plain uncompressed format:
   //   date: [1969-12-27 .. 1970-01-20]
-  auto readSession = createReadSession("date.parquet", dateSchema());
+  auto readerBundle = readerBuilder("date.parquet", dateSchema()).build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 25ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 25ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type(), DATE());
@@ -629,7 +622,7 @@ TEST_F(ParquetReaderTest, parseDate) {
       makeFlatVector<int32_t>(25, [](auto row) { return row - 5; }),
   });
   assertReadWithReaderAndExpected(
-      dateSchema(), *readSession.rowReader, expected, *leafPool_);
+      dateSchema(), *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseRowMapArray) {
@@ -667,15 +660,15 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 TEST_F(ParquetReaderTest, projectNoColumns) {
   // This is the case for count(*).
   auto rowType = ROW({}, {});
-  auto readSession =
+  auto readerBundle =
       readerBuilder("sample.parquet", rowType).withScanSpecOnly().build();
   auto result = BaseVector::create(rowType, 1, leafPool_.get());
   constexpr int kBatchSize = 100;
-  ASSERT_TRUE(readSession.rowReader->next(kBatchSize, result));
+  ASSERT_TRUE(readerBundle.rowReader->next(kBatchSize, result));
   EXPECT_EQ(result->size(), 10);
-  ASSERT_TRUE(readSession.rowReader->next(kBatchSize, result));
+  ASSERT_TRUE(readerBundle.rowReader->next(kBatchSize, result));
   EXPECT_EQ(result->size(), 10);
-  ASSERT_FALSE(readSession.rowReader->next(kBatchSize, result));
+  ASSERT_FALSE(readerBundle.rowReader->next(kBatchSize, result));
 }
 
 TEST_F(ParquetReaderTest, parseIntDecimal) {
@@ -688,12 +681,12 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   //   a: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   //   b: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
   auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(14, 2)});
-  auto readSession =
+  auto readerBundle =
       readerBuilder("decimal_dict.parquet", rowType).withScanSpecOnly().build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 6ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 6ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   auto col1 = type->childAt(1);
@@ -702,7 +695,7 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
 
   int64_t expectValues[3] = {1111, 2222, 3333};
   auto result = BaseVector::create(rowType, 1, leafPool_.get());
-  readSession.rowReader->next(6, result);
+  readerBundle.rowReader->next(6, result);
   EXPECT_EQ(result->size(), 6ULL);
   auto decimals = result->as<RowVector>();
   auto a = decimals->childAt(0)
@@ -737,10 +730,11 @@ TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
 
   auto fileSchema =
       ROW("test", createType<TypeKind::MAP>({VARCHAR(), BIGINT()}));
-  auto readSession = readerBuilder("map_key_value.parquet", fileSchema).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 1ULL);
+  auto readerBundle =
+      readerBuilder("map_key_value.parquet", fileSchema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 1ULL);
 
-  auto rowType = readSession.reader->typeWithId();
+  auto rowType = readerBundle.reader->typeWithId();
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(rowType->size(), 1ULL);
 
@@ -764,7 +758,7 @@ TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
         {"7", 7}}})});
 
   assertReadWithReaderAndExpected(
-      fileSchema, *readSession.rowReader, expected, *leafPool_);
+      fileSchema, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parseRowArrayTest) {
@@ -788,10 +782,10 @@ TEST_F(ParquetReaderTest, parseRowArrayTest) {
            ROW("someId", INTEGER()),
            ROW("someId", INTEGER()),
            ARRAY(ROW("someId", INTEGER()))});
-  auto readSession =
+  auto readerBundle =
       readerBuilder("proto-struct-with-array.parquet", outputRowType).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 1ULL);
-  auto type = readSession.reader->typeWithId();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 1ULL);
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 6ULL);
   auto col6Type = type->childAt(5);
   EXPECT_EQ(col6Type->type()->kind(), TypeKind::ARRAY);
@@ -800,7 +794,7 @@ TEST_F(ParquetReaderTest, parseRowArrayTest) {
 
   VectorPtr result = BaseVector::create(outputRowType, 0, &*leafPool_);
 
-  ASSERT_TRUE(readSession.rowReader->next(1, result));
+  ASSERT_TRUE(readerBundle.rowReader->next(1, result));
   // data: 10, 9, <empty>, null, {9}, 2 elements starting at 0 {{9}, {10}}}
   auto structArray =
       result->as<RowVector>()->childAt(5)->loadedVector()->as<ArrayVector>();
@@ -1057,11 +1051,12 @@ TEST_F(ParquetReaderTest, filterRowGroups) {
   // decimal_no_ColumnMetadata.parquet has one columns a: DECIMAL(9,1). It
   // doesn't have ColumnMetaData, and rowGroups_[0].columns[0].file_offset is 0.
   auto rowType = ROW("_c0", DECIMAL(9, 1));
-  auto readSession = readerBuilder("decimal_no_ColumnMetadata.parquet", rowType)
-                         .withScanSpecOnly()
-                         .build();
+  auto readerBundle =
+      readerBuilder("decimal_no_ColumnMetadata.parquet", rowType)
+          .withScanSpecOnly()
+          .build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 10ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 10ULL);
 }
 
 TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
@@ -1079,11 +1074,11 @@ TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
 // This test is to verify filterRowGroups() doesn't fail if offset is 0
 TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
   auto rowType = ROW("IDX", INTEGER());
-  auto readSession = readerBuilder("zero_offset_row_group.parquet", rowType)
-                         .withScanSpecOnly()
-                         .build();
+  auto readerBundle = readerBuilder("zero_offset_row_group.parquet", rowType)
+                          .withScanSpecOnly()
+                          .build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 1L);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 1L);
 }
 
 TEST_F(ParquetReaderTest, parseLongTagged) {
@@ -1184,11 +1179,11 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
 TEST_F(ParquetReaderTest, testEmptyRowGroups) {
   // empty_row_groups.parquet contains empty row groups
   auto fileSchema = ROW("a", INTEGER());
-  auto readSession =
+  auto readerBundle =
       readerBuilder("empty_row_groups.parquet", fileSchema).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 5ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 5ULL);
 
-  auto rowType = readSession.reader->typeWithId();
+  auto rowType = readerBundle.reader->typeWithId();
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(rowType->size(), 1ULL);
 
@@ -1198,16 +1193,16 @@ TEST_F(ParquetReaderTest, testEmptyRowGroups) {
   auto expected = makeRowVector({makeFlatVector<int32_t>({0, 3, 3, 3, 3})});
 
   assertReadWithReaderAndExpected(
-      fileSchema, *readSession.rowReader, expected, *leafPool_);
+      fileSchema, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, testEnumType) {
   // enum_type.parquet contains 1 column (ENUM) with 3 rows.
   auto fileSchema = ROW("test", VARCHAR());
-  auto readSession = readerBuilder("enum_type.parquet", fileSchema).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 3ULL);
+  auto readerBundle = readerBuilder("enum_type.parquet", fileSchema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 3ULL);
 
-  auto rowType = readSession.reader->typeWithId();
+  auto rowType = readerBundle.reader->typeWithId();
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(rowType->size(), 1ULL);
 
@@ -1217,15 +1212,15 @@ TEST_F(ParquetReaderTest, testEnumType) {
       makeRowVector({makeFlatVector<StringView>({"FOO", "BAR", "FOO"})});
 
   assertReadWithReaderAndExpected(
-      fileSchema, *readSession.rowReader, expected, *leafPool_);
+      fileSchema, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
   const std::string filename("varbinary_flba.parquet");
   auto selectedType = ROW("flba_field", VARBINARY());
-  auto readSession = readerBuilder(filename, selectedType).build();
+  auto readerBundle = readerBuilder(filename, selectedType).build();
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 8ULL);
   auto flbaCol =
       std::static_pointer_cast<const ParquetTypeWithId>(type->childAt(6));
@@ -1234,7 +1229,7 @@ TEST_F(ParquetReaderTest, readVarbinaryFromFLBA) {
 
   auto expected = std::string(1024, '*');
   VectorPtr result = BaseVector::create(selectedType, 0, &(*leafPool_));
-  readSession.rowReader->next(1, result);
+  readerBundle.rowReader->next(1, result);
   EXPECT_EQ(
       expected,
       result->as<RowVector>()
@@ -1344,10 +1339,10 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
 
 TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   auto outputRowType = ROW("regionkey", BIGINT());
-  auto readSession = readerBuilder("v2_page.parquet", outputRowType).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 5ULL);
+  auto readerBundle = readerBuilder("v2_page.parquet", outputRowType).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 5ULL);
 
-  auto rowType = readSession.reader->typeWithId();
+  auto rowType = readerBundle.reader->typeWithId();
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(rowType->size(), 1ULL);
 
@@ -1356,17 +1351,17 @@ TEST_F(ParquetReaderTest, testV2PageWithZeroMaxDefRep) {
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
 
   assertReadWithReaderAndExpected(
-      outputRowType, *readSession.rowReader, expected, *leafPool_);
+      outputRowType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, readComplexTypeWithV2Page) {
   auto outputRowType =
       ROW({"nums", "props"}, {ARRAY(INTEGER()), MAP(VARCHAR(), INTEGER())});
-  auto readSession =
+  auto readerBundle =
       readerBuilder("complex_type_v2_page.parquet", outputRowType).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 1ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 1ULL);
 
-  auto rowType = readSession.reader->typeWithId();
+  auto rowType = readerBundle.reader->typeWithId();
   EXPECT_EQ(rowType->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(rowType->size(), 2ULL);
 
@@ -1375,7 +1370,7 @@ TEST_F(ParquetReaderTest, readComplexTypeWithV2Page) {
        makeMapVectorFromJson<std::string, int32_t>(
            {"{\"x\": 99, \"y\": 100}"})});
   assertReadWithReaderAndExpected(
-      outputRowType, *readSession.rowReader, expected, *leafPool_);
+      outputRowType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
@@ -1395,15 +1390,15 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyArrayValue) {
   const std::string expectedVeloxType =
       "ROW<test:ARRAY<MAP<VARCHAR,ARRAY<INTEGER>>>>";
   auto rowType = ROW("test", ARRAY(MAP(VARCHAR(), ARRAY(INTEGER()))));
-  auto readSession =
+  auto readerBundle =
       readerBuilder("array_of_map_of_int_key_array_value.parquet", rowType)
           .withScanSpecOnly()
           .build();
-  EXPECT_EQ(readSession.reader->rowType()->toString(), expectedVeloxType);
-  auto type = readSession.reader->typeWithId();
+  EXPECT_EQ(readerBundle.reader->rowType()->toString(), expectedVeloxType);
+  auto type = readerBundle.reader->typeWithId();
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
-  while (readSession.rowReader->next(kBatchSize, result)) {
+  while (readerBundle.rowReader->next(kBatchSize, result)) {
   }
 }
 
@@ -1457,12 +1452,12 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
       ROW("test",
           ROW({"stringarrayfield", "intarrayfield"},
               {ARRAY(ARRAY(VARCHAR())), ARRAY(ARRAY(INTEGER()))}));
-  auto readSession = readerBuilder("struct_of_array_of_array.parquet", rowType)
-                         .withScanSpecOnly()
-                         .build();
-  auto type = readSession.reader->typeWithId();
+  auto readerBundle = readerBuilder("struct_of_array_of_array.parquet", rowType)
+                          .withScanSpecOnly()
+                          .build();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
-  EXPECT_EQ(readSession.reader->rowType()->toString(), expectedVeloxType);
+  EXPECT_EQ(readerBundle.reader->rowType()->toString(), expectedVeloxType);
 
   auto test_column = type->childAt(0);
   EXPECT_EQ(test_column->type()->kind(), TypeKind::ROW);
@@ -1507,7 +1502,7 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
 
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
-  while (readSession.rowReader->next(kBatchSize, result)) {
+  while (readerBundle.rowReader->next(kBatchSize, result)) {
   }
 }
 
@@ -1515,11 +1510,11 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
   auto outputRowType = ROW(
       {"test"},
       {ROW({"intfield", "stringarrayfield"}, {INTEGER(), ARRAY(VARCHAR())})});
-  auto readSession = readerBuilder("lzo.parquet", outputRowType).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 23'547ULL);
+  auto readerBundle = readerBuilder("lzo.parquet", outputRowType).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 23'547ULL);
 
   VectorPtr result = BaseVector::create(outputRowType, 0, &*leafPool_);
-  readSession.rowReader->next(23'547ULL, result);
+  readerBundle.rowReader->next(23'547ULL, result);
   EXPECT_EQ(23'547ULL, result->size());
   auto* rowVector = result->asUnchecked<RowVector>();
   auto* values =
@@ -1541,16 +1536,16 @@ TEST_F(ParquetReaderTest, testLzoDataPage) {
 
 TEST_F(ParquetReaderTest, testEmptyV2DataPage) {
   auto outputRowType = ROW("test", REAL());
-  auto readSession =
+  auto readerBundle =
       readerBuilder("empty_v2datapage.parquet", outputRowType).build();
-  EXPECT_EQ(readSession.reader->numberOfRows(), 30001ULL);
-  EXPECT_EQ(*(readSession.reader->typeWithId()->type()), *outputRowType);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 30001ULL);
+  EXPECT_EQ(*(readerBundle.reader->typeWithId()->type()), *outputRowType);
 
   auto expected = makeRowVector({makeFlatVector<float>(
       30001, [](auto /*row*/) { return 1; }, nullEvery(1))});
 
   assertReadWithReaderAndExpected(
-      outputRowType, *readSession.rowReader, expected, *leafPool_);
+      outputRowType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, parquet251) {
@@ -1766,17 +1761,17 @@ TEST_F(ParquetReaderTest, readTimeMillis) {
           TIME())});
   auto sink = write(data);
 
-  auto readSession = readerBuilder(*sink, rowType).build();
+  auto readerBundle = readerBuilder(*sink, rowType).build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 6ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 6ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
   EXPECT_TRUE(col0->type()->isTime());
 
   assertReadWithReaderAndExpected(
-      rowType, *readSession.rowReader, data, *leafPool_);
+      rowType, *readerBundle.rowReader, data, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, readTimeMicros) {
@@ -1798,18 +1793,18 @@ TEST_F(ParquetReaderTest, readTimeMicros) {
           TIME_MICRO_UTC())});
   auto sink = write(data);
 
-  auto readSession = readerBuilder(*sink, rowType).build();
+  auto readerBundle = readerBuilder(*sink, rowType).build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 7ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 7ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
   EXPECT_TRUE(col0->type()->isTime());
   EXPECT_TRUE(col0->type()->equivalent(*TIME_MICRO_UTC()));
 
   assertReadWithReaderAndExpected(
-      rowType, *readSession.rowReader, data, *leafPool_);
+      rowType, *readerBundle.rowReader, data, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
@@ -1827,18 +1822,18 @@ TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
 
   auto sink = write(data);
 
-  auto readSession = readerBuilder(*sink, rowType).build();
+  auto readerBundle = readerBuilder(*sink, rowType).build();
 
-  EXPECT_EQ(readSession.reader->numberOfRows(), 5ULL);
+  EXPECT_EQ(readerBundle.reader->numberOfRows(), 5ULL);
 
-  auto type = readSession.reader->typeWithId();
+  auto type = readerBundle.reader->typeWithId();
   EXPECT_EQ(type->size(), 3ULL);
   EXPECT_EQ(type->childAt(0)->type()->kind(), TypeKind::INTEGER);
   EXPECT_TRUE(type->childAt(1)->type()->isTime());
   EXPECT_EQ(type->childAt(2)->type()->kind(), TypeKind::VARCHAR);
 
   assertReadWithReaderAndExpected(
-      rowType, *readSession.rowReader, data, *leafPool_);
+      rowType, *readerBundle.rowReader, data, *leafPool_);
 }
 
 // Verifies that when the footer size exceeds the configured threshold, memory

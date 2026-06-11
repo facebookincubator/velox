@@ -40,7 +40,7 @@ class ParquetTestBase;
 
 /// Owns a ParquetReader and RowReader created for a single read test.
 /// Declares reader before rowReader so C++ destroys rowReader first.
-struct ParquetReaderSession {
+struct ParquetReaderBundle {
   /// Owns file metadata and input state required by rowReader.
   std::unique_ptr<ParquetReader> reader;
 
@@ -48,7 +48,7 @@ struct ParquetReaderSession {
   std::unique_ptr<dwio::common::RowReader> rowReader;
 };
 
-/// Builder for creating ParquetReader + RowReader sessions in unit tests.
+/// Builder for creating ParquetReader + RowReader bundles in unit tests.
 ///
 /// Construct via ParquetTestBase::readerBuilder with a data source (example
 /// file or in-memory buffer) and output projection, then apply optional
@@ -89,8 +89,8 @@ class ParquetReaderBuilder {
   ParquetReaderBuilder& options(
       const dwio::common::ReaderOptions& readerOptions);
 
-  /// Creates a reader session from the configured inputs.
-  ParquetReaderSession build();
+  /// Creates reader handles from the configured inputs.
+  ParquetReaderBundle build();
 
  private:
   memory::MemoryPool* pool_;
