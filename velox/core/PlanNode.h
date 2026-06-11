@@ -3701,6 +3701,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// @param hasMarker if true, the output type includes a boolean
   /// column at the end to indicate if a join output row has a match or not.
   /// This only applies for left join.
+  /// @param forwardedProbeColumns Probe-side columns that the operator must
+  /// include in the connector's lookup input vector even when no join key or
+  /// join condition references them. Connectors that need per-row probe
+  /// values (e.g. cumulative-weight caps fetched per probe) use this to
+  /// declare which columns they expect to find in the request input. Defaults
+  /// to empty, in which case behavior is unchanged. A forwarded column may
+  /// not overlap with any column already referenced by leftKeys or by a join
+  /// condition.
   IndexLookupJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
@@ -3712,7 +3720,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       TableScanNodePtr right,
       RowTypePtr outputType,
-      std::optional<bool> splitOutput = std::nullopt);
+      std::optional<bool> splitOutput = std::nullopt,
+      std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns = {});
 
   /// @param splitOutput Optional flag to control whether the operator should
   /// split output batches if they are too large. If true, output is split into
@@ -3731,7 +3740,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       std::optional<bool> splitOutput,
       PlanNodePtr left,
       TableScanNodePtr right,
-      RowTypePtr outputType);
+      RowTypePtr outputType,
+      std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns = {});
 
   class Builder
       : public AbstractJoinNode::Builder<IndexLookupJoinNode, Builder> {
@@ -3744,6 +3754,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       filter_ = other.filter();
       hasMarker_ = other.hasMarker();
       splitOutput_ = other.splitOutput();
+      forwardedProbeColumns_ = other.forwardedProbeColumns();
     }
 
     /// Set lookup conditions for index lookup that can't be converted into
@@ -3773,6 +3784,15 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       return *this;
     }
 
+    /// Set probe-side columns that should be forwarded to the connector's
+    /// lookup input even though no join key or join condition references
+    /// them. See the IndexLookupJoinNode constructor for the contract.
+    Builder& forwardedProbeColumns(
+        std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
+      return *this;
+    }
+
     std::shared_ptr<IndexLookupJoinNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "IndexLookupJoinNode id is not set");
       VELOX_USER_CHECK(
@@ -3799,13 +3819,15 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           splitOutput_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
-          outputType_.value());
+          outputType_.value(),
+          forwardedProbeColumns_);
     }
 
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
     bool hasMarker_{false};
     std::optional<bool> splitOutput_;
+    std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns_;
   };
 
   bool supportsBarrier() const override {
@@ -3824,6 +3846,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// simple equality join conditions.
   const std::vector<IndexLookupConditionPtr>& joinConditions() const {
     return joinConditions_;
+  }
+
+  /// Probe-side columns the operator forwards into the connector's lookup
+  /// input vector beyond what leftKeys and joinConditions reference. Connectors
+  /// that need per-row probe values (e.g. cumulative-weight caps) declare
+  /// them here. Empty by default.
+  const std::vector<FieldAccessTypedExprPtr>& forwardedProbeColumns() const {
+    return forwardedProbeColumns_;
   }
 
   std::string_view name() const override {
@@ -3866,6 +3896,12 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// Optional flag to control whether to split output batches. When set,
   /// overrides the index_lookup_join_split_output QueryConfig.
   const std::optional<bool> splitOutput_;
+
+  /// Probe-side columns to forward to the connector's lookup input even if
+  /// they are not referenced by leftKeys or joinConditions. Validated in the
+  /// constructor to be present in the probe input type and to not overlap
+  /// with leftKeys or joinCondition-referenced columns.
+  const std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
