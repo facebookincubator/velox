@@ -20,6 +20,7 @@
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -62,7 +63,7 @@ class ExchangeClientTest : public testing::Test,
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    bufferManager_ = OutputBufferManager::getInstanceRef();
+    bufferManager_ = OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>("default");
 
     common::testutil::TestValue::enable();
   }

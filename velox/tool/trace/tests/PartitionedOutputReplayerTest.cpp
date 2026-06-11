@@ -28,6 +28,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/trace/TraceUtil.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 
@@ -118,7 +119,7 @@ class PartitionedOutputReplayerTest
   }
 
   const std::shared_ptr<OutputBufferManager> bufferManager_{
-      exec::OutputBufferManager::getInstanceRef()};
+      exec::OutputBufferManagerRegistry::getManagerAs<exec::OutputBufferManager>("default")};
 };
 
 TEST_P(PartitionedOutputReplayerTest, defaultConsumer) {
