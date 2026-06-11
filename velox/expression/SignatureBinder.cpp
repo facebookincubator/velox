@@ -373,6 +373,19 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
     return true;
   }
 
+  // UNKNOWN is coercible to any type. Bind type variables in the signature to
+  // UNKNOWN so return type resolution works (e.g. array(T) -> T resolves to
+  // UNKNOWN).
+  if (actualType->isUnknown()) {
+    const auto& params = typeSignature.parameters();
+    for (const auto& param : params) {
+      if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   const auto& params = typeSignature.parameters();
   if (params.size() != actualType->parameters().size()) {
     return false;
@@ -409,6 +422,25 @@ bool SignatureBinderBase::tryBind(
   const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
   if (!boost::algorithm::iequals(typeName, actualType->name())) {
+    if (allowCoercion && actualType->isUnknown() &&
+        !typeSignature.parameters().empty()) {
+      auto resolvedType = SignatureBinder::tryResolveType(
+          typeSignature,
+          variables(),
+          typeVariablesBindings_,
+          integerVariablesBindings_,
+          longEnumVariablesBindings_,
+          varcharEnumVariablesBindings_);
+      if (!resolvedType) {
+        return false;
+      }
+      // Prefer fewer type parameters (array(T) over map(K,V)) to break ties.
+      coercion = {
+          .type = resolvedType,
+          .cost = static_cast<int>(typeSignature.parameters().size()),
+      };
+      return true;
+    }
     if (allowCoercion && typeSignature.parameters().empty()) {
       if (auto availableCoercion =
               coercer_.coerceTypeBase(actualType, typeName)) {
