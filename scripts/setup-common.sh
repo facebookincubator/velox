@@ -236,7 +236,12 @@ function install_arrow {
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
     for patch in $VELOX_ARROW_CMAKE_PATCH; do
-      git apply "$patch" || exit 1
+      # Try patch command first (handles line number offsets), fall back to git apply
+      if command -v patch >/dev/null 2>&1; then
+        patch -p1 -i "$patch" || exit 1
+      else
+        git apply "$patch" || exit 1 
+      fi
     done
     # Presto needs this for Arrow Flight
     if [[ -n $EXTRA_ARROW_PATCH ]]; then
