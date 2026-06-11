@@ -32,9 +32,6 @@ namespace facebook::velox::cudf_velox {
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-[[nodiscard]] std::unique_ptr<cudf::table> makeEmptyTable(
-    TypePtr const& inputType);
-
 /**
  * @brief Concatenates multiple CudfVectors into a single cudf::table.
  *
@@ -89,6 +86,20 @@ namespace facebook::velox::cudf_velox {
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/**
+ * @brief Concatenates multiple CudfVectors into CudfVector output batches.
+ *
+ * This wraps getConcatenatedTableBatched for column-bearing tables and
+ * preserves logical row counts from CudfVector::size() for zero-column tables,
+ * whose cuDF table views cannot represent the row count.
+ */
+[[nodiscard]] std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
+    memory::MemoryPool* pool,
+    std::vector<CudfVectorPtr>&& vectors,
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
