@@ -25,7 +25,7 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime_api.h>
-
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -57,6 +57,25 @@ CudaEvent& eventForThread() {
     events[deviceIndex] = new CudaEvent(cudaEventDisableTiming);
   }
   return *events[deviceIndex];
+
+size_t maxBatchRows() {
+  const auto& cudfConfig = CudfConfig::getInstance();
+  if (cudfConfig.batchSizeMaxThreshold) {
+    VELOX_CHECK_GT(
+        cudfConfig.batchSizeMaxThreshold.value(),
+        0,
+        "cuDF max batch size must be positive");
+    return static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value());
+  }
+  return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+}
+
+vector_size_t checkedVectorSize(size_t rowCount) {
+  VELOX_CHECK_LE(
+      rowCount,
+      static_cast<size_t>(std::numeric_limits<vector_size_t>::max()),
+      "cuDF vector row count exceeds Velox vector size limit");
+  return static_cast<vector_size_t>(rowCount);
 }
 
 } // namespace
@@ -166,10 +185,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   cudf::detail::join_streams(inputStreams, stream);
 
   std::vector<std::unique_ptr<cudf::table>> outputTables;
-  const auto& cudfConfig = CudfConfig::getInstance();
-  auto const maxRows = cudfConfig.batchSizeMaxThreshold
-      ? static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value())
-      : static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+  auto const maxRows = maxBatchRows();
   size_t startpos = 0;
   size_t runningRows = 0;
   for (size_t i = 0; i < tableViews.size(); ++i) {
@@ -201,6 +217,58 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
+}
+
+std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
+    memory::MemoryPool* pool,
+    std::vector<CudfVectorPtr>&& vectors,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_NOT_NULL(pool);
+
+  std::vector<CudfVectorPtr> outputVectors;
+  if (tableType->size() > 0) {
+    auto tables =
+        getConcatenatedTableBatched(std::move(vectors), tableType, stream, mr);
+    outputVectors.reserve(tables.size());
+    for (auto& table : tables) {
+      VELOX_CHECK_NOT_NULL(table);
+      const auto rowCount =
+          checkedVectorSize(static_cast<size_t>(table->num_rows()));
+      outputVectors.push_back(
+          std::make_shared<CudfVector>(
+              pool, tableType, rowCount, std::move(table), stream));
+    }
+    return outputVectors;
+  }
+
+  size_t remainingRows = 0;
+  for (const auto& vector : vectors) {
+    VELOX_CHECK_NOT_NULL(vector);
+    VELOX_CHECK_EQ(vector->getTableView().num_columns(), 0);
+    const auto rowCount = static_cast<size_t>(vector->size());
+    VELOX_CHECK_LE(
+        rowCount,
+        std::numeric_limits<size_t>::max() - remainingRows,
+        "zero-column cuDF vector row count overflow");
+    remainingRows += rowCount;
+  }
+
+  const auto maxRows = maxBatchRows();
+  do {
+    const auto chunkRows = std::min(remainingRows, maxRows);
+    outputVectors.push_back(
+        std::make_shared<CudfVector>(
+            pool,
+            tableType,
+            checkedVectorSize(chunkRows),
+            makeEmptyTable(tableType),
+            stream));
+    remainingRows -= chunkRows;
+  } while (remainingRows > 0);
+
+  return outputVectors;
 }
 
 void streamsWaitForStream(
