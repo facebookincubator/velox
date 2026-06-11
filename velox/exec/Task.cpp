@@ -2328,6 +2328,7 @@ bool Task::isFinishedLocked() const {
 bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
+    // Ignore messages received after no-more-buffers message.
     if (noMoreOutputBuffers_) {
       return false;
     }
@@ -3000,7 +3001,9 @@ TaskStats Task::taskStats() const {
   if (auto mgr = bufferManager_.lock()) {
     taskStats.outputBufferUtilization = mgr->getUtilization(taskId_);
     taskStats.outputBufferOverutilized = mgr->isOverutilized(taskId_);
-    taskStats.outputBufferStats = mgr->stats(taskId_);
+    if (!taskStats.outputBufferStats.has_value()) {
+      taskStats.outputBufferStats = mgr->stats(taskId_);
+    }
   }
   return taskStats;
 }
@@ -3263,7 +3266,7 @@ folly::dynamic Task::toJson() const {
   if (auto mgr = bufferManager_.lock()) {
     auto s = mgr->toString(taskId_);
     if (!s.empty()) {
-      obj["outputBuffer"] = s;
+      obj["buffer"] = s;
     }
   }
 
