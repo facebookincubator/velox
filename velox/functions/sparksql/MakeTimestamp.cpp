@@ -36,13 +36,13 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
   // Check hour.
   auto hour = hourVector->valueAt<int32_t>(row);
   if (hour < 0 || hour >= 24) {
-    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+    return nullOrUserFail(
         ansiEnabled, "Invalid value for hour, must be in [0, 24): {}", hour);
   }
   // Check minute.
   auto minute = minuteVector->valueAt<int32_t>(row);
   if (minute < 0 || minute >= 60) {
-    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+    return nullOrUserFail(
         ansiEnabled,
         "Invalid value for minute, must be in [0, 60): {}",
         minute);
@@ -50,14 +50,14 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
   // Check microseconds.
   auto micros = microsVector->valueAt<int64_t>(row);
   if (micros < 0) {
-    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+    return nullOrUserFail(
         ansiEnabled,
         "Invalid value for second microseconds, must be non-negative: {}",
         micros);
   }
   auto seconds = micros / util::kMicrosPerSec;
   if (seconds > 60 || (seconds == 60 && micros % util::kMicrosPerSec != 0)) {
-    VELOX_SPARK_RETURN_NULL_OR_FAIL(
+    return nullOrUserFail(
         ansiEnabled,
         "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: {}.{:06d}",
         seconds,
@@ -71,8 +71,7 @@ std::optional<Timestamp> makeTimeStampFromDecodedArgs(
       dayVector->valueAt<int32_t>(row));
   if (daysSinceEpoch.hasError()) {
     VELOX_DCHECK(daysSinceEpoch.error().isUserError());
-    VELOX_SPARK_RETURN_NULL_OR_FAIL(
-        ansiEnabled, "{}", daysSinceEpoch.error().message());
+    return nullOrUserFail(ansiEnabled, "{}", daysSinceEpoch.error().message());
   }
 
   // Micros has at most 8 digits (2 for seconds + 6 for microseconds),
@@ -110,8 +109,7 @@ std::optional<Timestamp> makeTimestampWithTimeZone(
     return std::nullopt;
   }
   if (timeZone == nullptr) {
-    VELOX_SPARK_RETURN_NULL_OR_FAIL(
-        ansiEnabled, "Unknown time zone: '{}'", timeZoneName);
+    return nullOrUserFail(ansiEnabled, "Unknown time zone: '{}'", timeZoneName);
   }
   toGMTWithGapCorrection(timestamp.value(), *timeZone);
   return timestamp;
