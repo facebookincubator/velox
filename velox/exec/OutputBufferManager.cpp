@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/OutputBufferManager.h"
-#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -30,13 +29,6 @@ const std::shared_ptr<OutputBufferManager>& OutputBufferManager::getInstanceRef(
     const Options& options) {
   static const std::shared_ptr<OutputBufferManager> instance =
       std::make_shared<OutputBufferManager>(options);
-  static const bool registered = [] {
-    if (!OutputBufferManagerRegistry::hasManager("default")) {
-      OutputBufferManagerRegistry::registerManager("default", instance);
-    }
-    return true;
-  }();
-  (void)registered;
   return instance;
 }
 

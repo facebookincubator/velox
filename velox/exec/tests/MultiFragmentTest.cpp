@@ -22,7 +22,6 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/OutputBufferManager.h"
-#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -264,8 +263,7 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
   std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
-          "default")};
+      OutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(MultiFragmentTest, aggregationSingleKey) {
@@ -2651,8 +2649,7 @@ class DataFetcher {
   folly::EventCount bufferFullOrDoneWait_;
 
   std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManagerRegistry::getManagerAs<OutputBufferManager>(
-          "default")};
+      OutputBufferManager::getInstanceRef()};
 };
 
 /// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB
