@@ -931,7 +931,10 @@ std::unique_ptr<dwio::common::RowReader> JsonReader::createRowReader(
 JsonRowReader::JsonRowReader(
     std::shared_ptr<FileContents> contents,
     const dwio::common::RowReaderOptions& options)
-    : contents_{std::move(contents)}, options_{options} {
+    : contents_{std::move(contents)},
+      options_{options},
+      splitStart_{options.offset()},
+      splitEnd_{options.limit()} {
   const auto& readFile = contents_->input->getReadFile();
   fileLength_ = readFile->size();
   // Pad the buffer so the last line can be parsed by simdjson without
@@ -941,10 +944,29 @@ JsonRowReader::JsonRowReader(
   if (fileLength_ > 0) {
     readFile->pread(0, fileLength_, fileBuffer_.data());
   }
+
+  // Position at the first record this split owns. A nonzero split offset
+  // generally lands inside a record; that record belongs to the previous
+  // split, so scan forward to the byte after the next newline and start
+  // there. The first split (offset 0) starts at byte 0 and skips nothing.
+  pos_ = splitStart_;
+  if (splitStart_ != 0 && splitStart_ < fileLength_) {
+    const char* from = fileBuffer_.data() + splitStart_;
+    const char* nl = static_cast<const char*>(
+        std::memchr(from, '\n', fileLength_ - splitStart_));
+    // No newline at or after the offset means the offset falls in the
+    // file's final (unterminated) record, which the previous split owns.
+    pos_ = (nl == nullptr) ? fileLength_
+                           : static_cast<size_t>(nl - fileBuffer_.data()) + 1;
+  }
 }
 
 bool JsonRowReader::readNextLine() {
-  if (pos_ >= fileLength_) {
+  // Stop at end of file, or once a record would start past this split's
+  // boundary. A record starting at exactly splitEnd_ is still read (the
+  // straddling record); the next split skips it via the constructor's
+  // first-line skip. This is the Presto/Hive line-split convention.
+  if (pos_ >= fileLength_ || pos_ > splitEnd_) {
     return false;
   }
   const char* start = fileBuffer_.data() + pos_;
@@ -967,6 +989,16 @@ bool JsonRowReader::readNextLine() {
 }
 
 void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
+  // A blank line — empty or whitespace only — is never a valid JSON
+  // record. JsonSerDe rejects these as empty rows; surface a clear error
+  // rather than simdjson's lower-level diagnostic. Blank lines turn up at
+  // split boundaries (leading, trailing, or between records), so the
+  // behavior is pinned here.
+  std::string_view line(lineBuffer_.data(), lineLength_);
+  if (line.find_first_not_of(" \t\r\n") == std::string_view::npos) {
+    VELOX_USER_FAIL("JSON parse error: encountered an empty row.");
+  }
+
   simdjson::padded_string_view padded(
       lineBuffer_.data(),
       lineLength_,
@@ -998,7 +1030,7 @@ uint64_t JsonRowReader::next(
     uint64_t size,
     VectorPtr& result,
     const dwio::common::Mutation* /*mutation*/) {
-  if (size == 0 || pos_ >= fileLength_) {
+  if (size == 0 || pos_ >= fileLength_ || pos_ > splitEnd_) {
     return 0;
   }
 

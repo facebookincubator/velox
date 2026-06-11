@@ -66,6 +66,49 @@ class JsonReaderTest : public testing::Test, public test::VectorTestBase {
     rowReader->next(1'000, result);
     return std::dynamic_pointer_cast<RowVector>(result);
   }
+
+  // Reads the byte range [offset, offset + length) of the input through
+  // the JSON reader and returns the resulting RowVector, or nullptr when
+  // the split contains no whole records.
+  RowVectorPtr readRange(
+      const std::string& input,
+      const RowTypePtr& schema,
+      uint64_t offset,
+      uint64_t length) {
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+    dwio::common::ReaderOptions readerOptions{pool()};
+    readerOptions.setFileSchema(schema);
+
+    auto readFile = std::make_shared<InMemoryReadFile>(input);
+    auto bufferedInput =
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto reader =
+        factory->createReader(std::move(bufferedInput), readerOptions);
+
+    dwio::common::RowReaderOptions rowReaderOptions;
+    rowReaderOptions.range(offset, length);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    VectorPtr result;
+    rowReader->next(1'000, result);
+    return std::dynamic_pointer_cast<RowVector>(result);
+  }
+
+  // Collects the first (BIGINT) column of a read result into a vector,
+  // treating a null result as no records.
+  std::vector<int64_t> ids(const RowVectorPtr& row) {
+    std::vector<int64_t> out;
+    if (row == nullptr) {
+      return out;
+    }
+    auto* col = row->childAt(0)->asFlatVector<int64_t>();
+    for (vector_size_t i = 0; i < row->size(); ++i) {
+      out.push_back(col->valueAt(i));
+    }
+    return out;
+  }
 };
 
 TEST_F(JsonReaderTest, factoryRegistration) {
@@ -727,6 +770,138 @@ TEST_F(JsonReaderTest, mapValueRow) {
   auto keys = makeFlatVector<StringView>({"a"_sv});
   auto expected = makeRowVector({makeMapVector({0}, keys, values)});
   test::assertEqualVectors(expected, row);
+}
+
+TEST_F(JsonReaderTest, splitFromOffsetZero) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "{\"id\":0}\n{\"id\":1}\n{\"id\":2}\n";
+  EXPECT_EQ(
+      ids(readRange(file, schema, 0, file.size())),
+      (std::vector<int64_t>{0, 1, 2}));
+}
+
+TEST_F(JsonReaderTest, splitExhaustiveSweep) {
+  auto schema = ROW({{"id", BIGINT()}});
+  // Twenty records of varying length. "pad" is not in the schema, so it
+  // is ignored — its only purpose is to shift record boundaries.
+  std::string file;
+  std::vector<int64_t> expected;
+  for (int i = 0; i < 20; ++i) {
+    file += "{\"id\":" + std::to_string(i) + ",\"pad\":\"" +
+        std::string(i % 7, 'x') + "\"}\n";
+    expected.push_back(i);
+  }
+
+  // Whole-file read sanity check.
+  EXPECT_EQ(ids(readRange(file, schema, 0, file.size())), expected);
+
+  // Partition the file into [0, p) and [p, fileSize) at every byte
+  // offset p. The concatenation must equal the whole-file read with no
+  // dropped or duplicated records. This is the only test that exercises
+  // off-by-one errors at every byte position.
+  for (uint64_t p = 1; p <= file.size(); ++p) {
+    auto left = ids(readRange(file, schema, 0, p));
+    auto right = ids(readRange(file, schema, p, file.size() - p));
+    std::vector<int64_t> combined = left;
+    combined.insert(combined.end(), right.begin(), right.end());
+    EXPECT_EQ(combined, expected) << "split point " << p;
+  }
+}
+
+TEST_F(JsonReaderTest, splitInsideMultibyteUtf8) {
+  auto schema = ROW({{"id", BIGINT()}});
+  // String value holds "ñ" (0xC3 0xB1) and "€" (0xE2 0x82 0xAC). None of
+  // those bytes is 0x0A, so newline scanning must not be confused.
+  std::string r0 = "{\"id\":0,\"s\":\"\xC3\xB1\xE2\x82\xAC\"}\n";
+  std::string file = r0 + "{\"id\":1}\n";
+  // Split one byte into the multibyte run of the first record.
+  uint64_t p = r0.find("\xC3\xB1") + 1;
+  auto left = ids(readRange(file, schema, 0, p));
+  auto right = ids(readRange(file, schema, p, file.size() - p));
+  std::vector<int64_t> combined = left;
+  combined.insert(combined.end(), right.begin(), right.end());
+  EXPECT_EQ(combined, (std::vector<int64_t>{0, 1}));
+}
+
+TEST_F(JsonReaderTest, splitInsideJsonStringLiteral) {
+  auto schema = ROW({{"id", BIGINT()}});
+  // The string value contains braces and an escaped newline (backslash
+  // 'n', two bytes — not a real 0x0A line terminator).
+  std::string r0 = "{\"id\":0,\"s\":\"a{b}c\\nd efgh\"}\n";
+  std::string file = r0 + "{\"id\":1}\n";
+  uint64_t p = r0.find("b}c");
+  auto left = ids(readRange(file, schema, 0, p));
+  auto right = ids(readRange(file, schema, p, file.size() - p));
+  std::vector<int64_t> combined = left;
+  combined.insert(combined.end(), right.begin(), right.end());
+  EXPECT_EQ(combined, (std::vector<int64_t>{0, 1}));
+}
+
+TEST_F(JsonReaderTest, splitAtExactlyNewline) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "{\"id\":0}\n{\"id\":1}\n{\"id\":2}\n";
+  // Split exactly at the newline ending the first record. That record
+  // belongs to the left split; the right split skips from the newline
+  // forward to the start of the second record.
+  uint64_t nl = file.find('\n');
+  auto left = ids(readRange(file, schema, 0, nl));
+  auto right = ids(readRange(file, schema, nl, file.size() - nl));
+  std::vector<int64_t> combined = left;
+  combined.insert(combined.end(), right.begin(), right.end());
+  EXPECT_EQ(combined, (std::vector<int64_t>{0, 1, 2}));
+}
+
+TEST_F(JsonReaderTest, splitPastEof) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "{\"id\":0}\n{\"id\":1}\n";
+  // Offset beyond the end of the file yields no records.
+  EXPECT_TRUE(ids(readRange(file, schema, file.size() + 10, 100)).empty());
+  // Offset exactly at EOF yields no records.
+  EXPECT_TRUE(ids(readRange(file, schema, file.size(), 100)).empty());
+}
+
+TEST_F(JsonReaderTest, splitWith20RecordsVaryingLength) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file;
+  std::vector<int64_t> expected;
+  for (int i = 0; i < 20; ++i) {
+    file += "{\"id\":" + std::to_string(i) + ",\"pad\":\"" +
+        std::string(i, 'x') + "\"}\n";
+    expected.push_back(i);
+  }
+  // Three adjacent splits tiling the file end to end.
+  uint64_t third = file.size() / 3;
+  auto a = ids(readRange(file, schema, 0, third));
+  auto b = ids(readRange(file, schema, third, third));
+  auto c = ids(readRange(file, schema, 2 * third, file.size() - 2 * third));
+  std::vector<int64_t> combined = a;
+  combined.insert(combined.end(), b.begin(), b.end());
+  combined.insert(combined.end(), c.begin(), c.end());
+  EXPECT_EQ(combined, expected);
+}
+
+TEST_F(JsonReaderTest, splitFileWithLeadingBlankLineThrows) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "\n{\"id\":0}\n";
+  VELOX_ASSERT_USER_THROW(readRange(file, schema, 0, file.size()), "empty row");
+}
+
+TEST_F(JsonReaderTest, splitFileWithBlankLineBetweenRecordsThrows) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "{\"id\":0}\n\n{\"id\":1}\n";
+  VELOX_ASSERT_USER_THROW(readRange(file, schema, 0, file.size()), "empty row");
+}
+
+TEST_F(JsonReaderTest, splitFileWithTrailingBlankLineThrows) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "{\"id\":0}\n\n";
+  VELOX_ASSERT_USER_THROW(readRange(file, schema, 0, file.size()), "empty row");
+}
+
+TEST_F(JsonReaderTest, splitFileWithWhitespaceOnlyLineThrows) {
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string file = "{\"id\":0}\n   \n{\"id\":1}\n";
+  VELOX_ASSERT_USER_THROW(readRange(file, schema, 0, file.size()), "empty row");
 }
 
 } // namespace

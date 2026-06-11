@@ -117,8 +117,11 @@ class JsonReader : public dwio::common::Reader {
 
 /// Row reader for the JSON file format. Reads one JSON object per line,
 /// dispatching each field to the matching column via the schema field
-/// index. The whole file is loaded into memory at construction; split
-/// support is deferred (see json-reader-pr-roadmap.md PR-7).
+/// index. The whole file is loaded into memory at construction. Reads are
+/// split-aware: a row reader created for the byte range [offset, offset +
+/// length) processes exactly the records whose starting byte falls in that
+/// range, so concatenating the output of splits that tile the file
+/// reproduces a whole-file read with no dropped or duplicated records.
 class JsonRowReader : public dwio::common::RowReader {
  public:
   JsonRowReader(
@@ -159,14 +162,27 @@ class JsonRowReader : public dwio::common::RowReader {
   // Caller-supplied row reader options (range, selector, scan spec).
   dwio::common::RowReaderOptions options_;
 
-  // Entire file contents loaded at construction. Split support
-  // is deferred to a later PR.
+  // Entire file contents loaded at construction. Reads are restricted to
+  // this reader's split via splitStart_ and splitEnd_ below.
   std::string fileBuffer_;
 
   // Length of valid bytes in fileBuffer_. fileBuffer_ has additional
   // SIMDJSON_PADDING bytes of zeroes after fileLength_ so the last
   // line can be parsed in place.
   size_t fileLength_{0};
+
+  // First byte of this reader's split (RowReaderOptions::offset()). When
+  // nonzero, the record straddling this offset belongs to the previous
+  // split, so the constructor skips it by scanning forward to the byte
+  // after the next newline.
+  size_t splitStart_{0};
+
+  // One past the last byte this reader claims (RowReaderOptions::limit(),
+  // i.e. offset + length saturated). A record is read while its starting
+  // byte is <= splitEnd_, so the record straddling the boundary is read
+  // in full here and skipped by the next split. Matches the Presto/Hive
+  // line-split convention (see TextReader).
+  size_t splitEnd_{0};
 
   // Current read offset into fileBuffer_. Records start at this position.
   size_t pos_{0};
