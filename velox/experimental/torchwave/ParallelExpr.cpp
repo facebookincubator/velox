@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <sstream>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <folly/ScopeGuard.h>
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
 #include "velox/experimental/torchwave/Utils.h"
@@ -34,14 +36,32 @@ namespace torch::wave {
 
 namespace {
 
+// Extra dependency edges injected by side-effect analysis (see
+// computeSideEffectEdges): maps a node to in-place mutation nodes it must run
+// after (or, for a mutation, the earlier touches of the same storage it must
+// run after). Consulted by args() so the existing layering orders mutations
+// relative to the reads/writes of the storage they alias. Null when no
+// side-effect analysis is active (e.g. during reachability computation).
+// thread_local so concurrent compiles of different graphs don't race on it
+// (the rest of torchwave keeps compile/execution state thread_local).
+thread_local const std::unordered_map<NodeCP, std::vector<NodeCP>>* gExtraArgs =
+    nullptr;
+
 // Returns the input nodes of 'expr'. Loops over inputs() of the node and adds
-// the producer of the Value of each NamedArgument if not null.
+// the producer of the Value of each NamedArgument if not null, plus any
+// side-effect dependency edges recorded for 'expr'.
 std::vector<NodeCP> args(NodeCP expr) {
   std::vector<NodeCP> result;
   for (const auto& input : expr->inputs()) {
     auto* producer = input.value->producer();
     if (producer != nullptr && producer != expr) {
       result.push_back(producer);
+    }
+  }
+  if (gExtraArgs != nullptr) {
+    auto it = gExtraArgs->find(expr);
+    if (it != gExtraArgs->end()) {
+      result.insert(result.end(), it->second.begin(), it->second.end());
     }
   }
   return result;
@@ -255,6 +275,140 @@ void collectReachable(
   }
 }
 
+// Computes the extra dependency edges needed to honor in-place side effects.
+//
+// A non-functionalized graph has imperative semantics: a "value" is a handle to
+// storage, and an in-place op (FunctionSchema Tensor(a!)) mutates the storage
+// of one of its arguments. Reads/writes of that storage through aliasing views
+// must keep their program order relative to the mutation, even though there is
+// no producer->input edge expressing it (and the mutation's own output may be
+// dead, so the output-reachability walk never finds it).
+//
+// For every storage base that is mutated, this orders all touches (any node
+// referencing the base or a view of it) relative to each mutation: touches
+// after the mutation depend on it (read-after-write), and the mutation depends
+// on touches before it (write-after-read / write-after-write). The graph output
+// node is included as a final touch so a mutated value that is also returned
+// pulls in and orders its mutation. Edges are emitted via 'extraArgs' (consumed
+// by args()); 'mutationNodes' collects the mutations that gained a later
+// dependent, so the layering can force them to be their own project nodes.
+void computeSideEffectEdges(
+    const nativert::Graph& graph,
+    std::unordered_map<NodeCP, std::vector<NodeCP>>& extraArgs,
+    NodeSet& mutationNodes) {
+  std::unordered_map<NodeCP, int32_t> pos;
+  int32_t idx = 0;
+  for (const auto& node : graph.nodes()) {
+    pos[&node] = idx++;
+  }
+  NodeCP outputNode = graph.outputNode();
+
+  // The node list must be in program (topological) order: every input's
+  // producer precedes its consumer. The memory-dependency analysis below uses
+  // node-list position as program order, so a graph rewrite that inserts a
+  // replacement node out of position (e.g. not at the replaced op's site, as
+  // index_put_ -> tw.masked_put_ once did) would silently invert the
+  // ordering edges. Fail loudly here instead. Rewrites must use
+  // graph->insertBefore(newNode, replacedNode).
+  for (const auto& node : graph.nodes()) {
+    auto consumerPos = pos[&node];
+    for (const auto& input : node.inputs()) {
+      if (input.value == nullptr) {
+        continue;
+      }
+      auto* producer = input.value->producer();
+      if (producer == nullptr) {
+        continue;
+      }
+      auto it = pos.find(producer);
+      if (it == pos.end()) {
+        continue;
+      }
+      TORCH_CHECK(
+          it->second < consumerPos,
+          "Graph node list is not in program order: node '",
+          node.target(),
+          "' consumes a value produced later by '",
+          producer->target(),
+          "'. A graph rewrite likely inserted a replacement node out of "
+          "position; use graph->insertBefore(newNode, replacedNode).");
+    }
+  }
+
+  std::unordered_map<ValueCP, ValueCP> baseMemo;
+  auto baseOf = [&](ValueCP v) -> ValueCP {
+    auto it = baseMemo.find(v);
+    if (it != baseMemo.end()) {
+      return it->second;
+    }
+    auto* b = viewStorageBase(v);
+    baseMemo[v] = b;
+    return b;
+  };
+
+  struct Touch {
+    NodeCP node;
+    int32_t pos;
+  };
+  std::unordered_map<ValueCP, std::vector<Touch>> touches;
+  for (const auto& node : graph.nodes()) {
+    if (&node == outputNode) {
+      continue;
+    }
+    for (const auto& input : node.inputs()) {
+      if (input.value != nullptr) {
+        touches[baseOf(input.value)].push_back({&node, pos[&node]});
+      }
+    }
+  }
+  // Graph outputs are materialized after every node runs: model the output node
+  // as a touch at the end so mutations feeding outputs are ordered/pulled in.
+  constexpr int32_t kOutputPos = std::numeric_limits<int32_t>::max();
+  for (const auto& input : outputNode->inputs()) {
+    if (input.value != nullptr) {
+      touches[baseOf(input.value)].push_back({outputNode, kOutputPos});
+    }
+  }
+
+  auto addEdge = [&](NodeCP from, NodeCP to) {
+    auto& deps = extraArgs[from];
+    if (std::find(deps.begin(), deps.end(), to) == deps.end()) {
+      deps.push_back(to);
+    }
+  };
+  for (const auto& node : graph.nodes()) {
+    if (&node == outputNode) {
+      continue;
+    }
+    auto mutated = dataMutatedInputs(&node);
+    if (mutated.empty()) {
+      continue;
+    }
+    auto mPos = pos[&node];
+    bool hasLaterUse = false;
+    for (auto* mv : mutated) {
+      auto it = touches.find(baseOf(mv));
+      if (it == touches.end()) {
+        continue;
+      }
+      for (const auto& t : it->second) {
+        if (t.node == &node) {
+          continue;
+        }
+        if (t.pos > mPos) {
+          addEdge(t.node, &node); // read/write after the mutation depends on it
+          hasLaterUse = true;
+        } else {
+          addEdge(&node, t.node); // mutation depends on the earlier touch
+        }
+      }
+    }
+    if (hasLaterUse) {
+      mutationNodes.insert(&node);
+    }
+  }
+}
+
 } // namespace
 
 ProjectNode* ParallelNodes::makeParallelProject(
@@ -298,6 +452,20 @@ ProjectNode* ParallelNodes::makeParallelProject(
 }
 
 ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
+  // Side-effect analysis: extra ordering edges for in-place mutations. Computed
+  // from the raw graph (gExtraArgs is still null here), then installed so the
+  // args()-based layering below orders mutations relative to the storage they
+  // alias and discovers mutations whose SSA output is dead.
+  std::unordered_map<NodeCP, std::vector<NodeCP>> extraArgs;
+  NodeSet mutationNodes;
+  computeSideEffectEdges(graph, extraArgs, mutationNodes);
+  gExtraArgs = &extraArgs;
+  // Clear on every exit path (incl. exceptions) so args() can never dereference
+  // a dangling pointer to the now-destroyed local 'extraArgs'.
+  SCOPE_EXIT {
+    gExtraArgs = nullptr;
+  };
+
   NodeCP root = graph.outputNode();
   auto topExprs = args(root);
   NodeSet top(topExprs.begin(), topExprs.end());
@@ -305,6 +473,17 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
   std::vector<LevelData> levelData;
   std::unordered_map<NodeCP, int32_t> refCount;
   makeExprLevels(top, levelData, refCount);
+
+  // Force in-place mutation nodes to be project-node borders so compileNode
+  // emits them even when their SSA result is dead: their effect is observed
+  // only through the mutated storage. (Reachable mutations are in refCount via
+  // the extra edges; unreachable/dead ones are absent and stay dropped.)
+  for (auto* m : mutationNodes) {
+    auto it = refCount.find(m);
+    if (it != refCount.end() && it->second < 2) {
+      it->second = 2;
+    }
+  }
 
   NodeSet placed;
   ProjectNode* current = nullptr;

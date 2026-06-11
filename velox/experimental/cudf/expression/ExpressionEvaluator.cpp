@@ -25,6 +25,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/DecimalUtil.h"
+#include "velox/type/Time.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ConstantVector.h"
@@ -47,6 +48,8 @@
 #include <cudf/strings/case.hpp>
 #include <cudf/strings/combine.hpp>
 #include <cudf/strings/contains.hpp>
+#include <cudf/strings/convert/convert_datetime.hpp>
+#include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/replace.hpp>
 #include <cudf/strings/slice.hpp>
@@ -61,6 +64,7 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <cctype>
 #include <memory>
 
 namespace facebook::velox::cudf_velox {
@@ -1234,11 +1238,14 @@ class CoalesceFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> literalScalar_;
 };
 
-class YearFunction : public CudfFunction {
+class ExtractComponentFunction : public CudfFunction {
  public:
-  explicit YearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+  ExtractComponentFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr,
+      cudf::datetime::datetime_component component)
+      : component_(component) {
     VELOX_CHECK_EQ(
-        expr->inputs().size(), 1, "year expects exactly 1 input column");
+        expr->inputs().size(), 1, "extract expects exactly 1 input column");
   }
 
   ColumnOrView eval(
@@ -1247,7 +1254,100 @@ class YearFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::datetime::extract_datetime_component(
-        inputCol, cudf::datetime::datetime_component::YEAR, stream, mr);
+        inputCol, component_, stream, mr);
+  }
+
+ private:
+  cudf::datetime::datetime_component component_;
+};
+
+// Builds an ExtractComponentFunction for a fixed datetime component, avoiding a
+// near-identical registration lambda for every component (year, month, ...).
+struct ExtractComponentFactory {
+  cudf::datetime::datetime_component component;
+
+  std::shared_ptr<CudfFunction> operator()(
+      const std::string&,
+      const std::shared_ptr<velox::exec::Expr>& expr) const {
+    return std::make_shared<ExtractComponentFunction>(expr, component);
+  }
+};
+
+class QuarterFunction : public CudfFunction {
+ public:
+  explicit QuarterFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "quarter expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::datetime::extract_quarter(inputCol, stream, mr);
+  }
+};
+
+class DayOfYearFunction : public CudfFunction {
+ public:
+  explicit DayOfYearFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "day_of_year expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    return cudf::datetime::day_of_year(inputCol, stream, mr);
+  }
+};
+
+class WeekFunction : public CudfFunction {
+ public:
+  explicit WeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(), 1, "week expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto weekStrings = cudf::strings::from_timestamps(
+        inputCol, "%V", cudf::strings_column_view{}, stream, mr);
+    return cudf::strings::to_integers(
+        cudf::strings_column_view(weekStrings->view()),
+        cudf::data_type(cudf::type_id::INT32),
+        stream,
+        mr);
+  }
+};
+
+class YearOfWeekFunction : public CudfFunction {
+ public:
+  explicit YearOfWeekFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(
+        expr->inputs().size(),
+        1,
+        "year_of_week expects exactly 1 input column");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto yearStrings = cudf::strings::from_timestamps(
+        inputCol, "%G", cudf::strings_column_view{}, stream, mr);
+    return cudf::strings::to_integers(
+        cudf::strings_column_view(yearStrings->view()),
+        cudf::data_type(cudf::type_id::INT32),
+        stream,
+        mr);
   }
 };
 
@@ -1842,11 +1942,12 @@ std::shared_ptr<CudfFunction> createCudfFunction(
   }
   for (const auto& spec : it->second) {
     // Empty signatures matching must be allowed to handle
-    // the special case of cast
-    if (spec.signatures.empty() ||
-        matchCallAgainstSignatures(*expr, spec.signatures)) {
-      return spec.factory(name, expr);
+    // the special case of cast.
+    if (!spec.signatures.empty() &&
+        !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
     }
+    return spec.factory(name, expr);
   }
   return nullptr;
 }
@@ -1994,19 +2095,83 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .build()});
 
+  const std::vector<exec::FunctionSignaturePtr> timestampDateIntegerSignatures{
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("timestamp")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("integer")
+          .argumentType("date")
+          .build()};
+
   registerCudfFunction(
       prefix + "year",
+      ExtractComponentFactory{cudf::datetime::datetime_component::YEAR},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "month",
+      ExtractComponentFactory{cudf::datetime::datetime_component::MONTH},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "day",
+      ExtractComponentFactory{cudf::datetime::datetime_component::DAY},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "dow", prefix + "day_of_week"},
+      ExtractComponentFactory{cudf::datetime::datetime_component::WEEKDAY},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "doy", prefix + "day_of_year"},
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<YearFunction>(expr);
+        return std::make_shared<DayOfYearFunction>(expr);
       },
-      {FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("timestamp")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("integer")
-           .argumentType("date")
-           .build()});
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "week", prefix + "week_of_year"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<WeekFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "quarter",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<QuarterFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunctions(
+      {prefix + "yow", prefix + "year_of_week"},
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<YearOfWeekFunction>(expr);
+      },
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "hour",
+      ExtractComponentFactory{cudf::datetime::datetime_component::HOUR},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "minute",
+      ExtractComponentFactory{cudf::datetime::datetime_component::MINUTE},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "second",
+      ExtractComponentFactory{cudf::datetime::datetime_component::SECOND},
+      timestampDateIntegerSignatures);
+
+  registerCudfFunction(
+      prefix + "millisecond",
+      ExtractComponentFactory{cudf::datetime::datetime_component::MILLISECOND},
+      timestampDateIntegerSignatures);
 
   registerCudfFunction(
       prefix + "length",
@@ -2170,6 +2335,32 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // regular comparison operators
   //
 
+  const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("double")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("timestamp")
+          .argumentType("timestamp")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("date")
+          .argumentType("date")
+          .build(),
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("b_precision")
+          .integerVariable("b_scale")
+          .returnType("boolean")
+          .argumentType("decimal(a_precision, a_scale)")
+          .argumentType("decimal(b_precision, b_scale)")
+          .build()};
+
   auto registerComparisonOp = [&](const std::vector<std::string>& aliases,
                                   cudf::binary_operator op) {
     registerCudfFunctions(
@@ -2179,26 +2370,14 @@ bool registerBuiltinFunctions(const std::string& prefix) {
             const std::shared_ptr<velox::exec::Expr>& expr) {
           return std::make_shared<BinaryFunction>(expr, op);
         },
-        {FunctionSignatureBuilder()
-             .returnType("boolean")
-             .argumentType("double")
-             .argumentType("double")
-             .build(),
-         FunctionSignatureBuilder()
-             .integerVariable("a_precision")
-             .integerVariable("a_scale")
-             .integerVariable("b_precision")
-             .integerVariable("b_scale")
-             .returnType("boolean")
-             .argumentType("decimal(a_precision, a_scale)")
-             .argumentType("decimal(b_precision, b_scale)")
-             .build()});
+        comparisonSignatures);
   };
 
   registerComparisonOp(
-      {prefix + "equal", prefix + "eq"}, cudf::binary_operator::EQUAL);
+      {prefix + "equalto", prefix + "eq"}, cudf::binary_operator::EQUAL);
   registerComparisonOp(
-      {prefix + "notequal", prefix + "neq"}, cudf::binary_operator::NOT_EQUAL);
+      {prefix + "notequalto", prefix + "neq"},
+      cudf::binary_operator::NOT_EQUAL);
   registerComparisonOp(
       {prefix + "greaterthanorequal", prefix + "gte"},
       cudf::binary_operator::GREATER_EQUAL);
@@ -2249,25 +2428,40 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // between
   //
 
+  const std::vector<exec::FunctionSignaturePtr> betweenSignatures{
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("double")
+          .argumentType("double")
+          .argumentType("double")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("timestamp")
+          .argumentType("timestamp")
+          .argumentType("timestamp")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
+          .argumentType("date")
+          .argumentType("date")
+          .argumentType("date")
+          .build(),
+      FunctionSignatureBuilder()
+          .integerVariable("p")
+          .integerVariable("s")
+          .returnType("boolean")
+          .argumentType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .argumentType("decimal(p,s)")
+          .build()};
+
   registerCudfFunction(
       prefix + "between",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<BetweenFunction>(expr);
       },
-      {FunctionSignatureBuilder()
-           .returnType("boolean")
-           .argumentType("double")
-           .argumentType("double")
-           .argumentType("double")
-           .build(),
-       FunctionSignatureBuilder()
-           .integerVariable("p")
-           .integerVariable("s")
-           .returnType("boolean")
-           .argumentType("decimal(p,s)")
-           .argumentType("decimal(p,s)")
-           .argumentType("decimal(p,s)")
-           .build()});
+      betweenSignatures);
 
   //
   // greatest & least
@@ -2311,6 +2505,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("decimal(p,s)")
            .build()});
 
+  // Note: Spark and Presto functions are now registered separately via
+  // registerSparkFunctions() and registerPrestoFunctions()
   return true;
 }
 
@@ -2403,10 +2599,11 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
     return false;
   }
   for (const auto& spec : it->second) {
-    if (spec.signatures.empty() ||
-        matchCallAgainstSignatures(*expr, spec.signatures)) {
-      return true;
+    if (!spec.signatures.empty() &&
+        !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
     }
+    return true;
   }
   return false;
 }

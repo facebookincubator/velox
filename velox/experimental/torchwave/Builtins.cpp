@@ -608,6 +608,28 @@ void registerBuiltins() {
       .costFunction(powCost)
       .registerOp();
 
+  // In-place binary arithmetic. PyTorch keeps these in non-functionalized
+  // graphs (e.g. dense-feature normalization x.add_(mean).mul_(inv_std)).
+  // Registered as elementwise; the device functions take the mutated arg by
+  // reference so the write lands in self's storage. No arithmeticPromotion:
+  // in-place ops keep self's dtype rather than promoting the result.
+  MetadataBuilder("torch.ops.aten.add_.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Tensor")
+      .elementwise()
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Tensor")
+      .elementwise()
+      .costFunction(divCost)
+      .registerOp();
+
   // Binary arithmetic (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.add.Scalar")
       .elementwiseFunc("__add")
@@ -892,6 +914,15 @@ void registerBuiltins() {
            {.hasPresentTemplateParam = true}})
       .normalize(castScalarAttrsToInputDtype)
       .registerOp();
+  // In-place clamp. Mirrors clamp.default; __clamp_(T&, lo, hi) writes self.
+  MetadataBuilder("torch.ops.aten.clamp_.default")
+      .elementwise()
+      .argumentMeta(
+          {{.isRegister = true},
+           {.hasPresentTemplateParam = true},
+           {.hasPresentTemplateParam = true}})
+      .normalize(castScalarAttrsToInputDtype)
+      .registerOp();
   MetadataBuilder("torch.ops.aten.nan_to_num.default")
       .elementwise()
       .normalize(resolveNanToNumDefaults)
@@ -1146,16 +1177,29 @@ void registerBuiltins() {
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& /*types*/,
-             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
             if (inputs.empty() || outputs.empty()) {
               return {};
             }
+            auto* outputNode = waveGraph.graph()->outputNode();
             for (auto* user : outputs[0]->users()) {
               if (isInPlaceMutation(user, outputs[0])) {
                 return {};
               }
+              // A returned clone must stay a real copy: it is a distinct output
+              // tensor, and aliasing it to its source can collide with another
+              // output that is the same value.
+              if (user == outputNode) {
+                return {};
+              }
+            }
+            // Do not eliminate the clone if its source storage is mutated in
+            // place later: the clone is a required snapshot of the pre-mutation
+            // value, so it cannot be aliased to its (later-overwritten) source.
+            if (baseMutatedAfter(*waveGraph.graph(), node, inputs[0].value)) {
+              return {};
             }
             return {{outputs[0], inputs[0].value}};
           })
@@ -1386,6 +1430,14 @@ void registerBuiltins() {
                       const_cast<nativert::Value*>(
                           listPack->inputs()[0].value)},
                      {"values", valuesVal}});
+                // Place the replacement at the original op's program position.
+                // createNode inserts at the graph's current insertion point,
+                // which is not the index_put_ site; leaving it there would put
+                // this in-place mutation out of program order and invert the
+                // memory-dependency edges computed in ParallelExpr (a read of
+                // self before the mutation could be scheduled after it).
+                graph->insertBefore(
+                    maskedPutNode, const_cast<nativert::Node*>(node));
                 auto* resultValue = waveGraph.newTensorValue(
                     maskedPutNode, "masked_put_result", selfDtype);
                 return {{node->outputs()[0], resultValue}};
