@@ -235,32 +235,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedGetAll) {
   OutputBufferManagerRegistry::unregisterAll();
 }
 
-TEST_F(OutputBufferManagerRegistryFixture, lifecycleCallsDispatchedToAll) {
-  auto mgr1 = std::make_shared<MockOutputBufferManager>();
-  auto mgr2 = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("mgr1", mgr1);
-  OutputBufferManagerRegistry::global().insert("mgr2", mgr2);
-
-  auto managers = OutputBufferManagerRegistry::getAll();
-  ASSERT_EQ(managers.size(), 2);
-
-  for (auto& [_, mgr] : managers) {
-    mgr->updateOutputBuffers("task-1", 4, false);
-    mgr->updateNumDrivers("task-1", 2);
-    mgr->removeTask("task-1");
-  }
-
-  EXPECT_EQ(mgr1->updateBuffersCount, 1);
-  EXPECT_EQ(mgr1->updateDriversCount, 1);
-  EXPECT_EQ(mgr1->removeCount, 1);
-
-  EXPECT_EQ(mgr2->updateBuffersCount, 1);
-  EXPECT_EQ(mgr2->updateDriversCount, 1);
-  EXPECT_EQ(mgr2->removeCount, 1);
-
-  OutputBufferManagerRegistry::unregisterAll();
-}
-
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
   OutputBufferManagerRegistry::global().insert("obm", globalMgr);
@@ -286,86 +260,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
   EXPECT_TRUE(foundOverride);
 
   OutputBufferManagerRegistry::unregisterAll();
-}
-
-TEST(OutputBufferManagerRegistryTest, statsAdd) {
-  OutputBuffer::Stats a(
-      core::PartitionedOutputNode::Kind::kPartitioned,
-      /*_noMoreBuffers=*/false,
-      /*_noMoreData=*/false,
-      /*_finished=*/false,
-      /*_bufferedBytes=*/100,
-      /*_bufferedPages=*/10,
-      /*_totalBytesSent=*/1000,
-      /*_totalRowsSent=*/50,
-      /*_totalPagesSent=*/5,
-      /*_averageBufferTimeMs=*/200,
-      /*_numTopBuffers=*/2,
-      /*_buffersStats=*/{});
-
-  OutputBuffer::Stats b(
-      core::PartitionedOutputNode::Kind::kBroadcast,
-      /*_noMoreBuffers=*/true,
-      /*_noMoreData=*/true,
-      /*_finished=*/true,
-      /*_bufferedBytes=*/300,
-      /*_bufferedPages=*/30,
-      /*_totalBytesSent=*/3000,
-      /*_totalRowsSent=*/150,
-      /*_totalPagesSent=*/15,
-      /*_averageBufferTimeMs=*/400,
-      /*_numTopBuffers=*/6,
-      /*_buffersStats=*/{});
-
-  a.add(b);
-
-  EXPECT_EQ(a.kind, core::PartitionedOutputNode::Kind::kBroadcast);
-  EXPECT_TRUE(a.noMoreBuffers);
-  EXPECT_TRUE(a.noMoreData);
-  EXPECT_TRUE(a.finished);
-  EXPECT_EQ(a.bufferedBytes, 400);
-  EXPECT_EQ(a.bufferedPages, 40);
-  EXPECT_EQ(a.totalBytesSent, 4000);
-  EXPECT_EQ(a.totalRowsSent, 200);
-  EXPECT_EQ(a.totalPagesSent, 20);
-  EXPECT_EQ(a.numTopBuffers, 8);
-
-  // Weighted average: (200*1000 + 400*3000) / (1000+3000) = 1400000/4000 = 350
-  EXPECT_EQ(a.averageBufferTimeMs, 350);
-}
-
-TEST(OutputBufferManagerRegistryTest, statsAddZeroBytes) {
-  OutputBuffer::Stats a(
-      core::PartitionedOutputNode::Kind::kPartitioned,
-      false,
-      false,
-      false,
-      /*_bufferedBytes=*/0,
-      /*_bufferedPages=*/0,
-      /*_totalBytesSent=*/0,
-      /*_totalRowsSent=*/0,
-      /*_totalPagesSent=*/0,
-      /*_averageBufferTimeMs=*/0,
-      /*_numTopBuffers=*/0,
-      /*_buffersStats=*/{});
-
-  OutputBuffer::Stats b(
-      core::PartitionedOutputNode::Kind::kPartitioned,
-      false,
-      false,
-      false,
-      /*_bufferedBytes=*/0,
-      /*_bufferedPages=*/0,
-      /*_totalBytesSent=*/0,
-      /*_totalRowsSent=*/0,
-      /*_totalPagesSent=*/0,
-      /*_averageBufferTimeMs=*/0,
-      /*_numTopBuffers=*/0,
-      /*_buffersStats=*/{});
-
-  a.add(b);
-  EXPECT_EQ(a.averageBufferTimeMs, 0);
-  EXPECT_EQ(a.totalBytesSent, 0);
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, createWithNullParentIsolation) {

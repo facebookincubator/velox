@@ -26,7 +26,9 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/IOutputBufferManager.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -511,6 +513,72 @@ class TestShouldYieldOperator : public exec::Operator {
  private:
   RowVectorPtr input_;
   bool shouldYieldResult_{false};
+};
+
+class TestOutputBufferManager : public IOutputBufferManager {
+ public:
+  TestOutputBufferManager(
+      OutputBuffer::Stats stats,
+      double utilization,
+      bool overutilized)
+      : stats_(std::move(stats)),
+        utilization_(utilization),
+        overutilized_(overutilized) {}
+
+  void initializeTask(
+      std::shared_ptr<Task> /*task*/,
+      core::PartitionedOutputNode::Kind /*kind*/,
+      int /*numDestinations*/,
+      int /*numDrivers*/) override {
+    ++initCount;
+  }
+
+  bool updateOutputBuffers(
+      const std::string& /*taskId*/,
+      int /*numBuffers*/,
+      bool /*noMoreBuffers*/) override {
+    ++updateBuffersCount;
+    return true;
+  }
+
+  void removeTask(const std::string& /*taskId*/) override {
+    ++removeCount;
+  }
+
+  std::optional<OutputBuffer::Stats> stats(
+      const std::string& /*taskId*/) override {
+    ++statsCount;
+    return stats_;
+  }
+
+  bool updateNumDrivers(const std::string& /*taskId*/, uint32_t /*numDrivers*/)
+      override {
+    ++updateDriversCount;
+    return true;
+  }
+
+  double getUtilization(const std::string& /*taskId*/) override {
+    return utilization_;
+  }
+
+  bool isOverutilized(const std::string& /*taskId*/) override {
+    return overutilized_;
+  }
+
+  std::string toString(const std::string& /*taskId*/) override {
+    return "test-output-buffer-manager";
+  }
+
+  int initCount{0};
+  int updateBuffersCount{0};
+  int updateDriversCount{0};
+  int removeCount{0};
+  int statsCount{0};
+
+ private:
+  OutputBuffer::Stats stats_;
+  double utilization_;
+  bool overutilized_;
 };
 } // namespace
 
@@ -1397,6 +1465,71 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     // ignored.
     ASSERT_FALSE(task->updateOutputBuffers(15, true));
   }
+}
+
+TEST_F(TaskTest, taskStatsUseSelectedOutputBufferManager) {
+  core::PlanNodeId outputNodeId;
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputNodeId)
+                  .planFragment();
+  const std::string transportType{"test-output-manager"};
+  plan.outputTransportTypes[outputNodeId] = transportType;
+
+  OutputBuffer::Stats expectedStats(
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*_noMoreBuffers=*/true,
+      /*_noMoreData=*/true,
+      /*_finished=*/false,
+      /*_bufferedBytes=*/123,
+      /*_bufferedPages=*/4,
+      /*_totalBytesSent=*/1'024,
+      /*_totalRowsSent=*/32,
+      /*_totalPagesSent=*/8,
+      /*_averageBufferTimeMs=*/17,
+      /*_numTopBuffers=*/2,
+      /*_buffersStats=*/{});
+  auto selectedManager =
+      std::make_shared<TestOutputBufferManager>(expectedStats, 0.5, true);
+  auto queryRegistry = OutputBufferManagerRegistry::create(
+      &OutputBufferManagerRegistry::global());
+  queryRegistry->insert(transportType, selectedManager);
+
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(
+      OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
+  auto task = Task::create(
+      "task-selected-output-manager-stats",
+      plan,
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  task->start(1, 1);
+
+  const auto taskStats = task->taskStats();
+  EXPECT_EQ(selectedManager->initCount, 1);
+  EXPECT_EQ(selectedManager->statsCount, 1);
+  EXPECT_DOUBLE_EQ(taskStats.outputBufferUtilization, 0.5);
+  EXPECT_TRUE(taskStats.outputBufferOverutilized);
+  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
+  const auto& outputStats = taskStats.outputBufferStats.value();
+  EXPECT_EQ(outputStats.kind, expectedStats.kind);
+  EXPECT_EQ(outputStats.noMoreBuffers, expectedStats.noMoreBuffers);
+  EXPECT_EQ(outputStats.noMoreData, expectedStats.noMoreData);
+  EXPECT_EQ(outputStats.finished, expectedStats.finished);
+  EXPECT_EQ(outputStats.bufferedBytes, expectedStats.bufferedBytes);
+  EXPECT_EQ(outputStats.bufferedPages, expectedStats.bufferedPages);
+  EXPECT_EQ(outputStats.totalBytesSent, expectedStats.totalBytesSent);
+  EXPECT_EQ(outputStats.totalRowsSent, expectedStats.totalRowsSent);
+  EXPECT_EQ(outputStats.totalPagesSent, expectedStats.totalPagesSent);
+  EXPECT_EQ(outputStats.averageBufferTimeMs, expectedStats.averageBufferTimeMs);
+  EXPECT_EQ(outputStats.numTopBuffers, expectedStats.numTopBuffers);
+  EXPECT_EQ(outputStats.buffersStats.size(), expectedStats.buffersStats.size());
+
+  task->requestCancel();
+  waitForTaskCompletion(task.get());
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
