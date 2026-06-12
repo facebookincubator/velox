@@ -24,6 +24,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -59,6 +60,34 @@ class IcebergReadTest : public test::IcebergTestBase {
     test::IcebergTestBase::SetUp();
     folly::SingletonVault::singleton()->registrationComplete();
     fileFormat_ = dwio::common::FileFormat::DWRF;
+  }
+
+  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
+      const std::string& name,
+      const TypePtr& type,
+      int fieldId,
+      const std::string& defaultValue) {
+    return std::make_shared<IcebergColumnHandle>(
+        name,
+        HiveColumnHandle::ColumnType::kRegular,
+        type,
+        parquet::ParquetFieldId(fieldId),
+        std::vector<common::Subfield>{},
+        std::optional<std::string>{defaultValue});
+  }
+
+  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
+      const std::string& name,
+      const TypePtr& type,
+      int fieldId,
+      FileColumnHandle::ColumnType columnType =
+          FileColumnHandle::ColumnType::kRegular) {
+    return std::make_shared<IcebergColumnHandle>(
+        name,
+        columnType,
+        type,
+        parquet::ParquetFieldId(fieldId),
+        std::vector<common::Subfield>{});
   }
 
   void assertDefaultValues(
