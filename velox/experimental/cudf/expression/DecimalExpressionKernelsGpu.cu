@@ -29,31 +29,80 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
+// Device-safe int128 bounds (std::numeric_limits is host-only in CUDA).
+constexpr unsigned __int128 kUnsigned128Max =
+    static_cast<unsigned __int128>(-1);
+constexpr unsigned __int128 kInt128MinMagnitude =
+    static_cast<unsigned __int128>(1) << 127;
+constexpr unsigned __int128 kInt128MaxMagnitude = kInt128MinMagnitude - 1;
+constexpr __int128_t kInt128Max =
+    static_cast<__int128_t>(kInt128MaxMagnitude);
+// Bit pattern 2^127 maps to INT128_MIN without negating INT128_MIN (UB).
+constexpr __int128_t kInt128Min =
+    static_cast<__int128_t>(kInt128MinMagnitude);
+
+// Extract absolute value in unsigned space. Signed negation of INT128_MIN is
+// undefined; negating the unsigned bit pattern is always defined.
+__device__ inline unsigned __int128
+absToUnsigned(__int128_t value, bool& negative) {
+  if (value < 0) {
+    negative = !negative;
+    return -static_cast<unsigned __int128>(value);
+  }
+  return static_cast<unsigned __int128>(value);
+}
+
+// Reapply sign after unsigned divide/round. Magnitudes >= 2^127 cannot be
+// represented as positive int128; magnitude == 2^127 is exactly INT128_MIN.
+__device__ inline __int128_t
+signedFromUnsigned(unsigned __int128 magnitude, bool negative) {
+  if (!negative) {
+    if (magnitude > kInt128MaxMagnitude) {
+      return kInt128Max;
+    }
+    return static_cast<__int128_t>(magnitude);
+  }
+  if (magnitude >= kInt128MinMagnitude) {
+    return kInt128Min;
+  }
+  return -static_cast<__int128_t>(magnitude);
+}
+
+// Decimal divide with rescale (numerator * scale / denom), half-up rounding.
+// All intermediate math uses unsigned magnitudes so multiply, divide, mod, and
+// abs never hit signed overflow or INT128_MIN negation UB.
 template <typename OutT>
 __device__ OutT
 decimalDivideImpl(__int128_t numerator, __int128_t denom, __int128_t scale) {
   if (denom == 0) {
     return OutT{0};
   }
-  int sign = 1;
-  if (numerator < 0) {
-    numerator = -numerator;
-    sign = -sign;
+
+  bool negative = false;
+  unsigned __int128 const uNum = absToUnsigned(numerator, negative);
+  unsigned __int128 const uDenom = absToUnsigned(denom, negative);
+  // scale comes from pow10Int128 and is always positive.
+  unsigned __int128 const uScale = static_cast<unsigned __int128>(scale);
+
+  unsigned __int128 scaled = uNum * uScale;
+  // Detect unsigned multiply overflow; saturate to int128 min/max for sign.
+  if (uScale != 0 && scaled / uScale != uNum) {
+    return static_cast<OutT>(signedFromUnsigned(kUnsigned128Max, negative));
   }
-  if (denom < 0) {
-    denom = -denom;
-    sign = -sign;
+
+  unsigned __int128 quotient = scaled / uDenom;
+  unsigned __int128 const remainder = scaled % uDenom;
+
+  // Half-up: round up when remainder >= denom/2. Equivalent to
+  // 2 * remainder >= denom but avoids overflow when remainder is large.
+  if (remainder > (uDenom - 1) / 2) {
+    // Guard ++quotient when quotient is already UINT128_MAX.
+    if (quotient < kUnsigned128Max) {
+      ++quotient;
+    }
   }
-  __int128_t scaled = numerator * scale;
-  __int128_t quotient = scaled / denom;
-  __int128_t remainder = scaled % denom;
-  if (remainder * 2 >= denom) {
-    ++quotient;
-  }
-  if (sign < 0) {
-    quotient = -quotient;
-  }
-  return static_cast<OutT>(quotient);
+
+  return static_cast<OutT>(signedFromUnsigned(quotient, negative));
 }
 
 inline __int128_t pow10Int128(int32_t exp) {
