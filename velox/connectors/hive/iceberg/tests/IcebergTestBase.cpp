@@ -171,12 +171,6 @@ std::shared_ptr<IcebergPartitionSpec> IcebergTestBase::createPartitionSpec(
 
 namespace {
 
-uint64_t getTestFileSize(const std::string& path) {
-  return filesystems::getFileSystem(path, nullptr)
-      ->openFileForRead(path)
-      ->size();
-}
-
 parquet::ParquetFieldId makeField(const TypePtr& type, int32_t& fieldId) {
   const int32_t currentId = fieldId++;
   std::vector<parquet::ParquetFieldId> children;
@@ -336,7 +330,9 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
 }
 
 uint64_t IcebergTestBase::getFileSize(const std::string& path) const {
-  return getTestFileSize(path);
+  return filesystems::getFileSystem(path, nullptr)
+      ->openFileForRead(path)
+      ->size();
 }
 
 std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
@@ -384,33 +380,6 @@ IcebergTestBase::makeIcebergSplitWithInfoColumns(
       dataFilePath, deleteFiles, {}, 1, infoColumns, dataSequenceNumber);
   VELOX_CHECK_EQ(splits.size(), 1);
   return splits.front();
-}
-
-std::shared_ptr<IcebergColumnHandle> IcebergTestBase::makeIcebergHandle(
-    const std::string& name,
-    const TypePtr& type,
-    int fieldId,
-    const std::string& defaultValue) {
-  return std::make_shared<IcebergColumnHandle>(
-      name,
-      HiveColumnHandle::ColumnType::kRegular,
-      type,
-      parquet::ParquetFieldId(fieldId),
-      std::vector<common::Subfield>{},
-      std::optional<std::string>{defaultValue});
-}
-
-std::shared_ptr<IcebergColumnHandle> IcebergTestBase::makeIcebergHandle(
-    const std::string& name,
-    const TypePtr& type,
-    int fieldId,
-    FileColumnHandle::ColumnType columnType) {
-  return std::make_shared<IcebergColumnHandle>(
-      name,
-      columnType,
-      type,
-      parquet::ParquetFieldId(fieldId),
-      std::vector<common::Subfield>{});
 }
 
 ColumnHandleMap IcebergTestBase::makeColumnHandles(

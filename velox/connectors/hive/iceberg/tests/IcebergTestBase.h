@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -90,19 +89,6 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::unordered_map<std::string, std::string>& infoColumns,
       const std::vector<IcebergDeleteFile>& deleteFiles = {},
       int64_t dataSequenceNumber = 0);
-
-  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
-      const std::string& name,
-      const TypePtr& type,
-      int fieldId,
-      const std::string& defaultValue);
-
-  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
-      const std::string& name,
-      const TypePtr& type,
-      int fieldId,
-      FileColumnHandle::ColumnType columnType =
-          FileColumnHandle::ColumnType::kRegular);
 
   ColumnHandleMap makeColumnHandles(
       const RowTypePtr& rowType,
