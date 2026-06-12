@@ -261,9 +261,27 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: minute(timestamp) -> integer
 
-    Returns the minutes of ``timestamp``.::
+    Returns the minutes of ``timestamp``, subject to the session timezone.
+
+    Under session timezone UTC: ::
 
         SELECT minute('2009-07-30 12:58:59'); -- 58
+
+    Under session timezone ``Asia/Kolkata`` (UTC+5:30): ::
+
+        SELECT minute('2009-07-30 12:58:59 UTC'); -- 28
+
+.. spark:function:: minute(timestamp_utc) -> integer
+
+    Returns the minutes of ``timestamp_utc``, not subject to the session timezone.
+
+    Under session timezone UTC: ::
+
+        SELECT minute(TIMESTAMP_NTZ '2009-07-30 12:58:59'); -- 58
+
+    Under session timezone ``Asia/Kolkata`` (UTC+5:30): ::
+
+        SELECT minute(TIMESTAMP_NTZ '2009-07-30 12:58:59'); -- 58
 
 .. spark:function:: month(date) -> integer
 
@@ -318,9 +336,16 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: second(timestamp) -> integer
 
-    Returns the seconds of ``timestamp``. ::
+    Returns the seconds of ``timestamp``. The result is not affected by the session
+    timezone since all timezone offsets are whole-minute multiples. ::
 
         SELECT second('2009-07-30 12:58:59'); -- 59
+
+.. spark:function:: second(timestamp_utc) -> integer
+
+    Returns the seconds of ``timestamp_utc``, not subject to the session timezone. ::
+
+        SELECT second(TIMESTAMP_NTZ '2009-07-30 12:58:59'); -- 59
 
 .. spark:function:: timestampadd(unit, value, timestamp) -> timestamp
 

@@ -48,6 +48,10 @@ bool unregisterReaderFactory(FileFormat format) {
   return count == 1;
 }
 
+bool hasReaderFactory(FileFormat format) {
+  return readerFactories().contains(format);
+}
+
 std::shared_ptr<ReaderFactory> getReaderFactory(FileFormat format) {
   auto it = readerFactories().find(format);
   VELOX_CHECK(

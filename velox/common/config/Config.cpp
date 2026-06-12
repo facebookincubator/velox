@@ -139,6 +139,23 @@ std::unordered_map<std::string, std::string> ConfigBase::rawConfigsCopy()
   return configs_;
 }
 
+std::unordered_map<std::string, std::string> ConfigBase::rawConfigsWithPrefix(
+    std::string_view prefix) const {
+  std::unordered_map<std::string, std::string> filteredConfigs;
+  if (prefix.empty()) {
+    return filteredConfigs;
+  }
+
+  std::shared_lock<std::shared_mutex> l(mutex_);
+  for (const auto& [key, value] : configs_) {
+    if (key.size() >= prefix.size() &&
+        key.compare(0, prefix.size(), prefix) == 0) {
+      filteredConfigs.emplace(key.substr(prefix.size()), value);
+    }
+  }
+  return filteredConfigs;
+}
+
 std::string ConfigBase::toConfigKey(std::string_view sessionKey) {
   std::string configKey{sessionKey};
   std::replace(configKey.begin(), configKey.end(), '_', '-');

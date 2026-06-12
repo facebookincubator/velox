@@ -18,6 +18,7 @@
 
 #include <thrift/lib/cpp2/FieldRef.h>
 
+#include "velox/common/Casts.h"
 #include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
@@ -134,7 +135,38 @@ bool isInt64Compatible(const TypePtr& type) {
   return type->kind() == TypeKind::BIGINT;
 }
 
+ParquetReaderOptions getParquetReaderOptions(
+    const dwio::common::ReaderOptions& options) {
+  if (options.formatSpecificOptions()) {
+    return *checkedPointerCast<ParquetReaderOptions>(
+        options.formatSpecificOptions());
+  }
+
+  ParquetReaderOptions parquetOptions;
+  parquetOptions.footerSpeculativeIoSize = options.footerSpeculativeIoSize();
+  parquetOptions.columnMappingMode = options.columnMappingMode();
+  return parquetOptions;
+}
+
 } // namespace
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+ParquetReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<ParquetReaderOptions>();
+  options->footerSpeculativeIoSize =
+      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
+  options->allowInt32Narrowing =
+      ParquetConfig::allowInt32Narrowing(connectorConfig, session);
+  options->footerMemoryTrackingThreshold =
+      ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session);
+  const auto useColumnNames =
+      ParquetConfig::useColumnNames(connectorConfig, session);
+  options->columnMappingMode =
+      useColumnNames ? ColumnMappingMode::kName : ColumnMappingMode::kPosition;
+  return options;
+}
 
 /// Metadata and options for reading Parquet.
 class ReaderBase {
@@ -256,10 +288,12 @@ class ReaderBase {
       bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
-  const uint64_t footerSpeculativeIoSize_;
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
+  // Copy of Parquet-specific options, or defaults for direct ParquetReader
+  // callers that do not go through ParquetReaderFactory.
+  const ParquetReaderOptions parquetReaderOptions_;
   std::shared_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
   std::unique_ptr<thrift::FileMetaData> fileMetaData_;
@@ -294,9 +328,9 @@ ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_{options.memoryPool()},
-      footerSpeculativeIoSize_{options.footerSpeculativeIoSize()},
       filePreloadThreshold_{options.filePreloadThreshold()},
       options_{options},
+      parquetReaderOptions_{getParquetReaderOptions(options)},
       input_{std::move(input)},
       fileLength_{input_->getReadFile()->size()} {
   VELOX_CHECK_GT(fileLength_, 0, "Parquet file is empty");
@@ -331,9 +365,11 @@ void ReaderBase::releaseThriftBytes(size_t bytes) {
 }
 
 void ReaderBase::loadFileMetaData() {
-  bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, footerSpeculativeIoSize_);
-  uint64_t readSize = preloadFile ? fileLength_ : footerSpeculativeIoSize_;
+  bool preloadFile = fileLength_ <=
+      std::max(filePreloadThreshold_,
+               parquetReaderOptions_.footerSpeculativeIoSize);
+  uint64_t readSize =
+      preloadFile ? fileLength_ : parquetReaderOptions_.footerSpeculativeIoSize;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -377,7 +413,7 @@ void ReaderBase::loadFileMetaData() {
       std::string_view(
           reinterpret_cast<char*>(copy.data() + footerOffsetInBuffer),
           footerLength));
-  if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
+  if (footerLength > parquetReaderOptions_.footerMemoryTrackingThreshold) {
     thriftSize_ = fileMetaData().estimateFileMetadataSize();
   }
 }
@@ -386,7 +422,8 @@ void ReaderBase::initializeSchema() {
   if (fileMetaData_->encryption_algorithm()) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }
-  if (options_.columnMappingMode() == ColumnMappingMode::kParquetFieldId) {
+  if (parquetReaderOptions_.columnMappingMode ==
+      ColumnMappingMode::kParquetFieldId) {
     VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
   }
 
@@ -478,7 +515,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (options_.columnMappingMode() != ColumnMappingMode::kName &&
+  if (parquetReaderOptions_.columnMappingMode != ColumnMappingMode::kName &&
       options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
@@ -525,7 +562,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (options_.columnMappingMode() == ColumnMappingMode::kName) {
+          if (parquetReaderOptions_.columnMappingMode ==
+              ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);
@@ -907,7 +945,7 @@ TypePtr ReaderBase::convertType(
       "Converted type {} is not allowed for requested type {} for file column '{}'";
   const bool isRepeated = schemaElement.repetition_type() &&
       *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
-  const bool allowNarrowing = options_.allowInt32Narrowing();
+  const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing;
   if (schemaElement.converted_type()) {
     switch (*schemaElement.converted_type()) {
       case thrift::ConvertedType::INT_8:
