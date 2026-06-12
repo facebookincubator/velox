@@ -244,7 +244,8 @@ struct divideColumnColumnKernel {
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
   bool operator()() const {
-    return true;
+    CUDF_FAIL("Invalid types for decimal divide");
+    return false;
   }
 };
 
@@ -274,7 +275,8 @@ struct divideColumnScalarKernel {
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
   bool operator()() const {
-    return true;
+    CUDF_FAIL("Invalid types for decimal divide");
+    return false;
   }
 };
 
@@ -304,7 +306,8 @@ struct divideScalarColumnKernel {
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
   bool operator()() const {
-    return true;
+    CUDF_FAIL("Invalid types for decimal divide");
+    return false;
   }
 };
 
