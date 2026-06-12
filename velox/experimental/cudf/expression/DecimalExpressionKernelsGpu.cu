@@ -35,16 +35,15 @@ constexpr unsigned __int128 kUnsigned128Max =
 constexpr unsigned __int128 kInt128MinMagnitude =
     static_cast<unsigned __int128>(1) << 127;
 constexpr unsigned __int128 kInt128MaxMagnitude = kInt128MinMagnitude - 1;
-constexpr __int128_t kInt128Max =
-    static_cast<__int128_t>(kInt128MaxMagnitude);
+constexpr __int128_t kInt128Max = static_cast<__int128_t>(kInt128MaxMagnitude);
 // Bit pattern 2^127 maps to INT128_MIN without negating INT128_MIN (UB).
-constexpr __int128_t kInt128Min =
-    static_cast<__int128_t>(kInt128MinMagnitude);
+constexpr __int128_t kInt128Min = static_cast<__int128_t>(kInt128MinMagnitude);
 
 // Extract absolute value in unsigned space. Signed negation of INT128_MIN is
 // undefined; negating the unsigned bit pattern is always defined.
-__device__ inline unsigned __int128
-absToUnsigned(__int128_t value, bool& negative) {
+__device__ inline unsigned __int128 absToUnsigned(
+    __int128_t value,
+    bool& negative) {
   if (value < 0) {
     negative = !negative;
     return -static_cast<unsigned __int128>(value);
@@ -54,8 +53,9 @@ absToUnsigned(__int128_t value, bool& negative) {
 
 // Reapply sign after unsigned divide/round. Magnitudes >= 2^127 cannot be
 // represented as positive int128; magnitude == 2^127 is exactly INT128_MIN.
-__device__ inline __int128_t
-signedFromUnsigned(unsigned __int128 magnitude, bool negative) {
+__device__ inline __int128_t signedFromUnsigned(
+    unsigned __int128 magnitude,
+    bool negative) {
   if (!negative) {
     if (magnitude > kInt128MaxMagnitude) {
       return kInt128Max;
@@ -68,12 +68,15 @@ signedFromUnsigned(unsigned __int128 magnitude, bool negative) {
   return -static_cast<__int128_t>(magnitude);
 }
 
-// Decimal divide with rescale (numerator * scale / denom), half-up rounding.
+// Decimal divide with rescale (numerator * rescaleFactor / denom), half-up
+// rounding.
 // All intermediate math uses unsigned magnitudes so multiply, divide, mod, and
 // abs never hit signed overflow or INT128_MIN negation UB.
 template <typename OutT>
-__device__ OutT
-decimalDivideImpl(__int128_t numerator, __int128_t denom, __int128_t scale) {
+__device__ OutT decimalDivideImpl(
+    __int128_t numerator,
+    __int128_t denom,
+    __int128_t rescaleFactor) {
   if (denom == 0) {
     return OutT{0};
   }
@@ -81,12 +84,13 @@ decimalDivideImpl(__int128_t numerator, __int128_t denom, __int128_t scale) {
   bool negative = false;
   unsigned __int128 const uNum = absToUnsigned(numerator, negative);
   unsigned __int128 const uDenom = absToUnsigned(denom, negative);
-  // scale comes from pow10Int128 and is always positive.
-  unsigned __int128 const uScale = static_cast<unsigned __int128>(scale);
+  // rescaleFactor is pow10Int128(aRescale) and is always positive.
+  unsigned __int128 const uRescaleFactor =
+      static_cast<unsigned __int128>(rescaleFactor);
 
-  unsigned __int128 scaled = uNum * uScale;
+  unsigned __int128 scaled = uNum * uRescaleFactor;
   // Detect unsigned multiply overflow; saturate to int128 min/max for sign.
-  if (uScale != 0 && scaled / uScale != uNum) {
+  if (uRescaleFactor != 0 && scaled / uRescaleFactor != uNum) {
     return static_cast<OutT>(signedFromUnsigned(kUnsigned128Max, negative));
   }
 
@@ -118,10 +122,10 @@ struct DivideFunctor {
   const InT* lhs;
   const InT* rhs;
   OutT* out;
-  __int128_t scale;
+  __int128_t rescaleFactor;
 
   __device__ void operator()(int32_t idx) const {
-    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhs[idx], scale);
+    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhs[idx], rescaleFactor);
   }
 };
 
@@ -130,10 +134,10 @@ struct DivideLhsScalarFunctor {
   __int128_t lhsValue;
   const InColT* rhs;
   OutT* out;
-  __int128_t scale;
+  __int128_t rescaleFactor;
 
   __device__ void operator()(int32_t idx) const {
-    out[idx] = decimalDivideImpl<OutT>(lhsValue, rhs[idx], scale);
+    out[idx] = decimalDivideImpl<OutT>(lhsValue, rhs[idx], rescaleFactor);
   }
 };
 
@@ -142,10 +146,10 @@ struct DivideRhsScalarFunctor {
   const InColT* lhs;
   __int128_t rhsValue;
   OutT* out;
-  __int128_t scale;
+  __int128_t rescaleFactor;
 
   __device__ void operator()(int32_t idx) const {
-    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhsValue, scale);
+    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhsValue, rescaleFactor);
   }
 };
 
@@ -201,10 +205,7 @@ struct divideColumnScalarKernel {
       return;
     }
     DivideRhsScalarFunctor<InT, OutT> op{
-        lhs.data<InT>(),
-        rhsValue,
-        out.data<OutT>(),
-        pow10Int128(aRescale)};
+        lhs.data<InT>(), rhsValue, out.data<OutT>(), pow10Int128(aRescale)};
     cub::DeviceFor::ForEachN(
         thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
     CUDF_CUDA_TRY(cudaGetLastError());
@@ -229,10 +230,7 @@ struct divideScalarColumnKernel {
       return;
     }
     DivideLhsScalarFunctor<InT, OutT> op{
-        lhsValue,
-        rhs.data<InT>(),
-        out.data<OutT>(),
-        pow10Int128(aRescale)};
+        lhsValue, rhs.data<InT>(), out.data<OutT>(), pow10Int128(aRescale)};
     cub::DeviceFor::ForEachN(
         thrust::counting_iterator<int32_t>(0), rhs.size(), op, stream.value());
     CUDF_CUDA_TRY(cudaGetLastError());
