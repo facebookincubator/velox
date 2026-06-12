@@ -30,9 +30,18 @@ class Task;
 /// output from a Task to downstream consumers. Concrete implementations (e.g.
 /// OutputBufferManager for CPU, or a GPU-accelerated variant) are registered
 /// in OutputBufferManagerRegistry and resolved per query via QueryCtx.
+///
+/// This interface covers only the control plane (task lifecycle) and
+/// observability (stats and utilization). The data plane (enqueueing pages,
+/// fetching, acknowledging, and deleting results) is intentionally not part of
+/// this interface: payloads are transport-specific (e.g. serialized pages for
+/// HTTP versus GPU buffers for UCX), so data-plane methods live on the concrete
+/// managers and are used by the matching transport-specific output operator.
 class IOutputBufferManager {
  public:
   virtual ~IOutputBufferManager() = default;
+
+  // Lifecycle.
 
   /// Creates an output buffer for 'task' with the specified partitioning
   /// 'kind', number of destination partitions, and number of producing drivers.
@@ -50,19 +59,21 @@ class IOutputBufferManager {
       int numBuffers,
       bool noMoreBuffers) = 0;
 
-  /// Removes the output buffer state associated with 'taskId'.
-  virtual void removeTask(const std::string& taskId) = 0;
-
-  /// Returns output buffer statistics for the task identified by 'taskId', or
-  /// std::nullopt if no buffer exists for that task.
-  virtual std::optional<OutputBuffer::Stats> stats(
-      const std::string& taskId) = 0;
-
   /// Updates the number of producing drivers for grouped execution. Returns
   /// true if a buffer exists for the given taskId, false otherwise.
   virtual bool updateNumDrivers(
       const std::string& taskId,
       uint32_t newNumDrivers) = 0;
+
+  /// Removes the output buffer state associated with 'taskId'.
+  virtual void removeTask(const std::string& taskId) = 0;
+
+  // Observability.
+
+  /// Returns output buffer statistics for the task identified by 'taskId', or
+  /// std::nullopt if no buffer exists for that task.
+  virtual std::optional<OutputBuffer::Stats> stats(
+      const std::string& taskId) = 0;
 
   /// Returns the memory utilization ratio (0.0 to 1.0) for the output buffer
   /// of the task identified by 'taskId'. Returns 0 if the task is not found.

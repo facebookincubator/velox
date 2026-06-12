@@ -1330,13 +1330,23 @@ void Task::initializePartitionOutput() {
         mgr,
         "OutputBufferManager not registered for transport type: {}",
         transportType);
-    bufferManager_ = mgr;
+    setOutputBufferManager(mgr);
     mgr->initializeTask(
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
         numOutputDrivers);
   }
+}
+
+std::weak_ptr<IOutputBufferManager> Task::outputBufferManager() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return bufferManager_;
+}
+
+void Task::setOutputBufferManager(std::weak_ptr<IOutputBufferManager> manager) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  bufferManager_ = std::move(manager);
 }
 
 // static

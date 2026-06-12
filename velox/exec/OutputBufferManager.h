@@ -30,6 +30,13 @@ class OutputBufferManager : public IOutputBufferManager {
 
   explicit OutputBufferManager(Options) {}
 
+  static const std::shared_ptr<OutputBufferManager>& getInstanceRef();
+
+  static const std::shared_ptr<OutputBufferManager>& getInstanceRef(
+      const Options& options);
+
+  // Lifecycle.
+
   void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
@@ -48,6 +55,10 @@ class OutputBufferManager : public IOutputBufferManager {
   /// Returns true if the buffer exists for a given taskId, else returns false.
   bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers)
       override;
+
+  void removeTask(const std::string& taskId) override;
+
+  // Data plane.
 
   /// Adds data to the outgoing queue for 'destination'. 'data' must not be
   /// nullptr. 'data' is always added but if the buffers are full the future is
@@ -94,15 +105,6 @@ class OutputBufferManager : public IOutputBufferManager {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
-  void removeTask(const std::string& taskId) override;
-
-  static const std::shared_ptr<OutputBufferManager>& getInstanceRef();
-
-  static const std::shared_ptr<OutputBufferManager>& getInstanceRef(
-      const Options& options);
-
-  uint64_t numBuffers() const;
-
   // Returns a new stream listener if a listener factory has been set.
   std::unique_ptr<OutputStreamListener> newListener() const {
     return listenerFactory_ ? listenerFactory_() : nullptr;
@@ -114,6 +116,14 @@ class OutputBufferManager : public IOutputBufferManager {
       std::function<std::unique_ptr<OutputStreamListener>()> factory) {
     listenerFactory_ = factory;
   }
+
+  // Retrieves the set of buffers for a query if exists.
+  // Returns NULL if task not found.
+  std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
+
+  // Observability.
+
+  uint64_t numBuffers() const;
 
   std::string toString();
 
@@ -131,10 +141,6 @@ class OutputBufferManager : public IOutputBufferManager {
 
   // Returns nullopt when the specified output buffer doesn't exist.
   std::optional<OutputBuffer::Stats> stats(const std::string& taskId) override;
-
-  // Retrieves the set of buffers for a query if exists.
-  // Returns NULL if task not found.
-  std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
 
  private:
   // Retrieves the set of buffers for a query.
