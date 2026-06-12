@@ -22,20 +22,20 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <type_traits>
 #include <utility>
 
 namespace facebook::velox::cudf_velox::detail {
 
 template <typename T>
-inline constexpr bool isDecimalSumStorageType =
-    std::is_same_v<T, int64_t> || std::is_same_v<T, __int128_t>;
+concept OffsetStorageType =
+    std::same_as<T, int32_t> || std::same_as<T, int64_t>;
 
 template <typename T>
-inline constexpr bool isOffsetStorageType =
-    std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>;
+concept DecimalSumStorageType =
+    std::same_as<T, int64_t> || std::same_as<T, __int128_t>;
 
 // Size in bytes of each row's packed decimal SUM intermediate state in the
 // strings payload (count, overflow placeholder, and 128-bit sum split into
@@ -50,17 +50,15 @@ constexpr size_t kDecimalSumStateSize = 32;
  * @param stream CUDA stream for the launch.
  */
 struct fillOffsetsForDecimalSumState {
-  template <
-      typename OffsetT,
-      std::enable_if_t<isOffsetStorageType<OffsetT>, int> = 0>
+  template <typename OffsetT>
+    requires OffsetStorageType<OffsetT>
   void operator()(
       cudf::mutable_column_view offsetsView,
       cudf::size_type numRows,
       rmm::cuda_stream_view stream) const;
 
-  template <
-      typename OffsetT,
-      std::enable_if_t<!isOffsetStorageType<OffsetT>, int> = 0>
+  template <typename OffsetT>
+    requires(!OffsetStorageType<OffsetT>)
   void operator()(
       cudf::mutable_column_view offsetsView,
       cudf::size_type numRows,
@@ -79,9 +77,8 @@ struct fillOffsetsForDecimalSumState {
  * @param stream CUDA stream for the launch.
  */
 struct packDecimalSumState {
-  template <
-      typename SumT,
-      std::enable_if_t<isDecimalSumStorageType<SumT>, int> = 0>
+  template <typename SumT>
+    requires DecimalSumStorageType<SumT>
   void operator()(
       cudf::column_view sumCol,
       const int64_t* counts,
@@ -90,9 +87,8 @@ struct packDecimalSumState {
       cudf::size_type numRows,
       rmm::cuda_stream_view stream) const;
 
-  template <
-      typename SumT,
-      std::enable_if_t<!isDecimalSumStorageType<SumT>, int> = 0>
+  template <typename SumT>
+    requires(!DecimalSumStorageType<SumT>)
   void operator()(
       cudf::column_view sumCol,
       const int64_t* counts,
@@ -113,9 +109,8 @@ struct packDecimalSumState {
  * @param stream CUDA stream for the launch.
  */
 struct unpackDecimalSumState {
-  template <
-      typename OffsetT,
-      std::enable_if_t<isOffsetStorageType<OffsetT>, int> = 0>
+  template <typename OffsetT>
+    requires OffsetStorageType<OffsetT>
   void operator()(
       cudf::column_view offsetsView,
       const uint8_t* chars,
@@ -124,9 +119,8 @@ struct unpackDecimalSumState {
       cudf::size_type numRows,
       rmm::cuda_stream_view stream) const;
 
-  template <
-      typename OffsetT,
-      std::enable_if_t<!isOffsetStorageType<OffsetT>, int> = 0>
+  template <typename OffsetT>
+    requires(!OffsetStorageType<OffsetT>)
   void operator()(
       cudf::column_view offsetsView,
       const uint8_t* chars,
@@ -147,9 +141,8 @@ struct unpackDecimalSumState {
  * @param stream CUDA stream for the launch.
  */
 struct averageRoundDecimalSum {
-  template <
-      typename SumT,
-      std::enable_if_t<isDecimalSumStorageType<SumT>, int> = 0>
+  template <typename SumT>
+    requires DecimalSumStorageType<SumT>
   void operator()(
       cudf::column_view sumCol,
       const int64_t* counts,
@@ -157,9 +150,8 @@ struct averageRoundDecimalSum {
       cudf::size_type numRows,
       rmm::cuda_stream_view stream) const;
 
-  template <
-      typename SumT,
-      std::enable_if_t<!isDecimalSumStorageType<SumT>, int> = 0>
+  template <typename SumT>
+    requires(!DecimalSumStorageType<SumT>)
   void operator()(
       cudf::column_view sumCol,
       const int64_t* counts,

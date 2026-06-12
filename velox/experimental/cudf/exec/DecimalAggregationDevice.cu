@@ -234,7 +234,8 @@ std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMaskImpl(
 
 namespace detail {
 
-template <typename OffsetT, std::enable_if_t<isOffsetStorageType<OffsetT>, int>>
+template <typename OffsetT>
+  requires OffsetStorageType<OffsetT>
 void fillOffsetsForDecimalSumState::operator()(
     cudf::mutable_column_view offsetsView,
     cudf::size_type numRows,
@@ -245,16 +246,17 @@ void fillOffsetsForDecimalSumState::operator()(
       stream);
 }
 
-template void fillOffsetsForDecimalSumState::operator()<int32_t, 0>(
+template void fillOffsetsForDecimalSumState::operator()<int32_t>(
     cudf::mutable_column_view offsetsView,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
-template void fillOffsetsForDecimalSumState::operator()<int64_t, 0>(
+template void fillOffsetsForDecimalSumState::operator()<int64_t>(
     cudf::mutable_column_view offsetsView,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
 
-template <typename OffsetT, std::enable_if_t<isOffsetStorageType<OffsetT>, int>>
+template <typename OffsetT>
+  requires OffsetStorageType<OffsetT>
 void unpackDecimalSumState::operator()(
     cudf::column_view offsetsView,
     const uint8_t* chars,
@@ -271,14 +273,14 @@ void unpackDecimalSumState::operator()(
       stream);
 }
 
-template void unpackDecimalSumState::operator()<int32_t, 0>(
+template void unpackDecimalSumState::operator()<int32_t>(
     cudf::column_view offsetsView,
     const uint8_t* chars,
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
-template void unpackDecimalSumState::operator()<int64_t, 0>(
+template void unpackDecimalSumState::operator()<int64_t>(
     cudf::column_view offsetsView,
     const uint8_t* chars,
     cudf::mutable_column_view sumView,
@@ -286,7 +288,8 @@ template void unpackDecimalSumState::operator()<int64_t, 0>(
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
 
-template <typename SumT, std::enable_if_t<isDecimalSumStorageType<SumT>, int>>
+template <typename SumT>
+  requires DecimalSumStorageType<SumT>
 void packDecimalSumState::operator()(
     cudf::column_view sumCol,
     const int64_t* counts,
@@ -313,14 +316,14 @@ void packDecimalSumState::operator()(
   }
 }
 
-template void packDecimalSumState::operator()<int64_t, 0>(
+template void packDecimalSumState::operator()<int64_t>(
     cudf::column_view sumCol,
     const int64_t* counts,
     cudf::column_view offsetsView,
     uint8_t* chars,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
-template void packDecimalSumState::operator()<__int128_t, 0>(
+template void packDecimalSumState::operator()<__int128_t>(
     cudf::column_view sumCol,
     const int64_t* counts,
     cudf::column_view offsetsView,
@@ -328,7 +331,8 @@ template void packDecimalSumState::operator()<__int128_t, 0>(
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
 
-template <typename SumT, std::enable_if_t<isDecimalSumStorageType<SumT>, int>>
+template <typename SumT>
+  requires DecimalSumStorageType<SumT>
 void averageRoundDecimalSum::operator()(
     cudf::column_view sumCol,
     const int64_t* counts,
@@ -343,13 +347,13 @@ void averageRoundDecimalSum::operator()(
       stream);
 }
 
-template void averageRoundDecimalSum::operator()<int64_t, 0>(
+template void averageRoundDecimalSum::operator()<int64_t>(
     cudf::column_view sumCol,
     const int64_t* counts,
     cudf::mutable_column_view outView,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream) const;
-template void averageRoundDecimalSum::operator()<__int128_t, 0>(
+template void averageRoundDecimalSum::operator()<__int128_t>(
     cudf::column_view sumCol,
     const int64_t* counts,
     cudf::mutable_column_view outView,
