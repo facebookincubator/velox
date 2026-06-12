@@ -212,6 +212,9 @@ MetadataBuilder::MetadataBuilder(std::string_view qualifiedName)
       md_.functionSchema, "FunctionSchema not found for: ", qualifiedName);
 }
 
+MetadataBuilder::MetadataBuilder(std::string_view qualifiedName, NoSchema)
+    : name_(qualifiedName) {}
+
 MetadataBuilder::MetadataBuilder(std::unique_ptr<c10::FunctionSchema> schema) {
   name_ = schema->name();
   if (!schema->overload_name().empty()) {
@@ -496,6 +499,17 @@ MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
   ensureElementwise().hasBlockInfo = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::isScalarElementwise(bool val) {
+  md_.isScalarElementwise = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::argumentNames(
+    std::vector<std::string> names) {
+  md_.argumentNames = std::move(names);
   return *this;
 }
 

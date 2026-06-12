@@ -551,6 +551,14 @@ void WaveGraphExecutor::executeWave(
   }
   state.frame = &frame;
   state.valueTypes = &waveGraph.types();
+
+  // Make the graph's value types available to node printers (e.g. the
+  // execution-trace prints via standaloneToString) for the duration of this
+  // wave execution. The guard restores the previous thread-local print options
+  // on exit.
+  PrintOptions printOptions = NodePrinter::defaults();
+  printOptions.valueTypes = &waveGraph.types();
+  WithPrintOptions printOptionsGuard(printOptions);
   state.deviceArena = g->deviceArena.get();
   state.pinnedArena = g->pinnedArena.get();
   state.streamPool = g->streamPool.get();
@@ -646,6 +654,7 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.noDtoH = sv.noDtoH;
         meta.inputBytes = sv.inputBytes;
         meta.outputBytes = sv.outputBytes;
+        meta.refCheckUs = sv.refCheckUs;
       }
     }
     threadInfo.launchMeta.push_back(std::move(meta));
@@ -655,13 +664,14 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   if (WaveConfig::get().trace & WaveConfig::kTiming) {
     threadInfo.standaloneTimes.clear();
     threadInfo.standaloneLabels.clear();
+    threadInfo.standaloneTargets.clear();
     if (state.standaloneStats && state.standaloneIndices) {
       // Build index→node map by inverting node→index.
       std::unordered_map<int32_t, NodeCP> idxToNode;
       for (auto& [node, idx] : *state.standaloneIndices) {
         idxToNode[idx] = node;
       }
-      std::vector<std::pair<int64_t, std::string>> sorted;
+      std::vector<std::tuple<int64_t, std::string, std::string>> sorted;
       for (size_t i = 0; i < state.standaloneStats->size(); ++i) {
         auto us = (*state.standaloneStats)[i].micros;
         if (us > 0) {
@@ -669,15 +679,19 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
           std::string label = it != idxToNode.end()
               ? standaloneToString(it->second)
               : "standalone[" + std::to_string(i) + "]";
-          sorted.emplace_back(us, std::move(label));
+          std::string target = it != idxToNode.end()
+              ? std::string(it->second->target())
+              : "standalone[" + std::to_string(i) + "]";
+          sorted.emplace_back(us, std::move(label), std::move(target));
         }
       }
       std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
-        return a.first > b.first;
+        return std::get<0>(a) > std::get<0>(b);
       });
-      for (auto& [us, label] : sorted) {
+      for (auto& [us, label, target] : sorted) {
         threadInfo.standaloneTimes.push_back(us);
         threadInfo.standaloneLabels.push_back(std::move(label));
+        threadInfo.standaloneTargets.push_back(std::move(target));
       }
     }
   }
@@ -796,14 +810,21 @@ std::string WaveGraphExecutor::makePerfReport(
     int64_t wallUs) const {
   const auto& info = waveThreadInfo();
   std::stringstream ss;
-  double wallSec = wallUs / 1e6;
 
   // Compute total input size from user inputs.
   int64_t totalInputBytes = 0;
   int64_t totalDataBytes = 0;
+  // Total reference-frame checking time (device-to-host copy + comparison).
+  // This is debug-only overhead included in the measured wall time, so subtract
+  // it to report the real e2e time.
+  int64_t totalRefCheckUs = 0;
   for (const auto& meta : info.launchMeta) {
     totalDataBytes += meta.inputBytes + meta.outputBytes;
+    totalRefCheckUs += meta.refCheckUs;
   }
+  bool refChecking = WaveConfig::get().referenceFrame != nullptr;
+  wallUs -= totalRefCheckUs;
+  double wallSec = static_cast<double>(wallUs) / 1e6;
   // User input size from frame inputs.
   auto& frame = *state.frame;
   auto numValues = static_cast<int32_t>(graph().numValues());
@@ -828,6 +849,9 @@ std::string WaveGraphExecutor::makePerfReport(
   }
 
   ss << "=== Performance Report ===\n";
+  if (refChecking) {
+    ss << "WARNING reference frame checking is on.\n";
+  }
   ss << fmt::format("E2E wall time: {} us ({:.3f} s)\n", wallUs, wallSec);
   if (wallUs > 0 && totalInputBytes > 0) {
     double inputGBs = totalInputBytes / (wallSec * 1e9);
@@ -842,6 +866,39 @@ std::string WaveGraphExecutor::makePerfReport(
         "Internal throughput: {:.2f} GB/s ({:.1f} MB total data)\n",
         dataGBs,
         totalDataBytes / 1e6);
+  }
+
+  // Time split across all steps: kernel (GPU), standalone (eager ATen on the
+  // default stream), and interpretation (gather + grid + alloc + fill = the
+  // host-side scheduling overhead). For a standalone-bound step the measured
+  // kernelUs reflects waiting on the standalone work rather than the GPU
+  // kernel, so estimate the kernel time from that step's max thread-block
+  // clocks (1 clock ~= 0.7 ns).
+  {
+    double kernelUs = 0.0;
+    int64_t standaloneUs = 0;
+    int64_t interpUs = 0;
+    for (size_t i = 0; i < info.launchMeta.size(); ++i) {
+      const auto& m = info.launchMeta[i];
+      interpUs += m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
+      standaloneUs += m.standaloneUs;
+      if (m.standaloneBound) {
+        int64_t maxClocks = 0;
+        if (i < info.debugInfo.size()) {
+          for (const auto& b : info.debugInfo[i]) {
+            maxClocks = std::max(maxClocks, b.clocks);
+          }
+        }
+        kernelUs += static_cast<double>(maxClocks) * 0.7 / 1000.0;
+      } else {
+        kernelUs += static_cast<double>(m.kernelUs);
+      }
+    }
+    ss << fmt::format(
+        "Kernel time: {:.0f} us  Standalone time: {} us  Interpretation time: {} us\n",
+        kernelUs,
+        standaloneUs,
+        interpUs);
   }
 
   // Per-node, per-step report.
@@ -874,6 +931,37 @@ std::string WaveGraphExecutor::makePerfReport(
 
   // Collect all referenced op codes for the legend.
   std::set<int32_t> referencedOps;
+  // Total GPU thread-block clocks spent in each op across all blocks/steps.
+  std::map<int32_t, int64_t> opTotalClocks;
+
+  // Distinct standalone targets and their counts for a step, as
+  // " [target xN, target xM, ...]" (empty if the step has no standalones).
+  auto standaloneBreakdown = [&](int32_t seq, int32_t step) -> std::string {
+    if (seq >= static_cast<int32_t>(state.stepVectors.size()) ||
+        step >= static_cast<int32_t>(state.stepVectors[seq].size())) {
+      return "";
+    }
+    std::map<std::string, int32_t> counts;
+    for (const auto& data : state.stepVectors[seq][step].standalones) {
+      if (data.launch && data.launch->standalone) {
+        counts[std::string(data.launch->standalone->target())]++;
+      }
+    }
+    if (counts.empty()) {
+      return "";
+    }
+    std::string s = " [";
+    bool first = true;
+    for (const auto& [name, c] : counts) {
+      if (!first) {
+        s += ", ";
+      }
+      s += name + " x" + std::to_string(c);
+      first = false;
+    }
+    s += "]";
+    return s;
+  };
 
   for (auto& [seq, nodeUs] : nodeWallTimes) {
     ss << fmt::format("\nNode {}: {} us\n", seq, nodeUs);
@@ -894,10 +982,11 @@ std::string WaveGraphExecutor::makePerfReport(
               state.stepVectors[seq][step].standalones.size());
         }
         ss << fmt::format(
-            "  step {}: {} standalones  {} us\n",
+            "  step {}: {} standalones  {} us",
             m.stepIdx,
             numStandalones,
             m.standaloneUs);
+        ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx) << "\n";
         continue;
       }
       auto stepUs = m.gatherUs + m.gridUs + m.allocUs + m.fillUs + m.kernelUs;
@@ -921,9 +1010,13 @@ std::string WaveGraphExecutor::makePerfReport(
       if (m.standaloneUs > 0) {
         ss << fmt::format(
             " standalone={}{}", m.standaloneUs, m.standaloneBound ? "*" : "");
+        ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx);
       }
       if (m.noDtoH) {
         ss << " noDtoH";
+      }
+      if (m.refCheckUs > 0) {
+        ss << fmt::format(" refcheck={}", m.refCheckUs);
       }
       ss << "\n";
 
@@ -970,6 +1063,7 @@ std::string WaveGraphExecutor::makePerfReport(
           s.opBarrier += b.barrierClocks;
           s.count++;
           referencedOps.insert(b.op);
+          opTotalClocks[b.op] += b.clocks;
         }
         // Get per-op element counts from step vectors.
         auto seq = m.sequenceNumber;
@@ -1031,21 +1125,38 @@ std::string WaveGraphExecutor::makePerfReport(
     ss << fmt::format("  Node {}: {} us ({:.1f}%)\n", seq, us, pct);
   }
 
-  // Top standalones.
+  // Standalones grouped by op target: total time and occurrence count, sorted
+  // by total time descending (all targets, no cutoff).
   if (!info.standaloneTimes.empty()) {
-    ss << "\nTop standalones (% wall time):\n";
-    for (size_t i = 0; i < std::min(info.standaloneTimes.size(), size_t(10));
-         ++i) {
-      double pct = wallUs > 0 ? 100.0 * info.standaloneTimes[i] / wallUs : 0.0;
+    ss << "\nStandalones by target (% wall time):\n";
+    std::unordered_map<std::string, std::pair<int64_t, int32_t>> byTarget;
+    static const std::string kUnknownTarget = "?";
+    for (size_t i = 0; i < info.standaloneTimes.size(); ++i) {
+      // Both branches are lvalues so the const ref binds without copying the
+      // label (a temporary in the false branch would force a copy).
+      const std::string& target = i < info.standaloneTargets.size()
+          ? info.standaloneTargets[i]
+          : kUnknownTarget;
+      auto& entry = byTarget[target];
+      entry.first += info.standaloneTimes[i];
+      entry.second += 1;
+    }
+    std::vector<std::pair<std::string, std::pair<int64_t, int32_t>>> sorted(
+        byTarget.begin(), byTarget.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+      return a.second.first > b.second.first;
+    });
+    for (const auto& [target, agg] : sorted) {
+      double pct = wallUs > 0
+          ? 100.0 * static_cast<double>(agg.first) / static_cast<double>(wallUs)
+          : 0.0;
       ss << fmt::format(
-          "  {} us ({:.1f}%): {}\n",
-          info.standaloneTimes[i],
-          pct,
-          i < info.standaloneLabels.size() ? info.standaloneLabels[i] : "?");
+          "  {} us ({:.1f}%) x{}: {}\n", agg.first, pct, agg.second, target);
     }
   }
 
-  // Op legend: map op codes to their kernel operation expressions.
+  // Op legend: map op codes to their kernel operation expressions, annotated
+  // with each op's share of total GPU thread-block clocks.
   if (!referencedOps.empty() && waveGraph_) {
     ss << "\n=== Op Legend ===\n";
     struct OpLegendEntry {
@@ -1065,9 +1176,47 @@ std::string WaveGraphExecutor::makePerfReport(
         }
       }
     }
+
+    // Grand total thread-block clocks over all kernel ops.
+    int64_t grandTotalClocks = 0;
+    for (const auto& [op, clk] : opTotalClocks) {
+      grandTotalClocks += clk;
+    }
+    auto pctOf = [&](int64_t clk) -> double {
+      return grandTotalClocks > 0 ? 100.0 * static_cast<double>(clk) /
+              static_cast<double>(grandTotalClocks)
+                                  : 0.0;
+    };
+
+    // Top 10 ops by thread-block clocks, on one line at the head.
+    std::vector<std::pair<int32_t, int64_t>> byClocks(
+        opTotalClocks.begin(), opTotalClocks.end());
+    std::sort(byClocks.begin(), byClocks.end(), [](auto& a, auto& b) {
+      return a.second > b.second;
+    });
+    ss << "  Top ops by clocks: ";
+    int32_t shown = 0;
+    for (const auto& [op, clk] : byClocks) {
+      if (shown >= 10) {
+        break;
+      }
+      if (shown > 0) {
+        ss << ", ";
+      }
+      ss << fmt::format("op {} {:.1f}%", op, pctOf(clk));
+      ++shown;
+    }
+    ss << "\n";
+
     for (auto& [opCode, entry] : opLabels) {
+      auto clk = opTotalClocks.count(opCode) ? opTotalClocks[opCode] : 0;
       ss << fmt::format(
-          "  Op {} cost={:.1f} {}\n", opCode, entry.cost, entry.label);
+          "  Op {} cost={:.1f} clocks={} ({:.1f}%) {}\n",
+          opCode,
+          entry.cost,
+          clk,
+          pctOf(clk),
+          entry.label);
     }
   }
 

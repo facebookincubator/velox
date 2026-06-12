@@ -146,6 +146,26 @@ void CompileCtx::generateElementwise(
     bool fullBlockResult) {
   auto& op = *generatingOp_;
 
+  // Scalar-elementwise ops (isScalarElementwise, e.g. _operator.* / sym_size /
+  // sym_numel) produce a naked scalar, not a tensor: the loop runs a single
+  // element (the kernel has no whole-tensor operand, so the size head computes
+  // size == 1) and the result is written to a scalar parameter. Verify the
+  // result Value really is a scalar so a misregistration is caught at compile
+  // time rather than corrupting memory.
+  for (const auto& sg : subgraphs) {
+    auto* rootMeta = nodeMeta(sg.root);
+    if (rootMeta && rootMeta->isScalarElementwise &&
+        !sg.root->outputs().empty()) {
+      auto kind = sg.root->outputs()[0]->type().kind();
+      TORCH_CHECK(
+          kind != nativert::Type::Kind::Tensor &&
+              kind != nativert::Type::Kind::TensorList,
+          "isScalarElementwise op ",
+          sg.root->target(),
+          " must produce a scalar result, not a tensor");
+    }
+  }
+
   // Get unique leaf inputs by walking subgraph roots.
   auto leafInputs = subgraphInputs(subgraphs);
 
@@ -333,6 +353,13 @@ void CompileCtx::generateElementwise(
   // Generate shared declarations for size and fast path flags.
   op.addSharedDeclaration("  __shared__ uint32_t size;\n");
   auto numFastPathVars = (tensorCount + kBitsPerWord - 1) / kBitsPerWord;
+  // Always declare at least isFastPath0: an elementwise kernel whose only
+  // tensor operand is a whole tensor (e.g. sym_numel/sym_size fused into a
+  // kernel) has tensorCount == 0 but still emits `isFastPath0 = 1` in the
+  // size-1 branch below.
+  if (numFastPathVars < 1) {
+    numFastPathVars = 1;
+  }
   for (size_t i = 0; i < numFastPathVars; ++i) {
     op.addSharedDeclaration(
         "  __shared__ uint32_t isFastPath" + std::to_string(i) + ";\n");

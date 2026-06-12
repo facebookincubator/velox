@@ -308,6 +308,18 @@ std::string traceIValue(const c10::IValue& value) {
       s += std::to_string(t.size(d));
     }
     s += "]";
+    // For non-contiguous tensors also show the strides, since shape alone does
+    // not capture the layout.
+    if (t.defined() && !t.is_contiguous()) {
+      s += " strides[";
+      for (int64_t d = 0; d < t.dim(); ++d) {
+        if (d > 0) {
+          s += ", ";
+        }
+        s += std::to_string(t.stride(d));
+      }
+      s += "]";
+    }
     return s;
   }
   if (value.isList()) {
@@ -418,7 +430,13 @@ std::string tensorDebugString(const at::Tensor& t, int32_t maxElements) {
   auto limit = maxElements > 0 ? std::min<int64_t>(flat.numel(), maxElements)
                                : flat.numel();
   std::stringstream ss;
-  ss << "shape=" << t.sizes() << " dtype=" << t.dtype() << " [";
+  ss << "shape=" << t.sizes() << " dtype=" << t.dtype();
+  // For non-contiguous tensors also show the strides, since shape alone does
+  // not capture the layout.
+  if (t.defined() && !t.is_contiguous()) {
+    ss << " strides=" << t.strides();
+  }
+  ss << " [";
   for (int64_t i = 0; i < limit; ++i) {
     if (i > 0) {
       ss << ", ";
@@ -571,6 +589,39 @@ bool tensorsMatch(const at::Tensor& actual, const at::Tensor& expected) {
   return actual.cpu().equal(expected.cpu());
 }
 
+std::optional<at::Tensor> scalarLikeToTensor(const c10::IValue& iv) {
+  auto longOpts = at::TensorOptions().dtype(at::kLong).device(at::kCPU);
+  auto doubleOpts = at::TensorOptions().dtype(at::kDouble).device(at::kCPU);
+  if (iv.isInt()) {
+    return at::tensor(std::vector<int64_t>{iv.toInt()}, longOpts);
+  }
+  if (iv.isDouble()) {
+    return at::tensor(std::vector<double>{iv.toDouble()}, doubleOpts);
+  }
+  if (iv.isBool()) {
+    return at::tensor(std::vector<int64_t>{iv.toBool() ? 1 : 0}, longOpts)
+        .to(at::kBool);
+  }
+  if (iv.isIntList()) {
+    const auto& l = iv.toIntList();
+    return at::tensor(std::vector<int64_t>(l.begin(), l.end()), longOpts);
+  }
+  if (iv.isDoubleList()) {
+    const auto& l = iv.toDoubleList();
+    return at::tensor(std::vector<double>(l.begin(), l.end()), doubleOpts);
+  }
+  if (iv.isBoolList()) {
+    const auto& l = iv.toBoolList();
+    std::vector<int64_t> v;
+    v.reserve(l.size());
+    for (bool b : l) {
+      v.push_back(b ? 1 : 0);
+    }
+    return at::tensor(v, longOpts).to(at::kBool);
+  }
+  return std::nullopt;
+}
+
 std::string tensorToString(const at::Tensor& t) {
   auto cpu = t.cpu().contiguous();
   auto flat = cpu.flatten();
@@ -659,31 +710,24 @@ void serializeReferenceFrame(
   for (const auto& [id, iv] : items) {
     RefEntry e{};
     e.id = id;
+    // Tensors are stored as-is; scalars and scalar lists are wrapped into a 1-D
+    // tensor of the matching dtype so they live on the same (kRefTensor) path
+    // and can be compared element-wise at check time.
+    at::Tensor t;
     if (iv.isTensor()) {
-      auto t = iv.toTensor().cpu().contiguous();
-      heldTensors.push_back(t);
-      e.kind = kRefTensor;
-      e.scalarType = static_cast<int32_t>(t.scalar_type());
-      e.dims = t.sizes().vec();
-      e.length = static_cast<uint64_t>(t.nbytes());
-      blobs.push_back(t.data_ptr());
-    } else if (iv.isInt()) {
-      e.kind = kRefInt;
-      int64_t v = iv.toInt();
-      std::memcpy(&e.offset, &v, sizeof(int64_t));
-      blobs.push_back(nullptr);
-    } else if (iv.isDouble()) {
-      e.kind = kRefDouble;
-      double v = iv.toDouble();
-      std::memcpy(&e.offset, &v, sizeof(double));
-      blobs.push_back(nullptr);
-    } else if (iv.isBool()) {
-      e.kind = kRefBool;
-      e.offset = iv.toBool() ? 1 : 0;
-      blobs.push_back(nullptr);
+      t = iv.toTensor();
+    } else if (auto st = scalarLikeToTensor(iv)) {
+      t = *st;
     } else {
       continue;
     }
+    t = t.cpu().contiguous();
+    heldTensors.push_back(t);
+    e.kind = kRefTensor;
+    e.scalarType = static_cast<int32_t>(t.scalar_type());
+    e.dims = t.sizes().vec();
+    e.length = static_cast<uint64_t>(t.nbytes());
+    blobs.push_back(t.data_ptr());
     entries.push_back(std::move(e));
   }
 
@@ -783,7 +827,9 @@ void saveReferenceFrame(
       if (iv.toTensor().numel() > 0) {
         items.emplace_back(static_cast<int32_t>(id), iv);
       }
-    } else if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+    } else if (
+        iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(static_cast<int32_t>(id), iv);
     }
   }
@@ -804,7 +850,9 @@ void saveReferenceFrame(
       if (iv.toTensor().numel() > 0) {
         items.emplace_back(id, iv);
       }
-    } else if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+    } else if (
+        iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(id, iv);
     }
   }
@@ -832,7 +880,8 @@ void saveReferenceFrame(
       continue;
     }
     const auto& iv = frame.getIValue(value->id());
-    if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+    if (iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(static_cast<int32_t>(id), iv);
     }
   }
