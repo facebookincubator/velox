@@ -24,40 +24,42 @@
 
 namespace facebook::velox::cudf_velox::detail {
 
-// Dispatches a per-row device loop: fixed-point divide (lhs * 10^aRescale) /
+// Dispatches a per-row device loop: fixed-point divide (lhs * rescaleFactor) /
 // rhs with half-away-from-zero rounding on the remainder, writing into out.
-// Zero divisors produce a numeric zero in out (callers patch nulls). inType /
-// outType select DECIMAL64 vs DECIMAL128 storage widths for inputs and result,
-// via cudf::double_type_dispatcher<cudf::dispatch_storage_type>.
-void decimalDivideColumnColumn(
+// rescaleFactor is DecimalUtil::kPowersOfTen[aRescale] from the caller.
+// Zero divisors produce a numeric zero in out (callers patch nulls). Returns
+// false if any row overflowed (caller should VELOX_USER_FAIL). inType / outType
+// select DECIMAL64 vs DECIMAL128 storage widths via
+// cudf::double_type_dispatcher<cudf::dispatch_storage_type>.
+bool decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
-    int32_t aRescale,
+    __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
 // Same kernel math as decimalDivideColumnColumn, but rhs is a single
 // __int128_t decimal payload (already decoded from a cuDF scalar).
-void decimalDivideColumnScalar(
+bool decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
     __int128_t rhsValue,
     cudf::mutable_column_view out,
-    int32_t aRescale,
+    __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
 // Same kernel math as decimalDivideColumnColumn, but lhs is a single
 // __int128_t decimal payload and rhs is per-row.
-void decimalDivideScalarColumn(
+bool decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
-    int32_t aRescale,
+    __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
 } // namespace facebook::velox::cudf_velox::detail

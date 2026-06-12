@@ -19,6 +19,8 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
+#include <rmm/device_scalar.hpp>
+
 #include <cub/device/device_for.cuh>
 #include <cuda_runtime.h>
 #include <thrust/iterator/counting_iterator.h>
@@ -35,9 +37,21 @@ constexpr unsigned __int128 kUnsigned128Max =
 constexpr unsigned __int128 kInt128MinMagnitude =
     static_cast<unsigned __int128>(1) << 127;
 constexpr unsigned __int128 kInt128MaxMagnitude = kInt128MinMagnitude - 1;
-constexpr __int128_t kInt128Max = static_cast<__int128_t>(kInt128MaxMagnitude);
 // Bit pattern 2^127 maps to INT128_MIN without negating INT128_MIN (UB).
 constexpr __int128_t kInt128Min = static_cast<__int128_t>(kInt128MinMagnitude);
+
+// Match DecimalUtil::kLongDecimal{Min,Max} (10^38 bounds); duplicated here
+// because Velox headers cannot be included in this translation unit (nvcc).
+constexpr __int128_t kLongDecimalPowerOfTen38 =
+    1'000'000'000'000'000'000LL * (__int128_t)1'000'000'000'000'000'000LL * 100;
+constexpr __int128_t kLongDecimalMax = kLongDecimalPowerOfTen38 - 1;
+constexpr __int128_t kLongDecimalMin = -kLongDecimalPowerOfTen38 + 1;
+
+// Device threads cannot throw; record overflow for launchDecimalDivide to
+// report to the host caller, matching Velox CPU decimal divide errors.
+__device__ inline void markDecimalOverflow(int32_t* overflowFlag) {
+  atomicOr(overflowFlag, 1);
+}
 
 // Extract absolute value in unsigned space. Signed negation of INT128_MIN is
 // undefined; negating the unsigned bit pattern is always defined.
@@ -51,15 +65,11 @@ __device__ inline unsigned __int128 absToUnsigned(
   return static_cast<unsigned __int128>(value);
 }
 
-// Reapply sign after unsigned divide/round. Magnitudes >= 2^127 cannot be
-// represented as positive int128; magnitude == 2^127 is exactly INT128_MIN.
+// Reapply sign after unsigned divide/round. Caller must ensure magnitude fits.
 __device__ inline __int128_t signedFromUnsigned(
     unsigned __int128 magnitude,
     bool negative) {
   if (!negative) {
-    if (magnitude > kInt128MaxMagnitude) {
-      return kInt128Max;
-    }
     return static_cast<__int128_t>(magnitude);
   }
   if (magnitude >= kInt128MinMagnitude) {
@@ -68,16 +78,29 @@ __device__ inline __int128_t signedFromUnsigned(
   return -static_cast<__int128_t>(magnitude);
 }
 
+// Quotient magnitude must fit in int128 before signedFromUnsigned; rounding can
+// push a representable unsigned quotient past INT128_MAX / INT128_MIN.
+__device__ inline bool fitsRepresentableInt128(
+    unsigned __int128 magnitude,
+    bool negative) {
+  if (!negative) {
+    return magnitude <= kInt128MaxMagnitude;
+  }
+  return magnitude <= kInt128MinMagnitude;
+}
+
 // Decimal divide with rescale (numerator * rescaleFactor / denom). Rounding
 // matches Velox CPU DecimalUtil::divideWithRoundUp (increment unsigned
 // quotient, then apply sign), not Java/Hive HALF_UP toward +infinity on ties.
-// All intermediate math uses unsigned magnitudes so multiply, divide, mod, and
-// abs never hit signed overflow or INT128_MIN negation UB.
+// Overflow on rescale multiply, round-up, or out-of-range results sets
+// overflowFlag (see launchDecimalDivide); intermediate math uses unsigned
+// magnitudes so multiply, divide, mod, and abs never hit signed overflow UB.
 template <typename OutT>
 __device__ OutT decimalDivideImpl(
     __int128_t numerator,
     __int128_t denom,
-    __int128_t rescaleFactor) {
+    __int128_t rescaleFactor,
+    int32_t* overflowFlag) {
   if (denom == 0) {
     return OutT{0};
   }
@@ -85,14 +108,15 @@ __device__ OutT decimalDivideImpl(
   bool negative = false;
   unsigned __int128 const uNum = absToUnsigned(numerator, negative);
   unsigned __int128 const uDenom = absToUnsigned(denom, negative);
-  // rescaleFactor is pow10Int128(aRescale) and is always positive.
+  // rescaleFactor is DecimalUtil::kPowersOfTen[aRescale] from the host caller.
   unsigned __int128 const uRescaleFactor =
       static_cast<unsigned __int128>(rescaleFactor);
 
   unsigned __int128 scaled = uNum * uRescaleFactor;
-  // Detect unsigned multiply overflow; saturate to int128 min/max for sign.
+  // Match Velox CPU checkedMultiply on rescale.
   if (uRescaleFactor != 0 && scaled / uRescaleFactor != uNum) {
-    return static_cast<OutT>(signedFromUnsigned(kUnsigned128Max, negative));
+    markDecimalOverflow(overflowFlag);
+    return OutT{0};
   }
 
   unsigned __int128 quotient = scaled / uDenom;
@@ -102,21 +126,27 @@ __device__ OutT decimalDivideImpl(
   // Equivalent to 2 * remainder >= denom but avoids overflow when remainder is
   // large.
   if (remainder > (uDenom - 1) / 2) {
-    // Guard ++quotient when quotient is already UINT128_MAX.
-    if (quotient < kUnsigned128Max) {
-      ++quotient;
+    // Round-up would wrap unsigned quotient; CPU path would overflow too.
+    if (quotient >= kUnsigned128Max) {
+      markDecimalOverflow(overflowFlag);
+      return OutT{0};
     }
+    ++quotient;
   }
 
-  return static_cast<OutT>(signedFromUnsigned(quotient, negative));
-}
-
-inline __int128_t pow10Int128(int32_t exp) {
-  __int128_t value = 1;
-  for (int32_t i = 0; i < exp; ++i) {
-    value *= 10;
+  if (!fitsRepresentableInt128(quotient, negative)) {
+    markDecimalOverflow(overflowFlag);
+    return OutT{0};
   }
-  return value;
+
+  __int128_t const result = signedFromUnsigned(quotient, negative);
+  // Match Velox CPU DecimalUtil::valueInRange after divide.
+  if (result < kLongDecimalMin || result > kLongDecimalMax) {
+    markDecimalOverflow(overflowFlag);
+    return OutT{0};
+  }
+
+  return static_cast<OutT>(result);
 }
 
 template <typename InT, typename OutT>
@@ -125,9 +155,11 @@ struct DivideFunctor {
   const InT* rhs;
   OutT* out;
   __int128_t rescaleFactor;
+  int32_t* overflowFlag;
 
   __device__ void operator()(int32_t idx) const {
-    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhs[idx], rescaleFactor);
+    out[idx] = decimalDivideImpl<OutT>(
+        lhs[idx], rhs[idx], rescaleFactor, overflowFlag);
   }
 };
 
@@ -137,9 +169,11 @@ struct DivideLhsScalarFunctor {
   const InColT* rhs;
   OutT* out;
   __int128_t rescaleFactor;
+  int32_t* overflowFlag;
 
   __device__ void operator()(int32_t idx) const {
-    out[idx] = decimalDivideImpl<OutT>(lhsValue, rhs[idx], rescaleFactor);
+    out[idx] = decimalDivideImpl<OutT>(
+        lhsValue, rhs[idx], rescaleFactor, overflowFlag);
   }
 };
 
@@ -149,11 +183,30 @@ struct DivideRhsScalarFunctor {
   __int128_t rhsValue;
   OutT* out;
   __int128_t rescaleFactor;
+  int32_t* overflowFlag;
 
   __device__ void operator()(int32_t idx) const {
-    out[idx] = decimalDivideImpl<OutT>(lhs[idx], rhsValue, rescaleFactor);
+    out[idx] = decimalDivideImpl<OutT>(
+        lhs[idx], rhsValue, rescaleFactor, overflowFlag);
   }
 };
+
+// Returns false if any row set overflowFlag during the kernel.
+template <typename BuildOp>
+bool launchDecimalDivide(
+    cudf::size_type size,
+    BuildOp buildOp,
+    rmm::cuda_stream_view stream) {
+  if (size == 0) {
+    return true;
+  }
+  rmm::device_scalar<int32_t> overflowFlag{0, stream};
+  auto op = buildOp(overflowFlag.data());
+  cub::DeviceFor::ForEachN(
+      thrust::counting_iterator<int32_t>(0), size, op, stream.value());
+  CUDF_CUDA_TRY(cudaGetLastError());
+  return overflowFlag.value(stream) == 0;
+}
 
 } // namespace
 
@@ -169,120 +222,132 @@ struct divideColumnColumnKernel {
   const cudf::column_view& lhs;
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
-  int32_t aRescale;
+  __int128_t rescaleFactor;
   rmm::cuda_stream_view stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
-  void operator()() const {
-    if (lhs.size() == 0) {
-      return;
-    }
-    DivideFunctor<InT, OutT> op{
-        lhs.data<InT>(),
-        rhs.data<InT>(),
-        out.data<OutT>(),
-        pow10Int128(aRescale)};
-    cub::DeviceFor::ForEachN(
-        thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
-    CUDF_CUDA_TRY(cudaGetLastError());
+  bool operator()() const {
+    return launchDecimalDivide(
+        lhs.size(),
+        [&](int32_t* overflowFlag) {
+          return DivideFunctor<InT, OutT>{
+              lhs.data<InT>(),
+              rhs.data<InT>(),
+              out.data<OutT>(),
+              rescaleFactor,
+              overflowFlag};
+        },
+        stream);
   }
 
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
-  void operator()() const {}
+  bool operator()() const {
+    return true;
+  }
 };
 
 struct divideColumnScalarKernel {
   const cudf::column_view& lhs;
   __int128_t rhsValue;
   cudf::mutable_column_view out;
-  int32_t aRescale;
+  __int128_t rescaleFactor;
   rmm::cuda_stream_view stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
-  void operator()() const {
-    if (lhs.size() == 0) {
-      return;
-    }
-    DivideRhsScalarFunctor<InT, OutT> op{
-        lhs.data<InT>(), rhsValue, out.data<OutT>(), pow10Int128(aRescale)};
-    cub::DeviceFor::ForEachN(
-        thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
-    CUDF_CUDA_TRY(cudaGetLastError());
+  bool operator()() const {
+    return launchDecimalDivide(
+        lhs.size(),
+        [&](int32_t* overflowFlag) {
+          return DivideRhsScalarFunctor<InT, OutT>{
+              lhs.data<InT>(),
+              rhsValue,
+              out.data<OutT>(),
+              rescaleFactor,
+              overflowFlag};
+        },
+        stream);
   }
 
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
-  void operator()() const {}
+  bool operator()() const {
+    return true;
+  }
 };
 
 struct divideScalarColumnKernel {
   __int128_t lhsValue;
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
-  int32_t aRescale;
+  __int128_t rescaleFactor;
   rmm::cuda_stream_view stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
-  void operator()() const {
-    if (rhs.size() == 0) {
-      return;
-    }
-    DivideLhsScalarFunctor<InT, OutT> op{
-        lhsValue, rhs.data<InT>(), out.data<OutT>(), pow10Int128(aRescale)};
-    cub::DeviceFor::ForEachN(
-        thrust::counting_iterator<int32_t>(0), rhs.size(), op, stream.value());
-    CUDF_CUDA_TRY(cudaGetLastError());
+  bool operator()() const {
+    return launchDecimalDivide(
+        rhs.size(),
+        [&](int32_t* overflowFlag) {
+          return DivideLhsScalarFunctor<InT, OutT>{
+              lhsValue,
+              rhs.data<InT>(),
+              out.data<OutT>(),
+              rescaleFactor,
+              overflowFlag};
+        },
+        stream);
   }
 
   template <typename InT, typename OutT>
     requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
-  void operator()() const {}
+  bool operator()() const {
+    return true;
+  }
 };
 
-void decimalDivideColumnColumn(
+bool decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
-    int32_t aRescale,
+    __int128_t rescaleFactor,
     rmm::cuda_stream_view stream) {
-  cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
+  return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
-      divideColumnColumnKernel{lhs, rhs, out, aRescale, stream});
+      divideColumnColumnKernel{lhs, rhs, out, rescaleFactor, stream});
 }
 
-void decimalDivideColumnScalar(
+bool decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
     const cudf::column_view& lhs,
     __int128_t rhsValue,
     cudf::mutable_column_view out,
-    int32_t aRescale,
+    __int128_t rescaleFactor,
     rmm::cuda_stream_view stream) {
-  cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
+  return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
-      divideColumnScalarKernel{lhs, rhsValue, out, aRescale, stream});
+      divideColumnScalarKernel{lhs, rhsValue, out, rescaleFactor, stream});
 }
 
-void decimalDivideScalarColumn(
+bool decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
     __int128_t lhsValue,
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
-    int32_t aRescale,
+    __int128_t rescaleFactor,
     rmm::cuda_stream_view stream) {
-  cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
+  return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
-      divideScalarColumnKernel{lhsValue, rhs, out, aRescale, stream});
+      divideScalarColumnKernel{lhsValue, rhs, out, rescaleFactor, stream});
 }
 
 } // namespace detail
