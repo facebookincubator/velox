@@ -569,7 +569,7 @@ int32_t KernelOperation::attrOffset(NodeCP node, std::string_view attr) const {
       "Attribute '",
       attr,
       "' not found for node ",
-      node->toString());
+      standaloneToString(node));
   return it->second;
 }
 
@@ -1042,6 +1042,16 @@ void KernelOperation::setOutputs(
             desc.aliasSelfId = mutated[0]->id();
           }
         }
+      }
+      // If the kernel's top node returns a naked scalar (e.g. sym_size / numel
+      // used as the kernel output rather than fused in-register), it must be
+      // read back into the execution frame so a consuming kernel can pick it up
+      // as a host scalar param. Fused uses don't reach here: the producer is
+      // then an interior node whose register output is never materialized.
+      auto outKind = outputs[i]->type().kind();
+      if (node == expr_ && outKind != nativert::Type::Kind::Tensor &&
+          outKind != nativert::Type::Kind::TensorList) {
+        desc.neededOnHost = true;
       }
       if (isListOutput) {
         desc.isList = true;

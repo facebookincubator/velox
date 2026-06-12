@@ -304,6 +304,46 @@ void CompiledModule::initialize() {
   ensureInit();
 }
 
+namespace {
+// Order-sensitive hash combiner (boost-style).
+inline size_t mixHash(size_t seed, std::string_view s) {
+  return seed ^
+      (std::hash<std::string_view>{}(s) + 0x9e3779b97f4a7c15ULL + (seed << 6) +
+       (seed >> 2));
+}
+} // namespace
+
+size_t kernelCacheSalt() {
+  ensureInit();
+  // Header contents and target arch are fixed once NVRTC is initialized, so
+  // hash them once. waveNvrtcFlags carries the --gpu-architecture flag, so the
+  // arch is captured here as part of the flag set; we additionally fold the
+  // resolved header name/text pairs that NVRTC pulls in at compile time.
+  static const size_t headersAndArch = [] {
+    size_t h = 0;
+    for (size_t i = 0; i < waveHeaderNameString.size(); ++i) {
+      h = mixHash(h, waveHeaderNameString[i]);
+      h = mixHash(h, waveHeaderTextString[i]);
+    }
+    // The architecture is determined in ensureInit() as a --gpu-architecture
+    // flag; fold those specific flags into the precomputed component.
+    for (const auto& flag : waveNvrtcFlags) {
+      if (flag.find("arch") != std::string::npos) {
+        h = mixHash(h, flag);
+      }
+    }
+    return h;
+  }();
+
+  // Mix the full NVRTC flag set (e.g. -G, -O, -Xptxas) on each call so a change
+  // in compile flags reflects in the key even if headers/arch are unchanged.
+  size_t h = headersAndArch;
+  for (const auto& flag : waveNvrtcFlags) {
+    h = mixHash(h, flag);
+  }
+  return h;
+}
+
 std::shared_ptr<CompiledModule> CompiledModule::create(KernelSpec& spec) {
   ensureInit();
   const char** headers = waveHeaderTextString.data();
