@@ -108,6 +108,7 @@ velox_add_library(
   Window.cpp
   WindowFunction.cpp
   WindowPartition.cpp
+  fixedpoint/FixedPointPlanNodes.cpp
   HEADERS
   AddressableNonNullValueList.h
   Aggregate.h
@@ -218,6 +219,7 @@ velox_add_library(
   Window.h
   WindowFunction.h
   WindowPartition.h
+  fixedpoint/FixedPointPlanNodes.h
 )
 
 velox_add_library(velox_exec_spill_stats SpillStats.cpp HEADERS SpillStats.h)
