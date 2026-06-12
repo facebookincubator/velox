@@ -184,6 +184,9 @@ struct ExecutionState {
   const folly::F14FastMap<NodeCP, int32_t>* standaloneIndices{nullptr};
   std::vector<StandaloneStats>* standaloneStats{nullptr};
 
+  // Standalone nodes skipped during step execution due to None inputs.
+  std::vector<NodeCP>* deferredStandalones{nullptr};
+
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
 

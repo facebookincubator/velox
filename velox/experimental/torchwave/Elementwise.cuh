@@ -547,8 +547,18 @@ __device__ inline T __minimum(T a1, T a2) {
   return a1 < a2 ? a1 : a2;
 }
 
+template <typename T, typename U>
+__device__ inline auto __minimum(T a1, U a2) -> decltype(a1 + a2) {
+  return a1 < a2 ? a1 : a2;
+}
+
 template <typename T>
 __device__ inline T __maximum(T a1, T a2) {
+  return a1 > a2 ? a1 : a2;
+}
+
+template <typename T, typename U>
+__device__ inline auto __maximum(T a1, U a2) -> decltype(a1 + a2) {
   return a1 > a2 ? a1 : a2;
 }
 

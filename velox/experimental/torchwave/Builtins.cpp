@@ -61,6 +61,12 @@ std::pair<c10::ScalarType, std::string> resolveOutDtype(
   } else {
     dtypeStr = c10::toString(outDtype);
   }
+  // An empty or unrecognized dtype string (e.g. dtype="" serialized for a
+  // factory op that infers its type from the input) must fall back to the
+  // resolved dtype name; otherwise downstream codegen defaults it to Float.
+  if (dtypeStr.empty()) {
+    dtypeStr = c10::toString(outDtype);
+  }
   return {outDtype, dtypeStr};
 }
 
@@ -226,7 +232,7 @@ void resolveDtypeFromInput(nativert::Node* node, const ValueTypes& types) {
     auto outDtype = c10::isIntegralType(inputDtype, /*includeBool=*/true)
         ? c10::ScalarType::Long
         : inputDtype;
-    node->addAttribute({"dtype", std::string(c10::toString(outDtype))});
+    node->addAttribute({"dtype", outDtype});
   }
 }
 
@@ -300,7 +306,7 @@ void resolveDefaultDtype(nativert::Node* node, const ValueTypes& /*types*/) {
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
-  node->addAttribute({"dtype", std::string("Float")});
+  node->addAttribute({"dtype", c10::ScalarType::Float});
 }
 
 void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
@@ -315,7 +321,8 @@ void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
       break;
     }
   }
-  node->addAttribute({"dtype", std::string(hasFloat ? "Float" : "Long")});
+  node->addAttribute(
+      {"dtype", hasFloat ? c10::ScalarType::Float : c10::ScalarType::Long});
 }
 
 void resolveNanToNumDefaults(nativert::Node* node, const ValueTypes& types) {
@@ -370,7 +377,7 @@ void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
   auto inputId = node->inputs()[0].value->id();
   if (inputId < static_cast<int>(types.types.size()) && types.types[inputId]) {
     auto inputDtype = types.types[inputId]->dtype();
-    node->addAttribute({"dtype", std::string(c10::toString(inputDtype))});
+    node->addAttribute({"dtype", inputDtype});
   }
 }
 
@@ -404,8 +411,12 @@ std::vector<std::vector<Dim>> numBlocksShape(
     const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
   auto blockSize = WaveConfig::get().blockSize;
-  auto numBlocks =
-      static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize);
+  // At least one block: makeGrid always launches >=1 block (even for an empty
+  // input), and that block's head kernel unconditionally writes one per-block
+  // partial sum (out[blockInOp]).  A zero-length counts buffer would make that
+  // write dereference null storage.
+  auto numBlocks = std::max<Dim>(
+      1, static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize));
   return {{numBlocks}};
 }
 
@@ -945,6 +956,7 @@ void registerBuiltins() {
   // Type cast.
   MetadataBuilder("torch.ops.aten.to.dtype")
       .elementwiseFunc("__to")
+      .numArgs(1)
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -964,6 +976,7 @@ void registerBuiltins() {
   // placement/layout, which wave handles separately, so they are ignored.
   MetadataBuilder("torch.ops.aten._to_copy.default")
       .elementwiseFunc("__to")
+      .numArgs(1)
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -1095,14 +1108,29 @@ void registerBuiltins() {
             if (!sizeAttr) {
               return {};
             }
-            auto [outDtype, dtypeStr] = resolveOutDtype(node, &waveGraph);
+            auto outDtype = resolveOutDtype(node, &waveGraph).first;
             auto* graph = waveGraph.graph();
             auto* zerosNode =
                 graph->createNode("torch.ops.aten.zeros.default", {});
             zerosNode->addAttribute(
                 {sizeAttr->name,
                  std::get<std::vector<int64_t>>(sizeAttr->value)});
-            zerosNode->addAttribute({"dtype", dtypeStr});
+            // aten.zeros runs as a standalone via nativert C10Kernel, whose
+            // boxed schema expects an int ScalarType for `dtype`.  Emit a typed
+            // ScalarType (not the string name) so it unboxes natively, with no
+            // string-reinterpret workaround needed in
+            // prefillStackWithStaticArgs.
+            zerosNode->addAttribute({"dtype", outDtype});
+            // new_zeros inherits its input's device; the rewritten zeros has no
+            // such input, so pin it to the wave (GPU) device.  Without this the
+            // C10 zeros falls back to CPU and trips device-mismatch checks.
+            if (auto* dev = facebook::velox::wave::currentDevice()) {
+              zerosNode->addAttribute(
+                  {"device",
+                   c10::Device(
+                       c10::kCUDA,
+                       static_cast<c10::DeviceIndex>(dev->deviceId))});
+            }
             graph->insertBefore(zerosNode, const_cast<nativert::Node*>(node));
             auto* newOutput =
                 waveGraph.newTensorValue(zerosNode, "zeros", outDtype);
@@ -1316,22 +1344,56 @@ void registerBuiltins() {
       .deviceFunc("__copyTensor")
       .typeTemplateParams({0})
       .maybeReplace(
-          [](NodeCP node, ValueTypes& /*types*/, WaveGraph& /*waveGraph*/)
-              -> std::vector<std::pair<ValueCP, ValueCP>> {
+          [](NodeCP node,
+             ValueTypes& /*types*/,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
             if (inputs.empty() || outputs.empty() || !inputs[0].value) {
               return {};
             }
-            // Eliminate the clone (alias its output to the source) only when
-            // the source is produced by an elementwise node whose result has
-            // no user other than this clone. The source is then a fresh value
-            // computed here and read nowhere else, so the copy is redundant
-            // and aliasing it cannot expose a later in-place mutation to
-            // another reader. In any other case -- the source is a graph
-            // input, a view, a standalone (non-elementwise) result, or is
-            // shared by other users -- keep the clone as a real copy.
             auto* source = inputs[0].value;
+            auto* outputNode = waveGraph.graph()->outputNode();
+            // clone(memory_format=contiguous_format) is not an identity: it
+            // produces a contiguous copy that a following view() relies on.
+            // Keep the clone (its __copyTensor writes a contiguous register)
+            // rather than eliding it.
+            const auto* mfAttr = node->tryGetAttribute("memory_format");
+            if (mfAttr) {
+              bool isContiguous = false;
+              if (std::holds_alternative<c10::MemoryFormat>(mfAttr->value)) {
+                isContiguous = std::get<c10::MemoryFormat>(mfAttr->value) ==
+                    c10::MemoryFormat::Contiguous;
+              } else if (std::holds_alternative<std::string>(mfAttr->value)) {
+                const auto& s = std::get<std::string>(mfAttr->value);
+                isContiguous = s == "contiguous_format" || s == "Contiguous";
+              }
+              if (isContiguous) {
+                return {};
+              }
+            }
+            for (auto* user : outputs[0]->users()) {
+              if (isInPlaceMutation(user, outputs[0])) {
+                return {};
+              }
+              // A returned clone must stay a real copy: it is a distinct output
+              // tensor, and aliasing it to its source can collide with another
+              // output that is the same value.
+              if (user == outputNode) {
+                return {};
+              }
+            }
+            // Do not eliminate the clone if its source storage is mutated in
+            // place later: the clone is a required snapshot of the pre-mutation
+            // value, so it cannot be aliased to its (later-overwritten) source.
+            if (baseMutatedAfter(*waveGraph.graph(), node, inputs[0].value)) {
+              return {};
+            }
+            // Otherwise eliminate the clone (alias its output to the source)
+            // only when the source is produced by an elementwise node whose
+            // result has no other user -- a fresh value read nowhere else.  In
+            // any other case (graph input, view, standalone, or shared) keep
+            // the clone as a real copy.
             const auto* producer = source->producer();
             const auto* producerMeta = producer ? nodeMeta(producer) : nullptr;
             if (!producerMeta || !producerMeta->elementwise ||
