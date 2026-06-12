@@ -11,12 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-rules:
-  use-trusted-publishing:
-    ignore:
-      - build_pyvelox.yml
-  dangerous-triggers:
-    ignore:
-      - build-impact-comment.yml
-      - ci-failure-comment.yml
-      - labeler.yml
+# Automatically add labels based on file paths
+cudf:
+  - changed-files:
+      - any-glob-to-any-file: [velox/experimental/cudf/**, CMake/resolve_dependency_modules/cudf.cmake]
