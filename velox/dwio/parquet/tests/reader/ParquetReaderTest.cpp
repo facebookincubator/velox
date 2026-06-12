@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
@@ -53,10 +54,34 @@ class ParquetReaderTest : public ParquetTestBase {
   // path enabled by a 1-byte threshold so any footer engages tracking.
   dwio::common::ReaderOptions makeThriftTrackingReaderOptions() {
     auto readerOptions = makeDefaultReaderOptions();
-    readerOptions.setParquetFooterMemoryTrackingThreshold(1);
+    auto parquetOptions = std::make_shared<ParquetReaderOptions>();
+    parquetOptions->footerMemoryTrackingThreshold = 1;
+    readerOptions.setFormatSpecificOptions(std::move(parquetOptions));
     return readerOptions;
   }
 };
+
+TEST_F(ParquetReaderTest, createFormatOptions) {
+  config::ConfigBase connectorConfig({
+      {std::string(ParquetConfig::kUseColumnNames), "true"},
+      {std::string(ParquetConfig::kFooterSpeculativeIoSize), "99"},
+      {std::string(ParquetConfig::kAllowInt32Narrowing), "false"},
+      {std::string(ParquetConfig::kFooterMemoryTrackingThreshold), "99"},
+  });
+  config::ConfigBase session({
+      {std::string(ParquetConfig::kFooterSpeculativeIoSizeSession), "2"},
+      {std::string(ParquetConfig::kAllowInt32NarrowingSession), "true"},
+      {std::string(ParquetConfig::kFooterMemoryTrackingThresholdSession), "1"},
+  });
+
+  ParquetReaderFactory factory;
+  auto parquetOptions = checkedPointerCast<ParquetReaderOptions>(
+      factory.createFormatOptions(connectorConfig, session));
+  EXPECT_EQ(parquetOptions->columnMappingMode, ColumnMappingMode::kName);
+  EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 2);
+  EXPECT_TRUE(parquetOptions->allowInt32Narrowing);
+  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 1);
+}
 
 TEST_F(ParquetReaderTest, parseSample) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and

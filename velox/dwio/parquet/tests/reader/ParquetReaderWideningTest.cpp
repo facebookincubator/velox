@@ -33,7 +33,9 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       bool allowInt32Narrowing = false) const {
     auto opts = makeDefaultReaderOptions();
     opts.setFileSchema(readSchema);
-    opts.setAllowInt32Narrowing(allowInt32Narrowing);
+    auto parquetOptions = std::make_shared<ParquetReaderOptions>();
+    parquetOptions->allowInt32Narrowing = allowInt32Narrowing;
+    opts.setFormatSpecificOptions(std::move(parquetOptions));
     return opts;
   }
 
@@ -1058,7 +1060,9 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
 
   // Default: flag is false.
   auto readerOptions = makeDefaultReaderOptions();
-  ASSERT_FALSE(readerOptions.allowInt32Narrowing());
+  auto parquetOptions = std::make_shared<ParquetReaderOptions>();
+  ASSERT_FALSE(parquetOptions->allowInt32Narrowing);
+  readerOptions.setFormatSpecificOptions(parquetOptions);
 
   // INT32->TINYINT narrowing rejected by default.
   readerOptions.setFileSchema(ROW("c1", TINYINT()));
@@ -1101,7 +1105,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   }
 
   // With flag enabled, narrowing is allowed with silent truncation.
-  readerOptions.setAllowInt32Narrowing(true);
+  parquetOptions->allowInt32Narrowing = true;
 
   // INT32->TINYINT: values are truncated via static_cast<int8_t>.
   {

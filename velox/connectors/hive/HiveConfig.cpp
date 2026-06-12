@@ -51,6 +51,10 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterSpeculativeIoSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kAllowInt32NarrowingSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterMemoryTrackingThresholdSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
     VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
     VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);

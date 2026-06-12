@@ -76,6 +76,11 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
+/// Returns a format-scoped config prefix using the file format's canonical
+/// string token. For example, PARQUET with "." returns "parquet.", while
+/// PARQUET with "_" returns "parquet_".
+std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
+
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.
 enum class ColumnMappingMode {
@@ -202,8 +207,15 @@ struct RowNumberColumnInfo {
   std::string name;
 };
 
+/// Carries format-owned reader and writer options through the common reader
+/// interfaces.
 class FormatSpecificOptions {
  public:
+  FormatSpecificOptions() = default;
+  FormatSpecificOptions(const FormatSpecificOptions&) = default;
+  FormatSpecificOptions& operator=(const FormatSpecificOptions&) = default;
+  FormatSpecificOptions(FormatSpecificOptions&&) = default;
+  FormatSpecificOptions& operator=(FormatSpecificOptions&&) = default;
   virtual ~FormatSpecificOptions() = default;
 };
 
@@ -647,8 +659,6 @@ class ReaderOptions : public io::ReaderOptions {
       1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
-  static constexpr uint64_t kDefaultParquetFooterMemoryTrackingThreshold =
-      std::numeric_limits<uint64_t>::max(); // Disabled by default.
 
   explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : io::ReaderOptions(pool) {}
@@ -699,11 +709,6 @@ class ReaderOptions : public io::ReaderOptions {
     footerSpeculativeIoSize_ = size;
     return *this;
   }
-  ReaderOptions& setParquetFooterMemoryTrackingThreshold(uint64_t size) {
-    parquetFooterMemoryTrackingThreshold_ = size;
-    return *this;
-  }
-
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
     filePreloadThreshold_ = threshold;
     return *this;
@@ -744,6 +749,15 @@ class ReaderOptions : public io::ReaderOptions {
     return properties_;
   }
 
+  const std::shared_ptr<FormatSpecificOptions>& formatSpecificOptions() const {
+    return formatSpecificOptions_;
+  }
+
+  void setFormatSpecificOptions(
+      std::shared_ptr<FormatSpecificOptions> options) {
+    formatSpecificOptions_ = std::move(options);
+  }
+
   /// Gets the file schema.
   const std::shared_ptr<const velox::RowType>& fileSchema() const {
     return fileSchema_;
@@ -763,10 +777,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   uint64_t footerSpeculativeIoSize() const {
     return footerSpeculativeIoSize_;
-  }
-
-  uint64_t parquetFooterMemoryTrackingThreshold() const {
-    return parquetFooterMemoryTrackingThreshold_;
   }
 
   uint64_t filePreloadThreshold() const {
@@ -919,20 +929,6 @@ class ReaderOptions : public io::ReaderOptions {
     allowEmptyFile_ = value;
   }
 
-  /// Allows reading INT32 physical type columns as a narrower integer type
-  /// (e.g., INT32 -> TINYINT/SMALLINT). Some Parquet writers store INT_8 and
-  /// INT_16 values as plain INT32 without a converted type annotation. When
-  /// enabled, the value is silently truncated on overflow. When disabled
-  /// (default), only annotated type-matching reads are allowed (e.g.,
-  /// INT_8 -> TINYINT, INT_16 -> SMALLINT, INT_32 -> INTEGER).
-  bool allowInt32Narrowing() const {
-    return allowInt32Narrowing_;
-  }
-
-  void setAllowInt32Narrowing(bool value) {
-    allowInt32Narrowing_ = value;
-  }
-
   /// File handle providing the cache key (uuid) for metadata caching in
   /// Nimble's TabletReader. The pointer is only dereferenced during reader
   /// construction to extract the uuid; it does not need to outlive the
@@ -964,6 +960,7 @@ class ReaderOptions : public io::ReaderOptions {
   RowTypePtr fileSchema_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
+  std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
@@ -983,11 +980,8 @@ class ReaderOptions : public io::ReaderOptions {
   bool preloadIndex_{false};
   bool loadChunkIndex_{true};
   bool allowEmptyFile_{false};
-  bool allowInt32Narrowing_{false};
   const FileHandle* fileHandle_{nullptr};
   cache::AsyncDataCache* cache_{nullptr};
-  uint64_t parquetFooterMemoryTrackingThreshold_{
-      kDefaultParquetFooterMemoryTrackingThreshold};
 };
 
 struct WriterOptions {

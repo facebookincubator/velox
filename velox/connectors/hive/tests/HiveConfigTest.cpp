@@ -19,6 +19,8 @@
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
 
+#include <algorithm>
+
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using facebook::velox::connector::hive::HiveConfig;
@@ -62,9 +64,6 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(
       hiveConfig.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
   ASSERT_EQ(
-      hiveConfig.parquetFooterSpeculativeIoSize(emptySession.get()),
-      256UL << 10);
-  ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
   ASSERT_FALSE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_FALSE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
@@ -96,7 +95,6 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kCacheMetadata, "true"},
       {HiveConfig::kCacheIndex, "true"},
       {HiveConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
-      {HiveConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
       {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
       {HiveConfig::kNimbleStringDecoderZeroCopy, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncoding, "true"},
@@ -138,8 +136,6 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_EQ(
       hiveConfig.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
   ASSERT_EQ(
-      hiveConfig.parquetFooterSpeculativeIoSize(emptySession.get()), 1UL << 20);
-  ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
@@ -168,8 +164,6 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kCacheIndexSession, "true"},
       {HiveConfig::kOrcFooterSpeculativeIoSizeSession,
        std::to_string(128UL << 10)},
-      {HiveConfig::kParquetFooterSpeculativeIoSizeSession,
-       std::to_string(512UL << 10)},
       {HiveConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
       {HiveConfig::kNimbleStringDecoderZeroCopySession, "true"},
@@ -205,8 +199,6 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_TRUE(hiveConfig.cacheMetadata(session.get()));
   ASSERT_TRUE(hiveConfig.cacheIndex(session.get()));
   ASSERT_EQ(hiveConfig.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
-  ASSERT_EQ(
-      hiveConfig.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
@@ -262,4 +254,18 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
       config.maxTargetFileSizeBytes(
           dwio::common::FileFormat::NIMBLE, session.get()),
       56UL << 20);
+}
+
+TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
+  const auto& properties = HiveConfig::registeredProperties();
+
+  auto hasProperty = [&](const std::string& name) {
+    return std::any_of(
+        properties.begin(), properties.end(), [&](const auto& property) {
+          return property.name == name;
+        });
+  };
+
+  EXPECT_TRUE(hasProperty(HiveConfig::kParquetUseColumnNamesSession));
+  EXPECT_FALSE(hasProperty(HiveConfig::kParquetUseColumnNames));
 }
