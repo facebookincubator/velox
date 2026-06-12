@@ -515,75 +515,42 @@ class TestShouldYieldOperator : public exec::Operator {
   bool shouldYieldResult_{false};
 };
 
-class TestOutputBufferManager : public IOutputBufferManager {
+// A control-plane-only IOutputBufferManager that is not an OutputBufferManager.
+// Used to verify that PartitionedOutput errors when the task resolves an output
+// buffer manager for a different transport (e.g. a future UCX manager).
+class NonHttpOutputBufferManager : public IOutputBufferManager {
  public:
-  TestOutputBufferManager(
-      OutputBuffer::Stats stats,
-      double utilization,
-      bool overutilized)
-      : stats_(std::move(stats)),
-        utilization_(utilization),
-        overutilized_(overutilized) {}
-
   void initializeTask(
       std::shared_ptr<Task> /*task*/,
       core::PartitionedOutputNode::Kind /*kind*/,
       int /*numDestinations*/,
-      int /*numDrivers*/) override {
-    ++initCount;
-  }
+      int /*numDrivers*/) override {}
 
-  bool updateOutputBuffers(
-      const std::string& /*taskId*/,
-      int /*numBuffers*/,
-      bool /*noMoreBuffers*/) override {
-    ++updateBuffersCount;
+  bool updateOutputBuffers(const std::string&, int, bool) override {
     return true;
   }
 
-  void removeTask(const std::string& /*taskId*/) override {
-    ++removeCount;
-    removed_ = true;
-  }
-
-  std::optional<OutputBuffer::Stats> stats(
-      const std::string& /*taskId*/) override {
-    ++statsCount;
-    if (removed_) {
-      return std::nullopt;
-    }
-    return stats_;
-  }
-
-  bool updateNumDrivers(const std::string& /*taskId*/, uint32_t /*numDrivers*/)
-      override {
-    ++updateDriversCount;
+  bool updateNumDrivers(const std::string&, uint32_t) override {
     return true;
   }
 
-  double getUtilization(const std::string& /*taskId*/) override {
-    return utilization_;
+  void removeTask(const std::string&) override {}
+
+  std::optional<OutputBuffer::Stats> stats(const std::string&) override {
+    return std::nullopt;
   }
 
-  bool isOverutilized(const std::string& /*taskId*/) override {
-    return overutilized_;
+  double getUtilization(const std::string&) override {
+    return 0.0;
   }
 
-  std::string toString(const std::string& /*taskId*/) override {
-    return "test-output-buffer-manager";
+  bool isOverutilized(const std::string&) override {
+    return false;
   }
 
-  int initCount{0};
-  int updateBuffersCount{0};
-  int updateDriversCount{0};
-  int removeCount{0};
-  int statsCount{0};
-
- private:
-  OutputBuffer::Stats stats_;
-  double utilization_;
-  bool overutilized_;
-  bool removed_{false};
+  std::string toString(const std::string&) override {
+    return "non-http";
+  }
 };
 } // namespace
 
@@ -1499,130 +1466,77 @@ TEST_F(TaskTest, taskUsesHttpOutputBufferManagerAfterRegistryClear) {
   waitForTaskCompletion(task.get());
 }
 
-TEST_F(TaskTest, taskStatsUseSelectedOutputBufferManager) {
-  core::PlanNodeId outputNodeId;
-  auto plan = PlanBuilder()
-                  .tableScan(ROW({"c0"}, {BIGINT()}))
-                  .partitionedOutput({}, 1)
-                  .capturePlanNodeId(outputNodeId)
-                  .planFragment();
-  const std::string transportType{"test-output-manager"};
-  plan.outputTransportTypes[outputNodeId] = transportType;
+TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
+  constexpr int32_t numBatches = 10;
+  std::vector<RowVectorPtr> dataBatches;
+  dataBatches.reserve(numBatches);
+  const int numRows = numBatches * 3;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
+  }
 
-  OutputBuffer::Stats expectedStats(
-      core::PartitionedOutputNode::Kind::kPartitioned,
-      /*_noMoreBuffers=*/true,
-      /*_noMoreData=*/true,
-      /*_finished=*/false,
-      /*_bufferedBytes=*/123,
-      /*_bufferedPages=*/4,
-      /*_totalBytesSent=*/1'024,
-      /*_totalRowsSent=*/32,
-      /*_totalPagesSent=*/8,
-      /*_averageBufferTimeMs=*/17,
-      /*_numTopBuffers=*/2,
-      /*_buffersStats=*/{});
-  auto selectedManager =
-      std::make_shared<TestOutputBufferManager>(expectedStats, 0.5, true);
-  auto queryRegistry = OutputBufferManagerRegistry::create(
-      &OutputBufferManagerRegistry::global());
-  queryRegistry->insert(transportType, selectedManager);
+  auto plan =
+      PlanBuilder().values(dataBatches).partitionedOutput({}, 1).planNode();
 
-  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
-  queryCtx->setRegistry(
-      OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
-  auto task = Task::create(
-      "task-selected-output-manager-stats",
-      plan,
-      0,
-      queryCtx,
-      Task::ExecutionMode::kParallel,
-      exec::Consumer{});
-  task->start(1, 1);
-
-  const auto taskStats = task->taskStats();
-  EXPECT_EQ(selectedManager->initCount, 1);
-  EXPECT_EQ(selectedManager->statsCount, 1);
-  EXPECT_DOUBLE_EQ(taskStats.outputBufferUtilization, 0.5);
-  EXPECT_TRUE(taskStats.outputBufferOverutilized);
-  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
-  const auto& outputStats = taskStats.outputBufferStats.value();
-  EXPECT_EQ(outputStats.kind, expectedStats.kind);
-  EXPECT_EQ(outputStats.noMoreBuffers, expectedStats.noMoreBuffers);
-  EXPECT_EQ(outputStats.noMoreData, expectedStats.noMoreData);
-  EXPECT_EQ(outputStats.finished, expectedStats.finished);
-  EXPECT_EQ(outputStats.bufferedBytes, expectedStats.bufferedBytes);
-  EXPECT_EQ(outputStats.bufferedPages, expectedStats.bufferedPages);
-  EXPECT_EQ(outputStats.totalBytesSent, expectedStats.totalBytesSent);
-  EXPECT_EQ(outputStats.totalRowsSent, expectedStats.totalRowsSent);
-  EXPECT_EQ(outputStats.totalPagesSent, expectedStats.totalPagesSent);
-  EXPECT_EQ(outputStats.averageBufferTimeMs, expectedStats.averageBufferTimeMs);
-  EXPECT_EQ(outputStats.numTopBuffers, expectedStats.numTopBuffers);
-  EXPECT_EQ(outputStats.buffersStats.size(), expectedStats.buffersStats.size());
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  Task* task = cursor->task().get();
+  while (cursor->moveNext()) {
+  }
 
   task->requestCancel();
-  waitForTaskCompletion(task.get());
+  waitForTaskCompletion(task);
+
+  const auto taskStats = task->taskStats();
+  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
+  const auto& outputStats = taskStats.outputBufferStats.value();
+  EXPECT_EQ(outputStats.kind, core::PartitionedOutputNode::Kind::kPartitioned);
+  EXPECT_EQ(outputStats.totalRowsSent, numRows);
+  EXPECT_GT(outputStats.totalPagesSent, 0);
+  EXPECT_GT(outputStats.bufferedBytes, 0);
+  EXPECT_EQ(outputStats.bufferedPages, outputStats.totalPagesSent);
 }
 
-TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
+TEST_F(TaskTest, partitionedOutputErrorsOnTransportMismatch) {
   core::PlanNodeId outputNodeId;
+  auto data = makeRowVector({makeFlatVector<int64_t>({0, 1, 10})});
   auto plan = PlanBuilder()
-                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .values({data})
                   .partitionedOutput({}, 1)
                   .capturePlanNodeId(outputNodeId)
                   .planFragment();
-  const std::string transportType{"test-output-manager-final-stats"};
+  // Select a non-HTTP output buffer manager via the plan's output transport
+  // type. The default PartitionedOutput operator only handles the HTTP
+  // OutputBufferManager, so it must error rather than send output to the wrong
+  // manager.
+  const std::string transportType{"test-mismatch-transport"};
   plan.outputTransportTypes[outputNodeId] = transportType;
 
-  OutputBuffer::Stats expectedStats(
-      core::PartitionedOutputNode::Kind::kPartitioned,
-      /*_noMoreBuffers=*/true,
-      /*_noMoreData=*/true,
-      /*_finished=*/true,
-      /*_bufferedBytes=*/456,
-      /*_bufferedPages=*/7,
-      /*_totalBytesSent=*/2'048,
-      /*_totalRowsSent=*/64,
-      /*_totalPagesSent=*/16,
-      /*_averageBufferTimeMs=*/23,
-      /*_numTopBuffers=*/3,
-      /*_buffersStats=*/{});
-  auto selectedManager =
-      std::make_shared<TestOutputBufferManager>(expectedStats, 0.75, true);
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
-  queryRegistry->insert(transportType, selectedManager);
-
+  queryRegistry->insert(
+      transportType, std::make_shared<NonHttpOutputBufferManager>());
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
+
   auto task = Task::create(
-      "task-selected-output-manager-final-stats",
-      plan,
+      "task-transport-mismatch",
+      std::move(plan),
       0,
       queryCtx,
       Task::ExecutionMode::kParallel,
       exec::Consumer{});
   task->start(1, 1);
 
-  task->requestCancel();
-  waitForTaskCompletion(task.get());
-
-  EXPECT_EQ(selectedManager->removeCount, 1);
-  const auto taskStats = task->taskStats();
-  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
-  const auto& outputStats = taskStats.outputBufferStats.value();
-  EXPECT_EQ(outputStats.kind, expectedStats.kind);
-  EXPECT_EQ(outputStats.noMoreBuffers, expectedStats.noMoreBuffers);
-  EXPECT_EQ(outputStats.noMoreData, expectedStats.noMoreData);
-  EXPECT_EQ(outputStats.finished, expectedStats.finished);
-  EXPECT_EQ(outputStats.bufferedBytes, expectedStats.bufferedBytes);
-  EXPECT_EQ(outputStats.bufferedPages, expectedStats.bufferedPages);
-  EXPECT_EQ(outputStats.totalBytesSent, expectedStats.totalBytesSent);
-  EXPECT_EQ(outputStats.totalRowsSent, expectedStats.totalRowsSent);
-  EXPECT_EQ(outputStats.totalPagesSent, expectedStats.totalPagesSent);
-  EXPECT_EQ(outputStats.averageBufferTimeMs, expectedStats.averageBufferTimeMs);
-  EXPECT_EQ(outputStats.numTopBuffers, expectedStats.numTopBuffers);
+  ASSERT_TRUE(waitForTaskFailure(task.get()));
+  EXPECT_TRUE(
+      task->errorMessage().find(
+          "PartitionedOutput requires the default OutputBufferManager") !=
+      std::string::npos)
+      << task->errorMessage();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {

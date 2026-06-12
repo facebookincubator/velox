@@ -178,6 +178,8 @@ class PartitionedOutput : public Operator {
       const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
       bool eagerFlush);
 
+  void initialize() override;
+
   void addInput(RowVectorPtr input) override;
 
   /// Always returns nullptr. The action is to further process
@@ -234,7 +236,7 @@ class PartitionedOutput : public Operator {
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
   // Empty if column order in the output is exactly the same as in input.
   const std::vector<column_index_t> outputChannels_;
-  const std::weak_ptr<exec::OutputBufferManager> bufferManager_;
+  std::weak_ptr<exec::OutputBufferManager> bufferManager_;
   const std::function<void()> bufferReleaseFn_;
   const int64_t maxBufferedBytes_;
   const bool eagerFlush_;
