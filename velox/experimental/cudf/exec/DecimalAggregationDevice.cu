@@ -140,10 +140,7 @@ void launchDeviceFor(
   }
   auto op = buildOp();
   cub::DeviceFor::ForEachN(
-      cuda::counting_iterator<cudf::size_type>{0},
-      size,
-      op,
-      stream.value());
+      cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -217,8 +214,7 @@ struct fillOffsetsForDecimalSumStateKernel {
         numRows + 1,
         [&] {
           return FillOffsetsFunctor<OffsetT>{cuda::std::span<OffsetT>{
-              offsetsView.data<OffsetT>(),
-              static_cast<size_t>(numRows) + 1}};
+              offsetsView.data<OffsetT>(), static_cast<size_t>(numRows) + 1}};
         },
         stream);
   }

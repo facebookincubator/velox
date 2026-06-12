@@ -107,13 +107,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
       "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
       cudf::type_to_name(offsetsView.type()));
   detail::unpackDecimalSumState(
-      offsetsType,
-      offsetsView,
-      charsPtr,
-      sumView,
-      countView,
-      numRows,
-      stream);
+      offsetsType, offsetsView, charsPtr, sumView, countView, numRows, stream);
 
   if (stateCol.nullable()) {
     auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);
