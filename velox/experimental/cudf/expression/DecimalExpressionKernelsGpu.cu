@@ -22,8 +22,8 @@
 #include <rmm/device_scalar.hpp>
 
 #include <cub/device/device_for.cuh>
+#include <cuda/iterator>
 #include <cuda_runtime.h>
-#include <thrust/iterator/counting_iterator.h>
 
 #include <concepts>
 #include <cstdint>
@@ -157,7 +157,7 @@ struct DivideFunctor {
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     out[idx] = decimalDivideImpl<OutT>(
         lhs[idx], rhs[idx], rescaleFactor, overflowFlag);
   }
@@ -171,7 +171,7 @@ struct DivideLhsScalarFunctor {
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     out[idx] = decimalDivideImpl<OutT>(
         lhsValue, rhs[idx], rescaleFactor, overflowFlag);
   }
@@ -185,7 +185,7 @@ struct DivideRhsScalarFunctor {
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
 
-  __device__ void operator()(int32_t idx) const {
+  __device__ void operator()(cudf::size_type idx) const {
     out[idx] = decimalDivideImpl<OutT>(
         lhs[idx], rhsValue, rescaleFactor, overflowFlag);
   }
@@ -203,7 +203,7 @@ bool launchDecimalDivide(
   rmm::device_scalar<int32_t> overflowFlag{0, stream};
   auto op = buildOp(overflowFlag.data());
   cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), size, op, stream.value());
+      cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
   return overflowFlag.value(stream) == 0;
 }
