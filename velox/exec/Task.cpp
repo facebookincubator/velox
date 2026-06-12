@@ -1322,16 +1322,17 @@ void Task::initializePartitionOutput() {
     const std::string transportType = it != outputTransportTypes.end()
         ? it->second
         : std::string{core::TransportKind::kHttp};
-    auto mgr = OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
-    if (!mgr && transportType == core::TransportKind::kHttp) {
-      mgr = OutputBufferManager::getInstanceRef();
+    auto manager =
+        OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
+    if (!manager && transportType == core::TransportKind::kHttp) {
+      manager = OutputBufferManager::getInstanceRef();
     }
     VELOX_CHECK_NOT_NULL(
-        mgr,
+        manager,
         "OutputBufferManager not registered for transport type: {}",
         transportType);
-    setOutputBufferManager(mgr);
-    mgr->initializeTask(
+    setOutputBufferManager(manager);
+    manager->initializeTask(
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
@@ -2146,8 +2147,8 @@ bool Task::checkNoMoreSplitGroupsLocked() {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
     if (groupedPartitionedOutput_) {
-      if (auto mgr = bufferManager_.lock()) {
-        mgr->updateNumDrivers(
+      if (auto manager = bufferManager_.lock()) {
+        manager->updateNumDrivers(
             taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
       }
     }
@@ -2346,8 +2347,8 @@ bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
       noMoreOutputBuffers_ = true;
     }
   }
-  if (auto mgr = bufferManager_.lock()) {
-    return mgr->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  if (auto manager = bufferManager_.lock()) {
+    return manager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
   }
   return false;
 }
@@ -2842,14 +2843,14 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
-    if (auto mgr = bufferManager_.lock()) {
+    if (auto manager = bufferManager_.lock()) {
       {
         std::lock_guard<std::timed_mutex> l(mutex_);
         if (!taskStats_.outputBufferStats.has_value()) {
-          taskStats_.outputBufferStats = mgr->stats(taskId_);
+          taskStats_.outputBufferStats = manager->stats(taskId_);
         }
       }
-      mgr->removeTask(taskId_);
+      manager->removeTask(taskId_);
     }
   }
 }
@@ -3008,11 +3009,11 @@ TaskStats Task::taskStats() const {
     }
   }
 
-  if (auto mgr = bufferManager_.lock()) {
-    taskStats.outputBufferUtilization = mgr->getUtilization(taskId_);
-    taskStats.outputBufferOverutilized = mgr->isOverutilized(taskId_);
+  if (auto manager = bufferManager_.lock()) {
+    taskStats.outputBufferUtilization = manager->getUtilization(taskId_);
+    taskStats.outputBufferOverutilized = manager->isOverutilized(taskId_);
     if (!taskStats.outputBufferStats.has_value()) {
-      taskStats.outputBufferStats = mgr->stats(taskId_);
+      taskStats.outputBufferStats = manager->stats(taskId_);
     }
   }
   return taskStats;
@@ -3273,8 +3274,8 @@ folly::dynamic Task::toJson() const {
   }
   obj["drivers"] = drivers;
 
-  if (auto mgr = bufferManager_.lock()) {
-    auto s = mgr->toString(taskId_);
+  if (auto manager = bufferManager_.lock()) {
+    auto s = manager->toString(taskId_);
     if (!s.empty()) {
       obj["buffer"] = s;
     }
