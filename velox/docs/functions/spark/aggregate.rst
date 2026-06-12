@@ -7,6 +7,37 @@ Aggregate functions operate on a set of values to compute a single result.
 General Aggregate Functions
 ---------------------------
 
+.. spark:function:: approx_count_distinct_for_intervals(x, endpoints, relativeSD) -> array(bigint)
+
+    Returns approximate distinct counts per interval defined by ``endpoints``.
+    Given an array of sorted endpoints (e1, e2, ..., eN), the result contains
+    counts for intervals [e1, e2], (e2, e3], ..., (eN-1, eN].
+    Values outside the overall range are ignored. Null inputs are ignored. NaN
+    inputs are rejected.
+
+    Duplicate endpoints are allowed. For any interval with identical endpoints
+    (e.g. (5, 5]), the result is 1.
+    Empty or all-null input returns zero counts, with duplicate-endpoint
+    intervals set to 1.
+
+    ``endpoints`` must be a constant (foldable) array with at least two values.
+    ``relativeSD`` must be constant as well.
+
+    Supported input types are numeric, date, timestamp, interval, and decimal.
+    Endpoints can be any of these types and do not need to match the input type.
+    Interval membership is evaluated using DOUBLE comparisons across the input
+    and endpoint types. This is exact for integer-like values within
+    ``[-2^53, 2^53]`` and may lose precision for very large integers,
+    timestamp microseconds outside that range, or high-scale decimals near
+    interval boundaries.
+
+    **Known Limitations**
+
+    Partial aggregation uses Velox's HLL accumulator serialization, which is
+    not wire-compatible with Spark's internal HLL representation. Plans must not
+    mix Spark and Velox partial/intermediate aggregation steps for this function,
+    or approximate counts may diverge.
+
 .. spark:function:: avg(x) -> double|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.
