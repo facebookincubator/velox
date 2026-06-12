@@ -158,6 +158,19 @@ class Task : public std::enable_shared_from_this<Task> {
     return traceCtx_.get();
   }
 
+  /// Returns the output buffer manager selected for this task's partitioned
+  /// output, resolved in initializePartitionOutput() from the plan fragment's
+  /// output transport type. Returns an empty weak_ptr if the task has no
+  /// partitioned output. Held as a weak_ptr to break the reference cycle
+  /// through OutputBuffer::task_; callers must lock() and null-check.
+  std::weak_ptr<IOutputBufferManager> outputBufferManager() const;
+
+  /// Binds the output buffer manager for this task's partitioned output.
+  /// Normally called by initializePartitionOutput(); also used by tests that
+  /// drive a manager directly without going through Task::start(). Locks
+  /// mutex_, so it must not be called while holding it.
+  void setOutputBufferManager(std::weak_ptr<IOutputBufferManager> manager);
+
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
     return consumerSupplier_;
