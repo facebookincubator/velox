@@ -279,6 +279,11 @@ struct LaunchData {
   folly::F14FastSet<size_t> shapeOnlyTensorIndices;
   std::vector<nativert::ValueId> scalarsInFrame;
   std::vector<int32_t> scalarOffsets;
+  /// Offsets of non-tensor (scalar) kernel outputs. These get a zero
+  /// placeholder before launch and are overwritten by the kernel; they must
+  /// never be filled from the frame (unlike scalarsInFrame, which are inputs),
+  /// since the frame slot is None until this kernel produces the value.
+  std::vector<int32_t> scalarOutputOffsets;
   std::vector<nativert::ValueId> returnValues;
   std::vector<int32_t> returnOffsets;
   /// Type kind for each return value, parallel to returnValues.

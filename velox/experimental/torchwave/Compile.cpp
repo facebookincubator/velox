@@ -137,7 +137,7 @@ void listConstantsImpl(
               "Constant attribute '",
               attr.name,
               "' is None in node: ",
-              n->toString());
+              standaloneToString(n));
         }
         storage.push_back(std::move(iv));
       });
@@ -739,23 +739,32 @@ void CompileCtx::setGridChoice(ProjectOperation* projectOp) {
   if (projectOp->grid_.empty() || projectOp->singleBlockGrid_.empty()) {
     return;
   }
-  auto& grid = projectOp->grid_;
-  auto& sbGrid = projectOp->singleBlockGrid_;
-  for (size_t i = 0; i < grid.size() && i < sbGrid.size(); ++i) {
-    for (size_t j = 0; j < grid[i].size() && j < sbGrid[i].size(); ++j) {
-      auto& gl = grid[i][j];
-      auto& sl = sbGrid[i][j];
-      if (gl.standalone && sl.standalone) {
-        TORCH_CHECK(
-            gl.standalone == sl.standalone,
-            "Grid and singleBlockGrid have standalone launches with different nodes");
-      } else if (gl.standalone || sl.standalone) {
-        TORCH_CHECK(
-            false,
-            "Grid and singleBlockGrid mismatch: one has a standalone and the other has a kernel");
-      } else if (gl.op && sl.op) {
-        gl.op->setIsGridChoice(true);
-        sl.op->setIsGridChoice(true);
+  // grid_ and singleBlockGrid_ are two complete alternative plans for the same
+  // ProjectOp; at runtime the executor picks one wholesale based on the
+  // grid-choice kernel's element count (see CompiledOp.cpp). Launches within a
+  // parallel step are data-independent, so their relative order can differ
+  // between the two grids (e.g. fusion can reorder a standalone view relative
+  // to sibling kernels). Match the grid-choice kernel across the two grids by
+  // node identity -- the original root node each kernel op was built from --
+  // rather than by position, which would spuriously flag a standalone in one
+  // grid against a kernel in the other when the orders diverge.
+  std::unordered_map<NodeCP, KernelOperation*> sbKernelByRoot;
+  for (auto& step : projectOp->singleBlockGrid_) {
+    for (auto& launch : step) {
+      if (launch.op && launch.op->expr()) {
+        sbKernelByRoot[originalFromVariant(launch.op->expr())] = launch.op;
+      }
+    }
+  }
+  for (auto& step : projectOp->grid_) {
+    for (auto& launch : step) {
+      if (!launch.op || !launch.op->expr()) {
+        continue;
+      }
+      auto it = sbKernelByRoot.find(originalFromVariant(launch.op->expr()));
+      if (it != sbKernelByRoot.end()) {
+        launch.op->setIsGridChoice(true);
+        it->second->setIsGridChoice(true);
         return;
       }
     }
@@ -930,7 +939,7 @@ void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
               "Constant attribute '",
               attr.name,
               "' is None in node: ",
-              n->toString());
+              standaloneToString(n));
         }
 
         NodeCP original = originalFromVariant(n);
@@ -1522,6 +1531,11 @@ std::string CompileCtx::declareAttributes(
 
 std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
   std::string result;
+  // Schema-less scalar ops (isScalarElementwise) have no presence template
+  // params.
+  if (!meta.functionSchema) {
+    return result;
+  }
   const auto& schemaArgs = meta.functionSchema->arguments();
   const auto& nodeInputs = node->inputs();
   for (size_t i = 0; i < schemaArgs.size(); ++i) {
@@ -1699,9 +1713,19 @@ std::string CompileCtx::makeCall(
     } else {
       ss << outputs[i].variable;
     }
-    if (outputs[i].value && i < meta->returnMeta.size() &&
-        (meta->returnMeta[i].shapeSetOnDevice ||
-         meta->returnMeta[i].neededOnHost)) {
+    // A naked scalar that is this kernel's top-level output (e.g. sym_size /
+    // numel returned to host or consumed by another kernel as a host param)
+    // must be read back into the frame between launches. Mirrors the dynamic
+    // neededOnHost decision in KernelOperation::setOutputs (node == expr_).
+    // Fused interior uses emit to a register and do not reach this branch.
+    bool nakedScalarOutput = outputs[i].value && op.expr() == node &&
+        outputs[i].value->type().kind() != nativert::Type::Kind::Tensor &&
+        outputs[i].value->type().kind() != nativert::Type::Kind::TensorList;
+    if (outputs[i].value &&
+        ((i < meta->returnMeta.size() &&
+          (meta->returnMeta[i].shapeSetOnDevice ||
+           meta->returnMeta[i].neededOnHost)) ||
+         nakedScalarOutput)) {
       waveGraph_.addSyncableValueId(outputs[i].value->id());
     }
   }

@@ -40,6 +40,31 @@ TEST_F(ExecutorTest, elementTest) {
   runTest("data/element_test.pt2", "data/element_test_results.pt");
 }
 
+// aten.tensor / scalar_tensor (0-d tensor from a symbolic size) feeding an
+// add.tensor, plus _to_copy applied to the input tensor and to the 0-d tensor
+// with a dtype change.
+TEST_F(ExecutorTest, tensorTest) {
+  runTest("data/tensor_test.pt2", "data/tensor_test_results.pt");
+}
+
+// aten.sym_numel (element count of a dynamic tensor) used two ways: fed through
+// scalar_tensor into an add (broadcast), and returned directly to host as an
+// int.
+TEST_F(ExecutorTest, numelTest) {
+  runTest("data/numel_test.pt2", "data/numel_test_results.pt");
+}
+
+// Fused elementwise ops interleaved with view-like breaks (view, slice,
+// select.int), like the ROO dense-feature preproc chain. The view/slice/select
+// ops break the fused kernels and run host-side, so the wave executor emits one
+// node with many steps alternating fused code and view breaks. The [:, :K]
+// slices feed the next kernel non-contiguously and (via reshape) a
+// clone-then-view break.
+TEST_F(ExecutorTest, viewInterleaveTest) {
+  runTest(
+      "data/view_interleave_test.pt2", "data/view_interleave_test_results.pt");
+}
+
 // In-place mutation through views and clones. Validates that torchwave honors
 // the imperative order of in-place ops (add_) on aliased storage and keeps
 // clones from being eliminated when their source is mutated later.
