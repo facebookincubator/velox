@@ -68,8 +68,9 @@ __device__ inline __int128_t signedFromUnsigned(
   return -static_cast<__int128_t>(magnitude);
 }
 
-// Decimal divide with rescale (numerator * rescaleFactor / denom), half-up
-// rounding.
+// Decimal divide with rescale (numerator * rescaleFactor / denom). Rounding
+// matches Velox CPU DecimalUtil::divideWithRoundUp (increment unsigned
+// quotient, then apply sign), not Java/Hive HALF_UP toward +infinity on ties.
 // All intermediate math uses unsigned magnitudes so multiply, divide, mod, and
 // abs never hit signed overflow or INT128_MIN negation UB.
 template <typename OutT>
@@ -97,8 +98,9 @@ __device__ OutT decimalDivideImpl(
   unsigned __int128 quotient = scaled / uDenom;
   unsigned __int128 const remainder = scaled % uDenom;
 
-  // Half-up: round up when remainder >= denom/2. Equivalent to
-  // 2 * remainder >= denom but avoids overflow when remainder is large.
+  // Round ties away from zero (e.g. -1.5 -> -2), same as Velox CPU divide.
+  // Equivalent to 2 * remainder >= denom but avoids overflow when remainder is
+  // large.
   if (remainder > (uDenom - 1) / 2) {
     // Guard ++quotient when quotient is already UINT128_MAX.
     if (quotient < kUnsigned128Max) {
