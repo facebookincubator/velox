@@ -44,6 +44,12 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
  protected:
   using OperatorTestBase::assertQuery;
 
+  static std::string parquetSessionProperty(std::string_view key) {
+    return dwio::common::formatConfigPrefix(
+               dwio::common::FileFormat::PARQUET, "_") +
+        std::string(key);
+  }
+
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
     parquet::registerParquetReaderFactory();
@@ -804,7 +810,7 @@ TEST_F(ParquetTableScanTest, array) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kParquetUseColumnNamesSession,
+          parquetSessionProperty(ParquetConfig::kUseColumnNamesSession),
           "true")
       .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
       .assertResults(expected);
@@ -1428,13 +1434,14 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
 
   // Now run query with column mapping using names - we should not be able to
   // find any names.
-  result = AssertQueryBuilder(op)
-               .connectorSessionProperty(
-                   kHiveConnectorId,
-                   connector::hive::HiveConfig::kParquetUseColumnNamesSession,
-                   "true")
-               .split(makeSplit(filePath))
-               .copyResults(pool());
+  result =
+      AssertQueryBuilder(op)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              parquetSessionProperty(ParquetConfig::kUseColumnNamesSession),
+              "true")
+          .split(makeSplit(filePath))
+          .copyResults(pool());
   rows = result->as<RowVector>();
   // check for rest of the selected columns
   auto nullBigIntVector = makeFlatVector<int64_t>(
@@ -1502,13 +1509,14 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
            .endTableScan()
            .planNode();
 
-  result = AssertQueryBuilder(op)
-               .connectorSessionProperty(
-                   kHiveConnectorId,
-                   connector::hive::HiveConfig::kParquetUseColumnNamesSession,
-                   "true")
-               .split(makeSplit(filePath))
-               .copyResults(pool());
+  result =
+      AssertQueryBuilder(op)
+          .connectorSessionProperty(
+              kHiveConnectorId,
+              parquetSessionProperty(ParquetConfig::kUseColumnNamesSession),
+              "true")
+          .split(makeSplit(filePath))
+          .copyResults(pool());
 
   rows = result->as<RowVector>();
   auto nullVector = makeFlatVector<std::string>(
@@ -1972,14 +1980,14 @@ TEST_F(ParquetTableScanTest, intReadWithNarrowerType) {
                 .planNode();
 
   auto split = makeSplit(dataFile->getPath());
-  auto result =
-      AssertQueryBuilder(op)
-          .connectorSessionProperty(
-              kHiveConnectorId,
-              connector::hive::HiveConfig::kAllowInt32NarrowingSession,
-              "true")
-          .split(split)
-          .copyResults(pool());
+  auto result = AssertQueryBuilder(op)
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        parquetSessionProperty(
+                            ParquetConfig::kAllowInt32NarrowingSession),
+                        "true")
+                    .split(split)
+                    .copyResults(pool());
   auto rows = result->as<RowVector>();
 
   assertEqualVectors(smallerIntVectors->childAt(0), rows->childAt(0));

@@ -12,33 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(
-  velox_dwio_parquet_common
-  BloomFilter.cpp
-  LevelComparison.cpp
-  LevelConversion.cpp
-  XxHasher.cpp
-  HEADERS
-  BitStreamUtilsInternal.h
-  BloomFilter.h
-  Hasher.h
-  LevelComparison.h
-  LevelConversion.h
-  LevelConversionUtil.h
-  ParquetConfig.h
-  RleEncodingInternal.h
-  XxHasher.h
-)
+name: Labeler
 
-velox_link_libraries(
-  velox_dwio_parquet_common
-  velox_dwio_parquet_thrift
-  velox_type
-  velox_dwio_common
-  velox_dwio_common_compression
-  arrow
-  fmt::fmt
-  Folly::folly
-  Snappy::snappy
-  zstd::zstd
-)
+# zizmor:disable:dangerous-triggers -- only reads file paths and adds labels, no PR code execution.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  labeler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/labeler.yml
+          sync-labels: true
