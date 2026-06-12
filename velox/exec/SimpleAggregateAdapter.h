@@ -91,6 +91,15 @@ class SimpleAggregateAdapter : public Aggregate {
     }
   }
 
+  template <typename T, typename = void>
+  struct SupportSetConstantInputs : std::false_type {};
+
+  template <typename T>
+  struct SupportSetConstantInputs<
+      T,
+      std::void_t<decltype(std::declval<T&>().setConstantInputs(
+          std::declval<const std::vector<VectorPtr>&>()))>> : std::true_type {};
+
   // Assume most aggregate functions have fixed-size accumulators. Functions
   // that
   // have non-fixed-size accumulators should overwrite `is_fixed_size_` in their
@@ -248,6 +257,9 @@ class SimpleAggregateAdapter : public Aggregate {
   static constexpr bool accumulator_is_aligned_ =
       accumulator_is_aligned<typename FUNC::AccumulatorType>::value;
 
+  static constexpr bool kSupportSetConstantInputs =
+      SupportSetConstantInputs<FUNC>::value;
+
   bool isFixedSize() const override {
     return accumulator_is_fixed_size_;
   }
@@ -265,6 +277,13 @@ class SimpleAggregateAdapter : public Aggregate {
       return alignof(typename FUNC::AccumulatorType);
     }
     return Aggregate::accumulatorAlignmentSize();
+  }
+
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override {
+    if constexpr (kSupportSetConstantInputs) {
+      fn_->setConstantInputs(constantInputs);
+    }
   }
 
   // Add raw input to accumulators. If the simple aggregation function has

@@ -83,6 +83,10 @@ int main(int argc, char** argv) {
   // Spark does not provide user-accessible aggregate functions with the
   // following names.
   std::unordered_set<std::string> skipFunctions = {
+      // Internal Catalyst aggregate. The Spark SQL aggregate fuzzer generates
+      // arbitrary arguments and doesn't model the required constant endpoints
+      // and relativeSD arguments for this function.
+      "approx_count_distinct_for_intervals",
       "bloom_filter_agg",
       // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
       // doesn't support. The fuzzer may pick this signature and fail.
