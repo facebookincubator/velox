@@ -17,11 +17,13 @@
 #include "velox/experimental/cudf/expression/DecimalExpressionKernelsGpu.h"
 
 #include <cudf/utilities/error.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
 
 #include <cub/device/device_for.cuh>
 #include <cuda_runtime.h>
 #include <thrust/iterator/counting_iterator.h>
 
+#include <concepts>
 #include <cstdint>
 
 namespace facebook::velox::cudf_velox {
@@ -156,6 +158,68 @@ void launchDivideKernelRhsScalar(
 
 namespace detail {
 
+template <typename InT, typename OutT>
+concept ValidDecimalDivideStorageTypes =
+    (std::same_as<InT, int64_t> &&
+     (std::same_as<OutT, int64_t> || std::same_as<OutT, __int128_t>)) ||
+    (std::same_as<InT, __int128_t> && std::same_as<OutT, __int128_t>);
+
+struct divideColumnColumnKernel {
+  const cudf::column_view& lhs;
+  const cudf::column_view& rhs;
+  cudf::mutable_column_view out;
+  int32_t aRescale;
+  rmm::cuda_stream_view stream;
+
+  template <typename InT, typename OutT>
+    requires ValidDecimalDivideStorageTypes<InT, OutT>
+  void operator()() const {
+    launchDivideKernel<InT, OutT>(lhs, rhs, out, aRescale, stream);
+  }
+
+  template <typename InT, typename OutT>
+    requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
+  void operator()() const {}
+};
+
+struct divideColumnScalarKernel {
+  const cudf::column_view& lhs;
+  __int128_t rhsValue;
+  cudf::mutable_column_view out;
+  int32_t aRescale;
+  rmm::cuda_stream_view stream;
+
+  template <typename InT, typename OutT>
+    requires ValidDecimalDivideStorageTypes<InT, OutT>
+  void operator()() const {
+    launchDivideKernelRhsScalar<InT, OutT>(
+        lhs, rhsValue, out, aRescale, stream);
+  }
+
+  template <typename InT, typename OutT>
+    requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
+  void operator()() const {}
+};
+
+struct divideScalarColumnKernel {
+  __int128_t lhsValue;
+  const cudf::column_view& rhs;
+  cudf::mutable_column_view out;
+  int32_t aRescale;
+  rmm::cuda_stream_view stream;
+
+  template <typename InT, typename OutT>
+    requires ValidDecimalDivideStorageTypes<InT, OutT>
+  void operator()() const {
+    launchDivideKernelLhsScalar<InT, OutT>(
+        lhsValue, rhs, out, aRescale, stream);
+  }
+
+  template <typename InT, typename OutT>
+    requires(!ValidDecimalDivideStorageTypes<InT, OutT>)
+  void operator()() const {}
+};
+
 void decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
@@ -164,15 +228,10 @@ void decimalDivideColumnColumn(
     cudf::mutable_column_view out,
     int32_t aRescale,
     rmm::cuda_stream_view stream) {
-  if (inType == cudf::type_id::DECIMAL64) {
-    if (outType == cudf::type_id::DECIMAL64) {
-      launchDivideKernel<int64_t, int64_t>(lhs, rhs, out, aRescale, stream);
-    } else {
-      launchDivideKernel<int64_t, __int128_t>(lhs, rhs, out, aRescale, stream);
-    }
-  } else {
-    launchDivideKernel<__int128_t, __int128_t>(lhs, rhs, out, aRescale, stream);
-  }
+  cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
+      cudf::data_type{inType},
+      cudf::data_type{outType},
+      divideColumnColumnKernel{lhs, rhs, out, aRescale, stream});
 }
 
 void decimalDivideColumnScalar(
@@ -183,18 +242,10 @@ void decimalDivideColumnScalar(
     cudf::mutable_column_view out,
     int32_t aRescale,
     rmm::cuda_stream_view stream) {
-  if (inType == cudf::type_id::DECIMAL64) {
-    if (outType == cudf::type_id::DECIMAL64) {
-      launchDivideKernelRhsScalar<int64_t, int64_t>(
-          lhs, rhsValue, out, aRescale, stream);
-    } else {
-      launchDivideKernelRhsScalar<int64_t, __int128_t>(
-          lhs, rhsValue, out, aRescale, stream);
-    }
-  } else {
-    launchDivideKernelRhsScalar<__int128_t, __int128_t>(
-        lhs, rhsValue, out, aRescale, stream);
-  }
+  cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
+      cudf::data_type{inType},
+      cudf::data_type{outType},
+      divideColumnScalarKernel{lhs, rhsValue, out, aRescale, stream});
 }
 
 void decimalDivideScalarColumn(
@@ -205,18 +256,10 @@ void decimalDivideScalarColumn(
     cudf::mutable_column_view out,
     int32_t aRescale,
     rmm::cuda_stream_view stream) {
-  if (inType == cudf::type_id::DECIMAL64) {
-    if (outType == cudf::type_id::DECIMAL64) {
-      launchDivideKernelLhsScalar<int64_t, int64_t>(
-          lhsValue, rhs, out, aRescale, stream);
-    } else {
-      launchDivideKernelLhsScalar<int64_t, __int128_t>(
-          lhsValue, rhs, out, aRescale, stream);
-    }
-  } else {
-    launchDivideKernelLhsScalar<__int128_t, __int128_t>(
-        lhsValue, rhs, out, aRescale, stream);
-  }
+  cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
+      cudf::data_type{inType},
+      cudf::data_type{outType},
+      divideScalarColumnKernel{lhsValue, rhs, out, aRescale, stream});
 }
 
 } // namespace detail
