@@ -27,7 +27,8 @@ namespace facebook::velox::cudf_velox::detail {
 // Dispatches a per-row device loop: fixed-point divide (lhs * 10^aRescale) /
 // rhs with half-away-from-zero rounding on the remainder, writing into out.
 // Zero divisors produce a numeric zero in out (callers patch nulls). inType /
-// outType select DECIMAL64 vs DECIMAL128 storage widths for inputs and result.
+// outType select DECIMAL64 vs DECIMAL128 storage widths for inputs and result,
+// via cudf::double_type_dispatcher<cudf::dispatch_storage_type>.
 void decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
