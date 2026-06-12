@@ -37,7 +37,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      memory::MemoryPool& pool);
 
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
@@ -78,6 +79,38 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
  private:
+  // Builds the child readers and returns the missing fields. The
+  // missing fields are the children of 'requestedType' that are not found in
+  // 'fileType'.
+  std::vector<column_index_t> buildChildren(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      const TypePtr& requestedType,
+      ParquetParams& params,
+      bool useColumnNames,
+      memory::MemoryPool& pool);
+
+  // Applies the policy for missing fields. If
+  // 'parquetNullStructForMissingFields' is true and all children are missing,
+  // sets the struct as null. Otherwise, sets the missing children as null.
+  void applyMissingFieldPolicy(
+      const std::vector<column_index_t>& missingFields,
+      const TypePtr& requestedType,
+      bool parquetNullStructForMissingFields,
+      memory::MemoryPool& pool);
+
+  // Ensures there is a child reader to avoid being treated as a leaf reader in
+  // the 'readLeafRepDefs'. This is needed for struct readers with all missing
+  // children.
+  void ensureChild(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      ParquetParams& params,
+      bool useColumnNames,
+      bool parquetNullStructForMissingFields,
+      memory::MemoryPool& pool);
+
+  // Initializes the state for reading repdefs.
+  void initRepDefState();
+
   dwio::common::SelectiveColumnReader* findBestLeaf();
 
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);

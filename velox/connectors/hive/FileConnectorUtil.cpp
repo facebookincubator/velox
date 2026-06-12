@@ -67,6 +67,8 @@ void configureReaderOptions(
       columnMappingMode = fileConfig->isParquetUseColumnNames(sessionProperties)
           ? dwio::common::ColumnMappingMode::kName
           : dwio::common::ColumnMappingMode::kPosition;
+      readerOptions.setParquetNullStructForMissingFields(
+          fileConfig->isParquetNullStructForMissingFields(sessionProperties));
       readerOptions.setAllowInt32Narrowing(
           fileConfig->allowInt32Narrowing(sessionProperties));
       break;

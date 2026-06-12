@@ -66,6 +66,8 @@ FileFormat toFileFormat(std::string_view s) {
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
   columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
+  columnReaderOptions.parquetNullStructForMissingFields_ =
+      options.parquetNullStructForMissingFields();
   return columnReaderOptions;
 }
 

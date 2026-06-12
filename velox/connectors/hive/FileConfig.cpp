@@ -28,6 +28,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
 
     VELOX_HIVE_CONFIG_REGISTER(kOrcUseColumnNamesSession);
     VELOX_HIVE_CONFIG_REGISTER(kParquetUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetNullStructForMissingFieldsSession);
     VELOX_HIVE_CONFIG_REGISTER(kAllowInt32NarrowingSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
     VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
