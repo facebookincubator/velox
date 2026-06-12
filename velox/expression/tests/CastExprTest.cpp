@@ -2311,39 +2311,39 @@ TEST_F(CastExprTest, doubleToDecimal) {
       DOUBLE(),
       DECIMAL(10, 2),
       {9999999999999999999999.99},
-      "Cannot cast DOUBLE '1E22' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+22' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast DOUBLE '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast DOUBLE '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast DOUBLE '1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast DOUBLE '-1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::max()},
-      "Cannot cast DOUBLE '1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::lowest()},
-      "Cannot cast DOUBLE '-1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<double>(std::numeric_limits<double>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
