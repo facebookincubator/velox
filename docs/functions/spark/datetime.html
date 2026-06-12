@@ -350,8 +350,27 @@ e.g., make_ym_interval(178956970, 8).</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="minute">
 <span class="sig-name descname"><span class="pre">minute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#minute" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the minutes of <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.:</p>
+<dd><p>Returns the minutes of <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>, subject to the session timezone.</p>
+<p>Under session timezone UTC:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">minute</span><span class="p">(</span><span class="s1">&#39;2009-07-30 12:58:59&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">58</span>
+</pre></div>
+</div>
+<p>Under session timezone <code class="docutils literal notranslate"><span class="pre">Asia/Kolkata</span></code> (UTC+5:30):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">minute</span><span class="p">(</span><span class="s1">&#39;2009-07-30 12:58:59 UTC&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">28</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id2">
+<span class="sig-name descname"><span class="pre">minute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp_utc</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the minutes of <code class="docutils literal notranslate"><span class="pre">timestamp_utc</span></code>, not subject to the session timezone.</p>
+<p>Under session timezone UTC:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">minute</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2009-07-30 12:58:59&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">58</span>
+</pre></div>
+</div>
+<p>Under session timezone <code class="docutils literal notranslate"><span class="pre">Asia/Kolkata</span></code> (UTC+5:30):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">minute</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2009-07-30 12:58:59&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">58</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -425,8 +444,18 @@ Returns null if <code class="docutils literal notranslate"><span class="pre">day
 <dl class="spark function">
 <dt class="sig sig-object spark" id="second">
 <span class="sig-name descname"><span class="pre">second</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#second" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the seconds of <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<dd><p>Returns the seconds of <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>. The result is not affected by the session
+timezone since all timezone offsets are whole-minute multiples.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">second</span><span class="p">(</span><span class="s1">&#39;2009-07-30 12:58:59&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">59</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id3">
+<span class="sig-name descname"><span class="pre">second</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp_utc</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the seconds of <code class="docutils literal notranslate"><span class="pre">timestamp_utc</span></code>, not subject to the session timezone.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">second</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2009-07-30 12:58:59&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">59</span>
 </pre></div>
 </div>
 </dd></dl>
@@ -615,8 +644,8 @@ higher levels of precision.:</p>
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id2">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id2" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="id4">
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id4" title="Link to this definition">¶</a></dt>
 <dd><p>Converts the time represented by <code class="docutils literal notranslate"><span class="pre">date</span></code> at the configured session timezone to the GMT time, and extracts the seconds.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
 <span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">&#39;2024-10-01&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1727740800</span>
@@ -648,8 +677,8 @@ is invalid.</p>
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id3">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id3" title="Link to this definition">¶</a></dt>
+<dt class="sig sig-object spark" id="id5">
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id5" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the UNIX timestamp of the given <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> in seconds.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="n">CAST</span><span class="p">(</span><span class="mi">0</span> <span class="n">AS</span> <span class="n">TIMESTAMP</span><span class="p">));</span> <span class="o">--</span> <span class="mi">0</span>
 <span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="n">CAST</span><span class="p">(</span><span class="mi">1739933174</span> <span class="n">AS</span> <span class="n">TIMESTAMP</span><span class="p">));</span> <span class="o">--</span> <span class="mi">1739933174</span>
@@ -698,12 +727,12 @@ part of the 53rd week of year 2004, so the result is 2004. Only supports DATE ty
 <h2>Simple vs. Joda Date Formatter<a class="headerlink" href="#simple-vs-joda-date-formatter" title="Link to this heading">¶</a></h2>
 <p>To align with Spark, Velox supports both <a class="reference external" href="https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html">Simple</a>
 and <a class="reference external" href="https://www.joda.org/joda-time/">Joda</a> date formmaters to parse/format timestamp/date strings
-used in functions <a class="reference internal" href="#from_unixtime" title="from_unixtime"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a>, <a class="reference internal" href="#id3" title="unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a>, <a class="reference internal" href="#make_date" title="make_date"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">make_date()</span></code></a>
+used in functions <a class="reference internal" href="#from_unixtime" title="from_unixtime"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">from_unixtime()</span></code></a>, <a class="reference internal" href="#id5" title="unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a>, <a class="reference internal" href="#make_date" title="make_date"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">make_date()</span></code></a>
 and <a class="reference internal" href="#to_unix_timestamp" title="to_unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">to_unix_timestamp()</span></code></a>.
 If the configuration setting <a class="reference internal" href="../../configs.html"><span class="doc">spark.legacy_date_formatter</span></a> is true,
 <cite>Simple</cite> date formmater in lenient mode is used; otherwise, <cite>Joda</cite> is used. It is important
 to note that there are some different behaviors between these two formatters.</p>
-<p>For <a class="reference internal" href="#id3" title="unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a> and <a class="reference internal" href="#get_timestamp" title="get_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get_timestamp()</span></code></a>, the <cite>Simple</cite> date formatter permits partial date parsing
+<p>For <a class="reference internal" href="#id5" title="unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a> and <a class="reference internal" href="#get_timestamp" title="get_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get_timestamp()</span></code></a>, the <cite>Simple</cite> date formatter permits partial date parsing
 which means that format can match only a part of input string. For example, if input string is
 2015-07-22 10:00:00, it can be parsed using format is yyyy-MM-dd because the parser does not require entire
 input to be consumed. In contrast, the <cite>Joda</cite> date formatter performs strict checks to ensure that the
@@ -758,12 +787,14 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#make_timestamp"><code class="docutils literal notranslate"><span class="pre">make_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#make_ym_interval"><code class="docutils literal notranslate"><span class="pre">make_ym_interval()</span></code></a></li>
 <li><a class="reference internal" href="#minute"><code class="docutils literal notranslate"><span class="pre">minute()</span></code></a></li>
+<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">minute()</span></code></a></li>
 <li><a class="reference internal" href="#month"><code class="docutils literal notranslate"><span class="pre">month()</span></code></a></li>
 <li><a class="reference internal" href="#monthname"><code class="docutils literal notranslate"><span class="pre">monthname()</span></code></a></li>
 <li><a class="reference internal" href="#months_between"><code class="docutils literal notranslate"><span class="pre">months_between()</span></code></a></li>
 <li><a class="reference internal" href="#next_day"><code class="docutils literal notranslate"><span class="pre">next_day()</span></code></a></li>
 <li><a class="reference internal" href="#quarter"><code class="docutils literal notranslate"><span class="pre">quarter()</span></code></a></li>
 <li><a class="reference internal" href="#second"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
+<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">second()</span></code></a></li>
 <li><a class="reference internal" href="#timestampadd"><code class="docutils literal notranslate"><span class="pre">timestampadd()</span></code></a></li>
 <li><a class="reference internal" href="#timestampdiff"><code class="docutils literal notranslate"><span class="pre">timestampdiff()</span></code></a></li>
 <li><a class="reference internal" href="#timestamp_micros"><code class="docutils literal notranslate"><span class="pre">timestamp_micros()</span></code></a></li>
@@ -777,8 +808,8 @@ returned for invalid format; otherwise, exception is thrown.</p>
 <li><a class="reference internal" href="#unix_millis"><code class="docutils literal notranslate"><span class="pre">unix_millis()</span></code></a></li>
 <li><a class="reference internal" href="#unix_seconds"><code class="docutils literal notranslate"><span class="pre">unix_seconds()</span></code></a></li>
 <li><a class="reference internal" href="#unix_timestamp"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
-<li><a class="reference internal" href="#id2"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
-<li><a class="reference internal" href="#id3"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
+<li><a class="reference internal" href="#id5"><code class="docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#weekday"><code class="docutils literal notranslate"><span class="pre">weekday()</span></code></a></li>
 <li><a class="reference internal" href="#year"><code class="docutils literal notranslate"><span class="pre">year()</span></code></a></li>
 <li><a class="reference internal" href="#year_of_week"><code class="docutils literal notranslate"><span class="pre">year_of_week()</span></code></a></li>
