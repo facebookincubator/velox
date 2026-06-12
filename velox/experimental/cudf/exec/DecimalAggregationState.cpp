@@ -25,7 +25,6 @@
 #include <cudf/null_mask.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/utilities.hpp>
-#include <cudf/utilities/type_dispatcher.hpp>
 
 #include <limits>
 
@@ -107,9 +106,8 @@ DecimalSumStateColumns deserializeDecimalSumState(
           offsetsType == cudf::type_id::INT64,
       "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
       cudf::type_to_name(offsetsView.type()));
-  cudf::type_dispatcher(
-      offsetsView.type(),
-      detail::unpackDecimalSumState{},
+  detail::unpackDecimalSumState(
+      offsetsType,
       offsetsView,
       charsPtr,
       sumView,
@@ -185,21 +183,18 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       static_cast<size_t>(numRows) * detail::kDecimalSumStateSize, stream, mr);
 
   auto charsPtr = reinterpret_cast<uint8_t*>(charsBuf.data());
-  cudf::type_dispatcher(
-      offsetsView.type(),
-      detail::fillOffsetsForDecimalSumState{},
-      offsetsView,
-      rowCount,
-      stream);
+  detail::fillOffsetsForDecimalSumState(
+      offsetsType, offsetsView, rowCount, stream);
 
+  const auto sumType = sumCol.type().id();
   VELOX_CHECK(
-      sumCol.type().id() == cudf::type_id::DECIMAL64 ||
-          sumCol.type().id() == cudf::type_id::DECIMAL128,
+      sumType == cudf::type_id::DECIMAL64 ||
+          sumType == cudf::type_id::DECIMAL128,
       "Unsupported decimal sum column type (type is {})",
       cudf::type_to_name(sumCol.type()));
-  cudf::type_dispatcher<cudf::dispatch_storage_type>(
-      sumCol.type(),
-      detail::packDecimalSumState{},
+  detail::packDecimalSumState(
+      sumType,
+      offsetsType,
       sumCol,
       countCol.data<int64_t>(),
       offsetsView,
@@ -244,9 +239,9 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
 
   if (numRows > 0) {
     auto const rowCount = static_cast<int32_t>(numRows);
-    cudf::type_dispatcher<cudf::dispatch_storage_type>(
-        sumCol.type(),
-        detail::averageRoundDecimalSum{},
+    const auto sumType = sumCol.type().id();
+    detail::averageRoundDecimalSum(
+        sumType,
         sumCol,
         countCol.data<int64_t>(),
         out->mutable_view(),
