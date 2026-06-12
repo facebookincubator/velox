@@ -18,6 +18,8 @@
 #include "velox/experimental/cudf/expression/DecimalExpressionKernelsGpu.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/type/Type.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -118,6 +120,10 @@ std::unique_ptr<cudf::column> decimalDivide(
       "Decimal divide requires matching input types");
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");
+  // Rescale indexes DecimalUtil::kPowersOfTen; same bound as Presto divide
+  // init.
+  VELOX_USER_CHECK_LE(
+      aRescale, LongDecimalType::kMaxPrecision, "Decimal overflow");
 
   const auto inType = lhs.type().id();
   const auto outType = outputType.id();
@@ -143,8 +149,17 @@ std::unique_ptr<cudf::column> decimalDivide(
   auto out = cudf::make_fixed_width_column(
       outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
-  detail::decimalDivideColumnColumn(
-      inType, outType, lhs, rhs, out->mutable_view(), aRescale, stream);
+  const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
+  VELOX_USER_CHECK(
+      detail::decimalDivideColumnColumn(
+          inType,
+          outType,
+          lhs,
+          rhs,
+          out->mutable_view(),
+          rescaleFactor,
+          stream),
+      "Decimal overflow");
 
   // Scatter nulls where divisor is zero.
   return scatterNullsAtZeroDivisor(std::move(out), rhs, stream, mr);
@@ -159,6 +174,10 @@ std::unique_ptr<cudf::column> decimalDivide(
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");
+  // Rescale indexes DecimalUtil::kPowersOfTen; same bound as Presto divide
+  // init.
+  VELOX_USER_CHECK_LE(
+      aRescale, LongDecimalType::kMaxPrecision, "Decimal overflow");
 
   if (!rhs.is_valid(stream)) {
     return makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
@@ -187,8 +206,16 @@ std::unique_ptr<cudf::column> decimalDivide(
         "Unexpected output type for decimal divide");
   }
 
-  detail::decimalDivideColumnScalar(
-      inType, outType, lhs, rhsValue, out->mutable_view(), aRescale, stream);
+  VELOX_USER_CHECK(
+      detail::decimalDivideColumnScalar(
+          inType,
+          outType,
+          lhs,
+          rhsValue,
+          out->mutable_view(),
+          DecimalUtil::kPowersOfTen[aRescale],
+          stream),
+      "Decimal overflow");
 
   return out;
 }
@@ -202,6 +229,10 @@ std::unique_ptr<cudf::column> decimalDivide(
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");
+  // Rescale indexes DecimalUtil::kPowersOfTen; same bound as Presto divide
+  // init.
+  VELOX_USER_CHECK_LE(
+      aRescale, LongDecimalType::kMaxPrecision, "Decimal overflow");
 
   if (!lhs.is_valid(stream)) {
     return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
@@ -233,8 +264,17 @@ std::unique_ptr<cudf::column> decimalDivide(
         "Unexpected output type for decimal divide");
   }
 
-  detail::decimalDivideScalarColumn(
-      inType, outType, lhsValue, rhs, out->mutable_view(), aRescale, stream);
+  const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
+  VELOX_USER_CHECK(
+      detail::decimalDivideScalarColumn(
+          inType,
+          outType,
+          lhsValue,
+          rhs,
+          out->mutable_view(),
+          rescaleFactor,
+          stream),
+      "Decimal overflow");
 
   // Scatter nulls where divisor is zero.
   return scatterNullsAtZeroDivisor(std::move(out), rhs, stream, mr);
