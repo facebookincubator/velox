@@ -100,60 +100,6 @@ struct DivideRhsScalarFunctor {
   }
 };
 
-template <typename InT, typename OutT>
-void launchDivideKernel(
-    const cudf::column_view& lhs,
-    const cudf::column_view& rhs,
-    cudf::mutable_column_view out,
-    int32_t aRescale,
-    rmm::cuda_stream_view stream) {
-  if (lhs.size() == 0) {
-    return;
-  }
-  DivideFunctor<InT, OutT> op{
-      lhs.data<InT>(),
-      rhs.data<InT>(),
-      out.data<OutT>(),
-      pow10Int128(aRescale)};
-  cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
-  CUDF_CUDA_TRY(cudaGetLastError());
-}
-
-template <typename InColT, typename OutT>
-void launchDivideKernelLhsScalar(
-    __int128_t lhsValue,
-    const cudf::column_view& rhs,
-    cudf::mutable_column_view out,
-    int32_t aRescale,
-    rmm::cuda_stream_view stream) {
-  if (rhs.size() == 0) {
-    return;
-  }
-  DivideLhsScalarFunctor<InColT, OutT> op{
-      lhsValue, rhs.data<InColT>(), out.data<OutT>(), pow10Int128(aRescale)};
-  cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), rhs.size(), op, stream.value());
-  CUDF_CUDA_TRY(cudaGetLastError());
-}
-
-template <typename InColT, typename OutT>
-void launchDivideKernelRhsScalar(
-    const cudf::column_view& lhs,
-    __int128_t rhsValue,
-    cudf::mutable_column_view out,
-    int32_t aRescale,
-    rmm::cuda_stream_view stream) {
-  if (lhs.size() == 0) {
-    return;
-  }
-  DivideRhsScalarFunctor<InColT, OutT> op{
-      lhs.data<InColT>(), rhsValue, out.data<OutT>(), pow10Int128(aRescale)};
-  cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
-  CUDF_CUDA_TRY(cudaGetLastError());
-}
-
 } // namespace
 
 namespace detail {
@@ -174,7 +120,17 @@ struct divideColumnColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   void operator()() const {
-    launchDivideKernel<InT, OutT>(lhs, rhs, out, aRescale, stream);
+    if (lhs.size() == 0) {
+      return;
+    }
+    DivideFunctor<InT, OutT> op{
+        lhs.data<InT>(),
+        rhs.data<InT>(),
+        out.data<OutT>(),
+        pow10Int128(aRescale)};
+    cub::DeviceFor::ForEachN(
+        thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
+    CUDF_CUDA_TRY(cudaGetLastError());
   }
 
   template <typename InT, typename OutT>
@@ -192,8 +148,17 @@ struct divideColumnScalarKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   void operator()() const {
-    launchDivideKernelRhsScalar<InT, OutT>(
-        lhs, rhsValue, out, aRescale, stream);
+    if (lhs.size() == 0) {
+      return;
+    }
+    DivideRhsScalarFunctor<InT, OutT> op{
+        lhs.data<InT>(),
+        rhsValue,
+        out.data<OutT>(),
+        pow10Int128(aRescale)};
+    cub::DeviceFor::ForEachN(
+        thrust::counting_iterator<int32_t>(0), lhs.size(), op, stream.value());
+    CUDF_CUDA_TRY(cudaGetLastError());
   }
 
   template <typename InT, typename OutT>
@@ -211,8 +176,17 @@ struct divideScalarColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   void operator()() const {
-    launchDivideKernelLhsScalar<InT, OutT>(
-        lhsValue, rhs, out, aRescale, stream);
+    if (rhs.size() == 0) {
+      return;
+    }
+    DivideLhsScalarFunctor<InT, OutT> op{
+        lhsValue,
+        rhs.data<InT>(),
+        out.data<OutT>(),
+        pow10Int128(aRescale)};
+    cub::DeviceFor::ForEachN(
+        thrust::counting_iterator<int32_t>(0), rhs.size(), op, stream.value());
+    CUDF_CUDA_TRY(cudaGetLastError());
   }
 
   template <typename InT, typename OutT>
