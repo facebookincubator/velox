@@ -4467,6 +4467,57 @@ TEST_P(MemoryPoolTest, transferTo) {
   }
 }
 
+// Demonstrates that pool.usedBytes() does not track the actual physical
+// allocation size after MmapAllocator size-class rounding.
+TEST_P(MemoryPoolTest, contiguousAllocationDoesNotTrackAllocatedSize) {
+  if (!useMmap_) {
+    return;
+  }
+
+  constexpr int kNumAllocs = 100;
+  constexpr int64_t kOverBoundary = 130L * 1024;
+  constexpr int64_t kUnderBoundary = 120L * 1024;
+
+  auto manager = getMemoryManager();
+  auto root = manager->addRootPool("fragRoot", 256 * MB);
+  auto pool = root->addLeafChild("fragTest", true);
+  auto* allocator = manager->allocator();
+
+  std::vector<void*> overAllocs;
+  overAllocs.reserve(kNumAllocs);
+  auto pagesBefore = allocator->numAllocated();
+  for (int i = 0; i < kNumAllocs; ++i) {
+    overAllocs.push_back(pool->allocate(kOverBoundary));
+  }
+  auto pagesAfter = allocator->numAllocated();
+  auto allocatorBytes = AllocationTraits::pageBytes(pagesAfter - pagesBefore);
+  auto poolBytes = pool->usedBytes();
+
+  EXPECT_EQ(poolBytes, kNumAllocs * kOverBoundary);
+  EXPECT_GT(allocatorBytes, static_cast<int64_t>(poolBytes * 1.8));
+
+  for (auto* p : overAllocs) {
+    pool->free(p, kOverBoundary);
+  }
+
+  std::vector<void*> underAllocs;
+  underAllocs.reserve(kNumAllocs);
+  pagesBefore = allocator->numAllocated();
+  for (int i = 0; i < kNumAllocs; ++i) {
+    underAllocs.push_back(pool->allocate(kUnderBoundary));
+  }
+  pagesAfter = allocator->numAllocated();
+  allocatorBytes = AllocationTraits::pageBytes(pagesAfter - pagesBefore);
+  poolBytes = pool->usedBytes();
+
+  EXPECT_EQ(poolBytes, kNumAllocs * kUnderBoundary);
+  EXPECT_LT(allocatorBytes, static_cast<int64_t>(poolBytes * 1.15));
+
+  for (auto* p : underAllocs) {
+    pool->free(p, kUnderBoundary);
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     MemoryPoolTestSuite,
     MemoryPoolTest,
