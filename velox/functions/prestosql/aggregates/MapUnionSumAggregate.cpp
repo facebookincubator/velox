@@ -20,6 +20,8 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
+#include <folly/container/Reserve.h>
+
 namespace facebook::velox::aggregate::prestosql {
 
 namespace {
@@ -49,6 +51,8 @@ struct Accumulator {
     auto values = mapValues->template as<SimpleVector<S>>();
     auto offset = mapVector->offsetAt(row);
     auto size = mapVector->sizeAt(row);
+
+    folly::grow_capacity_by(sums, size);
 
     for (auto i = 0; i < size; ++i) {
       // Ignore null map keys.
