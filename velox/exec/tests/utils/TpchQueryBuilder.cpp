@@ -1798,7 +1798,13 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId partsuppScanNodeId;
 
+  // Keep the IN-list literals as INTEGER so they match the INTEGER p_size
+  // column; widening them to BIGINT would cast the column and block the
+  // subfield filter pushdown.
+  parse::ParseOptions parseOptions;
+  parseOptions.parseIntegerAsBigint = false;
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .setParseOptions(parseOptions)
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kPart,
