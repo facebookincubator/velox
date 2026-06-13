@@ -611,6 +611,100 @@ struct ArrayFrequencyFunction {
 };
 
 template <typename TExecParams, typename T>
+struct ArrayLeastFrequentFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const arg_type<velox::Array<T>>* /*inputArray*/) {
+    VELOX_CHECK(
+        !inputTypes[0]->childAt(0)->providesCustomComparison(),
+        "array_least_frequent does not support types with custom comparison");
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      const arg_type<velox::Array<T>>* /*inputArray*/,
+      const int64_t* /*n*/) {
+    VELOX_CHECK(
+        !inputTypes[0]->childAt(0)->providesCustomComparison(),
+        "array_least_frequent does not support types with custom comparison");
+  }
+
+  // Single-arg overload: returns 1 least frequent element.
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<velox::Array<T>>& out,
+      const arg_type<velox::Array<T>>& inputArray) {
+    return callImpl(out, inputArray, 1);
+  }
+
+  // Two-arg overload: returns n least frequent elements.
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<velox::Array<T>>& out,
+      const arg_type<velox::Array<T>>& inputArray,
+      const int64_t& n) {
+    VELOX_USER_CHECK_GE(n, 0, "n must be greater than or equal to 0");
+    return callImpl(out, inputArray, n);
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE bool callImpl(
+      out_type<velox::Array<T>>& out,
+      const arg_type<velox::Array<T>>& inputArray,
+      int64_t n) {
+    if (n == 0) {
+      return true;
+    }
+
+    frequencyCount_.clear();
+    for (const auto& item : inputArray.skipNulls()) {
+      frequencyCount_[item]++;
+    }
+
+    if (frequencyCount_.empty()) {
+      return false;
+    }
+
+    using ElemType = arg_type<T>;
+    entries_.clear();
+    entries_.reserve(frequencyCount_.size());
+    for (const auto& [value, count] : frequencyCount_) {
+      entries_.push_back({count, value});
+    }
+
+    using facebook::velox::util::floating_point::NaNAwareLessThan;
+    std::sort(
+        entries_.begin(),
+        entries_.end(),
+        [](const std::pair<int, ElemType>& a,
+           const std::pair<int, ElemType>& b) {
+          if (a.first != b.first) {
+            return a.first < b.first;
+          }
+          if constexpr (
+              std::is_same_v<ElemType, float> ||
+              std::is_same_v<ElemType, double>) {
+            return NaNAwareLessThan<ElemType>{}(a.second, b.second);
+          } else {
+            return a.second < b.second;
+          }
+        });
+
+    int64_t count = std::min(n, static_cast<int64_t>(entries_.size()));
+    for (int64_t i = 0; i < count; ++i) {
+      out.push_back(entries_[i].second);
+    }
+    return true;
+  }
+
+  typename util::floating_point::HashMapNaNAwareTypeTraits<arg_type<T>, int>::
+      Type frequencyCount_;
+  std::vector<std::pair<int, arg_type<T>>> entries_;
+};
+
+template <typename TExecParams, typename T>
 struct ArrayNormalizeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
 
