@@ -52,6 +52,7 @@ velox_add_library(
   UnscaledValueFunction.cpp
   XxHash64.cpp
   HEADERS
+  AnsiMode.h
   Arena.h
   Arithmetic.h
   ArrayAppend.h
