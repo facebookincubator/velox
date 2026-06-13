@@ -119,7 +119,7 @@ class OutputBufferManagerTest : public testing::Test {
     // Bind the manager to the task the same way
     // Task::initializePartitionOutput() does in production, so
     // task->taskStats() can surface buffer utilization.
-    task->setOutputBufferManager(bufferManager_);
+    task->testingSetOutputBufferManager(bufferManager_);
     return task;
   }
 

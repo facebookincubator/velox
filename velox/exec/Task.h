@@ -165,12 +165,6 @@ class Task : public std::enable_shared_from_this<Task> {
   /// through OutputBuffer::task_; callers must lock() and null-check.
   std::weak_ptr<IOutputBufferManager> outputBufferManager() const;
 
-  /// Binds the output buffer manager for this task's partitioned output.
-  /// Normally called by initializePartitionOutput(); also used by tests that
-  /// drive a manager directly without going through Task::start(). Locks
-  /// mutex_, so it must not be called while holding it.
-  void setOutputBufferManager(std::weak_ptr<IOutputBufferManager> manager);
-
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
     return consumerSupplier_;
@@ -856,6 +850,14 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns true if all the splits have finished.
   bool testingAllSplitsFinished();
 
+  /// Test-only. Binds the output buffer manager directly, for tests that drive
+  /// OutputBufferManager::initializeTask() without going through Task::start()
+  /// and initializePartitionOutput().
+  void testingSetOutputBufferManager(
+      std::weak_ptr<IOutputBufferManager> manager) {
+    setOutputBufferManager(std::move(manager));
+  }
+
  private:
   // Hook of system-wide running task list.
   struct TaskListEntry {
@@ -904,6 +906,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Creates the output buffer in partitioned output buffer manager if needed.
   void initializePartitionOutput();
+
+  // Binds the output buffer manager resolved in initializePartitionOutput().
+  // Locks mutex_, so it must not be called while holding it.
+  void setOutputBufferManager(std::weak_ptr<IOutputBufferManager> manager);
 
   // Creates and starts drivers.
   void createAndStartDrivers(uint32_t concurrentSplitGroups);
