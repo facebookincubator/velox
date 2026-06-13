@@ -71,6 +71,22 @@ struct OpaqueTypeFunction {
   }
 };
 
+/// Returns the input value doubled, or -1 if the input is null. Used to test
+/// non-default null behavior with remote functions.
+template <typename T>
+struct NullableDoubleFunction {
+  FOLLY_ALWAYS_INLINE bool callNullable(
+      int64_t& result,
+      const int64_t* a) {
+    if (a == nullptr) {
+      result = -1;
+    } else {
+      result = (*a) * 2;
+    }
+    return true;
+  }
+};
+
 // Parametrize in the serialization format so we can test both presto page and
 // unsafe row.
 class RemoteFunctionTest
@@ -131,6 +147,22 @@ class RemoteFunctionTest
                                  .build()};
     registerRemoteFunction("remote_opaque", opaqueSignatures, metadata);
 
+    // Register with non-default null behavior.
+    RemoteThriftVectorFunctionMetadata nullableMetadata = metadata;
+    nullableMetadata.defaultNullBehavior = false;
+    auto nullableDoubleSignatures = {exec::FunctionSignatureBuilder()
+                                         .returnType("bigint")
+                                         .argumentType("bigint")
+                                         .build()};
+    registerRemoteFunction(
+        "remote_nullable_double", nullableDoubleSignatures, nullableMetadata);
+
+    // Register with non-deterministic behavior.
+    RemoteThriftVectorFunctionMetadata nonDetMetadata = metadata;
+    nonDetMetadata.deterministic = false;
+    registerRemoteFunction(
+        "remote_plus_nondet", plusSignatures, nonDetMetadata);
+
     // Registers the actual function under a different prefix. This is only
     // needed for tests since the thrift service runs in the same process.
     registerFunction<PlusFunction, int64_t, int64_t, int64_t>(
@@ -143,6 +175,10 @@ class RemoteFunctionTest
         {params.functionPrefix + ".remote_substr"});
     registerFunction<OpaqueTypeFunction, int64_t, std::shared_ptr<Foo>>(
         {params.functionPrefix + ".remote_opaque"});
+    registerFunction<NullableDoubleFunction, int64_t, int64_t>(
+        {params.functionPrefix + ".remote_nullable_double"});
+    registerFunction<PlusFunction, int64_t, int64_t, int64_t>(
+        {params.functionPrefix + ".remote_plus_nondet"});
 
     registerOpaqueType<Foo>("Foo");
     OpaqueType::registerSerialization<Foo>(
@@ -247,6 +283,26 @@ TEST_P(RemoteFunctionTest, opaque) {
       "remote_opaque(c0)", makeRowVector({inputVector}));
 
   auto expected = makeFlatVector<int64_t>({10, 11});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, nonDefaultNullBehavior) {
+  auto inputVector =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt, 5});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_nullable_double(c0)", makeRowVector({inputVector}));
+
+  // Null inputs should produce -1, non-null inputs should be doubled.
+  auto expected = makeFlatVector<int64_t>({2, -1, 6, -1, 10});
+  assertEqualVectors(expected, results);
+}
+
+TEST_P(RemoteFunctionTest, nonDeterministic) {
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "remote_plus_nondet(c0, c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>({2, 4, 6, 8, 10});
   assertEqualVectors(expected, results);
 }
 
