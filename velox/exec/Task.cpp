@@ -2347,7 +2347,7 @@ bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
       noMoreOutputBuffers_ = true;
     }
   }
-  if (auto manager = bufferManager_.lock()) {
+  if (auto manager = outputBufferManager().lock()) {
     return manager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
   }
   return false;
@@ -2843,7 +2843,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
-    if (auto manager = bufferManager_.lock()) {
+    if (auto manager = outputBufferManager().lock()) {
       {
         std::lock_guard<std::timed_mutex> l(mutex_);
         if (!taskStats_.outputBufferStats.has_value()) {
