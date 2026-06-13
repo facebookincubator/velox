@@ -159,22 +159,20 @@ class MapFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // Support up to 10 key-value pairs (20 arguments) for MAP() function.
-    // array(K), array(V) -> map(K,V)
-    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-    constexpr int kNumberOfSignatures = 10;
-    signatures.reserve(kNumberOfSignatures);
-    for (int i = 1; i <= kNumberOfSignatures; i++) {
-      auto builder = exec::FunctionSignatureBuilder()
-                         .knownTypeVariable("K")
-                         .typeVariable("V")
-                         .returnType("map(K,V)");
-      for (int arg = 0; arg < i; arg++) {
-        builder.argumentType("K").argumentType("V");
-      }
-      signatures.push_back(builder.build());
-    }
-    return signatures;
+    // K, V, K, V, ... -> map(K,V)
+    // Uses variableArity("any") to accept an arbitrary number of key-value
+    // pairs. Type checking for args beyond the first pair is done at runtime
+    // in apply().
+    return {
+        exec::FunctionSignatureBuilder()
+            .knownTypeVariable("K")
+            .typeVariable("V")
+            .returnType("map(K,V)")
+            .argumentType("K")
+            .argumentType("V")
+            .variableArity("any")
+            .build(),
+    };
   }
 };
 } // namespace
