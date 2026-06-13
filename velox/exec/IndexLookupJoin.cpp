@@ -130,21 +130,26 @@ std::vector<core::IndexLookupConditionPtr> getJoinConditions(
 
 // Validates one of between bound, and update the lookup input channels and type
 // to include the corresponding probe input column if the bound is not constant.
+// When 'isPaired' is true, the bound is expected to be ARRAY-typed (with
+// element type matching 'indexKeyType'); the connector pairs the i-th element
+// with the i-th value of the BETWEEN's pairedColumn at lookup time.
 bool addBetweenConditionBound(
     const core::TypedExprPtr& typeExpr,
     const RowTypePtr& inputType,
     const TypePtr& indexKeyType,
+    bool isPaired,
     std::vector<std::string>& lookupInputNames,
     std::vector<TypePtr>& lookupInputTypes,
     std::vector<column_index_t>& lookupInputChannels,
     folly::F14FastSet<std::string>& lookupInputNameSet) {
   const bool isConstant = core::TypedExprs::isConstant(typeExpr);
+  const auto expectedType = isPaired ? ARRAY(indexKeyType) : indexKeyType;
   if (!isConstant) {
     const auto conditionColumnName = getColumnName(typeExpr);
     const auto conditionColumnChannel =
         inputType->getChildIdx(conditionColumnName);
     const auto conditionColumnType = inputType->childAt(conditionColumnChannel);
-    VELOX_USER_CHECK(conditionColumnType->equivalent(*indexKeyType));
+    VELOX_USER_CHECK(conditionColumnType->equivalent(*expectedType));
     addLookupInputColumn(
         conditionColumnName,
         conditionColumnType,
@@ -156,14 +161,16 @@ bool addBetweenConditionBound(
   } else {
     VELOX_USER_CHECK(
         core::TypedExprs::asConstant(typeExpr)->type()->equivalent(
-            *indexKeyType));
+            *expectedType));
   }
   return isConstant;
 }
 
 // Process a between join condition by validating the lower and upper bound
 // types, and updating the lookup input channels and type to include the probe
-// input columns which contain the between condition bounds.
+// input columns which contain the between condition bounds. When the BETWEEN
+// has a pairedColumn set, the bounds are expected to be ARRAY-typed and the
+// paired column is added to the lookup input by the sibling IN condition.
 void addBetweenCondition(
     const core::BetweenIndexLookupConditionPtr& betweenCondition,
     const RowTypePtr& inputType,
@@ -172,11 +179,13 @@ void addBetweenCondition(
     std::vector<TypePtr>& lookupInputTypes,
     std::vector<column_index_t>& lookupInputChannels,
     folly::F14FastSet<std::string>& lookupInputNameSet) {
+  const bool isPaired = betweenCondition->pairedColumn != nullptr;
   size_t numConstants{0};
   numConstants += !!addBetweenConditionBound(
       betweenCondition->lower,
       inputType,
       indexKeyType,
+      isPaired,
       lookupInputNames,
       lookupInputTypes,
       lookupInputChannels,
@@ -185,6 +194,7 @@ void addBetweenCondition(
       betweenCondition->upper,
       inputType,
       indexKeyType,
+      isPaired,
       lookupInputNames,
       lookupInputTypes,
       lookupInputChannels,
@@ -877,6 +887,7 @@ RowVectorPtr IndexLookupJoin::getOutput() {
 void IndexLookupJoin::prepareLookup(InputBatchState& batch) {
   VELOX_CHECK_GT(numInputBatches(), 0);
   VELOX_CHECK_NOT_NULL(batch.input);
+  validatePairedBetweenSizes(batch);
   const size_t numLookupRows = batch.lookupInputHasNullKeys
       ? batch.nonNullInputRows.countSelected()
       : batch.input->size();
@@ -918,6 +929,68 @@ void IndexLookupJoin::prepareLookup(InputBatchState& batch) {
         batch.nonNullInputMappings,
         numLookupRows,
         batch.input->childAt(lookupInputChannels_[i]));
+  }
+}
+
+void IndexLookupJoin::validatePairedBetweenSizes(
+    const InputBatchState& batch) const {
+  for (const auto& condition : joinConditions_) {
+    const auto between =
+        std::dynamic_pointer_cast<const core::BetweenIndexLookupCondition>(
+            condition);
+    if (between == nullptr || between->pairedColumn == nullptr) {
+      continue;
+    }
+    if (!between->lower->isFieldAccessKind() ||
+        !between->upper->isFieldAccessKind()) {
+      continue;
+    }
+    const auto& inListVec = batch.input->childAt(
+        probeType_->getChildIdx(between->pairedColumn->name()));
+    const auto& lowerVec = batch.input->childAt(
+        probeType_->getChildIdx(getColumnName(between->lower)));
+    const auto& upperVec = batch.input->childAt(
+        probeType_->getChildIdx(getColumnName(between->upper)));
+    inListVec->loadedVector();
+    lowerVec->loadedVector();
+    upperVec->loadedVector();
+
+    DecodedVector decodedIn(*inListVec);
+    DecodedVector decodedLower(*lowerVec);
+    DecodedVector decodedUpper(*upperVec);
+    const auto* inArray = decodedIn.base()->as<ArrayVector>();
+    const auto* lowerArray = decodedLower.base()->as<ArrayVector>();
+    const auto* upperArray = decodedUpper.base()->as<ArrayVector>();
+    VELOX_CHECK_NOT_NULL(inArray);
+    VELOX_CHECK_NOT_NULL(lowerArray);
+    VELOX_CHECK_NOT_NULL(upperArray);
+
+    // decodeAndDetectNonNullKeys (called from addInput before prepareLookup)
+    // already deselected any row with a null in the IN-list, lower-bound, or
+    // upper-bound column (all three are in lookupInputChannels_ and therefore
+    // in lookupKeyOrConditionHashers_). So every row applyToSelected hands us
+    // is guaranteed non-null in all three; no per-row null guard needed.
+    batch.nonNullInputRows.applyToSelected([&](vector_size_t row) {
+      const auto inSize = inArray->sizeAt(decodedIn.index(row));
+      const auto lowerSize = lowerArray->sizeAt(decodedLower.index(row));
+      const auto upperSize = upperArray->sizeAt(decodedUpper.index(row));
+      VELOX_USER_CHECK_EQ(
+          inSize,
+          lowerSize,
+          "Paired BETWEEN bound and IN list array sizes must match per row; "
+          "row {}: IN list size {} vs lower bound size {}",
+          row,
+          inSize,
+          lowerSize);
+      VELOX_USER_CHECK_EQ(
+          inSize,
+          upperSize,
+          "Paired BETWEEN bound and IN list array sizes must match per row; "
+          "row {}: IN list size {} vs upper bound size {}",
+          row,
+          inSize,
+          upperSize);
+    });
   }
 }
 

@@ -156,6 +156,14 @@ core::TypedExprPtr toJoinConditionExpr(
     if (auto betweenCondition =
             std::dynamic_pointer_cast<core::BetweenIndexLookupCondition>(
                 condition)) {
+      // Paired BETWEEN's per-element pairing semantics aren't expressible
+      // as a single scalar `between(scalar, scalar, scalar)` call. The
+      // test connector skips it here; the IndexLookupJoin operator has
+      // already validated the paired bounds (ARRAY type + element kind
+      // match) before the connector is invoked.
+      if (betweenCondition->pairedColumn != nullptr) {
+        continue;
+      }
       conditionExprs.push_back(
           std::make_shared<const core::CallTypedExpr>(
               BOOLEAN(),
