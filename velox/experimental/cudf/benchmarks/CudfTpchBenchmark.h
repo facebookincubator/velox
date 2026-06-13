@@ -18,6 +18,7 @@
 
 #include "velox/benchmarks/tpch/TpchBenchmark.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/Memory.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -41,6 +42,11 @@ class CudfTpchBenchmark : public TpchBenchmark {
       const facebook::velox::exec::test::TpchPlan& plan) override;
 
   void shutdown() override;
+
+ private:
+  void ensurePreloaded();
+  bool preloaded_ = false;
+  std::shared_ptr<facebook::velox::memory::MemoryPool> preloadPool_;
 };
 
 namespace facebook::velox::cudf_velox {
