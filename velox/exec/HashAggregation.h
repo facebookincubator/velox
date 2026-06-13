@@ -57,9 +57,7 @@ class HashAggregation : public Operator {
 
   void noMoreInput() override;
 
-  BlockingReason isBlocked(ContinueFuture* /* unused */) override {
-    return BlockingReason::kNotBlocked;
-  }
+  BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 
@@ -109,11 +107,28 @@ class HashAggregation : public Operator {
 
   void updateEstimatedOutputRowSize();
 
+  // Returns whether this driver may emit the default global grouping set rows;
+  // with multiple drivers, elects a single emitter via a peer barrier.
+  bool shouldEmitDefaultGlobalGroupingSetRows();
+
+  // Barrier across peers. True only on the elected last driver when input is
+  // globally empty; false when parked on 'future_' or input is non-empty.
+  bool electDefaultGlobalGroupingSetDriver();
+
+  // Returns the default global grouping set rows if elected and input is empty,
+  // else nullptr.
+  RowVectorPtr maybeGetDefaultGlobalGroupingSetOutput();
+
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const bool isPartialOutput_;
   const bool isGlobal_;
   const bool isDistinct_;
+  // True for raw-input steps (kSingle/kPartial).
+  const bool isRawInput_;
+  // True if this aggregation has global grouping sets (a GROUPING SETS query
+  // with a () set).
+  const bool hasGlobalGroupingSets_;
   const bool memoryCompactionEnabled_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
   // Minimum number of rows to see before deciding to give up on partial
@@ -155,6 +170,13 @@ class HashAggregation : public Operator {
 
   // Possibly reusable output vector.
   RowVectorPtr output_;
+
+  // Future used to park non-last drivers during the default global grouping set
+  // election in noMoreInput(). Valid only while blocked.
+  ContinueFuture future_{ContinueFuture::makeEmpty()};
+
+  // Whether this driver may emit the default global grouping set rows.
+  bool emitDefaultGlobalGroupingSetRows_{false};
 };
 
 } // namespace facebook::velox::exec
