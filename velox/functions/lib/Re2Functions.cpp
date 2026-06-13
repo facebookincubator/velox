@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/Re2Functions.h"
+
+#include <folly/container/span.h>
+#include <folly/small_vector.h>
+
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/vector/FunctionVector.h"
 
@@ -466,12 +470,15 @@ struct SubPatternStats {
   }
 };
 
+using SubPatternKindVec = folly::small_vector<SubPatternKind, 8>;
+using SubPatternRangeVec = folly::small_vector<std::pair<size_t, size_t>, 8>;
+
 // Construct SubPatternMetadata from subPatternKinds, subPatternRanges.
 // Caller need to make sure the specified range only contains
 // fixed(kLiteralString, kSingleWildcard) patterns.
 size_t buildFixedSubPatterns(
-    const std::vector<SubPatternKind>& subPatternKinds,
-    const std::vector<std::pair<size_t, size_t>>& subPatternRanges,
+    folly::span<const SubPatternKind> subPatternKinds,
+    folly::span<const std::pair<size_t, size_t>> subPatternRanges,
     size_t start,
     size_t end,
     std::vector<SubPatternMetadata>& subPatterns) {
@@ -495,8 +502,8 @@ size_t buildFixedSubPatterns(
 // the pattern, it is mainly used to get the length of the fixed part in a
 // pattern, so we can extract the fixed part out.
 size_t fixedLength(
-    const std::vector<SubPatternKind>& subPatternKinds,
-    const std::vector<std::pair<size_t, size_t>>& subPatternRanges) {
+    folly::span<const SubPatternKind> subPatternKinds,
+    folly::span<const std::pair<size_t, size_t>> subPatternRanges) {
   size_t result = 0;
   for (auto i = 0; i < subPatternKinds.size(); i++) {
     if (subPatternKinds[i] != SubPatternKind::kAnyCharsWildcard) {
@@ -2041,8 +2048,8 @@ bool isOptimizedLikeCandidate(
 std::optional<std::string> parsePattern(
     std::string_view pattern,
     std::optional<char> escapeChar,
-    std::vector<SubPatternKind>& subPatternKinds,
-    std::vector<std::pair<size_t, size_t>>& subPatternRanges) {
+    SubPatternKindVec& subPatternKinds,
+    SubPatternRangeVec& subPatternRanges) {
   PatternStringIterator iterator{pattern, escapeChar};
 
   // Iterate through the pattern string to collect the stats for the simple
@@ -2104,8 +2111,8 @@ PatternMetadata determinePatternKind(
   }
 
   // Parse the pattern into sub-patterns.
-  std::vector<SubPatternKind> subPatternKinds;
-  std::vector<std::pair<size_t, size_t>> subPatternRanges;
+  SubPatternKindVec subPatternKinds;
+  SubPatternRangeVec subPatternRanges;
 
   std::optional<std::string> parsedPattern =
       parsePattern(pattern, escapeChar, subPatternKinds, subPatternRanges);
