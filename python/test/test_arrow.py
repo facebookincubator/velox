@@ -24,9 +24,11 @@ from pyvelox.vector import Vector
 class TestPyVeloxArrow(unittest.TestCase):
     def test_vector_simple(self):
         array = pyarrow.array([1, 2, 3, 4, 5, 6])
+        # pyrefly: ignore [bad-argument-type]
         vector = to_velox(array)
 
         self.assertTrue(isinstance(vector, Vector))
+        # pyrefly: ignore [bad-argument-type]
         self.assertEqual(len(vector), 6)
 
         # TODO: For now we only return the values as strings for printing.
@@ -35,6 +37,7 @@ class TestPyVeloxArrow(unittest.TestCase):
 
     def test_roundtrip(self):
         array = pyarrow.array([2, 2, 3, 4, 4, 0])
+        # pyrefly: ignore [bad-argument-type]
         array2 = to_arrow(to_velox(array))
 
         self.assertTrue(isinstance(array2, pyarrow.Array))
@@ -42,6 +45,7 @@ class TestPyVeloxArrow(unittest.TestCase):
 
     def test_struct_roundtrip(self):
         struct_array = pyarrow.StructArray.from_arrays(
+            # pyrefly: ignore [bad-argument-type]
             [
                 pyarrow.array([1, 2, 3]),
                 pyarrow.array(["a", "b", "c"]),
@@ -64,10 +68,12 @@ class TestPyVeloxArrow(unittest.TestCase):
             names=["col1", "col2"],
         )
         vector = to_velox(record_batch)
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(str(vector.type()), "ROW<col1:BIGINT,col2:VARCHAR>")
 
         struct_array = to_arrow(vector)
         self.assertTrue(isinstance(struct_array, pyarrow.StructArray))
+        # pyrefly: ignore [missing-attribute]
         self.assertEqual(struct_array, record_batch.to_struct_array())
 
     def test_empty(self):
