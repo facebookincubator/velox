@@ -20,22 +20,11 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/RowLayout.h"
 #include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::exec {
 namespace {
-template <TypeKind Kind>
-static int32_t kindSize() {
-  return sizeof(typename KindToFlatVector<Kind>::HashRowType);
-}
-
-static int32_t typeKindSize(TypeKind kind) {
-  if (kind == TypeKind::UNKNOWN) {
-    return sizeof(UnknownValue);
-  }
-
-  return VELOX_DYNAMIC_TYPE_DISPATCH(kindSize, kind);
-}
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
@@ -148,123 +137,47 @@ RowContainer::RowContainer(
       accumulators_(accumulators),
       rows_(pool),
       rowPointers_(StlAllocator<char*>(stringAllocator_.get())) {
-  // Compute the layout of the payload row.  The row has keys, null flags,
-  // accumulators, dependent fields. All fields are fixed width. If variable
-  // width data is referenced, this is done with StringView(for VARCHAR) and
-  // std::string_view(for ARRAY, MAP and ROW) pointing to the data (StringView
-  // might inline the data if it's sufficiently small). The number of bytes used
-  // by each key is determined by keyTypes[i]. Null flags are one bit per field.
-  // If nullableKeys is true there is a null flag for each key. If there are
-  // accumulators, the remaining bits in the current byte are ignored and the
-  // flags for the accumulators begin aligned on the next byte. A null bit and
-  // an initialized bit, alternating, for each accumulator follow. A null bit
-  // for each dependent field follows that.  If hasProbedFlag is true, there is
-  // an extra bit to track if the row has been selected by a hash join probe.
-  // This is followed by a free bit which is set if the row is in a free list.
-  // The accumulators come next, with size given by
-  // Aggregate::accumulatorFixedWidthSize(). Dependent fields follow. These are
-  // non-key columns for hash join or order by. If there are variable length
-  // columns or accumulators, i.e. ones that allocate extra space, this space is
-  // tracked by a uint32_t after the dependent columns. If this is a hash join
-  // build side, the pointer to the next row with the same key is after the
-  // optional row size.
-  //
-  // In most cases, rows are prefixed with a normalized_key_t at index
-  // -1, 8 bytes below the pointer. This space is reserved for a 64
-  // bit unique digest of the keys for speeding up comparison. This
-  // space is reserved for the rows that are inserted before the
-  // cardinality grows too large for packing all in 64
-  // bits. 'numRowsWithNormalizedKey_' gives the number of rows with
-  // the extra field.
-  int32_t offset = 0;
-  int32_t flagOffset = 0;
-  bool isVariableWidth = false;
-  for (auto& type : keyTypes_) {
-    typeKinds_.push_back(type->kind());
-    types_.push_back(type);
-    offsets_.push_back(offset);
-    offset += typeKindSize(type->kind());
-    nullOffsets_.push_back(flagOffset);
-    isVariableWidth |= !type->isFixedWidth();
-    if (nullableKeys_) {
-      ++flagOffset;
-    }
-  }
-  // Make offset at least sizeof pointer so that there is space for a
-  // free list next pointer below the bit at 'freeFlagOffset_'.
-  offset = std::max<int32_t>(offset, sizeof(void*));
-  const int32_t firstAggregateOffset = offset;
-  if (!accumulators.empty()) {
-    // This moves flagOffset to the start of the next byte.
-    // This is to guarantee the null and initialized bits for an aggregate
-    // always appear in the same byte.
-    flagOffset = (flagOffset + 7) & -8;
-  }
-  for (const auto& accumulator : accumulators) {
-    // Null bit.
-    nullOffsets_.push_back(flagOffset);
-    // Increment for two bits: null bit and following initialized bit.
-    flagOffset += kNumAccumulatorFlags;
-    isVariableWidth |= !accumulator.isFixedSize();
-    usesExternalMemory_ |= accumulator.usesExternalMemory();
-    alignment_ = combineAlignments(accumulator.alignment(), alignment_);
-  }
-  for (auto& type : dependentTypes) {
+  // The row layout (byte offsets, null bit positions, flag region size and
+  // alignment) is computed by RowLayout::compute(); see RowLayout.h for the
+  // overall row shape. 'numRowsWithNormalizedKey_' is incremented as rows are
+  // allocated with the optional 64-bit normalized-key prefix.
+  types_.reserve(keyTypes.size() + dependentTypes.size());
+  typeKinds_.reserve(keyTypes.size() + dependentTypes.size());
+  for (const auto& type : keyTypes_) {
     types_.push_back(type);
     typeKinds_.push_back(type->kind());
-    nullOffsets_.push_back(flagOffset);
-    ++flagOffset;
-    isVariableWidth |= !type->isFixedWidth();
   }
-  if (hasProbedFlag) {
-    probedFlagOffset_ = flagOffset + firstAggregateOffset * 8;
-    ++flagOffset;
+  for (const auto& type : dependentTypes) {
+    types_.push_back(type);
+    typeKinds_.push_back(type->kind());
   }
-  // Free flag.
-  freeFlagOffset_ = flagOffset + firstAggregateOffset * 8;
-  ++flagOffset;
-  // Add 1 to the last null offset to get the number of bits.
-  flagBytes_ = bits::nbytes(flagOffset);
-  // Fixup 'nullOffsets_' to be the bit number from the start of the row.
-  for (int32_t i = 0; i < nullOffsets_.size(); ++i) {
-    nullOffsets_[i] += firstAggregateOffset * 8;
-  }
-  offset += flagBytes_;
-  for (const auto& accumulator : accumulators) {
-    // Accumulator offset must be aligned by their alignment size.
-    offset = bits::roundUp(offset, accumulator.alignment());
-    offsets_.push_back(offset);
-    offset += accumulator.fixedWidthSize();
-  }
-  for (auto& type : dependentTypes) {
-    offsets_.push_back(offset);
-    offset += typeKindSize(type->kind());
-  }
-  if (isVariableWidth) {
-    rowSizeOffset_ = offset;
-    offset += sizeof(uint32_t);
-  }
-  if (hasNext) {
-    nextOffset_ = offset;
-    offset += sizeof(void*);
-  }
-  if (hasCountFlag) {
-    countOffset_ = offset;
-    offset += sizeof(int32_t);
-  }
-  fixedRowSize_ = bits::roundUp(offset, alignment_);
-  originalNormalizedKeySize_ = hasNormalizedKeys_
-      ? bits::roundUp(sizeof(normalized_key_t), alignment_)
-      : 0;
+
+  auto layout = RowLayout::compute(
+      keyTypes,
+      accumulators,
+      dependentTypes,
+      RowLayoutOptions{
+          .nullableKeys = nullableKeys,
+          .hasNext = hasNext,
+          .hasProbedFlag = hasProbedFlag,
+          .hasCountFlag = hasCountFlag,
+          .hasNormalizedKeys = hasNormalizedKeys,
+      });
+  offsets_ = std::move(layout.offsets);
+  nullOffsets_ = std::move(layout.nullOffsets);
+  rowColumns_ = std::move(layout.rowColumns);
+  probedFlagOffset_ = layout.probedFlagOffset;
+  freeFlagOffset_ = layout.freeFlagOffset;
+  countOffset_ = layout.countOffset;
+  nextOffset_ = layout.nextOffset;
+  rowSizeOffset_ = layout.rowSizeOffset;
+  flagBytes_ = layout.flagBytes;
+  fixedRowSize_ = layout.fixedRowSize;
+  originalNormalizedKeySize_ = layout.originalNormalizedKeySize;
   normalizedKeySize_ = originalNormalizedKeySize_;
-  size_t nullOffsetsPos = 0;
-  for (auto i = 0; i < offsets_.size(); ++i) {
-    rowColumns_.emplace_back(
-        offsets_[i],
-        (nullableKeys_ || i >= keyTypes_.size()) ? nullOffsets_[nullOffsetsPos]
-                                                 : RowColumn::kNotNullOffset);
-    ++nullOffsetsPos;
-  }
+  alignment_ = layout.alignment;
+  usesExternalMemory_ = layout.usesExternalMemory;
+
   rowColumnsStats_.resize(types_.size());
 }
 
@@ -611,7 +524,7 @@ int32_t RowContainer::variableSizeAt(const char* row, column_index_t column)
 }
 
 int32_t RowContainer::fixedSizeAt(column_index_t column) const {
-  return typeKindSize(typeKinds_[column]);
+  return RowLayout::typeKindSize(typeKinds_[column]);
 }
 
 int32_t RowContainer::extractVariableSizeAt(
@@ -693,8 +606,8 @@ void RowContainer::extractSerializedRows(
     const VectorPtr& result) const {
   // The format of the extracted row is: null bytes followed by keys and
   // dependent columns. Fixed-width columns are serialized into fixed number of
-  // bytes (see typeKindSize). Variable-width columns are serialized as 4 bytes
-  // of size followed by that many bytes.
+  // bytes (see RowLayout::typeKindSize). Variable-width columns are serialized
+  // as 4 bytes of size followed by that many bytes.
 
   // First, calculate total number of bytes needed to serialize all rows.
 
@@ -703,7 +616,7 @@ void RowContainer::extractSerializedRows(
   for (auto i = 0; i < types_.size(); ++i) {
     const auto& type = types_[i];
     if (type->isFixedWidth()) {
-      fixedWidthRowSize += typeKindSize(type->kind());
+      fixedWidthRowSize += RowLayout::typeKindSize(type->kind());
     } else {
       hasVariableWidth = true;
     }
@@ -742,7 +655,7 @@ void RowContainer::extractSerializedRows(
     for (auto j = 0; j < types_.size(); ++j) {
       const auto& type = types_[j];
       if (type->isFixedWidth()) {
-        const auto size = typeKindSize(type->kind());
+        const auto size = RowLayout::typeKindSize(type->kind());
         ::memcpy(rawBuffer + offset, row + rowColumns_[j].offset(), size);
         offset += size;
       } else {
@@ -774,7 +687,7 @@ void RowContainer::storeSerializedRow(
   for (auto i = 0; i < types_.size(); ++i) {
     const auto& type = types_[i];
     if (type->isFixedWidth()) {
-      const auto size = typeKindSize(type->kind());
+      const auto size = RowLayout::typeKindSize(type->kind());
       ::memcpy(row + rowColumns_[i].offset(), serialized.data() + offset, size);
       offset += size;
     } else {
