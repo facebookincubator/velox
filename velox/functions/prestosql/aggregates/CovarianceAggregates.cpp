@@ -55,7 +55,9 @@ struct CovarSampResultAccessor {
 
 struct CorrResultAccessor {
   static bool hasResult(const CorrAccumulator& accumulator) {
-    return !std::isnan(result(accumulator));
+    // DuckDB 1.4.4 returns NaN, not NULL, when corr has inputs but zero
+    // variance in one or both arguments.
+    return accumulator.count() > 0;
   }
 
   static double result(const CorrAccumulator& accumulator) {
@@ -141,7 +143,9 @@ struct RegrSxxResultAccessor {
 
 struct RegrSlopeResultAccessor {
   static bool hasResult(const RegrAccumulator& accumulator) {
-    return !std::isnan(result(accumulator));
+    // DuckDB 1.4.4 returns NaN, not NULL, when regr_slope has inputs but the
+    // independent variable has zero variance.
+    return accumulator.count() > 0;
   }
 
   static double result(const RegrAccumulator& accumulator) {

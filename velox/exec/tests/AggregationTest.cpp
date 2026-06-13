@@ -3716,12 +3716,20 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
       PlanBuilder()
           .values({data})
           .singleAggregation(
-              {"c0"}, {"max_by(DISTINCT c1, 1)", "corr(DISTINCT 0.5, c2)"})
+              {"c0"}, {"max_by(DISTINCT 1, 1)", "corr(DISTINCT 0.5, c2)"})
           .planNode();
 
   assertQuery(
       plan,
-      "SELECT c0, max_by(DISTINCT c1, 1), corr(DISTINCT 0.5, c2) FROM tmp GROUP BY c0");
+      "SELECT c0, max_by(DISTINCT 1, 1), corr(DISTINCT 0.5, c2) FROM tmp GROUP BY c0");
+
+  // Distinct column input with a constant companion.
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation({"c0"}, {"corr(DISTINCT c2, 0.5)"})
+             .planNode();
+
+  assertQuery(plan, "SELECT c0, corr(DISTINCT c2, 0.5) FROM tmp GROUP BY c0");
 
   // All-constant distinct inputs.
   plan = PlanBuilder()
@@ -3757,7 +3765,7 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
              .project({"c0", "c1", "c2", "c1 > 1 as mask"})
              .singleAggregation(
                  {},
-                 {"max_by(DISTINCT c1, 1)",
+                 {"max_by(DISTINCT 1, 1)",
                   "sum(DISTINCT 3)",
                   "sum(DISTINCT 3)",
                   "count(c1)"},
@@ -3766,7 +3774,7 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
 
   assertQuery(
       plan,
-      "SELECT max_by(DISTINCT c1, 1), sum(DISTINCT 3), sum(DISTINCT 3) FILTER (WHERE c1 > 1), count(c1) FROM tmp");
+      "SELECT max_by(DISTINCT 1, 1), sum(DISTINCT 3), sum(DISTINCT 3) FILTER (WHERE c1 > 1), count(c1) FROM tmp");
 
   // Mixed empty and non-empty groups.
   plan = PlanBuilder()

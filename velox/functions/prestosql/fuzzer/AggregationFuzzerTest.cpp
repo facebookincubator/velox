@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
   // can be verified. If such transformation exists, it can be specified to be
   // used for results verification. If no transformation is specified, results
   // are not verified.
-  static const std::unordered_map<
+  std::unordered_map<
       std::string,
       std::shared_ptr<facebook::velox::exec::test::ResultVerifier>>
       customVerificationFunctions = {
@@ -268,6 +268,15 @@ int main(int argc, char** argv) {
           // Velox-only function, not available in Presto.
           {"vector_sum", nullptr},
       };
+
+  if (!FLAGS_presto_url.empty()) {
+    // DuckDB 1.4 returns NaN for zero-variance cases, while Presto returns
+    // NULL. These functions are still verified against DuckDB.
+    customVerificationFunctions.insert({
+        {"corr", nullptr},
+        {"regr_slope", nullptr},
+    });
+  }
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
   using Options = facebook::velox::exec::test::AggregationFuzzerOptions;

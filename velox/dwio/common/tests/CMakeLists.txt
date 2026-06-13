@@ -117,7 +117,7 @@ if(VELOX_ENABLE_BENCHMARKS)
       velox_dwio_common
       arrow
       velox_fastpforlib
-      duckdb_static
+      duckdb_static_with_extensions
       Folly::folly
       Folly::follybenchmark
     )

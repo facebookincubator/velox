@@ -277,6 +277,31 @@ endif()
 if(${VELOX_ENABLE_DUCKDB})
   velox_set_source(DuckDB)
   velox_resolve_dependency(DuckDB)
+
+  add_library(duckdb_static_with_extensions INTERFACE)
+
+  if(DEFINED duckdb_SOURCE_DIR)
+    # DuckDB uses directory-scoped include_directories() which doesn't propagate
+    # to consuming targets. Explicitly set the include path on the interface
+    # target so all velox targets that link against it can find duckdb.hpp.
+    target_include_directories(
+      duckdb_static_with_extensions
+      SYSTEM
+      INTERFACE "${duckdb_SOURCE_DIR}/src/include"
+    )
+  elseif(DEFINED DuckDB_INCLUDE_DIRS)
+    target_include_directories(
+      duckdb_static_with_extensions
+      SYSTEM
+      INTERFACE ${DuckDB_INCLUDE_DIRS}
+    )
+  endif()
+
+  if(TARGET duckdb_static)
+    target_link_libraries(duckdb_static_with_extensions INTERFACE $<LINK_ONLY:duckdb_static>)
+  else()
+    target_link_libraries(duckdb_static_with_extensions INTERFACE ${DuckDB_LIBRARIES})
+  endif()
 endif()
 
 if(VELOX_ENABLE_FAISS)
@@ -840,3 +865,13 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 add_subdirectory(velox)
+
+if(
+  VELOX_ENABLE_DUCKDB
+  AND VELOX_MONO_LIBRARY
+  AND TARGET velox
+  AND DuckDB_SOURCE STREQUAL "BUNDLED"
+  AND DEFINED duckdb_SOURCE_DIR
+)
+  target_include_directories(velox SYSTEM PRIVATE "${duckdb_SOURCE_DIR}/src/include")
+endif()

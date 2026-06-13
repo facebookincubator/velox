@@ -23,6 +23,7 @@
 #include <duckdb/parser/expression/between_expression.hpp> // @manual
 #include <duckdb/parser/expression/case_expression.hpp> // @manual
 #include <duckdb/parser/expression/cast_expression.hpp> // @manual
+#include <duckdb/parser/expression/columnref_expression.hpp> // @manual
 #include <duckdb/parser/expression/comparison_expression.hpp> // @manual
 #include <duckdb/parser/expression/conjunction_expression.hpp> // @manual
 #include <duckdb/parser/expression/constant_expression.hpp> // @manual
@@ -32,6 +33,11 @@
 #include <duckdb/parser/expression/window_expression.hpp> // @manual
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <limits>
 
 namespace facebook::velox::duckdb {
 
@@ -45,6 +51,8 @@ using ::duckdb::ConstantExpression;
 using ::duckdb::ExpressionClass;
 using ::duckdb::ExpressionType;
 using ::duckdb::FunctionExpression;
+using ::duckdb::interval_t;
+using ::duckdb::LogicalType;
 using ::duckdb::LogicalTypeId;
 using ::duckdb::LogicalTypeIdToString;
 using ::duckdb::OperatorExpression;
@@ -104,6 +112,8 @@ std::string duckOperatorToVelox(ExpressionType type) {
       return "in";
     case ExpressionType::OPERATOR_NOT:
       return "not";
+    case ExpressionType::OPERATOR_TRY:
+      return "try";
     default:
       return normalizeFuncName(ExpressionTypeToOperator(type));
   }
@@ -161,12 +171,33 @@ std::shared_ptr<const core::CallExpr> callExpr(
       std::move(alias));
 }
 
+std::shared_ptr<const core::ConstantExpr> intervalConstant(
+    const interval_t& interval,
+    std::optional<std::string> alias) {
+  if (interval.months != 0 && interval.days == 0 && interval.micros == 0) {
+    return std::make_shared<const core::ConstantExpr>(
+        INTERVAL_YEAR_MONTH(), Variant(interval.months), alias);
+  }
+  if (interval.months != 0) {
+    VELOX_NYI("Mixed year-month and day-time intervals are not supported");
+  }
+  return std::make_shared<const core::ConstantExpr>(
+      INTERVAL_DAY_TIME(),
+      Variant(interval.days * 24L * 60 * 60 * 1'000 + interval.micros / 1'000),
+      alias);
+}
+
 // Parse a constant (1, 99.8, "string", etc).
 core::ExprPtr parseConstantExpr(
     ParsedExpression& expr,
     const ParseOptions& options) {
   auto& constantExpr = dynamic_cast<ConstantExpression&>(expr);
   auto& value = constantExpr.value;
+  const auto alias = getAlias(expr);
+
+  if (value.type().id() == LogicalTypeId::INTERVAL) {
+    return intervalConstant(value.GetValue<interval_t>(), alias);
+  }
 
   // This is a hack to make DuckDB more compatible with the old Koski-based
   // parser. By default literal integer constants in DuckDB parser are INTEGER,
@@ -182,7 +213,7 @@ core::ExprPtr parseConstantExpr(
   }
 
   return std::make_shared<const core::ConstantExpr>(
-      toVeloxType(value.type()), duckValueToVariant(value), getAlias(expr));
+      toVeloxType(value.type()), duckValueToVariant(value), alias);
 }
 
 // Parse a column reference (col1, "col2", tbl.col, etc).
@@ -203,36 +234,196 @@ core::ExprPtr parseColumnRefExpr(
 
 namespace {
 
-std::optional<int64_t> extractInteger(const core::ConstantExpr& constInput) {
-  if (constInput.value().isNull()) {
+std::optional<double> extractNumeric(const Value& value) {
+  if (value.IsNull()) {
     return std::nullopt;
   }
-  if (constInput.type()->isBigint()) {
-    return constInput.value().value<int64_t>();
-  } else if (constInput.type()->isInteger()) {
-    return constInput.value().value<int32_t>();
+
+  switch (value.type().id()) {
+    case LogicalTypeId::BIGINT:
+      return value.GetValue<int64_t>();
+    case LogicalTypeId::INTEGER:
+      return value.GetValue<int32_t>();
+    case LogicalTypeId::DECIMAL:
+    case LogicalTypeId::DOUBLE:
+      return value.DefaultCastAs(::duckdb::LogicalType(LogicalTypeId::DOUBLE))
+          .GetValue<double>();
+    default:
+      return std::nullopt;
+  }
+}
+
+std::optional<double> extractNumeric(ParsedExpression& expr) {
+  if (auto* constInput = dynamic_cast<ConstantExpression*>(&expr)) {
+    return extractNumeric(constInput->value);
+  }
+  if (auto* castInput = dynamic_cast<CastExpression*>(&expr)) {
+    return extractNumeric(*castInput->child);
+  }
+  if (auto* functionInput = dynamic_cast<FunctionExpression*>(&expr)) {
+    if (normalizeFuncName(functionInput->function_name) == "trunc" &&
+        functionInput->children.size() == 1) {
+      auto value = extractNumeric(*functionInput->children[0]);
+      if (value.has_value()) {
+        return std::trunc(value.value());
+      }
+    }
   }
   return std::nullopt;
 }
 
+std::optional<LogicalType> logicalTypeFromName(std::string name) {
+  if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+    name = name.substr(1, name.size() - 2);
+  }
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+
+  if (name == "BOOLEAN" || name == "BOOL") {
+    return LogicalType(LogicalTypeId::BOOLEAN);
+  }
+  if (name == "TINYINT") {
+    return LogicalType(LogicalTypeId::TINYINT);
+  }
+  if (name == "SMALLINT") {
+    return LogicalType(LogicalTypeId::SMALLINT);
+  }
+  if (name == "INTEGER" || name == "INT" || name == "SIGNED") {
+    return LogicalType(LogicalTypeId::INTEGER);
+  }
+  if (name == "BIGINT") {
+    return LogicalType(LogicalTypeId::BIGINT);
+  }
+  if (name == "REAL" || name == "FLOAT" || name == "FLOAT4") {
+    return LogicalType(LogicalTypeId::FLOAT);
+  }
+  if (name == "DOUBLE" || name == "DOUBLE PRECISION" || name == "FLOAT8") {
+    return LogicalType(LogicalTypeId::DOUBLE);
+  }
+  if (name == "VARCHAR" || name == "CHAR" || name == "BPCHAR" ||
+      name == "TEXT" || name == "STRING") {
+    return LogicalType(LogicalTypeId::VARCHAR);
+  }
+  if (name == "BLOB" || name == "BYTEA" || name == "VARBINARY") {
+    return LogicalType(LogicalTypeId::BLOB);
+  }
+  if (name == "DATE") {
+    return LogicalType(LogicalTypeId::DATE);
+  }
+  if (name == "TIME") {
+    return LogicalType(LogicalTypeId::TIME);
+  }
+  if (name == "TIMESTAMP" || name == "DATETIME") {
+    return LogicalType(LogicalTypeId::TIMESTAMP);
+  }
+  if (name == "INTERVAL") {
+    return LogicalType(LogicalTypeId::INTERVAL);
+  }
+  return std::nullopt;
+}
+
+LogicalType resolveParsedType(LogicalType type) {
+  if (auto resolvedType = logicalTypeFromName(type.ToString())) {
+    return resolvedType.value();
+  }
+  return type;
+}
+
+std::optional<int64_t> extractInteger(const Value& value) {
+  switch (value.type().id()) {
+    case LogicalTypeId::TINYINT:
+      return value.GetValue<int8_t>();
+    case LogicalTypeId::SMALLINT:
+      return value.GetValue<int16_t>();
+    case LogicalTypeId::INTEGER:
+      return value.GetValue<int32_t>();
+    case LogicalTypeId::BIGINT:
+      return value.GetValue<int64_t>();
+    case LogicalTypeId::INTEGER_LITERAL:
+      return value.GetValue<int64_t>();
+    default:
+      return std::nullopt;
+  }
+}
+
+template <typename T>
+T checkedIntegerCast(int64_t value, LogicalTypeId targetType) {
+  VELOX_USER_CHECK(
+      value >= static_cast<int64_t>(std::numeric_limits<T>::min()) &&
+          value <= static_cast<int64_t>(std::numeric_limits<T>::max()),
+      "Cannot cast IN-list constant {} to {}",
+      value,
+      LogicalTypeIdToString(targetType));
+  return static_cast<T>(value);
+}
+
+std::optional<Value> castIntegerInListConstant(
+    const Value& value,
+    LogicalTypeId targetType) {
+  const auto integer = extractInteger(value);
+  if (!integer.has_value()) {
+    return std::nullopt;
+  }
+
+  switch (targetType) {
+    case LogicalTypeId::TINYINT:
+      return Value::TINYINT(
+          checkedIntegerCast<int8_t>(integer.value(), targetType));
+    case LogicalTypeId::SMALLINT:
+      return Value::SMALLINT(
+          checkedIntegerCast<int16_t>(integer.value(), targetType));
+    case LogicalTypeId::INTEGER:
+      return Value::INTEGER(
+          checkedIntegerCast<int32_t>(integer.value(), targetType));
+    case LogicalTypeId::BIGINT:
+      return Value::BIGINT(integer.value());
+    default:
+      return std::nullopt;
+  }
+}
+
+Value castInListConstant(const Value& value, const CastExpression& castExpr) {
+  const auto sourceType = value.type().id();
+  const auto targetLogicalType = resolveParsedType(castExpr.cast_type);
+  const auto targetType = targetLogicalType.id();
+
+  if (auto integerValue = castIntegerInListConstant(value, targetType)) {
+    return integerValue.value();
+  }
+
+  if (sourceType == LogicalTypeId::VARCHAR) {
+    const auto str = value.GetValue<std::string>();
+    if (targetType == LogicalTypeId::BOOLEAN) {
+      if (str == "t" || str == "true") {
+        return Value::BOOLEAN(true);
+      }
+      if (str == "f" || str == "false") {
+        return Value::BOOLEAN(false);
+      }
+    }
+    if (targetType == LogicalTypeId::DATE) {
+      return Value::DATE(::duckdb::Date::FromString(str));
+    }
+    if (targetType == LogicalTypeId::BLOB) {
+      return Value::BLOB_RAW(str);
+    }
+  }
+
+  if (sourceType == LogicalTypeId::DECIMAL &&
+      targetType == LogicalTypeId::FLOAT) {
+    return Value::FLOAT(static_cast<float>(value.GetValue<double>()));
+  }
+
+  return value.DefaultCastAs(targetLogicalType, !castExpr.try_cast);
+}
 } // namespace
 
 std::shared_ptr<const core::ConstantExpr> tryParseInterval(
     const std::string& functionName,
-    const core::ExprPtr& input,
+    ParsedExpression& input,
     std::optional<std::string> alias) {
-  std::optional<int64_t> value;
-
-  if (auto constInput = dynamic_cast<const core::ConstantExpr*>(input.get())) {
-    value = extractInteger(*constInput);
-  } else if (
-      auto castInput = dynamic_cast<const core::CastExpr*>(input.get())) {
-    if (auto constInput =
-            dynamic_cast<const core::ConstantExpr*>(castInput->input().get())) {
-      value = extractInteger(*constInput);
-    }
-  }
-
+  auto value = extractNumeric(input);
   if (!value.has_value()) {
     return nullptr;
   }
@@ -265,8 +456,9 @@ std::shared_ptr<const core::ConstantExpr> tryParseInterval(
         Variant((int32_t)(value.value() * multiplier)),
         alias);
   }
+  const auto millis = static_cast<int64_t>(value.value() * multiplier);
   return std::make_shared<core::ConstantExpr>(
-      INTERVAL_DAY_TIME(), Variant(value.value() * multiplier), alias);
+      INTERVAL_DAY_TIME(), Variant(millis), alias);
 }
 
 // DuckDB parses struct literals {'x': 1, 'y': 2} as struct_pack(1 AS x, 2 AS
@@ -324,18 +516,20 @@ core::ExprPtr parseFunctionExpr(
     ParsedExpression& expr,
     const ParseOptions& options) {
   const auto& functionExpr = dynamic_cast<FunctionExpression&>(expr);
+  auto func = normalizeFuncName(functionExpr.function_name);
+
+  if (functionExpr.children.size() == 1) {
+    if (auto interval =
+            tryParseInterval(func, *functionExpr.children[0], getAlias(expr))) {
+      return interval;
+    }
+  }
+
   std::vector<core::ExprPtr> params;
   params.reserve(functionExpr.children.size());
 
   for (const auto& c : functionExpr.children) {
     params.emplace_back(parseExpr(*c, options));
-  }
-  auto func = normalizeFuncName(functionExpr.function_name);
-
-  if (params.size() == 1) {
-    if (auto interval = tryParseInterval(func, params[0], getAlias(expr))) {
-      return interval;
-    }
   }
 
   if (func == "struct_pack" || func == "row") {
@@ -508,8 +702,7 @@ core::ExprPtr parseOperatorExpr(
             ExpressionType::VALUE_CONSTANT) {
           auto constExpr =
               dynamic_cast<ConstantExpression*>(castExpr->child.get());
-          auto value = constExpr->value.DefaultCastAs(
-              castExpr->cast_type, !castExpr->try_cast);
+          auto value = castInListConstant(constExpr->value, *castExpr);
           if (options.parseInListAsArray) {
             values.emplace_back(duckValueToVariant(value));
             valueType = toVeloxType(castExpr->cast_type);
@@ -716,6 +909,17 @@ core::ExprPtr parseCastExpr(
           targetType, Variant::null(targetType->kind()), getAlias(expr));
     }
 
+    if (castExpr.cast_type.id() == LogicalTypeId::INTERVAL &&
+        constant->type()->isVarchar()) {
+      auto value = Value(constant->value().value<TypeKind::VARCHAR>())
+                       .DefaultCastAs(castExpr.cast_type, !castExpr.try_cast);
+      if (value.IsNull()) {
+        return std::make_shared<const core::ConstantExpr>(
+            targetType, Variant::null(targetType->kind()), getAlias(expr));
+      }
+      return intervalConstant(value.GetValue<interval_t>(), getAlias(expr));
+    }
+
     // DuckDB parses BOOLEAN literal as cast expression.  Try to restore it back
     // to constant expression here.
     if (targetType->isBoolean() && constant->type()->isVarchar()) {
@@ -744,6 +948,13 @@ core::ExprPtr parseCastExpr(
       return std::make_shared<const core::ConstantExpr>(
           DATE(),
           Variant::create<TypeKind::INTEGER>(DATE()->toDays(value)),
+          getAlias(expr));
+    }
+
+    if (targetType->isVarbinary() && constant->type()->isVarchar()) {
+      return std::make_shared<const core::ConstantExpr>(
+          VARBINARY(),
+          Variant::binary(constant->value().value<TypeKind::VARCHAR>()),
           getAlias(expr));
     }
 
@@ -988,12 +1199,15 @@ BoundType parseBoundType(WindowBoundary boundary) {
   switch (boundary) {
     case WindowBoundary::CURRENT_ROW_RANGE:
     case WindowBoundary::CURRENT_ROW_ROWS:
+    case WindowBoundary::CURRENT_ROW_GROUPS:
       return BoundType::kCurrentRow;
     case WindowBoundary::EXPR_PRECEDING_ROWS:
     case WindowBoundary::EXPR_PRECEDING_RANGE:
+    case WindowBoundary::EXPR_PRECEDING_GROUPS:
       return BoundType::kPreceding;
     case WindowBoundary::EXPR_FOLLOWING_ROWS:
     case WindowBoundary::EXPR_FOLLOWING_RANGE:
+    case WindowBoundary::EXPR_FOLLOWING_GROUPS:
       return BoundType::kFollowing;
     case WindowBoundary::UNBOUNDED_FOLLOWING:
       return BoundType::kUnboundedFollowing;

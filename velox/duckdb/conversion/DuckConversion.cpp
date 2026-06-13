@@ -16,6 +16,9 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/type/Variant.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace facebook::velox::duckdb {
 using ::duckdb::DataChunk;
 using ::duckdb::Date;
@@ -31,6 +34,87 @@ using ::duckdb::date_t;
 using ::duckdb::dtime_t;
 using ::duckdb::string_t;
 using ::duckdb::timestamp_t;
+
+namespace {
+
+TypePtr customTypeFromName(std::string name) {
+  if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+    name = name.substr(1, name.size() - 2);
+  }
+  if (auto customType = getCustomType(name, {})) {
+    return customType;
+  }
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+  if (auto customType = getCustomType(name, {})) {
+    return customType;
+  }
+  if (name == "OPAQUE<VOID>") {
+    return OPAQUE<void>();
+  }
+  return nullptr;
+}
+
+TypePtr builtinTypeFromName(std::string name) {
+  if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+    name = name.substr(1, name.size() - 2);
+  }
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return std::toupper(c);
+  });
+
+  if (name == "BOOLEAN" || name == "BOOL") {
+    return BOOLEAN();
+  }
+  if (name == "TINYINT") {
+    return TINYINT();
+  }
+  if (name == "SMALLINT") {
+    return SMALLINT();
+  }
+  if (name == "INTEGER" || name == "INT" || name == "SIGNED") {
+    return INTEGER();
+  }
+  if (name == "BIGINT") {
+    return BIGINT();
+  }
+  if (name == "REAL" || name == "FLOAT" || name == "FLOAT4") {
+    return REAL();
+  }
+  if (name == "DOUBLE" || name == "DOUBLE PRECISION" || name == "FLOAT8") {
+    return DOUBLE();
+  }
+  if (name == "VARCHAR" || name == "CHAR" || name == "BPCHAR" ||
+      name == "TEXT" || name == "STRING") {
+    return VARCHAR();
+  }
+  if (name == "BLOB" || name == "BYTEA" || name == "VARBINARY") {
+    return VARBINARY();
+  }
+  if (name == "DATE") {
+    return DATE();
+  }
+  if (name == "TIME") {
+    return TIME();
+  }
+  if (name == "TIMESTAMP" || name == "DATETIME") {
+    return TIMESTAMP();
+  }
+  if (name == "INTERVAL") {
+    return INTERVAL_DAY_TIME();
+  }
+  return nullptr;
+}
+
+TypePtr typeFromName(const std::string& name) {
+  if (auto customType = customTypeFromName(name)) {
+    return customType;
+  }
+  return builtinTypeFromName(name);
+}
+
+} // namespace
 
 Variant decimalVariant(const Value& val) {
   VELOX_DCHECK(val.type().id() == LogicalTypeId::DECIMAL);
@@ -62,36 +146,36 @@ LogicalType fromVeloxType(const TypePtr& type) {
 
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
-      return LogicalType::BOOLEAN;
+      return LogicalType(LogicalTypeId::BOOLEAN);
     case TypeKind::TINYINT:
-      return LogicalType::TINYINT;
+      return LogicalType(LogicalTypeId::TINYINT);
     case TypeKind::SMALLINT:
-      return LogicalType::SMALLINT;
+      return LogicalType(LogicalTypeId::SMALLINT);
     case TypeKind::INTEGER:
       if (type->isIntervalYearMonth()) {
-        return LogicalType::INTERVAL;
+        return LogicalType(LogicalTypeId::INTERVAL);
       }
       if (type->isDate()) {
-        return LogicalType::DATE;
+        return LogicalType(LogicalTypeId::DATE);
       }
-      return LogicalType::INTEGER;
+      return LogicalType(LogicalTypeId::INTEGER);
     case TypeKind::BIGINT:
       if (type->isIntervalDayTime()) {
-        return LogicalType::INTERVAL;
+        return LogicalType(LogicalTypeId::INTERVAL);
       }
       if (type->isTime()) {
         VELOX_DCHECK(type->equivalent(*TIME()));
-        return LogicalType::TIME;
+        return LogicalType(LogicalTypeId::TIME);
       }
-      return LogicalType::BIGINT;
+      return LogicalType(LogicalTypeId::BIGINT);
     case TypeKind::REAL:
-      return LogicalType::FLOAT;
+      return LogicalType(LogicalTypeId::FLOAT);
     case TypeKind::DOUBLE:
-      return LogicalType::DOUBLE;
+      return LogicalType(LogicalTypeId::DOUBLE);
     case TypeKind::VARCHAR:
-      return LogicalType::VARCHAR;
+      return LogicalType(LogicalTypeId::VARCHAR);
     case TypeKind::TIMESTAMP:
-      return LogicalType::TIMESTAMP;
+      return LogicalType(LogicalTypeId::TIMESTAMP);
     case TypeKind::ARRAY:
       return LogicalType::LIST(fromVeloxType(type->childAt(0)));
     case TypeKind::MAP:
@@ -139,6 +223,11 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
     case LogicalTypeId::DOUBLE:
       return DOUBLE();
     case LogicalTypeId::VARCHAR:
+      if (type.HasAlias()) {
+        if (auto customType = customTypeFromName(type.GetAlias())) {
+          return customType;
+        }
+      }
       return VARCHAR();
     case LogicalTypeId::DATE:
       return DATE();
@@ -147,7 +236,7 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
     case LogicalTypeId::TIMESTAMP_TZ: {
-      if (auto customType = getCustomType("TIMESTAMP WITH TIME ZONE", {})) {
+      if (auto customType = customTypeFromName("TIMESTAMP WITH TIME ZONE")) {
         return customType;
       }
       [[fallthrough]];
@@ -188,22 +277,17 @@ TypePtr toVeloxType(LogicalType type, bool fileColumnNamesReadAsLowerCase) {
       return ROW(std::move(names), std::move(types));
     }
     case LogicalTypeId::UUID: {
-      if (auto customType = getCustomType("UUID", {})) {
+      if (auto customType = customTypeFromName("UUID")) {
         return customType;
-      }
-      [[fallthrough]];
-    }
-    case LogicalTypeId::USER: {
-      const auto name = ::duckdb::UserType::GetTypeName(type);
-      if (auto customType = getCustomType(name, {})) {
-        return customType;
-      }
-      if (name == "OPAQUE<void>") {
-        return OPAQUE<void>();
       }
       [[fallthrough]];
     }
     default:
+      // DuckDB's parser can produce parser-only type names that are not bound
+      // without a full binder. Resolve the names Velox supports locally.
+      if (auto typeFromString = typeFromName(type.ToString())) {
+        return typeFromString;
+      }
       throw std::runtime_error(
           "unsupported type for duckdb -> velox conversion: " +
           type.ToString());
@@ -238,6 +322,18 @@ Variant duckValueToVariant(const Value& val) {
       return Variant::binary(val.GetValue<std::string>());
     case LogicalTypeId::DATE:
       return Variant(val.GetValue<::duckdb::date_t>().days);
+    case LogicalTypeId::LIST: {
+      if (val.IsNull()) {
+        return Variant::null(TypeKind::ARRAY);
+      }
+      std::vector<Variant> elements;
+      const auto& children = ::duckdb::ListValue::GetChildren(val);
+      elements.reserve(children.size());
+      for (const auto& child : children) {
+        elements.push_back(duckValueToVariant(child));
+      }
+      return Variant::array(std::move(elements));
+    }
     default:
       throw std::runtime_error(
           "unsupported type for duckdb value -> velox variant conversion: " +

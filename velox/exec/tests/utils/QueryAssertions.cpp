@@ -172,7 +172,7 @@ template <>
   auto size = arrayVector->sizeAt(arrayRow);
 
   if (size == 0) {
-    return ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(elements->type()));
+    return ::duckdb::Value::LIST(duckdb::fromVeloxType(elements->type()), {});
   }
 
   ::duckdb::vector<::duckdb::Value> array;
@@ -301,9 +301,9 @@ variant variantAt<TypeKind::TIMESTAMP>(
 
 template <TypeKind kind>
 variant variantAt(const ::duckdb::Value& value) {
-  if (value.type() == ::duckdb::LogicalType::INTERVAL) {
+  if (value.type().id() == ::duckdb::LogicalTypeId::INTERVAL) {
     return ::duckdb::Interval::GetMicro(value.GetValue<::duckdb::interval_t>());
-  } else if (value.type() == ::duckdb::LogicalType::DATE) {
+  } else if (value.type().id() == ::duckdb::LogicalTypeId::DATE) {
     return ::duckdb::Date::EpochDays(value.GetValue<::duckdb::date_t>());
   } else {
     // NOTE: duckdb only support native cpp type for GetValue so we need to use
