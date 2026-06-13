@@ -166,6 +166,24 @@ TEST(InMemoryFile, preadv) {
   EXPECT_EQ(expected, values);
 }
 
+TEST(InMemoryFile, ownedBuffer) {
+  memory::MemoryManager::Options options;
+  memory::MemoryManager manager{options};
+  auto pool = manager.addLeafPool();
+
+  const std::string data = "abcdefghij";
+  std::shared_ptr<InMemoryReadFile> readFile;
+  {
+    auto buffer = AlignedBuffer::allocate<char>(data.size(), pool.get());
+    memcpy(buffer->asMutable<char>(), data.data(), data.size());
+    readFile = std::make_shared<InMemoryReadFile>(std::move(buffer));
+  }
+
+  // The file owns the buffer, so reads succeed after the local handle is gone.
+  EXPECT_EQ(readFile->size(), data.size());
+  EXPECT_EQ(readFile->pread(0, data.size()), data);
+}
+
 class FaultyFsTest : public ::testing::Test {
  protected:
   FaultyFsTest() {}
