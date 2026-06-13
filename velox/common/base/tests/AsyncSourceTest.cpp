@@ -447,6 +447,7 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveSteal) {
   folly::Baton<> makingContinue;
   folly::Baton<> firstMoveWaiting;
   folly::Baton<> secondMoveComplete;
+  folly::Baton<> prepareComplete;
 
   auto asyncSource =
       std::make_shared<AsyncSource<Gizmo>>([&makingStarted, &makingContinue]() {
@@ -469,24 +470,36 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveSteal) {
         secondMoveComplete.wait();
       }));
 
-  // Thread 1: First move() - will wait for making and then get blocked by
-  // TestValue.
+  // Thread 1: prepare() - starts making the item. Launched first and
+  // synchronized on so that prepare() (not the first move()) becomes the maker;
+  // the first move() then deterministically takes the consumer wait path.
+  auto prepareThread = std::thread([&]() {
+    asyncSource->prepare();
+    prepareComplete.post();
+  });
+
+  // Wait for making to start, guaranteeing the state is kMaking and itemMaker
+  // is blocked, before the first move() runs.
+  ASSERT_TRUE(makingStarted.try_wait_for(1s));
+
+  // Thread 2: First move() - enters the kMaking wait path and gets blocked by
+  // TestValue while parked on the promise.
   auto firstMoveThread = std::thread([&]() {
     firstMoveHolder = asyncSource->move();
     firstMoveResult = firstMoveHolder.get();
   });
 
-  // Thread 2: prepare() - starts making the item.
-  auto prepareThread = std::thread([&]() { asyncSource->prepare(); });
-
-  // Wait for making to start.
-  ASSERT_TRUE(makingStarted.try_wait_for(1s));
+  // Wait for the first move() to register its promise and reach makeWait()
+  // before letting making complete. This guarantees it takes the wait path
+  // rather than the kPrepared fast path.
+  ASSERT_TRUE(firstMoveWaiting.try_wait_for(1s));
 
   // Let making complete - this will signal the first move's promise.
   makingContinue.post();
 
-  // Wait for first move to be signaled and about to re-acquire lock.
-  ASSERT_TRUE(firstMoveWaiting.try_wait_for(1s));
+  // Wait for prepare() to finish transitioning the state to kPrepared so the
+  // second move() deterministically steals the prepared item.
+  ASSERT_TRUE(prepareComplete.try_wait_for(1s));
 
   // Thread 3: Second move() - steals the item while first move is blocked.
   auto secondMoveThread = std::thread([&]() {
@@ -526,6 +539,7 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveCloseRace) {
   folly::Baton<> makingContinue;
   folly::Baton<> moveWaiting;
   folly::Baton<> closeComplete;
+  folly::Baton<> prepareComplete;
 
   auto asyncSource =
       std::make_shared<AsyncSource<Gizmo>>([&makingStarted, &makingContinue]() {
@@ -546,23 +560,38 @@ DEBUG_ONLY_TEST_F(AsyncSourceTest, concurrentMoveCloseRace) {
         closeComplete.wait();
       }));
 
-  // Thread 1: move() - will wait for making and then get blocked by TestValue.
+  // Thread 1: prepare() - starts making the item. Launched first and
+  // synchronized on so that prepare() (not move()) becomes the maker; move()
+  // then deterministically takes the consumer wait path.
+  auto prepareThread = std::thread([&]() {
+    asyncSource->prepare();
+    prepareComplete.post();
+  });
+
+  // Wait for making to start, guaranteeing the state is kMaking and itemMaker
+  // is blocked, before move() runs.
+  ASSERT_TRUE(makingStarted.try_wait_for(1s));
+
+  // Thread 2: move() - enters the kMaking wait path and gets blocked by
+  // TestValue while parked on the promise.
   auto moveThread = std::thread([&]() {
     moveHolder = asyncSource->move();
     moveResult = moveHolder.get();
   });
 
-  // Thread 2: prepare() - starts making the item.
-  auto prepareThread = std::thread([&]() { asyncSource->prepare(); });
-
-  // Wait for making to start.
-  ASSERT_TRUE(makingStarted.try_wait_for(1s));
+  // Wait for move() to register its promise and reach makeWait() before letting
+  // making complete. This guarantees move() takes the wait path rather than the
+  // kPrepared fast path.
+  ASSERT_TRUE(moveWaiting.try_wait_for(1s));
 
   // Let making complete - this will signal move's promise.
   makingContinue.post();
 
-  // Wait for move to be signaled and about to re-acquire lock.
-  ASSERT_TRUE(moveWaiting.try_wait_for(1s));
+  // Wait for prepare() to finish transitioning the state to kPrepared before
+  // closing. Otherwise close() may observe kMaking and itself wait on
+  // makeWait(), which re-triggers the TestValue callback and double-posts the
+  // moveWaiting baton.
+  ASSERT_TRUE(prepareComplete.try_wait_for(1s));
 
   // close() comes in and closes the item while move is blocked.
   asyncSource->close();
