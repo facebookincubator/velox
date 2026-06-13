@@ -87,18 +87,24 @@ void randomBools(int n, double p, uint32_t seed, bool* out) {
   }
 }
 
-void randomInt96Numbers(
-    int n,
-    uint32_t seed,
-    int32_t minValue,
-    int32_t maxValue,
-    Int96* out) {
+void randomInt96Numbers(int n, uint32_t seed, Int96* out) {
   std::default_random_engine gen(seed);
-  std::uniform_int_distribution<int32_t> d(minValue, maxValue);
+  // INT96 format: first 8 bytes (value[0] and value[1]) are nanoseconds of day,
+  // last 4 bytes (value[2]) are Julian day number.
+  // Nanoseconds in a day: 86'400 * 1'000'000'000 = 86'400'000'000'000.
+  std::uniform_int_distribution<uint64_t> nanosDistribution(
+      0, 86'399'999'999'999ULL);
+  // Julian day range: use a reasonable range around Unix epoch (2'440'588).
+  // Range from year 1970 to 2100 (approximately).
+  std::uniform_int_distribution<uint32_t> daysDistribution(
+      2'440'588, 2'488'069);
+
   for (int i = 0; i < n; ++i) {
-    out[i].value[0] = d(gen);
-    out[i].value[1] = d(gen);
-    out[i].value[2] = d(gen);
+    uint64_t nanos = nanosDistribution(gen);
+    uint32_t julianDay = daysDistribution(gen);
+    // Store in INT96 format: lower 8 bytes = nanos, upper 4 bytes = Julian day
+    memcpy(&out[i].value[0], &nanos, sizeof(uint64_t));
+    out[i].value[2] = julianDay;
   }
 }
 
