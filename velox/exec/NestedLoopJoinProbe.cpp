@@ -164,6 +164,17 @@ BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
 }
 
 void NestedLoopJoinProbe::close() {
+  // Disarm the peer-synchronization barrier only if this operator never
+  // reached it (so its missing arrival would otherwise leave peers in
+  // kWaitForPeers forever). Operators that already participated in the
+  // barrier must not disarm it: doing so would set the released flag on a
+  // barrier that is either still actively counting peers or has already
+  // completed normally, causing future or concurrent allPeersFinished()
+  // callers to skip last-prober work (e.g. RIGHT/FULL outer-join
+  // build-mismatch emission) and silently drop result rows.
+  if (!barrierReached_) {
+    operatorCtx_->task()->releasePeerBarrier(splitGroupId(), planNodeId());
+  }
   if (joinCondition_ != nullptr) {
     joinCondition_->clear();
   }
@@ -770,13 +781,31 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   // this code will survive and move on to process build mismatches.
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
+  bool released{false};
   if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+          planNodeId(),
+          operatorCtx_->driver(),
+          &future_,
+          promises,
+          peers,
+          &released)) {
+    // We participated in the barrier, so close() must not disarm it later.
+    barrierReached_ = true;
+    if (released) {
+      // Barrier was disarmed by a peer that closed without reaching it.
+      // Skip build-mismatch output and finish without becoming a last
+      // prober.
+      setState(ProbeOperatorState::kFinish);
+      return;
+    }
     VELOX_CHECK(future_.valid());
     setState(ProbeOperatorState::kWaitForPeers);
     return;
   }
 
+  // Last prober: we contributed to the barrier count, so close() must skip
+  // the disarm step that would otherwise poison the released flag.
+  barrierReached_ = true;
   lastProbe_ = true;
 
   // From now on, buildIndex_ is used to indexing into buildMismatched_
