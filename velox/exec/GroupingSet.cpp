@@ -115,7 +115,7 @@ GroupingSet::GroupingSet(
   }
 
   for (auto& aggregate : aggregates_) {
-    if (aggregate.distinct) {
+    if (aggregate.sortingKeys.empty() && aggregate.distinct) {
       VELOX_USER_CHECK(
           !isPartial_,
           "Partial aggregations over distinct inputs are not supported");
