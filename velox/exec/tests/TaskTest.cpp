@@ -26,7 +26,9 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/IOutputBufferManager.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -511,6 +513,44 @@ class TestShouldYieldOperator : public exec::Operator {
  private:
   RowVectorPtr input_;
   bool shouldYieldResult_{false};
+};
+
+// A control-plane-only IOutputBufferManager that is not an OutputBufferManager.
+// Used to verify that PartitionedOutput errors when the task resolves an output
+// buffer manager for a different transport (e.g. a future UCX manager).
+class NonHttpOutputBufferManager : public IOutputBufferManager {
+ public:
+  void initializeTask(
+      std::shared_ptr<Task> /*task*/,
+      core::PartitionedOutputNode::Kind /*kind*/,
+      int /*numDestinations*/,
+      int /*numDrivers*/) override {}
+
+  bool updateOutputBuffers(const std::string&, int, bool) override {
+    return true;
+  }
+
+  bool updateNumDrivers(const std::string&, uint32_t) override {
+    return true;
+  }
+
+  void removeTask(const std::string&) override {}
+
+  std::optional<OutputBuffer::Stats> stats(const std::string&) override {
+    return std::nullopt;
+  }
+
+  double getUtilization(const std::string&) override {
+    return 0.0;
+  }
+
+  bool isOverutilized(const std::string&) override {
+    return false;
+  }
+
+  std::string toString(const std::string&) override {
+    return "non-http";
+  }
 };
 } // namespace
 
@@ -1397,6 +1437,106 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
     // ignored.
     ASSERT_FALSE(task->updateOutputBuffers(15, true));
   }
+}
+
+TEST_F(TaskTest, taskUsesHttpOutputBufferManagerAfterRegistryClear) {
+  OutputBufferManagerRegistry::unregisterAll();
+
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .project({"c0 % 10"})
+                  .partitionedOutputBroadcast({})
+                  .planFragment();
+  auto task = Task::create(
+      "task-http-output-manager-after-registry-clear",
+      plan,
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(1, 1);
+
+  auto httpMgr = OutputBufferManagerRegistry::tryGet(
+      std::string(core::TransportKind::kHttp));
+  EXPECT_NE(httpMgr, nullptr);
+  EXPECT_TRUE(task->updateOutputBuffers(10, true /*noMoreBuffers*/));
+
+  task->requestCancel();
+  waitForTaskCompletion(task.get());
+}
+
+TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
+  constexpr int32_t numBatches = 10;
+  std::vector<RowVectorPtr> dataBatches;
+  dataBatches.reserve(numBatches);
+  const int numRows = numBatches * 3;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
+  }
+
+  auto plan =
+      PlanBuilder().values(dataBatches).partitionedOutput({}, 1).planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  Task* task = cursor->task().get();
+  while (cursor->moveNext()) {
+  }
+
+  task->requestCancel();
+  waitForTaskCompletion(task);
+
+  const auto taskStats = task->taskStats();
+  ASSERT_TRUE(taskStats.outputBufferStats.has_value());
+  const auto& outputStats = taskStats.outputBufferStats.value();
+  EXPECT_EQ(outputStats.kind, core::PartitionedOutputNode::Kind::kPartitioned);
+  EXPECT_EQ(outputStats.totalRowsSent, numRows);
+  EXPECT_GT(outputStats.totalPagesSent, 0);
+  EXPECT_GT(outputStats.bufferedBytes, 0);
+  EXPECT_EQ(outputStats.bufferedPages, outputStats.totalPagesSent);
+}
+
+TEST_F(TaskTest, partitionedOutputErrorsOnTransportMismatch) {
+  core::PlanNodeId outputNodeId;
+  auto data = makeRowVector({makeFlatVector<int64_t>({0, 1, 10})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputNodeId)
+                  .planFragment();
+  // Select a non-HTTP output buffer manager via the plan's output transport
+  // type. The default PartitionedOutput operator only handles the HTTP
+  // OutputBufferManager, so it must error rather than send output to the wrong
+  // manager.
+  const std::string transportType{"test-mismatch-transport"};
+  plan.outputTransportTypes[outputNodeId] = transportType;
+
+  auto queryRegistry = OutputBufferManagerRegistry::create(
+      &OutputBufferManagerRegistry::global());
+  queryRegistry->insert(
+      transportType, std::make_shared<NonHttpOutputBufferManager>());
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(
+      OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
+
+  auto task = Task::create(
+      "task-transport-mismatch",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  task->start(1, 1);
+
+  ASSERT_TRUE(waitForTaskFailure(task.get()));
+  EXPECT_TRUE(
+      task->errorMessage().find(
+          "PartitionedOutput requires the default OutputBufferManager") !=
+      std::string::npos)
+      << task->errorMessage();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
