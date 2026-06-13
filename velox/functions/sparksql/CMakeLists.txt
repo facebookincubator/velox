@@ -26,6 +26,7 @@ velox_link_libraries(velox_spark_query_config velox_config_property velox_core)
 add_subdirectory(specialforms)
 velox_add_library(
   velox_functions_spark_impl
+  AesEncryptDecrypt.cpp
   ArrayGetFunction.cpp
   ArraySort.cpp
   AssertNotNull.cpp
@@ -52,6 +53,7 @@ velox_add_library(
   UnscaledValueFunction.cpp
   XxHash64.cpp
   HEADERS
+  AesEncryptDecrypt.h
   Arena.h
   Arithmetic.h
   ArrayAppend.h

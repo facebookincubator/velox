@@ -2,6 +2,43 @@
 Binary Functions
 ================
 
+.. spark:function:: aes_encrypt(input, key, mode, padding, iv, aad) -> varbinary
+
+    Encrypts ``input`` (varbinary) with AES (Advanced Encryption Standard)
+    symmetric-key encryption using ``key`` (16/24/32 bytes for AES-128/192/256).
+    ``iv`` is the initialization vector (16 bytes for CBC, 12 bytes for GCM,
+    empty for ECB; if empty/NULL for CBC/GCM a random IV is generated and
+    prepended to the output). ``aad`` is additional authenticated data,
+    GCM only; it is authenticated but not encrypted. ``mode`` is the
+    block-cipher mode (``ECB``, ``CBC``, or ``GCM``); ``padding`` is
+    ``PKCS``, ``NONE``, or ``DEFAULT`` (PKCS for ECB/CBC, none for GCM).
+    Output is ``ciphertext`` for ECB, ``IV || ciphertext`` for CBC, and
+    ``IV || ciphertext || tag`` (16-byte GCM tag) for GCM. ::
+
+        SELECT base64(aes_encrypt(CAST('Spark' AS VARBINARY),
+                                  CAST('abcdefghijklmnop' AS VARBINARY),
+                                  'ECB', 'PKCS',
+                                  CAST('' AS VARBINARY),
+                                  CAST('' AS VARBINARY))); -- 4Hv0UKCx6nfUeAoPZo1z+w==
+
+    Never reuse an IV with the same key in GCM mode; IV reuse breaks GCM's
+    authentication guarantees and may leak plaintext.
+
+.. spark:function:: aes_decrypt(input, key, mode, padding, iv, aad) -> varbinary
+
+    Decrypts ``input`` (varbinary) with AES using ``key``. Parameters match
+    :spark:func:`aes_encrypt`. For CBC/GCM with empty ``iv``, the IV is read
+    from the first bytes of ``input`` (12 bytes for GCM, 16 for CBC) and
+    the rest is treated as ciphertext. For GCM, the trailing 16 bytes are
+    the authentication tag and are verified against ``aad``; a mismatch
+    (wrong key, tampered ciphertext, or wrong AAD) throws. ::
+
+        SELECT CAST(aes_decrypt(unbase64('4Hv0UKCx6nfUeAoPZo1z+w=='),
+                                CAST('abcdefghijklmnop' AS VARBINARY),
+                                'ECB', 'PKCS',
+                                CAST('' AS VARBINARY),
+                                CAST('' AS VARBINARY)) AS VARCHAR); -- Spark
+
 .. spark:function:: crc32(binary) -> bigint
 
     Computes the crc32 checksum of ``binary``.

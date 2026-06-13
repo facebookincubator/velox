@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/BinaryFunctions.h"
+#include "velox/functions/sparksql/AesEncryptDecrypt.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/String.h"
@@ -44,6 +45,24 @@ void registerBinaryFunctions(const std::string& prefix) {
       {prefix + "sha1"});
   registerFunction<Sha2HexStringFunction, Varchar, Varbinary, int32_t>(
       {prefix + "sha2"});
+  registerFunction<
+      AesEncryptFunction,
+      Varbinary,
+      Varbinary,
+      Varbinary,
+      Varchar,
+      Varchar,
+      Varbinary,
+      Varbinary>({prefix + "aes_encrypt"});
+  registerFunction<
+      AesDecryptFunction,
+      Varbinary,
+      Varbinary,
+      Varbinary,
+      Varchar,
+      Varchar,
+      Varbinary,
+      Varbinary>({prefix + "aes_decrypt"});
 }
 
 } // namespace facebook::velox::functions::sparksql
