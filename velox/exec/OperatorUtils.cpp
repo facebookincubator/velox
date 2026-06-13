@@ -96,33 +96,6 @@ void complexGatherCopy(
   }
 }
 
-void gatherCopy(
-    BaseVector* target,
-    vector_size_t targetIndex,
-    vector_size_t count,
-    const std::vector<const RowVector*>& sources,
-    const std::vector<vector_size_t>& sourceIndices,
-    column_index_t sourceChannel) {
-  const bool flattenSources =
-      std::all_of(sources.begin(), sources.end(), [](const auto& source) {
-        return source->isFlatEncoding();
-      });
-  if (target->isScalar() && flattenSources) {
-    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        scalarGatherCopy,
-        target->type()->kind(),
-        target,
-        targetIndex,
-        count,
-        sources,
-        sourceIndices,
-        sourceChannel);
-  } else {
-    complexGatherCopy(
-        target, targetIndex, count, sources, sourceIndices, sourceChannel);
-  }
-}
-
 // We want to aggregate some operator runtime metrics per operator rather than
 // per event. This function returns true for such metrics.
 bool shouldAggregateRuntimeMetric(const std::string& name) {
@@ -420,6 +393,33 @@ void loadColumns(const RowVectorPtr& input, core::ExecCtx& execCtx) {
           *decodedHolder.get(),
           *baseRowsHolder.get(input->size()));
     }
+  }
+}
+
+void gatherCopy(
+    BaseVector* target,
+    vector_size_t targetIndex,
+    vector_size_t count,
+    const std::vector<const RowVector*>& sources,
+    const std::vector<vector_size_t>& sourceIndices,
+    column_index_t sourceChannel) {
+  const bool flattenSources =
+      std::all_of(sources.begin(), sources.end(), [](const auto& source) {
+        return source->isFlatEncoding();
+      });
+  if (target->isScalar() && flattenSources) {
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        scalarGatherCopy,
+        target->type()->kind(),
+        target,
+        targetIndex,
+        count,
+        sources,
+        sourceIndices,
+        sourceChannel);
+  } else {
+    complexGatherCopy(
+        target, targetIndex, count, sources, sourceIndices, sourceChannel);
   }
 }
 
