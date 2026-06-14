@@ -163,6 +163,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_join_fuzzer
+  SOURCES CudfJoinFuzzerRunner.cpp CudfJoinFuzzer.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_join_fuzzer_base velox_vector_fuzzer
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_limit_test
   SOURCES Main.cpp LimitTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
