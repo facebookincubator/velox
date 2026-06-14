@@ -1077,6 +1077,19 @@ TEST_F(Re2FunctionsTest, likeSubstringPattern) {
       true);
 }
 
+// Verifies the substrings fast path is taken when an escape character is
+// supplied but does not appear in the pattern. Spark always emits a default
+// escape '\' on its Like expression, so without this case patterns like
+// '%foo%bar%' incorrectly fall back to the RE2 engine.
+TEST_F(Re2FunctionsTest, likeSubstringPatternWithInertEscape) {
+  testLike("hello special requests today", "%special%requests%", '\\', true);
+  testLike("requests special hello", "%special%requests%", '\\', false);
+  testLike("aXbYcZ", "%a%b%c%", '\\', true);
+  testLike("aXbY", "%a%b%c%", '\\', false);
+  // Custom escape character that does not appear in the pattern.
+  testLike("aXbYcZ", "%a%b%c%", '!', true);
+}
+
 TEST_F(Re2FunctionsTest, nullConstantPatternOrEscape) {
   // Test null pattern.
   ASSERT_TRUE(

@@ -2286,10 +2286,14 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   PatternMetadata patternMetadata = PatternMetadata::generic();
   try {
-    // Fast path for substrings search.
-    if (!escapeChar.has_value()) {
-      auto substrings =
-          PatternMetadata::parseSubstrings(std::string_view(pattern));
+    // Fast path for substrings search. The escape character can be ignored if
+    // it does not appear in the pattern, so callers that always emit a default
+    // escape (e.g. Spark/Gluten emits '\') still hit this path.
+    const auto patternView = std::string_view(pattern);
+    const bool escapeIsInert = !escapeChar.has_value() ||
+        patternView.find(escapeChar.value()) == std::string_view::npos;
+    if (escapeIsInert) {
+      auto substrings = PatternMetadata::parseSubstrings(patternView);
       if (substrings.size() > 0) {
         patternMetadata = PatternMetadata::substrings(std::move(substrings));
         return std::make_shared<OptimizedLike<PatternKind::kSubstrings>>(
@@ -2297,8 +2301,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       }
     }
 
-    patternMetadata =
-        determinePatternKind(std::string_view(pattern), escapeChar);
+    patternMetadata = determinePatternKind(patternView, escapeChar);
   } catch (...) {
     return std::make_shared<exec::AlwaysFailingVectorFunction>(
         std::current_exception());
