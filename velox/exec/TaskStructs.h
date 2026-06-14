@@ -199,6 +199,8 @@ struct LocalExchangeState {
   std::vector<std::shared_ptr<LocalExchangeQueue>> queues;
   std::shared_ptr<common::SkewedPartitionRebalancer>
       scaleWriterPartitionBalancer;
+  std::shared_ptr<folly::Synchronized<LocalExchangeDynamicFilters>>
+      dynamicFilters;
 };
 
 /// Stores inter-operator state (exchange, bridges) for split groups.
