@@ -1590,6 +1590,10 @@ struct FromIso8601Timestamp {
     if (!timeZone) {
       timeZone = sessionTimeZone_;
     }
+    // Adjust for DST gaps (nonexistent local times) before converting to GMT.
+    auto corrected = timeZone->correct_nonexistent_time(
+        std::chrono::seconds(ts.getSeconds()));
+    ts = Timestamp(corrected.count(), ts.getNanos());
     ts.toGMT(*timeZone);
     result = pack(ts, timeZone->id());
     return Status::OK();
@@ -1647,6 +1651,11 @@ struct DateParseFunction {
       return dateTimeResult.error();
     }
 
+    // Adjust for DST gaps (nonexistent local times) before converting to GMT.
+    auto corrected = sessionTimeZone_->correct_nonexistent_time(
+        std::chrono::seconds(dateTimeResult->timestamp.getSeconds()));
+    dateTimeResult->timestamp =
+        Timestamp(corrected.count(), dateTimeResult->timestamp.getNanos());
     dateTimeResult->timestamp.toGMT(*sessionTimeZone_);
     result = dateTimeResult->timestamp;
     return Status::OK();
@@ -1775,6 +1784,11 @@ struct ParseDateTimeFunction {
     // no session timezone, fallback to 0 (GMT).
     const auto* timeZone =
         dateTimeResult->timezone ? dateTimeResult->timezone : sessionTimeZone_;
+    // Adjust for DST gaps (nonexistent local times) before converting to GMT.
+    auto corrected = timeZone->correct_nonexistent_time(
+        std::chrono::seconds(dateTimeResult->timestamp.getSeconds()));
+    dateTimeResult->timestamp =
+        Timestamp(corrected.count(), dateTimeResult->timestamp.getNanos());
     dateTimeResult->timestamp.toGMT(*timeZone);
     result = pack(dateTimeResult->timestamp, timeZone->id());
     return Status::OK();
