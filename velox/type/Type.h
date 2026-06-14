@@ -1791,6 +1791,10 @@ class TimeMicroPrecisionUtcType final
   /// - 86'399'999'999 -> "23:59:59.999999"
   static std::string toCompactIso8601(int64_t microseconds);
 
+  /// Parses a time string in H:m:s[.SSSSSS] format and returns microseconds
+  /// since midnight.
+  int64_t valueToTime(const StringView& timeStr) const;
+
  private:
   constexpr TimeMicroPrecisionUtcType() = default;
 };
