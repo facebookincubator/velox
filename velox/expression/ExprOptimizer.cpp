@@ -129,7 +129,7 @@ core::TypedExprPtr optimize(
   if (allInputsConstant) {
     return tryConstantFold(result, queryCtx, pool, makeFailExpr);
   }
-  return ExprRewriteRegistry::instance().rewrite(result);
+  return ExprRewriteRegistry::instance().rewrite(result, pool);
 }
 
 } // namespace facebook::velox::expression

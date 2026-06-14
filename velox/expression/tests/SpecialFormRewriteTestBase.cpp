@@ -39,7 +39,7 @@ void SpecialFormRewriteTestBase::testRewrite(
     const RowTypePtr& type) {
   const auto typedExpr = makeTypedExpr(expr, type);
   const auto rewritten =
-      expression::ExprRewriteRegistry::instance().rewrite(typedExpr);
+      expression::ExprRewriteRegistry::instance().rewrite(typedExpr, nullptr);
   const auto expectedExpr = makeTypedExpr(expected, type);
   if (*rewritten != *expectedExpr) {
     SCOPED_TRACE(fmt::format("Input: {}", typedExpr->toString()));

@@ -22,7 +22,9 @@
 
 namespace facebook::velox::expression {
 
-core::TypedExprPtr SwitchRewrite::rewrite(const core::TypedExprPtr& expr) {
+core::TypedExprPtr SwitchRewrite::rewrite(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* /*pool*/) {
   if (!expr->isCallKind()) {
     return nullptr;
   }

@@ -36,7 +36,9 @@ class SwitchRewrite {
   /// returned if it is present; otherwise NULL is returned. The else value is
   /// added to the inputs otherwise and the optimized SWITCH expression with
   /// pruned inputs is returned.
-  static core::TypedExprPtr rewrite(const core::TypedExprPtr& expr);
+  static core::TypedExprPtr rewrite(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* /*pool*/);
 
   static void registerRewrite();
 };

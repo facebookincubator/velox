@@ -48,6 +48,7 @@ velox_add_library(
   FromUtf8.cpp
   GooglePolylineFunctions.cpp
   InPredicate.cpp
+  InRewrite.cpp
   JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp

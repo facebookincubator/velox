@@ -197,7 +197,7 @@ void registerSplitToMap(const std::string& prefix) {
       Varchar,
       bool>({"$internal$split_to_map"});
   expression::ExprRewriteRegistry::instance().registerRewrite(
-      [prefix](const auto& expr) {
+      [prefix](const auto& expr, memory::MemoryPool* /*pool*/) {
         return rewriteSplitToMapCall(prefix, expr);
       });
 }
