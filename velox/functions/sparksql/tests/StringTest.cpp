@@ -544,7 +544,7 @@ TEST_F(StringTest, repeat) {
       "Result size must be less than or equal to 1048576");
   VELOX_ASSERT_USER_THROW(
       stringRepeat(std::string(214749, 'l'), 10000),
-      "integer overflow: 214749 * 10000");
+      "Result size must be less than or equal to 1048576");
 }
 
 TEST_F(StringTest, replace) {
