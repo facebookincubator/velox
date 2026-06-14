@@ -42,11 +42,15 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<AtanhFunction, double, double>({prefix + "atanh"});
   registerFunction<SecFunction, double, double>({prefix + "sec"});
   registerFunction<CscFunction, double, double>({prefix + "csc"});
+  registerFunction<SinFunction, double, double>({prefix + "sin"});
   registerFunction<SinhFunction, double, double>({prefix + "sinh"});
   registerFunction<CosFunction, double, double>({prefix + "cos"});
   registerFunction<CoshFunction, double, double>({prefix + "cosh"});
   registerFunction<CotFunction, double, double>({prefix + "cot"});
+  registerFunction<TanFunction, double, double>({prefix + "tan"});
+  registerFunction<TanhFunction, double, double>({prefix + "tanh"});
   registerFunction<DegreesFunction, double, double>({prefix + "degrees"});
+  registerFunction<RadiansFunction, double, double>({prefix + "radians"});
   registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
@@ -81,6 +85,7 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "floor"});
   registerDecimalFloor(prefix);
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
+  registerFunction<sparksql::LnFunction, double, double>({prefix + "ln"});
   registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
   registerFunction<sparksql::LogarithmFunction, double, double, double>(
