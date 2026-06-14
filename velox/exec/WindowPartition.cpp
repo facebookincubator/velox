@@ -114,7 +114,8 @@ void WindowPartition::extractColumn(
       columns_[columnIndex],
       data_->columnHasNulls(inputMapping_[columnIndex]),
       resultOffset,
-      result);
+      result,
+      false);
 }
 
 void WindowPartition::extractColumn(
@@ -130,7 +131,8 @@ void WindowPartition::extractColumn(
       columns_[columnIndex],
       data_->columnHasNulls(inputMapping_[columnIndex]),
       resultOffset,
-      result);
+      result,
+      false);
 }
 
 void WindowPartition::extractNulls(
