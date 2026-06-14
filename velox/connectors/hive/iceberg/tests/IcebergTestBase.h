@@ -73,8 +73,12 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
 
-  uint64_t getFileSize(const std::string& path) const;
+  /// Returns the size of a test file.
+  static uint64_t getFileSize(const std::string& path);
 
+  /// Creates Iceberg connector splits for a data file. Tests can attach delete
+  /// files, partition keys, info columns, and a data sequence number to each
+  /// split.
   std::vector<std::shared_ptr<ConnectorSplit>> makeIcebergSplits(
       const std::string& dataFilePath,
       const std::vector<IcebergDeleteFile>& deleteFiles = {},
@@ -84,27 +88,19 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       int64_t dataSequenceNumber = 0);
 
+  /// Creates one Iceberg connector split for a full data file with info
+  /// columns.
   std::shared_ptr<ConnectorSplit> makeIcebergSplitWithInfoColumns(
       const std::string& dataFilePath,
       const std::unordered_map<std::string, std::string>& infoColumns,
       const std::vector<IcebergDeleteFile>& deleteFiles = {},
       int64_t dataSequenceNumber = 0);
 
+  /// Creates Hive column handles for all columns in 'rowType', marking
+  /// specified columns as partition keys.
   ColumnHandleMap makeColumnHandles(
       const RowTypePtr& rowType,
       const std::unordered_set<int>& partitionIndices = {});
-
-  void assertTableScan(
-      const RowTypePtr& outputType,
-      const std::vector<std::shared_ptr<ConnectorSplit>>& splits,
-      const std::vector<RowVectorPtr>& expected,
-      const RowTypePtr& dataColumns = nullptr,
-      const ColumnHandleMap& assignments = {},
-      const std::string& filter = "",
-      const std::string& remainingFilter = "",
-      const std::string& subfieldFilter = "",
-      const std::unordered_map<std::string, std::string>& sessionProperties =
-          {});
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 

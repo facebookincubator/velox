@@ -380,9 +380,11 @@ class PlanBuilder {
     common::SubfieldFilters subfieldFiltersMap_;
   };
 
-  /// Start a TableScanBuilder.
-  TableScanBuilder& startTableScan() {
+  /// Start a TableScanBuilder using the specified connector.
+  TableScanBuilder& startTableScan(
+      std::string connectorId = std::string(kHiveDefaultConnectorId)) {
     tableScanBuilder_.reset(new TableScanBuilder(*this));
+    tableScanBuilder_->connectorId(std::move(connectorId));
     return *tableScanBuilder_;
   }
 

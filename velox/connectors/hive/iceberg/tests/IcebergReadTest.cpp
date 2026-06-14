@@ -26,6 +26,8 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -100,16 +102,19 @@ class IcebergReadTest : public test::IcebergTestBase {
           {}) {
     auto dataFilePath = TempFilePath::create();
     writeToFile(dataFilePath->getPath(), data);
-    assertTableScan(
-        outputType,
-        makeIcebergSplits(dataFilePath->getPath()),
-        expected,
-        scanSpecType,
-        assignments,
-        "",
-        "",
-        "",
-        sessionProperties);
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(scanSpecType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+
+    exec::test::AssertQueryBuilder(plan)
+        .connectorSessionProperties(
+            {{test::kIcebergConnectorId, sessionProperties}})
+        .splits(makeIcebergSplits(dataFilePath->getPath()))
+        .assertResults(expected);
   }
 
   std::vector<RowVectorPtr> makeSingleBigintData(
@@ -212,16 +217,19 @@ class IcebergReadTest : public test::IcebergTestBase {
         ROW({"c0", "_row_id", "_last_updated_sequence_number"},
             {BIGINT(), BIGINT(), BIGINT()});
     const auto tableDataColumns = ROW({"c0"}, {BIGINT()});
-    assertTableScan(
-        outputType,
-        {makeIcebergSplitWithInfoColumns(
-            dataFilePath->getPath(), infoColumns, deleteFiles)},
-        tc.expectedVectors,
-        tableDataColumns,
-        {},
-        "",
-        "",
-        tc.subfieldFilter);
+    exec::test::PlanBuilder planBuilder;
+    auto& tableScanBuilder =
+        planBuilder.startTableScan(test::kIcebergConnectorId)
+            .outputType(outputType)
+            .dataColumns(tableDataColumns);
+    if (!tc.subfieldFilter.empty()) {
+      tableScanBuilder.subfieldFilter(tc.subfieldFilter);
+    }
+    auto plan = tableScanBuilder.endTableScan().planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits({makeIcebergSplitWithInfoColumns(
+            dataFilePath->getPath(), infoColumns, deleteFiles)})
+        .assertResults(tc.expectedVectors);
   }
 };
 
@@ -245,8 +253,14 @@ TEST_F(IcebergReadTest, schemaEvolutionRemoveColumn) {
       {dataVectors[0]->childAt(0), dataVectors[0]->childAt(2)})};
 
   // Read with new schema (c0 and c2 only, c1 removed).
-  assertTableScan(
-      newRowType, makeIcebergSplits(dataFilePath->getPath()), expectedVectors);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(newRowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFilePath->getPath()))
+      .assertResults(expectedVectors);
 }
 
 TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
@@ -265,11 +279,15 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
        makeNullConstant(TypeKind::VARCHAR, 3)})};
 
   // Read with new schema (c0, c1, and c2).
-  assertTableScan(
-      newRowType,
-      makeIcebergSplits(dataFilePath->getPath()),
-      expectedVectors,
-      newRowType);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(newRowType)
+                  .dataColumns(newRowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFilePath->getPath()))
+      .assertResults(expectedVectors);
 }
 
 TEST_F(IcebergReadTest, addColumnWithDefault) {
@@ -423,12 +441,16 @@ TEST_F(IcebergReadTest, addColumnWithInvalidDefault) {
   assignments["age"] = makeIcebergHandle("age", INTEGER(), 2, "IN");
 
   VELOX_ASSERT_THROW(
-      assertTableScan(
-          newRowType,
-          makeIcebergSplits(dataFilePath->getPath()),
-          {},
-          newRowType,
-          assignments),
+      exec::test::AssertQueryBuilder(
+          exec::test::PlanBuilder()
+              .startTableScan(test::kIcebergConnectorId)
+              .outputType(newRowType)
+              .dataColumns(newRowType)
+              .assignments(assignments)
+              .endTableScan()
+              .planNode())
+          .splits(makeIcebergSplits(dataFilePath->getPath()))
+          .assertResults(std::vector<RowVectorPtr>{}),
       "Invalid");
 }
 
@@ -489,37 +511,61 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
              [](vector_size_t) { return "IN"; })})};
   };
 
-  assertTableScan(
-      newRowType,
-      makeSplits(),
-      // Test 1: No filter. After deletes, rows 1, 3, 5, 7, 8, 9, 10 remain.
-      makeExpected({1, 3, 5, 7, 8, 9, 10}),
-      newRowType,
-      assignments);
-  assertTableScan(
-      newRowType,
-      makeSplits(),
-      // Test 2: Filter on file column (c0 > 5) with deletes.
-      makeExpected({7, 8, 9, 10}),
-      newRowType,
-      assignments,
-      "c0 > 5");
-  assertTableScan(
-      newRowType,
-      makeSplits(),
-      // Test 3: Filter on default value column (country = 'IN') with deletes.
-      makeExpected({1, 3, 5, 7, 8, 9, 10}),
-      newRowType,
-      assignments,
-      "country = 'IN'");
-  assertTableScan(
-      newRowType,
-      makeSplits(),
-      // Test 4: Combined filter (c0 > 3 AND country = 'IN') with deletes.
-      makeExpected({5, 7, 8, 9, 10}),
-      newRowType,
-      assignments,
-      "c0 > 3 AND country = 'IN'");
+  {
+    // Test 1: No filter. After deletes, rows 1, 3, 5, 7, 8, 9, 10 remain.
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeSplits())
+        .assertResults(makeExpected({1, 3, 5, 7, 8, 9, 10}));
+  }
+  {
+    // Test 2: Filter on file column (c0 > 5) with deletes.
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .filter("c0 > 5")
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeSplits())
+        .assertResults(makeExpected({7, 8, 9, 10}));
+  }
+  {
+    // Test 3: Filter on default value column (country = 'IN') with deletes.
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .filter("country = 'IN'")
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeSplits())
+        .assertResults(makeExpected({1, 3, 5, 7, 8, 9, 10}));
+  }
+  {
+    // Test 4: Combined filter (c0 > 3 AND country = 'IN') with deletes.
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .filter("c0 > 3 AND country = 'IN'")
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeSplits())
+        .assertResults(makeExpected({5, 7, 8, 9, 10}));
+  }
 }
 
 TEST_F(IcebergReadTest, partitionColumnsFromHive) {
@@ -556,12 +602,16 @@ TEST_F(IcebergReadTest, partitionColumnsFromHive) {
           makeFlatVector<int32_t>({2025, 2025, 2025}),
       })};
 
-  assertTableScan(
-      tableRowType,
-      makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys),
-      expectedVectors,
-      tableRowType,
-      makeColumnHandles(tableRowType, {2, 3}));
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(tableRowType)
+                  .dataColumns(tableRowType)
+                  .assignments(makeColumnHandles(tableRowType, {2, 3}))
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFilePath->getPath(), {}, partitionKeys))
+      .assertResults(expectedVectors);
 }
 
 TEST_F(IcebergReadTest, rowLineage) {
@@ -799,17 +849,21 @@ TEST_F(IcebergReadTest, targetTableRowIdSynthesis) {
               }),
       });
 
-  assertTableScan(
-      outputType,
-      {makeIcebergSplitWithInfoColumns(
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(ROW({"c0"}, {BIGINT()}))
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits({makeIcebergSplitWithInfoColumns(
           dataFilePath->getPath(),
           {
               {IcebergMetadataColumn::kSpecIdInfoColumn, "7"},
               {IcebergMetadataColumn::kPartitionDataInfoColumn,
                kPartitionDataJson},
-          })},
-      {expected},
-      ROW({"c0"}, {BIGINT()}));
+          })})
+      .assertResults({expected});
 }
 
 TEST_F(IcebergReadTest, flatMapAsStruct) {
@@ -854,12 +908,16 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
             makeFlatVector<double>({20.0, 200.0})})});
 
   // Output type has ROW for the struct-encoded column.
-  assertTableScan(
-      ROW({"id", "features"}, {BIGINT(), structType}),
-      makeIcebergSplits(dataFilePath->getPath()),
-      {expected},
-      dataSchema,
-      assignments);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(ROW({"id", "features"}, {BIGINT(), structType}))
+                  .dataColumns(dataSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFilePath->getPath()))
+      .assertResults({expected});
 }
 
 } // namespace
