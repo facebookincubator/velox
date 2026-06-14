@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/container/F14Set.h>
+#include <folly/container/Reserve.h>
 #include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
@@ -145,6 +146,11 @@ class IntegerDictionaryEncoder : public AbstractIntegerDictionaryEncoder {
     keys_.append(value);
     counts_.append(count);
     return newIndex;
+  }
+
+  // Pre-allocate bucket space for additional elements to avoid rehashing.
+  void reserveAdditionalCapacity(uint32_t additionalSize) {
+    folly::grow_capacity_by(keyIndex_, additionalSize);
   }
 
   // Returns the num elements in the dictionary. Helps determine if we
