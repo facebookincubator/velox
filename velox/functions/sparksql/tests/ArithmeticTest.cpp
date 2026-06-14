@@ -184,6 +184,16 @@ class ArithmeticTest : public SparkFunctionBaseTest {
     return evaluateOnce<T>("unaryminus(c0)", arg);
   }
 
+  template <typename T>
+  std::optional<T> add(std::optional<T> a, std::optional<T> b) {
+    return evaluateOnce<T>("add(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> subtract(std::optional<T> a, std::optional<T> b) {
+    return evaluateOnce<T>("subtract(c0, c1)", a, b);
+  }
+
   std::optional<double> divide(
       std::optional<double> numerator,
       std::optional<double> denominator) {
@@ -318,6 +328,62 @@ TEST_F(ArithmeticTest, UnaryMinusOverflow) {
   EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
   EXPECT_EQ(unaryminus<double>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, UnaryMinusOverflowAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(unaryminus<int8_t>(INT8_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int16_t>(INT16_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int32_t>(INT32_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int64_t>(INT64_MIN), "Arithmetic overflow");
+
+  EXPECT_EQ(unaryminus<float>(-kInf), kInf);
+  EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
+  EXPECT_EQ(unaryminus<double>(-kInf), kInf);
+  EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, AddOverflow) {
+  EXPECT_EQ(add<int8_t>(INT8_MAX, 1), std::numeric_limits<int8_t>::min());
+  EXPECT_EQ(add<int16_t>(INT16_MAX, 1), std::numeric_limits<int16_t>::min());
+  EXPECT_EQ(add<int32_t>(INT32_MAX, 1), std::numeric_limits<int32_t>::min());
+  EXPECT_EQ(add<int64_t>(INT64_MAX, 1), std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(ArithmeticTest, AddOverflowAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(add<int8_t>(INT8_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add<int16_t>(INT16_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add<int32_t>(INT32_MAX, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(add<int64_t>(INT64_MAX, 1), "Arithmetic overflow");
+
+  EXPECT_EQ(add<int32_t>(1, 2), 3);
+}
+
+TEST_F(ArithmeticTest, SubtractOverflow) {
+  EXPECT_EQ(subtract<int8_t>(INT8_MIN, 1), std::numeric_limits<int8_t>::max());
+  EXPECT_EQ(
+      subtract<int16_t>(INT16_MIN, 1), std::numeric_limits<int16_t>::max());
+  EXPECT_EQ(
+      subtract<int32_t>(INT32_MIN, 1), std::numeric_limits<int32_t>::max());
+  EXPECT_EQ(
+      subtract<int64_t>(INT64_MIN, 1), std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(ArithmeticTest, SubtractOverflowAnsi) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+
+  VELOX_ASSERT_THROW(subtract<int8_t>(INT8_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract<int16_t>(INT16_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract<int32_t>(INT32_MIN, 1), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(subtract<int64_t>(INT64_MIN, 1), "Arithmetic overflow");
+
+  EXPECT_EQ(subtract<int32_t>(3, 2), 1);
 }
 
 TEST_F(ArithmeticTest, Divide) {
@@ -851,6 +917,243 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
       abs<int32_t>(std::numeric_limits<int32_t>::min()), "Arithmetic overflow");
   VELOX_ASSERT_THROW(
       abs<int64_t>(std::numeric_limits<int64_t>::min()), "Arithmetic overflow");
+}
+
+class IntervalArithmeticAnsiTest : public SparkFunctionBaseTest {
+ protected:
+  void SetUp() override {
+    SparkFunctionBaseTest::SetUp();
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+  }
+
+  void TearDown() override {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+    SparkFunctionBaseTest::TearDown();
+  }
+};
+
+TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeUnaryMinusAnsi) {
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(1000)),
+      -1000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(-1000)),
+      1000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)", INTERVAL_DAY_TIME(), std::optional<int64_t>(0)),
+      0);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)",
+          INTERVAL_DAY_TIME(),
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "unaryminus(c0)",
+          INTERVAL_DAY_TIME(),
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min())),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthUnaryMinusAnsi) {
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(12)),
+      -12);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(-12)),
+      12);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)", INTERVAL_YEAR_MONTH(), std::optional<int32_t>(0)),
+      0);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)",
+          INTERVAL_YEAR_MONTH(),
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "unaryminus(c0)",
+          INTERVAL_YEAR_MONTH(),
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min())),
+      std::numeric_limits<int32_t>::min());
+}
+
+TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeAddAnsi) {
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(1000),
+          std::optional<int64_t>(2000)),
+      3000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(-1000),
+          std::optional<int64_t>(500)),
+      -500);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "add(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(1)),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthAddAnsi) {
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(12),
+          std::optional<int32_t>(24)),
+      36);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(-12),
+          std::optional<int32_t>(6)),
+      -6);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::max()),
+          std::optional<int32_t>(1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "add(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::max()),
+          std::optional<int32_t>(1)),
+      std::numeric_limits<int32_t>::min());
+}
+
+TEST_F(IntervalArithmeticAnsiTest, IntervalDayTimeSubtractAnsi) {
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(3000),
+          std::optional<int64_t>(1000)),
+      2000);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(1000),
+          std::optional<int64_t>(2000)),
+      -1000);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(1)),
+      "Arithmetic overflow");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::max()),
+          std::optional<int64_t>(-1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_DAY_TIME(), INTERVAL_DAY_TIME()},
+          std::optional<int64_t>(std::numeric_limits<int64_t>::min()),
+          std::optional<int64_t>(1)),
+      std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(IntervalArithmeticAnsiTest, IntervalYearMonthSubtractAnsi) {
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(36),
+          std::optional<int32_t>(12)),
+      24);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(12),
+          std::optional<int32_t>(24)),
+      -12);
+
+  VELOX_ASSERT_THROW(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min()),
+          std::optional<int32_t>(1)),
+      "Arithmetic overflow");
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "subtract(c0, c1)",
+          {INTERVAL_YEAR_MONTH(), INTERVAL_YEAR_MONTH()},
+          std::optional<int32_t>(std::numeric_limits<int32_t>::min()),
+          std::optional<int32_t>(1)),
+      std::numeric_limits<int32_t>::max());
 }
 
 class LogNTest : public SparkFunctionBaseTest {

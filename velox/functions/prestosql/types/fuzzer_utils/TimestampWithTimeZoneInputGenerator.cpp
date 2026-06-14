@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
 
 #include "velox/common/fuzzer/Utils.h"
+#include "velox/functions/lib/DateTimeFormatterBuilder.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Variant.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -57,6 +58,36 @@ std::vector<int16_t> excludeProblematicTimeZoneIds(
 
   return timeZoneIds;
 }
+
+bool roundTripsThroughPrestoQueryRunnerTransform(
+    int64_t timestampWithTimeZone) {
+  static const auto timestampFormatter =
+      functions::buildJodaDateTimeFormatter("yyyy-MM-dd HH:mm:ss.SSS ZZ")
+          .value();
+  static const auto zoneFormatter =
+      functions::buildJodaDateTimeFormatter("ZZZ").value();
+
+  const auto timestamp = unpackTimestampUtc(timestampWithTimeZone);
+  const auto* timeZone = tz::locateZone(unpackZoneKeyId(timestampWithTimeZone));
+
+  std::string timestampText(timestampFormatter->maxResultSize(timeZone), '\0');
+  timestampText.resize(timestampFormatter->format(
+      timestamp, timeZone, timestampText.size(), timestampText.data()));
+
+  std::string zoneText(zoneFormatter->maxResultSize(timeZone), '\0');
+  zoneText.resize(zoneFormatter->format(
+      timestamp, timeZone, zoneText.size(), zoneText.data()));
+
+  auto parsed = timestampFormatter->parse(timestampText);
+  if (parsed.hasError() || parsed->timezone == nullptr) {
+    return false;
+  }
+
+  auto parsedTimestamp = parsed->timestamp;
+  parsedTimestamp.toGMT(*parsed->timezone);
+  return pack(parsedTimestamp, tz::getTimeZoneID(zoneText)) ==
+      timestampWithTimeZone;
+}
 } // namespace
 
 TimestampWithTimeZoneInputGenerator::TimestampWithTimeZoneInputGenerator(
@@ -74,9 +105,18 @@ variant TimestampWithTimeZoneInputGenerator::generate() {
     return variant::null(type_->kind());
   }
 
-  int16_t timeZoneId =
-      timeZoneIds_[rand<size_t>(rng_, 0, timeZoneIds_.size() - 1)];
+  while (true) {
+    int16_t timeZoneId =
+        timeZoneIds_[rand<size_t>(rng_, 0, timeZoneIds_.size() - 1)];
+    auto value =
+        pack(rand<int64_t>(rng_, kMinMillisUtc, kMaxMillisUtc), timeZoneId);
 
-  return pack(rand<int64_t>(rng_, kMinMillisUtc, kMaxMillisUtc), timeZoneId);
+    // Presto query runner transports this type as
+    // (format_datetime(..., ZZ), format_datetime(..., ZZZ)) and reconstructs
+    // it with parse_datetime(..., ZZ) plus at_timezone(..., zone).
+    if (roundTripsThroughPrestoQueryRunnerTransform(value)) {
+      return value;
+    }
+  }
 }
 } // namespace facebook::velox::fuzzer

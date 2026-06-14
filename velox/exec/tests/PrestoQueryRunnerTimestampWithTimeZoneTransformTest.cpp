@@ -18,6 +18,7 @@
 #include "velox/exec/tests/PrestoQueryRunnerIntermediateTypeTransformTestBase.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec::test {
 namespace {
@@ -75,6 +76,29 @@ TEST_F(
       {SMALLINT(),
        TIMESTAMP(),
        ARRAY(ROW({MAP(VARCHAR(), TIMESTAMP_WITH_TIME_ZONE())}))})));
+}
+
+TEST_F(
+    PrestoQueryRunnerTimestampWithTimeZoneTransformTest,
+    transformIntermediateOnlyTypeTimestampWithTimeZoneUsesStructuredTransport) {
+  const auto value = pack(
+      Timestamp::fromMillis(1572771600000),
+      tz::getTimeZoneID("America/Los_Angeles"));
+  auto base =
+      makeNullableFlatVector<int64_t>({value}, TIMESTAMP_WITH_TIME_ZONE());
+
+  auto transformed = transformIntermediateTypes(base);
+  ASSERT_TRUE(transformed->type()->isRow());
+  auto row = transformed->as<RowVector>();
+  ASSERT_NE(row, nullptr);
+  ASSERT_EQ(
+      row->childAt(0)->as<SimpleVector<StringView>>()->valueAt(0).str(),
+      "2019-11-03 01:00:00.000 -08:00");
+  ASSERT_EQ(
+      row->childAt(1)->as<SimpleVector<StringView>>()->valueAt(0).str(),
+      "America/Los_Angeles");
+
+  test(base);
 }
 
 TEST_F(

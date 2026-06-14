@@ -49,6 +49,9 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
+    For integral inputs and interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow wraps when Spark ANSI mode is
+    disabled and throws an overflow exception when Spark ANSI mode is enabled.
     Corresponds to sparks's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
@@ -115,7 +118,7 @@ Mathematical Functions
 
 .. spark:function:: cot(x) -> double
 
-    Returns the cotangent of ``x``(measured in radians). Supported type is DOUBLE.
+    Returns the cotangent of ``x`` (measured in radians). Supported type is DOUBLE.
 
 .. spark:function:: csc(x) -> double
 
@@ -412,6 +415,9 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
+    For integral inputs and interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow wraps when Spark ANSI mode is
+    disabled and throws an overflow exception when Spark ANSI mode is enabled.
     Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
@@ -428,7 +434,12 @@ Mathematical Functions
 
 .. spark:function:: unaryminus(x) -> [same as x]
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the negative of `x`.
+    For integral inputs and interval inputs (``interval day to second`` and
+    ``interval year to month``), negating the minimum representable value
+    returns the wrapped value when Spark ANSI mode is disabled and throws an
+    overflow exception when Spark ANSI mode is enabled.
+    Corresponds to Spark's operator ``-``.
 
 .. spark:function:: unhex(x) -> varbinary
 

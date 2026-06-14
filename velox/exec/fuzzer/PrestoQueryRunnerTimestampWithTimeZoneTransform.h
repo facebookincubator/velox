@@ -26,7 +26,11 @@ class TimestampWithTimeZoneTransform
   TimestampWithTimeZoneTransform()
       : IntermediateTypeTransformUsingCast(
             TIMESTAMP_WITH_TIME_ZONE(),
-            VARCHAR()) {}
+            ROW({"timestamp_text", "zone_text"}, {VARCHAR(), VARCHAR()})) {}
+
+  core::ExprPtr projectToTargetType(
+      const core::ExprPtr& inputExpr,
+      const std::string& columnAlias) const override;
 
   core::ExprPtr projectToIntermediateType(
       const core::ExprPtr& inputExpr,

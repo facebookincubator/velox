@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Status.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -144,18 +145,90 @@ struct PModFloatFunction {
   }
 };
 
-template <typename T>
+template <typename TExec>
 struct UnaryMinusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
     if constexpr (std::is_integral_v<TInput>) {
-      // Avoid undefined integer overflow.
-      result = a == std::numeric_limits<TInput>::min() ? a : -a;
+      const bool isMinValue =
+          FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min());
+      VELOX_USER_RETURN(
+          ansiEnabled_ && isMinValue, "Arithmetic overflow: unaryminus({})", a);
+      result = isMinValue ? a : -a;
     } else {
       result = -a;
     }
-    return true;
+    return Status::OK();
   }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+template <typename TExec>
+struct PlusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/,
+      const TInput* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput& a, const TInput& b) {
+    if constexpr (std::is_integral_v<TInput>) {
+      TInput res;
+      const bool overflow = __builtin_add_overflow(a, b, &res);
+      VELOX_USER_RETURN(
+          ansiEnabled_ && overflow, "Arithmetic overflow: {} + {}", a, b);
+      result = res;
+    } else {
+      result = a + b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
+};
+
+template <typename TExec>
+struct MinusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/,
+      const TInput* /*b*/) {
+    ansiEnabled_ = config.sparkAnsiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status
+  call(TInput& result, const TInput& a, const TInput& b) {
+    if constexpr (std::is_integral_v<TInput>) {
+      const bool overflow = __builtin_sub_overflow(a, b, &result);
+      VELOX_USER_RETURN(
+          ansiEnabled_ && overflow, "Arithmetic overflow: {} - {}", a, b);
+    } else {
+      result = a - b;
+    }
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
