@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -26,11 +28,16 @@ using facebook::velox::functions::sparksql::SparkQueryConfig;
 namespace facebook::velox::test {
 namespace {
 
+constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
+
 class SparkCastExprTest : public functions::test::CastBaseTest {
  protected:
   static void SetUpTestCase() {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
+    functions::sparksql::registerSparkCastModeSpecialForms(
+        kSparkAnsiCast, kSparkLegacyCast);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
@@ -38,6 +45,17 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
           std::to_string(value)}});
+  }
+
+  VectorPtr evaluateCastModeSpecialForm(
+      const std::string& castName,
+      const TypePtr& toType,
+      const VectorPtr& input) {
+    auto inputField =
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0");
+    auto cast = std::make_shared<const core::CallTypedExpr>(
+        toType, std::vector<core::TypedExprPtr>{inputField}, castName);
+    return evaluate(cast, makeRowVector({input}));
   }
 
   void testBoolToTimestamp() {
@@ -1042,6 +1060,29 @@ class SparkCastExprTestAnsiOff : public SparkCastExprTest {
     setAnsiSupport(false);
   }
 };
+
+TEST_F(SparkCastExprTest, ansiCastModeIgnoresSessionAnsiOff) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          INTEGER(),
+          makeFlatVector<std::string>({"2147483648"})),
+      "Cannot cast");
+}
+
+TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
+  setAnsiSupport(true);
+
+  auto result = evaluateCastModeSpecialForm(
+      kSparkLegacyCast,
+      INTEGER(),
+      makeFlatVector<std::string>({"2147483648", "123"}));
+  auto expected =
+      makeNullableFlatVector<int32_t>({std::nullopt, 123}, INTEGER());
+  assertEqualVectors(expected, result);
+}
 
 // ============================================================================
 // ANSI ON Tests
