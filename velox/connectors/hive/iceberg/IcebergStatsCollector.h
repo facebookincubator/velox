@@ -63,7 +63,7 @@ class IcebergStatsCollector {
   /// @param inputColumns The Iceberg input column handles (carry the field-id
   /// trees).
   /// @param schema The written row type.
-  static std::shared_ptr<IcebergStatsCollector> create(
+  static std::unique_ptr<IcebergStatsCollector> create(
       dwio::common::FileFormat format,
       const std::vector<IcebergColumnHandlePtr>& inputColumns,
       const RowTypePtr& schema);
