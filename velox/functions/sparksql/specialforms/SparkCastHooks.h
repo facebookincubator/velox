@@ -68,6 +68,10 @@ class SparkCastHooks : public exec::CastHooks {
     return timestampToStringOptions_;
   }
 
+  const TimestampToStringOptions& timestampUtcToStringOptions() const override {
+    return timestampUtcToStringOptions_;
+  }
+
   bool truncate() const override {
     return allowOverflow_;
   }
@@ -77,6 +81,11 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   exec::PolicyType getPolicy() const override;
+
+  // Spark supports TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return true;
+  }
 
   void castDateTimestampToGMT(
       Timestamp& timestamp,
@@ -108,5 +117,15 @@ class SparkCastHooks : public exec::CastHooks {
       .skipTrailingZeros = true,
       .zeroPaddingYear = true,
       .dateTimeSeparator = ' '};
+
+  /// Same as timestampToStringOptions_ but with timeZone = nullptr, since
+  /// TIMESTAMP_UTC is not subject to session timezone adjustment.
+  TimestampToStringOptions timestampUtcToStringOptions_ = {
+      .precision = TimestampToStringOptions::Precision::kMicroseconds,
+      .leadingPositiveSign = true,
+      .skipTrailingZeros = true,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+      .timeZone = nullptr};
 };
 } // namespace facebook::velox::functions::sparksql
