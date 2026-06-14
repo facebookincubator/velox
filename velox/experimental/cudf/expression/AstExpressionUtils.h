@@ -670,14 +670,12 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       exprVec.push_back(&logicalNode);
     }
 
-    // Handle empty IN list case
+    // Per Presto IN semantics, an empty or null-only in-list yields NULL
+    // regardless of the probe value.
     if (exprVec.empty()) {
-      // FAIL
-      VELOX_FAIL("Empty IN list");
-      // Return FALSE for empty IN list
-      // auto falseValue = std::make_shared<ConstantVector<bool>>(
-      //     value->pool(), 1, false, TypeKind::BOOLEAN, false);
-      // return tree.push(createLiteral(falseValue, scalars));
+      auto nullBoolean =
+          BaseVector::createNullConstant(BOOLEAN(), 1, value->pool());
+      return tree.push(createLiteral(nullBoolean, scalars));
     }
 
     // OR all logical nodes
