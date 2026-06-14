@@ -1402,6 +1402,98 @@ TEST_F(HiveIcebergTest, defaultValueWithDeletesAndFilters) {
   }
 }
 
+// Test filter pushdown (remainingFilter) with initial-default columns.
+// This test validates that when a filter is pushed down to the split reader,
+// files with missing columns that have initial-defaults are correctly handled
+// during checkIfSplitIsEmpty().
+TEST_F(HiveIcebergTest, filterPushdownWithInitialDefault) {
+  auto newRowType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+
+  // Write data file with old schema (only c0) containing rows 1-5.
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeC0Handle();
+  assignments["country"] = makeIcebergHandle("country", VARCHAR(), 2, "IN");
+
+  // Test 1: Filter pushdown on initial-default column (matching value)
+  // Without the fix, checkIfSplitIsEmpty() would incorrectly skip this file
+  // because it treats missing 'country' column as NULL, and NULL != 'IN'.
+  {
+    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+         makeFlatVector<std::string>({"IN", "IN", "IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .remainingFilter("country = 'IN'")
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+
+  // Test 2: Combined filter pushdown (file column AND default column)
+  // Tests that both filters are correctly evaluated.
+  {
+    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({3, 4, 5}),
+         makeFlatVector<std::string>({"IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .remainingFilter("c0 > 2 AND country = 'IN'")
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+
+  // Test 3: IS NOT NULL filter on initial-default column
+  // All rows should match since default is non-null.
+  {
+    auto icebergSplits = makeIcebergSplits(dataFilePath->getPath());
+    std::vector<RowVectorPtr> expectedVectors;
+    expectedVectors.push_back(makeRowVector(
+        newRowType->names(),
+        {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+         makeFlatVector<std::string>({"IN", "IN", "IN", "IN", "IN"})}));
+
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .remainingFilter("country IS NOT NULL")
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .splits(icebergSplits)
+        .assertResults(expectedVectors);
+  }
+}
+
 // Test reading partition columns from Hive-migrated tables.
 // This tests the adaptColumns method handling partition columns that are not
 // stored in the data file but provided via partitionKeys map.
