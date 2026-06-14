@@ -362,7 +362,7 @@ IcebergDataSink::IcebergDataSink(
       columnHandles.emplace_back(
           checkedPointerCast<const IcebergColumnHandle>(column));
     }
-    parquetStatsCollector_ = std::make_shared<IcebergParquetStatsCollector>(
+    parquetStatsCollector_ = std::make_unique<IcebergParquetStatsCollector>(
         std::move(columnHandles));
   }
 #endif
