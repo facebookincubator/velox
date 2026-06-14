@@ -299,7 +299,7 @@ class IcebergDataSink : public HiveDataSink {
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
 
 #ifdef VELOX_ENABLE_PARQUET
-  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
+  std::unique_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
 #endif
 };
 
