@@ -44,7 +44,6 @@
 #define TPC "Transaction Processing Performance Council"
 #define C_DATES "1994 - 2010"
 
-#include "dbgen/config.h" // @manual
 #include "dbgen/shared.h" // @manual
 
 #include <stdio.h>
