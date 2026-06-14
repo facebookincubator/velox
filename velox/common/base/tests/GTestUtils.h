@@ -26,11 +26,36 @@
 #define VELOX_TYPED_TEST_SUITE TYPED_TEST_CASE
 #endif
 
+/// Name generator for parameterized tests that uses the parameter index.
+/// Avoids gtest's default behavior of dumping raw bytes for types without
+/// operator<< or PrintTo.
+struct VeloxTestIndexParamName {
+  template <typename ParamType>
+  std::string operator()(
+      const ::testing::TestParamInfo<ParamType>& info) const {
+    return std::to_string(info.index);
+  }
+};
+
+// Dispatch based on argument count: 3 args = no custom name generator (use
+// index-based default), 4 args = caller-provided name generator.
+#define VELOX_INSTANTIATE_PICK(_1, _2, _3, _4, NAME, ...) NAME
+
 #ifdef INSTANTIATE_TEST_SUITE_P
-#define VELOX_INSTANTIATE_TEST_SUITE_P INSTANTIATE_TEST_SUITE_P
+#define VELOX_INSTANTIATE_3(prefix, suite, generator) \
+  INSTANTIATE_TEST_SUITE_P(prefix, suite, generator, VeloxTestIndexParamName())
+#define VELOX_INSTANTIATE_4(prefix, suite, generator, nameGen) \
+  INSTANTIATE_TEST_SUITE_P(prefix, suite, generator, nameGen)
 #else
-#define VELOX_INSTANTIATE_TEST_SUITE_P INSTANTIATE_TEST_CASE_P
+#define VELOX_INSTANTIATE_3(prefix, suite, generator) \
+  INSTANTIATE_TEST_CASE_P(prefix, suite, generator, VeloxTestIndexParamName())
+#define VELOX_INSTANTIATE_4(prefix, suite, generator, nameGen) \
+  INSTANTIATE_TEST_CASE_P(prefix, suite, generator, nameGen)
 #endif
+
+#define VELOX_INSTANTIATE_TEST_SUITE_P(...) \
+  VELOX_INSTANTIATE_PICK(                   \
+      __VA_ARGS__, VELOX_INSTANTIATE_4, VELOX_INSTANTIATE_3)(__VA_ARGS__)
 
 // The void static cast supresses the "unused expression result" warning in
 // clang.
