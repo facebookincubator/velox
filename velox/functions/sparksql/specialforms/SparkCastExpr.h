@@ -23,9 +23,6 @@
 
 namespace facebook::velox::functions::sparksql {
 
-inline constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
-inline constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
-
 class SparkCastExpr : public exec::CastExpr {
  public:
   SparkCastExpr(
@@ -67,13 +64,19 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
       const core::QueryConfig& config) override;
 };
 
-/// Registers Spark cast special forms that preserve the cast mode on the
-/// expression instead of deriving it only from SparkQueryConfig::ansiEnabled().
+/// Registers private Spark cast special forms for integrations that translate
+/// Spark plans with per-expression cast modes. For example, Gluten can register
+/// internal names for ANSI and legacy casts, then emit those names while
+/// converting Spark Cast expressions whose mode is already fixed in the Spark
+/// plan.
 ///
-/// The ANSI cast form applies ANSI behavior for casts supported by
+/// These forms are not the default Spark SQL cast forms because regular
+/// `cast` and `try_cast` must continue to derive behavior from
+/// SparkQueryConfig::ansiEnabled(), matching session-level Spark SQL semantics.
+/// The ANSI form applies ANSI behavior for casts supported by
 /// SparkCastCallToSpecialForm::isAnsiSupported() and uses legacy behavior for
-/// cast pairs whose ANSI behavior is not supported yet. The legacy cast form
-/// applies Spark legacy cast behavior regardless of the session ANSI setting.
+/// cast pairs whose ANSI behavior is not supported yet. The legacy form applies
+/// Spark legacy cast behavior regardless of the session ANSI setting.
 void registerSparkCastModeSpecialForms(
     const std::string& ansiCastName,
     const std::string& legacyCastName);

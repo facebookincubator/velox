@@ -23,12 +23,13 @@
 #include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
-using facebook::velox::functions::sparksql::kSparkAnsiCast;
-using facebook::velox::functions::sparksql::kSparkLegacyCast;
 using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::test {
 namespace {
+
+constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
 
 class SparkCastExprTest : public functions::test::CastBaseTest {
  protected:
