@@ -327,4 +327,81 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   return splits;
 }
 
+uint64_t IcebergTestBase::getFileSize(const std::string& path) {
+  return filesystems::getFileSystem(path, nullptr)
+      ->openFileForRead(path)
+      ->size();
+}
+
+std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
+    const std::string& dataFilePath,
+    const std::vector<IcebergDeleteFile>& deleteFiles,
+    const std::unordered_map<std::string, std::optional<std::string>>&
+        partitionKeys,
+    uint32_t splitCount,
+    const std::unordered_map<std::string, std::string>& infoColumns,
+    int64_t dataSequenceNumber) {
+  VELOX_CHECK_GT(splitCount, 0);
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  const auto fileSize = getFileSize(dataFilePath);
+  const auto splitSize = fileSize / splitCount;
+  splits.reserve(splitCount);
+
+  for (auto i = 0; i < splitCount; ++i) {
+    splits.emplace_back(
+        std::make_shared<HiveIcebergSplit>(
+            kIcebergConnectorId,
+            dataFilePath,
+            fileFormat_,
+            i * splitSize,
+            splitSize,
+            partitionKeys,
+            std::nullopt,
+            std::unordered_map<std::string, std::string>{},
+            nullptr,
+            /*cacheable=*/true,
+            deleteFiles,
+            infoColumns,
+            std::nullopt,
+            dataSequenceNumber));
+  }
+
+  return splits;
+}
+
+std::shared_ptr<ConnectorSplit>
+IcebergTestBase::makeIcebergSplitWithInfoColumns(
+    const std::string& dataFilePath,
+    const std::unordered_map<std::string, std::string>& infoColumns,
+    const std::vector<IcebergDeleteFile>& deleteFiles,
+    int64_t dataSequenceNumber) {
+  auto splits = makeIcebergSplits(
+      dataFilePath, deleteFiles, {}, 1, infoColumns, dataSequenceNumber);
+  VELOX_CHECK_EQ(splits.size(), 1);
+  return splits.front();
+}
+
+ColumnHandleMap IcebergTestBase::makeColumnHandles(
+    const RowTypePtr& rowType,
+    const std::unordered_set<int>& partitionIndices) {
+  ColumnHandleMap assignments;
+  for (auto i = 0; i < rowType->size(); ++i) {
+    const auto& columnName = rowType->nameOf(i);
+    const auto& columnType = rowType->childAt(i);
+    const auto columnHandleType = partitionIndices.contains(i)
+        ? FileColumnHandle::ColumnType::kPartitionKey
+        : FileColumnHandle::ColumnType::kRegular;
+    assignments.insert(
+        {columnName,
+         std::make_shared<HiveColumnHandle>(
+             columnName,
+             columnHandleType,
+             columnType,
+             columnType,
+             std::vector<common::Subfield>{})});
+  }
+
+  return assignments;
+}
+
 } // namespace facebook::velox::connector::hive::iceberg::test
