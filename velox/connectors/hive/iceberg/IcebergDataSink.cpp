@@ -396,9 +396,7 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
               IcebergInsertTableHandle::WriteKind::kDeletionVector);
       if (!commitPartitionValue_.empty() &&
           !commitPartitionValue_[i].isNull()) {
-        commitData["partitionDataJson"] = folly::toJson(
-            folly::dynamic::object(
-                "partitionValues", commitPartitionValue_[i]));
+        commitData["partitionDataJson"] = folly::toJson(commitPartitionValue_[i]);
       }
       auto commitDataJson = folly::toJson(commitData);
       commitTasks.push_back(commitDataJson);
@@ -477,16 +475,19 @@ IcebergDataSink::createWriterOptions(size_t writerIndex) const {
 
 folly::dynamic IcebergDataSink::makeCommitPartitionValue(
     uint32_t writerIndex) const {
-  folly::dynamic partitionValues = folly::dynamic::array();
+  folly::dynamic partitionValues = folly::dynamic::object();
   const auto& transformedValues = partitionIdGenerator_->partitionValues();
-  for (auto i = 0; i < partitionChannels_.size(); ++i) {
+  for (auto i = 0; i < partitionSpec_->fields.size(); ++i) {
+    const auto& field = partitionSpec_->fields[i];
     const auto& child = transformedValues->childAt(i);
+    folly::dynamic value;
     if (child->isNullAt(writerIndex)) {
-      partitionValues.push_back(nullptr);
+      value = nullptr;
     } else {
-      partitionValues.push_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          extractPartitionValue, child->typeKind(), child, writerIndex));
+      value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          extractPartitionValue, child->typeKind(), child, writerIndex);
     }
+    partitionValues[field.name] = value;
   }
   return partitionValues;
 }
