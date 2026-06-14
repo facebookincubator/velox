@@ -53,8 +53,7 @@ class IcebergDwrfInsertTest : public test::IcebergTestBase {
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
     auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+                    .startTableScan(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -233,8 +232,7 @@ TEST_F(IcebergDwrfInsertTest, partitioned) {
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
   auto plan = exec::test::PlanBuilder()
-                  .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
+                  .startTableScan(test::kIcebergConnectorId)
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();

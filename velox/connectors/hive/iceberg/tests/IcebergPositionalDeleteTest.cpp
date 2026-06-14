@@ -33,6 +33,7 @@
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -47,7 +48,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
       std::string,
       std::multimap<std::string, std::vector<int64_t>>>;
 
-  static constexpr int32_t rowCount = 20000;
+  static constexpr int32_t kRowCount = 20000;
 
   void SetUp() override {
     test::IcebergTestBase::SetUp();
@@ -100,7 +101,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
       const std::vector<int64_t>& deletePositions,
       int32_t fileCount,
       int32_t numPrefetchSplits,
-      int rowCountPerFile = rowCount,
+      int rowCountPerFile = kRowCount,
       int32_t splitCountPerFile = 1) {
     RowGroupSizesForFiles rowGroupSizesForFiles;
     DeleteFilesForBaseDataFiles deleteFilesForBaseDatafiles;
@@ -196,8 +197,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     }
 
     auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+                    .startTableScan(test::kIcebergConnectorId)
                     .outputType(ROW({"c0"}, {BIGINT()}))
                     .endTableScan()
                     .planNode();
@@ -304,12 +304,16 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     auto deleteFile = makePositionalDeleteFile(
         dataFilePath->getPath(), {1, 3}, deleteFilePath, deleteSequenceNumber);
 
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan(test::kIcebergConnectorId)
+                    .outputType(ROW({"c0"}, {BIGINT()}))
+                    .endTableScan()
+                    .planNode();
     auto expected = makeRowVector({makeFlatVector<int64_t>(expectedValues)});
-    assertTableScan(
-        ROW({"c0"}, {BIGINT()}),
-        {makeIcebergSplitWithInfoColumns(
-            dataFilePath->getPath(), {}, {deleteFile}, dataSequenceNumber)},
-        {expected});
+    exec::test::AssertQueryBuilder(plan)
+        .splits({makeIcebergSplitWithInfoColumns(
+            dataFilePath->getPath(), {}, {deleteFile}, dataSequenceNumber)})
+        .assertResults({expected});
   }
 
  private:
@@ -527,10 +531,10 @@ TEST_F(
   assertMultipleBaseFileSingleDeleteFile({10000, 10002, 19999});
   assertMultipleBaseFileSingleDeleteFile({10000, 10002, 19999});
   assertMultipleBaseFileSingleDeleteFile(
-      makeRandomIncreasingValues(0, rowCount));
+      makeRandomIncreasingValues(0, kRowCount));
   assertMultipleBaseFileSingleDeleteFile({});
   assertMultipleBaseFileSingleDeleteFile(
-      makeContinuousIncreasingValues(0, rowCount));
+      makeContinuousIncreasingValues(0, kRowCount));
 }
 
 /// This test creates one base data file/split with multiple delete files. The
@@ -707,7 +711,7 @@ TEST_F(IcebergPositionalDeleteTest, skipDeleteFileByPositionUpperBound) {
   reader->loadCache();
   ASSERT_GE(reader->footer().stripesSize(), 2);
   const uint64_t splitStart = reader->footer().stripes(1).offset();
-  auto split = std::make_shared<HiveIcebergSplit>(
+  std::shared_ptr<ConnectorSplit> split = std::make_shared<HiveIcebergSplit>(
       test::kIcebergConnectorId,
       dataFilePath->getPath(),
       fileFormat_,
@@ -723,7 +727,13 @@ TEST_F(IcebergPositionalDeleteTest, skipDeleteFileByPositionUpperBound) {
   // The second half of the file should be returned with no rows deleted.
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>(makeContinuousIncreasingValues(50, 100))});
-  assertTableScan(ROW({"c0"}, {BIGINT()}), {split}, {expected});
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(ROW({"c0"}, {BIGINT()}))
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits({split}).assertResults(
+      {expected});
 }
 #ifdef VELOX_ENABLE_PARQUET
 TEST_F(IcebergPositionalDeleteTest, positionalDeleteFileWithRowGroupFilter) {
@@ -739,8 +749,7 @@ TEST_F(IcebergPositionalDeleteTest, positionalDeleteFileWithRowGroupFilter) {
 
   assertQuery(
       exec::test::PlanBuilder()
-          .startTableScan()
-          .connectorId(test::kIcebergConnectorId)
+          .startTableScan(test::kIcebergConnectorId)
           .outputType(ROW({"id"}, {BIGINT()}))
           .remainingFilter("id >= 100")
           .endTableScan()

@@ -25,8 +25,6 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -329,7 +327,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
   return splits;
 }
 
-uint64_t IcebergTestBase::getFileSize(const std::string& path) const {
+uint64_t IcebergTestBase::getFileSize(const std::string& path) {
   return filesystems::getFileSystem(path, nullptr)
       ->openFileForRead(path)
       ->size();
@@ -343,27 +341,28 @@ std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
     uint32_t splitCount,
     const std::unordered_map<std::string, std::string>& infoColumns,
     int64_t dataSequenceNumber) {
+  VELOX_CHECK_GT(splitCount, 0);
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
-  auto baseSplits = makeHiveConnectorSplits(
-      dataFilePath, splitCount, fileFormat_, partitionKeys, infoColumns);
-  splits.reserve(baseSplits.size());
+  const auto fileSize = getFileSize(dataFilePath);
+  const auto splitSize = fileSize / splitCount;
+  splits.reserve(splitCount);
 
-  for (const auto& baseSplit : baseSplits) {
+  for (auto i = 0; i < splitCount; ++i) {
     splits.emplace_back(
         std::make_shared<HiveIcebergSplit>(
             kIcebergConnectorId,
-            baseSplit->filePath,
-            baseSplit->fileFormat,
-            baseSplit->start,
-            baseSplit->length,
-            baseSplit->partitionKeys,
-            baseSplit->tableBucketNumber,
-            baseSplit->customSplitInfo,
-            baseSplit->extraFileInfo,
-            baseSplit->cacheable,
+            dataFilePath,
+            fileFormat_,
+            i * splitSize,
+            splitSize,
+            partitionKeys,
+            std::nullopt,
+            std::unordered_map<std::string, std::string>{},
+            nullptr,
+            /*cacheable=*/true,
             deleteFiles,
-            baseSplit->infoColumns,
-            baseSplit->properties,
+            infoColumns,
+            std::nullopt,
             dataSequenceNumber));
   }
 
@@ -403,45 +402,6 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
   }
 
   return assignments;
-}
-
-void IcebergTestBase::assertTableScan(
-    const RowTypePtr& outputType,
-    const std::vector<std::shared_ptr<ConnectorSplit>>& splits,
-    const std::vector<RowVectorPtr>& expected,
-    const RowTypePtr& dataColumns,
-    const ColumnHandleMap& assignments,
-    const std::string& filter,
-    const std::string& remainingFilter,
-    const std::string& subfieldFilter,
-    const std::unordered_map<std::string, std::string>& sessionProperties) {
-  exec::test::PlanBuilder tableScanPlanBuilder;
-  auto& builder = tableScanPlanBuilder.startTableScan();
-  builder.connectorId(kIcebergConnectorId);
-  builder.outputType(outputType);
-  if (dataColumns != nullptr) {
-    builder.dataColumns(dataColumns);
-  }
-  if (!assignments.empty()) {
-    builder.assignments(assignments);
-  }
-  if (!subfieldFilter.empty()) {
-    builder.subfieldFilter(subfieldFilter);
-  }
-  if (!remainingFilter.empty()) {
-    builder.remainingFilter(remainingFilter);
-  }
-  auto& planBuilder = builder.endTableScan();
-  if (!filter.empty()) {
-    planBuilder.filter(filter);
-  }
-  auto plan = planBuilder.planNode();
-
-  auto queryBuilder = exec::test::AssertQueryBuilder(plan);
-  for (const auto& [key, value] : sessionProperties) {
-    queryBuilder.connectorSessionProperty(kIcebergConnectorId, key, value);
-  }
-  queryBuilder.splits(splits).assertResults(expected);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test
