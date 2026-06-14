@@ -20,7 +20,11 @@ namespace facebook::velox {
 
 uint64_t StringIdMap::id(std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
+#ifdef __APPLE__
+  auto it = stringToId_.find(std::string(string));
+#else
   auto it = stringToId_.find(string);
+#endif
   if (it != stringToId_.end()) {
     return it->second;
   }
@@ -56,7 +60,11 @@ void StringIdMap::addReference(uint64_t id) {
 
 uint64_t StringIdMap::makeId(std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
+#ifdef __APPLE__
+  auto it = stringToId_.find(std::string(string));
+#else
   auto it = stringToId_.find(string);
+#endif
   if (it != stringToId_.end()) {
     auto entry = idToEntry_.find(it->second);
     VELOX_CHECK(entry != idToEntry_.end());
@@ -79,13 +87,21 @@ uint64_t StringIdMap::makeId(std::string_view string) {
   pinnedSize_ += string.size();
   const auto id = entry.id;
   idToEntry_[id] = std::move(entry);
+#ifdef __APPLE__
+  stringToId_[std::string(string)] = id;
+#else
   stringToId_[string] = id;
+#endif
   return lastId_;
 }
 
 uint64_t StringIdMap::recoverId(uint64_t id, std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
+#ifdef __APPLE__
+  auto it = stringToId_.find(std::string(string));
+#else
   auto it = stringToId_.find(string);
+#endif
   if (it != stringToId_.end()) {
     VELOX_CHECK_EQ(
         id, it->second, "Multiple recover ids assigned to {}", string);
@@ -110,7 +126,11 @@ uint64_t StringIdMap::recoverId(uint64_t id, std::string_view string) {
   entry.numInUse = 1;
   pinnedSize_ += string.size();
   idToEntry_[id] = std::move(entry);
+#ifdef __APPLE__
+  stringToId_[std::string(string)] = id;
+#else
   stringToId_[string] = id;
+#endif
   return id;
 }
 } // namespace facebook::velox
