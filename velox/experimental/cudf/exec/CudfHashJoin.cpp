@@ -47,6 +47,7 @@
 #include <cudf/search.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
@@ -79,6 +80,195 @@ cudf::table_view createExtendedTableView(
   }
 
   return cudf::table_view(allViews);
+}
+
+/// Returns a resolution rank for timestamp types (higher = finer).
+int timestampResolutionRank(cudf::type_id id) {
+  VELOX_CHECK(cudf::is_timestamp(cudf::data_type{id}));
+  switch (id) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      return 0;
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return 1;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return 2;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return 3;
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+/// Returns a canonical timestamp type for normalization.  Picks the highest
+/// resolution present across both tables so that no precision is lost.
+cudf::type_id findCanonicalTimestampType(
+    cudf::table_view left,
+    cudf::table_view right) {
+  auto best = cudf::type_id::TIMESTAMP_SECONDS;
+  auto promote = [&best](cudf::type_id id) {
+    if (timestampResolutionRank(id) > timestampResolutionRank(best)) {
+      best = id;
+    }
+  };
+  for (cudf::size_type i = 0; i < left.num_columns(); ++i) {
+    if (cudf::is_timestamp(left.column(i).type())) {
+      promote(left.column(i).type().id());
+    }
+  }
+  for (cudf::size_type i = 0; i < right.num_columns(); ++i) {
+    if (cudf::is_timestamp(right.column(i).type())) {
+      promote(right.column(i).type().id());
+    }
+  }
+  return best;
+}
+
+/// Returns the finest resolution that `col` can safely be cast to without
+/// overflowing int64.  For MICROSECONDS → NANOSECONDS (×10^3) the range is
+/// always safe.  For coarser sources (SECONDS, MILLISECONDS) heading to a
+/// finer target, we inspect the column's actual min/max via cudf::minmax()
+/// and select the finest type whose scaling factor won't overflow.
+cudf::type_id safestFinestPrecision(
+    cudf::column_view col,
+    cudf::type_id target,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto src = col.type().id();
+  if (src == target || col.size() == 0) {
+    return target;
+  }
+  if (src == cudf::type_id::TIMESTAMP_MICROSECONDS &&
+      target == cudf::type_id::TIMESTAMP_NANOSECONDS) {
+    return target;
+  }
+
+  // Max absolute source value that survives the cast to each target.
+  // E.g. SECONDS → NANOSECONDS multiplies by 10^9, so |val| must be
+  // ≤ INT64_MAX / 10^9 ≈ 9.2×10^9.
+  static constexpr int64_t kMaxSecToNanos = 9'223'372'036LL;
+  static constexpr int64_t kMaxSecToMicros = 9'223'372'036'854LL;
+  static constexpr int64_t kMaxSecToMillis = 9'223'372'036'854'775LL;
+  static constexpr int64_t kMaxMillisToNanos = 9'223'372'036'854LL;
+  static constexpr int64_t kMaxMillisToMicros = 9'223'372'036'854'775LL;
+
+  struct Candidate {
+    cudf::type_id type;
+    int64_t limit;
+  };
+
+  std::vector<Candidate> candidates;
+  if (src == cudf::type_id::TIMESTAMP_SECONDS) {
+    if (timestampResolutionRank(target) >= 3)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_NANOSECONDS, kMaxSecToNanos});
+    if (timestampResolutionRank(target) >= 2)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_MICROSECONDS, kMaxSecToMicros});
+    if (timestampResolutionRank(target) >= 1)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_MILLISECONDS, kMaxSecToMillis});
+  } else if (src == cudf::type_id::TIMESTAMP_MILLISECONDS) {
+    if (timestampResolutionRank(target) >= 3)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_NANOSECONDS, kMaxMillisToNanos});
+    if (timestampResolutionRank(target) >= 2)
+      candidates.push_back(
+          {cudf::type_id::TIMESTAMP_MICROSECONDS, kMaxMillisToMicros});
+  }
+
+  if (candidates.empty()) {
+    return target;
+  }
+
+  auto extremes = cudf::minmax(col, stream, mr);
+  auto minTicks =
+      static_cast<cudf::numeric_scalar<int64_t> const&>(*extremes.first)
+          .value(stream);
+  auto maxTicks =
+      static_cast<cudf::numeric_scalar<int64_t> const&>(*extremes.second)
+          .value(stream);
+  int64_t absMax = std::max(std::abs(minTicks), std::abs(maxTicks));
+
+  for (auto& c : candidates) {
+    if (absMax <= c.limit) {
+      return c.type;
+    }
+  }
+  return src;
+}
+
+/// Finds the finest timestamp resolution that ALL timestamp columns across
+/// both tables can safely be cast to without int64 overflow.
+cudf::type_id findSafeCanonicalType(
+    cudf::table_view left,
+    cudf::table_view right,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto target = findCanonicalTimestampType(left, right);
+  auto clampToSafe = [&](cudf::table_view view) {
+    for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
+      auto id = view.column(i).type().id();
+      if (!cudf::is_timestamp(cudf::data_type{id}) || id == target) {
+        continue;
+      }
+      auto safe = safestFinestPrecision(view.column(i), target, stream, mr);
+      if (timestampResolutionRank(safe) < timestampResolutionRank(target)) {
+        target = safe;
+      }
+    }
+  };
+  clampToSafe(left);
+  clampToSafe(right);
+  return target;
+}
+
+/// Casts any timestamp column whose resolution differs from `target` and
+/// returns the new table_view.  Owned columns are appended to `storage` so
+/// they outlive the returned view.
+cudf::table_view normalizeTimestampColumns(
+    cudf::table_view view,
+    cudf::type_id target,
+    std::vector<std::unique_ptr<cudf::column>>& storage,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  std::vector<cudf::column_view> cols;
+  cols.reserve(view.num_columns());
+  bool anycast = false;
+  for (cudf::size_type i = 0; i < view.num_columns(); ++i) {
+    auto id = view.column(i).type().id();
+    if (cudf::is_timestamp(cudf::data_type{id}) && id != target) {
+      storage.push_back(
+          cudf::cast(view.column(i), cudf::data_type{target}, stream, mr));
+      cols.push_back(storage.back()->view());
+      anycast = true;
+    } else {
+      cols.push_back(view.column(i));
+    }
+  }
+  return anycast ? cudf::table_view(cols) : view;
+}
+
+/// Normalizes timestamp columns in both tables to match the finest resolution
+/// present across either side.  Returns the (possibly unchanged) views and
+/// owns any intermediate cast columns via the returned storage vector.
+struct NormalizedPair {
+  cudf::table_view left;
+  cudf::table_view right;
+  std::vector<std::unique_ptr<cudf::column>> storage;
+};
+
+NormalizedPair normalizeBothSides(
+    cudf::table_view left,
+    cudf::table_view right,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto canonTs = findSafeCanonicalType(left, right, stream, mr);
+  NormalizedPair result;
+  result.left =
+      normalizeTimestampColumns(left, canonTs, result.storage, stream, mr);
+  result.right =
+      normalizeTimestampColumns(right, canonTs, result.storage, stream, mr);
+  return result;
 }
 
 } // namespace
@@ -714,8 +904,25 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutput(
   for (const auto& col : joinedCols) {
     joinedColViews.push_back(col->view());
   }
+
+  // Normalize timestamp columns to a common resolution that avoids overflow.
+  // The joined table may contain timestamps from both sides at different
+  // resolutions; the filter evaluator's JIT engine implicitly converts to the
+  // finest resolution which can overflow for large values.
+  std::vector<std::unique_ptr<cudf::column>> normStorage;
+  auto joinedView = cudf::table_view(joinedColViews);
+  auto canonTs = findSafeCanonicalType(
+      joinedView, cudf::table_view{}, stream, get_temp_mr());
+  auto normalizedView = normalizeTimestampColumns(
+      joinedView, canonTs, normStorage, stream, get_temp_mr());
+  std::vector<cudf::column_view> normalizedColViews;
+  normalizedColViews.reserve(normalizedView.num_columns());
+  for (cudf::size_type i = 0; i < normalizedView.num_columns(); ++i) {
+    normalizedColViews.push_back(normalizedView.column(i));
+  }
+
   auto filterColumns =
-      filterEvaluator_->eval(joinedColViews, stream, get_output_mr());
+      filterEvaluator_->eval(normalizedColViews, stream, get_output_mr());
   auto filterColumn = asView(filterColumns);
 
   joinedCols = func(std::move(joinedCols), filterColumn);
@@ -748,11 +955,16 @@ std::unique_ptr<cudf::table> CudfHashJoinProbe::filteredOutputIndices(
     cudf::table_view extendedRightView,
     cudf::join_kind joinKind,
     rmm::cuda_stream_view stream) {
+  // Normalize timestamp resolutions across both sides so the AST filter
+  // tree sees matching types.  Different Parquet files may store timestamps
+  // at different resolutions (e.g. microseconds vs nanoseconds).
+  auto norm = normalizeBothSides(
+      extendedLeftView, extendedRightView, stream, get_temp_mr());
   // Use extended views (with precomputed columns) for filter evaluation
   auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
       cudf::filter_join_indices(
-          extendedLeftView,
-          extendedRightView,
+          norm.left,
+          norm.right,
           leftIndicesCol,
           rightIndicesCol,
           tree_.back(),
@@ -1189,10 +1401,12 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::fullJoin(
       // Use filter_join_indices with LEFT_JOIN to get proper full join probe
       // semantics: all probe rows are kept, build columns are NULL when filter
       // fails or no match.
+      auto norm = normalizeBothSides(
+          leftTableView, rightTableView, stream, get_temp_mr());
       auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
           cudf::filter_join_indices(
-              leftTableView,
-              rightTableView,
+              norm.left,
+              norm.right,
               leftIndicesCol,
               rightIndicesCol,
               tree_.back(),
@@ -1270,11 +1484,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::leftSemiFilterJoin(
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
 
     if (joinNode_->filter()) {
+      auto norm = normalizeBothSides(
+          leftTableView, rightTableView, stream, get_temp_mr());
       leftJoinIndices = cudf::mixed_left_semi_join(
-          leftTableView.select(leftKeyIndices_),
-          rightTableView.select(rightKeyIndices_),
-          leftTableView,
-          rightTableView,
+          norm.left.select(leftKeyIndices_),
+          norm.right.select(rightKeyIndices_),
+          norm.left,
+          norm.right,
           tree_.back(),
           cudf::null_equality::UNEQUAL,
           stream,
@@ -1519,9 +1735,11 @@ CudfHashJoinProbe::leftSemiProjectJoin(
     if (joinNode_->filter()) {
       // Step 2: Apply filter to the join pairs. INNER_JOIN mode keeps only
       // pairs where the predicate evaluates to true.
+      auto norm = normalizeBothSides(
+          extendedLeftView, extendedRightView, stream, get_temp_mr());
       auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
-          extendedLeftView,
-          extendedRightView,
+          norm.left,
+          norm.right,
           leftIndicesSpan,
           rightIndicesSpan,
           tree_.back(),
@@ -1616,9 +1834,12 @@ CudfHashJoinProbe::leftSemiProjectJoin(
             return;
           }
 
+          auto norm = normalizeBothSides(
+              extendedLeftView, extendedRight, stream, get_temp_mr());
+
           auto [filteredLeft, filteredRight] = cudf::filter_join_indices(
-              extendedLeftView,
-              extendedRight,
+              norm.left,
+              norm.right,
               toSpan(syntheticLeft->view()),
               toSpan(syntheticRight->view()),
               tree_.back(),
@@ -1842,11 +2063,13 @@ CudfHashJoinProbe::rightSemiFilterJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightJoinIndices;
   if (joinNode_->filter()) {
+    auto norm = normalizeBothSides(
+        rightTableView, leftTableView, stream, get_temp_mr());
     rightJoinIndices = cudf::mixed_left_semi_join(
-        rightTableView.select(rightKeyIndices_),
-        leftTableView.select(leftKeyIndices_),
-        rightTableView,
-        leftTableView,
+        norm.left.select(rightKeyIndices_),
+        norm.right.select(leftKeyIndices_),
+        norm.left,
+        norm.right,
         tree_.back(),
         cudf::null_equality::UNEQUAL,
         stream,
@@ -1911,11 +2134,13 @@ std::vector<std::unique_ptr<cudf::table>> CudfHashJoinProbe::antiJoin(
 
   std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftJoinIndices;
   if (joinNode_->filter()) {
+    auto norm = normalizeBothSides(
+        leftTableView, rightTableView, stream, get_temp_mr());
     leftJoinIndices = cudf::mixed_left_anti_join(
-        leftTableView.select(leftKeyIndices_),
-        rightTableView.select(rightKeyIndices_),
-        leftTableView,
-        rightTableView,
+        norm.left.select(leftKeyIndices_),
+        norm.right.select(rightKeyIndices_),
+        norm.left,
+        norm.right,
         tree_.back(),
         cudf::null_equality::UNEQUAL,
         stream,
