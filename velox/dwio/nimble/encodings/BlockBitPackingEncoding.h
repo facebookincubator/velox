@@ -166,6 +166,55 @@ class BlockBitPackingEncoding final
         metadataSize + packedSize;
   }
 
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Statistics-only overload for general encoding selection (e.g. as a
+  /// SubIntSplit segment candidate), where only `Statistics<physicalType>` --
+  /// not the raw values -- is available. Without raw values, true per-block
+  /// locality can't be observed; this approximates a "typical" per-block bit
+  /// width as the ~50%-coverage point of `statistics.bucketCounts()` (median
+  /// bit width of value - min), analogous to how PFOREncoding's
+  /// `selectBaseBitWidth` picks a 90%-coverage baseline. This is a coarser
+  /// approximation than the span-based overload above.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics,
+      uint16_t blockSize = kBlockBitPackingBlockSize) {
+    if (rowCount == 0) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+    const auto& bucketCounts = statistics.bucketCounts();
+    const auto fullRange =
+        static_cast<physicalType>(statistics.max() - statistics.min());
+    const uint8_t maxBitWidth =
+        static_cast<uint8_t>(velox::bits::bitsRequired(fullRange));
+
+    constexpr double kCoverageThreshold = 0.5;
+    const uint64_t threshold = static_cast<uint64_t>(
+        static_cast<double>(rowCount) * kCoverageThreshold);
+    uint8_t typicalBitWidth = maxBitWidth;
+    uint64_t cumulative = 0;
+    for (size_t k = 0; k < bucketCounts.size(); ++k) {
+      cumulative += bucketCounts[k];
+      if (cumulative >= threshold) {
+        typicalBitWidth = std::min<uint8_t>(
+            static_cast<uint8_t>(std::min<size_t>((k + 1) * 7, 64)),
+            maxBitWidth);
+        break;
+      }
+    }
+
+    const uint32_t numBlocks =
+        velox::bits::divRoundUp(static_cast<uint32_t>(rowCount), blockSize);
+    const uint64_t packedSize =
+        FixedBitArray::bufferSize(rowCount, typicalBitWidth);
+    const uint64_t metadataSize = kMetadataHeaderSize +
+        TrivialEncoding<physicalType>::estimateSize(numBlocks) +
+        TrivialEncoding<uint8_t>::estimateSize(numBlocks) +
+        TrivialEncoding<uint32_t>::estimateSize(numBlocks);
+    return EncodingPrefix::kFixedPrefixSize + metadataSize + packedSize;
+  }
+#endif
+
   std::string debugString(int offset) const final;
 
  private:
