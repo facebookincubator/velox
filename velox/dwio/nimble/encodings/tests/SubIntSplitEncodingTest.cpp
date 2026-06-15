@@ -62,6 +62,36 @@ std::vector<T> makeStructuredValues() {
   return values;
 }
 
+// 300 values whose unsigned physical representation is strictly
+// monotonically increasing with a constant, wide step (so consecutive
+// values' low-order bit-range segments are also roughly monotonic with a
+// constant step). This is the data shape the Delta/FOR cost models
+// (SubIntSplitCostModelsTest.cpp's makeDeltaFriendlyValues/
+// makeForFriendlyValues) favor, exercised here end-to-end through the real
+// SubIntSplit segment-selection pipeline (B.4's extended candidate list).
+template <typename T>
+std::vector<T> makeWideRangeMonotonicValues() {
+  std::vector<T> values;
+  values.reserve(300);
+
+  UnsignedPhysicalType<T> base{};
+  UnsignedPhysicalType<T> step{};
+  if constexpr (sizeof(PhysicalType<T>) == 4) {
+    base = static_cast<UnsignedPhysicalType<T>>(0x10000000u);
+    step = static_cast<UnsignedPhysicalType<T>>(0x00010000u);
+  } else {
+    base = static_cast<UnsignedPhysicalType<T>>(0x1000000000000000ULL);
+    step = static_cast<UnsignedPhysicalType<T>>(0x0000000100000000ULL);
+  }
+
+  for (UnsignedPhysicalType<T> i = 0; i < 300; ++i) {
+    const auto bits = static_cast<UnsignedPhysicalType<T>>(base + i * step);
+    values.push_back(std::bit_cast<T>(bits));
+  }
+
+  return values;
+}
+
 template <typename T>
 std::vector<nimble::detail::subintsplit::SegmentPlan> makePreserveSegments() {
   if constexpr (sizeof(PhysicalType<T>) == 4) {
@@ -494,6 +524,8 @@ TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren
       containsType(extendedFactors, nimble::EncodingType::SimdForBitpack));
   EXPECT_TRUE(
       containsType(extendedFactors, nimble::EncodingType::BlockBitPacking));
+  EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::Delta));
+  EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::FOR));
 
   // Children of a non-SubIntSplit node do not get the extended list.
   auto pforChild = policy.createImpl(
@@ -508,6 +540,8 @@ TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren
       containsType(unextendedFactors, nimble::EncodingType::SimdForBitpack));
   EXPECT_FALSE(
       containsType(unextendedFactors, nimble::EncodingType::BlockBitPacking));
+  EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::Delta));
+  EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::FOR));
 }
 
 TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
@@ -521,6 +555,29 @@ TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
   expectBitwiseEqual(values, decoded);
+}
+
+// Recursion-sanity test for Delta/FOR as SubIntSplit segment candidates
+// (B.4): a wide-range, constant-step monotonic column should round-trip
+// bit-exactly and produce a bounded encoding size, regardless of which
+// candidate (Delta, FOR, or another) each segment's encodeNested ends up
+// selecting.
+TYPED_TEST(SubIntSplitEncodingTest, WideRangeMonotonicRoundTrip) {
+  using T = TypeParam;
+  const auto values = makeWideRangeMonotonicValues<T>();
+
+  const auto encoded =
+      encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto captured = nimble::EncodingLayoutCapture::capture(encoded);
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+
+  const auto decoded = decodeAll<T>(encoded, *this->pool_);
+  expectBitwiseEqual(values, decoded);
+
+  // Bounded size: the recursive candidate set must not blow up the encoding
+  // beyond a small multiple of the raw data size.
+  const size_t rawSize = values.size() * sizeof(T);
+  EXPECT_LE(encoded.size(), rawSize * 4 + 1024);
 }
 
 #endif
