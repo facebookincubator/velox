@@ -104,7 +104,7 @@ jobs:
           cat $sizes_file
           echo "::endgroup::"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           path: ${{ env.sizes_file }}
           name: ${{ matrix.type }}-${{ matrix.link-type }}-sizes
@@ -177,7 +177,7 @@ jobs:
           nix-shell --run "quarto render report.qmd"
 
       - name: Upload Report Artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: report
           path: scripts/ci/bm-report/report.html
