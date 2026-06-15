@@ -243,8 +243,36 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 }
 
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
+  constexpr int32_t kNumBatches = 100;
+  constexpr vector_size_t kRowsPerBatch = 100;
+  constexpr int32_t kPayloadSize = 96;
+
+  auto makePayload = [](int64_t value) {
+    std::string payload;
+    payload.reserve(kPayloadSize);
+    for (auto i = 0; i < kPayloadSize; ++i) {
+      payload.push_back(static_cast<char>('a' + ((value + i) % 26)));
+    }
+    return payload;
+  };
+
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
-  const auto vectors = createTestData(rowType, 100, 100);
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    vectors.push_back(makeRowVector(
+        rowType->names(),
+        {
+            makeFlatVector<int64_t>(
+                kRowsPerBatch,
+                [batch](auto row) { return batch * kRowsPerBatch + row; }),
+            makeFlatVector<std::string>(
+                kRowsPerBatch,
+                [&, batch](auto row) {
+                  return makePayload(batch * kRowsPerBatch + row);
+                }),
+        }));
+  }
 
   auto writeAndRead = [&](const std::string& maxTargetFileSize) {
     setConnectorSessionProperty(
@@ -276,8 +304,8 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
   // Rotation uses rawBytesWritten(), which advances when Parquet flushes a row
   // group. Counts therefore follow row group flush boundaries rather than
   // scaling linearly with maxTargetFileSize.
-  ASSERT_EQ(smallTargetFileCount, 80);
-  ASSERT_EQ(mediumTargetFileCount, 14);
+  ASSERT_EQ(smallTargetFileCount, 100);
+  ASSERT_EQ(mediumTargetFileCount, 4);
   ASSERT_EQ(largeTargetFileCount, 1);
 }
 
