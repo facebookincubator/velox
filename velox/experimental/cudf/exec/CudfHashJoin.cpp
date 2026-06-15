@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/type/TypeUtil.h"
@@ -52,6 +53,8 @@
 #include <rmm/exec_policy.hpp>
 
 #include <nvtx3/nvtx3.hpp>
+
+#include <iterator>
 
 namespace facebook::velox::cudf_velox {
 
@@ -204,7 +207,15 @@ void CudfHashJoinBuild::doNoMoreInput() {
     auto op = peer->findOperator(planNodeId());
     auto* build = dynamic_cast<CudfHashJoinBuild*>(op);
     VELOX_CHECK_NOT_NULL(build);
-    inputs_.insert(inputs_.end(), build->inputs_.begin(), build->inputs_.end());
+    inputs_.insert(
+        inputs_.end(),
+        std::make_move_iterator(build->inputs_.begin()),
+        std::make_move_iterator(build->inputs_.end()));
+    build->inputs_.clear();
+    auto retainedInputBatches = build->inputs_.size();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cudf_velox::CudfHashJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+        &retainedInputBatches);
   }
 
   SCOPE_EXIT {
@@ -439,10 +450,10 @@ void CudfHashJoinProbe::initialize() {
   exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
   VELOX_CHECK_EQ(exprs.exprs().size(), 1);
 
-  // For now we disable AST-based filtering (and force precomputation)
-  // if the filter expression contains decimal types, using the same
-  // shallow search as used for regular expression evaluation.
-  if (containsDecimalType(exprs.exprs()[0], false)) {
+  // Disable AST-based filtering (and force precomputation) if the filter
+  // expression contains a type the AST/JIT evaluator can't handle, using the
+  // same shallow check applied during regular expression evaluation.
+  if (containsAstUnsupportedType(exprs.exprs()[0])) {
     useAstFilter_ = false;
   }
 

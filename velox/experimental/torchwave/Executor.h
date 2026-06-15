@@ -79,6 +79,9 @@ struct LaunchMeta {
   bool noDtoH{false};
   int64_t inputBytes{0};
   int64_t outputBytes{0};
+  // Time spent on reference-frame device-to-host copy and comparison for this
+  // step (debug-only; excluded from the reported e2e time).
+  int64_t refCheckUs{0};
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -87,9 +90,13 @@ struct WaveThreadInfo {
   std::vector<std::vector<DebugInfo>> debugInfo;
   std::vector<LaunchMeta> launchMeta;
   std::string errors;
-  /// Standalone execution times, sorted descending. Paired with labels.
+  /// Standalone execution times, sorted descending. Indices line up with
+  /// standaloneLabels and standaloneTargets.
   std::vector<int64_t> standaloneTimes;
+  /// Human-readable label for each standalone, parallel to standaloneTimes.
   std::vector<std::string> standaloneLabels;
+  /// Operator target string for each standalone, parallel to standaloneTimes.
+  std::vector<std::string> standaloneTargets;
   /// Performance report, filled when trace kTiming is on.
   std::string perfReport;
 };
@@ -156,6 +163,9 @@ struct StepVectors {
   bool noDtoH{false};
   int64_t inputBytes{0};
   int64_t outputBytes{0};
+  // Time spent on reference-frame device-to-host copy and comparison for this
+  // step (debug-only; excluded from the reported e2e time).
+  int64_t refCheckUs{0};
 };
 
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph

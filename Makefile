@@ -108,16 +108,17 @@ cmake-wave:
 cmake-cudf:
 	$(MAKE) EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS} -DVELOX_ENABLE_CUDF=ON ${EXTRA_CMAKE_CUDA_FLAGS}" cmake
 
-build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
-	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
+build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables. Set TARGETS to a space-separated list to do a selective build.
+	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS) \
+		$(if $(TARGETS),--target $(TARGETS))
 
-debug:					#: Build with debugging symbols
+debug:					#: Build with debugging symbols. Set TARGETS to do a selective debug build.
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
-	$(MAKE) build BUILD_DIR=debug
+	$(MAKE) build BUILD_DIR=debug TARGETS="$(TARGETS)"
 
-release:				#: Build the release version
+release:				#: Build the release version. Set TARGETS to do a selective release build.
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
-	$(MAKE) build BUILD_DIR=release
+	$(MAKE) build BUILD_DIR=release TARGETS="$(TARGETS)"
 
 minimal_debug:			#: Minimal build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=debug \

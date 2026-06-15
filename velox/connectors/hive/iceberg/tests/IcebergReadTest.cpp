@@ -469,25 +469,27 @@ class HiveIcebergTest : public HiveConnectorTestBase {
   }
 
   struct RowLineageTestCase {
-    std::vector<int64_t> values;
+    std::vector<int64_t> values{};
     // Physically stored _row_id values; nullopt entries write a file null.
     // Absent means no _row_id column in the file; reader derives from
     // firstRowId. Always paired with storedSequenceNumbers.
-    std::optional<std::vector<std::optional<int64_t>>> storedRowIds;
+    std::optional<std::vector<std::optional<int64_t>>> storedRowIds =
+        std::nullopt;
     // Physically stored _last_updated_sequence_number values; nullopt entries
     // write a file null. Absent means no column in the file; reader derives
     // from dataSequenceNumber. Always paired with storedRowIds.
-    std::optional<std::vector<std::optional<int64_t>>> storedSequenceNumbers;
+    std::optional<std::vector<std::optional<int64_t>>> storedSequenceNumbers =
+        std::nullopt;
     // Passed as first_row_id in the split's info columns.
-    std::optional<int64_t> firstRowId;
+    std::optional<int64_t> firstRowId = std::nullopt;
     // Passed as data_sequence_number in the split's info columns.
-    std::optional<int64_t> dataSequenceNumber;
+    std::optional<int64_t> dataSequenceNumber = std::nullopt;
     // File positions to delete; empty means no delete file is created.
-    std::vector<int64_t> deletePositions;
+    std::vector<int64_t> deletePositions{};
     // Subfield filter expression (e.g., "c0 > 20"); empty means no filter.
-    std::string subfieldFilter;
+    std::string subfieldFilter{};
     // Expected output rows: (c0, _row_id, _last_updated_sequence_number).
-    std::vector<RowVectorPtr> expectedVectors;
+    std::vector<RowVectorPtr> expectedVectors{};
   };
 
   // Writes tc to a temp data file, executes a table scan over
@@ -1709,6 +1711,75 @@ TEST_F(HiveIcebergTest, rowLineage) {
                   {std::nullopt, std::nullopt, std::nullopt}),
           })},
   });
+}
+
+// Tests Iceberg MERGE INTO row-id synthesis: the projection of the synthetic
+// $target_table_row_id ROW column produced at read time from the split's
+// infoColumns ($path, $spec_id, partition_data) plus the file row positions.
+// Mirrors the IcebergPageSourceProvider Java path that backs
+// MERGE_TARGET_ROW_ID_DATA.
+TEST_F(HiveIcebergTest, targetTableRowIdSynthesis) {
+  folly::SingletonVault::singleton()->registrationComplete();
+
+  static const std::string kPartitionDataJson =
+      "{\"partitionValues\":[\"2024-01-01\"]}";
+
+  // Write a small data file containing only c0 (the synthetic row-id column
+  // never appears in the file).
+  std::vector<RowVectorPtr> inputVectors = {
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})})};
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), inputVectors);
+
+  std::unordered_map<std::string, std::string> infoColumns = {
+      {IcebergMetadataColumn::kSpecIdInfoColumn, "7"},
+      {IcebergMetadataColumn::kPartitionDataInfoColumn, kPartitionDataJson},
+  };
+
+  auto split = makeIcebergSplitWithInfoColumns(
+      dataFilePath->getPath(), infoColumns, /*deleteFiles=*/{});
+
+  const auto rowIdType =
+      ROW({"file_path", "row_position", "spec_id", "partition_data"},
+          {VARCHAR(), BIGINT(), INTEGER(), VARCHAR()});
+  const auto outputType =
+      ROW({"c0", IcebergMetadataColumn::kTargetTableRowIdColumnName},
+          {BIGINT(), rowIdType});
+  const auto tableDataColumns = ROW({"c0"}, {BIGINT()});
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(tableDataColumns)
+                  .endTableScan()
+                  .planNode();
+
+  // Contiguous case: row_position = file position [0, 1, 2]. file_path,
+  // spec_id, and partition_data are split-level constants.
+  auto expected = makeRowVector(
+      {"c0", IcebergMetadataColumn::kTargetTableRowIdColumnName},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeRowVector(
+              {"file_path", "row_position", "spec_id", "partition_data"},
+              {
+                  makeFlatVector<std::string>(
+                      3,
+                      [&](vector_size_t /*row*/) {
+                        return dataFilePath->getPath();
+                      }),
+                  makeFlatVector<int64_t>({0, 1, 2}),
+                  makeFlatVector<int32_t>({7, 7, 7}),
+                  makeFlatVector<std::string>(
+                      3,
+                      [&](vector_size_t /*row*/) {
+                        return kPartitionDataJson;
+                      }),
+              }),
+      });
+
+  AssertQueryBuilder(plan).splits({split}).assertResults({expected});
 }
 
 #ifdef VELOX_ENABLE_PARQUET

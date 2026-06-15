@@ -32,6 +32,16 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
   if (values.empty() && args.empty()) {
     return 1;
   }
+  // Broadcasting elementwise: the element count is the product of the broadcast
+  // shape across all operands, which can exceed the largest single operand
+  // (e.g. [20,1] and [100] broadcast to [20,100]).
+  if (broadcast) {
+    int64_t n = 1;
+    for (auto dim : dims(frame)) {
+      n *= dim;
+    }
+    return n;
+  }
   int64_t result = 0;
   for (auto valueId : values) {
     auto& ivalue = frame->getIValue(valueId);
@@ -68,6 +78,36 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
   if (values.empty() && args.empty()) {
     return {1};
   }
+  // Broadcasting: combine all operand shapes right-aligned, taking the max
+  // (non-1) extent per dimension. Operands are assumed broadcast-compatible.
+  if (broadcast) {
+    std::vector<Dim> result;
+    auto combine = [&result](const std::vector<Dim>& shape) {
+      // Right-align: grow result to the larger rank, then max each dim from
+      // the right.
+      if (shape.size() > result.size()) {
+        result.insert(result.begin(), shape.size() - result.size(), 1);
+      }
+      for (size_t i = 0; i < shape.size(); ++i) {
+        auto& resultDim = result[result.size() - shape.size() + i];
+        resultDim = std::max<Dim>(resultDim, shape[i]);
+      }
+    };
+    for (auto valueId : values) {
+      auto& ivalue = frame->getIValue(valueId);
+      if (ivalue.isTensor()) {
+        auto sizes = ivalue.toTensor().sizes();
+        combine(std::vector<Dim>(sizes.begin(), sizes.end()));
+      }
+    }
+    for (auto& child : args) {
+      combine(child.dims(frame));
+    }
+    if (result.empty()) {
+      result.push_back(1);
+    }
+    return result;
+  }
   int64_t bestNumel = -1;
   std::vector<Dim> bestDims;
   for (auto valueId : values) {
@@ -100,6 +140,7 @@ SizeExpr SizeExpr::toActual(
     const IdToValueMap& idToValue) const {
   SizeExpr result;
   result.op = op;
+  result.broadcast = broadcast;
   result.values.reserve(values.size());
   for (auto valueId : values) {
     auto it = bindings.find(valueId);
@@ -528,7 +569,7 @@ int32_t KernelOperation::attrOffset(NodeCP node, std::string_view attr) const {
       "Attribute '",
       attr,
       "' not found for node ",
-      node->toString());
+      standaloneToString(node));
   return it->second;
 }
 
@@ -696,7 +737,13 @@ SizeExpr KernelOperation::makeSizeExpr(
     std::unordered_set<ValueCP> seen;
     std::vector<nativert::ValueId> leafIds;
     collectElementwiseLeaves(node, subgraphInputs, seen, leafIds);
-    return SizeExpr{SizeShortcut::kMax, std::move(leafIds), {}};
+    // With more than one operand the result is their broadcast: the size is the
+    // product of the broadcast shape, which can exceed the largest single
+    // operand (e.g. [20,1] + [100] -> [20,100]). With one operand the size is
+    // just that operand, so the broadcast path is unnecessary.
+    SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
+    expr.broadcast = expr.values.size() > 1;
+    return expr;
   }
 
   TORCH_CHECK(meta, "No metadata for: ", node->target());
@@ -742,7 +789,11 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       std::unordered_set<ValueCP> seen;
       std::vector<nativert::ValueId> leafIds;
       collectElementwiseLeaves(expr_, inputs_, seen, leafIds);
-      return SizeExpr{SizeShortcut::kMax, std::move(leafIds), {}};
+      // Multiple operands broadcast against each other; size by the broadcast
+      // shape (see makeSizeExpr).
+      SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
+      expr.broadcast = expr.values.size() > 1;
+      return expr;
     }
   }
   std::vector<nativert::ValueId> leafIds;
@@ -972,13 +1023,35 @@ void KernelOperation::setOutputs(
       OutputDesc desc;
       if (needsShapeOnly && meta->returnMeta[i].isRegister) {
         desc.shapeOnly = true;
-        desc.sizeExpr = makeSizeExpr(node, subgraphInputs, i);
+        desc.sizeExpr =
+            makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
       } else if (meta->returnMeta[i].reserveShape) {
         desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
       } else {
         desc.shapeSetOnDevice = meta->returnMeta[i].shapeSetOnDevice;
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
-        desc.sizeExpr = makeSizeExpr(node, subgraphInputs, i);
+        desc.sizeExpr =
+            makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
+        // In-place elementwise (Tensor(a!)): the materialized output aliases
+        // the mutated self argument, so reserve it as a view of self instead of
+        // a fresh buffer (see reserveOutputs). This makes the returned tensor
+        // reflect self, including later in-place mutations of self.
+        if (meta->elementwise && i == 0) {
+          auto mutated = dataMutatedInputs(node);
+          if (!mutated.empty()) {
+            desc.aliasSelfId = mutated[0]->id();
+          }
+        }
+      }
+      // If the kernel's top node returns a naked scalar (e.g. sym_size / numel
+      // used as the kernel output rather than fused in-register), it must be
+      // read back into the execution frame so a consuming kernel can pick it up
+      // as a host scalar param. Fused uses don't reach here: the producer is
+      // then an interior node whose register output is never materialized.
+      auto outKind = outputs[i]->type().kind();
+      if (node == expr_ && outKind != nativert::Type::Kind::Tensor &&
+          outKind != nativert::Type::Kind::TensorList) {
+        desc.neededOnHost = true;
       }
       if (isListOutput) {
         desc.isList = true;

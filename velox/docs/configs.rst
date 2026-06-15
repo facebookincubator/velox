@@ -962,6 +962,15 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
+   * - nimble.lazy-column-io
+     - nimble.lazy_column_io
+     - boolean
+     - false
+     - Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
+       Lazy IO columns are loaded through a separate buffered input other than the one used by early
+       materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
+       not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
+       allow lazy IO across stripes.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

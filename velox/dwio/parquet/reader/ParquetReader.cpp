@@ -16,13 +16,14 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 
-#include <thrift/protocol/TCompactProtocol.h> //@manual
+#include <thrift/lib/cpp2/FieldRef.h>
 
+#include "velox/common/Casts.h"
 #include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
-#include "velox/dwio/parquet/thrift/ThriftTransport.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::parquet {
@@ -134,7 +135,38 @@ bool isInt64Compatible(const TypePtr& type) {
   return type->kind() == TypeKind::BIGINT;
 }
 
+ParquetReaderOptions getParquetReaderOptions(
+    const dwio::common::ReaderOptions& options) {
+  if (options.formatSpecificOptions()) {
+    return *checkedPointerCast<ParquetReaderOptions>(
+        options.formatSpecificOptions());
+  }
+
+  ParquetReaderOptions parquetOptions;
+  parquetOptions.footerSpeculativeIoSize = options.footerSpeculativeIoSize();
+  parquetOptions.columnMappingMode = options.columnMappingMode();
+  return parquetOptions;
+}
+
 } // namespace
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+ParquetReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<ParquetReaderOptions>();
+  options->footerSpeculativeIoSize =
+      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
+  options->allowInt32Narrowing =
+      ParquetConfig::allowInt32Narrowing(connectorConfig, session);
+  options->footerMemoryTrackingThreshold =
+      ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session);
+  const auto useColumnNames =
+      ParquetConfig::useColumnNames(connectorConfig, session);
+  options->columnMappingMode =
+      useColumnNames ? ColumnMappingMode::kName : ColumnMappingMode::kPosition;
+  return options;
+}
 
 /// Metadata and options for reading Parquet.
 class ReaderBase {
@@ -256,10 +288,12 @@ class ReaderBase {
       bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
-  const uint64_t footerSpeculativeIoSize_;
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
+  // Copy of Parquet-specific options, or defaults for direct ParquetReader
+  // callers that do not go through ParquetReaderFactory.
+  const ParquetReaderOptions parquetReaderOptions_;
   std::shared_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
   std::unique_ptr<thrift::FileMetaData> fileMetaData_;
@@ -294,9 +328,9 @@ ReaderBase::ReaderBase(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options)
     : pool_{options.memoryPool()},
-      footerSpeculativeIoSize_{options.footerSpeculativeIoSize()},
       filePreloadThreshold_{options.filePreloadThreshold()},
       options_{options},
+      parquetReaderOptions_{getParquetReaderOptions(options)},
       input_{std::move(input)},
       fileLength_{input_->getReadFile()->size()} {
   VELOX_CHECK_GT(fileLength_, 0, "Parquet file is empty");
@@ -331,9 +365,11 @@ void ReaderBase::releaseThriftBytes(size_t bytes) {
 }
 
 void ReaderBase::loadFileMetaData() {
-  bool preloadFile =
-      fileLength_ <= std::max(filePreloadThreshold_, footerSpeculativeIoSize_);
-  uint64_t readSize = preloadFile ? fileLength_ : footerSpeculativeIoSize_;
+  bool preloadFile = fileLength_ <=
+      std::max(filePreloadThreshold_,
+               parquetReaderOptions_.footerSpeculativeIoSize);
+  uint64_t readSize =
+      preloadFile ? fileLength_ : parquetReaderOptions_.footerSpeculativeIoSize;
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -371,37 +407,40 @@ void ReaderBase::loadFileMetaData() {
         missingLength, stream.get(), copy.data(), bufferStart, bufferEnd);
   }
 
-  std::shared_ptr<thrift::ThriftTransport> thriftTransport =
-      std::make_shared<thrift::ThriftBufferedTransport>(
-          copy.data() + footerOffsetInBuffer, footerLength);
-  auto thriftProtocol = std::make_unique<
-      apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport>>(
-      thriftTransport);
   fileMetaData_ = std::make_unique<thrift::FileMetaData>();
-  fileMetaData_->read(thriftProtocol.get());
-  if (footerLength > options().parquetFooterMemoryTrackingThreshold()) {
+  thrift::deserialize(
+      fileMetaData_.get(),
+      std::string_view(
+          reinterpret_cast<char*>(copy.data() + footerOffsetInBuffer),
+          footerLength));
+  if (footerLength > parquetReaderOptions_.footerMemoryTrackingThreshold) {
     thriftSize_ = fileMetaData().estimateFileMetadataSize();
   }
 }
 
 void ReaderBase::initializeSchema() {
-  if (fileMetaData_->__isset.encryption_algorithm) {
+  if (fileMetaData_->encryption_algorithm()) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }
-  if (options_.columnMappingMode() == ColumnMappingMode::kParquetFieldId) {
+  if (parquetReaderOptions_.columnMappingMode ==
+      ColumnMappingMode::kParquetFieldId) {
     VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
   }
 
   VELOX_CHECK_GT(
-      fileMetaData_->schema.size(),
+      fileMetaData_->schema()->size(),
       1,
       "Invalid Parquet schema: Need at least one non-root column in the file");
+  // parquet.thrift says "The root of the schema does not have a
+  // repetition_type" but there are Parquet files that specify
+  // REQUIRED explicitly.
   VELOX_CHECK_EQ(
-      fileMetaData_->schema[0].repetition_type,
+      (*fileMetaData_->schema())[0].repetition_type().value_or(
+          thrift::FieldRepetitionType::REQUIRED),
       thrift::FieldRepetitionType::REQUIRED,
       "Invalid Parquet schema: root element must be REQUIRED");
   VELOX_CHECK_GT(
-      fileMetaData_->schema[0].num_children,
+      *(*fileMetaData_->schema())[0].num_children(),
       0,
       "Invalid Parquet schema: root element must have at least 1 child");
 
@@ -409,7 +448,7 @@ void ReaderBase::initializeSchema() {
   uint32_t maxRepeat = 0;
   uint32_t schemaIdx = 0;
   uint32_t columnIdx = 0;
-  uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
+  uint32_t maxSchemaElementIdx = fileMetaData_->schema()->size() - 1;
   std::vector<std::string> columnNames;
   // Setting the parent schema index of the root("hive_schema") to be 0, which
   // is the root itself. This is ok because it's never required to check the
@@ -429,7 +468,11 @@ void ReaderBase::initializeSchema() {
 }
 
 void ReaderBase::initializeVersion() {
-  version_ = SemanticVersion::parse(fileMetaData_->created_by);
+  if (fileMetaData_->created_by()) {
+    version_ = SemanticVersion::parse(*fileMetaData_->created_by());
+  } else {
+    version_ = std::nullopt;
+  }
 }
 
 std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
@@ -443,36 +486,36 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     const TypePtr& parentRequestedType,
     std::vector<std::string>& columnNames) const {
   VELOX_CHECK(fileMetaData_ != nullptr);
-  VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema.size());
+  VELOX_CHECK_LT(schemaIdx, fileMetaData_->schema()->size());
 
-  auto& schema = fileMetaData_->schema;
+  auto& schema = *fileMetaData_->schema();
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
   bool isRepeated = false;
   bool isOptional = false;
 
-  if (schemaElement.__isset.repetition_type) {
-    if (schemaElement.repetition_type !=
+  if (schemaElement.repetition_type()) {
+    if (*schemaElement.repetition_type() !=
         thrift::FieldRepetitionType::REQUIRED) {
       maxDefine++;
     }
-    if (schemaElement.repetition_type ==
+    if (apache::thrift::can_throw(*schemaElement.repetition_type()) ==
         thrift::FieldRepetitionType::REPEATED) {
       maxRepeat++;
       isRepeated = true;
     }
-    if (schemaElement.repetition_type ==
+    if (*schemaElement.repetition_type() ==
         thrift::FieldRepetitionType::OPTIONAL) {
       isOptional = true;
     }
   }
 
-  auto name = schemaElement.name;
+  auto name = *schemaElement.name();
   if (isFileColumnNamesReadAsLowerCase()) {
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (options_.columnMappingMode() != ColumnMappingMode::kName &&
+  if (parquetReaderOptions_.columnMappingMode != ColumnMappingMode::kName &&
       options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
@@ -481,9 +524,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     columnNames.push_back(name);
   }
 
-  if (!schemaElement.__isset.type) { // inner node
+  if (!schemaElement.type()) { // inner node
     VELOX_CHECK(
-        schemaElement.__isset.num_children && schemaElement.num_children > 0,
+        schemaElement.num_children() && *schemaElement.num_children() > 0,
         "Node has no children but should");
     VELOX_CHECK(
         !requestedType || requestedType->isRow() || requestedType->isArray() ||
@@ -492,9 +535,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     std::vector<std::unique_ptr<ParquetTypeWithId::TypeWithId>> children;
 
     auto curSchemaIdx = schemaIdx;
-    for (int32_t i = 0; i < schemaElement.num_children; i++) {
+    for (int32_t i = 0; i < *schemaElement.num_children(); i++) {
       ++schemaIdx;
-      auto childName = schema[schemaIdx].name;
+      auto childName = *schema[schemaIdx].name();
       if (isFileColumnNamesReadAsLowerCase()) {
         childName = functions::stringImpl::utf8StrToLowerCopy(childName);
       }
@@ -519,7 +562,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (options_.columnMappingMode() == ColumnMappingMode::kName) {
+          if (parquetReaderOptions_.columnMappingMode ==
+              ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);
@@ -568,8 +612,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     VELOX_CHECK(!children.empty());
     name = columnNames.at(curSchemaIdx);
 
-    if (schemaElement.__isset.converted_type) {
-      switch (schemaElement.converted_type) {
+    if (schemaElement.converted_type()) {
+      switch (*schemaElement.converted_type()) {
         case thrift::ConvertedType::LIST: {
           VELOX_CHECK_EQ(children.size(), 1);
           const auto& child = children[0];
@@ -577,7 +621,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // In case the child is a MAP or current element is repeated then
           // wrap child around additional ARRAY
           if (child->type()->kind() == TypeKind::MAP ||
-              schemaElement.repetition_type ==
+              apache::thrift::can_throw(*schemaElement.repetition_type()) ==
                   thrift::FieldRepetitionType::REPEATED) {
             return std::make_unique<ParquetTypeWithId>(
                 TypeFactory<TypeKind::ARRAY>::create(child->type()),
@@ -602,14 +646,15 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // If the MAP_KEY_VALUE annotated group's parent is a MAP, it should
           // be the repeated key_value group that directly contains the key and
           // value children.
-          if (schema[parentSchemaIdx].converted_type ==
-              thrift::ConvertedType::MAP) {
+          if (schema[parentSchemaIdx].converted_type() &&
+              *schema[parentSchemaIdx].converted_type() ==
+                  thrift::ConvertedType::MAP) {
             // TODO: the group names need to be checked. According to the spec,
             // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
             // the name of the schema element being 'key_value' is
             // also an indication of this is a map type
             VELOX_CHECK_EQ(
-                schemaElement.repetition_type,
+                *schemaElement.repetition_type(),
                 thrift::FieldRepetitionType::REPEATED);
             VELOX_CHECK_EQ(children.size(), 2);
 
@@ -665,14 +710,15 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         default:
           VELOX_UNREACHABLE(
               "Invalid SchemaElement converted_type: {}, name: {}",
-              schemaElement.converted_type,
+              *schemaElement.converted_type(),
               name);
       }
     } else {
-      if (schemaElement.repetition_type ==
-          thrift::FieldRepetitionType::REPEATED) {
-        if (schema[parentSchemaIdx].converted_type ==
-            thrift::ConvertedType::LIST) {
+      if (schemaElement.repetition_type() &&
+          *schemaElement.repetition_type() ==
+              thrift::FieldRepetitionType::REPEATED) {
+        auto convertedType = schema[parentSchemaIdx].converted_type();
+        if (convertedType && *convertedType == thrift::ConvertedType::LIST) {
           // TODO: the group names need to be checked. According to spec,
           // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
           // the name of the schema element being 'array' is
@@ -680,7 +726,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           // child of LIST
           VELOX_CHECK_GE(children.size(), 1);
           if (children.size() == 1 && name != "array" &&
-              name != schema[parentSchemaIdx].name + "_tuple") {
+              name != *schema[parentSchemaIdx].name() + "_tuple") {
             auto type =
                 TypeFactory<TypeKind::ARRAY>::create(children[0]->type());
             return std::make_unique<ParquetTypeWithId>(
@@ -746,10 +792,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             return res;
           }
         } else if (
-            schema[parentSchemaIdx].converted_type ==
-                thrift::ConvertedType::MAP ||
-            schema[parentSchemaIdx].converted_type ==
-                thrift::ConvertedType::MAP_KEY_VALUE) {
+            convertedType &&
+            (*convertedType == thrift::ConvertedType::MAP ||
+             *convertedType == thrift::ConvertedType::MAP_KEY_VALUE)) {
           // children  of MAP
           VELOX_CHECK_EQ(children.size(), 2);
           auto type = TypeFactory<TypeKind::MAP>::create(
@@ -831,21 +876,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   } else { // leaf node
     name = columnNames.at(curSchemaIdx);
     const auto veloxType = convertType(schemaElement, requestedType);
-    int32_t precision =
-        schemaElement.__isset.precision ? schemaElement.precision : 0;
-    int32_t scale = schemaElement.__isset.scale ? schemaElement.scale : 0;
-    int32_t type_length =
-        schemaElement.__isset.type_length ? schemaElement.type_length : 0;
+    int32_t precision = schemaElement.precision().value_or(0);
+    int32_t scale = schemaElement.scale().value_or(0);
+    int32_t typeLength = schemaElement.type_length().value_or(0);
     std::vector<std::unique_ptr<dwio::common::TypeWithId>> children;
     const std::optional<thrift::LogicalType> logicalType_ =
-        schemaElement.__isset.logicalType
-        ? std::optional<thrift::LogicalType>(schemaElement.logicalType)
-        : std::nullopt;
-    const std::optional<thrift::ConvertedType::type> convertedType =
-        schemaElement.__isset.converted_type
-        ? std::optional<thrift::ConvertedType::type>(
-              schemaElement.converted_type)
-        : std::nullopt;
+        schemaElement.logicalType().to_optional();
+    const std::optional<thrift::ConvertedType> convertedType =
+        schemaElement.converted_type().to_optional();
 
     auto leafTypePtr = std::make_unique<ParquetTypeWithId>(
         veloxType,
@@ -854,7 +892,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         maxSchemaElementIdx,
         columnIdx++,
         name,
-        schemaElement.type,
+        *schemaElement.type(),
         logicalType_,
         convertedType,
         maxRepeat,
@@ -863,9 +901,9 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         isRepeated,
         precision,
         scale,
-        type_length);
+        typeLength);
 
-    if (schemaElement.repetition_type ==
+    if (apache::thrift::can_throw(*schemaElement.repetition_type()) ==
         thrift::FieldRepetitionType::REPEATED) {
       // Array
       children.clear();
@@ -896,28 +934,27 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 TypePtr ReaderBase::convertType(
     const thrift::SchemaElement& schemaElement,
     const TypePtr& requestedType) const {
-  VELOX_CHECK(schemaElement.__isset.type && schemaElement.num_children == 0);
   VELOX_CHECK(
-      schemaElement.type != thrift::Type::FIXED_LEN_BYTE_ARRAY ||
-          schemaElement.__isset.type_length,
+      schemaElement.type() && schemaElement.num_children().value_or(0) == 0);
+  VELOX_CHECK(
+      *schemaElement.type() != thrift::Type::FIXED_LEN_BYTE_ARRAY ||
+          schemaElement.type_length(),
       "FIXED_LEN_BYTE_ARRAY requires length to be set");
 
   static constexpr const char* kTypeMappingErrorFmtStr =
       "Converted type {} is not allowed for requested type {} for file column '{}'";
-
-  const bool isRepeated = schemaElement.__isset.repetition_type &&
-      schemaElement.repetition_type == thrift::FieldRepetitionType::REPEATED;
-  const bool allowNarrowing = options_.allowInt32Narrowing();
-
-  if (schemaElement.__isset.converted_type) {
-    switch (schemaElement.converted_type) {
+  const bool isRepeated = schemaElement.repetition_type() &&
+      *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
+  const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing;
+  if (schemaElement.converted_type()) {
+    switch (*schemaElement.converted_type()) {
       case thrift::ConvertedType::INT_8:
       case thrift::ConvertedType::UINT_8:
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT32,
             "{} converted type can only be set for value of thrift::Type::INT32",
-            schemaElement.converted_type);
+            *schemaElement.converted_type());
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -930,16 +967,16 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "TINYINT",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return TINYINT();
 
       case thrift::ConvertedType::INT_16:
       case thrift::ConvertedType::UINT_16:
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT32,
             "{} converted type can only be set for value of thrift::Type::INT32",
-            schemaElement.converted_type);
+            *schemaElement.converted_type());
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -952,16 +989,16 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "SMALLINT",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return SMALLINT();
 
       case thrift::ConvertedType::INT_32:
       case thrift::ConvertedType::UINT_32:
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT32,
             "{} converted type can only be set for value of thrift::Type::INT32",
-            schemaElement.converted_type);
+            *schemaElement.converted_type());
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -974,28 +1011,28 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return INTEGER();
 
       case thrift::ConvertedType::INT_64:
       case thrift::ConvertedType::UINT_64:
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT64,
             "{} converted type can only be set for value of thrift::Type::INT64",
-            schemaElement.converted_type);
+            *schemaElement.converted_type());
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(requestedType, isRepeated, isInt64Compatible),
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return BIGINT();
 
       case thrift::ConvertedType::DATE:
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT32,
             "DATE converted type can only be set for value of thrift::Type::INT32");
         VELOX_CHECK(
@@ -1007,13 +1044,13 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "DATE",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return DATE();
 
       case thrift::ConvertedType::TIMESTAMP_MICROS:
       case thrift::ConvertedType::TIMESTAMP_MILLIS:
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT64,
             "TIMESTAMP_MICROS or TIMESTAMP_MILLIS converted type can only be set for value of thrift::Type::INT64");
         VELOX_CHECK(
@@ -1027,15 +1064,15 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return TIMESTAMP();
 
       case thrift::ConvertedType::DECIMAL: {
         VELOX_CHECK(
-            schemaElement.__isset.precision && schemaElement.__isset.scale,
+            schemaElement.precision() && schemaElement.scale(),
             "DECIMAL requires a length and scale specifier!");
-        const auto schemaElementPrecision = schemaElement.precision;
-        const auto schemaElementScale = schemaElement.scale;
+        const auto schemaElementPrecision = *schemaElement.precision();
+        const auto schemaElementScale = *schemaElement.scale();
         auto type = DECIMAL(schemaElementPrecision, schemaElementScale);
         if (requestedType) {
           VELOX_CHECK(
@@ -1046,7 +1083,7 @@ TypePtr ReaderBase::convertType(
               kTypeMappingErrorFmtStr,
               "DECIMAL",
               requestedType->toString(),
-              schemaElement.name);
+              *schemaElement.name());
           // Allow decimal widening: precision may be larger and scale may
           // increase as long as precisionIncrease >= scaleIncrease.
           // Short-to-long decimal crossing is handled by getDecimalValues
@@ -1064,13 +1101,13 @@ TypePtr ReaderBase::convertType(
               kTypeMappingErrorFmtStr,
               type->toString(),
               requestedType->toString(),
-              schemaElement.name);
+              *schemaElement.name());
         }
         return type;
       }
 
       case thrift::ConvertedType::UTF8:
-        switch (schemaElement.type) {
+        switch (*schemaElement.type()) {
           case thrift::Type::BYTE_ARRAY:
           case thrift::Type::FIXED_LEN_BYTE_ARRAY:
             VELOX_CHECK(
@@ -1084,7 +1121,7 @@ TypePtr ReaderBase::convertType(
                 kTypeMappingErrorFmtStr,
                 "VARCHAR",
                 requestedType->toString(),
-                schemaElement.name);
+                *schemaElement.name());
             return VARCHAR();
           default:
             VELOX_FAIL(
@@ -1092,7 +1129,7 @@ TypePtr ReaderBase::convertType(
         }
       case thrift::ConvertedType::ENUM: {
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::BYTE_ARRAY,
             "ENUM converted type can only be set for value of thrift::Type::BYTE_ARRAY");
         VELOX_CHECK(
@@ -1106,13 +1143,13 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "VARCHAR",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return VARCHAR();
       }
       case thrift::ConvertedType::TIME_MILLIS:
         VELOX_CHECK_EQ(
-            schemaElement.type,
-            thrift::Type::INT32,
+            static_cast<int>(*schemaElement.type()),
+            static_cast<int>(thrift::Type::INT32),
             "TIME_MILLIS converted type can only be set for value of thrift::Type::INT32");
         VELOX_CHECK(
             !requestedType ||
@@ -1125,12 +1162,12 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "TIME",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return TIME();
 
       case thrift::ConvertedType::TIME_MICROS: {
         VELOX_CHECK_EQ(
-            schemaElement.type,
+            *schemaElement.type(),
             thrift::Type::INT64,
             "TIME_MICROS converted type can only be set for value of thrift::Type::INT64");
         const bool isCompatibleRequestedType = !requestedType ||
@@ -1154,11 +1191,11 @@ TypePtr ReaderBase::convertType(
       default:
         VELOX_FAIL(
             "Unsupported Parquet SchemaElement converted type: {}",
-            schemaElement.converted_type);
+            *schemaElement.converted_type());
     }
   } else {
-    switch (schemaElement.type) {
-      case thrift::Type::type::BOOLEAN:
+    switch (*schemaElement.type()) {
+      case thrift::Type::BOOLEAN:
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -1170,9 +1207,9 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "BOOLEAN",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return BOOLEAN();
-      case thrift::Type::type::INT32:
+      case thrift::Type::INT32:
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -1185,12 +1222,13 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "INTEGER",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return INTEGER();
-      case thrift::Type::type::INT64:
+      case thrift::Type::INT64:
         // For Int64 Timestamp in nano precision
-        if (schemaElement.__isset.logicalType &&
-            schemaElement.logicalType.__isset.TIMESTAMP) {
+        if (schemaElement.logicalType() &&
+            schemaElement.logicalType()->getType() ==
+                thrift::LogicalType::Type::TIMESTAMP) {
           VELOX_CHECK(
               !requestedType ||
                   isCompatible(
@@ -1202,7 +1240,7 @@ TypePtr ReaderBase::convertType(
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
               requestedType->toString(),
-              schemaElement.name);
+              *schemaElement.name());
           return TIMESTAMP();
         }
         VELOX_CHECK(
@@ -1211,9 +1249,9 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "BIGINT",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return BIGINT();
-      case thrift::Type::type::INT96:
+      case thrift::Type::INT96:
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -1225,9 +1263,9 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return TIMESTAMP(); // INT96 only maps to a timestamp
-      case thrift::Type::type::FLOAT:
+      case thrift::Type::FLOAT:
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -1240,9 +1278,9 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "REAL",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return REAL();
-      case thrift::Type::type::DOUBLE:
+      case thrift::Type::DOUBLE:
         VELOX_CHECK(
             !requestedType ||
                 isCompatible(
@@ -1254,10 +1292,10 @@ TypePtr ReaderBase::convertType(
             kTypeMappingErrorFmtStr,
             "DOUBLE",
             requestedType->toString(),
-            schemaElement.name);
+            *schemaElement.name());
         return DOUBLE();
-      case thrift::Type::type::BYTE_ARRAY:
-      case thrift::Type::type::FIXED_LEN_BYTE_ARRAY:
+      case thrift::Type::BYTE_ARRAY:
+      case thrift::Type::FIXED_LEN_BYTE_ARRAY:
         if (requestedType &&
             isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
               return type->isVarchar();
@@ -1273,13 +1311,14 @@ TypePtr ReaderBase::convertType(
               kTypeMappingErrorFmtStr,
               "VARBINARY",
               requestedType->toString(),
-              schemaElement.name);
+              *schemaElement.name());
           return VARBINARY();
         }
 
       default:
         VELOX_FAIL(
-            "Unknown Parquet SchemaElement type: {}", schemaElement.type);
+            "Unknown Parquet SchemaElement type: {}",
+            static_cast<int>(*schemaElement.type()));
     }
   }
 }
@@ -1325,12 +1364,20 @@ int64_t ReaderBase::rowGroupUncompressedSize(
     int32_t rowGroupIndex,
     const dwio::common::TypeWithId& type) const {
   if (type.column() != ParquetTypeWithId::kNonLeaf) {
-    VELOX_CHECK_LT(rowGroupIndex, fileMetaData_->row_groups.size());
+    VELOX_CHECK_LT(rowGroupIndex, fileMetaData_->row_groups()->size());
     VELOX_CHECK_LT(
-        type.column(), fileMetaData_->row_groups[rowGroupIndex].columns.size());
-    return fileMetaData_->row_groups[rowGroupIndex]
-        .columns[type.column()]
-        .meta_data.total_uncompressed_size;
+        type.column(),
+        apache::thrift::can_throw(*fileMetaData_->row_groups())[rowGroupIndex]
+            .columns()
+            ->size());
+    return apache::thrift::can_throw(
+               *apache::thrift::can_throw(
+                    *fileMetaData_->row_groups())[rowGroupIndex]
+                    .columns()
+                    .value()[type.column()]
+                    .meta_data())
+        .total_uncompressed_size()
+        .value();
   }
   int64_t sum = 0;
   for (auto child : type.getChildren()) {
@@ -1351,7 +1398,7 @@ class ParquetRowReader::Impl {
       : pool_{readerBase->getMemoryPool()},
         readerBase_{readerBase},
         options_{options},
-        rowGroups_{readerBase_->thriftFileMetaData().row_groups},
+        rowGroups_{*readerBase_->thriftFileMetaData().row_groups()},
         nextRowGroupIdsIdx_{0},
         currentRowGroupPtr_{nullptr},
         rowsInCurrentRowGroup_{0},
@@ -1414,20 +1461,29 @@ class ParquetRowReader::Impl {
     uint64_t rowNumber = 0;
     size_t freedThriftSize = 0;
     for (auto i = 0; i < rowGroups_.size(); i++) {
-      VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
+      VELOX_CHECK_GT(rowGroups_[i].columns()->size(), 0);
       auto fileOffset =
-          (rowGroups_[i].__isset.file_offset && rowGroups_[i].file_offset != 0)
-          ? rowGroups_[i].file_offset
-          : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
-          ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
-          : rowGroups_[i].columns[0].meta_data.data_page_offset;
+          (rowGroups_[i].file_offset() &&
+           apache::thrift::can_throw(*rowGroups_[i].file_offset()) != 0)
+          ? apache::thrift::can_throw(*rowGroups_[i].file_offset())
+          : apache::thrift::can_throw(
+                rowGroups_[i].columns().value()[0].meta_data())
+                ->dictionary_page_offset()
+          ? apache::thrift::can_throw(
+                *apache::thrift::can_throw(
+                     rowGroups_[i].columns().value()[0].meta_data())
+                     ->dictionary_page_offset())
+          : apache::thrift::can_throw(
+                *apache::thrift::can_throw(
+                     rowGroups_[i].columns().value()[0].meta_data())
+                     ->data_page_offset());
       VELOX_CHECK_GT(fileOffset, 0);
       auto rowGroupInRange =
           (fileOffset >= options_.offset() && fileOffset < options_.limit());
 
       auto isExcluded =
           (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
-      auto isEmpty = rowGroups_[i].num_rows == 0;
+      auto isEmpty = apache::thrift::can_throw(*rowGroups_[i].num_rows()) == 0;
 
       // Add a row group to read if it is within range and not empty and not in
       // the excluded list.
@@ -1442,7 +1498,7 @@ class ParquetRowReader::Impl {
           // Measure the columns BEFORE clearing so we can release the matching
           // amount from the pool reservation that ReaderBase reported.
           if (readerBase_->isThriftMemoryReported()) {
-            for (const auto& column : rowGroups_[i].columns) {
+            for (const auto& column : *rowGroups_[i].columns()) {
               freedThriftSize +=
                   ColumnChunkMetaDataPtr(&column).estimateColumnMetadataSize();
             }
@@ -1451,14 +1507,14 @@ class ParquetRowReader::Impl {
           // operator=({}) and clear() preserve capacity, so the bytes
           // reported as freed would still be resident; only the
           // swap-with-empty idiom guarantees the allocation is released.
-          std::vector<thrift::ColumnChunk>().swap(rowGroups_[i].columns);
+          std::vector<thrift::ColumnChunk>().swap(*rowGroups_[i].columns());
         }
         if (rowGroupInRange) {
           skippedStrides_++;
         }
       }
 
-      rowNumber += rowGroups_[i].num_rows;
+      rowNumber += *rowGroups_[i].num_rows();
     }
 
     if (freedThriftSize > 0) {
@@ -1519,7 +1575,7 @@ class ParquetRowReader::Impl {
     }
     estimatedRowSize_ = readerBase_->rowGroupUncompressedSize(
                             index, *readerBase_->schemaWithId()) /
-        rowGroups_[index].num_rows;
+        *rowGroups_[index].num_rows();
     lastRowGroupWithRowEstimate_ = index;
     return estimatedRowSize_;
   }
@@ -1552,7 +1608,7 @@ class ParquetRowReader::Impl {
         nextRowGroupIdsIdx_,
         static_cast<StructColumnReader&>(*columnReader_));
     currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
-    rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
+    rowsInCurrentRowGroup_ = *currentRowGroupPtr_->num_rows();
     currentRowInGroup_ = 0;
     nextRowGroupIdsIdx_++;
     columnReader_->seekToRowGroup(nextRowGroupIndex);
@@ -1634,7 +1690,7 @@ ParquetReader::ParquetReader(
     : readerBase_(std::make_shared<ReaderBase>(std::move(input), options)) {}
 
 std::optional<uint64_t> ParquetReader::numberOfRows() const {
-  return readerBase_->thriftFileMetaData().num_rows;
+  return *readerBase_->thriftFileMetaData().num_rows();
 }
 
 std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(

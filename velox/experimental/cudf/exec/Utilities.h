@@ -23,6 +23,7 @@
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
+#include <span>
 
 namespace facebook::velox::cudf_velox {
 
@@ -178,6 +179,19 @@ class CudaEvent {
  */
 void streamsWaitForStream(
     CudaEvent& event,
-    const std::vector<rmm::cuda_stream_view>& streams,
+    std::span<const rmm::cuda_stream_view> streams,
+    rmm::cuda_stream_view stream);
+
+/**
+ * @brief Orders CudfVector deallocations after work on a target stream.
+ *
+ * Prefer rebinding owned table buffers to @p stream so stream-ordered memory
+ * resources free the inputs after prior work on that stream. Falls back to an
+ * event wait on @p inputStreams when an input cannot be rebound without
+ * materializing, e.g. packed-table inputs or older cuDF builds.
+ */
+void orderCudfVectorDeallocationsAfterStream(
+    std::span<const CudfVectorPtr> vectors,
+    std::span<const rmm::cuda_stream_view> inputStreams,
     rmm::cuda_stream_view stream);
 } // namespace facebook::velox::cudf_velox
