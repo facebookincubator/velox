@@ -2286,9 +2286,10 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   PatternMetadata patternMetadata = PatternMetadata::generic();
   try {
-    // Fast path for substrings search. The escape character can be ignored if
-    // it does not appear in the pattern, so callers that always emit a default
-    // escape (e.g. Spark/Gluten emits '\') still hit this path.
+    // Fast path for substrings search. The escape character can be ignored
+    // when it does not appear in the pattern, so callers that always supply
+    // an escape argument still hit this path as long as the escape character
+    // is not actually used in the pattern.
     const auto patternView = std::string_view(pattern);
     const bool escapeIsInert = !escapeChar.has_value() ||
         patternView.find(escapeChar.value()) == std::string_view::npos;
