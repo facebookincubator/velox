@@ -18,11 +18,13 @@
 
 #include <cctype>
 #include <cstring>
+#include <limits>
 
 #include <folly/Conv.h>
 #include <folly/container/F14Map.h>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonWrapper.h"
@@ -32,6 +34,21 @@
 namespace facebook::velox::json {
 namespace {
 
+// File name suffixes that signal a compressed JSON Lines file, matching the
+// Hive text-file convention (see TextReader). Compression is inferred from the
+// name because JSON carries no embedded codec marker.
+constexpr std::string_view kCompressionExtensionGzip{".gz"};
+constexpr std::string_view kCompressionExtensionDeflate{".deflate"};
+constexpr std::string_view kCompressionExtensionZstd{".zst"};
+constexpr std::string_view kCompressionExtensionLz4{".lz4"};
+constexpr std::string_view kCompressionExtensionLzo{".lzo"};
+constexpr std::string_view kCompressionExtensionSnappy{".snappy"};
+
+// Multiplier applied to the compressed file length to size the zlib output
+// buffer (and the fallback decompressed-length estimate for other codecs).
+// Mirrors TextReader's kDecompressionBufferFactor.
+constexpr int32_t kDecompressionBufferFactor = 3;
+
 // Unwraps a simdjson_result, throwing VELOX_USER_FAIL on error.
 template <typename T>
 T unwrap(simdjson::simdjson_result<T> result) {
@@ -40,6 +57,65 @@ T unwrap(simdjson::simdjson_result<T> result) {
         "JSON parse error: {}", simdjson::error_message(result.error()));
   }
   return std::move(result).value_unsafe();
+}
+
+// Infers the compression codec from a file name extension. GZIP uses a 2^15
+// window with gzip framing; the .deflate convention is raw deflate (negative
+// window bits, no header); .zst is zstd. LZ4/LZO/Snappy carry framing the
+// reader's decompressor does not support and fail fast, matching TextReader.
+// An unrecognized extension means the file is uncompressed.
+void setCompressionFromName(
+    std::string_view name,
+    common::CompressionKind& kind,
+    dwio::common::compression::CompressionOptions& options) {
+  if (name.ends_with(kCompressionExtensionLz4) ||
+      name.ends_with(kCompressionExtensionLzo) ||
+      name.ends_with(kCompressionExtensionSnappy)) {
+    VELOX_FAIL("Unsupported compression extension for JSON file: {}", name);
+  }
+  if (name.ends_with(kCompressionExtensionGzip)) {
+    kind = common::CompressionKind::CompressionKind_GZIP;
+    options.format.zlib.windowBits = 15;
+  } else if (name.ends_with(kCompressionExtensionDeflate)) {
+    kind = common::CompressionKind::CompressionKind_ZLIB;
+    options.format.zlib.windowBits = -15; // Raw deflate, no zlib header.
+  } else if (name.ends_with(kCompressionExtensionZstd)) {
+    kind = common::CompressionKind::CompressionKind_ZSTD;
+  } else {
+    kind = common::CompressionKind::CompressionKind_NONE;
+  }
+}
+
+// Decompresses the whole file into buffer, padded with SIMDJSON_PADDING zero
+// bytes, and returns the decompressed length. Compressed JSON files are not
+// byte-addressable, so the entire file is materialized at once. Mirrors
+// TextReader's whole-file, raw decompression via createDecompressor.
+size_t decompressWholeFile(FileContents& contents, std::string& buffer) {
+  const size_t compressedLength = contents.input->getReadFile()->size();
+  auto decompressed = dwio::common::compression::createDecompressor(
+      contents.compression,
+      contents.input->loadCompleteFile(),
+      kDecompressionBufferFactor * compressedLength,
+      contents.pool,
+      contents.compressionOptions,
+      "JSON Reader",
+      /*decryptr=*/nullptr,
+      /*useRawDecompression=*/true,
+      compressedLength);
+
+  std::string decoded;
+  const void* chunk = nullptr;
+  int32_t length = 0;
+  while (decompressed->Next(&chunk, &length)) {
+    if (length > 0) {
+      decoded.append(static_cast<const char*>(chunk), length);
+    }
+  }
+
+  const size_t decodedLength = decoded.size();
+  buffer.assign(decodedLength + simdjson::SIMDJSON_PADDING, '\0');
+  std::memcpy(buffer.data(), decoded.data(), decodedLength);
+  return decodedLength;
 }
 
 // Lowercases an ASCII string byte by byte.
@@ -900,6 +976,12 @@ JsonReader::JsonReader(
       std::move(schema),
       options_.jsonSerDeOptions());
   contents_->input = std::move(input);
+  // Infer the compression codec from the file name. Unsupported codecs throw
+  // here, so an unsupported file fails at reader creation rather than mid-read.
+  setCompressionFromName(
+      contents_->input->getName(),
+      contents_->compression,
+      contents_->compressionOptions);
 }
 
 std::optional<uint64_t> JsonReader::numberOfRows() const {
@@ -935,6 +1017,23 @@ JsonRowReader::JsonRowReader(
       options_{options},
       splitStart_{options.offset()},
       splitEnd_{options.limit()} {
+  if (contents_->compression != common::CompressionKind::CompressionKind_NONE) {
+    // Compressed files are not byte-addressable and so cannot be split: the
+    // split that starts at offset 0 decompresses and reads the whole file,
+    // while every other split reads nothing. Matches TextReader's convention.
+    if (splitStart_ != 0) {
+      fileLength_ = 0;
+      pos_ = 0; // pos_ >= fileLength_ makes next() return zero rows.
+      return;
+    }
+    fileLength_ = decompressWholeFile(*contents_, fileBuffer_);
+    pos_ = 0;
+    // The requested byte length refers to compressed bytes and is meaningless
+    // after decompression; this split owns every decompressed record.
+    splitEnd_ = std::numeric_limits<size_t>::max();
+    return;
+  }
+
   const auto& readFile = contents_->input->getReadFile();
   fileLength_ = readFile->size();
   // Pad the buffer so the last line can be parsed by simdjson without

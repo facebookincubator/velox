@@ -23,6 +23,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/common/compression/Compression.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 
 namespace facebook::velox::json {
@@ -56,9 +57,20 @@ struct FileContents {
   /// across rows to parse TIMESTAMP columns.
   std::shared_ptr<functions::DateTimeFormatter> timestampFormatter;
 
-  /// Decompressed byte stream for the file. Owned here so JsonRowReader
-  /// can read from it without taking ownership.
+  /// Byte stream for the file. Owned here so JsonRowReader can read from it
+  /// without taking ownership. May hold compressed bytes; see compression.
   std::unique_ptr<dwio::common::BufferedInput> input;
+
+  /// Compression codec inferred once from the file name extension (.gz,
+  /// .deflate, .zst). JSON Lines files are decompressed whole at row-reader
+  /// construction; they are not byte-addressable, so a compressed file cannot
+  /// be split (the first split reads it all, the rest read nothing).
+  common::CompressionKind compression{
+      common::CompressionKind::CompressionKind_NONE};
+
+  /// Format-specific decompression options (e.g. zlib window bits) paired with
+  /// compression. Empty for uncompressed files.
+  dwio::common::compression::CompressionOptions compressionOptions{};
 
   /// For every ROW type reachable from the schema (the top-level row and
   /// any ROW nested inside ARRAY elements, MAP values, or other ROWs), maps

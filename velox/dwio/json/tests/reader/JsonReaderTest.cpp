@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
+#include <folly/compression/Compression.h>
+#include <folly/compression/Zlib.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/json/RegisterJsonReader.h"
 #include "velox/type/Timestamp.h"
@@ -25,6 +28,31 @@
 
 namespace facebook::velox::json {
 namespace {
+
+// Compresses data into a gzip-framed stream (.gz convention: zlib deflate with
+// a 2^15 window and gzip header/trailer), matching what the reader's GZIP
+// decompressor expects.
+std::string gzipCompress(const std::string& data) {
+  auto codec = folly::compression::zlib::getCodec(folly::compression::zlib::Options(
+      folly::compression::zlib::Options::Format::GZIP));
+  return codec->compress(folly::StringPiece(data));
+}
+
+// Compresses data into a raw deflate stream (.deflate convention: no zlib
+// header, negative window bits), matching the reader's ZLIB decompressor.
+std::string deflateCompress(const std::string& data) {
+  auto codec = folly::compression::zlib::getCodec(folly::compression::zlib::Options(
+      folly::compression::zlib::Options::Format::RAW));
+  return codec->compress(folly::StringPiece(data));
+}
+
+// Compresses data with zstd (.zst convention), matching the reader's ZSTD
+// decompressor.
+std::string zstdCompress(const std::string& data) {
+  auto codec =
+      folly::compression::getCodec(folly::compression::CodecType::ZSTD);
+  return codec->compress(folly::StringPiece(data));
+}
 
 class JsonReaderTest : public testing::Test, public test::VectorTestBase {
  protected:
@@ -34,10 +62,51 @@ class JsonReaderTest : public testing::Test, public test::VectorTestBase {
 
   void SetUp() override {
     registerJsonReaderFactory();
+    tempDir_ = common::testutil::TempDirectoryPath::create();
   }
 
   void TearDown() override {
     unregisterJsonReaderFactory();
+  }
+
+  // Writes bytes to a fresh file under the test's temp directory whose name
+  // ends in extension (e.g. ".gz"), and returns its path. The extension drives
+  // the reader's filename-based compression detection.
+  std::string writeTempFile(
+      const std::string& bytes,
+      const std::string& extension) {
+    auto path =
+        fmt::format("{}/data{}{}", tempDir_->getPath(), fileCounter_++, extension);
+    LocalWriteFile writeFile(path);
+    writeFile.append(bytes);
+    writeFile.close();
+    return path;
+  }
+
+  // Reads an on-disk file through the JSON reader against schema and returns
+  // the resulting RowVector. The file name's extension selects the codec; bytes
+  // must already be encoded with that codec.
+  RowVectorPtr readFromFile(
+      const std::string& bytes,
+      const std::string& extension,
+      const RowTypePtr& schema) {
+    auto path = writeTempFile(bytes, extension);
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+    dwio::common::ReaderOptions readerOptions{pool()};
+    readerOptions.setFileSchema(schema);
+
+    auto readFile = std::make_shared<LocalReadFile>(path);
+    auto bufferedInput =
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto reader =
+        factory->createReader(std::move(bufferedInput), readerOptions);
+    auto rowReader = reader->createRowReader(dwio::common::RowReaderOptions{});
+
+    VectorPtr result;
+    rowReader->next(1'000, result);
+    return std::dynamic_pointer_cast<RowVector>(result);
   }
 
   // Reads the entire input string through the JSON reader against the
@@ -109,6 +178,13 @@ class JsonReaderTest : public testing::Test, public test::VectorTestBase {
     }
     return out;
   }
+
+  // Temp directory backing on-disk fixtures for compression tests. Lives for
+  // the whole test so files written under it outlast each read.
+  std::shared_ptr<common::testutil::TempDirectoryPath> tempDir_;
+
+  // Distinguishes temp file names within a single test.
+  int fileCounter_{0};
 };
 
 TEST_F(JsonReaderTest, factoryRegistration) {
@@ -902,6 +978,112 @@ TEST_F(JsonReaderTest, splitFileWithWhitespaceOnlyLineThrows) {
   auto schema = ROW({{"id", BIGINT()}});
   std::string file = "{\"id\":0}\n   \n{\"id\":1}\n";
   VELOX_ASSERT_USER_THROW(readRange(file, schema, 0, file.size()), "empty row");
+}
+
+// Records exercising several leaf types so decompression is verified to feed
+// the parser byte-identical input, not just simple scalars.
+const std::string kCompressionJson =
+    "{\"id\":0,\"name\":\"alice\",\"score\":1.5,\"ok\":true}\n"
+    "{\"id\":1,\"name\":\"bob\",\"score\":-2.25,\"ok\":false}\n"
+    "{\"id\":2,\"name\":\"carol\",\"score\":3.75,\"ok\":true}\n";
+
+const RowTypePtr kCompressionSchema = ROW(
+    {{"id", BIGINT()},
+     {"name", VARCHAR()},
+     {"score", DOUBLE()},
+     {"ok", BOOLEAN()}});
+
+TEST_F(JsonReaderTest, compressionGzipIdentical) {
+  // A gzip-compressed file produces the same vector as the uncompressed bytes.
+  auto expected = read(kCompressionJson, kCompressionSchema);
+  auto actual = readFromFile(
+      gzipCompress(kCompressionJson), ".gz", kCompressionSchema);
+  test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(JsonReaderTest, compressionDeflateIdentical) {
+  // A raw-deflate (.deflate) file decompresses to the same vector.
+  auto expected = read(kCompressionJson, kCompressionSchema);
+  auto actual = readFromFile(
+      deflateCompress(kCompressionJson), ".deflate", kCompressionSchema);
+  test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(JsonReaderTest, compressionZstdIdentical) {
+  // A zstd-compressed (.zst) file decompresses to the same vector.
+  auto expected = read(kCompressionJson, kCompressionSchema);
+  auto actual = readFromFile(
+      zstdCompress(kCompressionJson), ".zst", kCompressionSchema);
+  test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(JsonReaderTest, compressionLz4Throws) {
+  // LZ4/LZO/Snappy carry framing the reader's decompressor does not support.
+  // Detection is name-based and fails at reader creation, so the payload bytes
+  // are irrelevant.
+  auto schema = ROW({{"id", BIGINT()}});
+  VELOX_ASSERT_THROW(
+      readFromFile("{\"id\":0}\n", ".lz4", schema),
+      "Unsupported compression extension");
+}
+
+TEST_F(JsonReaderTest, compressionLzoThrows) {
+  auto schema = ROW({{"id", BIGINT()}});
+  VELOX_ASSERT_THROW(
+      readFromFile("{\"id\":0}\n", ".lzo", schema),
+      "Unsupported compression extension");
+}
+
+TEST_F(JsonReaderTest, compressionSnappyThrows) {
+  auto schema = ROW({{"id", BIGINT()}});
+  VELOX_ASSERT_THROW(
+      readFromFile("{\"id\":0}\n", ".snappy", schema),
+      "Unsupported compression extension");
+}
+
+TEST_F(JsonReaderTest, compressionSplitReadsAllAtOffsetZeroNothingAfter) {
+  // Compressed files are not byte-addressable, so they cannot be split. The
+  // split starting at offset 0 reads the whole decompressed file; any later
+  // split reads nothing. Without this carve-out the split's byte length (which
+  // refers to compressed bytes) would truncate the decompressed stream.
+  auto schema = ROW({{"id", BIGINT()}});
+  std::string json = "{\"id\":0}\n{\"id\":1}\n{\"id\":2}\n";
+  auto compressed = gzipCompress(json);
+  auto path = writeTempFile(compressed, ".gz");
+
+  auto factory =
+      dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+  dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileSchema(schema);
+
+  auto makeReader = [&]() {
+    auto readFile = std::make_shared<LocalReadFile>(path);
+    auto bufferedInput =
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    return factory->createReader(std::move(bufferedInput), readerOptions);
+  };
+
+  // Split at offset 0 covering only the first compressed byte still reads the
+  // entire file.
+  {
+    dwio::common::RowReaderOptions rowReaderOptions;
+    rowReaderOptions.range(0, 1);
+    auto rowReader = makeReader()->createRowReader(rowReaderOptions);
+    VectorPtr result;
+    rowReader->next(1'000, result);
+    EXPECT_EQ(
+        ids(std::dynamic_pointer_cast<RowVector>(result)),
+        (std::vector<int64_t>{0, 1, 2}));
+  }
+
+  // Any split that does not start at offset 0 reads nothing.
+  {
+    dwio::common::RowReaderOptions rowReaderOptions;
+    rowReaderOptions.range(1, compressed.size());
+    auto rowReader = makeReader()->createRowReader(rowReaderOptions);
+    VectorPtr result;
+    EXPECT_EQ(rowReader->next(1'000, result), 0);
+  }
 }
 
 } // namespace
