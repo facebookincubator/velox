@@ -1593,6 +1593,22 @@ void HashTable<ignoreNullKeys>::rehash(
       }
     } while (numGroups > 0);
   }
+  // Replay rows relocated out of 'rows_' into additional containers (e.g. a CXL
+  // tier). They share this table's layout; bloom filters are join-only and not
+  // rebuilt here.
+  for (auto* extra : additionalRows()) {
+    RowContainerIterator iterator;
+    int32_t numGroups;
+    do {
+      numGroups = extra->listRows(&iterator, kHashBatchSize, groups);
+      if (!insertBatch(
+              groups, numGroups, hashes, /*initNormalizedKeys=*/true)) {
+        VELOX_CHECK_NE(hashMode_, HashMode::kHash);
+        setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
+        return;
+      }
+    } while (numGroups > 0);
+  }
 }
 
 template <bool ignoreNullKeys>
@@ -1846,7 +1862,41 @@ std::vector<RowContainer*> HashTable<ignoreNullKeys>::allRows() const {
   for (auto& other : otherTables_) {
     rowContainers.push_back(other->rows_.get());
   }
+  for (auto* extra : additionalRows()) {
+    rowContainers.push_back(extra);
+  }
   return rowContainers;
+}
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::swizzleRowPointers(
+    folly::FunctionRef<char*(char*)> translate) {
+  if (table_ == nullptr) {
+    return;
+  }
+  if (hashMode_ == HashMode::kArray) {
+    // Flat array indexed by the normalized key; each non-null slot holds a full
+    // row pointer.
+    for (int64_t i = 0; i < capacity_; ++i) {
+      if (table_[i] != nullptr) {
+        table_[i] = translate(table_[i]);
+      }
+    }
+    return;
+  }
+  // Bucketed layout: 16 (tag, 48-bit pointer) slots per bucket. Skip empty and
+  // tombstone slots; translate the rest in place.
+  for (int64_t bucketOffset = 0; bucketOffset < sizeMask_;
+       bucketOffset += kBucketSize) {
+    auto* bucket = bucketAt(bucketOffset);
+    for (auto slot = 0; slot < sizeof(TagVector); ++slot) {
+      const auto tag = bucket->tagAt(slot);
+      if (tag == ProbeState::kEmptyTag || tag == ProbeState::kTombstoneTag) {
+        continue;
+      }
+      bucket->setPointer(slot, translate(bucket->pointerAt(slot)));
+    }
+  }
 }
 
 template <bool ignoreNullKeys>
@@ -2056,6 +2106,9 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   numDistinct_ = rows()->numRows();
   for (const auto& other : otherTables_) {
     numDistinct_ += other->rows()->numRows();
+  }
+  for (auto* extra : additionalRows()) {
+    numDistinct_ += extra->numRows();
   }
   if (!useValueIds) {
     if (hashMode_ != HashMode::kHash) {

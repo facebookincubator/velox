@@ -261,6 +261,14 @@ class RowColumn {
   const uint64_t packedOffsets_;
 };
 
+/// One affine piece of a relocation produced by RowContainer::relocateTo: every
+/// source row in [srcBegin, srcLast] moved by 'delta' (new == old + delta).
+struct RowRelocation {
+  char* srcBegin;
+  char* srcLast;
+  int64_t delta;
+};
+
 /// Collection of rows for aggregation, hash join, order by.
 class RowContainer {
  public:
@@ -354,6 +362,14 @@ class RowContainer {
   /// a row with uninitialized keys for aggregates with no-op partial
   /// aggregation.
   void setAllNull(char* row);
+
+  /// Moves every row into 'dest' with a fixed-width byte copy (row plus
+  /// normalized-key prefix), empties this container, and returns the move as a
+  /// run-compressed vector of affine pieces sorted by source address. Both
+  /// containers must share a fixed layout and hold no variable-width or
+  /// external data; the caller swizzles its hash buckets with the returned
+  /// pieces.
+  std::vector<RowRelocation> relocateTo(RowContainer& dest);
 
   /// The row size excluding any out-of-line stored variable length values.
   int32_t fixedRowSize() const {

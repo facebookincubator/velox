@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/Function.h>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/OneWayStatusFlag.h"
@@ -812,6 +814,18 @@ class HashTable : public BaseHashTable {
   char** testingTable() const {
     return table_;
   }
+
+ protected:
+  /// Payload row containers in addition to 'rows_' and 'otherTables_'. Empty by
+  /// default; a tiering subclass overrides it to span rows relocated elsewhere.
+  virtual std::vector<RowContainer*> additionalRows() const {
+    return {};
+  }
+
+  /// Rewrites every occupied bucket slot's row pointer through 'translate'
+  /// (identity for unmoved rows), repointing the index after a relocation with
+  /// no rehash. Tags and positions are unchanged.
+  void swizzleRowPointers(folly::FunctionRef<char*(char*)> translate);
 
  private:
   // Enables debug stats for collisions for debug build.
