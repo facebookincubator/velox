@@ -149,6 +149,58 @@ std::string_view encodeWithNonRecursiveSubIntSplit(
       std::make_unique<NonRecursiveSubIntSplitPolicy<T>>(), values, buffer);
 }
 
+// Like NonRecursiveSubIntSplitPolicy, but its createImpl() delegates to
+// ManualEncodingSelectionPolicy<T>::createImpl() (passing through
+// EncodingType::SubIntSplit), exercising the real
+// EncodingType::SubIntSplit special case there, which extends the segment's
+// candidate list with PFOR / SimdForBitpack / BlockBitPacking.
+template <typename T>
+class ExtendedSubIntSplitPolicy final
+    : public nimble::EncodingSelectionPolicy<T> {
+  using physicalType = typename nimble::TypeTraits<T>::physicalType;
+
+ public:
+  nimble::EncodingSelectionResult select(
+      std::span<const physicalType> /* values */,
+      const nimble::Statistics<physicalType>& /* statistics */) override {
+    return {.encodingType = nimble::EncodingType::SubIntSplit};
+  }
+
+  nimble::EncodingSelectionResult selectNullable(
+      std::span<const physicalType> /* values */,
+      std::span<const bool> /* nulls */,
+      const nimble::Statistics<physicalType>& /* statistics */) override {
+    return {.encodingType = nimble::EncodingType::Nullable};
+  }
+
+  std::unique_ptr<nimble::EncodingSelectionPolicyBase> createImpl(
+      nimble::EncodingType encodingType,
+      nimble::NestedEncodingIdentifier identifier,
+      nimble::DataType type) override {
+    auto readFactors =
+        nimble::ManualEncodingSelectionPolicyFactory::defaultReadFactors();
+    readFactors.erase(
+        std::remove_if(
+            readFactors.begin(),
+            readFactors.end(),
+            [](const auto& factor) {
+              return factor.first == nimble::EncodingType::SubIntSplit;
+            }),
+        readFactors.end());
+    nimble::ManualEncodingSelectionPolicy<T> delegate{
+        std::move(readFactors), std::nullopt, std::nullopt};
+    return delegate.createImpl(encodingType, identifier, type);
+  }
+};
+
+template <typename T>
+std::string_view encodeWithExtendedSubIntSplit(
+    const std::vector<T>& values,
+    nimble::Buffer& buffer) {
+  return nimble::EncodingFactory::encode<T>(
+      std::make_unique<ExtendedSubIntSplitPolicy<T>>(), values, buffer);
+}
+
 template <typename T>
 std::string_view encodeWithReplayLayout(
     const nimble::EncodingLayout& layout,
@@ -411,6 +463,63 @@ TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
       nimble::detail::subintsplit::serializeSplitBoundaries(segments));
 
   const auto decoded = decodeAll<uint64_t>(encoded, *pool);
+  expectBitwiseEqual(values, decoded);
+}
+
+TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren) {
+  nimble::ManualEncodingSelectionPolicy<uint64_t> policy{
+      nimble::ManualEncodingSelectionPolicyFactory::defaultReadFactors(),
+      std::nullopt,
+      std::nullopt};
+
+  auto containsType =
+      [](const std::vector<std::pair<nimble::EncodingType, float>>& factors,
+         nimble::EncodingType type) {
+        return std::any_of(
+            factors.begin(), factors.end(), [type](const auto& pair) {
+              return pair.first == type;
+            });
+      };
+
+  // Direct children of a SubIntSplit node get the extended candidate list.
+  auto subIntSplitChild = policy.createImpl(
+      nimble::EncodingType::SubIntSplit, 0, nimble::DataType::Uint64);
+  auto* subIntSplitChildPolicy =
+      dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
+          subIntSplitChild.get());
+  ASSERT_NE(subIntSplitChildPolicy, nullptr);
+  const auto& extendedFactors = subIntSplitChildPolicy->readFactors();
+  EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::PFOR));
+  EXPECT_TRUE(
+      containsType(extendedFactors, nimble::EncodingType::SimdForBitpack));
+  EXPECT_TRUE(
+      containsType(extendedFactors, nimble::EncodingType::BlockBitPacking));
+
+  // Children of a non-SubIntSplit node do not get the extended list.
+  auto pforChild = policy.createImpl(
+      nimble::EncodingType::PFOR, 0, nimble::DataType::Uint64);
+  auto* pforChildPolicy =
+      dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
+          pforChild.get());
+  ASSERT_NE(pforChildPolicy, nullptr);
+  const auto& unextendedFactors = pforChildPolicy->readFactors();
+  EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::PFOR));
+  EXPECT_FALSE(
+      containsType(unextendedFactors, nimble::EncodingType::SimdForBitpack));
+  EXPECT_FALSE(
+      containsType(unextendedFactors, nimble::EncodingType::BlockBitPacking));
+}
+
+TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
+  using T = TypeParam;
+  const auto values = makeStructuredValues<T>();
+
+  const auto encoded =
+      encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto captured = nimble::EncodingLayoutCapture::capture(encoded);
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+
+  const auto decoded = decodeAll<T>(encoded, *this->pool_);
   expectBitwiseEqual(values, decoded);
 }
 
