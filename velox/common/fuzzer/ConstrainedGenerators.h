@@ -63,7 +63,8 @@ class RandomInputGenerator : public AbstractInputGenerator {
       return variant(randDate(rng_));
     }
     if (type_->isTime()) {
-      return variant(randTime(rng_, type_));
+      VELOX_DCHECK(type_->equivalent(*TIME()));
+      return variant(randTime(rng_));
     }
     return variant(rand<T>(rng_));
   }

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/expression/fuzzer/SparkSpecialFormSignatureGenerator.h"
-#include <algorithm>
 
 namespace facebook::velox::fuzzer {
 
@@ -24,20 +23,6 @@ SparkSpecialFormSignatureGenerator::getSignaturesForCast() const {
       getCommonSignaturesForCast();
 
   // Spark string-to-time casts use TIME_MICRO_UTC.
-  // Keep other TIME signatures unchanged to keep this path focused on
-  // string-to-time behavior.
-  signatures.erase(
-      std::remove_if(
-          signatures.begin(),
-          signatures.end(),
-          [](const exec::FunctionSignaturePtr& signature) {
-            const auto& from = signature->argumentTypes()[0].baseName();
-            const auto& to = signature->returnType().baseName();
-            const bool fromVarchar = from == "VARCHAR" || from == "varchar";
-            const bool toTime = to == "TIME" || to == "time";
-            return fromVarchar && toTime;
-          }),
-      signatures.end());
   signatures.push_back(makeCastSignature("varchar", "TIME MICRO UTC"));
 
   // Cast integer types as varbinary is supported in Spark.
