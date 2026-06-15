@@ -20,8 +20,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitMetrics.h"
 
 // Per-segment cost models for SubIntSplitEncoding's DP selector.
@@ -56,7 +59,7 @@ inline constexpr uint8_t storageWidthBits(int bw) noexcept {
 // Union of MetricFlags needed across all cost models below.
 inline MetricFlags allCostModelRequiredFlags() noexcept {
   return MetricFlag::MinMax | MetricFlag::RunStats | MetricFlag::UniqueCount |
-      MetricFlag::DominantValue;
+      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram;
 }
 
 // Trivial: store each value at its native storage width.
@@ -251,12 +254,126 @@ inline double varintCostBits(
       static_cast<double>(varintBytes) * 8.0 * static_cast<double>(numValues);
 }
 
+// SimdForBitpack: SIMD-friendly bit-packing of the observed [min, max] range.
+// Required: MinMax
+inline double simdForBitpackCostBits(
+    const SegmentMetrics& m,
+    size_t numValues,
+    int bitWidth) noexcept {
+  if (numValues == 0) {
+    return 0.0;
+  }
+  const auto rowCount = static_cast<uint64_t>(numValues);
+  uint64_t bytes;
+  switch (storageWidthBits(bitWidth)) {
+    case 8:
+      bytes = SimdForBitpackEncoding<uint8_t>::estimateSize(
+          rowCount, static_cast<uint8_t>(m.min), static_cast<uint8_t>(m.max));
+      break;
+    case 16:
+      bytes = SimdForBitpackEncoding<uint16_t>::estimateSize(
+          rowCount,
+          static_cast<uint16_t>(m.min),
+          static_cast<uint16_t>(m.max));
+      break;
+    case 32:
+      bytes = SimdForBitpackEncoding<uint32_t>::estimateSize(
+          rowCount,
+          static_cast<uint32_t>(m.min),
+          static_cast<uint32_t>(m.max));
+      break;
+    default:
+      bytes = SimdForBitpackEncoding<uint64_t>::estimateSize(
+          rowCount, m.min, m.max);
+      break;
+  }
+  return static_cast<double>(bytes) * 8.0;
+}
+
+// PFOR: bit-packed "base" region sized to cover ~90% of values (by observed
+// bit width), plus exception side-channels (positions + residual values) for
+// the remainder. Mirrors PFOREncoding<T>::selectBaseBitWidth /
+// PFOREncoding<T>::estimateSize, but operates on `m.bitWidthBuckets` directly
+// instead of constructing a real Statistics<T>.
+// Required: BitWidthHistogram
+inline double
+pforCostBits(const SegmentMetrics& m, size_t numValues, int bitWidth) noexcept {
+  if (numValues == 0) {
+    return 0.0;
+  }
+  if (bitWidth < 4) {
+    // PFOR's fixed per-segment header (baseline + baseBitWidth +
+    // numExceptions) dominates for very narrow segments.
+    return std::numeric_limits<double>::infinity();
+  }
+
+  constexpr double kCoverageThreshold = 0.9;
+  const uint64_t threshold = static_cast<uint64_t>(
+      static_cast<double>(numValues) * kCoverageThreshold);
+
+  uint8_t baseBitWidth = static_cast<uint8_t>(bitWidth);
+  uint64_t numExceptions = 0;
+  uint64_t cumulative = 0;
+  for (size_t k = 0; k < m.bitWidthBuckets.size(); ++k) {
+    cumulative += m.bitWidthBuckets[k];
+    if (cumulative >= threshold) {
+      const uint8_t bucketEndBitWidth =
+          static_cast<uint8_t>(std::min<size_t>((k + 1) * 7, 64));
+      baseBitWidth =
+          std::min<uint8_t>(bucketEndBitWidth, static_cast<uint8_t>(bitWidth));
+      numExceptions = static_cast<uint64_t>(numValues) - cumulative;
+      break;
+    }
+  }
+
+  const double storageBytes =
+      static_cast<double>(storageWidthBits(bitWidth)) / 8.0;
+  // prefix(6) + baseline(storageBytes) + baseBitWidth(1) + numExceptions(4)
+  const double headerBits = (6.0 + storageBytes + 1.0 + 4.0) * 8.0;
+  const double baseValuesBits =
+      static_cast<double>(baseBitWidth) * static_cast<double>(numValues);
+
+  // Exception side-channels are nested encodings; approximate as Trivial
+  // sub-encodings (prefix(6) + 1 + raw values), as PFOREncoding::estimateSize
+  // does.
+  constexpr double kNestedHeaderBits = 7.0 * 8.0;
+  const double positionsBits = numExceptions == 0
+      ? 0.0
+      : kNestedHeaderBits + static_cast<double>(numExceptions) * 32.0;
+  const double valuesBits = numExceptions == 0
+      ? 0.0
+      : kNestedHeaderBits +
+          static_cast<double>(numExceptions) *
+              static_cast<double>(storageWidthBits(bitWidth));
+
+  return headerBits + baseValuesBits + positionsBits + valuesBits;
+}
+
+// BlockBitPacking: per-block bit-packing with local baselines/widths.
+// Calls the encoding's own estimateSize directly on the raw sample (always
+// instantiated at uint64_t, regardless of `bitWidth` -- this overestimates
+// per-block metadata for narrower sections, but keeps the DP directionally
+// correct without per-width sample copies).
+// Required: none beyond `segValues` itself.
+inline double blockBitPackingCostBits(
+    const std::vector<uint64_t>& segValues,
+    size_t numValues,
+    uint16_t blockSize = kBlockBitPackingBlockSize) noexcept {
+  if (numValues == 0) {
+    return 0.0;
+  }
+  const uint64_t bytes =
+      BlockBitPackingEncoding<uint64_t>::estimateSize(segValues, blockSize);
+  return static_cast<double>(bytes) * 8.0;
+}
+
 // Evaluate all cost models and return the minimum cost in bits.
 // Also sets `bestEncoding` to the winning EncodingType.
 inline double bestCostBits(
     const SegmentMetrics& m,
     size_t numValues,
     int bitWidth,
+    const std::vector<uint64_t>& segValues,
     EncodingType& bestEncoding) noexcept {
   double best = std::numeric_limits<double>::infinity();
   auto consider = [&](double cost, EncodingType type) noexcept {
@@ -282,6 +399,13 @@ inline double bestCostBits(
     consider(
         dictionaryCostBits(m, numValues, bitWidth), EncodingType::Dictionary);
   }
+  consider(
+      simdForBitpackCostBits(m, numValues, bitWidth),
+      EncodingType::SimdForBitpack);
+  consider(pforCostBits(m, numValues, bitWidth), EncodingType::PFOR);
+  consider(
+      blockBitPackingCostBits(segValues, numValues),
+      EncodingType::BlockBitPacking);
   return best;
 }
 
