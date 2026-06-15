@@ -243,24 +243,42 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 }
 
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
-  setConnectorSessionProperty(
-      HiveConfig::kParquetMaxTargetFileSizeSession, "4KB");
-
-  const auto outputPath = TempDirectoryPath::create()->getPath();
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
-  const auto vectors = createTestData(rowType, 10, 1'000);
-  const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);
-  const auto commitTasks = dataSink->close();
+  const auto vectors = createTestData(rowType, 100, 100);
 
-  ASSERT_EQ(listFiles(outputPath).size(), 5);
+  auto writeAndRead = [&](const std::string& maxTargetFileSize) {
+    setConnectorSessionProperty(
+        HiveConfig::kParquetMaxTargetFileSizeSession, maxTargetFileSize);
 
-  auto splits = createSplitsForDirectory(outputPath);
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(rowType)
-                  .endTableScan()
-                  .planNode();
-  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+    const auto outputDirectory = TempDirectoryPath::create();
+    const auto outputPath = outputDirectory->getPath();
+    const auto dataSink = createDataSinkAndAppendData(vectors, outputPath);
+    const auto commitTasks = dataSink->close();
+    const auto files = listFiles(outputPath);
+    EXPECT_EQ(files.size(), commitTasks.size());
+
+    auto splits = createSplitsForDirectory(outputPath);
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan()
+                    .connectorId(test::kIcebergConnectorId)
+                    .outputType(rowType)
+                    .endTableScan()
+                    .planNode();
+    exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+
+    return files.size();
+  };
+
+  const auto smallTargetFileCount = writeAndRead("1KB");
+  const auto mediumTargetFileCount = writeAndRead("32KB");
+  const auto largeTargetFileCount = writeAndRead("10MB");
+
+  // Rotation uses rawBytesWritten(), which advances when Parquet flushes a row
+  // group. Counts therefore follow row group flush boundaries rather than
+  // scaling linearly with maxTargetFileSize.
+  ASSERT_EQ(smallTargetFileCount, 80);
+  ASSERT_EQ(mediumTargetFileCount, 14);
+  ASSERT_EQ(largeTargetFileCount, 1);
 }
 
 #endif
