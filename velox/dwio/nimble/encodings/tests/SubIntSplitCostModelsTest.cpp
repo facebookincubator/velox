@@ -64,6 +64,45 @@ std::vector<uint64_t> makeBlockClusteredValues() {
   return values;
 }
 
+// 1000 values: v[i] = i, a strictly monotonically increasing sequence with
+// constant step size 1 (bit_width(999) == 10). FOR's small per-frame
+// (128-value) local range (~64, 7 bits) beats Delta's byte-rounded 8-bit-
+// per-delta cost and PFOR/SimdForBitpack/BlockBitPacking/FixedBitWidth's
+// full 10-bit packing.
+std::vector<uint64_t> makeForFriendlyValues() {
+  std::vector<uint64_t> values;
+  values.reserve(1000);
+  for (int i = 0; i < 1000; ++i) {
+    values.push_back(static_cast<uint64_t>(i));
+  }
+  return values;
+}
+
+// 1000 values: v[i] = i * 20, a strictly monotonically increasing sequence
+// with constant step size 20 but a wide overall range (~19980, bit_width ==
+// 15). Delta's byte-rounded 8-bit-per-delta cost beats FOR's per-frame local
+// range estimate (~1280, 11 bits) and FixedBitWidth/PFOR/SimdForBitpack/
+// BlockBitPacking's full 15-bit packing.
+std::vector<uint64_t> makeDeltaFriendlyValues() {
+  std::vector<uint64_t> values;
+  values.reserve(1000);
+  for (int i = 0; i < 1000; ++i) {
+    values.push_back(static_cast<uint64_t>(i) * 20);
+  }
+  return values;
+}
+
+// 1000 values alternating between 0 and 1000. Half of all consecutive steps
+// are decreases, well below Delta's 90% monotonic-non-decreasing threshold.
+std::vector<uint64_t> makeAlternatingValues() {
+  std::vector<uint64_t> values;
+  values.reserve(1000);
+  for (int i = 0; i < 1000; ++i) {
+    values.push_back((i % 2 == 0) ? uint64_t{0} : uint64_t{1000});
+  }
+  return values;
+}
+
 } // namespace
 
 TEST(SubIntSplitCostModelsTest, PforBeatsFixedBitWidthForBaselinePlusOutliers) {
@@ -141,6 +180,77 @@ TEST(
 
   EXPECT_TRUE(std::isfinite(best));
   EXPECT_EQ(bestEncoding, EncodingType::BlockBitPacking);
+}
+
+TEST(SubIntSplitCostModelsTest, DeltaCostBitsFiniteForMonotonicData) {
+  const std::vector<uint64_t> values = makeDeltaFriendlyValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 15; // bit_width(19980) == 15
+  const double delta = deltaCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isfinite(delta));
+  EXPECT_GT(delta, 0.0);
+  EXPECT_LT(delta, fixedBitWidth);
+}
+
+TEST(SubIntSplitCostModelsTest, DeltaCostBitsInfiniteForNonMonotonicData) {
+  const std::vector<uint64_t> values = makeAlternatingValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 10; // bit_width(1000) == 10
+  const double delta = deltaCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isinf(delta));
+}
+
+TEST(SubIntSplitCostModelsTest, ForCostBitsFiniteAndPositive) {
+  const std::vector<uint64_t> values = makeForFriendlyValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 10; // bit_width(999) == 10
+  const double forCost = forCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isfinite(forCost));
+  EXPECT_GT(forCost, 0.0);
+  EXPECT_LT(forCost, fixedBitWidth);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsSelectsDeltaForWideRangeConstantStepData) {
+  const std::vector<uint64_t> values = makeDeltaFriendlyValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 15; // bit_width(19980) == 15
+  EncodingType bestEncoding = EncodingType::Trivial;
+  const double best =
+      bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
+
+  EXPECT_TRUE(std::isfinite(best));
+  EXPECT_EQ(bestEncoding, EncodingType::Delta);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsSelectsForForUnitStepMonotonicData) {
+  const std::vector<uint64_t> values = makeForFriendlyValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 10; // bit_width(999) == 10
+  EncodingType bestEncoding = EncodingType::Trivial;
+  const double best =
+      bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
+
+  EXPECT_TRUE(std::isfinite(best));
+  EXPECT_EQ(bestEncoding, EncodingType::FOR);
 }
 
 #endif
