@@ -39,6 +39,24 @@ endif()
 # target_link_libraries() is rejected.
 velox_link_libraries(velox_experimental_cxl velox_memory ${NUMA_LIBRARY})
 
+# CxlHashAggregation pulls in the exec layer (HashAggregation, DriverAdapter),
+# so it lives in its own target to keep the allocator/resource library free of
+# a velox_exec dependency.
+velox_add_library(
+  velox_experimental_cxl_exec
+  CxlHashTable.cpp
+  CxlHashAggregation.cpp
+  HEADERS
+  CxlHashTable.h
+  CxlHashAggregation.h
+  CxlRelocationMap.h
+)
+velox_link_libraries(velox_experimental_cxl_exec velox_experimental_cxl velox_exec)
+
 if(VELOX_BUILD_TESTING)
   add_subdirectory(tests)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
 endif()

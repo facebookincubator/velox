@@ -35,3 +35,41 @@ target_link_libraries(
     GTest::gtest
     GTest::gtest_main
 )
+
+# End-to-end seam test: runs a real aggregation query through the exec stack,
+# so it pulls in the exec test harness and prestosql aggregate functions on top
+# of the CXL operator library. CxlHashTableTest drives the table directly to
+# cover the relocate-to-CXL primitive.
+add_executable(
+  velox_experimental_cxl_hash_aggregation_test CxlHashAggregationTest.cpp
+                                               CxlHashTableTest.cpp
+)
+
+add_test(
+  NAME velox_experimental_cxl_hash_aggregation_test
+  COMMAND velox_experimental_cxl_hash_aggregation_test
+)
+
+target_link_libraries(
+  velox_experimental_cxl_hash_aggregation_test
+  PRIVATE
+    velox_experimental_cxl_exec
+    velox_experimental_cxl
+    velox_aggregates
+    velox_exec
+    velox_exec_test_lib
+    velox_functions_prestosql
+    velox_hive_connector
+    velox_memory
+    velox_vector
+    velox_type
+    ${NUMA_LIBRARY}
+    Boost::filesystem
+    Boost::program_options
+    Folly::folly
+    fmt::fmt
+    gflags::gflags
+    glog::glog
+    GTest::gmock
+    GTest::gtest
+)
