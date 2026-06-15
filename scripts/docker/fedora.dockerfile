@@ -12,24 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# tzdata is pinned to a known-good version so docker rebuilds (any time
-# scripts/docker/*.dockerfile or scripts/setup-*.sh changes) don't
-# silently bump tzdata in the image. See issue #17522 for the bug class
-# this prevents — version mismatch between OS tzdata and consumers'
-# bundled tzdb code can produce silent 1-hour offsets in TIMESTAMP
-# WITH TIME ZONE values. To bump intentionally: change the default and
-# rebuild locally to confirm before merging.
-ARG FEDORA_TZDATA_VERSION=2025c-1.fc42
-
 ########################
 # Stage 1: Base Build  #
 ########################
 ARG base=quay.io/fedora/fedora:42-x86_64
 FROM $base AS base-build
-
-ARG FEDORA_TZDATA_VERSION
-RUN dnf -y install "tzdata-${FEDORA_TZDATA_VERSION}.noarch" || \
-      dnf -y downgrade "tzdata-${FEDORA_TZDATA_VERSION}.noarch"
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
@@ -37,6 +24,8 @@ COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-fedora.sh /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
+COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
+COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
 
 ARG VELOX_BUILD_SHARED=ON
 # Building libvelox.so requires folly and gflags to be built shared as well for now
@@ -52,7 +41,8 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 
 # CMake 4.0 removed support for cmake minimums of <=3.5 and will fail builds, this overrides it
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
-    VELOX_ARROW_CMAKE_PATCH=/cmake-compatibility.patch
+    VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch" \
+    VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch"
 
 # Some CMake configs contain the hard coded prefix '/deps', we need to replace that with
 # the future location to avoid build errors in the base-image
@@ -63,10 +53,6 @@ RUN bash /setup-fedora.sh && \
 # Stage 2: Base Image  #
 ########################
 FROM $base AS fedora
-
-ARG FEDORA_TZDATA_VERSION
-RUN dnf -y install "tzdata-${FEDORA_TZDATA_VERSION}.noarch" || \
-      dnf -y downgrade "tzdata-${FEDORA_TZDATA_VERSION}.noarch"
 
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /

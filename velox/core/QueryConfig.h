@@ -838,100 +838,6 @@ class QueryConfig {
       96L << 20,
       "Minimum memory footprint to reclaim from a file writer by flushing.")
 
-  /// If true, array_agg() aggregation function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kPrestoArrayAggIgnoreNulls,
-      prestoArrayAggIgnoreNulls,
-      "presto.array_agg.ignore_nulls",
-      bool,
-      false,
-      "If true, array_agg() ignores nulls in the input.")
-
-  /// If true, Spark function's behavior is ANSI-compliant.
-  VELOX_QUERY_CONFIG(
-      kSparkAnsiEnabled,
-      sparkAnsiEnabled,
-      "spark.ansi_enabled",
-      bool,
-      false,
-      "Enable ANSI-compliant behavior for Spark functions.")
-
-  /// The default number of expected items for the bloomfilter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterExpectedNumItems,
-      sparkBloomFilterExpectedNumItems,
-      "spark.bloom_filter.expected_num_items",
-      int64_t,
-      1'000'000L,
-      "Default number of expected items for the Spark bloom filter.")
-
-  /// The default number of bits to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterNumBits,
-      sparkBloomFilterNumBits,
-      "spark.bloom_filter.num_bits",
-      int64_t,
-      8'388'608L,
-      "Default number of bits for the Spark bloom filter.")
-
-  /// The max number of bits to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterMaxNumBits,
-      sparkBloomFilterMaxNumBits,
-      "spark.bloom_filter.max_num_bits",
-      int64_t,
-      67'108'864,
-      "Maximum number of bits for the Spark bloom filter.")
-
-  /// The max number of items to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterMaxNumItems,
-      sparkBloomFilterMaxNumItems,
-      "spark.bloom_filter.max_num_items",
-      int64_t,
-      4'000'000L,
-      "Maximum number of items for the Spark bloom filter.")
-
-  /// The current spark partition id. No default (throws if not set).
-  static constexpr const char* kSparkPartitionId = "spark.partition_id";
-
-  /// If true, simple date formatter is used for time formatting and parsing.
-  VELOX_QUERY_CONFIG(
-      kSparkLegacyDateFormatter,
-      sparkLegacyDateFormatter,
-      "spark.legacy_date_formatter",
-      bool,
-      false,
-      "Use simple date formatter instead of Joda for Spark.")
-
-  /// If true, Spark statistical aggregation functions return NaN instead of
-  /// NULL when dividing by zero.
-  VELOX_QUERY_CONFIG(
-      kSparkLegacyStatisticalAggregate,
-      sparkLegacyStatisticalAggregate,
-      "spark.legacy_statistical_aggregate",
-      bool,
-      false,
-      "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
-
-  /// If true, ignore null fields when generating JSON string.
-  VELOX_QUERY_CONFIG(
-      kSparkJsonIgnoreNullFields,
-      sparkJsonIgnoreNullFields,
-      "spark.json_ignore_null_fields",
-      bool,
-      true,
-      "Ignore null fields when generating JSON string in Spark.")
-
-  /// If true, collect_list aggregate function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kSparkCollectListIgnoreNulls,
-      sparkCollectListIgnoreNulls,
-      "spark.collect_list.ignore_nulls",
-      bool,
-      true,
-      "If true, Spark collect_list() ignores nulls in the input.")
-
   /// The number of local parallel table writer operators per task.
   VELOX_QUERY_CONFIG(
       kTaskWriterCount,
@@ -1335,7 +1241,9 @@ class QueryConfig {
       0,
       "Maximum input batches to prefetch for index lookup. 0 disables.")
 
-  /// If true, index join operator may split output per input batch.
+  /// If true, index join operator may split output per input batch. This can be
+  /// overridden on a per operator basis by the splitOutput parameter in the
+  /// IndexLookupJoinNode.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinSplitOutput,
       indexLookupJoinSplitOutput,
@@ -1531,14 +1439,6 @@ class QueryConfig {
     constexpr uint8_t kMaxBits = 3;
     return std::min(
         kMaxBits, get<uint8_t>(kSpillNumPartitionBits, kDefaultBits));
-  }
-
-  int32_t sparkPartitionId() const {
-    auto id = get<int32_t>(kSparkPartitionId);
-    VELOX_CHECK(id.has_value(), "Spark partition id is not set.");
-    auto value = id.value();
-    VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
-    return value;
   }
 
   uint32_t taskPartitionedWriterCount() const {

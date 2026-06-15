@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -124,6 +125,12 @@ StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
   stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
       output, view);
   return output;
+}
+
+void SparkCastHooks::castDateTimestampToGMT(
+    Timestamp& timestamp,
+    const tz::TimeZone& timeZone) const {
+  toGMTWithGapCorrection(timestamp, timeZone);
 }
 
 exec::PolicyType SparkCastHooks::getPolicy() const {

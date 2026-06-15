@@ -24,7 +24,8 @@
 
 namespace facebook::velox::exec {
 class Operator;
-}
+class VectorFunction;
+} // namespace facebook::velox::exec
 
 namespace facebook::velox::exec::trace {
 
@@ -73,6 +74,14 @@ class TraceCtx {
       int /*instanceIndex*/) const {
     return nullptr;
   }
+
+  /// Activates intra-expression tracing on a vector function whose owning
+  /// operator and expression have both passed the tracing gates
+  /// (shouldTrace() and shouldTraceExpr() respectively).
+  virtual void maybeActivateIntraExprTracing(
+      const Operator& /*op*/,
+      std::string_view /*functionName*/,
+      VectorFunction& /*function*/) const {}
 
   bool dryRun() const {
     return dryRun_;

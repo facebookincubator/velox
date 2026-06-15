@@ -515,6 +515,16 @@ TEST_F(CeilFloorTest, Limits) {
   EXPECT_EQ(
       std::numeric_limits<int64_t>::min(),
       floor<double>(-std::numeric_limits<double>::infinity()));
+
+  // NaN maps to 0 (matches Spark's math.ceil(NaN).toLong behavior).
+  EXPECT_EQ(0, ceil<double>(std::numeric_limits<double>::quiet_NaN()));
+  EXPECT_EQ(0, floor<double>(std::numeric_limits<double>::quiet_NaN()));
+
+  // Null propagation.
+  EXPECT_EQ(std::nullopt, ceil<double>(std::nullopt));
+  EXPECT_EQ(std::nullopt, ceil<int64_t>(std::nullopt));
+  EXPECT_EQ(std::nullopt, floor<double>(std::nullopt));
+  EXPECT_EQ(std::nullopt, floor<int64_t>(std::nullopt));
 }
 
 TEST_F(ArithmeticTest, sinh) {
@@ -792,7 +802,8 @@ TEST_F(ArithmeticTest, checkedDiv) {
 TEST_F(ArithmeticTest, abs) {
   for (const auto& ansiEnabled : {"false", "true"}) {
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, ansiEnabled}});
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled}});
 
     EXPECT_EQ(abs<int8_t>(-127), 127);
     EXPECT_EQ(abs<int16_t>(-32767), 32767);
@@ -813,7 +824,7 @@ TEST_F(ArithmeticTest, abs) {
 TEST_F(ArithmeticTest, absMinValueOverflow) {
   // Test abs with ANSI off.
   queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "false"}});
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
 
   EXPECT_EQ(
       abs<int8_t>(std::numeric_limits<int8_t>::min()),
@@ -830,7 +841,7 @@ TEST_F(ArithmeticTest, absMinValueOverflow) {
 
   // Test abs with ANSI on.
   queryCtx_->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kSparkAnsiEnabled, "true"}});
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
 
   VELOX_ASSERT_THROW(
       abs<int8_t>(std::numeric_limits<int8_t>::min()), "Arithmetic overflow");

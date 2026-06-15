@@ -98,13 +98,13 @@ class JsonExtractor {
   thread_local static JsonPathTokenizer kTokenizer;
 
   // Max extractor number in extractor cache
-  static const uint32_t kMaxCacheNum{32};
+  static constexpr uint32_t kMaxCacheNum{32};
 
   std::vector<std::string> tokens_;
 };
 
 thread_local std::unordered_map<std::string, std::shared_ptr<JsonExtractor>>
-    JsonExtractor::kExtractorCache;
+    JsonExtractor::kExtractorCache(JsonExtractor::kMaxCacheNum);
 thread_local JsonPathTokenizer JsonExtractor::kTokenizer;
 
 void extractObject(

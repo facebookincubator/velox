@@ -796,3 +796,49 @@ TEST_F(CustomBufferedInputTest, basic) {
               fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
       "Not implemented in CustomBufferedInputBuilder");
 }
+
+TEST_F(BufferedInputTest, readGapTracking) {
+  constexpr int32_t kContentSize = 1 << 20; // 1MB
+  std::string content(kContentSize, 'x');
+  auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(content);
+
+  struct TestCase {
+    std::vector<Region> regions;
+    uint64_t expectedGapCount;
+    uint64_t expectedGapSum;
+    uint64_t expectedGapMin;
+    uint64_t expectedGapMax;
+    std::string debugString() const {
+      return fmt::format(
+          "regions {}, expectedGapCount {}", regions.size(), expectedGapCount);
+    }
+  };
+
+  std::vector<TestCase> testCases = {
+      // Scattered regions: gaps of 9'900 and 39'900 bytes.
+      {{{0, 100}, {10'000, 100}, {50'000, 100}}, 2, 49'800, 9'900, 39'900},
+      // Contiguous regions: no gaps.
+      {{{0, 100}, {100, 100}, {200, 100}},
+       0,
+       0,
+       std::numeric_limits<uint64_t>::max(),
+       0},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+
+    auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
+    BufferedInput input(readFile, *pool_, MetricsLog::voidLog(), ioStats.get());
+
+    for (const auto& region : testCase.regions) {
+      input.enqueue(region);
+    }
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(ioStats->readGap().count(), testCase.expectedGapCount);
+    EXPECT_EQ(ioStats->readGap().sum(), testCase.expectedGapSum);
+    EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
+    EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
+  }
+}

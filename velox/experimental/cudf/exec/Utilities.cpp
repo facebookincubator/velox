@@ -240,6 +240,7 @@ const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
   return *this;
 }
 
+<<<<<<< cudf-window-operator
 std::string getBaseFunctionName(const std::string& fullName) {
   auto pos = fullName.rfind('.');
   return pos == std::string::npos ? fullName : fullName.substr(pos + 1);
@@ -255,6 +256,8 @@ std::string stripFunctionPrefix(
   return base;
 }
 
+=======
+>>>>>>> main
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
     std::span<const rmm::cuda_stream_view> inputStreams,

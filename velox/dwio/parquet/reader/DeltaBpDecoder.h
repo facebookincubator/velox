@@ -20,6 +20,8 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/common/DecoderUtil.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::parquet {
 
@@ -27,6 +29,10 @@ namespace facebook::velox::parquet {
 // https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
 class DeltaBpDecoder {
  public:
+  /// Trailing readable bytes the SIMD kernel needs past the last
+  /// page byte; PageReader::kPageReadPadding must be >= this.
+  static constexpr int kRequiredTrailingPadding = 8;
+
   explicit DeltaBpDecoder(const char* start) : bufferStart_(start) {
     initHeader();
   }
@@ -36,7 +42,8 @@ class DeltaBpDecoder {
   }
 
   template <bool hasNulls>
-  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
+  FOLLY_ALWAYS_INLINE void
+  skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
@@ -49,6 +56,20 @@ class DeltaBpDecoder {
   void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
     int32_t current = visitor.start();
     skip<hasNulls>(current, 0, nulls);
+    if constexpr (
+        Visitor::dense && !hasNulls && Visitor::FilterType::deterministic &&
+        std::is_same_v<typename Visitor::HookType, dwio::common::NoHook> &&
+        std::is_integral_v<typename Visitor::DataType>) {
+      readWithVisitorDenseBatched(visitor);
+      return;
+    }
+    if constexpr (
+        !Visitor::dense && !hasNulls && Visitor::FilterType::deterministic &&
+        std::is_same_v<typename Visitor::HookType, dwio::common::NoHook> &&
+        std::is_integral_v<typename Visitor::DataType>) {
+      readWithVisitorSparseBuffered(visitor);
+      return;
+    }
     int32_t toSkip;
     bool atEnd = false;
     const bool allowNulls = hasNulls && visitor.allowNulls();
@@ -89,14 +110,294 @@ class DeltaBpDecoder {
   }
 
   template <typename T>
-  void readValues(T* values, int32_t numValues) {
+  FOLLY_ALWAYS_INLINE void readValues(T* values, int32_t numValues) {
     VELOX_DCHECK_LE(numValues, totalValuesRemaining_);
-    for (auto i = 0; i < numValues; i++) {
-      values[i] = T(readLong());
+    if constexpr (std::is_integral_v<T>) {
+      decodeLongs(values, numValues);
+    } else {
+      for (auto i = 0; i < numValues; i++) {
+        values[i] = T(readLong());
+      }
     }
   }
 
  private:
+  static constexpr int32_t kBatch = 1024;
+
+  template <typename Visitor>
+  void readWithVisitorDenseBatched(Visitor& visitor) {
+    using DataType = typename Visitor::DataType;
+    constexpr bool kHasFilter =
+        !std::
+            is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue>;
+    const int32_t total = visitor.numRows();
+    DataType* output = visitor.rawValues(total);
+    int32_t* filterHits = kHasFilter ? visitor.outputRows(total) : nullptr;
+    int32_t numValues = 0;
+    int32_t consumed = 0;
+    while (consumed < total) {
+      const int32_t n = std::min<int32_t>(kBatch, total - consumed);
+      DataType* dst = output + numValues;
+      decodeLongs(dst, n);
+      visitor.template processRun<
+          kHasFilter,
+          /*hasHook=*/false,
+          /*scatter=*/false>(
+          dst,
+          n,
+          /*scatterRows=*/nullptr,
+          filterHits,
+          output,
+          numValues);
+      consumed += n;
+    }
+    visitor.setNumValues(numValues);
+  }
+
+  // DELTA's chain forces every physical row to be decoded; batch the
+  // decode side and run the scalar visitor.process() over a buffer.
+  template <typename Visitor>
+  void readWithVisitorSparseBuffered(Visitor& visitor) {
+    using DataType = typename Visitor::DataType;
+    DataType buf[kBatch];
+
+    const auto* rows = visitor.rows();
+    const int32_t numRows = visitor.numRows();
+    int32_t rowIdx = 0;
+    int32_t currentPhys = (numRows > 0) ? rows[0] : 0;
+    bool atEnd = false;
+    while (!atEnd && rowIdx < numRows) {
+      const int32_t remaining = static_cast<int32_t>(totalValuesRemaining_);
+      if (remaining <= 0) {
+        return;
+      }
+      // Cap n to the visitor's residual span; over-decoding misaligns
+      // the next readWithVisitor call.
+      const int32_t lastRow = rows[numRows - 1];
+      const int32_t maxSpan = lastRow - currentPhys + 1;
+      const int32_t n = std::min<int32_t>({kBatch, remaining, maxSpan});
+      decodeLongs(buf, n);
+      const int32_t batchPhysStart = currentPhys;
+      const int32_t batchPhysEnd = currentPhys + n; // exclusive
+      currentPhys = batchPhysEnd;
+      while (rowIdx < numRows && rows[rowIdx] < batchPhysEnd) {
+        const int32_t i = rows[rowIdx] - batchPhysStart;
+        visitor.process(buf[i], atEnd);
+        ++rowIdx;
+        if (atEnd) {
+          return;
+        }
+      }
+    }
+  }
+
+  template <typename DataType>
+  void decodeLongs(DataType* out, int32_t n) {
+    const char* bufStart = bufferStart_;
+    uint64_t valuesPerMiniBlock = valuesPerMiniBlock_;
+    uint64_t miniBlockRemaining = valuesRemainingCurrentMiniBlock_;
+    uint64_t totalRemaining = totalValuesRemaining_;
+    int64_t lastValue = lastValue_;
+    int64_t minDelta = minDelta_;
+    uint64_t deltaBitWidth = deltaBitWidth_;
+    uint64_t bitOffset =
+        (valuesPerMiniBlock - miniBlockRemaining) * deltaBitWidth;
+
+    int32_t i = 0;
+    while (i < n) {
+      if (miniBlockRemaining == 0) {
+        if (!firstBlockInitialized_) {
+          bufferStart_ = bufStart;
+          valuesRemainingCurrentMiniBlock_ = 0;
+          totalValuesRemaining_ = totalRemaining;
+          lastValue_ = lastValue;
+          int64_t v = readLong();
+          out[i] = static_cast<DataType>(v);
+          bufStart = bufferStart_;
+          miniBlockRemaining = valuesRemainingCurrentMiniBlock_;
+          totalRemaining = totalValuesRemaining_;
+          lastValue = lastValue_;
+          minDelta = minDelta_;
+          deltaBitWidth = deltaBitWidth_;
+          bitOffset = (valuesPerMiniBlock - miniBlockRemaining) * deltaBitWidth;
+          ++i;
+          continue;
+        }
+        bufferStart_ = bufStart;
+        valuesRemainingCurrentMiniBlock_ = 0;
+        totalValuesRemaining_ = totalRemaining;
+        lastValue_ = lastValue;
+        advanceMiniBlock();
+        bufStart = bufferStart_;
+        miniBlockRemaining = valuesRemainingCurrentMiniBlock_;
+        minDelta = minDelta_;
+        deltaBitWidth = deltaBitWidth_;
+        bitOffset = 0;
+      }
+
+      if (miniBlockRemaining == valuesPerMiniBlock &&
+          static_cast<uint64_t>(n - i) >= valuesPerMiniBlock &&
+          totalRemaining >= valuesPerMiniBlock && deltaBitWidth <= 32) {
+        const int32_t miniBlockValues =
+            static_cast<int32_t>(valuesPerMiniBlock);
+        DataType* dst = out + i;
+        const bool dispatched = dispatchSimdMiniBlock<DataType>(
+            deltaBitWidth, bufStart, miniBlockValues, minDelta, lastValue, dst);
+        if (dispatched) {
+          bufStart += bits::nbytes(deltaBitWidth * valuesPerMiniBlock);
+          const uint64_t consumed = valuesPerMiniBlock;
+          miniBlockRemaining = 0;
+          totalRemaining -= consumed;
+          i += static_cast<int32_t>(consumed);
+          bitOffset = 0;
+          continue;
+        }
+      }
+
+      uint64_t value = 0;
+      if (deltaBitWidth) {
+        value = bits::detail::loadBits<uint64_t>(
+            reinterpret_cast<const uint64_t*>(bufStart),
+            bitOffset,
+            deltaBitWidth);
+        value &= (~0ULL >> (64 - deltaBitWidth));
+      }
+      uint64_t result = static_cast<uint64_t>(minDelta) + value +
+          static_cast<uint64_t>(lastValue);
+      lastValue = static_cast<int64_t>(result);
+      out[i] = static_cast<DataType>(result);
+      bitOffset += deltaBitWidth;
+      --miniBlockRemaining;
+      --totalRemaining;
+      if (miniBlockRemaining == 0 || totalRemaining == 0) {
+        bufStart += bits::nbytes(deltaBitWidth * valuesPerMiniBlock);
+        bitOffset = 0;
+      }
+      ++i;
+    }
+
+    bufferStart_ = bufStart;
+    valuesRemainingCurrentMiniBlock_ = miniBlockRemaining;
+    totalValuesRemaining_ = totalRemaining;
+    lastValue_ = lastValue;
+  }
+
+  /// Decode one whole miniblock with prefix-sum fused. Unsigned mod-2^64
+  /// per Parquet spec. Reads up to 7 bytes past the miniblock end;
+  /// safe via kPageReadPadding at page end and adjacent miniblocks
+  /// intra-page.
+  template <typename DataType, uint8_t bitWidth>
+  FOLLY_ALWAYS_INLINE void decodeMiniBlockSimd(
+      const char* src,
+      int32_t numValues,
+      int64_t minDelta,
+      int64_t& lastValue,
+      DataType* out) {
+    static_assert(bitWidth >= 1 && bitWidth <= 32);
+    constexpr uint64_t mask =
+        (bitWidth == 32) ? 0xFFFFFFFFULL : ((1ULL << bitWidth) - 1);
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(src);
+    uint64_t cumulative = static_cast<uint64_t>(lastValue);
+    const uint64_t step = static_cast<uint64_t>(minDelta);
+    if constexpr (bitWidth <= 16) {
+      // 4*bw <= 64; one u64 load per iter.
+      for (int32_t i = 0; i < numValues; i += 4) {
+        const int32_t bitPos = i * bitWidth;
+        const int32_t byteOff = bitPos >> 3;
+        const int32_t bitInByte = bitPos & 7;
+        const uint64_t word =
+            *reinterpret_cast<const uint64_t*>(p + byteOff) >> bitInByte;
+        cumulative += step + (word & mask);
+        out[i + 0] = static_cast<DataType>(cumulative);
+        cumulative += step + ((word >> bitWidth) & mask);
+        out[i + 1] = static_cast<DataType>(cumulative);
+        cumulative += step + ((word >> (2 * bitWidth)) & mask);
+        out[i + 2] = static_cast<DataType>(cumulative);
+        cumulative += step + ((word >> (3 * bitWidth)) & mask);
+        out[i + 3] = static_cast<DataType>(cumulative);
+      }
+    } else {
+      // 2*bw + bitInByte > 64; load via __uint128_t (two u64 + SHRD).
+      // The +8 read is safe: kPageReadPadding covers page end and
+      // adjacent miniblocks cover intra-page.
+      for (int32_t i = 0; i < numValues; i += 2) {
+        const int32_t bitPos = i * bitWidth;
+        const int32_t byteOff = bitPos >> 3;
+        const int32_t bitInByte = bitPos & 7;
+        const __uint128_t window =
+            static_cast<__uint128_t>(
+                *reinterpret_cast<const uint64_t*>(p + byteOff)) |
+            (static_cast<__uint128_t>(
+                 *reinterpret_cast<const uint64_t*>(p + byteOff + 8))
+             << 64);
+        const uint64_t word = static_cast<uint64_t>(window >> bitInByte);
+        cumulative += step + (word & mask);
+        out[i + 0] = static_cast<DataType>(cumulative);
+        cumulative += step + ((word >> bitWidth) & mask);
+        out[i + 1] = static_cast<DataType>(cumulative);
+      }
+    }
+    lastValue = static_cast<int64_t>(cumulative);
+  }
+
+  template <typename DataType>
+  FOLLY_ALWAYS_INLINE void decodeMiniBlockConstantDelta(
+      int32_t numValues,
+      int64_t minDelta,
+      int64_t& lastValue,
+      DataType* out) {
+    uint64_t cumulative = static_cast<uint64_t>(lastValue);
+    const uint64_t step = static_cast<uint64_t>(minDelta);
+    for (int32_t i = 0; i < numValues; ++i) {
+      cumulative += step;
+      out[i] = static_cast<DataType>(cumulative);
+    }
+    lastValue = static_cast<int64_t>(cumulative);
+  }
+
+  /// Dispatches a whole-miniblock SIMD decode by runtime `bitWidth`.
+  /// Returns false for `bitWidth` outside [0, 32] so the caller falls
+  /// back to the scalar inner loop.
+  template <typename DataType>
+  FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlock(
+      uint64_t bitWidth,
+      const char* src,
+      int32_t numValues,
+      int64_t minDelta,
+      int64_t& lastValue,
+      DataType* out) {
+    if (bitWidth == 0) {
+      decodeMiniBlockConstantDelta(numValues, minDelta, lastValue, out);
+      return true;
+    }
+    return dispatchSimdMiniBlockImpl<DataType>(
+        bitWidth,
+        src,
+        numValues,
+        minDelta,
+        lastValue,
+        out,
+        std::make_index_sequence<32>{});
+  }
+
+  template <typename DataType, std::size_t... Is>
+  FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlockImpl(
+      uint64_t bitWidth,
+      const char* src,
+      int32_t numValues,
+      int64_t minDelta,
+      int64_t& lastValue,
+      DataType* out,
+      std::index_sequence<Is...>) {
+    bool dispatched = false;
+    (void)((bitWidth == Is + 1 ? (decodeMiniBlockSimd<DataType, Is + 1>(
+                                      src, numValues, minDelta, lastValue, out),
+                                  dispatched = true)
+                               : false) ||
+           ...);
+    return dispatched;
+  }
+
   bool getVlqInt(uint64_t& v) {
     uint64_t tmp = 0;
     for (int i = 0; i < folly::kMaxVarintLength64; i++) {
@@ -177,7 +478,19 @@ class DeltaBpDecoder {
     valuesRemainingCurrentMiniBlock_ = valuesPerMiniBlock_;
   }
 
-  int64_t readLong() {
+  // Advance to the next miniblock without decoding any value.
+  void advanceMiniBlock() {
+    VELOX_DCHECK(firstBlockInitialized_);
+    VELOX_DCHECK_EQ(valuesRemainingCurrentMiniBlock_, 0);
+    ++miniBlockIdx_;
+    if (miniBlockIdx_ < miniBlocksPerBlock_) {
+      initMiniBlock(deltaBitWidths_[miniBlockIdx_]);
+    } else {
+      initBlock();
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE int64_t readLong() {
     int64_t value = 0;
     if (valuesRemainingCurrentMiniBlock_ == 0) {
       if (!firstBlockInitialized_) {
@@ -206,12 +519,13 @@ class DeltaBpDecoder {
     uint64_t consumedBits =
         (valuesPerMiniBlock_ - valuesRemainingCurrentMiniBlock_) *
         deltaBitWidth_;
-    bits::copyBits(
-        reinterpret_cast<const uint64_t*>(bufferStart_),
-        consumedBits,
-        reinterpret_cast<uint64_t*>(&value),
-        0,
-        deltaBitWidth_);
+    if (deltaBitWidth_) {
+      value = bits::detail::loadBits<uint64_t>(
+          reinterpret_cast<const uint64_t*>(bufferStart_),
+          consumedBits,
+          deltaBitWidth_);
+      value &= (~0ULL >> (64 - deltaBitWidth_));
+    }
     // Addition between minDelta_, packed int and lastValue_ should be treated
     // as unsigned addition. Overflow is as expected.
     value = static_cast<uint64_t>(minDelta_) + static_cast<uint64_t>(value) +

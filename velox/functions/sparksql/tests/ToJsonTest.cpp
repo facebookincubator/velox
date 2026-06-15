@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/JsonTestUtil.h"
 
 using namespace facebook::velox::test;
@@ -38,7 +39,8 @@ class ToJsonTest : public SparkFunctionBaseTest {
 
   void disableJsonIgnoreNullFields() {
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkJsonIgnoreNullFields, "false"}});
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kJsonIgnoreNullFields),
+          "false"}});
   }
 };
 

@@ -230,6 +230,7 @@ std::unique_ptr<exec::Aggregate> createSetAgg(
           velox::aggregate::prestosql::FloatSetAccumulatorNaNUnaware<double>>>(
           resultType);
     case TypeKind::TIMESTAMP:
+      VELOX_DCHECK(inputType->equivalent(*TIMESTAMP()));
       return std::make_unique<SparkCollectSetAggregate<Timestamp>>(resultType);
     case TypeKind::VARBINARY:
       [[fallthrough]];
