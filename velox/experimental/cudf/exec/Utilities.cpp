@@ -25,6 +25,7 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime_api.h>
+
 #include <algorithm>
 #include <limits>
 #include <vector>
@@ -58,25 +59,25 @@ CudaEvent& eventForThread() {
   }
   return *events[deviceIndex];
 
-size_t maxBatchRows() {
-  const auto& cudfConfig = CudfConfig::getInstance();
-  if (cudfConfig.batchSizeMaxThreshold) {
-    VELOX_CHECK_GT(
-        cudfConfig.batchSizeMaxThreshold.value(),
-        0,
-        "cuDF max batch size must be positive");
-    return static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value());
+  size_t maxBatchRows() {
+    const auto& cudfConfig = CudfConfig::getInstance();
+    if (cudfConfig.batchSizeMaxThreshold) {
+      VELOX_CHECK_GT(
+          cudfConfig.batchSizeMaxThreshold.value(),
+          0,
+          "cuDF max batch size must be positive");
+      return static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value());
+    }
+    return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
   }
-  return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
-}
 
-vector_size_t checkedVectorSize(size_t rowCount) {
-  VELOX_CHECK_LE(
-      rowCount,
-      static_cast<size_t>(std::numeric_limits<vector_size_t>::max()),
-      "cuDF vector row count exceeds Velox vector size limit");
-  return static_cast<vector_size_t>(rowCount);
-}
+  vector_size_t checkedVectorSize(size_t rowCount) {
+    VELOX_CHECK_LE(
+        rowCount,
+        static_cast<size_t>(std::numeric_limits<vector_size_t>::max()),
+        "cuDF vector row count exceeds Velox vector size limit");
+    return static_cast<vector_size_t>(rowCount);
+  }
 
 } // namespace
 
