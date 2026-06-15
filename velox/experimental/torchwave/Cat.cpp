@@ -36,6 +36,11 @@ namespace {
 SizeExpr translateSizeExpr(const SizeExpr& expr, const FormalToActual& map) {
   SizeExpr result;
   result.op = expr.op;
+  // Preserve broadcast and constShapes: a pure factory operand (e.g.
+  // zeros(size=[1000])) carries its extent in constShapes with no tensor
+  // leaves, so dropping them collapses its size to the scalar default.
+  result.broadcast = expr.broadcast;
+  result.constShapes = expr.constShapes;
   for (auto id : expr.values) {
     auto it = map.find(id);
     result.values.push_back(it != map.end() ? it->second : id);
@@ -382,7 +387,7 @@ catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
     auto* exclusiveSum = graph->createNode(
         "torch.ops.aten.exclusive_sum.default", {{"input", cumsumInput}});
     exclusiveSum->addAttribute({"dim", static_cast<int64_t>(0)});
-    exclusiveSum->addAttribute({"dtype", std::string(c10::toString(dtype))});
+    exclusiveSum->addAttribute({"dtype", dtype});
     graph->insertBefore(exclusiveSum, const_cast<nativert::Node*>(node));
     auto* newOutput =
         waveGraph.newTensorValue(exclusiveSum, "exclusive_sum", dtype);
