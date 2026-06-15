@@ -146,7 +146,7 @@ inline SelectorResult selectSplits(
 
       EncodingType bestEnc = EncodingType::Trivial;
       const double perSampleCost =
-          bestCostBits(metrics, numSamples, bitWidth, bestEnc);
+          bestCostBits(metrics, numSamples, bitWidth, segValues, bestEnc);
 
       // Scale to full stream
       const double fullCost = perSampleCost * static_cast<double>(fullCount) /
