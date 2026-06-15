@@ -24,8 +24,10 @@
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -172,6 +174,26 @@ struct EncodingSizeEstimation {
                   static_cast<double>(fbwEst.value()) * 0.90) +
               kOverheadBytes;
           return estimate;
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
+      // Delta/FOR integration (re-enabled for
+      // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::Delta: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return DeltaEncoding<physicalType>::estimateSize(
+              entryCount, statistics);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::FOR: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(
+              entryCount, statistics);
         } else {
           return std::nullopt;
         }
