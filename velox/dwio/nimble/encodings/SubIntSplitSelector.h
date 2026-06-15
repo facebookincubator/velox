@@ -110,8 +110,8 @@ struct SelectorResult {
 // produces estimates in the right units.
 //
 // `costFn` scores a single segment: given (metrics, numValues, bitWidth,
-// outBestEncoding), return the per-sample cost in bits and write the best
-// encoding into the output parameter.  Defaults to `bestCostBits`.
+// segValues, outBestEncoding), return the per-sample cost in bits and write
+// the best encoding into the output parameter.  Defaults to `bestCostBits`.
 template <typename CostFn>
 inline SelectorResult selectSplitsImpl(
     const std::vector<uint64_t>& samples,
@@ -149,7 +149,7 @@ inline SelectorResult selectSplitsImpl(
 
       EncodingType bestEnc = EncodingType::Trivial;
       const double perSampleCost =
-          costFn(metrics, numSamples, bitWidth, bestEnc);
+          costFn(metrics, numSamples, bitWidth, segValues, bestEnc);
 
       const double fullCost = perSampleCost * static_cast<double>(fullCount) /
           static_cast<double>(numSamples);
