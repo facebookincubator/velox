@@ -46,7 +46,6 @@ velox_add_library(
   FilterFunctions.cpp
   FindFirst.cpp
   FromUtf8.cpp
-  GooglePolylineFunctions.cpp
   InPredicate.cpp
   JsonFunctions.cpp
   Map.cpp
@@ -165,22 +164,28 @@ velox_link_libraries(
 
 if(VELOX_ENABLE_FAISS)
   velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
+  # @lint-ignore LINEWRAP
   velox_compile_definitions(velox_functions_prestosql_impl PRIVATE VELOX_ENABLE_FAISS)
 endif()
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)
+  # @lint-ignore LINEWRAP
+  velox_sources(velox_functions_prestosql_impl PRIVATE GooglePolylineFunctions.cpp)
 
   # S2 cell operations are isolated in a separate library to prevent a
   # nallocx symbol conflict between s2geometry's malloc_extension.h and
   # folly's MallocImpl.h.
+  # @lint-ignore LINEWRAP
   velox_add_library(velox_s2_cell_operations S2CellOperations.cpp HEADERS S2CellOperations.h)
   velox_link_libraries(velox_s2_cell_operations s2::s2 GEOS::geos)
 
+  # @lint-ignore LINEWRAP
   velox_link_libraries(velox_functions_prestosql_impl velox_functions_geo velox_s2_cell_operations)
 endif()
 
 if(NOT VELOX_MONO_LIBRARY)
+  # @lint-ignore LINEWRAP
   set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE high_memory_pool)
 endif()
 
