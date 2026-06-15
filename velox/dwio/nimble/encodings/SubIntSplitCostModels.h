@@ -59,7 +59,7 @@ inline constexpr uint8_t storageWidthBits(int bw) noexcept {
 // Union of MetricFlags needed across all cost models below.
 inline MetricFlags allCostModelRequiredFlags() noexcept {
   return MetricFlag::MinMax | MetricFlag::RunStats | MetricFlag::UniqueCount |
-      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram;
+      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram | MetricFlag::DeltaStats;
 }
 
 // Trivial: store each value at its native storage width.
@@ -367,6 +367,104 @@ inline double blockBitPackingCostBits(
   return static_cast<double>(bytes) * 8.0;
 }
 
+// Delta: positive-delta encoding with restatements for non-monotonic steps.
+// Infinity unless at least 90% of consecutive steps are non-decreasing
+// (matches DeltaEncoding's positive-delta-only design — frequent decreases
+// force expensive restatements).
+// Required: DeltaStats
+inline double deltaCostBits(
+    const SegmentMetrics& m,
+    size_t numValues,
+    int bitWidth) noexcept {
+  if (numValues < 2) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double monotonicFraction = static_cast<double>(m.monotonicCount) /
+      static_cast<double>(numValues - 1);
+  constexpr double kMonotonicThreshold = 0.9;
+  if (monotonicFraction < kMonotonicThreshold) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  const double avgAbsDelta = static_cast<double>(m.sumAbsDelta) /
+      static_cast<double>(numValues - 1);
+  const uint8_t deltaBitWidth = avgAbsDelta < 1.0
+      ? uint8_t{0}
+      : static_cast<uint8_t>(
+            std::bit_width(static_cast<uint64_t>(avgAbsDelta)));
+  // Round up to byte boundary, matching nested encodings' FixedBitWidth-style
+  // packing.
+  const uint8_t roundedDeltaBits = (deltaBitWidth + 7u) & ~7u;
+
+  const double restatementFraction = 1.0 - monotonicFraction;
+  // At least one restatement (the leading value) is always present.
+  const double numRestatements =
+      std::max(1.0, restatementFraction * static_cast<double>(numValues));
+
+  // Three nested sub-encodings (deltas, restatements, isRestatements), each
+  // with its own ~7-byte header, plus the outer prefix(6) + two 4-byte
+  // relative offsets.
+  constexpr double kNestedHeaderBits = 7.0 * 8.0;
+  constexpr double kOuterHeaderBits = (6.0 + 4.0 + 4.0) * 8.0;
+
+  const double deltasBits = kNestedHeaderBits +
+      static_cast<double>(numValues) * static_cast<double>(roundedDeltaBits);
+  const double restatementsBits = kNestedHeaderBits +
+      numRestatements * static_cast<double>(storageWidthBits(bitWidth));
+  // isRestatements is a bool stream, bit-packed to ~1 bit/value.
+  const double isRestatementsBits =
+      kNestedHeaderBits + static_cast<double>(numValues);
+
+  return kOuterHeaderBits + deltasBits + restatementsBits +
+      isRestatementsBits;
+}
+
+// FOR (Frame of Reference): fixed-size frames, each bit-packed against a
+// local minimum (reference). The local bit width is estimated from the
+// average step size scaled to the frame size -- a random-walk heuristic
+// where the local range over a frame of `kForFrameSize` steps grows roughly
+// with avgAbsDelta -- capped by the segment's overall range.
+// Required: MinMax, DeltaStats
+inline double
+forCostBits(const SegmentMetrics& m, size_t numValues, int bitWidth) noexcept {
+  if (numValues == 0) {
+    return 0.0;
+  }
+  constexpr uint32_t kForFrameSize = 128;
+  const uint32_t numFrames =
+      static_cast<uint32_t>((numValues + kForFrameSize - 1) / kForFrameSize);
+
+  const double avgAbsDelta = numValues > 1
+      ? static_cast<double>(m.sumAbsDelta) /
+          static_cast<double>(numValues - 1)
+      : 0.0;
+  const double localRange = std::min(
+      static_cast<double>(m.range),
+      avgAbsDelta * static_cast<double>(kForFrameSize) / 2.0);
+  const uint8_t localBits = localRange < 1.0
+      ? uint8_t{0}
+      : static_cast<uint8_t>(
+            std::bit_width(static_cast<uint64_t>(localRange)));
+
+  // prefix(6) + compressionType(1) + frameSize(4) + numFrames(4) +
+  // enableBitOffsets(1)
+  constexpr double kOuterHeaderBits = (6.0 + 1.0 + 4.0 + 4.0 + 1.0) * 8.0;
+  // Per-frame metadata streams (bitWidths, references, bitOffsets), each a
+  // nested encoding with its own ~7-byte header.
+  constexpr double kNestedHeaderBits = 7.0 * 8.0;
+  const double bitWidthsBits =
+      kNestedHeaderBits + static_cast<double>(numFrames) * 8.0;
+  const double referencesBits = kNestedHeaderBits +
+      static_cast<double>(numFrames) *
+          static_cast<double>(storageWidthBits(bitWidth));
+  const double bitOffsetsBits =
+      kNestedHeaderBits + static_cast<double>(numFrames) * 64.0;
+  const double packedBits = static_cast<double>(numValues) * localBits;
+
+  return kOuterHeaderBits + bitWidthsBits + referencesBits + bitOffsetsBits +
+      packedBits;
+}
+
 // Evaluate all cost models and return the minimum cost in bits.
 // Also sets `bestEncoding` to the winning EncodingType.
 inline double bestCostBits(
@@ -406,6 +504,8 @@ inline double bestCostBits(
   consider(
       blockBitPackingCostBits(segValues, numValues),
       EncodingType::BlockBitPacking);
+  consider(deltaCostBits(m, numValues, bitWidth), EncodingType::Delta);
+  consider(forCostBits(m, numValues, bitWidth), EncodingType::FOR);
   return best;
 }
 
