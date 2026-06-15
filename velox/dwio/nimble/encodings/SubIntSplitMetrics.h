@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -37,7 +39,8 @@ enum class MetricFlag : uint32_t {
   RunStats = 1u << 1, // runCount, avgRunLength
   UniqueCount = 1u << 2, // uniqueCount (raw, capped)
   DominantValue = 1u << 3, // dominantCount (most-frequent value's frequency)
-  All = (1u << 4) - 1,
+  BitWidthHistogram = 1u << 4, // bitWidthBuckets
+  All = (1u << 5) - 1,
 };
 using MetricFlags = uint32_t;
 
@@ -66,6 +69,13 @@ struct SegmentMetrics {
 
   size_t runCount{0};
   double avgRunLength{0.0};
+
+  // bitWidthBuckets[i] counts values v with bit_width(v) in [7*i, 7*i+6],
+  // for i in [0, 8]; bucket 9 catches bit_width(v) >= 63. Approximates
+  // PFOREncoding<T>::selectBaseBitWidth's bit_width(v - min) histogram using
+  // bit_width(v) directly (segment values are already small bit-slices, so
+  // `min` is usually close to 0). See PFOREncoding.h's selectBaseBitWidth.
+  std::array<uint32_t, 10> bitWidthBuckets{};
 };
 
 // Single-pass metric collector for extracted bit-range values.
@@ -81,6 +91,11 @@ class MetricCollector {
   static constexpr size_t kUniqueCountCap = 1
       << 14; // 16K cap (lighter than full HLL)
 
+  // Maps bit_width(v) to a bucket index in [0, 9], grouping every 7 bits.
+  static constexpr size_t bitWidthBucket(uint64_t v) noexcept {
+    return std::min<size_t>(static_cast<size_t>(std::bit_width(v)) / 7, 9);
+  }
+
   SegmentMetrics compute(
       const std::vector<uint64_t>& values,
       MetricFlags flags = static_cast<MetricFlags>(MetricFlag::All)) {
@@ -90,6 +105,7 @@ class MetricCollector {
     const bool doDominant = hasFlag(flags, MetricFlag::DominantValue);
     // Unique count and dominant value share a single frequency map pass.
     const bool doFreq = doUniq || doDominant;
+    const bool doHist = hasFlag(flags, MetricFlag::BitWidthHistogram);
 
     SegmentMetrics out;
     const size_t n = values.size();
@@ -104,6 +120,9 @@ class MetricCollector {
     }
     if (doRun) {
       out.runCount = 1;
+    }
+    if (doHist) {
+      ++out.bitWidthBuckets[bitWidthBucket(v0)];
     }
 
     bool capped = false;
@@ -138,6 +157,9 @@ class MetricCollector {
         if (inserted && freqMap_.size() > kUniqueCountCap) {
           capped = true;
         }
+      }
+      if (doHist) {
+        ++out.bitWidthBuckets[bitWidthBucket(v)];
       }
       prev = v;
     }
