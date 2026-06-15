@@ -16,11 +16,19 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+
+#include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -235,6 +243,48 @@ TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
   ASSERT_NE(concatIt, nodeStats.operatorStats.end());
   EXPECT_EQ(concatIt->second->inputVectors, 6);
   EXPECT_LT(concatIt->second->outputVectors, 6);
+}
+
+// Verifies the string character-offset overflow guard used before
+// accumulating keys/groups in CudfMarkDistinct and streaming CudfGroupby.
+// Uses the device-free overload so the limit logic is exercised without
+// allocating multi-gigabyte inputs.
+TEST(CudfStringOffsetLimitTest, throwsWhenColumnExceedsLimit) {
+  const int64_t overLimit = kCudfStringOffsetLimit + 1;
+  VELOX_ASSERT_THROW(
+      checkStringOffsetLimit(
+          std::vector<int64_t>{1000, overLimit}, kCudfStringOffsetLimit),
+      "exceeds cuDF's 32-bit character-offset limit");
+}
+
+TEST(CudfStringOffsetLimitTest, passesAtAndBelowLimit) {
+  EXPECT_NO_THROW(checkStringOffsetLimit(
+      std::vector<int64_t>{0, 1000, kCudfStringOffsetLimit},
+      kCudfStringOffsetLimit));
+}
+
+// Exercises the device (table_view) overload end to end: builds a small cuDF
+// string column, then verifies the chars_size summation, threshold check, and
+// throw fire correctly. Uses a lowered limit so a few bytes trip it — no
+// multi-gigabyte buffer required.
+TEST_F(CudfBatchConcatTest, stringOffsetLimitFiresOnTableOverload) {
+  auto input = makeRowVector(
+      {"k"}, {makeFlatVector<StringView>({"aaa", "bbbb", "cc"})}); // 9 chars
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto table = with_arrow::toCudfTable(input, pool(), stream, mr);
+  ASSERT_NE(table, nullptr);
+  const std::vector<cudf::table_view> tables{table->view()};
+
+  // 9 character bytes exceed a tiny ceiling of 5 -> throws.
+  VELOX_ASSERT_THROW(
+      checkStringOffsetLimit(tables, 5, stream),
+      "exceeds cuDF's 32-bit character-offset limit");
+
+  // Comfortably under the real limit -> no throw.
+  EXPECT_NO_THROW(
+      checkStringOffsetLimit(tables, kCudfStringOffsetLimit, stream));
+  stream.synchronize();
 }
 
 TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {

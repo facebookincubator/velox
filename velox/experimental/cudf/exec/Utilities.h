@@ -22,6 +22,7 @@
 
 #include <rmm/cuda_stream_view.hpp>
 
+#include <limits>
 #include <memory>
 #include <span>
 
@@ -90,6 +91,32 @@ getConcatenatedTableBatched(
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
+
+/// Per-column character-buffer ceiling imposed by cuDF's 32-bit string
+/// offsets: a single string column's total character bytes cannot exceed this.
+/// Pass to checkStringOffsetLimit in production; tests pass a smaller value to
+/// exercise the limit without multi-gigabyte inputs.
+inline constexpr int64_t kCudfStringOffsetLimit{
+    std::numeric_limits<cudf::size_type>::max()};
+
+/// Throws a user error if any per-column character total exceeds
+/// maxColumnCharBytes. Kept free of device code so the overflow logic is
+/// unit-testable without multi-gigabyte inputs.
+void checkStringOffsetLimit(
+    const std::vector<int64_t>& perColumnCharBytes,
+    int64_t maxColumnCharBytes);
+
+/// Throws a user error if concatenating the given tables would push any string
+/// column's character buffer past maxColumnCharBytes. Sums each string column's
+/// character bytes across all tables and delegates to the overload above.
+/// Throws a user error (not an internal one) so the query can fall back to the
+/// CPU path instead of launching a kernel that overflows and aborts the CUDA
+/// context. Call before concatenating accumulated keys or groups that grow for
+/// the lifetime of the query.
+void checkStringOffsetLimit(
+    const std::vector<cudf::table_view>& tables,
+    int64_t maxColumnCharBytes,
+    rmm::cuda_stream_view stream);
 
 /**
  * @brief Concatenates multiple CudfVectors into CudfVector output batches.

@@ -759,6 +759,10 @@ void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr tbl) {
   cudf::detail::join_streams(
       std::vector<rmm::cuda_stream_view>{inputTableStream}, finalStream);
 
+  // bufferedResult_ accumulates all groups for the whole query, so its string
+  // grouping-key buffer can outgrow cuDF's 32-bit offset limit. Bail cleanly
+  // before the concatenate launches a kernel that overflows the context.
+  checkStringOffsetLimit(tablesToConcat, kCudfStringOffsetLimit, finalStream);
   auto concatenatedTable =
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
   cudf::detail::join_streams(
@@ -788,6 +792,13 @@ void CudfGroupby::computeSingleGroupbyStreaming(CudfVectorPtr tbl) {
     std::vector<CudfVectorPtr> tablesToConcat;
     tablesToConcat.push_back(bufferedResult_);
     tablesToConcat.push_back(groupbyOnInput);
+    // bufferedResult_ accumulates all groups for the whole query, so its string
+    // grouping-key buffer can outgrow cuDF's 32-bit offset limit. Bail cleanly
+    // before the concatenate launches a kernel that overflows the context.
+    checkStringOffsetLimit(
+        {bufferedResult_->getTableView(), groupbyOnInput->getTableView()},
+        kCudfStringOffsetLimit,
+        partialOutputStream);
     auto concatenatedTable = getConcatenatedTable(
         std::move(tablesToConcat),
         bufferedResultType_,
