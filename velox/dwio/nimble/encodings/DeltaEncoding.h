@@ -24,6 +24,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -97,6 +98,50 @@ class DeltaEncoding final
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Statistics-only size estimate for general encoding selection (e.g. as a
+  /// SubIntSplit segment candidate), where only `Statistics<physicalType>` --
+  /// not the raw values -- is available. Without raw values, the true
+  /// monotonic-step pattern can't be observed; this assumes a single leading
+  /// restatement and an average step size of range / (rowCount - 1) -- the
+  /// typical step for a column whose values are roughly evenly spread across
+  /// [min, max] in row order. This is a coarse approximation: non-monotonic
+  /// columns (which need many restatements) will be underestimated.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics) {
+    if (rowCount == 0) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+    const auto fullRange =
+        static_cast<uint64_t>(statistics.max() - statistics.min());
+    const double avgAbsDelta = rowCount > 1
+        ? static_cast<double>(fullRange) / static_cast<double>(rowCount - 1)
+        : 0.0;
+    const uint8_t deltaBitWidth = avgAbsDelta < 1.0
+        ? uint8_t{0}
+        : static_cast<uint8_t>(
+              velox::bits::bitsRequired(static_cast<uint64_t>(avgAbsDelta)));
+
+    const uint64_t deltasSize =
+        FixedBitArray::bufferSize(rowCount, deltaBitWidth);
+    // Assume a single leading restatement (best case; non-monotonic columns
+    // need more, but Statistics<T> doesn't expose monotonicity).
+    const uint64_t restatementsSize = sizeof(physicalType);
+    const uint64_t isRestatementsSize = velox::bits::nbytes(rowCount);
+
+    // Each of the three nested sub-streams has its own ~7-byte header
+    // (prefix(6) + compressionType(1)).
+    constexpr uint64_t kNestedHeaderSize = 7;
+    // Outer prefix(6) + two 4-byte relative offsets.
+    constexpr uint64_t kOuterHeaderSize = EncodingPrefix::kFixedPrefixSize + 8;
+
+    return kOuterHeaderSize + (kNestedHeaderSize + deltasSize) +
+        (kNestedHeaderSize + restatementsSize) +
+        (kNestedHeaderSize + isRestatementsSize);
+  }
+#endif
 
  private:
   // Ensures isRestatementsBitmap_ has capacity for rowCount bits and
