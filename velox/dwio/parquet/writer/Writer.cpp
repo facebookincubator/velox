@@ -520,6 +520,14 @@ void Writer::write(const VectorPtr& data) {
   }
   arrowContext_->stagingRows += numRows;
   arrowContext_->stagingBytes += bytes;
+
+  // Flush as soon as the current write pushes the staged row group past the
+  // policy threshold. Otherwise callers that rotate files based on raw written
+  // bytes won't observe the row group until the next write.
+  if (flushPolicy_->shouldFlush(getStripeProgress(
+          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+    flush();
+  }
 }
 
 bool Writer::isCodecAvailable(common::CompressionKind compression) {
