@@ -40,7 +40,8 @@ enum class MetricFlag : uint32_t {
   UniqueCount = 1u << 2, // uniqueCount (raw, capped)
   DominantValue = 1u << 3, // dominantCount (most-frequent value's frequency)
   BitWidthHistogram = 1u << 4, // bitWidthBuckets
-  All = (1u << 5) - 1,
+  DeltaStats = 1u << 5, // sumAbsDelta, monotonicCount
+  All = (1u << 6) - 1,
 };
 using MetricFlags = uint32_t;
 
@@ -76,6 +77,13 @@ struct SegmentMetrics {
   // bit_width(v) directly (segment values are already small bit-slices, so
   // `min` is usually close to 0). See PFOREncoding.h's selectBaseBitWidth.
   std::array<uint32_t, 10> bitWidthBuckets{};
+
+  // Sum of |v[i] - v[i-1]| over consecutive pairs, and the count of pairs
+  // where v[i] >= v[i-1] (non-decreasing, i.e. encodable as a positive delta
+  // without a restatement). Used by deltaCostBits/forCostBits to estimate the
+  // average step size and the monotonic-non-decreasing fraction.
+  uint64_t sumAbsDelta{0};
+  size_t monotonicCount{0};
 };
 
 // Single-pass metric collector for extracted bit-range values.
@@ -106,6 +114,7 @@ class MetricCollector {
     // Unique count and dominant value share a single frequency map pass.
     const bool doFreq = doUniq || doDominant;
     const bool doHist = hasFlag(flags, MetricFlag::BitWidthHistogram);
+    const bool doDelta = hasFlag(flags, MetricFlag::DeltaStats);
 
     SegmentMetrics out;
     const size_t n = values.size();
@@ -160,6 +169,12 @@ class MetricCollector {
       }
       if (doHist) {
         ++out.bitWidthBuckets[bitWidthBucket(v)];
+      }
+      if (doDelta) {
+        out.sumAbsDelta += (v >= prev) ? (v - prev) : (prev - v);
+        if (v >= prev) {
+          ++out.monotonicCount;
+        }
       }
       prev = v;
     }
