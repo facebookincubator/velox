@@ -569,6 +569,22 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   // for the address range.
   void useHugePages(const ContiguousAllocation& data, bool enable);
 
+  // Allocation's run list is private and only mutable by friended allocators.
+  // These give every MemoryAllocator subclass a controlled seam to that state
+  // without each having to be friended individually. Appends a run of
+  // 'numPages' starting at 'address' to 'allocation'.
+  static void appendToAllocation(
+      Allocation& allocation,
+      uint8_t* address,
+      MachinePageCount numPages) {
+    allocation.append(address, numPages);
+  }
+
+  // Resets 'allocation' to empty, dropping its runs without freeing them.
+  static void clearAllocation(Allocation& allocation) {
+    allocation.clear();
+  }
+
   // The machine page counts corresponding to different sizes in order
   // of increasing size.
   const std::vector<MachinePageCount>

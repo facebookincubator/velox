@@ -82,6 +82,17 @@ if(VELOX_ENABLE_TORCHWAVE)
   add_subdirectory(experimental/torchwave)
 endif()
 
+if(VELOX_ENABLE_CXL)
+  if(UNIX AND NOT APPLE)
+    add_subdirectory(experimental/cxl)
+  else()
+    message(
+      WARNING
+      "VELOX_ENABLE_CXL is only supported on Linux; skipping experimental/cxl."
+    )
+  endif()
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tool)
 endif()
