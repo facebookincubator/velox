@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7cad94b7..53dd555f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -87,6 +87,8 @@ if(MSVC AND BUILD_SHARED_LIBS)
+   )
+ endif()
+ 
++target_compile_definitions(simdjson PUBLIC SIMDJSON_EXPERIMENTAL_ALLOW_INCOMPLETE_JSON)
++
+ simdjson_add_props(
+     target_include_directories
+     PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"

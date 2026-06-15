@@ -1,0 +1,12 @@
+diff --git a/src/core/lib/event_engine/cf_engine/dns_service_resolver.cc b/src/core/lib/event_engine/cf_engine/dns_service_resolver.cc
+index 96de4bbf0ba85..a202e815abe0e 100644
+--- a/src/core/lib/event_engine/cf_engine/dns_service_resolver.cc
++++ b/src/core/lib/event_engine/cf_engine/dns_service_resolver.cc
+@@ -18,6 +18,7 @@
+ #include <AvailabilityMacros.h>
+ #ifdef AVAILABLE_MAC_OS_X_VERSION_10_12_AND_LATER
+ 
++#include "absl/strings/str_cat.h"
+ #include "absl/strings/str_format.h"
+ 
+ #include "src/core/lib/address_utils/parse_address.h"
