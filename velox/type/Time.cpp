@@ -96,12 +96,6 @@ Expected<int32_t> parseFractionalSeconds(
   return fractionalPart;
 }
 
-// Helper: Parse fractional seconds (milliseconds).
-Expected<int32_t>
-parseFractionalSeconds(const char* data, size_t size, size_t& pos) {
-  return parseFractionalSeconds(data, size, pos, 3);
-}
-
 // Helper: Validate time components
 Status validateTimeComponents(const TimeComponents& components) {
   if (components.hour < 0 || components.hour >= kHoursPerDay) {

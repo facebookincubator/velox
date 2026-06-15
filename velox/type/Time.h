@@ -43,8 +43,9 @@ struct TimeComponents {
 /// false).
 /// @param fractionalPrecision Max fractional digits to accept (default: 3 for
 /// milliseconds).
-/// @return Parsed time components with fractional part scaled to
-/// fractionalPrecision and stored in TimeComponents::millis.
+/// @return Parsed time components. The fractional part is scaled to
+/// fractionalPrecision and stored in TimeComponents::millis (milliseconds at
+/// the default precision of 3, microseconds when fractionalPrecision is 6).
 Expected<TimeComponents> parseTimeComponents(
     const char* buf,
     size_t len,
