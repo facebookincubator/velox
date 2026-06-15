@@ -15,7 +15,11 @@
  */
 #pragma once
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -65,6 +69,45 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
       int64_t dataSequenceNumber = 0);
+};
+
+/// Builds HiveIcebergSplit instances with named parameters.
+class HiveIcebergSplitBuilder {
+ public:
+  explicit HiveIcebergSplitBuilder(std::string filePath);
+
+  HiveIcebergSplitBuilder& connectorId(std::string connectorId);
+
+  HiveIcebergSplitBuilder& fileFormat(dwio::common::FileFormat fileFormat);
+
+  HiveIcebergSplitBuilder& start(uint64_t start);
+
+  HiveIcebergSplitBuilder& length(uint64_t length);
+
+  HiveIcebergSplitBuilder& partitionKeys(
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys);
+
+  HiveIcebergSplitBuilder& infoColumns(
+      const std::unordered_map<std::string, std::string>& infoColumns);
+
+  HiveIcebergSplitBuilder& deleteFiles(
+      std::vector<IcebergDeleteFile> deleteFiles);
+
+  HiveIcebergSplitBuilder& dataSequenceNumber(int64_t dataSequenceNumber);
+
+  std::shared_ptr<HiveIcebergSplit> build() const;
+
+ private:
+  const std::string filePath_;
+  std::string connectorId_;
+  dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
+  uint64_t start_{0};
+  uint64_t length_{std::numeric_limits<uint64_t>::max()};
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
+  std::unordered_map<std::string, std::string> infoColumns_;
+  std::vector<IcebergDeleteFile> deleteFiles_;
+  int64_t dataSequenceNumber_{0};
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

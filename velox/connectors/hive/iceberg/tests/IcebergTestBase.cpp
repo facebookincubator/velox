@@ -309,19 +309,12 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
 
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
-    splits.push_back(
-        std::make_shared<HiveIcebergSplit>(
-            kIcebergConnectorId,
-            filePath,
-            fileFormat_,
-            0,
-            file->size(),
-            partitionKeys,
-            std::nullopt,
-            std::unordered_map<std::string, std::string>{},
-            nullptr,
-            /*cacheable=*/true,
-            std::vector<IcebergDeleteFile>()));
+    splits.push_back(HiveIcebergSplitBuilder(filePath)
+                         .connectorId(kIcebergConnectorId)
+                         .fileFormat(fileFormat_)
+                         .length(file->size())
+                         .partitionKeys(partitionKeys)
+                         .build());
   }
 
   return splits;
@@ -348,22 +341,16 @@ std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
   splits.reserve(splitCount);
 
   for (auto i = 0; i < splitCount; ++i) {
-    splits.emplace_back(
-        std::make_shared<HiveIcebergSplit>(
-            kIcebergConnectorId,
-            dataFilePath,
-            fileFormat_,
-            i * splitSize,
-            splitSize,
-            partitionKeys,
-            std::nullopt,
-            std::unordered_map<std::string, std::string>{},
-            nullptr,
-            /*cacheable=*/true,
-            deleteFiles,
-            infoColumns,
-            std::nullopt,
-            dataSequenceNumber));
+    splits.emplace_back(HiveIcebergSplitBuilder(dataFilePath)
+                            .connectorId(kIcebergConnectorId)
+                            .fileFormat(fileFormat_)
+                            .start(i * splitSize)
+                            .length(splitSize)
+                            .partitionKeys(partitionKeys)
+                            .deleteFiles(deleteFiles)
+                            .infoColumns(infoColumns)
+                            .dataSequenceNumber(dataSequenceNumber)
+                            .build());
   }
 
   return splits;
