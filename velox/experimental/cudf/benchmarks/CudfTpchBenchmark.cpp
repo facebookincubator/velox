@@ -53,6 +53,12 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
+DEFINE_int32(
+    cudf_batch_size_max_threshold,
+    0,
+    "Maximum rows allowed in a concatenated cuDF batch. If 0, use cuDF's "
+    "size_type limit.");
+
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
 DEFINE_string(
@@ -96,6 +102,15 @@ void CudfTpchBenchmark::initialize() {
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  if (FLAGS_cudf_batch_size_max_threshold > 0) {
+    cudfConfig.batchSizeMaxThreshold = FLAGS_cudf_batch_size_max_threshold;
+  } else {
+    cudfConfig.batchSizeMaxThreshold.reset();
+  }
+
+  cudfConfig.debugEnabled = FLAGS_cudf_debug_enabled;
+  // Enable cuDF operators
   cudf_velox::registerCudf();
 
   queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
@@ -145,6 +160,10 @@ CudfTpchBenchmark::listSplits(
 void CudfTpchBenchmark::shutdown() {
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
+}
+
+BENCHMARK(q23) {
+  benchmark->runQuery(23);
 }
 
 int main(int argc, char** argv) {
