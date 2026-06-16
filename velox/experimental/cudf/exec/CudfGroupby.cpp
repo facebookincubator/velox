@@ -283,7 +283,8 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests,
       rmm::cuda_stream_view stream) override {
-    if (step == core::AggregationNode::Step::kIntermediate || step == core::AggregationNode::Step::kFinal) {
+    if (step == core::AggregationNode::Step::kIntermediate ||
+        step == core::AggregationNode::Step::kFinal) {
       addDecimalDecodedSumCountRequests(
           tbl,
           inputIndex,

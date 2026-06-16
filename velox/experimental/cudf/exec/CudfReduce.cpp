@@ -472,7 +472,8 @@ struct ReduceDecimalAvgAggregator : ReduceAggregator {
         return reduceIntermediateDecimalFromSerializedColumn(
             inputCol, outputType, stream, mr);
       case core::AggregationNode::Step::kFinal:
-        VELOX_CHECK(*outputType == *resultType, "outputType/resultType mismatch");
+        VELOX_CHECK(
+            *outputType == *resultType, "outputType/resultType mismatch");
         return reduceFinalDecimalAvgFromSerializedColumn(
             inputCol, outputType, stream, mr);
       default:
