@@ -30,6 +30,7 @@
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_memory_pool_capacity_transfer_across_tasks);
+DECLARE_bool(velox_enable_inplace_realloc);
 
 namespace facebook::velox::exec {
 class ParallelMemoryReclaimer;
@@ -127,7 +128,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   struct Options {
     /// Specifies the memory allocation alignment through this memory pool.
-    uint16_t alignment{MemoryAllocator::kMaxAlignment};
+    uint16_t alignment{MemoryAllocator::kDefaultAlignment};
 
     /// Specifies the max memory capacity of this memory pool.
     int64_t maxCapacity{kMaxMemory};
@@ -163,6 +164,17 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If non-empty, enables debug mode for the created memory pool.
     std::optional<DebugOptions> debugOptions{std::nullopt};
+
+    /// Allocator override. Non-null routes allocations through this allocator
+    /// instead of the MemoryManager's default. Borrowed; the owner (typically
+    /// a CustomMemoryResource held by the MemoryManager) must outlive the
+    /// pool.
+    MemoryAllocator* customAllocator{nullptr};
+
+    /// Arbitrator override. Non-null routes capacity decisions through this
+    /// arbitrator instead of the MemoryManager's default. Same ownership
+    /// contract as 'customAllocator'.
+    MemoryArbitrator* customArbitrator{nullptr};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -240,6 +252,16 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       int64_t size,
       std::optional<uint32_t> alignment = std::nullopt) = 0;
 
+  /// Reports an external allocation of 'size' bytes to the memory pool without
+  /// allocating any memory. Used to track memory owned by objects that were
+  /// allocated outside of the pool (e.g., Thrift-deserialized structures).
+  /// Each call must be paired with a matching reportExternalFree() of the
+  /// same 'size' when the external memory is released. 'size' must be
+  /// positive. External allocations are counted separately from regular pool
+  /// allocations and surfaced through Stats::numExternalAllocs and
+  /// Stats::cumulativeExternalBytes.
+  virtual void reportExternalAllocation(int64_t size) = 0;
+
   /// Allocates a zero-filled buffer with capacity that can store 'numEntries'
   /// entries with each size of 'sizeEach'.
   virtual void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) = 0;
@@ -251,12 +273,29 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Frees an allocated buffer.
   virtual void free(void* p, int64_t size) = 0;
 
+  /// Allocates a buffer with arbitrary power-of-two alignment (e.g., 4096 for
+  /// O_DIRECT). Unlike allocate(), which is limited to the pool's fixed
+  /// alignment, this supports any power-of-two alignment >= kMinAlignment.
+  virtual void* allocateAligned(int64_t size, uint32_t alignment) {
+    VELOX_NYI("allocateAligned not implemented for {}", toString());
+  }
+
+  /// Frees a buffer allocated by allocateAligned.
+  virtual void freeAligned(void* buffer, int64_t size, uint32_t alignment) {
+    VELOX_NYI("freeAligned not implemented for {}", toString());
+  }
+
   /// Transfer the ownership of memory at 'buffer' for 'size' bytes to the
   /// memory pool 'dest'. Returns true if the transfer succeeds.
   virtual bool
   transferTo(MemoryPool* /*dest*/, void* /*buffer*/, uint64_t /*size*/) {
     return false;
   }
+
+  /// Reports the release of 'size' bytes of externally tracked memory. Must
+  /// be paired with a prior reportExternalAllocation() of the same 'size'.
+  /// 'size' must be positive.
+  virtual void reportExternalFree(int64_t size) = 0;
 
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
@@ -387,6 +426,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Returns the memory reclaimer of this memory pool if not null.
   virtual MemoryReclaimer* reclaimer() const = 0;
 
+  /// Returns the arbitrator that governs this pool's capacity. May be the
+  /// MemoryManager's default arbitrator or a custom resource's arbitrator.
+  virtual MemoryArbitrator* arbitrator() const = 0;
+
   /// Function estimates the number of reclaimable bytes and returns in
   /// 'reclaimableBytes'. If the 'reclaimer' is not set, the function returns
   /// std::nullopt. Otherwise, it will invoke the corresponding method of the
@@ -455,6 +498,14 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     ///
     /// NOTE: this only applies for the root memory pool.
     uint64_t numCapacityGrowths{0};
+    /// The number of external allocations reported via
+    /// reportExternalAllocation().
+    uint64_t numExternalAllocs{0};
+    /// The number of external frees reported via reportExternalFree().
+    uint64_t numExternalFrees{0};
+    /// The cumulative sum of bytes reported via reportExternalAllocation()
+    /// since the pool was created.
+    uint64_t cumulativeExternalBytes{0};
 
     bool operator==(const Stats& rhs) const;
 
@@ -616,13 +667,21 @@ class MemoryPoolImpl : public MemoryPool {
   void* allocate(int64_t size, std::optional<uint32_t> alignment = std::nullopt)
       override;
 
+  void reportExternalAllocation(int64_t size) override;
+
   void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override;
 
   void* reallocate(void* p, int64_t size, int64_t newSize) override;
 
   void free(void* p, int64_t size) override;
 
+  void* allocateAligned(int64_t size, uint32_t alignment) override;
+
+  void freeAligned(void* buffer, int64_t size, uint32_t alignment) override;
+
   bool transferTo(MemoryPool* dest, void* buffer, uint64_t size) override;
+
+  void reportExternalFree(int64_t size) override;
 
   void allocateNonContiguous(
       MachinePageCount numPages,
@@ -675,6 +734,10 @@ class MemoryPoolImpl : public MemoryPool {
   void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   MemoryReclaimer* reclaimer() const override;
+
+  MemoryArbitrator* arbitrator() const override {
+    return arbitrator_;
+  }
 
   std::optional<uint64_t> reclaimableBytes() const override;
 
@@ -783,7 +846,13 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
   FOLLY_ALWAYS_INLINE int64_t sizeAlign(int64_t size) const {
-    return (size + alignment_ - 1) & ~(alignment_ - 1);
+    return sizeAlign(size, alignment_);
+  }
+
+  static FOLLY_ALWAYS_INLINE int64_t
+  sizeAlign(int64_t size, uint32_t alignment) {
+    const auto mask = static_cast<int64_t>(alignment) - 1;
+    return checkedPlus(size, mask) & ~mask;
   }
 
   // Returns a rounded up delta based on adding 'delta' to 'size'. Adding the
@@ -959,7 +1028,10 @@ class MemoryPoolImpl : public MemoryPool {
         << succinctBytes(minReservationBytes_);
     out << "] counters [allocs " << numAllocs_ << ", frees " << numFrees_
         << ", reserves " << numReserves_ << ", releases " << numReleases_
-        << ", collisions " << numCollisions_ << "])";
+        << ", collisions " << numCollisions_ << ", external-allocs "
+        << numExternalAllocs_ << ", external-frees " << numExternalFrees_
+        << ", cumulative-external " << succinctBytes(cumulativeExternalBytes_)
+        << "])";
     out << ">";
     return out.str();
   }
@@ -1094,6 +1166,17 @@ class MemoryPoolImpl : public MemoryPool {
   //
   // NOTE: this only applies for root memory pool.
   std::atomic_uint64_t numCapacityGrowths_{0};
+
+  // The number of external allocations reported via
+  // reportExternalAllocation().
+  std::atomic_uint64_t numExternalAllocs_{0};
+
+  // The number of external frees reported via reportExternalFree().
+  std::atomic_uint64_t numExternalFrees_{0};
+
+  // The cumulative sum of bytes reported via reportExternalAllocation() since
+  // the pool was created.
+  std::atomic_uint64_t cumulativeExternalBytes_{0};
 
   // Mutex for 'debugAllocRecords_'.
   mutable std::mutex debugAllocMutex_;

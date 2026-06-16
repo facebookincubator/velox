@@ -80,14 +80,16 @@ class WriterBase {
       std::shared_ptr<velox::memory::MemoryPool> pool,
       const tz::TimeZone* sessionTimezone = nullptr,
       const bool adjustTimestampToTimezone = false,
-      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr) {
+      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr,
+      int64_t memoryBudget = std::numeric_limits<int64_t>::max()) {
     context_ = std::make_unique<WriterContext>(
         config,
         std::move(pool),
         sink_->metricsLog(),
         sessionTimezone,
         adjustTimestampToTimezone,
-        std::move(handler));
+        std::move(handler),
+        memoryBudget);
     writerSink_ = std::make_unique<WriterSink>(
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),

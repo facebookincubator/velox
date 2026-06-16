@@ -16,8 +16,7 @@
 #pragma once
 
 #include <folly/hash/Checksum.h>
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/BitUtil.h"

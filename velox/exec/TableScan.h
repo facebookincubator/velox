@@ -180,6 +180,10 @@ class TableScan : public SourceOperator {
 
   double maxFilteringRatio_{0};
 
+  // Per-split batch size hint. Set from ConnectorSplit::batchSizeHint when a
+  // new split is loaded. Reset to 0 when the split has no hint.
+  int32_t splitBatchSizeHint_{0};
+
   // Row size estimate from the file reader. It is set to the last known
   // estimated row size from the current split reader or the previous ones.
   int64_t fileEstimatedRowSize_{connector::DataSource::kUnknownRowSize};

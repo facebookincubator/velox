@@ -16,6 +16,8 @@
 
 #include "velox/connectors/Connector.h"
 
+#include "velox/common/EnumDefine.h"
+
 #include <memory>
 #include <string>
 

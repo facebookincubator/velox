@@ -1432,6 +1432,7 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(t->equivalent(*TIMESTAMP()));
       const std::string& s = getString(*this, isNull, delim);
 
       // Early return if no data vector or at EOF

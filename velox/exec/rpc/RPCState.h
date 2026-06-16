@@ -224,8 +224,19 @@ class RPCState {
 
   /// Returns true if backpressure should be applied. Thread-safe.
   /// PER_ROW mode: pending rows >= maxPendingRows.
-  /// BATCH mode: pending batches >= maxPendingBatches.
+  /// BATCH mode: pending batches >= effectiveMaxPendingBatches
+  /// (congestion-adjusted).
   bool isUnderBackpressure();
+
+  /// Signal that a batch completed successfully (all responses non-empty).
+  /// Increases the effective concurrency window by increment (additive
+  /// increase). Thread-safe.
+  void onBatchSuccess(int64_t increment = 2);
+
+  /// Signal that a batch had errors (e.g., empty responses from overload).
+  /// Halves the effective concurrency window (multiplicative decrease).
+  /// Thread-safe.
+  void onBatchError();
 
  private:
   /// Move a completed row into readyRows_ and notify waiters.
@@ -253,7 +264,14 @@ class RPCState {
   bool noMoreInput_{false};
   RPCStreamingMode streamingMode_{RPCStreamingMode::kPerRow};
   int64_t maxPendingRows_{100};
-  int64_t maxPendingBatches_{10};
+  int64_t maxPendingBatches_{2};
+
+  // Congestion control for BATCH mode.
+  // effectiveMaxPendingBatches_ starts at maxPendingBatches_ and adjusts:
+  //   - On success: min(effective + 1, maxPendingBatches_)  (additive increase)
+  //   - On error:   max(effective / 2, 1)                   (multiplicative
+  //   decrease)
+  int64_t effectiveMaxPendingBatches_{2};
 };
 
 } // namespace facebook::velox::exec::rpc

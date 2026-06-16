@@ -23,6 +23,8 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
@@ -130,6 +132,25 @@ inline size_t numSourceNodes(const core::PlanNode* planNode) {
   return !indexNode->needsIndexSplit() ? 1 : indexNode->sources().size();
 }
 
+// Collects IDs of IndexLookupJoinNode's lookup source (index) TableScanNodes.
+// These nodes are NOT separate pipeline leaves in Velox's LocalPlanner
+// (it only plans the probe source) and must be excluded from
+// groupedExecutionLeafNodeIds validation.
+void collectIndexSourceIds(
+    const core::PlanNodePtr& node,
+    std::unordered_set<core::PlanNodeId>& indexSourceIds) {
+  if (auto indexJoin =
+          std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(node)) {
+    indexSourceIds.insert(indexJoin->lookupSource()->id());
+    // Only recurse into the probe side (sources()[0]), not the lookup source.
+    collectIndexSourceIds(indexJoin->sources()[0], indexSourceIds);
+    return;
+  }
+  for (const auto& source : node->sources()) {
+    collectIndexSourceIds(source, indexSourceIds);
+  }
+}
+
 // Add 'running time' metrics from CpuWallTiming structures to have them
 // available aggregated per thread.
 void addRunningTimeOperatorMetrics(exec::OperatorStats& op) {
@@ -191,6 +212,18 @@ std::string makeUuid() {
 bool isHashJoinOperator(const std::string& operatorType) {
   return (operatorType == OperatorType::kHashBuild) ||
       (operatorType == OperatorType::kHashProbe);
+}
+
+// Returns the CustomMemoryResourceRegistry visible to 'queryCtx': the
+// per-query scoped registry if one has been installed under
+// 'kCustomMemoryResourceRegistryKey', otherwise the process-global
+// registry. Mirrors connector::ConnectorRegistry's per-query lookup.
+memory::CustomMemoryResourceRegistry::Registry& customMemoryResourceRegistryFor(
+    const core::QueryCtx& queryCtx) {
+  auto perQuery =
+      queryCtx.registry<memory::CustomMemoryResourceRegistry::Registry>(
+          memory::kCustomMemoryResourceRegistryKey);
+  return perQuery ? *perQuery : memory::CustomMemoryResourceRegistry::global();
 }
 
 class QueueSplitsStore : public SplitsStore {
@@ -408,6 +441,9 @@ Task::Task(
       splitsStates_(buildSplitStates(planFragment_.planNode)),
       bufferManager_(OutputBufferManager::getInstanceRef()) {
   ++numCreatedTasks_;
+  // Validate that any per-node transport type annotations refer to the right
+  // kind of plan node before they are used to select exchange transports.
+  planFragment_.validateTransportTypes();
   // NOTE: the executor must not be folly::InlineLikeExecutor for parallel
   // execution.
   if (mode_ == Task::ExecutionMode::kParallel) {
@@ -468,9 +504,12 @@ Task::~Task() {
   CLEAR(exchangeClients_.clear());
   CLEAR(exception_ = nullptr);
   CLEAR(nodePools_.clear());
+  CLEAR(customNodePools_.clear());
+  CLEAR(customTaskPools_.clear());
+  CLEAR(customChildPools_.clear());
   CLEAR(childPools_.clear());
-  CLEAR(pool_.reset());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
 
@@ -520,6 +559,8 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     VELOX_CHECK_EQ(factory->numDrivers, 1);
     numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
+
+  initDriverLifecycleStatsLocked();
 
   // Create drivers.
   createSplitGroupStateLocked(kUngroupedGroupId);
@@ -690,6 +731,25 @@ void Task::initTaskPool() {
   VELOX_CHECK_NULL(pool_);
   pool_ = queryCtx_->pool()->addAggregateChild(
       fmt::format("task.{}", taskId_.c_str()), createTaskReclaimer());
+  initCustomTaskPools();
+}
+
+void Task::initCustomTaskPools() {
+  VELOX_CHECK_NOT_NULL(pool_);
+  const auto& customRoots = queryCtx_->customPools();
+  if (customRoots.empty()) {
+    return;
+  }
+  auto& registry = customMemoryResourceRegistryFor(*queryCtx_);
+  for (const auto& [tag, root] : customRoots) {
+    auto resource = registry.find(tag);
+    VELOX_CHECK_NOT_NULL(
+        resource, "No CustomMemoryResource registered for tag: {}", tag);
+    customChildPools_.push_back(root->addAggregateChild(
+        fmt::format("task.{}.{}", taskId_.c_str(), tag),
+        resource->newReclaimer()));
+    customTaskPools_[tag] = customChildPools_.back().get();
+  }
 }
 
 velox::memory::MemoryPool* Task::getOrAddNodePool(
@@ -704,15 +764,42 @@ velox::memory::MemoryPool* Task::getOrAddNodePool(
       })));
   auto* nodePool = childPools_.back().get();
   nodePools_[planNodeId] = nodePool;
+  for (const auto& [tag, _] : queryCtx_->customPools()) {
+    getOrAddCustomNodePool(tag, planNodeId);
+  }
+  return nodePool;
+}
+
+memory::MemoryPool* Task::getOrAddCustomNodePool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId) {
+  auto& nodeMap = customNodePools_[tag];
+  if (auto it = nodeMap.find(planNodeId); it != nodeMap.end()) {
+    return it->second;
+  }
+  auto taskIt = customTaskPools_.find(tag);
+  VELOX_CHECK(
+      taskIt != customTaskPools_.end(),
+      "Custom task pool missing for tag: {}",
+      tag);
+  auto resource = customMemoryResourceRegistryFor(*queryCtx_).find(tag);
+  VELOX_CHECK_NOT_NULL(
+      resource, "No CustomMemoryResource registered for tag: {}", tag);
+  customChildPools_.push_back(taskIt->second->addAggregateChild(
+      fmt::format("node.{}.{}", planNodeId, tag), resource->newReclaimer()));
+  auto* nodePool = customChildPools_.back().get();
+  nodeMap[planNodeId] = nodePool;
   return nodePool;
 }
 
 memory::MemoryPool* Task::getOrAddJoinNodePool(
     const core::PlanNodeId& planNodeId,
     uint32_t splitGroupId) {
-  const std::string nodeId = splitGroupId == kUngroupedGroupId
-      ? planNodeId
+  const std::string formattedId = splitGroupId == kUngroupedGroupId
+      ? std::string{}
       : fmt::format("{}[{}]", planNodeId, splitGroupId);
+  const std::string& nodeId =
+      splitGroupId == kUngroupedGroupId ? planNodeId : formattedId;
   if (nodePools_.count(nodeId) == 1) {
     return nodePools_[nodeId];
   }
@@ -724,7 +811,71 @@ memory::MemoryPool* Task::getOrAddJoinNodePool(
       })));
   auto* nodePool = childPools_.back().get();
   nodePools_[nodeId] = nodePool;
+  for (const auto& [tag, _] : queryCtx_->customPools()) {
+    getOrAddCustomJoinNodePool(tag, planNodeId, splitGroupId);
+  }
   return nodePool;
+}
+
+memory::MemoryPool* Task::getOrAddCustomJoinNodePool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId,
+    uint32_t splitGroupId) {
+  const std::string nodeId = splitGroupId == kUngroupedGroupId
+      ? planNodeId
+      : fmt::format("{}[{}]", planNodeId, splitGroupId);
+  auto& nodeMap = customNodePools_[tag];
+  if (auto it = nodeMap.find(nodeId); it != nodeMap.end()) {
+    return it->second;
+  }
+  auto taskIt = customTaskPools_.find(tag);
+  VELOX_CHECK(
+      taskIt != customTaskPools_.end(),
+      "Custom task pool missing for tag: {}",
+      tag);
+  auto resource = customMemoryResourceRegistryFor(*queryCtx_).find(tag);
+  VELOX_CHECK_NOT_NULL(
+      resource, "No CustomMemoryResource registered for tag: {}", tag);
+  customChildPools_.push_back(taskIt->second->addAggregateChild(
+      fmt::format("node.{}.{}", nodeId, tag), resource->newReclaimer()));
+  auto* nodePool = customChildPools_.back().get();
+  nodeMap[nodeId] = nodePool;
+  return nodePool;
+}
+
+memory::MemoryPool* Task::addCustomOperatorPool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId,
+    uint32_t splitGroupId,
+    int pipelineId,
+    uint32_t driverId,
+    const std::string& operatorType) {
+  memory::MemoryPool* nodePool;
+  if (isHashJoinOperator(operatorType)) {
+    nodePool = getOrAddCustomJoinNodePool(tag, planNodeId, splitGroupId);
+  } else {
+    nodePool = getOrAddCustomNodePool(tag, planNodeId);
+  }
+  customChildPools_.push_back(nodePool->addLeafChild(
+      fmt::format(
+          "op.{}.{}.{}.{}.{}",
+          planNodeId,
+          pipelineId,
+          driverId,
+          operatorType,
+          tag)));
+  return customChildPools_.back().get();
+}
+
+memory::MemoryPool* Task::customNodePool(
+    const std::string& tag,
+    const core::PlanNodeId& planNodeId) const {
+  auto tagIt = customNodePools_.find(tag);
+  if (tagIt == customNodePools_.end()) {
+    return nullptr;
+  }
+  auto nodeIt = tagIt->second.find(planNodeId);
+  return nodeIt == tagIt->second.end() ? nullptr : nodeIt->second;
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Task::createNodeReclaimer(
@@ -1041,6 +1192,8 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
         factory->inputDriver, factory->outputDriver);
   }
 
+  initDriverLifecycleStatsLocked();
+
   validateGroupedExecutionLeafNodes();
 }
 
@@ -1262,9 +1415,20 @@ void Task::validateGroupedExecutionLeafNodes() {
         !planFragment_.groupedExecutionLeafNodeIds.empty(),
         "groupedExecutionLeafNodeIds must not be empty in "
         "grouped execution mode");
+
+    // Collect IndexLookupJoin lookup source node IDs. These are in
+    // groupedExecutionLeafNodeIds (for coordinator-side grouped split
+    // scheduling) but are NOT separate pipeline leaves in Velox —
+    // IndexLookupJoin manages the index source internally.
+    std::unordered_set<core::PlanNodeId> indexSourceIds;
+    collectIndexSourceIds(planFragment_.planNode, indexSourceIds);
+
     // Check that each node designated as the grouped execution leaf node
     // existing in a pipeline that will run grouped execution.
     for (const auto& leafNodeId : planFragment_.groupedExecutionLeafNodeIds) {
+      if (indexSourceIds.count(leafNodeId)) {
+        continue;
+      }
       bool found{false};
       for (auto& factory : driverFactories_) {
         if (leafNodeId == factory->leafNodeId()) {
@@ -1653,18 +1817,12 @@ void Task::addSplitToStoreLocked(
     uint32_t groupId,
     const exec::Split& split,
     std::vector<ContinuePromise>& promises) {
-  auto& splitsStore = splitsState.groupSplitsStores[groupId];
-  if (!splitsStore) {
-    setSplitsStore(
-        splitsStore,
-        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
-  }
+  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, groupId);
   if (split.isBarrier()) {
     splitsStore->requestBarrier(split.barrier->numDrivers, promises);
     return;
   }
-  auto* queueSplitsStore =
-      checkedPointerCast<QueueSplitsStore>(splitsStore.get());
+  auto* queueSplitsStore = checkedPointerCast<QueueSplitsStore>(splitsStore);
   queueSplitsStore->addSplit(split, promises);
 }
 
@@ -1678,7 +1836,7 @@ void Task::noMoreSplitsForGroup(
 
     auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
     noMoreSplitsForStore(
-        splitsState.groupSplitsStores[splitGroupId].get(), promises);
+        getOrCreateSplitsStoreLocked(splitsState, splitGroupId), promises);
 
     // There were no splits in this group, hence, no active drivers. Mark the
     // group complete.
@@ -1773,6 +1931,18 @@ void Task::setSplitsStore(
   splitsStore = std::move(newSplitsStore);
   splitsStore->setTaskStats(taskStats_);
   splitsStore->setPreloadingSplits(preloadingSplits_);
+}
+
+SplitsStore* Task::getOrCreateSplitsStoreLocked(
+    SplitsState& splitsState,
+    uint32_t splitGroupId) {
+  auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
+  if (!splitsStore) {
+    setSplitsStore(
+        splitsStore,
+        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
+  }
+  return splitsStore.get();
 }
 
 ContinueFuture Task::requestBarrier() {
@@ -1988,12 +2158,7 @@ BlockingReason Task::getSplitOrFuture(
     ContinueFuture& future) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-  auto& splitsStore = splitsState.groupSplitsStores[splitGroupId];
-  if (!splitsStore) {
-    setSplitsStore(
-        splitsStore,
-        std::make_unique<QueueSplitsStore>(!splitsState.sourceIsTableScan));
-  }
+  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
   return splitsStore->nextSplit(
              driverId, maxPreloadSplits, preload, split, future)
       ? BlockingReason::kNotBlocked
@@ -2485,13 +2650,18 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         "Termination time has already been set, this should only happen once.");
     taskStats_.terminationTimeMs = getCurrentTimeMs();
     if (state_ == TaskState::kCanceled || state_ == TaskState::kAborted) {
-      try {
-        VELOX_FAIL(
-            state_ == TaskState::kCanceled ? "Cancelled"
-                                           : "Aborted for external error");
-      } catch (const std::exception&) {
-        exception_ = std::current_exception();
-      }
+      // Construct the exception directly instead of going through VELOX_FAIL to
+      // avoid error log when cancellation is expected.
+      exception_ = std::make_exception_ptr(VeloxRuntimeError(
+          __FILE__,
+          __LINE__,
+          __FUNCTION__,
+          /*expression=*/"",
+          state_ == TaskState::kCanceled ? "Cancelled"
+                                         : "Aborted for external error",
+          error_source::kErrorSourceRuntime,
+          error_code::kInvalidState,
+          /*isRetriable=*/false));
     }
     if (state_ != TaskState::kFinished) {
       VELOX_CHECK(!cancellationSource_.isCancellationRequested());
@@ -2700,6 +2870,37 @@ void Task::addDriverStats(int pipelineId, DriverStats stats) {
   taskStats_.pipelineStats[pipelineId].driverStats.push_back(std::move(stats));
 }
 
+void Task::initDriverLifecycleStatsLocked() {
+  pipelineLifecycleStats_.resize(driverFactories_.size());
+  for (size_t i = 0; i < driverFactories_.size(); ++i) {
+    auto& pls = pipelineLifecycleStats_[i];
+    const auto& leafNode = driverFactories_[i]->planNodes.front();
+    pls.sourceOperatorType = leafNode->name();
+    pls.sourcePlanNodeId = leafNode->id();
+    pls.driverTimes.resize(driverFactories_[i]->numDrivers);
+  }
+}
+
+void Task::addDriverLifecycleStats(
+    uint32_t pipelineId,
+    uint32_t driverIndex,
+    uint64_t queuedNanos,
+    uint64_t onThreadNanos,
+    uint64_t blockedNanos) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  if (pipelineId >= pipelineLifecycleStats_.size()) {
+    return;
+  }
+  auto& pls = pipelineLifecycleStats_[pipelineId];
+  if (pls.driverTimes.empty()) {
+    return;
+  }
+  const auto idx = driverIndex % pls.driverTimes.size();
+  pls.driverTimes[idx].queuedNanos += queuedNanos;
+  pls.driverTimes[idx].onThreadNanos += onThreadNanos;
+  pls.driverTimes[idx].blockedNanos += blockedNanos;
+}
+
 TaskStats Task::taskStats() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2753,6 +2954,41 @@ TaskStats Task::taskStats() const {
   if (taskStats.longestRunningOpCallMs < 30000) {
     taskStats.longestRunningOpCall.clear();
     taskStats.longestRunningOpCallMs = 0;
+  }
+
+  // Emit per-pipeline driver lifecycle timing. Merged into the first
+  // existing DriverStats entry for each pipeline to avoid inflating the
+  // driverStats vector. Each logical driver index contributes one sample,
+  // giving proper sum/count/min/max aggregation.
+  for (size_t i = 0; i < pipelineLifecycleStats_.size(); ++i) {
+    const auto& pls = pipelineLifecycleStats_[i];
+    if (pls.driverTimes.empty()) {
+      continue;
+    }
+    auto& pipeDriverStats = taskStats.pipelineStats[i].driverStats;
+    if (pipeDriverStats.empty()) {
+      pipeDriverStats.emplace_back();
+    }
+    auto& targetStats = pipeDriverStats[0].runtimeStats;
+    const auto prefix = fmt::format(
+        "P{}-{}.{}", i, pls.sourceOperatorType, pls.sourcePlanNodeId);
+    const auto queuedKey = fmt::format("{}.driverQueuedWallNanos", prefix);
+    const auto onThreadKey = fmt::format("{}.driverOnThreadWallNanos", prefix);
+    const auto blockedKey = fmt::format("{}.driverBlockedWallNanos", prefix);
+    for (const auto& timing : pls.driverTimes) {
+      auto addOrMerge = [&targetStats](const std::string& key, uint64_t nanos) {
+        const auto value = saturateCast(nanos);
+        auto it = targetStats.find(key);
+        if (it != targetStats.end()) {
+          it->second.merge(RuntimeMetric(value, RuntimeCounter::Unit::kNanos));
+        } else {
+          targetStats[key] = RuntimeMetric(value, RuntimeCounter::Unit::kNanos);
+        }
+      };
+      addOrMerge(queuedKey, timing.queuedNanos);
+      addOrMerge(onThreadKey, timing.onThreadNanos);
+      addOrMerge(blockedKey, timing.blockedNanos);
+    }
   }
 
   auto bufferManager = bufferManager_.lock();

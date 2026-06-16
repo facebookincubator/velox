@@ -189,8 +189,7 @@ bool SignatureBinder::tryBind(
           }
 
           for (auto i = numFormalArgs; i < numActualTypes; i++) {
-            if (auto cost =
-                    TypeCoercer::coercible(actualTypes_[i], firstType)) {
+            if (auto cost = coercer_.coercible(actualTypes_[i], firstType)) {
               if (cost.value() > 0) {
                 coercions[i] = Coercion{firstType, cost.value()};
               }
@@ -288,7 +287,7 @@ std::optional<bool> SignatureBinderBase::checkSetTypeVariable(
     VELOX_CHECK(bindingIt != typeVariablesBindings_.end());
 
     const auto& boundType = bindingIt->second;
-    const auto cost = TypeCoercer::coercible(actualType, boundType);
+    const auto cost = coercer_.coercible(actualType, boundType);
     VELOX_CHECK(cost.has_value());
 
     if (cost.value() > 0) {
@@ -361,7 +360,7 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
     }
 
     if (auto superType =
-            TypeCoercer::leastCommonSuperType(actualType, bindingIt->second)) {
+            coercer_.leastCommonSuperType(actualType, bindingIt->second)) {
       typeVariablesBindings_[baseName] = superType;
       return true;
     }
@@ -412,7 +411,7 @@ bool SignatureBinderBase::tryBind(
   if (!boost::algorithm::iequals(typeName, actualType->name())) {
     if (allowCoercion && typeSignature.parameters().empty()) {
       if (auto availableCoercion =
-              TypeCoercer::coerceTypeBase(actualType, typeName)) {
+              coercer_.coerceTypeBase(actualType, typeName)) {
         coercion = availableCoercion.value();
         return true;
       }
@@ -615,10 +614,11 @@ TypePtr SignatureBinder::tryResolveType(
 TypePtr tryResolveReturnTypeWithCoercions(
     const std::vector<FunctionSignaturePtr>& signatures,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
   for (const auto& signature : signatures) {
-    SignatureBinder binder(*signature, argTypes);
+    SignatureBinder binder(*signature, argTypes, coercer);
     std::vector<Coercion> requiredCoercions;
     if (binder.tryBindWithCoercions(requiredCoercions)) {
       auto type = binder.tryResolveReturnType();

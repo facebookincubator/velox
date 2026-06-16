@@ -148,6 +148,8 @@ class FileIndexReader : public SplitIndexReader {
   // Reusable column vectors for building index bounds.
   std::vector<VectorPtr> lowerBoundColumns_;
   std::vector<VectorPtr> upperBoundColumns_;
+
+  uint64_t numIndexOutputRows_{0};
 };
 
 } // namespace facebook::velox::connector::hive

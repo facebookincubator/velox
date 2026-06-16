@@ -15,8 +15,8 @@
  */
 
 #include "velox/dwio/common/DirectBufferedInput.h"
+
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DirectInputStream.h"
 
@@ -151,11 +151,12 @@ std::vector<int32_t> DirectBufferedInput::groupRequests(
   std::vector<int32_t> ends;
   ends.reserve(requests.size());
   std::vector<char> ranges;
-  coalesceIo<LoadRequest*, char>(
+  const auto stats = coalesceIo<LoadRequest*, char>(
       requests,
       maxDistance,
       // Break batches up. Better load more short ones i parallel.
-      std::numeric_limits<int32_t>::max(), // limit coalesce by size, not count.
+      std::numeric_limits<int32_t>::max(), // limit coalesce by size, not
+                                           // count.
       [&](int32_t index) { return requests[index]->region.offset; },
       [&](int32_t index) -> int32_t {
         auto size = requests[index]->region.length;
@@ -183,6 +184,8 @@ std::vector<int32_t> DirectBufferedInput::groupRequests(
           int32_t end,
           uint64_t /*offset*/,
           const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  ioStatistics_->readGap().merge(stats.gaps);
+  ioStatistics_->incDuplicateRead(stats.duplicateRegions, stats.duplicateBytes);
   return ends;
 }
 
@@ -228,7 +231,6 @@ void DirectBufferedInput::readRegions(
         AsyncLoadHolder loadHolder{
             .load = load, .pool = pool_->shared_from_this()};
         executor_->add([asyncLoad = std::move(loadHolder)]() {
-          process::TraceContext trace("Read Ahead");
           VELOX_CHECK_NOT_NULL(asyncLoad.load);
           asyncLoad.load->loadOrFuture(nullptr);
         });
@@ -284,6 +286,28 @@ void appendRanges(
     }
   }
 }
+
+bool duplicateRegion(const LoadRequest& source, const LoadRequest& duplicate) {
+  return duplicate.region.offset == source.region.offset &&
+      duplicate.region.length == source.region.length;
+}
+
+void copyDuplicateRegion(
+    const LoadRequest& source,
+    LoadRequest& duplicate,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_EQ(source.loadSize, duplicate.loadSize);
+  if (source.data.numPages() > 0) {
+    const auto numPages =
+        memory::AllocationTraits::numPages(duplicate.loadSize);
+    pool->allocateNonContiguous(numPages, duplicate.data);
+    memory::Allocation::copy(source.data, duplicate.data, duplicate.loadSize);
+  } else {
+    VELOX_CHECK(
+        !source.tinyData.empty(), "Duplicate tiny region source is empty");
+    duplicate.tinyData = source.tinyData;
+  }
+}
 } // namespace
 
 void DirectBufferedInput::preload() {
@@ -309,7 +333,7 @@ void DirectBufferedInput::preload() {
   ioStatistics_->incRawBytesRead(fileSize_);
   ioStatistics_->queryThreadIoLatencyUs().increment(storageReadUs);
   ioStatistics_->storageReadLatencyUs().increment(storageReadUs);
-  ioStatistics_->incTotalScanTime(storageReadUs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(storageReadUs * 1'000);
 }
 
 folly::Range<const char*> DirectBufferedInput::preloadedData(
@@ -356,8 +380,15 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   int64_t size = 0;
   int64_t overread = 0;
 
-  for (auto& request : requests_) {
+  for (size_t i = 0; i < requests_.size(); ++i) {
+    auto& request = requests_[i];
     const auto& region = request.region;
+    if (i > 0 && duplicateRegion(requests_[i - 1], request)) {
+      const auto& prev = requests_[i - 1];
+      request.loadSize = prev.loadSize;
+      continue;
+    }
+
     if (region.offset > lastEnd) {
       buffers.push_back(
           folly::Range<char*>(
@@ -397,12 +428,19 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
 
   ioStatistics_->read().increment(size + overread);
   ioStatistics_->incRawBytesRead(size);
-  ioStatistics_->incTotalScanTime(usecs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(usecs * 1'000);
   ioStatistics_->queryThreadIoLatencyUs().increment(usecs);
   ioStatistics_->storageReadLatencyUs().increment(usecs);
   ioStatistics_->incRawOverreadBytes(overread);
   if (prefetch) {
     ioStatistics_->prefetch().increment(size + overread);
+  }
+  for (size_t i = 0; i < requests_.size(); ++i) {
+    auto& request = requests_[i];
+    if (i == 0 || !duplicateRegion(requests_[i - 1], request)) {
+      continue;
+    }
+    copyDuplicateRegion(requests_[i - 1], request, pool_);
   }
   TestValue::adjust(
       "facebook::velox::cache::DirectCoalescedLoad::loadData", this);
@@ -420,8 +458,18 @@ int32_t DirectCoalescedLoad::getData(
   if (it == requests_.cend() || it->region.offset != offset) {
     return 0;
   }
+  // Duplicate regions have the same offset. Skip buffers already handed to
+  // earlier streams so each duplicate stream gets its own copied buffer.
+  while (it != requests_.end() && it->region.offset == offset &&
+         it->bufferConsumed) {
+    ++it;
+  }
+  if (it == requests_.cend() || it->region.offset != offset) {
+    return 0;
+  }
   data = std::move(it->data);
   tinyData = std::move(it->tinyData);
+  it->bufferConsumed = true;
   return it->loadSize;
 }
 

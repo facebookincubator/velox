@@ -610,6 +610,52 @@ class CastTypedExpr : public ITypedExpr {
 
 using CastTypedExprPtr = std::shared_ptr<const CastTypedExpr>;
 
+/// NULLIF(a, b) expression. Returns NULL if a equals b, otherwise returns a.
+///
+/// The comparison uses the common supertype of a and b, but the return type is
+/// a's original type. The common type is stored as metadata and used internally
+/// to cast both inputs for comparison only.
+class NullIfTypedExpr : public ITypedExpr {
+ public:
+  /// @param value The first argument. Its type determines the return type.
+  /// @param comparand The second argument to compare against.
+  /// @param commonType The common supertype used to cast both inputs for
+  /// comparison.
+  NullIfTypedExpr(
+      TypedExprPtr value,
+      TypedExprPtr comparand,
+      TypePtr commonType);
+
+  /// Returns the common supertype used for comparison.
+  const TypePtr& commonType() const {
+    return commonType_;
+  }
+
+  TypedExprPtr rewriteInputNames(
+      const std::unordered_map<std::string, TypedExprPtr>& mapping)
+      const override;
+
+  std::string toString() const override;
+
+  size_t localHash() const override;
+
+  void accept(
+      const ITypedExprVisitor& visitor,
+      ITypedExprVisitorContext& context) const override;
+
+  bool operator==(const ITypedExpr& other) const override;
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  // The common supertype used to cast both inputs for comparison.
+  const TypePtr commonType_;
+};
+
+using NullIfTypedExprPtr = std::shared_ptr<const NullIfTypedExpr>;
+
 /// A collection of convenience methods for working with expressions.
 class TypedExprs {
  public:
@@ -682,6 +728,9 @@ class ITypedExprVisitor {
   virtual void visit(const LambdaTypedExpr& expr, ITypedExprVisitorContext& ctx)
       const = 0;
 
+  virtual void visit(const NullIfTypedExpr& expr, ITypedExprVisitorContext& ctx)
+      const = 0;
+
  protected:
   void visitInputs(const ITypedExpr& expr, ITypedExprVisitorContext& ctx)
       const {
@@ -731,6 +780,11 @@ class DefaultTypedExprVisitor : public ITypedExprVisitor {
   }
 
   void visit(const LambdaTypedExpr& expr, ITypedExprVisitorContext& ctx)
+      const override {
+    visitInputs(expr, ctx);
+  }
+
+  void visit(const NullIfTypedExpr& expr, ITypedExprVisitorContext& ctx)
       const override {
     visitInputs(expr, ctx);
   }

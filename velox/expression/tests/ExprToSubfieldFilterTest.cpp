@@ -50,16 +50,22 @@ class ExprToSubfieldFilterTest : public testing::Test {
 
   core::TypedExprPtr parseExpr(
       const std::string& expr,
-      const RowTypePtr& type) {
+      const RowTypePtr& type,
+      bool parseInListAsArray = true) {
+    parse::ParseOptions options;
+    options.parseInListAsArray = parseInListAsArray;
     return core::Expressions::inferTypes(
-        parse::DuckSqlExpressionsParser().parseExpr(expr), type, pool_.get());
+        parse::DuckSqlExpressionsParser(options).parseExpr(expr),
+        type,
+        pool_.get());
   }
 
   core::CallTypedExprPtr parseCallExpr(
       const std::string& expr,
-      const RowTypePtr& type) {
+      const RowTypePtr& type,
+      bool parseInListAsArray = true) {
     auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(
-        parseExpr(expr, type));
+        parseExpr(expr, type, parseInListAsArray));
     VELOX_CHECK_NOT_NULL(call);
     return call;
   }
@@ -129,6 +135,30 @@ TEST_F(ExprToSubfieldFilterTest, neq) {
   VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
 }
 
+TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
+  {
+    auto call = parseCallExpr("a <> 9223372036854775807", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(lessThan(std::numeric_limits<int64_t>::max()), filter);
+  }
+
+  {
+    auto call =
+        parseCallExpr("a <> -9223372036854775807 - 1", ROW("a", BIGINT()));
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+
+    VELOX_ASSERT_FILTER(
+        greaterThan(std::numeric_limits<int64_t>::min()), filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, lte) {
   auto call = parseCallExpr("a <= 42", ROW("a", BIGINT()));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
@@ -179,48 +209,103 @@ TEST_F(ExprToSubfieldFilterTest, between) {
   VELOX_ASSERT_FILTER(between(40, 42), filter);
 }
 
+// IN pushes as a subfield filter in both list encodings: the folded
+// `in(col, ARRAY[...])` form (parseInListAsArray = true) and the varargs
+// `in(col, a, b, ...)` form (false). The expectations are identical.
 TEST_F(ExprToSubfieldFilterTest, in) {
-  {
-    auto call = parseCallExpr("a in (40, 42)", ROW("a", BIGINT()));
-    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+  for (bool inListAsArray : {true, false}) {
+    SCOPED_TRACE(inListAsArray ? "array" : "varargs");
+    auto toSubfieldFilter = [&](const auto& sql, const auto& type) {
+      return leafCallToSubfieldFilter(
+          parseCallExpr(sql, ROW("a", type), inListAsArray));
+    };
 
-    ASSERT_TRUE(filter);
-    validateSubfield(subfield, {"a"});
+    {
+      auto [subfield, filter] = toSubfieldFilter("a in (40, 42)", BIGINT());
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(in({40, 42}), filter);
+    }
 
-    VELOX_ASSERT_FILTER(in({40, 42}), filter);
-  }
+    {
+      auto [subfield, filter] = toSubfieldFilter("a in ('x', 'y')", VARCHAR());
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(in({"x", "y"}), filter);
+    }
 
-  {
-    auto call = parseCallExpr("a in (40, 42, null)", ROW("a", BIGINT()));
-    auto [subfield, filter] = leafCallToSubfieldFilter(call);
-
-    ASSERT_TRUE(filter);
-    validateSubfield(subfield, {"a"});
-
-    VELOX_ASSERT_FILTER(in({40, 42}), filter);
+    // A NULL element is dropped from the IN list.
+    {
+      auto [subfield, filter] =
+          toSubfieldFilter("a in (40, 42, null::bigint)", BIGINT());
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(in({40, 42}), filter);
+    }
   }
 }
 
 TEST_F(ExprToSubfieldFilterTest, notIn) {
-  {
-    auto call = parseCallExpr("a in (40, 42)", ROW("a", BIGINT()));
-    auto [subfield, filter] = leafCallToSubfieldFilter(call, true);
+  for (bool inListAsArray : {true, false}) {
+    SCOPED_TRACE(inListAsArray ? "array" : "varargs");
+    auto toSubfieldFilter = [&](const auto& sql, const auto& type) {
+      return leafCallToSubfieldFilter(
+          parseCallExpr(sql, ROW("a", type), inListAsArray), /*negated=*/true);
+    };
 
-    ASSERT_TRUE(filter);
-    validateSubfield(subfield, {"a"});
+    {
+      auto [subfield, filter] = toSubfieldFilter("a in (40, 42)", BIGINT());
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(notIn({40, 42}), filter);
+    }
 
-    VELOX_ASSERT_FILTER(notIn({40, 42}), filter);
+    {
+      auto [subfield, filter] = toSubfieldFilter("a in ('x', 'y')", VARCHAR());
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(notIn({"x", "y"}), filter);
+    }
+
+    // A NULL in the list makes NOT IN never pass.
+    {
+      auto [subfield, filter] =
+          toSubfieldFilter("a in (40, 42, null::bigint)", BIGINT());
+      ASSERT_TRUE(filter);
+      validateSubfield(subfield, {"a"});
+      VELOX_ASSERT_FILTER(std::make_unique<common::AlwaysFalse>(), filter);
+    }
   }
+}
 
-  {
-    auto call = parseCallExpr("a in (40, 42, null)", ROW("a", BIGINT()));
-    auto [subfield, filter] = leafCallToSubfieldFilter(call, true);
+// An all-NULL list never passes IN or NOT IN, in both encodings: the array form
+// is an `array(unknown)` constant; the varargs form collects no values, so
+// finishInFilter returns AlwaysFalse.
+TEST_F(ExprToSubfieldFilterTest, inAllNull) {
+  for (bool inListAsArray : {true, false}) {
+    SCOPED_TRACE(inListAsArray ? "array" : "varargs");
 
-    ASSERT_TRUE(filter);
-    validateSubfield(subfield, {"a"});
+    for (bool negated : {false, true}) {
+      auto toSubfieldFilter = [&](const auto& sql, const auto& type) {
+        return leafCallToSubfieldFilter(
+            parseCallExpr(sql, ROW("a", type), inListAsArray), negated);
+      };
 
-    auto expected = std::make_unique<common::AlwaysFalse>();
-    VELOX_ASSERT_FILTER(expected, filter);
+      {
+        auto [subfield, filter] =
+            toSubfieldFilter("a in (null::bigint, null::bigint)", BIGINT());
+        ASSERT_TRUE(filter);
+        validateSubfield(subfield, {"a"});
+        VELOX_ASSERT_FILTER(std::make_unique<common::AlwaysFalse>(), filter);
+      }
+      {
+        auto [subfield, filter] =
+            toSubfieldFilter("a in (null::varchar, null::varchar)", VARCHAR());
+        ASSERT_TRUE(filter);
+        validateSubfield(subfield, {"a"});
+        VELOX_ASSERT_FILTER(std::make_unique<common::AlwaysFalse>(), filter);
+      }
+    }
   }
 }
 
@@ -476,6 +561,68 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRange) {
             between("FRANCE", "FRANCE"),
             between("GERMANY", "GERMANY"),
             between("JAPAN", "JAPAN")));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRangeBounded) {
+  // a between 'A' and 'C' OR a between 'F' and 'J'
+  {
+    auto expected = orFilter(between("A", "C"), between("F", "J"));
+    VELOX_ASSERT_FILTER(expected, makeOr(between("A", "C"), between("F", "J")));
+    VELOX_ASSERT_FILTER(expected, makeOr(between("F", "J"), between("A", "C")));
+  }
+
+  // a > 'A' and a < 'C' OR a > 'F' and a < 'J'
+  {
+    auto expected =
+        orFilter(betweenExclusive("A", "C"), betweenExclusive("F", "J"));
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(betweenExclusive("A", "C"), betweenExclusive("F", "J")));
+  }
+
+  // a < 'C' OR a >= 'F'
+  {
+    auto expected = orFilter(lessThan("C"), greaterThanOrEqual("F"));
+    VELOX_ASSERT_FILTER(
+        expected, makeOr(lessThan("C"), greaterThanOrEqual("F")));
+  }
+
+  // a between 'A' and 'C' OR a between 'F' and 'J' OR a between 'M' and 'P'
+  {
+    std::vector<std::unique_ptr<common::Filter>> expectedRanges;
+    expectedRanges.emplace_back(between("A", "C"));
+    expectedRanges.emplace_back(between("F", "J"));
+    expectedRanges.emplace_back(between("M", "P"));
+    auto expected = std::make_unique<common::MultiRange>(
+        std::move(expectedRanges), /*nullAllowed=*/false);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(between("A", "C"), between("F", "J"), between("M", "P")));
+  }
+
+  // nullAllowed on any disjunct propagates.
+  {
+    auto expected = orFilter(
+        between("A", "C"),
+        between("F", "J", /*nullAllowed=*/true),
+        /*nullAllowed=*/true);
+    VELOX_ASSERT_FILTER(
+        expected,
+        makeOr(between("A", "C"), between("F", "J", /*nullAllowed=*/true)));
+  }
+
+  // a < 'C' OR a < 'F'
+  {
+    auto expected = orFilter(lessThan("C"), lessThan("F"));
+    VELOX_ASSERT_FILTER(expected, makeOr(lessThan("C"), lessThan("F")));
+  }
+
+  // a < 'C' OR a between 'F' and 'J'
+  {
+    auto expected = orFilter(lessThan("C"), between("F", "J"));
+    VELOX_ASSERT_FILTER(expected, makeOr(lessThan("C"), between("F", "J")));
+    VELOX_ASSERT_FILTER(expected, makeOr(between("F", "J"), lessThan("C")));
   }
 }
 

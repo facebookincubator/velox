@@ -346,20 +346,20 @@ TEST_F(ArrayExceptTest, complexTypeRow) {
 
 // When one of the arrays is constant.
 TEST_F(ArrayExceptTest, constant) {
-  auto array1 = makeNullableArrayVector<int32_t>({
+  auto array1 = makeNullableArrayVector<int64_t>({
       {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
       {1, 2, -2, 1},
       {3, 8, std::nullopt},
       {1, 1, -2, -2, -2, 4, 8},
   });
-  auto expected = makeNullableArrayVector<int32_t>({
+  auto expected = makeNullableArrayVector<int64_t>({
       {3, std::nullopt, 5, 6},
       {2},
       {3, 8, std::nullopt},
       {8},
   });
   testExpr(expected, "array_except(C0, ARRAY[1,-2,4])", {array1});
-  expected = makeNullableArrayVector<int32_t>({
+  expected = makeNullableArrayVector<int64_t>({
       {},
       {4},
       {1, -2, 4},
@@ -369,7 +369,7 @@ TEST_F(ArrayExceptTest, constant) {
   testExpr(expected, "array_except(ARRAY[1,1,-2,1,-2,4,1,4,4], C0)", {array1});
 
   // Array containing NULLs.
-  expected = makeNullableArrayVector<int32_t>({
+  expected = makeNullableArrayVector<int64_t>({
       {-2, 3, 5, 6},
       {2, -2},
       {3, 8},
@@ -377,7 +377,7 @@ TEST_F(ArrayExceptTest, constant) {
   });
   testExpr(expected, "array_except(C0, ARRAY[1,NULL,4])", {array1});
 
-  expected = makeNullableArrayVector<int32_t>({
+  expected = makeNullableArrayVector<int64_t>({
       {},
       {std::nullopt, 4},
       {1, 4},

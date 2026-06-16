@@ -49,8 +49,8 @@ class AggregateFunctionRegistryTest : public testing::Test {
 
     {
       std::vector<TypePtr> coercions;
-      auto finalType =
-          resolveResultTypeWithCoercions(name, argTypes, coercions);
+      auto finalType = resolveResultTypeWithCoercions(
+          name, argTypes, coercions, TypeCoercer::defaults());
       VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
 
       EXPECT_EQ(coercions.size(), argTypes.size());
@@ -70,7 +70,8 @@ class AggregateFunctionRegistryTest : public testing::Test {
         "Aggregate function signature is not supported");
 
     std::vector<TypePtr> coercions;
-    auto finalType = resolveResultTypeWithCoercions(name, argTypes, coercions);
+    auto finalType = resolveResultTypeWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
     VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
 
     EXPECT_EQ(coercions.size(), argTypes.size());

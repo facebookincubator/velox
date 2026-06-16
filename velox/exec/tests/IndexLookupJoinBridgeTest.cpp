@@ -58,9 +58,8 @@ TEST_F(IndexLookupJoinBridgeTest, setAndGetSplits) {
 
   ContinueFuture future = ContinueFuture::makeEmpty();
   auto result = bridge->splitsOrFuture(&future);
-  ASSERT_FALSE(result.empty());
-  ASSERT_EQ(result.size(), expectedSize);
   ASSERT_FALSE(future.valid());
+  ASSERT_EQ(result.size(), expectedSize);
 }
 
 TEST_F(IndexLookupJoinBridgeTest, splitsOrFutureBlocks) {
@@ -68,8 +67,8 @@ TEST_F(IndexLookupJoinBridgeTest, splitsOrFutureBlocks) {
 
   ContinueFuture future = ContinueFuture::makeEmpty();
   auto result = bridge->splitsOrFuture(&future);
-  ASSERT_TRUE(result.empty());
   ASSERT_TRUE(future.valid());
+  ASSERT_TRUE(result.empty());
 
   // Set splits and verify the future is fulfilled.
   auto splits = makeFakeSplits(2);
@@ -81,9 +80,8 @@ TEST_F(IndexLookupJoinBridgeTest, splitsOrFutureBlocks) {
   for (int i = 0; i < 3; ++i) {
     ContinueFuture future2 = ContinueFuture::makeEmpty();
     auto result2 = bridge->splitsOrFuture(&future2);
-    ASSERT_FALSE(result2.empty());
-    ASSERT_EQ(result2.size(), 2);
     ASSERT_FALSE(future2.valid());
+    ASSERT_EQ(result2.size(), 2);
   }
 }
 
@@ -96,8 +94,8 @@ TEST_F(IndexLookupJoinBridgeTest, multipleFollowers) {
   for (int i = 0; i < numFollowers; ++i) {
     ContinueFuture future = ContinueFuture::makeEmpty();
     auto result = bridge->splitsOrFuture(&future);
-    ASSERT_TRUE(result.empty());
     ASSERT_TRUE(future.valid());
+    ASSERT_TRUE(result.empty());
     futures.push_back(std::move(future));
   }
 
@@ -113,9 +111,8 @@ TEST_F(IndexLookupJoinBridgeTest, multipleFollowers) {
   for (int i = 0; i < numFollowers; ++i) {
     ContinueFuture future = ContinueFuture::makeEmpty();
     auto result = bridge->splitsOrFuture(&future);
-    ASSERT_FALSE(result.empty());
-    ASSERT_EQ(result.size(), 5);
     ASSERT_FALSE(future.valid());
+    ASSERT_EQ(result.size(), 5);
   }
 }
 
@@ -129,9 +126,8 @@ TEST_F(IndexLookupJoinBridgeTest, setBeforeGet) {
   for (int i = 0; i < 3; ++i) {
     ContinueFuture future = ContinueFuture::makeEmpty();
     auto result = bridge->splitsOrFuture(&future);
-    ASSERT_FALSE(result.empty());
-    ASSERT_EQ(result.size(), 3);
     ASSERT_FALSE(future.valid());
+    ASSERT_EQ(result.size(), 3);
   }
 }
 
@@ -144,11 +140,40 @@ TEST_F(IndexLookupJoinBridgeTest, setTwiceThrows) {
       "setIndexSplits must be called only once");
 }
 
-TEST_F(IndexLookupJoinBridgeTest, setEmptySplitsThrows) {
+TEST_F(IndexLookupJoinBridgeTest, setEmptyTwiceThrows) {
   auto bridge = createBridge();
+  bridge->setIndexSplits({});
 
   VELOX_ASSERT_THROW(
-      bridge->setIndexSplits({}), "Index splits must not be empty");
+      bridge->setIndexSplits({}), "setIndexSplits must be called only once");
+}
+
+TEST_F(IndexLookupJoinBridgeTest, setEmptySplits) {
+  auto bridge = createBridge();
+  bridge->setIndexSplits({});
+
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  auto result = bridge->splitsOrFuture(&future);
+  ASSERT_FALSE(future.valid());
+  ASSERT_TRUE(result.empty());
+}
+
+TEST_F(IndexLookupJoinBridgeTest, emptySplitsUnblockFollowers) {
+  auto bridge = createBridge();
+
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  auto result = bridge->splitsOrFuture(&future);
+  ASSERT_TRUE(future.valid());
+  ASSERT_TRUE(result.empty());
+
+  bridge->setIndexSplits({});
+
+  std::move(future).via(&folly::InlineExecutor::instance()).get();
+
+  ContinueFuture future2 = ContinueFuture::makeEmpty();
+  auto result2 = bridge->splitsOrFuture(&future2);
+  ASSERT_FALSE(future2.valid());
+  ASSERT_TRUE(result2.empty());
 }
 
 TEST_F(IndexLookupJoinBridgeTest, setBeforeStartThrows) {
@@ -165,7 +190,6 @@ TEST_F(IndexLookupJoinBridgeTest, cancelUnblocksFollowers) {
 
   ContinueFuture future = ContinueFuture::makeEmpty();
   auto result = bridge->splitsOrFuture(&future);
-  ASSERT_TRUE(result.empty());
   ASSERT_TRUE(future.valid());
 
   bridge->cancel();
@@ -208,15 +232,14 @@ TEST_F(IndexLookupJoinBridgeTest, concurrentSetAndGet) {
     threads.emplace_back([&bridge, &successCount, &stop, numSplits]() {
       ContinueFuture future = ContinueFuture::makeEmpty();
       auto result = bridge->splitsOrFuture(&future);
-      if (result.empty()) {
+      if (future.valid()) {
         std::move(future).via(&folly::InlineExecutor::instance()).get();
       }
       while (!stop.load()) {
         ContinueFuture f = ContinueFuture::makeEmpty();
         auto r = bridge->splitsOrFuture(&f);
-        ASSERT_FALSE(r.empty());
-        ASSERT_EQ(r.size(), numSplits);
         ASSERT_FALSE(f.valid());
+        ASSERT_EQ(r.size(), numSplits);
         ++successCount;
       }
     });

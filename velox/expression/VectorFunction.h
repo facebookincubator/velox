@@ -22,6 +22,7 @@
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/type/TypeCoercer.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -192,7 +193,8 @@ TypePtr resolveVectorFunction(
 TypePtr resolveVectorFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadata(
@@ -210,7 +212,8 @@ std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadataWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Returns an instance of VectorFunction for the given name, input types and
 /// optionally constant input values.

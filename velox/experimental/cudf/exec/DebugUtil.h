@@ -16,9 +16,24 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/base/Exceptions.h"
+
+#include <cuda_runtime.h>
+
 namespace facebook::velox::cudf_velox {
+
+/// Helper function to check for CUDA errors in debug mode.
+inline void checkCudaErrorInDebug() {
+  if (CudfConfig::getInstance().debugEnabled) {
+    cudaError_t err = cudaGetLastError();
+    VELOX_CHECK(
+        err == cudaSuccess, "CUDA error detected: {}", cudaGetErrorString(err));
+  }
+}
+
 class DebugUtil {
  public:
   std::string toString(

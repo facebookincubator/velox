@@ -17,6 +17,10 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::parquet {
@@ -56,9 +60,10 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
     auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
-    auto logicalType = fileType.logicalType_;
-    if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
-        !logicalType.value().INTEGER.isSigned) {
+    const auto& logicalType = fileType.logicalType_;
+    if (logicalType &&
+        logicalType->getType() == thrift::LogicalType::Type::INTEGER &&
+        !*logicalType->get_INTEGER().isSigned()) {
       getUnsignedIntValues(rows, requestedType_, result);
     } else {
       getIntValues(rows, requestedType_, result);

@@ -75,6 +75,7 @@ target_link_libraries(
   velox_rpc_rate_limiter
   GTest::gtest
   GTest::gtest_main
+  Folly::folly
 )
 
 add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)

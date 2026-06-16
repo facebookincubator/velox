@@ -75,9 +75,30 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
   registerFunction<GetTimestampFunction, Timestamp, Varchar, Varchar>(
       {prefix + "get_timestamp"});
-  registerFunction<HourFunction, int32_t, Timestamp>({prefix + "hour"});
-  registerFunction<MinuteFunction, int32_t, Timestamp>({prefix + "minute"});
-  registerFunction<SecondFunction, int32_t, Timestamp>({prefix + "second"});
+  registerFunction<
+      ParameterBinder<HourFunction, Timestamp>,
+      int32_t,
+      Timestamp>({prefix + "hour"});
+  registerFunction<
+      ParameterBinder<HourFunction, TimestampUtc>,
+      int32_t,
+      TimestampUtc>({prefix + "hour"});
+  registerFunction<
+      ParameterBinder<MinuteFunction, Timestamp>,
+      int32_t,
+      Timestamp>({prefix + "minute"});
+  registerFunction<
+      ParameterBinder<MinuteFunction, TimestampUtc>,
+      int32_t,
+      TimestampUtc>({prefix + "minute"});
+  registerFunction<
+      ParameterBinder<SecondFunction, Timestamp>,
+      int32_t,
+      Timestamp>({prefix + "second"});
+  registerFunction<
+      ParameterBinder<SecondFunction, TimestampUtc>,
+      int32_t,
+      TimestampUtc>({prefix + "second"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth>(
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t>(

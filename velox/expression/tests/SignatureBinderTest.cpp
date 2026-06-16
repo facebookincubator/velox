@@ -62,11 +62,13 @@ void testSignatureBinder(
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
   {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
-  exec::SignatureBinder binder(*signature, actualTypes);
+  exec::SignatureBinder binder(
+      *signature, actualTypes, TypeCoercer::defaults());
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
 
@@ -85,12 +87,14 @@ void assertCannotBind(
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
   {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 
   if (allowCoercion) {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     std::vector<Coercion> coercions;
     ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
   }
@@ -103,11 +107,13 @@ void assertCannotResolve(
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
   {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
-  exec::SignatureBinder binder(*signature, actualTypes);
+  exec::SignatureBinder binder(
+      *signature, actualTypes, TypeCoercer::defaults());
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
 
@@ -245,7 +251,8 @@ TEST(SignatureBinderTest, decimals) {
                          .build();
 
     const std::vector<TypePtr> actualTypes{DECIMAL(10, 4)};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
 
     auto intermediateType =
@@ -270,7 +277,7 @@ TEST(SignatureBinderTest, decimals) {
                          .argumentType("DECIMAL(b_precision, b_scale)")
                          .build();
     const std::vector<TypePtr> argTypes{DECIMAL(11, 5), DECIMAL(10, 6)};
-    exec::SignatureBinder binder(*signature, argTypes);
+    exec::SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
     ASSERT_TRUE(binder.tryResolveReturnType() == nullptr);
   }
@@ -285,7 +292,8 @@ TEST(SignatureBinderTest, decimals) {
                          .build();
     {
       const std::vector<TypePtr> argTypes{DECIMAL(11, 5), DECIMAL(11, 5)};
-      exec::SignatureBinder binder(*signature, argTypes);
+      exec::SignatureBinder binder(
+          *signature, argTypes, TypeCoercer::defaults());
       ASSERT_TRUE(binder.tryBind());
       auto returnType = binder.tryResolveReturnType();
       ASSERT_TRUE(returnType != nullptr);
@@ -294,7 +302,8 @@ TEST(SignatureBinderTest, decimals) {
 
     {
       const std::vector<TypePtr> argTypes{DECIMAL(28, 5), DECIMAL(28, 5)};
-      exec::SignatureBinder binder(*signature, argTypes);
+      exec::SignatureBinder binder(
+          *signature, argTypes, TypeCoercer::defaults());
       ASSERT_TRUE(binder.tryBind());
       auto returnType = binder.tryResolveReturnType();
       ASSERT_TRUE(returnType != nullptr);
@@ -304,11 +313,13 @@ TEST(SignatureBinderTest, decimals) {
     // Decimal scalar function signature with precision/scale mismatch.
     {
       const std::vector<TypePtr> argTypes{DECIMAL(28, 5), DECIMAL(29, 5)};
-      exec::SignatureBinder binder(*signature, argTypes);
+      exec::SignatureBinder binder(
+          *signature, argTypes, TypeCoercer::defaults());
       ASSERT_FALSE(binder.tryBind());
 
       const std::vector<TypePtr> argTypes1{DECIMAL(28, 7), DECIMAL(28, 5)};
-      exec::SignatureBinder binder1(*signature, argTypes1);
+      exec::SignatureBinder binder1(
+          *signature, argTypes1, TypeCoercer::defaults());
 
       ASSERT_FALSE(binder1.tryBind());
     }
@@ -318,7 +329,8 @@ TEST(SignatureBinderTest, decimals) {
     {
       const std::vector<TypePtr> argTypes{
           MAP(VARCHAR(), BIGINT()), MAP(VARCHAR(), BIGINT())};
-      exec::SignatureBinder binder(*signature, argTypes);
+      exec::SignatureBinder binder(
+          *signature, argTypes, TypeCoercer::defaults());
       std::vector<Coercion> coercions;
       ASSERT_FALSE(binder.tryBindWithCoercions(coercions));
     }
@@ -520,13 +532,15 @@ TEST(SignatureBinderTest, knownOnly) {
                        .build();
   {
     auto actualTypes = std::vector<TypePtr>{MAP(UNKNOWN(), UNKNOWN())};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 
   {
     auto actualTypes = std::vector<TypePtr>{MAP(INTEGER(), UNKNOWN())};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 }
@@ -539,13 +553,15 @@ TEST(SignatureBinderTest, orderableComparable) {
                        .build();
   {
     auto actualTypes = std::vector<TypePtr>{ARRAY(BIGINT())};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
   {
     auto actualTypes = std::vector<TypePtr>{ARRAY(MAP(BIGINT(), BIGINT()))};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 
@@ -557,21 +573,24 @@ TEST(SignatureBinderTest, orderableComparable) {
                   .build();
   {
     auto actualTypes = std::vector<TypePtr>{ROW({BIGINT(), ARRAY(DOUBLE())})};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
   {
     auto actualTypes =
         std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
   {
     auto actualTypes =
         std::vector<TypePtr>{ROW({BIGINT(), MAP(VARCHAR(), BIGINT())})};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 }
@@ -585,7 +604,8 @@ TEST(SignatureBinderTest, orderableComparableAggregate) {
                        .build();
   {
     auto actualTypes = std::vector<TypePtr>{ARRAY(MAP(BIGINT(), BIGINT()))};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
@@ -598,7 +618,8 @@ TEST(SignatureBinderTest, orderableComparableAggregate) {
   {
     auto actualTypes =
         std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
@@ -611,13 +632,15 @@ TEST(SignatureBinderTest, orderableComparableAggregate) {
   {
     auto actualTypes =
         std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 
   {
     auto actualTypes = std::vector<TypePtr>{ROW({BIGINT(), ARRAY(DOUBLE())})};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
@@ -632,14 +655,16 @@ TEST(SignatureBinderTest, orderableComparableAggregate) {
   {
     auto actualTypes =
         std::vector<TypePtr>{MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
   }
 
   {
     auto actualTypes =
         std::vector<TypePtr>{ARRAY(DOUBLE()), MAP(VARCHAR(), BIGINT())};
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 }
@@ -872,7 +897,7 @@ TEST(SignatureBinderTest, lambda) {
                        .build();
 
   std::vector<TypePtr> inputTypes{ARRAY(BIGINT()), DOUBLE(), nullptr, nullptr};
-  exec::SignatureBinder binder(*signature, inputTypes);
+  exec::SignatureBinder binder(*signature, inputTypes, TypeCoercer::defaults());
   ASSERT_FALSE(binder.tryBind());
 
   // Resolve inputs for function(S,T,S). We resolve first 2 arguments, since
@@ -1130,11 +1155,13 @@ void testCoercions(
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
   {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_FALSE(binder.tryBind());
   }
 
-  exec::SignatureBinder binder(*signature, actualTypes);
+  exec::SignatureBinder binder(
+      *signature, actualTypes, TypeCoercer::defaults());
 
   std::vector<Coercion> coercions;
   ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
@@ -1156,7 +1183,8 @@ void testNoCoercions(
   SCOPED_TRACE(fmt::format("Actual types: {}", toString(actualTypes)));
 
   {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
     ASSERT_TRUE(binder.tryBind());
 
     auto returnType = binder.tryResolveReturnType();
@@ -1165,7 +1193,8 @@ void testNoCoercions(
   }
 
   {
-    exec::SignatureBinder binder(*signature, actualTypes);
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
 
     std::vector<Coercion> coercions;
     ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
@@ -1665,8 +1694,8 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
   // No signatures returns nullptr.
   {
     std::vector<TypePtr> coercions;
-    auto type =
-        exec::tryResolveReturnTypeWithCoercions({}, {BIGINT()}, coercions);
+    auto type = exec::tryResolveReturnTypeWithCoercions(
+        {}, {BIGINT()}, coercions, TypeCoercer::defaults());
     ASSERT_EQ(type, nullptr);
   }
 
@@ -1677,7 +1706,7 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     };
     std::vector<TypePtr> coercions;
     auto type = exec::tryResolveReturnTypeWithCoercions(
-        signatures, {BIGINT(), BIGINT()}, coercions);
+        signatures, {BIGINT(), BIGINT()}, coercions, TypeCoercer::defaults());
     VELOX_ASSERT_EQ_TYPES(type, BIGINT());
     ASSERT_EQ(coercions.size(), 2);
     ASSERT_EQ(coercions[0], nullptr);
@@ -1691,7 +1720,7 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     };
     std::vector<TypePtr> coercions;
     auto type = exec::tryResolveReturnTypeWithCoercions(
-        signatures, {VARCHAR(), BIGINT()}, coercions);
+        signatures, {VARCHAR(), BIGINT()}, coercions, TypeCoercer::defaults());
     ASSERT_EQ(type, nullptr);
   }
 
@@ -1703,7 +1732,7 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     };
     std::vector<TypePtr> coercions;
     auto type = exec::tryResolveReturnTypeWithCoercions(
-        signatures, {BIGINT(), BIGINT()}, coercions);
+        signatures, {BIGINT(), BIGINT()}, coercions, TypeCoercer::defaults());
     VELOX_ASSERT_EQ_TYPES(type, BIGINT());
     ASSERT_EQ(coercions.size(), 2);
     ASSERT_EQ(coercions[0], nullptr);
@@ -1718,7 +1747,7 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     };
     std::vector<TypePtr> coercions;
     auto type = exec::tryResolveReturnTypeWithCoercions(
-        signatures, {TINYINT(), TINYINT()}, coercions);
+        signatures, {TINYINT(), TINYINT()}, coercions, TypeCoercer::defaults());
     // integer(integer, integer) is lower cost than bigint(bigint, bigint).
     VELOX_ASSERT_EQ_TYPES(type, INTEGER());
     ASSERT_EQ(coercions.size(), 2);
@@ -1733,7 +1762,7 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     };
     std::vector<TypePtr> coercions;
     auto type = exec::tryResolveReturnTypeWithCoercions(
-        signatures, {TINYINT(), BIGINT()}, coercions);
+        signatures, {TINYINT(), BIGINT()}, coercions, TypeCoercer::defaults());
     VELOX_ASSERT_EQ_TYPES(type, BIGINT());
     ASSERT_EQ(coercions.size(), 2);
     VELOX_ASSERT_EQ_TYPES(coercions[0], BIGINT());

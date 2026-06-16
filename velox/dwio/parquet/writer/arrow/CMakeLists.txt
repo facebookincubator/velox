@@ -37,6 +37,7 @@ velox_add_library(
   Properties.cpp
   Schema.cpp
   Statistics.cpp
+  StringTruncation.cpp
   Types.cpp
   Writer.cpp
   HEADERS
@@ -59,6 +60,7 @@ velox_add_library(
   Schema.h
   SchemaInternal.h
   Statistics.h
+  StringTruncation.h
   ThriftInternal.h
   Types.h
   Writer.h
@@ -68,7 +70,6 @@ velox_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_arrow_parquet_writer_util_lib
   velox_dwio_parquet_common
-  velox_dwio_parquet_thrift
   velox_dwio_common
   velox_arrow_bridge
   arrow

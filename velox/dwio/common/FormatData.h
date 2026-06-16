@@ -127,12 +127,12 @@ class FormatData {
     return false;
   }
 
-  bool getStringBuffersFromDecoder() const {
-    return getStringBuffersFromDecoder_;
+  bool stringDecoderZeroCopy() const {
+    return stringDecoderZeroCopy_;
   }
 
  protected:
-  bool getStringBuffersFromDecoder_{false};
+  bool stringDecoderZeroCopy_{false};
 };
 
 /// Base class for format-specific reader initialization arguments.

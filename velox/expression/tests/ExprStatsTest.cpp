@@ -21,7 +21,6 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -349,14 +348,14 @@ TEST_F(ExprStatsTest, specialForms) {
   ASSERT_EQ(1, stats.at("coalesce").numProcessedVectors);
   ASSERT_EQ(1024, stats.at("coalesce").numProcessedRows);
 
-  // SWITCH.
+  // CASE (simple CASE — subject evaluated once).
   events.clear();
   evaluate("case c0 when 7 then 1 when 11 then 2 else 0 end", data);
   ASSERT_EQ(1, events.size());
   stats = events.back().stats;
 
-  ASSERT_EQ(1, stats.at("switch").numProcessedVectors);
-  ASSERT_EQ(1024, stats.at("switch").numProcessedRows);
+  ASSERT_EQ(1, stats.at("case").numProcessedVectors);
+  ASSERT_EQ(1024, stats.at("case").numProcessedRows);
 
   ASSERT_TRUE(exec::unregisterExprSetListener(listener));
 }

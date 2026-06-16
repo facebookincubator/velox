@@ -1297,9 +1297,10 @@ TEST_P(HashTableTest, toStringMultipleKeys) {
 
 TEST(HashTableTest, tableInsertPartitionInfo) {
   std::vector<char*> overflows;
+  std::vector<uint64_t> overflowHashes;
   const auto testFn = [&](PartitionBoundIndexType start,
                           PartitionBoundIndexType end) {
-    TableInsertPartitionInfo info{start, end, overflows};
+    TableInsertPartitionInfo info{start, end, overflows, overflowHashes};
   };
   struct {
     PartitionBoundIndexType start;
@@ -1315,8 +1316,9 @@ TEST(HashTableTest, tableInsertPartitionInfo) {
     VELOX_ASSERT_THROW(testFn(badData.start, badData.end), "");
   }
   ASSERT_TRUE(overflows.empty());
+  ASSERT_TRUE(overflowHashes.empty());
 
-  TableInsertPartitionInfo info{1, 1000, overflows};
+  TableInsertPartitionInfo info{1, 1000, overflows, overflowHashes};
   ASSERT_TRUE(info.inRange(1));
   ASSERT_FALSE(info.inRange(0));
   ASSERT_FALSE(info.inRange(-1));
@@ -1324,17 +1326,23 @@ TEST(HashTableTest, tableInsertPartitionInfo) {
   ASSERT_FALSE(info.inRange(1'000));
   ASSERT_FALSE(info.inRange(12'000));
   ASSERT_TRUE(overflows.empty());
+  ASSERT_TRUE(overflowHashes.empty());
 
   const std::vector<uint64_t> insertBuffers{100, 200, 300, 500};
-  for (const auto insertBuffer : insertBuffers) {
-    info.addOverflow(reinterpret_cast<char*>(insertBuffer));
+  const std::vector<uint64_t> insertHashes{0xAA, 0xBB, 0xCC, 0xDD};
+  for (int i = 0; i < insertBuffers.size(); ++i) {
+    info.addOverflow(
+        reinterpret_cast<char*>(insertBuffers[i]), insertHashes[i]);
   }
   ASSERT_EQ(overflows.size(), insertBuffers.size());
+  ASSERT_EQ(overflowHashes.size(), insertHashes.size());
   for (int i = 0; i < insertBuffers.size(); ++i) {
     ASSERT_EQ(insertBuffers[i], reinterpret_cast<uint64_t>(info.overflows[i]));
+    ASSERT_EQ(insertHashes[i], info.overflowHashes[i]);
   }
   for (int i = 0; i < overflows.size(); ++i) {
     ASSERT_EQ(overflows[i], info.overflows[i]);
+    ASSERT_EQ(overflowHashes[i], info.overflowHashes[i]);
   }
 }
 } // namespace facebook::velox::exec::test
