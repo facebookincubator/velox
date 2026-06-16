@@ -1024,7 +1024,8 @@ class WindowAdapter : public OperatorAdapter {
 
       if (usesFrame) {
         // Check frame type - RANGE with non-trivial bounds is not supported.
-        // Only these RANGE combinations are supported (equivalent to ROWS):
+        // Supported RANGE combinations use cudf::grouped_range_rolling_window
+        // (peer groups by ORDER BY key value, not row position):
         // - UNBOUNDED PRECEDING to CURRENT ROW
         // - UNBOUNDED PRECEDING to UNBOUNDED FOLLOWING
         if (func.frame.type == core::WindowNode::WindowType::kRange) {

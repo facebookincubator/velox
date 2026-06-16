@@ -125,9 +125,10 @@ class CudfWindow : public CudfOperatorBase {
       const std::string& baseName,
       rmm::cuda_stream_view stream) const;
 
-  // Compute first_value or last_value via cudf::grouped_rolling_window.
+  // Compute first_value or last_value via cudf rolling window APIs.
   std::unique_ptr<cudf::column> computeNthValueColumn(
       cudf::table_view const& partKeys,
+      cudf::table_view const& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
@@ -138,10 +139,22 @@ class CudfWindow : public CudfOperatorBase {
   // isCountStar: true for count(*), false for count(col).
   std::unique_ptr<cudf::column> computeAggregateColumn(
       cudf::table_view const& partKeys,
+      cudf::table_view const& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
       bool isCountStar,
+      rmm::cuda_stream_view stream) const;
+
+  // Dispatch to grouped_rolling_window (ROWS) or grouped_range_rolling_window
+  // (RANGE) based on the frame type.
+  std::unique_ptr<cudf::column> invokeGroupedRollingWindow(
+      cudf::table_view const& partKeys,
+      cudf::table_view const& sortedView,
+      cudf::column_view inputCol,
+      const core::WindowNode::Function& func,
+      cudf::rolling_aggregation const& agg,
+      bool isFullPartition,
       rmm::cuda_stream_view stream) const;
 
   std::shared_ptr<const core::WindowNode> windowNode_;

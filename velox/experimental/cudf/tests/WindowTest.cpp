@@ -1209,6 +1209,38 @@ TEST_F(CudfWindowTest, rankGlobalWithoutOrderBy) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+// RANGE frames peer-group by ORDER BY key value. With duplicate sort keys, rows
+// in the same peer group share the same frame. Addresses mattgara's review
+// comment on PR #16892:
+//   sum(v) OVER (ORDER BY k RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+//   FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+// Expected: s = {30, 30, 60}, not {10, 30, 60} from ROWS semantics.
+TEST_F(CudfWindowTest, sumRangeWithDuplicateSortKeys) {
+  auto data = makeRowVector(
+      {"k", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"sum(v) over (order by k "
+                           "range between unbounded preceding and current row) as s"})
+                  .orderBy({"k ASC NULLS LAST"}, false)
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "v", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({30, 30, 60}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 // Test last_value respects the actual frame bounds.
 // Default frame with ORDER BY is RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
 // ROW, which for last_value means returning the current row's value.
@@ -1385,7 +1417,7 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
           .copyResults(pool()),
       "Replacement with cuDF operator failed");
 
-  // Supported: RANGE UNBOUNDED PRECEDING to CURRENT ROW (equivalent to ROWS)
+  // Supported: RANGE UNBOUNDED PRECEDING to CURRENT ROW (peer groups by sort key)
   auto plan1 =
       PlanBuilder()
           .values({data})
