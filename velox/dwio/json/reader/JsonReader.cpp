@@ -49,12 +49,13 @@ constexpr std::string_view kCompressionExtensionSnappy{".snappy"};
 // Mirrors TextReader's kDecompressionBufferFactor.
 constexpr int32_t kDecompressionBufferFactor = 3;
 
-// Unwraps a simdjson_result, throwing VELOX_USER_FAIL on error.
+// Unwraps a simdjson_result, throwing VELOX_USER_FAIL on error. The simdjson
+// diagnostic is thrown bare; JsonRowReader::writeRow catches it and prepends
+// the record's byte offset so every parse error carries a location.
 template <typename T>
 T unwrap(simdjson::simdjson_result<T> result) {
   if (result.error() != simdjson::SUCCESS) {
-    VELOX_USER_FAIL(
-        "JSON parse error: {}", simdjson::error_message(result.error()));
+    VELOX_USER_FAIL("{}", simdjson::error_message(result.error()));
   }
   return std::move(result).value_unsafe();
 }
@@ -1068,6 +1069,9 @@ bool JsonRowReader::readNextLine() {
   if (pos_ >= fileLength_ || pos_ > splitEnd_) {
     return false;
   }
+  // Capture where this record begins before pos_ advances, so a parse error
+  // can report the record's byte offset.
+  recordStartOffset_ = pos_;
   const char* start = fileBuffer_.data() + pos_;
   size_t remaining = fileLength_ - pos_;
   const char* nl = static_cast<const char*>(std::memchr(start, '\n', remaining));
@@ -1088,6 +1092,23 @@ bool JsonRowReader::readNextLine() {
 }
 
 void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
+  try {
+    parseRecord(row, rowIndex);
+  } catch (const VeloxUserError& error) {
+    // Every parse error path throws a VeloxUserError with a bare description;
+    // catch it here, the one place that knows where the record began, and
+    // prepend the byte offset. Splits make line numbers ambiguous, so the
+    // offset into the (decompressed) file is the stable locator.
+    // Internal errors (VELOX_CHECK / VELOX_NYI)
+    // are not user-facing parse failures and propagate unwrapped.
+    VELOX_USER_FAIL(
+        "JSON parse error at byte offset {}: {}",
+        recordStartOffset_,
+        error.message());
+  }
+}
+
+void JsonRowReader::parseRecord(RowVector& row, vector_size_t rowIndex) {
   // A blank line — empty or whitespace only — is never a valid JSON
   // record. JsonSerDe rejects these as empty rows; surface a clear error
   // rather than simdjson's lower-level diagnostic. Blank lines turn up at
@@ -1095,7 +1116,7 @@ void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
   // behavior is pinned here.
   std::string_view line(lineBuffer_.data(), lineLength_);
   if (line.find_first_not_of(" \t\r\n") == std::string_view::npos) {
-    VELOX_USER_FAIL("JSON parse error: encountered an empty row.");
+    VELOX_USER_FAIL("encountered an empty row.");
   }
 
   simdjson::padded_string_view padded(
@@ -1103,18 +1124,12 @@ void JsonRowReader::writeRow(RowVector& row, vector_size_t rowIndex) {
       lineLength_,
       lineLength_ + simdjson::SIMDJSON_PADDING);
   thread_local simdjson::ondemand::parser parser;
-  auto docResult = parser.iterate(padded);
-  if (docResult.error() != simdjson::SUCCESS) {
-    VELOX_USER_FAIL(
-        "JSON parse error: {}",
-        simdjson::error_message(docResult.error()));
-  }
-  simdjson::ondemand::document doc = std::move(docResult).value_unsafe();
+  auto doc = unwrap(parser.iterate(padded));
 
   auto objResult = doc.get_object();
   if (objResult.error() != simdjson::SUCCESS) {
     VELOX_USER_FAIL(
-        "JSON record is not an object: {}",
+        "record is not a JSON object: {}",
         simdjson::error_message(objResult.error()));
   }
   simdjson::ondemand::object obj = objResult.value_unsafe();

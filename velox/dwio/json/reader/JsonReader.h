@@ -165,8 +165,13 @@ class JsonRowReader : public dwio::common::RowReader {
   // Parses lineBuffer_ as a single JSON object and writes its fields
   // into the corresponding columns of row at rowIndex. Fields not in
   // the schema are silently ignored; fields in the schema but absent
-  // from the JSON object remain NULL.
+  // from the JSON object remain NULL. Wraps parseRecord so any parse
+  // error is reported with the record's byte offset.
   void writeRow(RowVector& row, vector_size_t rowIndex);
+
+  // Parses and dispatches the record in lineBuffer_ into row at rowIndex,
+  // throwing a VeloxUserError (without location) on any malformed input.
+  void parseRecord(RowVector& row, vector_size_t rowIndex);
 
   // Per-file shared state (input stream, schema, options).
   const std::shared_ptr<FileContents> contents_;
@@ -198,6 +203,12 @@ class JsonRowReader : public dwio::common::RowReader {
 
   // Current read offset into fileBuffer_. Records start at this position.
   size_t pos_{0};
+
+  // Byte offset into the file (decompressed bytes, for a compressed file) at
+  // which the line currently held in lineBuffer_ begins. Used to locate parse
+  // errors; line numbers are ambiguous under splits, so errors report the byte
+  // offset instead.
+  size_t recordStartOffset_{0};
 
   // Reusable padded buffer holding the current line. Sized to fit the
   // longest line seen so far plus SIMDJSON_PADDING.

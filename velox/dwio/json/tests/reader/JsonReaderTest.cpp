@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <limits>
+
 #include <folly/compression/Compression.h>
 #include <folly/compression/Zlib.h>
 #include <gtest/gtest.h>
@@ -978,6 +980,88 @@ TEST_F(JsonReaderTest, splitFileWithWhitespaceOnlyLineThrows) {
   auto schema = ROW({{"id", BIGINT()}});
   std::string file = "{\"id\":0}\n   \n{\"id\":1}\n";
   VELOX_ASSERT_USER_THROW(readRange(file, schema, 0, file.size()), "empty row");
+}
+
+TEST_F(JsonReaderTest, errorMessageIncludesByteOffset) {
+  // The failing record is the third one. Each of the first two is 8 bytes
+  // ("{\"a\":N}\n"), so the third begins at byte 16. An array where BIGINT is
+  // expected is a shape mismatch, and the error must name that offset.
+  auto schema = ROW({{"a", BIGINT()}});
+  VELOX_ASSERT_USER_THROW(
+      read("{\"a\":1}\n{\"a\":2}\n{\"a\":[3]}\n", schema),
+      "JSON parse error at byte offset 16");
+}
+
+TEST_F(JsonReaderTest, errorMalformedJsonSyntax) {
+  // Malformed JSON on the second record (offset 8) surfaces simdjson's
+  // diagnostic, prefixed with the byte offset.
+  auto schema = ROW({{"a", BIGINT()}});
+  VELOX_ASSERT_USER_THROW(
+      read("{\"a\":1}\n{\"a\":}\n", schema),
+      "JSON parse error at byte offset 8");
+}
+
+TEST_F(JsonReaderTest, errorIntegerOverflowInRangeDoesNotThrow) {
+  // Coercion, not an error path: 2^63 wraps via two's complement to
+  // Long.MIN_VALUE. A regression that routed overflow to the error path
+  // would throw here.
+  auto schema = ROW({{"a", BIGINT()}});
+  auto row = read("{\"a\":9223372036854775808}\n", schema);
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(
+      row->childAt(0)->asFlatVector<int64_t>()->valueAt(0),
+      std::numeric_limits<int64_t>::min());
+}
+
+TEST_F(JsonReaderTest, errorTypeMismatchDoesNotThrow) {
+  // Coercion, not an error path: a non-numeric string into BIGINT becomes 0
+  // (full-fail to zero). A regression that threw on leaf type mismatch would
+  // fail here.
+  auto schema = ROW({{"a", BIGINT()}});
+  auto row = read("{\"a\":\"abc\"}\n", schema);
+  ASSERT_EQ(row->size(), 1);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 0);
+}
+
+TEST_F(JsonReaderTest, errorShapeMismatchThrowsForEachContainer) {
+  // A scalar where a container is expected throws for ARRAY, MAP, and ROW
+  // alike, and each error carries the byte offset.
+  VELOX_ASSERT_USER_THROW(
+      read("{\"v\":5}\n", ROW({{"v", ARRAY(BIGINT())}})),
+      "JSON parse error at byte offset 0");
+  VELOX_ASSERT_USER_THROW(
+      read("{\"v\":5}\n", ROW({{"v", MAP(VARCHAR(), BIGINT())}})),
+      "JSON parse error at byte offset 0");
+  VELOX_ASSERT_USER_THROW(
+      read("{\"v\":5}\n", ROW({{"v", ROW({{"id", BIGINT()}})}})),
+      "JSON parse error at byte offset 0");
+}
+
+TEST_F(JsonReaderTest, errorTopLevelNonObjectThrows) {
+  // A top-level value that is not an object throws a clean user error for every
+  // non-object JSON shape — including null, which Hive's JsonSerDe turns into a
+  // NullPointerException. We match the spec (a clean parse error), not the bug.
+  auto schema = ROW({{"a", BIGINT()}});
+  for (const auto* input : {"5\n", "[1,2]\n", "\"str\"\n", "null\n"}) {
+    VELOX_ASSERT_USER_THROW(read(input, schema), "JSON parse error at byte offset 0");
+  }
+}
+
+TEST_F(JsonReaderTest, errorBlankLineThrows) {
+  // A blank line after a valid record throws with the blank line's byte offset
+  // (8 — the length of the first record including its newline).
+  auto schema = ROW({{"a", BIGINT()}});
+  VELOX_ASSERT_USER_THROW(
+      read("{\"a\":1}\n\n", schema),
+      "JSON parse error at byte offset 8: encountered an empty row");
+}
+
+TEST_F(JsonReaderTest, errorWhitespaceOnlyLineThrows) {
+  // A whitespace-only line is rejected as an empty row, with its byte offset.
+  auto schema = ROW({{"a", BIGINT()}});
+  VELOX_ASSERT_USER_THROW(
+      read("{\"a\":1}\n   \n", schema),
+      "JSON parse error at byte offset 8: encountered an empty row");
 }
 
 // Records exercising several leaf types so decompression is verified to feed
