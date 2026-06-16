@@ -383,6 +383,10 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
+  // The default parser keeps integer literals as BIGINT, which exercises the
+  // existing Presto-compatible `substr` candidate. Spark-specific coverage is
+  // below, using INTEGER literals or INTEGER columns.
+
   // OK: 2-arg substr with constant start
   auto ok2 = compileExecExpr("substr(name, 1)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok2, /*deep=*/true));
@@ -391,14 +395,16 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   auto ok3 = compileExecExpr("substr(name, 1, 5)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok3, /*deep=*/true));
 
-  // OK: Spark substr registers integer positions and lengths.
+  // OK: Spark substring registers integer positions and lengths.
   parse::ParseOptions sparkLiteralOptions;
   sparkLiteralOptions.parseIntegerAsBigint = false;
   auto okSparkLiteralArgs = compileExecExpr(
       "substring(name, 1, 5)", rowType_, execCtx_.get(), sparkLiteralOptions);
   ASSERT_TRUE(canBeEvaluatedByCudf(okSparkLiteralArgs, /*deep=*/true));
 
-  // OK: Spark substr supports integer start and length columns.
+  // OK: Spark substring supports integer start and length columns. This also
+  // verifies that the cuDF `substr` function name routes to Spark semantics
+  // when Spark functions are registered.
   auto okStartColumn =
       compileExecExpr("substr(name, c)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(okStartColumn, /*deep=*/true));

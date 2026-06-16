@@ -204,6 +204,9 @@ TEST_F(CudfFilterProjectTest, substringConstantStartAndLength) {
       {"abcdef", "spark", "", "über", std::nullopt});
   auto data = makeRowVector({input});
 
+  // Use `substring` for CPU/GPU result comparison because the Velox Spark CPU
+  // registry resolves `substring`, but not the `substr` spelling. The `substr`
+  // cuDF registration is covered by the selection test.
   for (const auto& expression : {
            "substring(c0, 1)",
            "substring(c0, 1, 3)",

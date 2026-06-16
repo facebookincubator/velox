@@ -58,8 +58,10 @@ void registerSparkFunctions(const std::string& prefix) {
           .argumentType("integer")
           .build()};
   for (const auto& name : {prefix + "substr", prefix + "substring"}) {
-    // Spark substring semantics must take precedence over the default
-    // Presto-compatible candidate registered by registerCudf().
+    // Route both spellings to the Spark implementation in cuDF. The default
+    // cuDF registry already has a Presto-compatible `substr` candidate, so the
+    // Spark registration must be inserted before it whenever Spark functions
+    // are registered for the current query context.
     registerCudfFunctionWithPrecedence(
         name,
         [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
