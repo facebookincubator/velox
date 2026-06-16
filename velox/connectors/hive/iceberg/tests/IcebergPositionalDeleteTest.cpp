@@ -17,11 +17,8 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <algorithm>
-#include <map>
 #include <numeric>
-#include <random>
 
-#include <folly/Random.h>
 #include <folly/Singleton.h>
 #include <folly/lang/Bits.h>
 
@@ -32,7 +29,6 @@
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
-#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -43,10 +39,20 @@ using TempFilePath = common::testutil::TempFilePath;
 
 class IcebergPositionalDeleteTest : public test::IcebergTestBase {
  protected:
-  using RowGroupSizesForFiles = std::map<std::string, std::vector<int64_t>>;
-  using DeleteFilesForBaseDataFiles = std::unordered_map<
-      std::string,
-      std::multimap<std::string, std::vector<int64_t>>>;
+  struct DataFileSpec {
+    std::string name;
+    std::vector<int64_t> rowGroupSizes;
+  };
+
+  struct DeleteRowGroup {
+    std::string dataFileName;
+    std::vector<int64_t> positions;
+  };
+
+  struct DeleteFileSpec {
+    std::string name;
+    std::vector<DeleteRowGroup> rowGroups;
+  };
 
   static constexpr int32_t kRowCount = 20000;
 
@@ -66,133 +72,121 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
   }
 
   void assertSingleBaseFileSingleDeleteFile(
-      const std::vector<int64_t>& deletePositionsVec) {
+      const std::vector<int64_t>& deletePositions,
+      const std::vector<int64_t>& expectedValues) {
     assertPositionalDeletes(
         {{"data_file_1", {10000, 10000}}},
-        {{"delete_file_1", {{"data_file_1", deletePositionsVec}}}},
-        0);
+        {{"delete_file_1", {{"data_file_1", deletePositions}}}},
+        expectedValues);
   }
 
   void assertMultipleBaseFileSingleDeleteFile(
-      const std::vector<int64_t>& deletePositionsVec) {
+      const std::vector<int64_t>& deletePositions,
+      const std::vector<int64_t>& expectedValues) {
     assertPositionalDeletes(
         {
-            {"data_file_0", {500}},
-            {"data_file_1", {10000, 10000}},
-            {"data_file_2", {500}},
+            {"data_file_0", {5}},
+            {"data_file_1", {10}},
+            {"data_file_2", {5}},
         },
-        {{"delete_file_1", {{"data_file_1", deletePositionsVec}}}},
-        0);
+        {{"delete_file_1", {{"data_file_1", deletePositions}}}},
+        expectedValues);
   }
 
   void assertSingleBaseFileMultipleDeleteFiles(
-      const std::vector<std::vector<int64_t>>& deletePositionsVecs) {
-    DeleteFilesForBaseDataFiles deleteFilesForBaseDatafiles;
-    for (int32_t i = 0; i < deletePositionsVecs.size(); ++i) {
-      deleteFilesForBaseDatafiles[fmt::format("delete_file_{}", i)] = {
-          {"data_file_1", deletePositionsVecs[i]}};
+      const std::vector<std::vector<int64_t>>& deletePositionLists,
+      const std::vector<int64_t>& expectedValues) {
+    std::vector<DeleteFileSpec> deleteFiles;
+    for (int32_t i = 0; i < deletePositionLists.size(); ++i) {
+      deleteFiles.push_back(
+          {fmt::format("delete_file_{}", i),
+           {{"data_file_1", deletePositionLists[i]}}});
     }
 
     assertPositionalDeletes(
-        {{"data_file_1", {10000, 10000}}}, deleteFilesForBaseDatafiles, 0);
+        {{"data_file_1", {20}}}, deleteFiles, expectedValues);
   }
 
   void assertMultipleSplits(
       const std::vector<int64_t>& deletePositions,
       int32_t fileCount,
       int32_t numPrefetchSplits,
+      const std::vector<int64_t>& expectedValues,
       int rowCountPerFile = kRowCount,
       int32_t splitCountPerFile = 1) {
-    RowGroupSizesForFiles rowGroupSizesForFiles;
-    DeleteFilesForBaseDataFiles deleteFilesForBaseDatafiles;
+    std::vector<DataFileSpec> dataFiles;
+    std::vector<DeleteFileSpec> deleteFiles;
     for (int32_t i = 0; i < fileCount; ++i) {
       const auto dataFileName = fmt::format("data_file_{}", i);
-      rowGroupSizesForFiles[dataFileName] = {rowCountPerFile};
-      deleteFilesForBaseDatafiles[fmt::format("delete_file_{}", i)] = {
-          {dataFileName, deletePositions}};
+      dataFiles.push_back({dataFileName, {rowCountPerFile}});
+      deleteFiles.push_back(
+          {fmt::format("delete_file_{}", i),
+           {{dataFileName, deletePositions}}});
     }
 
     assertPositionalDeletes(
-        rowGroupSizesForFiles,
-        deleteFilesForBaseDatafiles,
+        dataFiles,
+        deleteFiles,
+        expectedValues,
         numPrefetchSplits,
         splitCountPerFile);
   }
 
-  std::vector<int64_t> makeRandomIncreasingValues(int64_t begin, int64_t end) {
-    VELOX_CHECK(begin < end);
-
-    std::mt19937 gen{0};
-    std::vector<int64_t> values;
-    values.reserve(end - begin);
-    for (int64_t i = begin; i < end; ++i) {
-      if (folly::Random::rand32(0, 10, gen) > 8) {
-        values.push_back(i);
-      }
-    }
-    return values;
-  }
-
-  static std::vector<int64_t> makeContinuousIncreasingValues(
-      int64_t begin,
-      int64_t end) {
+  static std::vector<int64_t> sequence(int64_t begin, int64_t end) {
     std::vector<int64_t> values(end - begin);
     std::iota(values.begin(), values.end(), begin);
     return values;
   }
 
-  /// @rowGroupSizesForFiles The key is the file name, and the value is a vector
-  /// of RowGroup sizes
-  /// @deleteFilesForBaseDatafiles The key is the delete file name, and the
-  /// value contains the information about the content of this delete file.
-  /// e.g. {
-  ///         "delete_file_1",
-  ///         {
-  ///             {"data_file_1", {1, 2, 3}},
-  ///             {"data_file_1", {4, 5, 6}},
-  ///             {"data_file_2", {0, 2, 4}}
-  ///         }
-  ///     }
-  /// represents one delete file called delete_file_1, which contains delete
-  /// positions for data_file_1 and data_file_2. THere are 3 RowGroups in this
-  /// delete file, the first two contain positions for data_file_1, and the last
-  /// contain positions for data_file_2
+  static std::vector<int64_t> concat(
+      std::initializer_list<std::vector<int64_t>> ranges) {
+    std::vector<int64_t> values;
+    for (const auto& range : ranges) {
+      values.insert(values.end(), range.begin(), range.end());
+    }
+    return values;
+  }
+
+  // Writes the requested data files and delete files, then verifies the table
+  // scan output against explicit expected values.
   void assertPositionalDeletes(
-      const RowGroupSizesForFiles& rowGroupSizesForFiles,
-      const DeleteFilesForBaseDataFiles& deleteFilesForBaseDatafiles,
+      const std::vector<DataFileSpec>& dataFiles,
+      const std::vector<DeleteFileSpec>& deleteFiles,
+      const std::vector<int64_t>& expectedValues,
       int32_t numPrefetchSplits = 0,
       int32_t splitCount = 1) {
-    auto dataFilePaths = writeDataFiles(rowGroupSizesForFiles);
-    auto deleteFilePaths =
-        writePositionDeleteFiles(deleteFilesForBaseDatafiles, dataFilePaths);
+    auto dataFilePaths = writeDataFiles(dataFiles);
+    auto deleteFilePaths = writePositionDeleteFiles(deleteFiles, dataFilePaths);
 
     std::vector<std::shared_ptr<ConnectorSplit>> splits;
 
-    for (const auto& dataFile : dataFilePaths) {
-      const auto& baseFileName = dataFile.first;
-      const auto& baseFilePath = dataFile.second->getPath();
-      std::vector<IcebergDeleteFile> deleteFiles;
+    for (const auto& dataFile : dataFiles) {
+      const auto& baseFilePath = dataFilePaths.at(dataFile.name)->getPath();
+      std::vector<IcebergDeleteFile> matchingDeleteFiles;
 
-      for (const auto& deleteFile : deleteFilesForBaseDatafiles) {
-        const auto& deleteFileName = deleteFile.first;
-        const auto& deleteFileContent = deleteFile.second;
-
-        if (!deleteFileContent.contains(baseFileName)) {
+      for (const auto& deleteFile : deleteFiles) {
+        const auto hasDeletesForDataFile = std::any_of(
+            deleteFile.rowGroups.begin(),
+            deleteFile.rowGroups.end(),
+            [&](const auto& rowGroup) {
+              return rowGroup.dataFileName == dataFile.name;
+            });
+        if (!hasDeletesForDataFile) {
           continue;
         }
 
         const auto deleteFilePath =
-            deleteFilePaths[deleteFileName].second->getPath();
-        deleteFiles.emplace_back(
+            deleteFilePaths.at(deleteFile.name).second->getPath();
+        matchingDeleteFiles.emplace_back(
             FileContent::kPositionalDeletes,
             deleteFilePath,
             fileFormat_,
-            deleteFilePaths[deleteFileName].first,
+            deleteFilePaths.at(deleteFile.name).first,
             getFileSize(deleteFilePath));
       }
 
       auto icebergSplits =
-          makeIcebergSplits(baseFilePath, deleteFiles, {}, splitCount);
+          makeIcebergSplits(baseFilePath, matchingDeleteFiles, {}, splitCount);
       splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
     }
 
@@ -201,16 +195,11 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
                     .outputType(ROW({"c0"}, {BIGINT()}))
                     .endTableScan()
                     .planNode();
-    auto task = assertQuery(
-        plan,
-        splits,
-        getDuckDBQuery(rowGroupSizesForFiles, deleteFilesForBaseDatafiles),
-        numPrefetchSplits);
-
-    const auto planStats = exec::toPlanStats(task->taskStats());
-    const auto it = planStats.find(plan->id());
-    ASSERT_TRUE(it != planStats.end());
-    ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+    exec::test::AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplits)
+        .splits(splits)
+        .assertResults(
+            makeRowVector({makeFlatVector<int64_t>(expectedValues)}));
   }
 
   IcebergDeleteFile makePositionalDeleteFile(
@@ -256,7 +245,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
 #ifdef VELOX_ENABLE_PARQUET
   std::vector<std::shared_ptr<ConnectorSplit>> createParquetDeleteFileAndSplits(
       const std::string& path,
-      const std::vector<int64_t>& deletePositionsVec,
+      const std::vector<int64_t>& deletePositions,
       int32_t deletedPositionSize,
       const std::shared_ptr<TempFilePath>& deleteFilePath) {
     writeToFile(
@@ -267,7 +256,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
                 makeFlatVector<std::string>(
                     static_cast<vector_size_t>(deletedPositionSize),
                     [&](vector_size_t) { return path; }),
-                makeFlatVector<int64_t>(deletePositionsVec),
+                makeFlatVector<int64_t>(deletePositions),
             })});
 
     IcebergDeleteFile icebergDeleteFile(
@@ -279,18 +268,12 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     auto file =
         filesystems::getFileSystem(path, nullptr)->openFileForRead(path);
 
-    return {std::make_shared<HiveIcebergSplit>(
-        test::kIcebergConnectorId,
-        path,
-        dwio::common::FileFormat::PARQUET,
-        0,
-        file->size(),
-        std::unordered_map<std::string, std::optional<std::string>>{},
-        std::nullopt,
-        std::unordered_map<std::string, std::string>{},
-        nullptr,
-        /*cacheable=*/true,
-        std::vector<IcebergDeleteFile>{icebergDeleteFile})};
+    return {IcebergSplitBuilder(path)
+                .connectorId(test::kIcebergConnectorId)
+                .fileFormat(dwio::common::FileFormat::PARQUET)
+                .length(file->size())
+                .deleteFiles({icebergDeleteFile})
+                .build()};
   }
 #endif
 
@@ -317,25 +300,18 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
   }
 
  private:
-  std::map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
-      const RowGroupSizesForFiles& rowGroupSizesForFiles) {
-    std::map<std::string, std::shared_ptr<TempFilePath>> dataFilePaths;
-
-    std::vector<RowVectorPtr> dataVectorsJoined;
-    dataVectorsJoined.reserve(rowGroupSizesForFiles.size());
-
+  std::unordered_map<std::string, std::shared_ptr<TempFilePath>> writeDataFiles(
+      const std::vector<DataFileSpec>& dataFiles) {
+    std::unordered_map<std::string, std::shared_ptr<TempFilePath>>
+        dataFilePaths;
     int64_t startingValue = 0;
-    for (auto& dataFile : rowGroupSizesForFiles) {
-      dataFilePaths[dataFile.first] = TempFilePath::create();
-      // We make the values continuously increasing even across base data files.
-      // This makes constructing DuckDB queries easier.
-      auto dataVectors = makeVectors(dataFile.second, startingValue);
-      writeToFile(dataFilePaths[dataFile.first]->getPath(), dataVectors);
-      dataVectorsJoined.insert(
-          dataVectorsJoined.end(), dataVectors.begin(), dataVectors.end());
+
+    for (const auto& dataFile : dataFiles) {
+      dataFilePaths[dataFile.name] = TempFilePath::create();
+      auto dataVectors = makeVectors(dataFile.rowGroupSizes, startingValue);
+      writeToFile(dataFilePaths[dataFile.name]->getPath(), dataVectors);
     }
 
-    createDuckDbTable(dataVectorsJoined);
     return dataFilePaths;
   }
 
@@ -343,41 +319,40 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
       std::string,
       std::pair<int64_t, std::shared_ptr<TempFilePath>>>
   writePositionDeleteFiles(
-      const DeleteFilesForBaseDataFiles& deleteFilesForBaseDatafiles,
-      std::map<std::string, std::shared_ptr<TempFilePath>> baseFilePaths) {
+      const std::vector<DeleteFileSpec>& deleteFiles,
+      const std::unordered_map<std::string, std::shared_ptr<TempFilePath>>&
+          baseFilePaths) {
     std::unordered_map<
         std::string,
         std::pair<int64_t, std::shared_ptr<TempFilePath>>>
         deleteFilePaths;
-    deleteFilePaths.reserve(deleteFilesForBaseDatafiles.size());
+    deleteFilePaths.reserve(deleteFiles.size());
 
-    for (const auto& deleteFile : deleteFilesForBaseDatafiles) {
-      const auto& deleteFileName = deleteFile.first;
-      const auto& deleteFileContent = deleteFile.second;
+    for (const auto& deleteFile : deleteFiles) {
       auto deleteFilePath = TempFilePath::create();
 
       std::vector<RowVectorPtr> deleteFileVectors;
       int64_t totalPositionsInDeleteFile = 0;
 
-      for (const auto& deleteFileRowGroup : deleteFileContent) {
-        const auto& baseFileName = deleteFileRowGroup.first;
-        const auto& positionsInRowGroup = deleteFileRowGroup.second;
-        const auto& baseFilePath = baseFilePaths[baseFileName]->getPath();
+      for (const auto& deleteFileRowGroup : deleteFile.rowGroups) {
+        const auto& baseFilePath =
+            baseFilePaths.at(deleteFileRowGroup.dataFileName)->getPath();
 
         deleteFileVectors.push_back(makeRowVector(
             {pathColumn_->name, posColumn_->name},
             {
                 makeFlatVector<std::string>(
-                    static_cast<vector_size_t>(positionsInRowGroup.size()),
+                    static_cast<vector_size_t>(
+                        deleteFileRowGroup.positions.size()),
                     [&](vector_size_t) { return baseFilePath; }),
-                makeFlatVector<int64_t>(positionsInRowGroup),
+                makeFlatVector<int64_t>(deleteFileRowGroup.positions),
             }));
         totalPositionsInDeleteFile +=
-            static_cast<int64_t>(positionsInRowGroup.size());
+            static_cast<int64_t>(deleteFileRowGroup.positions.size());
       }
 
       writeToFile(deleteFilePath->getPath(), deleteFileVectors);
-      deleteFilePaths[deleteFileName] =
+      deleteFilePaths[deleteFile.name] =
           std::make_pair(totalPositionsInDeleteFile, deleteFilePath);
     }
 
@@ -391,107 +366,12 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     vectors.reserve(vectorSizes.size());
 
     for (auto vectorSize : vectorSizes) {
-      auto data = makeContinuousIncreasingValues(
-          startingValue, startingValue + vectorSize);
+      auto data = sequence(startingValue, startingValue + vectorSize);
       vectors.push_back(makeRowVector({makeFlatVector<int64_t>(data)}));
       startingValue += vectorSize;
     }
 
     return vectors;
-  }
-
-  std::string getDuckDBQuery(
-      const RowGroupSizesForFiles& rowGroupSizesForFiles,
-      const DeleteFilesForBaseDataFiles& deleteFilesForBaseDatafiles) {
-    int64_t totalNumRowsInAllBaseFiles = 0;
-    std::map<std::string, int64_t> baseFileSizes;
-    for (const auto& rowGroupSizesInFile : rowGroupSizesForFiles) {
-      // Sum up the row counts in all RowGroups in each base file.
-      baseFileSizes[rowGroupSizesInFile.first] += std::accumulate(
-          rowGroupSizesInFile.second.begin(),
-          rowGroupSizesInFile.second.end(),
-          0LL);
-      totalNumRowsInAllBaseFiles += baseFileSizes[rowGroupSizesInFile.first];
-    }
-
-    std::map<std::string, std::vector<std::vector<int64_t>>>
-        deletePosVectorsForAllBaseFiles;
-    for (const auto& deleteFile : deleteFilesForBaseDatafiles) {
-      // Group the delete vectors by baseFileName.
-      for (const auto& rowGroup : deleteFile.second) {
-        deletePosVectorsForAllBaseFiles[rowGroup.first].push_back(
-            rowGroup.second);
-      }
-    }
-
-    std::map<std::string, std::vector<int64_t>>
-        flattenedDeletePosVectorsForAllBaseFiles;
-    int64_t totalNumDeletePositions = 0;
-    for (const auto& deleteVectorsForBaseFile :
-         deletePosVectorsForAllBaseFiles) {
-      // Flatten and deduplicate the delete position vectors in
-      // deletePosVectorsForAllBaseFiles from previous step, and count the total
-      // number of distinct delete positions for all base files.
-      auto deletePositionVector = flattenAndDedup(
-          deleteVectorsForBaseFile.second,
-          baseFileSizes[deleteVectorsForBaseFile.first]);
-      flattenedDeletePosVectorsForAllBaseFiles[deleteVectorsForBaseFile.first] =
-          deletePositionVector;
-      totalNumDeletePositions +=
-          static_cast<int64_t>(deletePositionVector.size());
-    }
-
-    if (totalNumDeletePositions == 0) {
-      return "SELECT * FROM tmp";
-    }
-
-    if (totalNumDeletePositions >= totalNumRowsInAllBaseFiles) {
-      return "SELECT * FROM tmp WHERE 1 = 0";
-    }
-
-    std::vector<int64_t> allDeleteValues;
-    int64_t numRowsInPreviousBaseFiles = 0;
-    // Now build the DuckDB query by converting delete positions in all base
-    // files into c0 values.
-    for (const auto& baseFileSize : baseFileSizes) {
-      auto deletePositions =
-          flattenedDeletePosVectorsForAllBaseFiles[baseFileSize.first];
-
-      if (numRowsInPreviousBaseFiles > 0) {
-        for (int64_t& deleteValue : deletePositions) {
-          deleteValue += numRowsInPreviousBaseFiles;
-        }
-      }
-
-      allDeleteValues.insert(
-          allDeleteValues.end(),
-          deletePositions.begin(),
-          deletePositions.end());
-      numRowsInPreviousBaseFiles += baseFileSize.second;
-    }
-
-    return fmt::format(
-        "SELECT * FROM tmp WHERE c0 NOT IN ({})",
-        folly::join(", ", allDeleteValues));
-  }
-
-  std::vector<int64_t> flattenAndDedup(
-      const std::vector<std::vector<int64_t>>& deletePositionVectors,
-      int64_t baseFileSize) {
-    std::vector<int64_t> deletePositionVector;
-    for (const auto& vec : deletePositionVectors) {
-      for (auto pos : vec) {
-        if (pos >= 0 && pos < baseFileSize) {
-          deletePositionVector.push_back(pos);
-        }
-      }
-    }
-
-    std::sort(deletePositionVector.begin(), deletePositionVector.end());
-    deletePositionVector.erase(
-        std::unique(deletePositionVector.begin(), deletePositionVector.end()),
-        deletePositionVector.end());
-    return deletePositionVector;
   }
 
   std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
@@ -500,176 +380,105 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
       IcebergMetadataColumn::icebergDeletePosColumn();
 };
 
-/// This test creates one single data file and one delete file. The parameter
-/// passed to assertSingleBaseFileSingleDeleteFile is the delete positions.
+// Verifies one data file with one positional delete file.
 TEST_F(IcebergPositionalDeleteTest, singleBaseFileSinglePositionalDeleteFile) {
-  // Delete the first and last row in each batch (10000 rows per batch).
-  assertSingleBaseFileSingleDeleteFile({{0, 1, 2, 3}});
-  assertSingleBaseFileSingleDeleteFile({{0, 9999, 10000, 19999}});
-  // Delete several rows in the second batch (10000 rows per batch).
-  assertSingleBaseFileSingleDeleteFile({{10000, 10002, 19999}});
-  // Delete random rows.
-  assertSingleBaseFileSingleDeleteFile({makeRandomIncreasingValues(0, 20000)});
-  // Delete 0 rows.
-  assertSingleBaseFileSingleDeleteFile({});
-  // Delete all rows.
+  assertSingleBaseFileSingleDeleteFile({0, 1, 2, 3}, sequence(4, kRowCount));
   assertSingleBaseFileSingleDeleteFile(
-      makeContinuousIncreasingValues(0, 20000));
-  // Delete rows that don't exist.
-  assertSingleBaseFileSingleDeleteFile({{20000, 29999}});
+      {0, 9999, 10000, 19999},
+      concat({sequence(1, 9999), sequence(10001, 19999)}));
+  assertSingleBaseFileSingleDeleteFile(
+      {10000, 10002, 19999},
+      concat({sequence(0, 10000), {10001}, sequence(10003, 19999)}));
+  assertSingleBaseFileSingleDeleteFile({}, sequence(0, kRowCount));
+  assertSingleBaseFileSingleDeleteFile(sequence(0, kRowCount), {});
+  assertSingleBaseFileSingleDeleteFile({20000, 29999}, sequence(0, kRowCount));
 }
 
-/// This test creates 3 base data files, only the middle one has corresponding
-/// delete positions. The parameter passed to
-/// assertSingleBaseFileSingleDeleteFile is the delete positions for the middle
-/// base file.
+// Verifies that deletes for one base file do not affect neighboring files.
 TEST_F(
     IcebergPositionalDeleteTest,
     multipleBaseFilesSinglePositionalDeleteFile) {
-  assertMultipleBaseFileSingleDeleteFile({0, 1, 2, 3});
-  assertMultipleBaseFileSingleDeleteFile({0, 9999, 10000, 19999});
-  assertMultipleBaseFileSingleDeleteFile({10000, 10002, 19999});
-  assertMultipleBaseFileSingleDeleteFile({10000, 10002, 19999});
   assertMultipleBaseFileSingleDeleteFile(
-      makeRandomIncreasingValues(0, kRowCount));
-  assertMultipleBaseFileSingleDeleteFile({});
+      {0, 3, 9}, {0, 1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19});
+  assertMultipleBaseFileSingleDeleteFile({}, sequence(0, 20));
   assertMultipleBaseFileSingleDeleteFile(
-      makeContinuousIncreasingValues(0, kRowCount));
+      sequence(0, 10), concat({sequence(0, 5), sequence(15, 20)}));
 }
 
-/// This test creates one base data file/split with multiple delete files. The
-/// parameter passed to assertSingleBaseFileMultipleDeleteFiles is the vector of
-/// delete files. Each leaf vector represents the delete positions in that
-/// delete file.
+// Verifies one base data file with multiple positional delete files.
 TEST_F(
     IcebergPositionalDeleteTest,
     singleBaseFileMultiplePositionalDeleteFiles) {
-  // Delete row 0, 1, 2, 3 from the first batch out of two.
-  assertSingleBaseFileMultipleDeleteFiles({{1}, {2}, {3}, {4}});
-  // Delete the first and last row in each batch (10000 rows per batch).
-  assertSingleBaseFileMultipleDeleteFiles({{0}, {9999}, {10000}, {19999}});
-  assertSingleBaseFileMultipleDeleteFiles({{500, 21000}});
   assertSingleBaseFileMultipleDeleteFiles(
-      {makeRandomIncreasingValues(0, 10000),
-       makeRandomIncreasingValues(10000, 20000),
-       makeRandomIncreasingValues(5000, 15000)});
+      {{1}, {2}, {3}, {4}}, concat({{0}, sequence(5, 20)}));
   assertSingleBaseFileMultipleDeleteFiles(
-      {makeContinuousIncreasingValues(0, 10000),
-       makeContinuousIncreasingValues(10000, 20000)});
+      {{0, 1, 2}, {2, 3, 4}, {25}}, sequence(5, 20));
+  assertSingleBaseFileMultipleDeleteFiles({{}, {}}, sequence(0, 20));
   assertSingleBaseFileMultipleDeleteFiles(
-      {makeContinuousIncreasingValues(0, 10000),
-       makeContinuousIncreasingValues(10000, 20000),
-       makeRandomIncreasingValues(5000, 15000)});
-  assertSingleBaseFileMultipleDeleteFiles(
-      {makeContinuousIncreasingValues(0, 20000),
-       makeContinuousIncreasingValues(0, 20000)});
-  assertSingleBaseFileMultipleDeleteFiles(
-      {makeRandomIncreasingValues(0, 20000),
-       {},
-       makeRandomIncreasingValues(5000, 15000)});
-  assertSingleBaseFileMultipleDeleteFiles({{}, {}});
+      {sequence(0, 20), sequence(0, 20)}, {});
 }
 
-/// This test creates 2 base data files, and 1 or 2 delete files, with
-/// unaligned RowGroup boundaries.
+// Verifies multiple base files and delete files with unaligned row-group
+// boundaries.
 TEST_F(
     IcebergPositionalDeleteTest,
     multipleBaseFileMultiplePositionalDeleteFiles) {
-  // Create two data files, each with two RowGroups.
-  RowGroupSizesForFiles rowGroupSizesForFiles = {
-      {"data_file_1", {100, 85}},
-      {"data_file_2", {99, 1}},
+  std::vector<DataFileSpec> dataFiles = {
+      {"data_file_1", {3, 2}},
+      {"data_file_2", {2, 3}},
   };
-  DeleteFilesForBaseDataFiles deleteFilesForBaseDatafiles;
 
-  // Delete 3 rows from the first RowGroup in data_file_1.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {{"data_file_1", {0, 1, 99}}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+  assertPositionalDeletes(
+      dataFiles,
+      {{"delete_file_1", {{"data_file_1", {0, 1}}, {"data_file_2", {2, 4}}}}},
+      {2, 3, 4, 5, 6, 8});
 
-  // Delete 3 rows from the second RowGroup in data_file_1.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", {100, 101, 184}}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  // Delete random rows from both RowGroups in data_file_1.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", makeRandomIncreasingValues(0, 185)}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  // Delete all rows in data_file_1.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", makeContinuousIncreasingValues(0, 185)}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  // Delete non-existent rows from data_file_1.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", makeRandomIncreasingValues(186, 300)}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  deleteFilesForBaseDatafiles.clear();
-  // Delete several rows from both RowGroups in both data files.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", {0, 100, 102, 184}}, {"data_file_2", {1, 98, 99}}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  deleteFilesForBaseDatafiles.clear();
-  // The delete file delete_file_1 contains 3 RowGroups itself, with the first
-  // rows deleting some repeating rows in data_file_1, and the last rows
-  // deleting some repeating rows in data_file_2.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", {0, 1, 2, 3}},
-      {"data_file_1", {1, 2, 3, 4}},
-      {"data_file_1", makeRandomIncreasingValues(0, 185)},
-      {"data_file_2", {1, 3, 5, 7}},
-      {"data_file_2", makeRandomIncreasingValues(0, 100)}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  deleteFilesForBaseDatafiles.clear();
-  // delete_file_2 contains non-overlapping delete rows for each data file in
-  // each RowGroup.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", {0, 1, 2, 3}}, {"data_file_2", {1, 3, 5, 7}}};
-  deleteFilesForBaseDatafiles["delete_file_2"] = {
-      {"data_file_1", {1, 2, 3, 4}},
-      {"data_file_1", {98, 99, 100, 101, 184}},
-      {"data_file_2", {3, 5, 7, 9}},
-      {"data_file_2", {98, 99, 100}}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
-
-  deleteFilesForBaseDatafiles.clear();
-  // Two delete files each containing overlapping delete rows for both data
-  // files.
-  deleteFilesForBaseDatafiles["delete_file_1"] = {
-      {"data_file_1", makeRandomIncreasingValues(0, 185)},
-      {"data_file_2", makeRandomIncreasingValues(0, 100)}};
-  deleteFilesForBaseDatafiles["delete_file_2"] = {
-      {"data_file_1", makeRandomIncreasingValues(10, 120)},
-      {"data_file_2", makeRandomIncreasingValues(50, 100)}};
-  assertPositionalDeletes(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
+  assertPositionalDeletes(
+      dataFiles,
+      {
+          {"delete_file_1", {{"data_file_1", {0, 3}}, {"data_file_2", {1}}}},
+          {"delete_file_2",
+           {{"data_file_1", {1, 3, 4}}, {"data_file_2", {3, 4}}}},
+      },
+      {2, 5, 7});
 }
 
 TEST_F(IcebergPositionalDeleteTest, positionalDeletesMultipleSplits) {
-  assertMultipleSplits({1, 2, 3, 4}, 10, 5);
-  assertMultipleSplits({1, 2, 3, 4}, 10, 0);
-  assertMultipleSplits({1, 2, 3, 4}, 10, 10);
-  assertMultipleSplits({0, 9999, 10000, 19999}, 10, 3);
-  assertMultipleSplits(makeRandomIncreasingValues(0, 20000), 10, 3);
-  assertMultipleSplits(makeContinuousIncreasingValues(0, 20000), 10, 3);
-  assertMultipleSplits({}, 10, 3);
-  assertMultipleSplits({1, 2, 3, 4}, 10, 5, 30000, 3);
+  assertMultipleSplits(
+      {1, 2, 3, 4},
+      3,
+      5,
+      concat({{0}, sequence(5, 21), sequence(25, 41), sequence(45, 60)}),
+      20);
+  assertMultipleSplits(
+      {1, 2, 3, 4},
+      3,
+      0,
+      concat({{0}, sequence(5, 21), sequence(25, 41), sequence(45, 60)}),
+      20);
+  assertMultipleSplits(
+      {0, 19}, 2, 3, concat({sequence(1, 19), sequence(21, 39)}), 20);
+  assertMultipleSplits({}, 2, 3, sequence(0, 40), 20);
+  assertMultipleSplits(
+      {1, 2, 3, 4}, 1, 5, concat({{0}, sequence(5, 30)}), 30, 3);
 
   assertPositionalDeletes(
       {
-          {"data_file_0", {500}},
-          {"data_file_1", {10000, 10000}},
-          {"data_file_2", {500}},
+          {"data_file_0", {5}},
+          {"data_file_1", {10, 10}},
+          {"data_file_2", {5}},
       },
-      {{"delete_file_1",
-        {{"data_file_1", makeRandomIncreasingValues(0, 20000)}}}},
+      {{"delete_file_1", {{"data_file_1", {0, 10, 19}}}}},
+      concat(
+          {sequence(0, 5),
+           sequence(6, 15),
+           sequence(16, 24),
+           sequence(25, 30)}),
       0,
       3);
 
-  assertMultipleSplits({1000, 9000, 20000}, 1, 0, 20000, 3);
+  assertMultipleSplits(
+      {10, 19, 20}, 1, 0, concat({sequence(0, 10), sequence(11, 19)}), 20, 3);
 }
 
 // Test that positional delete files are skipped when their position upper bound
@@ -682,10 +491,8 @@ TEST_F(IcebergPositionalDeleteTest, skipDeleteFileByPositionUpperBound) {
   writeToFile(
       dataFilePath->getPath(),
       {
-          makeRowVector(
-              {makeFlatVector<int64_t>(makeContinuousIncreasingValues(0, 50))}),
-          makeRowVector({makeFlatVector<int64_t>(
-              makeContinuousIncreasingValues(50, 100))}),
+          makeRowVector({makeFlatVector<int64_t>(sequence(0, 50))}),
+          makeRowVector({makeFlatVector<int64_t>(sequence(50, 100))}),
       },
       std::make_shared<dwrf::Config>(),
       []() {
@@ -711,22 +518,17 @@ TEST_F(IcebergPositionalDeleteTest, skipDeleteFileByPositionUpperBound) {
   reader->loadCache();
   ASSERT_GE(reader->footer().stripesSize(), 2);
   const uint64_t splitStart = reader->footer().stripes(1).offset();
-  std::shared_ptr<ConnectorSplit> split = std::make_shared<HiveIcebergSplit>(
-      test::kIcebergConnectorId,
-      dataFilePath->getPath(),
-      fileFormat_,
-      splitStart,
-      fileSize - splitStart,
-      std::unordered_map<std::string, std::optional<std::string>>{},
-      std::nullopt,
-      std::unordered_map<std::string, std::string>{},
-      nullptr,
-      /*cacheable=*/true,
-      std::vector<IcebergDeleteFile>{deleteFile});
+  std::shared_ptr<ConnectorSplit> split =
+      IcebergSplitBuilder(dataFilePath->getPath())
+          .connectorId(test::kIcebergConnectorId)
+          .fileFormat(fileFormat_)
+          .start(splitStart)
+          .length(fileSize - splitStart)
+          .deleteFiles({deleteFile})
+          .build();
 
   // The second half of the file should be returned with no rows deleted.
-  auto expected = makeRowVector(
-      {makeFlatVector<int64_t>(makeContinuousIncreasingValues(50, 100))});
+  auto expected = makeRowVector({makeFlatVector<int64_t>(sequence(50, 100))});
   auto plan = exec::test::PlanBuilder()
                   .startTableScan(test::kIcebergConnectorId)
                   .outputType(ROW({"c0"}, {BIGINT()}))
@@ -781,7 +583,7 @@ TEST_F(IcebergPositionalDeleteTest, positionalDeleteSequenceNumberSkipped) {
 TEST_F(
     IcebergPositionalDeleteTest,
     positionalDeleteSequenceNumberEqualApplied) {
-  // Same-snapshot delete applied: positions 1 and 3 deleted → [0, 2, 4].
+  // Same-snapshot delete applied: positions 1 and 3 deleted -> [0, 2, 4].
   assertDeleteSequenceScenario(
       /*dataSequenceNumber=*/5, /*deleteSequenceNumber=*/5, {0, 2, 4});
 }
@@ -789,7 +591,7 @@ TEST_F(
 TEST_F(
     IcebergPositionalDeleteTest,
     positionalDeleteSequenceNumberZeroDisablesFilter) {
-  // SeqNum=0 disables filtering → delete applied: [0, 2, 4].
+  // SeqNum=0 disables filtering -> delete applied: [0, 2, 4].
   assertDeleteSequenceScenario(
       /*dataSequenceNumber=*/100, /*deleteSequenceNumber=*/0, {0, 2, 4});
 }

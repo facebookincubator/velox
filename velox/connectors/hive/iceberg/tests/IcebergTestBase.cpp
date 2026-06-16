@@ -309,7 +309,7 @@ IcebergTestBase::createSplitsForDirectory(const std::string& directory) {
 
     const auto file = filesystems::getFileSystem(filePath, nullptr)
                           ->openFileForRead(filePath);
-    splits.push_back(HiveIcebergSplitBuilder(filePath)
+    splits.push_back(IcebergSplitBuilder(filePath)
                          .connectorId(kIcebergConnectorId)
                          .fileFormat(fileFormat_)
                          .length(file->size())
@@ -341,7 +341,7 @@ std::vector<std::shared_ptr<ConnectorSplit>> IcebergTestBase::makeIcebergSplits(
   splits.reserve(splitCount);
 
   for (auto i = 0; i < splitCount; ++i) {
-    splits.emplace_back(HiveIcebergSplitBuilder(dataFilePath)
+    splits.emplace_back(IcebergSplitBuilder(dataFilePath)
                             .connectorId(kIcebergConnectorId)
                             .fileFormat(fileFormat_)
                             .start(i * splitSize)

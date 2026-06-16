@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -71,30 +72,57 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       int64_t dataSequenceNumber = 0);
 };
 
-/// Builds HiveIcebergSplit instances with named parameters.
-class HiveIcebergSplitBuilder {
+/// Builds Iceberg splits with named parameters.
+class IcebergSplitBuilder {
  public:
-  explicit HiveIcebergSplitBuilder(std::string filePath);
+  explicit IcebergSplitBuilder(std::string filePath)
+      : filePath_{std::move(filePath)} {
+    infoColumns_["$path"] = filePath_;
+  }
 
-  HiveIcebergSplitBuilder& connectorId(std::string connectorId);
+  IcebergSplitBuilder& connectorId(std::string id) {
+    connectorId_ = std::move(id);
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& fileFormat(dwio::common::FileFormat fileFormat);
+  IcebergSplitBuilder& fileFormat(dwio::common::FileFormat format) {
+    fileFormat_ = format;
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& start(uint64_t start);
+  IcebergSplitBuilder& start(uint64_t start) {
+    start_ = start;
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& length(uint64_t length);
+  IcebergSplitBuilder& length(uint64_t length) {
+    length_ = length;
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& partitionKeys(
-      const std::unordered_map<std::string, std::optional<std::string>>&
-          partitionKeys);
+  IcebergSplitBuilder& partitionKeys(
+      const std::unordered_map<std::string, std::optional<std::string>>& keys) {
+    partitionKeys_ = keys;
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& infoColumns(
-      const std::unordered_map<std::string, std::string>& infoColumns);
+  IcebergSplitBuilder& infoColumns(
+      const std::unordered_map<std::string, std::string>& columns) {
+    for (const auto& [name, value] : columns) {
+      infoColumns_[name] = value;
+    }
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& deleteFiles(
-      std::vector<IcebergDeleteFile> deleteFiles);
+  IcebergSplitBuilder& deleteFiles(std::vector<IcebergDeleteFile> files) {
+    deleteFiles_ = std::move(files);
+    return *this;
+  }
 
-  HiveIcebergSplitBuilder& dataSequenceNumber(int64_t dataSequenceNumber);
+  IcebergSplitBuilder& dataSequenceNumber(int64_t sequenceNumber) {
+    dataSequenceNumber_ = sequenceNumber;
+    return *this;
+  }
 
   std::shared_ptr<HiveIcebergSplit> build() const;
 
