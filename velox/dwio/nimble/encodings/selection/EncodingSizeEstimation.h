@@ -28,6 +28,7 @@
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -193,6 +194,16 @@ struct EncodingSizeEstimation {
       case EncodingType::FOR: {
         if constexpr (isIntegralType<physicalType>()) {
           return ForEncoding<physicalType>::estimateSize(
+              entryCount, statistics);
+        } else {
+          return std::nullopt;
+        }
+      }
+      // FrequencyPartition integration (re-enabled for
+      // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+      case EncodingType::FrequencyPartition: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return FrequencyPartitionEncoding<physicalType>::estimateSize(
               entryCount, statistics);
         } else {
           return std::nullopt;
