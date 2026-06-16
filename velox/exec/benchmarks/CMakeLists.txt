@@ -213,7 +213,7 @@ target_link_libraries(
 
 add_executable(velox_atomics_benchmark AtomicsBench.cpp)
 
-target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
+target_link_libraries(velox_atomics_benchmark Folly::folly Folly::follybenchmark)
 
 if(VELOX_ENABLE_GEO)
   add_executable(velox_spatial_join_benchmark SpatialJoinBenchmark.cpp)
