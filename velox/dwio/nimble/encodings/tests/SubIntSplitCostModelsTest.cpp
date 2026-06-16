@@ -103,6 +103,37 @@ std::vector<uint64_t> makeAlternatingValues() {
   return values;
 }
 
+// 1024 values with a Zipfian frequency distribution, interleaved to avoid
+// monotonic ordering (keeps Delta cost at infinity). Layout:
+//   value 0: 512 occurrences (dominant — wins top-2 tier, topKCoverage[1] high)
+//   value 1: 256 occurrences
+//   value 2: 128 occurrences
+//   value 3: 64 occurrences
+//   values 4..67: 1 occurrence each (sparse fallback)
+// Interleaving (0,j) pairs ensures monotonicCount / (n-1) ≈ 0.5 < 0.9, so
+// Delta returns infinity and FrequencyPartition can win.
+std::vector<uint64_t> makeZipfianValues() {
+  std::vector<uint64_t> values;
+  values.reserve(1024);
+  auto push = [&](uint64_t a, uint64_t b, int count) {
+    for (int i = 0; i < count; ++i) {
+      values.push_back(a);
+      values.push_back(b);
+    }
+  };
+  push(0, 1, 256); // 512 values: 256× each of 0 and 1
+  push(0, 2, 128); // 256 values: 128× each of 0 and 2
+  push(0, 3, 64);  // 128 values: 64× each of 0 and 3
+  for (uint64_t j = 4; j < 36; ++j) {
+    push(0, j, 1); // 64 values: 1× each of 0 and j
+  }
+  for (uint64_t j = 36; j < 68; ++j) {
+    push(0, j, 1); // 64 values: 1× each of 0 and j
+  }
+  // Total: 512 + 256 + 128 + 64 + 64 = 1024
+  return values;
+}
+
 } // namespace
 
 TEST(SubIntSplitCostModelsTest, PforBeatsFixedBitWidthForBaselinePlusOutliers) {
@@ -251,6 +282,40 @@ TEST(
 
   EXPECT_TRUE(std::isfinite(best));
   EXPECT_EQ(bestEncoding, EncodingType::FOR);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    FrequencyPartitionCostBitsFiniteForZipfianData) {
+  const std::vector<uint64_t> values = makeZipfianValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  // Values 0..67 require 7 bits; FPE should be finite and beat fixed-bit-width
+  // thanks to the skewed distribution (value 0 covers 50% of entries).
+  constexpr int kBitWidth = 7; // bit_width(67) == 7
+  const double fpeCost = frequencyPartitionCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isfinite(fpeCost));
+  EXPECT_GT(fpeCost, 0.0);
+  EXPECT_LT(fpeCost, fixedBitWidth);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsSelectsFrequencyPartitionForZipfianData) {
+  const std::vector<uint64_t> values = makeZipfianValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 7; // bit_width(67) == 7
+  EncodingType bestEncoding = EncodingType::Trivial;
+  const double best =
+      bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
+
+  EXPECT_TRUE(std::isfinite(best));
+  EXPECT_EQ(bestEncoding, EncodingType::FrequencyPartition);
 }
 
 #endif
