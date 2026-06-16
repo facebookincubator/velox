@@ -134,6 +134,26 @@ std::vector<uint64_t> makeZipfianValues() {
   return values;
 }
 
+// 1000 values: 900 zeros (90% dominant) interleaved with 100 distinct values
+// in [128, 227]. Pattern: 9 zeros then one non-zero, repeated 100 times. The
+// 90% dominance makes MainlyConstant's exception-list representation (~2760
+// bits) cheaper than RLE (~5008 bits, 200 runs), FrequencyPartition (~4139
+// bits, 101 uniques), and all others. Non-monotonic enough to keep Delta from
+// also being cheap: monotonicFraction ≈ 900/999 ≈ 0.9009 passes Delta's 0.9
+// threshold but the large average delta (≈35.5) drives Delta's cost to ~10073
+// bits — well above MainlyConstant.
+std::vector<uint64_t> makeMainlyConstantValues() {
+  std::vector<uint64_t> values;
+  values.reserve(1000);
+  for (int i = 0; i < 100; ++i) {
+    for (int z = 0; z < 9; ++z) {
+      values.push_back(0);
+    }
+    values.push_back(static_cast<uint64_t>(128 + i)); // 128..227
+  }
+  return values;
+}
+
 } // namespace
 
 TEST(SubIntSplitCostModelsTest, PforBeatsFixedBitWidthForBaselinePlusOutliers) {
@@ -316,6 +336,40 @@ TEST(
 
   EXPECT_TRUE(std::isfinite(best));
   EXPECT_EQ(bestEncoding, EncodingType::FrequencyPartition);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    MainlyConstantCostBitsFiniteForDominantData) {
+  const std::vector<uint64_t> values = makeMainlyConstantValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  // bit_width(227) == 8; MainlyConstant should be finite and beat FixedBitWidth
+  // (~8072 bits) at this dominance level (900/1000 = 90% dominant value).
+  constexpr int kBitWidth = 8;
+  const double mc = mainlyConstantCostBits(m, values.size(), kBitWidth);
+  const double fixedBitWidth = fixedBitWidthCostBits(m, values.size(), kBitWidth);
+
+  EXPECT_TRUE(std::isfinite(mc));
+  EXPECT_GT(mc, 0.0);
+  EXPECT_LT(mc, fixedBitWidth);
+}
+
+TEST(
+    SubIntSplitCostModelsTest,
+    BestCostBitsSelectsMainlyConstantForDominantData) {
+  const std::vector<uint64_t> values = makeMainlyConstantValues();
+  const MetricCollector collector;
+  const SegmentMetrics m = collector.compute(values, allCostModelRequiredFlags());
+
+  constexpr int kBitWidth = 8; // bit_width(227) == 8
+  EncodingType bestEncoding = EncodingType::Trivial;
+  const double best =
+      bestCostBits(m, values.size(), kBitWidth, values, bestEncoding);
+
+  EXPECT_TRUE(std::isfinite(best));
+  EXPECT_EQ(bestEncoding, EncodingType::MainlyConstant);
 }
 
 #endif
