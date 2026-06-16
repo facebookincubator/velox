@@ -49,7 +49,6 @@ velox_add_library(
   HEADERS
   CxlHashTable.h
   CxlHashAggregation.h
-  CxlRelocationMap.h
 )
 velox_link_libraries(velox_experimental_cxl_exec velox_experimental_cxl velox_exec)
 

@@ -261,14 +261,6 @@ class RowColumn {
   const uint64_t packedOffsets_;
 };
 
-/// One affine piece of a relocation produced by RowContainer::relocateTo: every
-/// source row in [srcBegin, srcLast] moved by 'delta' (new == old + delta).
-struct RowRelocation {
-  char* srcBegin;
-  char* srcLast;
-  int64_t delta;
-};
-
 /// Collection of rows for aggregation, hash join, order by.
 class RowContainer {
  public:
@@ -362,14 +354,6 @@ class RowContainer {
   /// a row with uninitialized keys for aggregates with no-op partial
   /// aggregation.
   void setAllNull(char* row);
-
-  /// Moves every row into 'dest' with a fixed-width byte copy (row plus
-  /// normalized-key prefix), empties this container, and returns the move as a
-  /// run-compressed vector of affine pieces sorted by source address. Both
-  /// containers must share a fixed layout and hold no variable-width or
-  /// external data; the caller swizzles its hash buckets with the returned
-  /// pieces.
-  std::vector<RowRelocation> relocateTo(RowContainer& dest);
 
   /// The row size excluding any out-of-line stored variable length values.
   int32_t fixedRowSize() const {
@@ -767,6 +751,12 @@ class RowContainer {
     normalizedKeySize_ = 0;
   }
 
+  /// The size in bytes of the normalized-key prefix stored in the word below
+  /// each row, or 0 if normalized keys are disabled.
+  int normalizedKeySize() const {
+    return normalizedKeySize_;
+  }
+
   RowColumn columnAt(int32_t index) const {
     return rowColumns_[index];
   }
@@ -827,6 +817,12 @@ class RowContainer {
   /// unique, e.g. for a group by or semijoin build.
   int32_t nextOffset() const {
     return nextOffset_;
+  }
+
+  /// True if rows reference variable-width or otherwise out-of-line data that a
+  /// plain byte copy of the fixed row would not move.
+  bool usesExternalMemory() const {
+    return usesExternalMemory_;
   }
 
   /// Creates a next-row-vector if it doesn't exist. Appends the row address to
@@ -898,6 +894,13 @@ class RowContainer {
   /// 'columnIndex'. nullopt will be returned if the column stats was previous
   /// invalidated. Any row erase operations will invalidate column stats.
   std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
+
+  /// Merges 'source' per-column stats into this container's, column by column.
+  /// Both containers must share the same column layout. A byte-copy migration
+  /// preserves each row's null flag but not the aggregated per-column stats
+  /// that columnHasNulls() and the null-aware extract path rely on; this
+  /// carries those over. A no-op if either container has invalidated stats.
+  void mergeColumnStats(const RowContainer& source);
 
   uint32_t columnNullCount(int32_t columnIndex) const {
     return rowColumnsStats_[columnIndex].nullCount();

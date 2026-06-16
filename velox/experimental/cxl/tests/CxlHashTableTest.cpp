@@ -26,7 +26,7 @@ namespace facebook::velox::cxl {
 namespace {
 
 // Drives a CxlHashTable directly through groupProbe to exercise
-// relocateAllToCxl without the operator or a real CXL device: the "CXL"
+// relocateRowsToCxl without the operator or a real CXL device: the "CXL"
 // container lives on an ordinary second memory pool, enough for the
 // bucket-swizzle seam under test.
 class CxlHashTableTest : public testing::Test,
@@ -84,7 +84,7 @@ class CxlHashTableTest : public testing::Test,
   std::shared_ptr<memory::MemoryPool> cxlPool_;
 };
 
-TEST_F(CxlHashTableTest, relocateAllToCxlAndReprobe) {
+TEST_F(CxlHashTableTest, relocateRowsToCxlAndReprobe) {
   constexpr vector_size_t kSize = kBucketedSize;
   auto table = makeTable();
   exec::HashLookup lookup(table->hashers(), pool_.get());
@@ -94,7 +94,7 @@ TEST_F(CxlHashTableTest, relocateAllToCxlAndReprobe) {
   ASSERT_EQ(lookup.newGroups.size(), kSize);
   ASSERT_NE(table->hashMode(), exec::BaseHashTable::HashMode::kArray);
 
-  table->relocateAllToCxl();
+  table->relocateRowsToCxl();
   EXPECT_EQ(table->rows()->numRows(), 0);
   EXPECT_EQ(table->cxlRows()->numRows(), kSize);
   EXPECT_EQ(table->numDistinct(), kSize);
@@ -118,7 +118,7 @@ TEST_F(CxlHashTableTest, relocateInArrayMode) {
 
   probe(*table, lookup, keys);
   ASSERT_EQ(table->hashMode(), exec::BaseHashTable::HashMode::kArray);
-  table->relocateAllToCxl();
+  table->relocateRowsToCxl();
   EXPECT_EQ(table->cxlRows()->numRows(), kSize);
 
   probe(*table, lookup, keys);
@@ -136,7 +136,7 @@ TEST_F(CxlHashTableTest, relocateSurvivesRehash) {
   auto keys = wideKeys(kSize);
 
   probe(*table, lookup, keys);
-  table->relocateAllToCxl();
+  table->relocateRowsToCxl();
 
   // Grow well past capacity to force a rehash. The rebuild lists rows from both
   // containers and reindexes the relocated rows from the CXL container.

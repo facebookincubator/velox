@@ -683,7 +683,7 @@ class HashTable : public BaseHashTable {
   }
 
   int32_t numRowContainers() const override {
-    return otherTables_.size() + 1;
+    return otherTables_.size() + otherRowContainers_.size() + 1;
   }
 
   HashTableStats stats() const override {
@@ -775,6 +775,30 @@ class HashTable : public BaseHashTable {
 
   std::vector<RowContainer*> allRows() const override;
 
+  /// Takes ownership of a payload row container to be indexed alongside
+  /// 'rows_'. rehash() reindexes it, and allRows(), numRowContainers(),
+  /// listRows() and clear() span it just as they do the sub-tables of a
+  /// parallel join build. 'container' must share this table's row layout.
+  /// Returns a borrowed pointer to the registered container. Lets a tiering
+  /// layer relocate rows out of 'rows_' into another memory pool (e.g. far
+  /// memory) and keep them in the index without a rehash.
+  RowContainer* addOtherRowContainer(std::unique_ptr<RowContainer> container);
+
+  /// The payload row containers registered via addOtherRowContainer().
+  const std::vector<std::unique_ptr<RowContainer>>& otherRowContainers() const {
+    return otherRowContainers_;
+  }
+
+  /// Rewrites every live row pointer in the index by passing it through 'map'
+  /// and storing the result, leaving tags and slot positions unchanged. 'map'
+  /// must return a valid row pointer for every input and the identity for rows
+  /// that did not move; in bucketed mode the result must fit in 48 bits. This
+  /// repoints the index after rows have been relocated to new addresses (e.g. a
+  /// far-memory tier or a compacted container) without the cost of a rehash.
+  /// Advanced: a 'map' that returns a wrong address silently corrupts the
+  /// table. Pair with addOtherRowContainer() to relocate rows without a rehash.
+  void remapRowPointers(folly::FunctionRef<char*(char*)> map);
+
   std::string toString() override;
 
   /// Returns the details of the range of buckets. The range starts from
@@ -814,18 +838,6 @@ class HashTable : public BaseHashTable {
   char** testingTable() const {
     return table_;
   }
-
- protected:
-  /// Payload row containers in addition to 'rows_' and 'otherTables_'. Empty by
-  /// default; a tiering subclass overrides it to span rows relocated elsewhere.
-  virtual std::vector<RowContainer*> additionalRows() const {
-    return {};
-  }
-
-  /// Rewrites every occupied bucket slot's row pointer through 'translate'
-  /// (identity for unmoved rows), repointing the index after a relocation with
-  /// no rehash. Tags and positions are unchanged.
-  void swizzleRowPointers(folly::FunctionRef<char*(char*)> translate);
 
  private:
   // Enables debug stats for collisions for debug build.
@@ -1246,6 +1258,11 @@ class HashTable : public BaseHashTable {
   // Owns the memory of multiple build side hash join tables that are
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
+
+  // Payload row containers registered via addOtherRowContainer(), owned by and
+  // indexed alongside 'rows_'. Used by a memory-tiering layer to hold rows
+  // relocated out of 'rows_'.
+  std::vector<std::unique_ptr<RowContainer>> otherRowContainers_;
   // Statistics maintained if kTrackLoads is set.
 
   // Flags indicate whether the same column in all build-side join hash tables

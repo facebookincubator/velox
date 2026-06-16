@@ -23,10 +23,12 @@
 
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateInfo.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashAggregation.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/experimental/cxl/CxlHashTable.h"
 #include "velox/experimental/cxl/CxlMemoryResource.h"
@@ -50,7 +52,7 @@ constexpr int32_t kOutputBatchRows = 10'000;
 struct CxlHashAggregation::HashPartition {
   // A CxlHashTable holding a DRAM row container (rows_) and, when a CXL pool is
   // provided, a CXL row container (cxlRows_). New groups land in DRAM;
-  // relocateAllToCxl() moves them to CXL.
+  // relocateRowsToCxl() moves them to CXL.
   std::unique_ptr<CxlHashTable<false>> table;
   std::vector<exec::AggregateInfo> aggregates;
   std::unique_ptr<exec::HashLookup> lookup;
@@ -90,14 +92,11 @@ CxlHashAggregation::makePartition(memory::MemoryPool* pool) {
             aggregate.function.get(), aggregate.intermediateType});
   }
 
-  // Give the table a CXL-backed second container when a CXL tier is configured
-  // and relocation is safe for this aggregation's row layout.
-  auto* cxlPool =
-      (cxlPool_ != nullptr && relocationIsSafe(partition->aggregates))
-      ? cxlPool_
-      : nullptr;
+  // The adapter installs this operator only when a CXL tier is present and
+  // relocation is safe, so 'cxlPool_' always backs the table's second
+  // container.
   partition->table = CxlHashTable<false>::createForAggregation(
-      std::move(hashers), accumulators, pool, cxlPool);
+      std::move(hashers), accumulators, pool, cxlPool_);
 
   // Bind each aggregate to the table's row container (allocator + offsets).
   auto& rows = *partition->table->rows();
@@ -140,6 +139,10 @@ void CxlHashAggregation::initialize() {
       groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end(), 0);
 
   cxlPool_ = customPool(kCxlResourceTag);
+  VELOX_CHECK_NOT_NULL(
+      cxlPool_,
+      "CxlHashAggregation requires a CXL pool; the adapter must not install it "
+      "without one");
 
   partitions_.reserve(numPartitions_);
   for (size_t i = 0; i < numPartitions_; ++i) {
@@ -147,9 +150,7 @@ void CxlHashAggregation::initialize() {
   }
 
   numInitialized.fetch_add(1, std::memory_order_relaxed);
-  if (cxlPool_ != nullptr) {
-    numWithCxlPool.fetch_add(1, std::memory_order_relaxed);
-  }
+  numWithCxlPool.fetch_add(1, std::memory_order_relaxed);
 }
 
 void CxlHashAggregation::ensureInputFits(
@@ -254,30 +255,10 @@ void CxlHashAggregation::noMoreInput() {
   pool()->release();
 }
 
-bool CxlHashAggregation::relocationIsSafe(
-    const std::vector<exec::AggregateInfo>& aggregates) const {
-  // Variable-width keys store out-of-line StringViews into the row container's
-  // HashStringAllocator; a byte copy to CXL would leave dangling pointers.
-  for (const auto channel : groupingKeyInputChannels_) {
-    if (!inputType_->childAt(channel)->isFixedWidth()) {
-      return false;
-    }
-  }
-  // Accumulators with external (HashStringAllocator-backed) state can't be
-  // byte-copied either.
-  for (const auto& aggregate : aggregates) {
-    if (aggregate.function->accumulatorUsesExternalMemory()) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool CxlHashAggregation::canReclaim() const {
   for (const auto& partition : partitions_) {
-    // Reclaimable only if the table has a CXL container and DRAM-resident rows.
+    // Reclaimable while a partition still holds DRAM-resident rows to relocate.
     if (partition != nullptr && partition->table != nullptr &&
-        partition->table->cxlRows() != nullptr &&
         partition->table->rows()->numRows() > 0) {
       return true;
     }
@@ -295,7 +276,6 @@ void CxlHashAggregation::reclaim(
   for (size_t i = 0; i < partitions_.size(); ++i) {
     auto& partition = partitions_[i];
     if (partition == nullptr || partition->table == nullptr ||
-        partition->table->cxlRows() == nullptr ||
         partition->table->rows()->numRows() == 0) {
       continue;
     }
@@ -308,7 +288,7 @@ void CxlHashAggregation::reclaim(
   if (victim == partitions_.size()) {
     return;
   }
-  partitions_[victim]->table->relocateAllToCxl();
+  partitions_[victim]->table->relocateRowsToCxl();
   partitions_[victim]->onCxl = true;
   numMigrated.fetch_add(1, std::memory_order_relaxed);
   // Return the unused reservation so the arbitrator sees the freed capacity.
@@ -389,11 +369,53 @@ std::shared_ptr<const core::AggregationNode> findAggregationNode(
   return nullptr;
 }
 
-// Replaces every stock HashAggregation in the driver with a standalone
-// CxlHashAggregation built from the same AggregationNode.
+// Returns true if every grouping key is fixed-width and every accumulator is
+// fixed-size without external (HashStringAllocator-backed) memory, so a row can
+// be relocated DRAM -> CXL by a plain byte copy (v1 constraint).
+bool relocationIsSafe(
+    const core::AggregationNode& node,
+    const core::QueryConfig& config) {
+  // Variable-width grouping keys store out-of-line StringViews into the row
+  // container's HashStringAllocator; a byte copy to CXL would leave dangling
+  // pointers.
+  for (const auto& key : node.groupingKeys()) {
+    if (!key->type()->isFixedWidth()) {
+      return false;
+    }
+  }
+  // Accumulators with external state can't be byte-copied either. Build each
+  // function as the operator would (toAggregateInfo) and ask it.
+  const auto numKeys = node.groupingKeys().size();
+  const auto& outputType = node.outputType();
+  const auto& aggregates = node.aggregates();
+  for (auto i = 0; i < aggregates.size(); ++i) {
+    auto function = exec::Aggregate::create(
+        aggregates[i].call->name(),
+        exec::isPartialOutput(node.step())
+            ? core::AggregationNode::Step::kPartial
+            : core::AggregationNode::Step::kSingle,
+        aggregates[i].rawInputTypes,
+        outputType->childAt(numKeys + i),
+        config);
+    if (function->accumulatorUsesExternalMemory()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Replaces a stock HashAggregation with a standalone CxlHashAggregation, but
+// only when the query has a CXL tier and the aggregation's rows can be
+// byte-copied to it; otherwise the stock operator is left in place.
 bool adaptDriver(const exec::DriverFactory& factory, exec::Driver& driver) {
-  const auto operators = driver.operators();
   auto* driverCtx = driver.driverCtx();
+  // No CXL tier configured for this query: nothing to gain from replacing.
+  if (driverCtx->task->queryCtx()->customPool(std::string{kCxlResourceTag}) ==
+      nullptr) {
+    return false;
+  }
+  const auto& queryConfig = driverCtx->queryConfig();
+  const auto operators = driver.operators();
   bool replaced = false;
   for (size_t i = 0; i < operators.size(); ++i) {
     auto* aggregation = dynamic_cast<exec::HashAggregation*>(operators[i]);
@@ -403,6 +425,11 @@ bool adaptDriver(const exec::DriverFactory& factory, exec::Driver& driver) {
     auto aggregationNode =
         findAggregationNode(factory, aggregation->planNodeId());
     if (aggregationNode == nullptr) {
+      continue;
+    }
+    // v1: only grouped aggregations whose rows can be relocated by byte copy.
+    if (aggregationNode->groupingKeys().empty() ||
+        !relocationIsSafe(*aggregationNode, queryConfig)) {
       continue;
     }
     std::vector<std::unique_ptr<exec::Operator>> replacement;

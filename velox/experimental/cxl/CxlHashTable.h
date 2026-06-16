@@ -26,8 +26,6 @@ class CxlHashTable : public exec::HashTable<ignoreNullKeys> {
  public:
   using Base = exec::HashTable<ignoreNullKeys>;
 
-  /// Like the exec::HashTable constructor; 'cxlPool', when non-null, enables
-  /// relocation by building 'cxlRows_' with a layout identical to 'rows_'.
   CxlHashTable(
       std::vector<std::unique_ptr<exec::VectorHasher>>&& hashers,
       const std::vector<exec::Accumulator>& accumulators,
@@ -38,63 +36,27 @@ class CxlHashTable : public exec::HashTable<ignoreNullKeys> {
       bool hasCountFlag,
       uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
-      uint64_t bloomFilterMaxSize = 0,
-      memory::MemoryPool* cxlPool = nullptr);
+      memory::MemoryPool* cxlPool,
+      uint64_t bloomFilterMaxSize = 0);
 
   ~CxlHashTable() override = default;
 
-  /// Builds an aggregation table. 'cxlPool', when non-null, enables relocation.
+  /// Builds an aggregation table whose payload relocates into 'cxlPool'.
   static std::unique_ptr<CxlHashTable> createForAggregation(
       std::vector<std::unique_ptr<exec::VectorHasher>>&& hashers,
       const std::vector<exec::Accumulator>& accumulators,
       memory::MemoryPool* pool,
-      memory::MemoryPool* cxlPool = nullptr) {
-    return std::make_unique<CxlHashTable>(
-        std::move(hashers),
-        accumulators,
-        std::vector<TypePtr>{},
-        false, // allowDuplicates
-        false, // isJoinBuild
-        false, // hasProbedFlag
-        false, // hasCountFlag
-        0, // minTableSizeForParallelJoinBuild
-        pool,
-        /*bloomFilterMaxSize=*/0,
-        cxlPool);
-  }
+      memory::MemoryPool* cxlPool);
 
-  /// The CXL-backed row container, or null when no CXL pool was provided. Holds
-  /// the rows relocated out of 'rows_' by relocateAllToCxl().
-  exec::RowContainer* cxlRows() const {
-    return cxlRows_.get();
-  }
+  exec::RowContainer* cxlRows() const;
 
-  /// Moves every row in the DRAM 'rows_' into 'cxlRows_' and swizzles the hash
-  /// buckets to the new addresses, with no rehash. Requires a CXL pool.
-  void relocateAllToCxl();
-
- protected:
-  std::vector<exec::RowContainer*> additionalRows() const override {
-    if (cxlRows_ == nullptr) {
-      return {};
-    }
-    return {cxlRows_.get()};
-  }
-
-  void clear(bool freeTable) override {
-    Base::clear(freeTable);
-    if (cxlRows_ != nullptr) {
-      cxlRows_->clear();
-    }
-  }
+  /// Moves every row in the DRAM 'rows_' into 'cxlRows_' and remaps the hash
+  /// bucket pointers to the new addresses.
+  void relocateRowsToCxl();
 
  private:
-  // CXL memory pool backing 'cxlRows_'. Null when no CXL tier is configured.
+  // CXL memory pool backing the relocated row container.
   memory::MemoryPool* const cxlPool_;
-
-  // Second row container, backed by 'cxlPool_', with a byte-identical layout to
-  // 'rows_'. Holds rows relocated out of DRAM. Null when 'cxlPool_' is null.
-  std::unique_ptr<exec::RowContainer> cxlRows_;
 };
 
 } // namespace facebook::velox::cxl

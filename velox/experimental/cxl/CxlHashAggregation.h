@@ -86,12 +86,6 @@ class CxlHashAggregation : public exec::Operator {
   // operator; a later allocation hitting the cap fails the query instead.
   void ensureInputFits(HashPartition& partition, const RowVectorPtr& input);
 
-  // Returns true if every grouping key is fixed-width and every accumulator is
-  // fixed-size without external (HashStringAllocator-backed) memory, so a row
-  // can be relocated DRAM -> CXL by a plain byte copy (v1 constraint).
-  bool relocationIsSafe(
-      const std::vector<exec::AggregateInfo>& aggregates) const;
-
   const std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   // Input row type of the source plan node (the schema addInput() receives).
@@ -116,8 +110,8 @@ class CxlHashAggregation : public exec::Operator {
   size_t outputPartition_{0};
   size_t outputContainerIdx_{0};
 
-  // Per-query CXL custom pool, resolved by tag in initialize(); null when the
-  // query has no CXL tier.
+  // Per-query CXL custom pool, resolved by tag in initialize(). Non-null: the
+  // adapter installs this operator only when a CXL tier is present.
   memory::MemoryPool* cxlPool_{nullptr};
 
   // Output iteration state.

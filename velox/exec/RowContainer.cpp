@@ -990,89 +990,17 @@ void RowContainer::clear() {
   rowColumnsStats_.resize(types_.size());
 }
 
-std::vector<RowRelocation> RowContainer::relocateTo(RowContainer& dest) {
-  VELOX_CHECK(
-      !usesExternalMemory_ && !dest.usesExternalMemory_,
-      "relocateTo supports only fixed-size rows without external memory");
-  VELOX_CHECK_EQ(
-      fixedRowSize_,
-      dest.fixedRowSize_,
-      "relocateTo requires an identical row layout");
-  VELOX_CHECK_EQ(
-      normalizedKeySize_,
-      dest.normalizedKeySize_,
-      "relocateTo requires an identical normalized-key size");
-  VELOX_CHECK_EQ(
-      nextOffset_, 0, "relocateTo does not support duplicate-row links");
-
-  // Bump-allocation in source-address order makes a run of consecutive rows map
-  // to a constant delta, so record one affine piece per run, not one per row.
-  // 'runStride' is the open piece's stride, 0 until it holds a second row.
-  std::vector<RowRelocation> pieces;
-  int64_t runStride = 0;
-  // Copy the fixed row plus the normalized-key prefix in the word below it;
-  // 'row - normalizedKeySize_' is the start of the row's allocation.
-  const auto rowBytes = static_cast<size_t>(fixedRowSize_) + normalizedKeySize_;
-  constexpr int32_t kBatch = 1024;
-  std::vector<char*> rows(kBatch);
-  RowContainerIterator iter;
-  for (;;) {
-    const auto numRows = listRows(&iter, kBatch, rows.data());
-    if (numRows == 0) {
-      break;
-    }
-    for (auto i = 0; i < numRows; ++i) {
-      char* from = rows[i];
-      char* to = dest.newRow();
-      // A hash table stores row pointers in 48-bit bucket slots, so the
-      // destination pool's addresses must fit in 48 bits.
-      VELOX_CHECK_EQ(
-          reinterpret_cast<uintptr_t>(to) >> 48,
-          0,
-          "Relocated row address does not fit in a 48-bit hash table slot");
-      ::memcpy(to - normalizedKeySize_, from - normalizedKeySize_, rowBytes);
-      // Extend the open piece if this row continues its run at the same delta
-      // and stride; otherwise start a new single-row piece.
-      const int64_t delta = to - from;
-      if (!pieces.empty() && delta == pieces.back().delta) {
-        const int64_t step = from - pieces.back().srcLast;
-        if ((runStride == 0 && step > 0) ||
-            (runStride != 0 && step == runStride)) {
-          runStride = step;
-          pieces.back().srcLast = from;
-          continue;
-        }
-      }
-      pieces.push_back({from, from, delta});
-      runStride = 0;
-    }
+void RowContainer::mergeColumnStats(const RowContainer& source) {
+  // Merge (rather than assign) so repeated migrations into the same destination
+  // accumulate.
+  if (rowColumnsStats_.empty() || source.rowColumnsStats_.empty()) {
+    return;
   }
-
-  // Carry the per-column stats over to 'dest'. The byte copy preserves each
-  // row's null flag, but not the aggregated stats that columnHasNulls() and the
-  // null-aware extract path rely on; without this a migrated null key would be
-  // read back via the no-nulls fast path as a non-null value. Merge (rather
-  // than assign) so repeated relocations into the same destination accumulate.
-  if (!rowColumnsStats_.empty() && !dest.rowColumnsStats_.empty()) {
-    for (auto i = 0; i < rowColumnsStats_.size(); ++i) {
-      dest.rowColumnsStats_[i] = RowColumn::Stats::merge(
-          {dest.rowColumnsStats_[i], rowColumnsStats_[i]});
-    }
+  VELOX_CHECK_EQ(rowColumnsStats_.size(), source.rowColumnsStats_.size());
+  for (auto i = 0; i < rowColumnsStats_.size(); ++i) {
+    rowColumnsStats_[i] = RowColumn::Stats::merge(
+        {rowColumnsStats_[i], source.rowColumnsStats_[i]});
   }
-
-  // Free this container's row memory but keep the current normalized-key size:
-  // clear() resets it to the original, which differs once a table has fallen
-  // back to kHash and disabled normalized keys.
-  const auto normalizedKeySize = normalizedKeySize_;
-  clear();
-  normalizedKeySize_ = normalizedKeySize;
-
-  // Sort by source address so the caller can binary-search; disjoint pieces are
-  // thereby ordered by srcLast too.
-  std::sort(pieces.begin(), pieces.end(), [](const auto& a, const auto& b) {
-    return a.srcBegin < b.srcBegin;
-  });
-  return pieces;
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

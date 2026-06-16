@@ -147,10 +147,10 @@ TEST_F(CxlHashAggregationTest, adapterSwapsInCxlAggregationAndReachesCxlPool) {
       numCxlHashAggregationsWithCxlPool(), numCxlHashAggregationsInitialized());
 }
 
-// Without a CXL tier, the adapter still replaces the operator, but the
-// replacement resolves a null CXL pool and behaves exactly like the stock
-// HashAggregation. Results must still match the reference query.
-TEST_F(CxlHashAggregationTest, withoutCxlTierBehavesLikeStockAggregation) {
+// Without a CXL tier on the query, the adapter leaves the stock
+// HashAggregation in place: there is nothing to relocate to, so no
+// CxlHashAggregation is installed. Results match the reference query.
+TEST_F(CxlHashAggregationTest, withoutCxlTierKeepsStockAggregation) {
   auto data = makeAggInput();
   createDuckDbTable({data});
 
@@ -159,9 +159,12 @@ TEST_F(CxlHashAggregationTest, withoutCxlTierBehavesLikeStockAggregation) {
 
   EXPECT_THAT(
       operatorTypes(*task),
-      testing::Contains(std::string(CxlHashAggregation::kOperatorType)));
-  EXPECT_GT(numCxlHashAggregationsInitialized(), 0);
-  EXPECT_EQ(numCxlHashAggregationsWithCxlPool(), 0);
+      testing::Contains(std::string(exec::OperatorType::kAggregation)));
+  EXPECT_THAT(
+      operatorTypes(*task),
+      testing::Not(testing::Contains(
+          std::string(CxlHashAggregation::kOperatorType))));
+  EXPECT_EQ(numCxlHashAggregationsInitialized(), 0);
 }
 
 // Under memory pressure the operator relocates its partition's groups DRAM ->
@@ -217,7 +220,7 @@ DEBUG_ONLY_TEST_F(
 
 // The arbitrator itself must be able to drive relocation: with the query's
 // DRAM pool capped below the group table, hitting the cap mid-build must
-// reclaim via relocateAllToCxl() instead of failing with "Exceeded memory pool
+// reclaim via relocateRowsToCxl() instead of failing with "Exceeded memory pool
 // capacity". This exercises the real arbitration path (no TestValue): the
 // operator reserves memory at a safe point (ensureInputFits) inside a
 // reclaimable section, since the driver marks operators non-reclaimable for

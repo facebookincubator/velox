@@ -1593,10 +1593,10 @@ void HashTable<ignoreNullKeys>::rehash(
       }
     } while (numGroups > 0);
   }
-  // Replay rows relocated out of 'rows_' into additional containers (e.g. a CXL
-  // tier). They share this table's layout; bloom filters are join-only and not
-  // rebuilt here.
-  for (auto* extra : additionalRows()) {
+  // Replay rows relocated out of 'rows_' into registered payload containers
+  // (e.g. a far-memory tier). They share this table's layout; bloom filters are
+  // join-only and not rebuilt here.
+  for (auto& extra : otherRowContainers_) {
     RowContainerIterator iterator;
     int32_t numGroups;
     do {
@@ -1857,20 +1857,33 @@ void HashTable<ignoreNullKeys>::decideHashMode(
 template <bool ignoreNullKeys>
 std::vector<RowContainer*> HashTable<ignoreNullKeys>::allRows() const {
   std::vector<RowContainer*> rowContainers;
-  rowContainers.reserve(otherTables_.size() + 1);
+  rowContainers.reserve(
+      otherTables_.size() + otherRowContainers_.size() + 1);
   rowContainers.push_back(rows_.get());
   for (auto& other : otherTables_) {
     rowContainers.push_back(other->rows_.get());
   }
-  for (auto* extra : additionalRows()) {
-    rowContainers.push_back(extra);
+  for (auto& other : otherRowContainers_) {
+    rowContainers.push_back(other.get());
   }
   return rowContainers;
 }
 
 template <bool ignoreNullKeys>
-void HashTable<ignoreNullKeys>::swizzleRowPointers(
-    folly::FunctionRef<char*(char*)> translate) {
+RowContainer* HashTable<ignoreNullKeys>::addOtherRowContainer(
+    std::unique_ptr<RowContainer> container) {
+  VELOX_CHECK_NOT_NULL(container);
+  VELOX_CHECK_EQ(
+      container->fixedRowSize(),
+      rows_->fixedRowSize(),
+      "A registered row container must share the table's row layout");
+  otherRowContainers_.push_back(std::move(container));
+  return otherRowContainers_.back().get();
+}
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::remapRowPointers(
+    folly::FunctionRef<char*(char*)> map) {
   if (table_ == nullptr) {
     return;
   }
@@ -1879,13 +1892,13 @@ void HashTable<ignoreNullKeys>::swizzleRowPointers(
     // row pointer.
     for (int64_t i = 0; i < capacity_; ++i) {
       if (table_[i] != nullptr) {
-        table_[i] = translate(table_[i]);
+        table_[i] = map(table_[i]);
       }
     }
     return;
   }
   // Bucketed layout: 16 (tag, 48-bit pointer) slots per bucket. Skip empty and
-  // tombstone slots; translate the rest in place.
+  // tombstone slots; remap the rest in place.
   for (int64_t bucketOffset = 0; bucketOffset < sizeMask_;
        bucketOffset += kBucketSize) {
     auto* bucket = bucketAt(bucketOffset);
@@ -1894,7 +1907,7 @@ void HashTable<ignoreNullKeys>::swizzleRowPointers(
       if (tag == ProbeState::kEmptyTag || tag == ProbeState::kTombstoneTag) {
         continue;
       }
-      bucket->setPointer(slot, translate(bucket->pointerAt(slot)));
+      bucket->setPointer(slot, map(bucket->pointerAt(slot)));
     }
   }
 }
@@ -2106,9 +2119,6 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   numDistinct_ = rows()->numRows();
   for (const auto& other : otherTables_) {
     numDistinct_ += other->rows()->numRows();
-  }
-  for (auto* extra : additionalRows()) {
-    numDistinct_ += extra->numRows();
   }
   if (!useValueIds) {
     if (hashMode_ != HashMode::kHash) {
@@ -2328,9 +2338,17 @@ int32_t HashTable<ignoreNullKeys>::listRows(
     int32_t maxRows,
     uint64_t maxBytes,
     char** rows) {
-  const auto& rowContainer = rowContainerId == 0
-      ? rows_.get()
-      : otherTables_[rowContainerId - 1]->rows();
+  // Index space: 'rows_' at 0, then the join sub-tables, then the containers
+  // registered with addOtherRowContainer().
+  RowContainer* rowContainer;
+  if (rowContainerId == 0) {
+    rowContainer = rows_.get();
+  } else if (rowContainerId <= static_cast<int>(otherTables_.size())) {
+    rowContainer = otherTables_[rowContainerId - 1]->rows();
+  } else {
+    rowContainer =
+        otherRowContainers_[rowContainerId - 1 - otherTables_.size()].get();
+  }
   const auto numRows = rowContainer->template listRows<probeType>(
       &rowContainerIt, maxRows, maxBytes, rows);
   return numRows;
