@@ -29,34 +29,58 @@ struct DecimalSumStateColumns {
   std::unique_ptr<cudf::column> count;
 };
 
-// Decodes intermediate decimal SUM aggregate state stored as a cuDF STRING
-// column (fixed-size packed bytes per row, converted from Velox VARBINARY) into
-// two device columns: a DECIMAL128 sum with scale -scale (matching Velox
-// intermediate state) and an INT64 partial row count. Handles empty input,
-// all-null state without touching payload buffers, and propagates the source
-// null mask to both outputs when present.
+/**
+ * Decodes intermediate decimal SUM aggregate state stored as a cuDF STRING
+ * column (fixed-size packed bytes per row, converted from Velox VARBINARY) into
+ * two device columns: a DECIMAL128 sum with scale -scale (matching Velox
+ * intermediate state) and an INT64 partial row count. Handles empty input,
+ * all-null state without touching payload buffers, and propagates the source
+ * null mask to both outputs when present.
+ *
+ * @param stateCol STRING column of packed sum/count payloads.
+ * @param scale decimal scale used to set the output sum column's scale to
+ *        -scale.
+ * @param stream CUDA stream for device work.
+ * @return decoded sum and count columns.
+ */
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
     rmm::cuda_stream_view stream);
 
-// Encodes partial decimal SUM state (DECIMAL64 or DECIMAL128 sums plus
-// INT64 counts) into a single STRING column (later converted to Velox
-// VARBINARY): per-row fixed-width payloads and string offsets (INT32 or INT64
-// depending on total char size and cuDF large-strings settings). The output
-// null mask matches buildStateValidityMask: a row is invalid if the sum or
-// count is null, or the count is zero.
+/**
+ * Encodes partial decimal SUM state (DECIMAL64 or DECIMAL128 sums plus INT64
+ * counts) into a single STRING column (later converted to Velox VARBINARY):
+ * per-row fixed-width payloads and string offsets (INT32 or INT64 depending on
+ * total char size and cuDF large-strings settings). The output null mask
+ * matches buildStateValidityMask: a row is invalid if the sum or count is null,
+ * or the count is zero.
+ *
+ * @param sumCol per-row partial sums (DECIMAL64 or DECIMAL128).
+ * @param countCol per-row INT64 partial row counts.
+ * @param stream CUDA stream for device work.
+ * @param mr memory resource for allocated columns.
+ * @return STRING column of serialized state.
+ */
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-// Finalizes AVG from intermediate SUM state: divides each sum by its count
-// on device with decimal-specific rounding (see averageRoundDecimalSum),
-// producing a column of the same decimal type as the sum. Rows are null
-// where buildStateValidityMask marks them invalid (null sum/count or zero
-// count), matching serializeDecimalSumState.
+/**
+ * Finalizes AVG from intermediate SUM state: divides each sum by its count on
+ * device with decimal-specific rounding (see averageRoundDecimalSum),
+ * producing a column of the same decimal type as the sum. Rows are null where
+ * buildStateValidityMask marks them invalid (null sum/count or zero count),
+ * matching serializeDecimalSumState.
+ *
+ * @param sumCol per-row partial sums (DECIMAL64 or DECIMAL128).
+ * @param countCol per-row INT64 partial row counts.
+ * @param stream CUDA stream for device work.
+ * @param mr memory resource for allocated columns.
+ * @return per-row decimal average column.
+ */
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
