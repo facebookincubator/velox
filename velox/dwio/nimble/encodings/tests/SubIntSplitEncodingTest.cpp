@@ -92,6 +92,36 @@ std::vector<T> makeWideRangeMonotonicValues() {
   return values;
 }
 
+// Typed Zipfian generator for SubIntSplitEncodingTest. Values 0..67 are small
+// enough to fit in any physicalType; bit_cast is used so the round-trip stays
+// bit-exact regardless of the logical type (int32_t, float, etc.).
+// Interleaved (0, j) pairs give monotonicCount ≈ 50%, keeping Delta cost
+// infinite so FrequencyPartition can win the DP cost model.
+template <typename T>
+std::vector<T> makeZipfianValues() {
+  std::vector<T> values;
+  values.reserve(1024);
+  auto push = [&](uint64_t a, uint64_t b, int count) {
+    for (int i = 0; i < count; ++i) {
+      values.push_back(
+          std::bit_cast<T>(static_cast<UnsignedPhysicalType<T>>(a)));
+      values.push_back(
+          std::bit_cast<T>(static_cast<UnsignedPhysicalType<T>>(b)));
+    }
+  };
+  push(0, 1, 256); // 512 values
+  push(0, 2, 128); // 256 values
+  push(0, 3, 64);  // 128 values
+  for (uint64_t j = 4; j < 36; ++j) {
+    push(0, j, 1); // 64 values
+  }
+  for (uint64_t j = 36; j < 68; ++j) {
+    push(0, j, 1); // 64 values
+  }
+  // Total: 512 + 256 + 128 + 64 + 64 = 1024
+  return values;
+}
+
 template <typename T>
 std::vector<nimble::detail::subintsplit::SegmentPlan> makePreserveSegments() {
   if constexpr (sizeof(PhysicalType<T>) == 4) {
@@ -523,6 +553,8 @@ TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren
       containsType(extendedFactors, nimble::EncodingType::BlockBitPacking));
   EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::Delta));
   EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::FOR));
+  EXPECT_TRUE(
+      containsType(extendedFactors, nimble::EncodingType::FrequencyPartition));
 
   // Children of a non-SubIntSplit node do not get the extended list.
   auto pforChild = policy.createImpl(
@@ -539,6 +571,8 @@ TEST(SubIntSplitEncodingTests, CreateImplExtendsCandidatesForSubIntSplitChildren
       containsType(unextendedFactors, nimble::EncodingType::BlockBitPacking));
   EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::Delta));
   EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::FOR));
+  EXPECT_FALSE(containsType(
+      unextendedFactors, nimble::EncodingType::FrequencyPartition));
 }
 
 TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
@@ -573,6 +607,30 @@ TYPED_TEST(SubIntSplitEncodingTest, WideRangeMonotonicRoundTrip) {
 
   // Bounded size: the recursive candidate set must not blow up the encoding
   // beyond a small multiple of the raw data size.
+  const size_t rawSize = values.size() * sizeof(T);
+  EXPECT_LE(encoded.size(), rawSize * 4 + 1024);
+}
+
+// Zipfian-distributed data (FrequencyPartition as SubIntSplit segment
+// candidate, Phase C): a column with a dominant value (50% frequency) and a
+// long tail should round-trip bit-exactly through SubIntSplit with the
+// extended candidate set. The encoding size bound verifies that the
+// PerTierBitmaps index override in SubIntSplitEncoding::encode() does not
+// inflate the output beyond a reasonable multiple of the raw data.
+TYPED_TEST(SubIntSplitEncodingTest, ZipfianRoundTrip) {
+  using T = TypeParam;
+  const auto values = makeZipfianValues<T>();
+
+  const auto encoded =
+      encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto captured = nimble::EncodingLayoutCapture::capture(encoded);
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+
+  const auto decoded = decodeAll<T>(encoded, *this->pool_);
+  expectBitwiseEqual(values, decoded);
+
+  // Bounded size: FrequencyPartition with PerTierBitmaps adds index overhead
+  // but should still compress better than storing raw values.
   const size_t rawSize = values.size() * sizeof(T);
   EXPECT_LE(encoded.size(), rawSize * 4 + 1024);
 }
