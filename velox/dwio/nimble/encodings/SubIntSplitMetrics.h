@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -41,7 +42,8 @@ enum class MetricFlag : uint32_t {
   DominantValue = 1u << 3, // dominantCount (most-frequent value's frequency)
   BitWidthHistogram = 1u << 4, // bitWidthBuckets
   DeltaStats = 1u << 5, // sumAbsDelta, monotonicCount
-  All = (1u << 6) - 1,
+  FrequencyTiers = 1u << 6, // topKCoverage (requires UniqueCount)
+  All = (1u << 7) - 1,
 };
 using MetricFlags = uint32_t;
 
@@ -84,6 +86,14 @@ struct SegmentMetrics {
   // average step size and the monotonic-non-decreasing fraction.
   uint64_t sumAbsDelta{0};
   size_t monotonicCount{0};
+
+  // Cumulative fraction of values covered by the top-1/2/4/8 most-frequent
+  // distinct values. Only valid when FrequencyTiers was requested AND
+  // uniqueCountCapped == false (i.e. uniqueCount <= kUniqueCountCap).
+  // topKCoverage[0] = fraction for top-1, [1] = top-2, [2] = top-4,
+  // [3] = top-8. Used by frequencyPartitionCostBits to estimate tier encoding
+  // gains.
+  std::array<double, 4> topKCoverage{};
 };
 
 // Single-pass metric collector for extracted bit-range values.
@@ -109,8 +119,11 @@ class MetricCollector {
       MetricFlags flags = static_cast<MetricFlags>(MetricFlag::All)) {
     const bool doMin = hasFlag(flags, MetricFlag::MinMax);
     const bool doRun = hasFlag(flags, MetricFlag::RunStats);
-    const bool doUniq = hasFlag(flags, MetricFlag::UniqueCount);
     const bool doDominant = hasFlag(flags, MetricFlag::DominantValue);
+    const bool doFreqTiers = hasFlag(flags, MetricFlag::FrequencyTiers);
+    // FrequencyTiers requires frequency counts, which subsumes UniqueCount.
+    const bool doUniq =
+        hasFlag(flags, MetricFlag::UniqueCount) || doFreqTiers;
     // Unique count and dominant value share a single frequency map pass.
     const bool doFreq = doUniq || doDominant;
     const bool doHist = hasFlag(flags, MetricFlag::BitWidthHistogram);
@@ -193,6 +206,33 @@ class MetricCollector {
     if (doDominant) {
       out.dominantCount = maxCount;
       out.dominantCountCapped = capped;
+    }
+    if (doFreqTiers && !capped) {
+      // Extract frequency values, sort descending, then compute cumulative
+      // coverage fractions for top {1, 2, 4, 8} distinct values.
+      std::vector<uint32_t> freqs;
+      freqs.reserve(freqMap_.size());
+      for (const auto& [val, cnt] : freqMap_) {
+        freqs.push_back(cnt);
+      }
+      std::sort(freqs.begin(), freqs.end(), std::greater<uint32_t>());
+
+      constexpr size_t kTopKs[4] = {1, 2, 4, 8};
+      const double dn = static_cast<double>(n);
+      uint64_t cumFreq = 0;
+      size_t ki = 0;
+      for (size_t fi = 0; fi < freqs.size() && ki < 4; ++fi) {
+        cumFreq += freqs[fi];
+        while (ki < 4 && fi + 1 >= kTopKs[ki]) {
+          out.topKCoverage[ki] = static_cast<double>(cumFreq) / dn;
+          ++ki;
+        }
+      }
+      // Fill remaining slots if fewer distinct values than topK thresholds.
+      while (ki < 4) {
+        out.topKCoverage[ki] = static_cast<double>(cumFreq) / dn;
+        ++ki;
+      }
     }
 
     return out;
