@@ -683,23 +683,17 @@ void WriterOptions::processConfigs(
 
   // Parquet only updates ioStats_->rawBytesWritten() when a row group is
   // flushed. With the default flush policy (1M rows / 128MB), small
-  // maxTargetFileBytes_ would never trigger rotation because rawBytesWritten()
-  // stays at 0 while data is buffered. To honor maxTargetFileBytes_, cap the
-  // row group byte threshold so we flush earlier and rawBytesWritten() grows
-  // during writes.
-  auto maxTargetFileSize =
-      toParquetPageSize(session.getWithFallback<std::string>(
-          WriterConfig::kParquetSessionMaxTargetFileSize, connectorConfig));
-  if (maxTargetFileSize.has_value()) {
-    if (!flushPolicyFactory) {
-      auto bytesInRowGroup = std::min<int64_t>(
-          DefaultFlushPolicy::kDefaultBytesInRowGroup,
-          maxTargetFileSize.value());
-      flushPolicyFactory = [bytesInRowGroup]() {
-        return std::make_unique<DefaultFlushPolicy>(
-            DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
-      };
-    }
+  // maxTargetFileSizeBytes would never trigger rotation because
+  // rawBytesWritten() stays at 0 while data is buffered. To honor
+  // maxTargetFileSizeBytes, cap the row group byte threshold so we flush
+  // earlier and rawBytesWritten() grows during writes.
+  if (maxTargetFileSizeBytes > 0 && !flushPolicyFactory) {
+    auto bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
+        DefaultFlushPolicy::kDefaultBytesInRowGroup, maxTargetFileSizeBytes));
+    flushPolicyFactory = [bytesInRowGroup]() {
+      return std::make_unique<DefaultFlushPolicy>(
+          DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
+    };
   }
 }
 

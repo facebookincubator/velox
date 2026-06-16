@@ -59,4 +59,42 @@ TEST(IoStatisticsTest, totalScanTimeNs) {
   EXPECT_EQ(stats.totalScanTimeNs(), 4'000);
 }
 
+TEST(IoStatisticsTest, readGap) {
+  IoStatistics stats;
+  EXPECT_EQ(stats.readGap().count(), 0);
+
+  stats.readGap().increment(1'000);
+  stats.readGap().increment(500);
+  stats.readGap().increment(2'000);
+  EXPECT_EQ(stats.readGap().count(), 3);
+  EXPECT_EQ(stats.readGap().sum(), 3'500);
+  EXPECT_EQ(stats.readGap().min(), 500);
+  EXPECT_EQ(stats.readGap().max(), 2'000);
+
+  IoStatistics stats2;
+  stats2.readGap().increment(100);
+  stats2.readGap().increment(5'000);
+  stats.merge(stats2);
+  EXPECT_EQ(stats.readGap().count(), 5);
+  EXPECT_EQ(stats.readGap().sum(), 8'600);
+  EXPECT_EQ(stats.readGap().min(), 100);
+  EXPECT_EQ(stats.readGap().max(), 5'000);
+}
+
+TEST(IoStatisticsTest, duplicateRead) {
+  IoStatistics stats;
+  EXPECT_EQ(stats.duplicateReadRegions(), 0);
+  EXPECT_EQ(stats.duplicateReadBytes(), 0);
+
+  stats.incDuplicateRead(2, 1'000);
+  EXPECT_EQ(stats.duplicateReadRegions(), 2);
+  EXPECT_EQ(stats.duplicateReadBytes(), 1'000);
+
+  IoStatistics stats2;
+  stats2.incDuplicateRead(3, 500);
+  stats.merge(stats2);
+  EXPECT_EQ(stats.duplicateReadRegions(), 5);
+  EXPECT_EQ(stats.duplicateReadBytes(), 1'500);
+}
+
 } // namespace facebook::velox::io

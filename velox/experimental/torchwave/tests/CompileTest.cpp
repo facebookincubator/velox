@@ -91,10 +91,11 @@ class CompileTest : public ::testing::Test {
         model.constantPaths,
         torch::_export::archive_spec::CONSTANTS_DIR);
 
-    auto modelContext = std::make_shared<ModelContext>();
-    modelContext->graph = &graph;
+    auto modelContext = std::make_unique<ModelContext>();
+    modelContext->graph = std::move(model.graph);
     modelContext->weights = std::move(weights);
-    auto waveGraph = std::make_unique<WaveGraph>(std::move(modelContext));
+    modelContexts_.push_back(std::move(modelContext));
+    auto waveGraph = std::make_unique<WaveGraph>(modelContexts_.back().get());
     metaStore_.insert(
         metaStore_.end(),
         std::make_move_iterator(metaStore.begin()),
@@ -166,6 +167,8 @@ class CompileTest : public ::testing::Test {
  private:
   // Owns LoadedModels so the graph (and its nodes) remain valid.
   std::vector<LoadedModel> loadedModels_;
+  // Owns ModelContexts so the WaveGraph's borrowed pointer remains valid.
+  std::vector<std::unique_ptr<ModelContext>> modelContexts_;
   // Owns TensorMeta objects so pointers in ValueTypes remain valid.
   std::vector<std::unique_ptr<nativert::TensorMeta>> metaStore_;
 };

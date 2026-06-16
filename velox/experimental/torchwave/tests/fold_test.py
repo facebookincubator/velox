@@ -35,15 +35,19 @@ class FoldTestPreproc(nn.Module):
         # --- Foldable subgraphs (depend only on weights) ---
 
         # Folds to a constant tensor: element-wise on weights only.
+        # pyrefly: ignore [unsupported-operation]
         folded_sum = self.w1 + self.w2
 
         # Folds to a constant scalar via reduction.
+        # pyrefly: ignore [not-callable]
         folded_scalar = self.w1.sum()
 
         # Folds to a constant mask: w1 % 10 < 9 (90% true).
+        # pyrefly: ignore [unsupported-operation]
         folded_mask = self.w1 % 10 < 9
 
         # Folds to a constant tensor: masked_select with constant input and mask.
+        # pyrefly: ignore [bad-argument-type]
         folded_selected = torch.masked_select(self.w2, folded_mask)
 
         # --- Dynamic ops with redundant views ---
@@ -51,6 +55,7 @@ class FoldTestPreproc(nn.Module):
         # Chain 1: view, view, masked_select with folded mask.
         t1 = x.view(-1)
         t2 = t1.view(-1)
+        # pyrefly: ignore [bad-argument-type]
         s1 = torch.masked_select(t2, folded_mask)
 
         # Chain 2: view, view, masked_select with dynamic mask.
@@ -72,6 +77,7 @@ class FoldTestPreproc(nn.Module):
         o3 = folded_selected + 1
 
         # Another foldable scalar: product of weight shapes.
+        # pyrefly: ignore [bad-index]
         folded_numel = torch.tensor(self.w1.shape[0] * self.w2.shape[0])
         o4 = x + folded_numel
 

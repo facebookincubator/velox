@@ -1,0 +1,167 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Step 2 of the auto-trigger-full-build chain for approving reviews.
+#
+# Triggered via workflow_run when detect-force-full.yml completes
+# (on an approving review). workflow_run always runs in BASE context
+# with full GITHUB_TOKEN write access — even for fork PRs. That's
+# the whole point of the chain: pull_request_review on a fork PR
+# only gets a read-only token, so the privileged cancel + rerun has
+# to land here.
+#
+# Trust model:
+#   detect-force-full.yml runs in fork-PR context (the YAML is loaded
+#   from the PR head ref), so anything it writes is attacker-
+#   controllable. We trust ONLY `github.event.workflow_run.id`, which
+#   GitHub sets when the upstream run is created and forks cannot
+#   influence. From that id we API-derive the upstream's actual
+#   head_sha and resolve the PR — the fork can't substitute another
+#   PR's identity.
+#
+# Behaviour:
+#   * Resolve the upstream PR head SHA + number from workflow_run.id.
+#   * Dedup: only fire on the FIRST approving review for this head
+#     SHA (subsequent approvals on the same SHA are no-ops).
+#   * Hand off to the rerun-linux-build composite action, which
+#     finds the most recent `Linux Build using GCC` run on the head
+#     SHA, cancels it if in flight, and re-runs it.
+#
+# /full-build comment escalation does NOT come through here — see
+# force-full-on-comment.yml. The comment path can run inline because
+# issue_comment gets a full GITHUB_TOKEN in BASE context.
+#
+# Why re-run instead of dispatching a fresh build:
+#   GitHub Actions ties each job's check_run to `github.sha` of the
+#   triggering event. A re-run preserves the original `pull_request`
+#   event's SHA, so check_runs land on the PR head SHA and reviewers
+#   see the full build status on the PR. workflow_call from this
+#   workflow_run-triggered context would land check_runs on the
+#   default branch's HEAD instead.
+#
+# When the re-run executes, `selective-build-plan.yml` re-checks both
+# the standing approval and any /full-build comment on the PR,
+# OR-combines them into is_force_full, and resolves to full mode
+# automatically — no escalation flag or input plumbing needed.
+
+name: Rerun Linux Build on Force-Full Trigger
+
+on:
+  workflow_run:
+    workflows: [Detect Force-Full Trigger]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write # required by /actions/runs/{id}/{cancel,rerun}
+
+jobs:
+  rerun:
+    # Filter on conclusion to skip detect invocations whose `if:` was
+    # false (non-approving review). The detect job is skipped →
+    # workflow conclusion = success-with-skipped or skipped depending
+    # on GitHub internals; the meta step exits early either way once
+    # it sees the upstream event doesn't match.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      # workflow_run-triggered jobs start with an empty workspace; check
+      # out the helper-scripts dir and the rerun-linux-build composite
+      # action so both are on disk for the steps below. Sparse-checkout
+      # keeps this fast and the BASE-context default ref ensures we
+      # trust everything from main rather than the PR head.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/rerun-linux-build
+
+      # Re-derive the upstream PR head SHA and number from
+      # `workflow_run.id` (GitHub-set, not forgeable), instead of
+      # trusting any artifact written by detect-force-full.yml in
+      # fork-PR context. Two GitHub quirks handled here:
+      #
+      #   1. `github.event.workflow_run.head_sha` is the SHA of THIS
+      #      workflow's definition on main, NOT the upstream run's head
+      #      SHA. We have to look up the upstream run via
+      #      /actions/runs/{id} to get the real head_sha.
+      #
+      #   2. `/repos/{repo}/commits/{sha}/pulls` returns empty for fork-
+      #      PR head SHAs in this repo. The /search/issues API works.
+      - name: Resolve upstream PR head from workflow_run
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          upstream=$(gh_api "/repos/$REPO/actions/runs/$UPSTREAM_RUN_ID")
+          upstream_event=$(echo "$upstream" | jq -r '.event')
+          if [ "$upstream_event" != "pull_request_review" ]; then
+            echo "upstream event was $upstream_event — exiting"
+            exit 0
+          fi
+          head_sha=$(echo "$upstream" | jq -r '.head_sha')
+          pr_number=$(gh_api "/search/issues?q=is:pr+repo:$REPO+sha:$head_sha" \
+            --jq '[.items[] | select(.state == "open")][0].number // empty')
+          if [ -z "$pr_number" ] || [ -z "$head_sha" ]; then
+            echo "could not resolve PR or head SHA — exiting"
+            exit 0
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      # Dedup: count eligible approving reviews on this exact head
+      # SHA. == 1 means we are the first; > 1 means an earlier
+      # approval already triggered the re-run on this same SHA. The
+      # author_association filter matches detect-force-full.yml's
+      # if: gate (OWNER/MEMBER/COLLABORATOR/CONTRIBUTOR) so approvals
+      # outside the allowlist on the same SHA don't bump the counter
+      # and dedup away an eligible reviewer's first approval.
+      - name: Dedup
+        if: steps.meta.outputs.pr_number
+        id: dedup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.meta.outputs.pr_number }}
+          SHA: ${{ steps.meta.outputs.head_sha }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          approvals=$(gh_api "/repos/$REPO/pulls/$PR/reviews" \
+            --jq "[.[]
+                   | select(.state == \"APPROVED\" and .commit_id == \"$SHA\")
+                   | select(.author_association == \"OWNER\"
+                            or .author_association == \"MEMBER\"
+                            or .author_association == \"COLLABORATOR\"
+                            or .author_association == \"CONTRIBUTOR\")
+                  ] | length")
+          echo "eligible approvals on this SHA: $approvals"
+          if [ "$approvals" -eq 1 ]; then
+            echo "should_rerun=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_rerun=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cancel + rerun latest Linux Build
+        if: steps.dedup.outputs.should_rerun == 'true'
+        uses: ./.github/actions/rerun-linux-build
+        with:
+          repo: ${{ github.repository }}
+          head_sha: ${{ steps.meta.outputs.head_sha }}
+          github_token: ${{ github.token }}

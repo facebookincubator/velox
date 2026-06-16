@@ -30,7 +30,7 @@ Drafts a commit message that follows the rules in `CODING_STYLE.md` and `CLAUDE.
    - **What + why**: lead with user-visible behavior change. Include one concrete example query, error message, or before/after fact. A reader without internals knowledge should get the gist.
    - **Mechanism**: the core idea as ONE concept — a new field, a swapped algorithm, an added check, a rewrite step. Skip when the title + "what + why" already conveys it.
    - **Deferred**: name a deliberately-not-done case and how it surfaces (NYI message, follow-up issue). Skip if none.
-   - **Test plan**: high-level coverage. Name the test file(s) and what scenarios they cover. Don't write "tests pass" or "CI green" — CI reports that; restating it is noise. State what was *covered*, not that it succeeded. For pure refactors with no new tests, omit the Test Plan section entirely — "existing tests cover this" / "covered by CI" is implied by "pure refactor" and adds no information.
+   - **Test plan**: the only useful content is the test *strategy*, and only when it isn't obvious. Never list the tests or their scenarios — they are in the diff. Default to omitting the Test Plan entirely (unit tests added for the new behavior, or a pure refactor). State the strategy only when a reader couldn't guess it — a manual repro, a CLI run, a fuzzer run, end-to-end exercise; bullets if it spans more than one kind. No pass counts or "CI green" — CI reports that.
 
    **Prose clarity** — write so a tired reader gets each sentence on first read.
    - Prefer short sentences. If a sentence has two clauses joined by "so", "because", "but", "even though", "although", or a comma + participle, consider splitting it. Contrastive joiners ("but X", "even though Y") are especially risky when both halves introduce a fact the reader does not already have — pack two new facts into one sentence and the reader stalls. State each rule in its own sentence, then connect them.
@@ -94,7 +94,7 @@ These are the patterns drafts most often hit, and that this skill exists to prev
 - **Missing big picture** — Diving into internal symbols in paragraph 1. Lead with user-visible behavior; descend into mechanism in paragraph 2.
 - **Reasoning scaffolding** — "We considered X but chose Y because Z." Belongs in design docs or PR threads, not the commit log.
 - **Hard-wrapped paragraphs** — Hard line breaks at ~70/80 columns render as ragged short lines wherever the message is reflowed.
-- **Pass-counting test plans** — "All 47 tests pass." CI says that. State *what was covered*, not that it succeeded.
+- **Listing or pass-counting the tests** — the added cases are in the diff and "All 47 tests pass" is CI's job; both are noise. The Test Plan carries only a non-obvious test strategy (a repro, a CLI run), else omit it.
 
 ## When NOT to invoke
 

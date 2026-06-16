@@ -61,6 +61,12 @@ std::pair<c10::ScalarType, std::string> resolveOutDtype(
   } else {
     dtypeStr = c10::toString(outDtype);
   }
+  // An empty or unrecognized dtype string (e.g. dtype="" serialized for a
+  // factory op that infers its type from the input) must fall back to the
+  // resolved dtype name; otherwise downstream codegen defaults it to Float.
+  if (dtypeStr.empty()) {
+    dtypeStr = c10::toString(outDtype);
+  }
   return {outDtype, dtypeStr};
 }
 
@@ -226,7 +232,7 @@ void resolveDtypeFromInput(nativert::Node* node, const ValueTypes& types) {
     auto outDtype = c10::isIntegralType(inputDtype, /*includeBool=*/true)
         ? c10::ScalarType::Long
         : inputDtype;
-    node->addAttribute({"dtype", std::string(c10::toString(outDtype))});
+    node->addAttribute({"dtype", outDtype});
   }
 }
 
@@ -256,11 +262,51 @@ int64_t integerParamByName(
   return paramSymInt(input->value, frame, map);
 }
 
+// Casts int64 scalar attributes to double when the first input is a
+// floating-point tensor. Without this, an attribute like other=2 (int64)
+// gets copied as raw bytes to a param slot the kernel reads as double.
+void castScalarAttrsToInputDtype(
+    nativert::Node* node,
+    const ValueTypes& types) {
+  if (node->inputs().empty()) {
+    return;
+  }
+  auto inputId = node->inputs()[0].value->id();
+  if (inputId >= static_cast<int>(types.types.size()) ||
+      !types.types[inputId]) {
+    return;
+  }
+  auto dtype = types.types[inputId]->dtype();
+  if (!at::isFloatingType(dtype)) {
+    return;
+  }
+  // PyTorch performs Tensor-Scalar ops -- including the comparison chains that
+  // build selection masks (ge/lt/gt/le.Scalar) -- in the tensor's dtype: the
+  // scalar is first converted to that dtype. For a float32 tensor that means
+  // rounding the scalar to float32 before the op. Without this, a threshold
+  // like 0.1 stays a double and the generated `x >= threshold` promotes the
+  // float `x` to double, comparing in double; at a boundary value that flips
+  // the mask bit vs eager and the difference propagates into downstream
+  // jagged/masked-select counts. The float Constant kind is double, so we keep
+  // a double whose value is exactly representable as float32 -- a subsequent
+  // double comparison/arith then yields the same result as float.
+  const bool toFloat = (dtype == c10::ScalarType::Float);
+  for (auto& attr : node->attributes()) {
+    auto& value = const_cast<nativert::Attribute&>(attr).value;
+    if (std::holds_alternative<int64_t>(value)) {
+      double d = static_cast<double>(std::get<int64_t>(value));
+      value = toFloat ? static_cast<double>(static_cast<float>(d)) : d;
+    } else if (toFloat && std::holds_alternative<double>(value)) {
+      value = static_cast<double>(static_cast<float>(std::get<double>(value)));
+    }
+  }
+}
+
 void resolveDefaultDtype(nativert::Node* node, const ValueTypes& /*types*/) {
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
-  node->addAttribute({"dtype", std::string("Float")});
+  node->addAttribute({"dtype", c10::ScalarType::Float});
 }
 
 void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
@@ -275,7 +321,8 @@ void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
       break;
     }
   }
-  node->addAttribute({"dtype", std::string(hasFloat ? "Float" : "Long")});
+  node->addAttribute(
+      {"dtype", hasFloat ? c10::ScalarType::Float : c10::ScalarType::Long});
 }
 
 void resolveNanToNumDefaults(nativert::Node* node, const ValueTypes& types) {
@@ -330,7 +377,7 @@ void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
   auto inputId = node->inputs()[0].value->id();
   if (inputId < static_cast<int>(types.types.size()) && types.types[inputId]) {
     auto inputDtype = types.types[inputId]->dtype();
-    node->addAttribute({"dtype", std::string(c10::toString(inputDtype))});
+    node->addAttribute({"dtype", inputDtype});
   }
 }
 
@@ -346,61 +393,39 @@ std::vector<ValueConstraint> sizeAttrRankConstraint(
 }
 
 std::vector<std::vector<Dim>> sizeAttrReserveShape(
-    NodeCP node,
+    NodeCP /*node*/,
     nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
-  const auto* sizeAttr = node->tryGetAttribute("size");
-  if (sizeAttr) {
-    const auto& size = std::get<std::vector<int64_t>>(sizeAttr->value);
-    return {{size.begin(), size.end()}};
-  }
-  auto* sizeInput = node->tryGetInput("size");
-  TORCH_CHECK(sizeInput, node->target(), ": missing size attribute or input");
-  auto it = map.find(sizeInput->value->id());
-  TORCH_CHECK(it != map.end(), node->target(), ": size not in FormalToActual");
-  auto& ivalue = frame.getIValue(it->second);
-  if (!ivalue.isNone()) {
-    auto size = ivalue.toIntVector();
-    return {{size.begin(), size.end()}};
-  }
-  auto& idToValue = waveGraph()->idToValue();
-  auto valueIt = idToValue.find(it->second);
-  TORCH_CHECK(
-      valueIt != idToValue.end(),
-      node->target(),
-      ": size value id not in idToValue");
-  auto* producer = valueIt->second->producer();
-  TORCH_CHECK(
-      producer && producer->target() == "prim.ListPack",
-      node->target(),
-      ": expected prim.ListPack producer for size");
-  std::vector<Dim> size;
-  for (const auto& input : producer->inputs()) {
-    auto elemIt = map.find(input.value->id());
-    TORCH_CHECK(
-        elemIt != map.end(),
-        node->target(),
-        ": ListPack element not in FormalToActual");
-    size.push_back(static_cast<Dim>(frame.getIValue(elemIt->second).toInt()));
-  }
-  return {size};
+    const FormalToActual& map,
+    NodeCP originalFormalNode,
+    const NodeMap& nodeMap) {
+  auto size =
+      paramIntListByName(originalFormalNode, "size", frame, map, nodeMap);
+  return {{size.begin(), size.end()}};
 }
 
 std::vector<std::vector<Dim>> numBlocksShape(
     NodeCP node,
     nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
+    const FormalToActual& map,
+    NodeCP /*originalFormalNode*/,
+    const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
   auto blockSize = WaveConfig::get().blockSize;
-  auto numBlocks =
-      static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize);
+  // At least one block: makeGrid always launches >=1 block (even for an empty
+  // input), and that block's head kernel unconditionally writes one per-block
+  // partial sum (out[blockInOp]).  A zero-length counts buffer would make that
+  // write dereference null storage.
+  auto numBlocks = std::max<Dim>(
+      1, static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize));
   return {{numBlocks}};
 }
 
 std::vector<std::vector<Dim>> inputShape(
     NodeCP node,
     nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
+    const FormalToActual& map,
+    NodeCP /*originalFormalNode*/,
+    const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
   auto sizes = tensor.sizes();
   return {{sizes.begin(), sizes.end()}};
@@ -409,7 +434,9 @@ std::vector<std::vector<Dim>> inputShape(
 std::vector<std::vector<Dim>> inputShapePlusOne(
     NodeCP node,
     nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
+    const FormalToActual& map,
+    NodeCP /*originalFormalNode*/,
+    const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
   return {{static_cast<Dim>(tensor.numel() + 1)}};
 }
@@ -494,6 +521,78 @@ void registerReshapeLikeOp(const char* opName, const char* shapeAttrName) {
       .registerOp();
 }
 
+float elementwiseCostFromDtype(c10::ScalarType dtype, float baseCost) {
+  auto elemSize = c10::elementSize(dtype);
+  if (c10::isFloatingType(dtype)) {
+    if (elemSize <= 4) {
+      return baseCost;
+    }
+    auto* device = facebook::velox::wave::currentDevice();
+    float ratio = device ? static_cast<float>(device->float32To64Ratio) : 2.0f;
+    return baseCost * ratio;
+  }
+  return elemSize <= 4 ? baseCost : baseCost * 2.0f;
+}
+
+c10::ScalarType nodeOutputDtype(NodeCP node) {
+  auto* wg = waveGraph();
+  if (!wg) {
+    return c10::ScalarType::Float;
+  }
+  auto& types = wg->types();
+  for (auto* output : node->outputs()) {
+    auto id = output->id();
+    if (id >= 0 && static_cast<size_t>(id) < types.types.size() &&
+        types.types[id]) {
+      return types.types[id]->dtype();
+    }
+  }
+  if (!node->inputs().empty()) {
+    auto id = node->inputs()[0].value->id();
+    if (id >= 0 && static_cast<size_t>(id) < types.types.size() &&
+        types.types[id]) {
+      return types.types[id]->dtype();
+    }
+  }
+  return c10::ScalarType::Float;
+}
+
+float arithmeticCost(NodeCP node, const Metadata& /*meta*/) {
+  return elementwiseCostFromDtype(nodeOutputDtype(node), 1.0f);
+}
+
+float mulCost(NodeCP node, const Metadata& /*meta*/) {
+  auto dtype = nodeOutputDtype(node);
+  if (c10::isIntegralType(dtype, true) && c10::elementSize(dtype) > 4) {
+    return 4.0f;
+  }
+  return elementwiseCostFromDtype(dtype, 1.0f);
+}
+
+float divCost(NodeCP node, const Metadata& /*meta*/) {
+  auto dtype = nodeOutputDtype(node);
+  if (c10::isIntegralType(dtype, true)) {
+    return c10::elementSize(dtype) > 4 ? 16.0f : 8.0f;
+  }
+  return elementwiseCostFromDtype(dtype, 2.0f);
+}
+
+float remainderCost(NodeCP node, const Metadata& /*meta*/) {
+  auto dtype = nodeOutputDtype(node);
+  if (c10::isIntegralType(dtype, true)) {
+    return c10::elementSize(dtype) > 4 ? 20.0f : 10.0f;
+  }
+  return elementwiseCostFromDtype(dtype, 3.0f);
+}
+
+float powCost(NodeCP node, const Metadata& /*meta*/) {
+  return elementwiseCostFromDtype(nodeOutputDtype(node), 8.0f);
+}
+
+float transcendentalCost(NodeCP node, const Metadata& /*meta*/) {
+  return elementwiseCostFromDtype(nodeOutputDtype(node), 4.0f);
+}
+
 } // namespace
 
 void registerBuiltins() {
@@ -501,88 +600,161 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.add.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.sub.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.mul.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(mulCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.div.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(divCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.remainder.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.fmod.Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.pow.Tensor_Tensor")
       .elementwise()
       .arithmeticPromotion()
+      .costFunction(powCost)
+      .registerOp();
+
+  // In-place binary arithmetic. PyTorch keeps these in non-functionalized
+  // graphs (e.g. dense-feature normalization x.add_(mean).mul_(inv_std)).
+  // Registered as elementwise; the device functions take the mutated arg by
+  // reference so the write lands in self's storage. No arithmeticPromotion:
+  // in-place ops keep self's dtype rather than promoting the result.
+  MetadataBuilder("torch.ops.aten.add_.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Tensor")
+      .elementwise()
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Tensor")
+      .elementwise()
+      .costFunction(divCost)
       .registerOp();
 
   // Binary arithmetic (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.add.Scalar")
       .elementwiseFunc("__add")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.sub.Scalar")
       .elementwiseFunc("__sub")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.mul.Scalar")
       .elementwiseFunc("__mul")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(mulCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.div.Scalar")
       .elementwiseFunc("__div")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(divCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.remainder.Scalar")
       .elementwiseFunc("__remainder")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.fmod.Scalar")
       .elementwiseFunc("__fmod")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(remainderCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.pow.Tensor_Scalar")
       .elementwiseFunc("__pow")
       .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(powCost)
       .registerOp();
 
   // Comparison.
-  MetadataBuilder("torch.ops.aten.eq.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.ne.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.lt.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.le.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.gt.Tensor").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.ge.Tensor").elementwise().registerOp();
+  MetadataBuilder("torch.ops.aten.eq.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.ne.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.lt.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.le.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.gt.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.ge.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
 
   // Comparison (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.eq.Scalar")
       .elementwiseFunc("__eq")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.ne.Scalar")
       .elementwiseFunc("__ne")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.lt.Scalar")
       .elementwiseFunc("__lt")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.le.Scalar")
       .elementwiseFunc("__le")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.gt.Scalar")
       .elementwiseFunc("__gt")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
   MetadataBuilder("torch.ops.aten.ge.Scalar")
       .elementwiseFunc("__ge")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
       .registerOp();
 
   // Bitwise.
@@ -630,36 +802,110 @@ void registerBuiltins() {
       .elementwise()
       .registerOp();
 
-  // Unary math.
-  MetadataBuilder("torch.ops.aten.abs.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.neg.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.ceil.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.floor.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.round.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.trunc.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sign.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sqrt.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.rsqrt.default").elementwise().registerOp();
+  // Unary math - cheap ops (single cycle).
+  MetadataBuilder("torch.ops.aten.abs.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.neg.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.ceil.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.floor.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.round.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.trunc.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sign.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  // Unary math - SFU ops (2-4 cycles).
+  MetadataBuilder("torch.ops.aten.sqrt.default")
+      .elementwise()
+      .cost(2.0f)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.rsqrt.default")
+      .elementwise()
+      .cost(2.0f)
+      .registerOp();
   MetadataBuilder("torch.ops.aten.reciprocal.default")
       .elementwise()
+      .cost(2.0f)
       .registerOp();
-  MetadataBuilder("torch.ops.aten.exp.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log2.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log10.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.log1p.default").elementwise().registerOp();
+  MetadataBuilder("torch.ops.aten.exp.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log2.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log10.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.log1p.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
 
-  // Trigonometric.
-  MetadataBuilder("torch.ops.aten.sin.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.cos.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.tan.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.asin.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.acos.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.atan.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.atan2.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sinh.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.cosh.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.tanh.default").elementwise().registerOp();
+  // Trigonometric (SFU, ~4 cycles).
+  MetadataBuilder("torch.ops.aten.sin.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.cos.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.tan.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.asin.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.acos.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.atan.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.atan2.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sinh.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.cosh.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.tanh.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
 
   // Item.
   MetadataBuilder("torch.ops.aten.item.default")
@@ -677,14 +923,30 @@ void registerBuiltins() {
       .registerOp();
 
   // Activation functions.
-  MetadataBuilder("torch.ops.aten.relu.default").elementwise().registerOp();
-  MetadataBuilder("torch.ops.aten.sigmoid.default").elementwise().registerOp();
+  MetadataBuilder("torch.ops.aten.relu.default")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sigmoid.default")
+      .elementwise()
+      .costFunction(transcendentalCost)
+      .registerOp();
   MetadataBuilder("torch.ops.aten.clamp.default")
       .elementwise()
       .argumentMeta(
           {{.isRegister = true},
            {.hasPresentTemplateParam = true},
            {.hasPresentTemplateParam = true}})
+      .normalize(castScalarAttrsToInputDtype)
+      .registerOp();
+  // In-place clamp. Mirrors clamp.default; __clamp_(T&, lo, hi) writes self.
+  MetadataBuilder("torch.ops.aten.clamp_.default")
+      .elementwise()
+      .argumentMeta(
+          {{.isRegister = true},
+           {.hasPresentTemplateParam = true},
+           {.hasPresentTemplateParam = true}})
+      .normalize(castScalarAttrsToInputDtype)
       .registerOp();
   MetadataBuilder("torch.ops.aten.nan_to_num.default")
       .elementwise()
@@ -694,6 +956,7 @@ void registerBuiltins() {
   // Type cast.
   MetadataBuilder("torch.ops.aten.to.dtype")
       .elementwiseFunc("__to")
+      .numArgs(1)
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -704,6 +967,72 @@ void registerBuiltins() {
            << ")";
       })
       .ignoreAttrs({"memory_format", "copy", "non_blocking"})
+      .registerOp();
+
+  // _to_copy: functional copy/cast. Same as to.dtype -- the cast is driven by
+  // the (here optional) dtype attribute, named "dtype" exactly as in to.dtype,
+  // so no attribute rename is needed. When dtype is absent (a pure device/copy
+  // with no type change) the cast is the identity. The other kwargs only affect
+  // placement/layout, which wave handles separately, so they are ignored.
+  MetadataBuilder("torch.ops.aten._to_copy.default")
+      .elementwiseFunc("__to")
+      .numArgs(1)
+      .generateCall([](std::stringstream& ss,
+                       NodeCP node,
+                       std::vector<std::string> args) {
+        TORCH_CHECK(!args.empty(), "_to_copy requires at least one input");
+        const auto* dtypeAttr = node->tryGetAttribute("dtype");
+        if (!dtypeAttr ||
+            std::holds_alternative<nativert::None>(dtypeAttr->value)) {
+          ss << args[0];
+          return;
+        }
+        ss << "static_cast<" << cudaTypeFromDtype(*dtypeAttr) << ">(" << args[0]
+           << ")";
+      })
+      .ignoreAttrs(
+          {"layout", "device", "pin_memory", "non_blocking", "memory_format"})
+      .registerOp();
+
+  // scalar_tensor: materialize a Scalar as a 0-d (single-element) tensor.
+  // Elementwise with one (register) scalar input; the output is always one
+  // element and its value is, like to.dtype, a static_cast of the scalar to the
+  // type named by the dtype attribute (the literal's own type when dtype is
+  // absent/None). The layout/device/pin_memory kwargs only affect placement, so
+  // they are ignored.
+  MetadataBuilder("torch.ops.aten.scalar_tensor.default")
+      .elementwiseFunc("__scalar_tensor")
+      .numArgs(1)
+      // The schema has 5 args (s, dtype, layout, device, pin_memory); only the
+      // scalar s is a real (register) input, the rest arrive as attributes.
+      // argumentMeta must still cover every schema argument.
+      .argumentMeta({{.isRegister = true}, {}, {}, {}, {}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserveShape = [](NodeCP /*node*/,
+                               nativert::ExecutionFrame& /*frame*/,
+                               const FormalToActual& /*map*/,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
+              // 0-d (rank-0) output: one element, matching PyTorch's
+              // scalar_tensor shape.
+              return {{}};
+            }}})
+      .generateCall([](std::stringstream& ss,
+                       NodeCP node,
+                       std::vector<std::string> args) {
+        TORCH_CHECK(!args.empty(), "scalar_tensor requires at least one input");
+        const auto* dtypeAttr = node->tryGetAttribute("dtype");
+        if (!dtypeAttr ||
+            std::holds_alternative<nativert::None>(dtypeAttr->value)) {
+          ss << args[0];
+          return;
+        }
+        ss << "static_cast<" << cudaTypeFromDtype(*dtypeAttr) << ">(" << args[0]
+           << ")";
+      })
+      .ignoreAttrs({"layout", "device", "pin_memory"})
       .registerOp();
 
   // Zeros.
@@ -735,10 +1064,12 @@ void registerBuiltins() {
       .defaultInputMeta()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
             }}})
       .normalize(resolveDtypeFromInputExact)
@@ -753,10 +1084,12 @@ void registerBuiltins() {
       .defaultInputMeta()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
             }}})
       .normalize(resolveDtypeFromInputExact)
@@ -775,14 +1108,29 @@ void registerBuiltins() {
             if (!sizeAttr) {
               return {};
             }
-            auto [outDtype, dtypeStr] = resolveOutDtype(node, &waveGraph);
+            auto outDtype = resolveOutDtype(node, &waveGraph).first;
             auto* graph = waveGraph.graph();
             auto* zerosNode =
                 graph->createNode("torch.ops.aten.zeros.default", {});
             zerosNode->addAttribute(
                 {sizeAttr->name,
                  std::get<std::vector<int64_t>>(sizeAttr->value)});
-            zerosNode->addAttribute({"dtype", dtypeStr});
+            // aten.zeros runs as a standalone via nativert C10Kernel, whose
+            // boxed schema expects an int ScalarType for `dtype`.  Emit a typed
+            // ScalarType (not the string name) so it unboxes natively, with no
+            // string-reinterpret workaround needed in
+            // prefillStackWithStaticArgs.
+            zerosNode->addAttribute({"dtype", outDtype});
+            // new_zeros inherits its input's device; the rewritten zeros has no
+            // such input, so pin it to the wave (GPU) device.  Without this the
+            // C10 zeros falls back to CPU and trips device-mismatch checks.
+            if (auto* dev = facebook::velox::wave::currentDevice()) {
+              zerosNode->addAttribute(
+                  {"device",
+                   c10::Device(
+                       c10::kCUDA,
+                       static_cast<c10::DeviceIndex>(dev->deviceId))});
+            }
             graph->insertBefore(zerosNode, const_cast<nativert::Node*>(node));
             auto* newOutput =
                 waveGraph.newTensorValue(zerosNode, "zeros", outDtype);
@@ -796,10 +1144,12 @@ void registerBuiltins() {
       .hasIdxArg()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               auto end = integerParamByName(node, "end", frame, map);
               return {{static_cast<Dim>(end)}};
             }}})
@@ -814,10 +1164,12 @@ void registerBuiltins() {
       .hasIdxArg()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               auto start = integerParamByName(node, "start", frame, map);
               auto end = integerParamByName(node, "end", frame, map);
               return {{static_cast<Dim>(end - start)}};
@@ -837,8 +1189,70 @@ void registerBuiltins() {
       .elementwiseFunc("__sym_size")
       .argumentMeta(
           {{.isRegister = false, .wholeTensor = true}, {.isRegister = true}})
+      .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .isScalarElementwise()
       .registerOp();
+
+  // Element count. Like sym_size, reads tensor metadata; returns the numEl
+  // field of wave::Tensor. x.numel() on a dynamically-shaped tensor lowers to
+  // aten.sym_numel.default. Takes the whole tensor; output is a single int.
+  MetadataBuilder("torch.ops.aten.sym_numel.default")
+      .elementwiseFunc("__numel")
+      .argumentMeta({{.isRegister = false, .wholeTensor = true}})
+      .returnMeta({{.isRegister = true}})
+      .metadataGetter()
+      .isScalarElementwise()
+      .registerOp();
+
+  // _operator.* Python scalar ops (sym arithmetic / comparisons), e.g.
+  // sym_size // constant, size - 1, or a guard like sym_size >= 0. Operands and
+  // result are naked scalars (SymInt / SymFloat / SymBool), not tensors, and
+  // these ops are not in the PyTorch dispatcher, so they have no
+  // FunctionSchema. Register each schema-less with isScalarElementwise: the
+  // elementwise codegen then runs a single iteration and writes the result to a
+  // scalar parameter. The device functions are templated on the operand types,
+  // so one registration serves int and float operands.
+  auto registerScalarOp =
+      [](const char* opName, const char* deviceFunc, int32_t arity) {
+        std::vector<ArgumentMeta> args(arity, ArgumentMeta{.isRegister = true});
+        // The _operator builtins name their positional params with single
+        // letters from the Python signature: add(a, b), neg(a), etc. Bind by
+        // these names rather than by container order (see forArguments); a
+        // future op whose serialized names differ then errors instead of
+        // silently miscomputing.
+        std::vector<std::string> names;
+        names.reserve(arity);
+        for (int32_t i = 0; i < arity; ++i) {
+          names.emplace_back(1, static_cast<char>('a' + i));
+        }
+        MetadataBuilder(opName, MetadataBuilder::NoSchema{})
+            .elementwiseFunc(deviceFunc)
+            .numArgs(arity)
+            .isScalarElementwise()
+            .argumentMeta(std::move(args))
+            .argumentNames(std::move(names))
+            .returnMeta({{.isRegister = true}})
+            .registerOp();
+      };
+  // Binary arithmetic (result type follows operand promotion).
+  registerScalarOp("_operator.add", "__opadd", 2);
+  registerScalarOp("_operator.sub", "__opsub", 2);
+  registerScalarOp("_operator.mul", "__mul", 2);
+  registerScalarOp("_operator.floordiv", "__floordiv", 2);
+  registerScalarOp("_operator.mod", "__remainder", 2);
+  registerScalarOp("_operator.truediv", "__div", 2);
+  registerScalarOp("_operator.pow", "__pow", 2);
+  // Unary arithmetic.
+  registerScalarOp("_operator.neg", "__neg", 1);
+  registerScalarOp("_operator.abs", "__abs", 1);
+  // Comparisons (result is a bool).
+  registerScalarOp("_operator.eq", "__eq", 2);
+  registerScalarOp("_operator.ne", "__ne", 2);
+  registerScalarOp("_operator.lt", "__lt", 2);
+  registerScalarOp("_operator.le", "__le", 2);
+  registerScalarOp("_operator.gt", "__gt", 2);
+  registerScalarOp("_operator.ge", "__ge", 2);
 
   // Identity-like ops: output replaces first input.
   for (const auto* opName :
@@ -862,28 +1276,413 @@ void registerBuiltins() {
     builder.registerOp();
   }
 
+  // --- Helpers for index ops ---
+
+  auto isSingleBoolIndices =
+      [](ValueTypes& types, ValueCP tensor, ValueCP indices) -> bool {
+    if (!tensor || !indices) {
+      return false;
+    }
+    auto tensorId = tensor->id();
+    if (tensorId < 0 || static_cast<size_t>(tensorId) >= types.types.size() ||
+        !types.types[tensorId] || types.types[tensorId]->dim() != 1) {
+      return false;
+    }
+    auto* listPack = indices->producer();
+    if (!listPack || listPack->target() != "prim.ListPack" ||
+        listPack->inputs().size() != 1 || !listPack->inputs()[0].value) {
+      return false;
+    }
+    auto* idxVal = listPack->inputs()[0].value;
+    auto idxId = idxVal->id();
+    return idxId >= 0 && static_cast<size_t>(idxId) < types.types.size() &&
+        types.types[idxId] &&
+        types.types[idxId]->dtype() == c10::ScalarType::Bool;
+  };
+
+  auto isIntegerIndices =
+      [](ValueTypes& types, ValueCP tensor, ValueCP indices) -> int {
+    if (!tensor || !indices) {
+      return 0;
+    }
+    auto tensorId = tensor->id();
+    if (tensorId < 0 || static_cast<size_t>(tensorId) >= types.types.size() ||
+        !types.types[tensorId]) {
+      return 0;
+    }
+    auto rank = types.types[tensorId]->dim();
+    if (rank < 1 || rank > 3) {
+      return 0;
+    }
+    auto* listPack = indices->producer();
+    if (!listPack || listPack->target() != "prim.ListPack" ||
+        static_cast<int64_t>(listPack->inputs().size()) != rank) {
+      return 0;
+    }
+    for (size_t i = 0; i < listPack->inputs().size(); ++i) {
+      auto* idxVal = listPack->inputs()[i].value;
+      if (!idxVal) {
+        return 0;
+      }
+      auto idxId = idxVal->id();
+      if (idxId < 0 || static_cast<size_t>(idxId) >= types.types.size() ||
+          !types.types[idxId]) {
+        return 0;
+      }
+      auto dt = types.types[idxId]->dtype();
+      if (dt != c10::ScalarType::Int && dt != c10::ScalarType::Long) {
+        return 0;
+      }
+    }
+    return static_cast<int>(rank);
+  };
+
   // Clone: eliminate unless a user mutates the output in place.
   MetadataBuilder("torch.ops.aten.clone.default")
       .sizeOrdinal({0})
       .rankArgument(0)
-      .isStandalone()
+      .deviceFunc("__copyTensor")
+      .typeTemplateParams({0})
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& /*types*/,
-             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
-            if (inputs.empty() || outputs.empty()) {
+            if (inputs.empty() || outputs.empty() || !inputs[0].value) {
               return {};
+            }
+            auto* source = inputs[0].value;
+            auto* outputNode = waveGraph.graph()->outputNode();
+            // clone(memory_format=contiguous_format) is not an identity: it
+            // produces a contiguous copy that a following view() relies on.
+            // Keep the clone (its __copyTensor writes a contiguous register)
+            // rather than eliding it.
+            const auto* mfAttr = node->tryGetAttribute("memory_format");
+            if (mfAttr) {
+              bool isContiguous = false;
+              if (std::holds_alternative<c10::MemoryFormat>(mfAttr->value)) {
+                isContiguous = std::get<c10::MemoryFormat>(mfAttr->value) ==
+                    c10::MemoryFormat::Contiguous;
+              } else if (std::holds_alternative<std::string>(mfAttr->value)) {
+                const auto& s = std::get<std::string>(mfAttr->value);
+                isContiguous = s == "contiguous_format" || s == "Contiguous";
+              }
+              if (isContiguous) {
+                return {};
+              }
             }
             for (auto* user : outputs[0]->users()) {
               if (isInPlaceMutation(user, outputs[0])) {
                 return {};
               }
+              // A returned clone must stay a real copy: it is a distinct output
+              // tensor, and aliasing it to its source can collide with another
+              // output that is the same value.
+              if (user == outputNode) {
+                return {};
+              }
             }
-            return {{outputs[0], inputs[0].value}};
+            // Do not eliminate the clone if its source storage is mutated in
+            // place later: the clone is a required snapshot of the pre-mutation
+            // value, so it cannot be aliased to its (later-overwritten) source.
+            if (baseMutatedAfter(*waveGraph.graph(), node, inputs[0].value)) {
+              return {};
+            }
+            // Otherwise eliminate the clone (alias its output to the source)
+            // only when the source is produced by an elementwise node whose
+            // result has no other user -- a fresh value read nowhere else.  In
+            // any other case (graph input, view, standalone, or shared) keep
+            // the clone as a real copy.
+            const auto* producer = source->producer();
+            const auto* producerMeta = producer ? nodeMeta(producer) : nullptr;
+            if (!producerMeta || !producerMeta->elementwise ||
+                source->users().size() != 1) {
+              return {};
+            }
+            return {{outputs[0], source}};
+          })
+      .ignoreAttrs({"memory_format"})
+      .multiBlockReturnBarrier()
+      .registerOp();
+
+  // index.Tensor: gather elements by index. Rename to tw.idx_gather for
+  // any rank when all indices are int/long.
+  MetadataBuilder("torch.ops.aten.index.Tensor")
+      .sizeOrdinal({1, 0})
+      .isStandalone()
+      .maybeReplace(
+          [&isIntegerIndices](
+              NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
+              -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (node->inputs().size() < 2 || !node->inputs()[0].value) {
+              return {};
+            }
+            auto n = isIntegerIndices(
+                types, node->inputs()[0].value, node->inputs()[1].value);
+            if (n > 0) {
+              static const char* kNames[] = {
+                  "tw.index_elt_one", "tw.index_elt_two", "tw.index_elt_three"};
+              const_cast<nativert::Node*>(node)->setTarget(kNames[n - 1]);
+            }
+            return {};
           })
       .registerOp();
+
+  // tw.index_elt_one/two/three: elementwise index gather with scalar
+  // indices from a TensorList. Args: (Tensor self, TensorList indices).
+  {
+    static const char* kNames[] = {
+        "tw.index_elt_one", "tw.index_elt_two", "tw.index_elt_three"};
+    static const char* kFuncs[] = {
+        "__index_elt_one", "__index_elt_two", "__index_elt_three"};
+    auto indexEltReserve =
+        [](NodeCP node,
+           nativert::ExecutionFrame& frame,
+           const FormalToActual& map,
+           NodeCP /*originalFormalNode*/,
+           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+      auto* indicesValue = node->inputs()[1].value;
+      auto* listPack = indicesValue->producer();
+      TORCH_CHECK(
+          listPack && listPack->target() == "prim.ListPack",
+          "index_elt_* expects prim.ListPack for indices");
+      auto* firstIdx = listPack->inputs()[0].value;
+      auto firstId = firstIdx->id();
+      auto it = map.find(firstId);
+      auto actualId = it != map.end() ? it->second : firstId;
+      auto& idxTensor = frame.getIValue(actualId).toTensor();
+      auto sizes = idxTensor.sizes();
+      return {{sizes.begin(), sizes.end()}};
+    };
+    for (int numIdx = 1; numIdx <= 3; ++numIdx) {
+      (void)numIdx;
+      int i = numIdx - 1;
+      MetadataBuilder(
+          std::make_unique<c10::FunctionSchema>(
+              kNames[i],
+              "",
+              std::vector<c10::Argument>{
+                  c10::Argument("self", c10::TensorType::get()),
+                  c10::Argument("indices", c10::ListType::ofTensors())},
+              std::vector<c10::Argument>{
+                  c10::Argument("output", c10::TensorType::get())}))
+          .elementwiseFunc(kFuncs[i])
+          .argumentMeta(
+              {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+               {.isRegister = true}})
+          .returnMeta({{.isRegister = true, .reserveShape = indexEltReserve}})
+          .typeTemplateParams({0})
+          .hasBlockInfo()
+          .registerOp();
+    }
+  }
+
+  // index_put (functional, out-of-place): route through the in-place path.
+  // Copy the first input with an aten.clone (unless it is already a clone with
+  // a single user, which is then safe to mutate directly) and retarget the node
+  // to aten.index_put_. The optimizer re-visits a node whose target changed, so
+  // index_put_'s maybeReplace then performs the elementwise / masked_put
+  // rewrites on the in-place form.
+  MetadataBuilder("torch.ops.aten.index_put.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .ignoreAttrs({"accumulate"})
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (node->inputs().empty() || !node->inputs()[0].value) {
+              return {};
+            }
+            auto* mutableNode = const_cast<nativert::Node*>(node);
+            auto* selfVal = node->inputs()[0].value;
+            auto* selfProducer = selfVal->producer();
+            const bool alreadyClone = selfProducer &&
+                selfProducer->target() == "torch.ops.aten.clone.default" &&
+                selfVal->users().size() == 1;
+            if (!alreadyClone) {
+              auto selfId = selfVal->id();
+              if (selfId >= static_cast<int>(types.types.size()) ||
+                  !types.types[selfId]) {
+                // Type not resolved at optimization time; leave index_put as a
+                // standalone rather than risk a null dereference.
+                return {};
+              }
+              auto selfDtype = types.types[selfId]->dtype();
+              auto* graph = waveGraph.graph();
+              auto* cloneNode = graph->createNode(
+                  "torch.ops.aten.clone.default", {{"self", selfVal}});
+              graph->insertBefore(cloneNode, mutableNode);
+              auto* cloneOutput = waveGraph.newTensorValue(
+                  cloneNode, "index_put_clone", selfDtype);
+              mutableNode->inputs()[0].value = cloneOutput;
+            }
+            mutableNode->setTarget("torch.ops.aten.index_put_.default");
+            return {};
+          })
+      .registerOp();
+
+  // masked_put_: in-place scatter with bool mask. Shortcut for index_put_
+  // with a single 1D bool index tensor. Registered before index_put_ so
+  // the FunctionSchema is available when createNode is called.
+  {
+    auto maskedPutReserve =
+        [](NodeCP node,
+           nativert::ExecutionFrame& frame,
+           const FormalToActual& map,
+           NodeCP /*originalFormalNode*/,
+           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+      auto* selfValue = node->inputs()[0].value;
+      auto selfId = selfValue->id();
+      auto it = map.find(selfId);
+      auto actualId = it != map.end() ? it->second : selfId;
+      auto& selfTensor = frame.getIValue(actualId).toTensor();
+      auto* outputValue = node->outputs()[0];
+      auto outputId = outputValue->id();
+      auto outputIt = map.find(outputId);
+      auto actualOutputId = outputIt != map.end() ? outputIt->second : outputId;
+      frame.setIValue(actualOutputId, selfTensor);
+      auto sizes = selfTensor.sizes();
+      return {{sizes.begin(), sizes.end()}};
+    };
+
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.masked_put_",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("mask", c10::TensorType::get()),
+                c10::Argument("values", c10::TensorType::get())},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .sizeOrdinal({0})
+        .deviceFunc("__masked_put")
+        .typeTemplateParams({0})
+        .returnMeta({{.reserveShape = maskedPutReserve}})
+        .sharedDecls({{"uint32_t", "size"}})
+        .multiBlockReturnBarrier()
+        .registerOp();
+  }
+
+  // tw.index_put_elt_one/two/three: elementwise index_put with scalar
+  // indices from a TensorList. Args: (Tensor self, TensorList indices,
+  // Tensor values, bool accumulate).
+  {
+    static const char* kNames[] = {
+        "tw.index_put_elt_one",
+        "tw.index_put_elt_two",
+        "tw.index_put_elt_three"};
+    static const char* kFuncs[] = {
+        "__index_put_elt_one", "__index_put_elt_two", "__index_put_elt_three"};
+    for (int numIdx = 1; numIdx <= 3; ++numIdx) {
+      auto indexPutEltReserve =
+          [](NodeCP node,
+             nativert::ExecutionFrame& frame,
+             const FormalToActual& map,
+             NodeCP /*originalFormalNode*/,
+             const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+        auto* selfValue = node->inputs()[0].value;
+        auto selfId = selfValue->id();
+        auto it = map.find(selfId);
+        auto actualId = it != map.end() ? it->second : selfId;
+        auto& selfTensor = frame.getIValue(actualId).toTensor();
+        auto* outputValue = node->outputs()[0];
+        auto outputId = outputValue->id();
+        auto outputIt = map.find(outputId);
+        auto actualOutputId =
+            outputIt != map.end() ? outputIt->second : outputId;
+        frame.setIValue(actualOutputId, selfTensor);
+        auto sizes = selfTensor.sizes();
+        return {{sizes.begin(), sizes.end()}};
+      };
+      int i = numIdx - 1;
+      MetadataBuilder(
+          std::make_unique<c10::FunctionSchema>(
+              kNames[i],
+              "",
+              std::vector<c10::Argument>{
+                  c10::Argument("self", c10::TensorType::get()),
+                  c10::Argument("indices", c10::ListType::ofTensors()),
+                  c10::Argument("values", c10::TensorType::get()),
+                  c10::Argument(
+                      "accumulate",
+                      c10::BoolType::get(),
+                      std::nullopt,
+                      c10::IValue(false))},
+              std::vector<c10::Argument>{
+                  c10::Argument("output", c10::TensorType::get())}))
+          .elementwiseFunc(kFuncs[i])
+          .argumentMeta(
+              {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+               {.isRegister = true},
+               {.isRegister = true},
+               {.isRegister = true}})
+          .returnMeta(
+              {{.isRegister = false,
+                .reserveShape = indexPutEltReserve,
+                .wholeTensor = true,
+                .randomAccess = true}})
+          .typeTemplateParams({0})
+          .hasBlockInfo()
+          .multiBlockReturnBarrier()
+          .registerOp();
+    }
+  }
+
+  // index_put_: in-place scatter.
+  {
+    MetadataBuilder("torch.ops.aten.index_put_.default")
+        .isStandalone()
+        .maybeReplace(
+            [&isIntegerIndices, &isSingleBoolIndices](
+                NodeCP node, ValueTypes& types, WaveGraph& waveGraph)
+                -> std::vector<std::pair<ValueCP, ValueCP>> {
+              if (node->inputs().size() < 3 || !node->inputs()[0].value ||
+                  !node->inputs()[1].value || !node->inputs()[2].value) {
+                return {};
+              }
+              auto* selfVal = node->inputs()[0].value;
+              auto* indicesVal = node->inputs()[1].value;
+              auto* valuesVal = node->inputs()[2].value;
+              auto n = isIntegerIndices(types, selfVal, indicesVal);
+              if (n > 0) {
+                static const char* kEltNames[] = {
+                    "tw.index_put_elt_one",
+                    "tw.index_put_elt_two",
+                    "tw.index_put_elt_three"};
+                const_cast<nativert::Node*>(node)->setTarget(kEltNames[n - 1]);
+                return {};
+              }
+              if (isSingleBoolIndices(types, selfVal, indicesVal)) {
+                auto selfId = selfVal->id();
+                auto selfDtype = types.types[selfId]->dtype();
+                auto* listPack = indicesVal->producer();
+                auto* graph = waveGraph.graph();
+                auto* maskedPutNode = graph->createNode(
+                    "tw.masked_put_",
+                    {{"self", selfVal},
+                     {"mask",
+                      const_cast<nativert::Value*>(
+                          listPack->inputs()[0].value)},
+                     {"values", valuesVal}});
+                // Place the replacement at the original op's program position.
+                // createNode inserts at the graph's current insertion point,
+                // which is not the index_put_ site; leaving it there would put
+                // this in-place mutation out of program order and invert the
+                // memory-dependency edges computed in ParallelExpr (a read of
+                // self before the mutation could be scheduled after it).
+                graph->insertBefore(
+                    maskedPutNode, const_cast<nativert::Node*>(node));
+                auto* resultValue = waveGraph.newTensorValue(
+                    maskedPutNode, "masked_put_result", selfDtype);
+                return {{node->outputs()[0], resultValue}};
+              }
+              return {};
+            })
+        .registerOp();
+  }
 
   // Transpose.
   registerRankPreservingStandalone("torch.ops.aten.transpose.int", 0);
@@ -1075,7 +1874,9 @@ void registerBuiltins() {
           {{.isRegister = false,
             .reserveShape = [](NodeCP /*node*/,
                                nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/)
+                               const FormalToActual& /*map*/,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> { return {{}}; }}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(makeSumVariant)
@@ -1113,7 +1914,7 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .outputConstraints(rank1Constraint)
       .registerOp();
 
@@ -1132,7 +1933,9 @@ void registerBuiltins() {
           {{.isRegister = false,
             .reserveShape = [](NodeCP /*node*/,
                                nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/)
+                               const FormalToActual& /*map*/,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> { return {{}}; }}})
       .inputFromPreviousKernel(0)
       .headerFile(kScanHeader)
@@ -1157,10 +1960,12 @@ void registerBuiltins() {
       .argumentMeta({{.isRegister = true}, {.isRegister = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
             },
             .shapeSetOnDevice = true}})
@@ -1197,7 +2002,7 @@ void registerBuiltins() {
            {"uint32_t", "rounded"}})
       .typeTemplateParams({0})
       .hasBlockSizeTemplateParam()
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .outputConstraints(rank1Constraint)
       .registerOp();
 
@@ -1223,7 +2028,7 @@ void registerBuiltins() {
       .typeTemplateParams({})
       .hasBlockSizeTemplateParam()
       .inputFromPreviousKernel(0)
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .alwaysSingleBlock()
       .registerOp();
 
@@ -1242,10 +2047,12 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               auto total = paramSymInt(node->inputs()[3].value, frame, map);
               return {{static_cast<Dim>(total)}};
             }}})
@@ -1271,10 +2078,12 @@ void registerBuiltins() {
       .singleBlockIfFused()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
             }}})
       .normalize(resolveDtypeFromInput)
@@ -1316,7 +2125,7 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .only1d()
       .outputConstraints(rank1Constraint)
       .registerOp();
@@ -1343,7 +2152,7 @@ void registerBuiltins() {
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
       .inputFromPreviousKernel(0)
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .alwaysSingleBlock()
       .only1d()
       .registerOp();
@@ -1434,7 +2243,7 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .only1d()
       .outputConstraints(rank1Constraint)
       .registerOp();
@@ -1461,7 +2270,7 @@ void registerBuiltins() {
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
       .inputFromPreviousKernel(0)
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .alwaysSingleBlock()
       .only1d()
       .registerOp();
@@ -1515,7 +2324,9 @@ void registerBuiltins() {
           {{.isRegister = false,
             .reserveShape = [](NodeCP /*node*/,
                                nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/)
+                               const FormalToActual& /*map*/,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> { return {{}}; }},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .normalize(resolveDtypeFromInput)
@@ -1563,6 +2374,7 @@ void registerBuiltins() {
       .only1d()
       .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
+      .cost(25.0f)
       .registerOp();
 
   // tw.exclusive_sum_cg: (Tensor) -> (Tensor, Tensor[counts])
@@ -1595,6 +2407,7 @@ void registerBuiltins() {
       .numBarriers(2)
       .only1d()
       .outputConstraints(rank1Constraint)
+      .cost(25.0f)
       .registerOp();
 
   // tw.masked_select_cg: (Tensor, Tensor) -> (Tensor, Tensor[counts])
@@ -1626,6 +2439,135 @@ void registerBuiltins() {
       .hasBlockSizeTemplateParam()
       .numBarriers(3)
       .outputConstraints(rank1Constraint)
+      .cost(30.0f)
+      .registerOp();
+
+  // --- nonzero (1D) ---
+
+  auto nonzeroReserve =
+      [](NodeCP node,
+         nativert::ExecutionFrame& frame,
+         const FormalToActual& map,
+         NodeCP /*originalFormalNode*/,
+         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+    auto shapes = elementwiseInputShape(node, frame, map, 0);
+    if (!shapes.empty() && !shapes[0].empty()) {
+      shapes[0].push_back(1);
+    }
+    return shapes;
+  };
+
+  MetadataBuilder("torch.ops.aten.nonzero.default")
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .singleBlockIfFused()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = nonzeroReserve,
+            .shapeSetOnDevice = true}})
+      .headerFile(kScanHeader)
+      .deviceFunc("nonzero1d")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "counter"}})
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .alwaysSingleBlock()
+      .multiBlockReturnBarrier()
+      .registerOp();
+
+  // tw.nonzero1d_head: (Tensor) -> Tensor
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.nonzero1d_head",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .headerFile(kScanHeader)
+      .deviceFunc("nonzero1d_head")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // tw.nonzero1d_final: (Tensor, Tensor, int) -> Tensor
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.nonzero1d_final",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get()),
+              c10::Argument("counts", c10::TensorType::get()),
+              c10::Argument("total", c10::IntType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
+              auto total = paramSymInt(node->inputs()[2].value, frame, map);
+              return {{static_cast<Dim>(total)}};
+            },
+            .shapeSetOnDevice = true}})
+      .inputFromPreviousKernel(2)
+      .headerFile(kScanHeader)
+      .deviceFunc("nonzero1d_final")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .typeTemplateParams({0})
+      .hasBarrier()
+      .hasBlockSizeTemplateParam()
+      .alwaysSingleBlock()
+      .singleBlockIfFused()
+      .multiBlockReturnBarrier()
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
+  // tw.nonzero1d_cg: (Tensor) -> (Tensor, Tensor[counts])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.nonzero1d_cg",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("counts", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = nonzeroReserve,
+            .shapeSetOnDevice = true},
+           {.isRegister = false, .reserveShape = numBlocksShape}})
+      .headerFile(kScanHeader)
+      .deviceFunc("nonzero1d_cg")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"},
+           {"uint32_t", "counter"}})
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .numBarriers(3)
       .registerOp();
 
   // Cat — registered in Cat.cpp.
@@ -1685,7 +2627,7 @@ void registerBuiltins() {
            {"uint32_t", "counter"}})
       .typeTemplateParams({0})
       .hasBlockSizeTemplateParam()
-      .kernelBreakForMultiblock()
+      .multiBlockReturnBarrier()
       .singleBlockIfFused()
       .outputConstraints(
           [](NodeCP /*node*/,
@@ -1697,25 +2639,14 @@ void registerBuiltins() {
   auto repeatInterleaveFinalReserve =
       [](NodeCP node,
          nativert::ExecutionFrame& frame,
-         const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+         const FormalToActual& map,
+         NodeCP /*originalFormalNode*/,
+         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
     auto total = paramSymInt(node->inputs()[2].value, frame, map);
     return {{static_cast<Dim>(total)}};
   };
 
-  auto makeRepeatInterleaveFinalVariant = [](NodeCP single,
-                                             WaveGraph* waveGraph) {
-    auto* graph = variantNodeGraph(waveGraph);
-    auto* cgNode = graph->createNode(
-        "tw.repeat_interleave_final_cg",
-        {{"input", single->inputs()[0].value},
-         {"prefix", single->inputs()[1].value},
-         {"total", single->inputs()[2].value}});
-    copyOriginalOutputs(cgNode, single, waveGraph);
-    return cgNode;
-  };
-
   // tw.repeat_interleave_final: (Tensor, Tensor, int) -> Tensor
-  // Intrinsically single-block: uses prefix sums from the head stage.
   MetadataBuilder(
       std::make_unique<c10::FunctionSchema>(
           "tw.repeat_interleave_final",
@@ -1736,35 +2667,7 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasBarrier()
       .hasBlockSizeTemplateParam()
-      .alwaysSingleBlock()
-      .singleBlockIfFused()
-      .makeMultiKernelVariant(makeRepeatInterleaveFinalVariant)
-      .cgVariant(makeRepeatInterleaveFinalVariant)
-      .outputConstraints(rank1Constraint)
-      .registerOp();
-
-  // tw.repeat_interleave_final_cg: multi-block variant with op barrier.
-  MetadataBuilder(
-      std::make_unique<c10::FunctionSchema>(
-          "tw.repeat_interleave_final_cg",
-          "",
-          std::vector<c10::Argument>{
-              c10::Argument("input", c10::TensorType::get()),
-              c10::Argument("prefix", c10::TensorType::get()),
-              c10::Argument("total", c10::IntType::get())},
-          std::vector<c10::Argument>{
-              c10::Argument("output", c10::TensorType::get())}))
-      .sizeOrdinal({0})
-      .returnMeta(
-          {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
-      .inputFromPreviousKernel(2)
-      .headerFile(kScanHeader)
-      .deviceFunc("repeat_interleave_final_cg")
-      .sharedDecls({{"uint32_t", "size"}, {"uint32_t", "rounded"}})
-      .typeTemplateParams({0})
-      .hasBarrier()
-      .hasBlockSizeTemplateParam()
-      .numBarriers(1)
+      .multiBlockReturnBarrier()
       .outputConstraints(rank1Constraint)
       .registerOp();
 
@@ -1829,10 +2732,12 @@ void registerBuiltins() {
       .singleBlockIfFused()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
               auto tensor = paramTensor(node->inputs()[0].value, frame, map);
               auto n = tensor.numel();
               int64_t tableSize = 1;
@@ -1881,20 +2786,30 @@ void registerBuiltins() {
             }
             return {{types.rank(inputs[0].value)}};
           })
-      .maybeReplace(
-          [](NodeCP node,
-             ValueTypes&,
-             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
-            const auto* attr = node->tryGetAttribute("value");
-            if (!attr) {
-              const_cast<nativert::Node*>(node)->addAttribute(
-                  {"value", static_cast<int64_t>(0)});
-            } else if (std::holds_alternative<nativert::None>(attr->value)) {
-              const_cast<nativert::Attribute*>(attr)->value =
-                  static_cast<int64_t>(0);
-            }
-            return {};
-          })
+      .normalize([](nativert::Node* node, const ValueTypes& types) {
+        const auto* attr = node->tryGetAttribute("value");
+        bool needsDefault =
+            !attr || std::holds_alternative<nativert::None>(attr->value);
+        if (!needsDefault) {
+          return;
+        }
+        bool isFloat = false;
+        if (!node->inputs().empty()) {
+          auto inputId = node->inputs()[0].value->id();
+          if (inputId < static_cast<int>(types.types.size()) &&
+              types.types[inputId]) {
+            auto dt = types.types[inputId]->dtype();
+            isFloat = at::isFloatingType(dt);
+          }
+        }
+        nativert::Constant value =
+            isFloat ? nativert::Constant(0.0) : nativert::Constant(int64_t(0));
+        if (!attr) {
+          node->addAttribute({"value", std::move(value)});
+        } else {
+          const_cast<nativert::Attribute*>(attr)->value = std::move(value);
+        }
+      })
       .registerOp();
 }
 

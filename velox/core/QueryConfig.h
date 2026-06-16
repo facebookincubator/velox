@@ -838,18 +838,6 @@ class QueryConfig {
       96L << 20,
       "Minimum memory footprint to reclaim from a file writer by flushing.")
 
-  /// Back-compat shim for out-of-tree callers; use PrestoQueryConfig instead.
-  [[deprecated("Use PrestoQueryConfig::kArrayAggIgnoreNulls.")]]
-  static constexpr const char* kPrestoArrayAggIgnoreNulls =
-      "presto.array_agg.ignore_nulls";
-
-  [[deprecated("Use PrestoQueryConfig{config}.arrayAggIgnoreNulls().")]]
-  bool prestoArrayAggIgnoreNulls() const {
-    // Storage key is hardcoded (rather than referencing the deprecated
-    // constant above) so the shim does not self-trigger the warning.
-    return get<bool>("presto.array_agg.ignore_nulls", /*defaultValue=*/false);
-  }
-
   /// The number of local parallel table writer operators per task.
   VELOX_QUERY_CONFIG(
       kTaskWriterCount,

@@ -129,7 +129,7 @@ velox_link_libraries(
   velox_functions_util
   velox_trace
   velox_type_tz
-  double-conversion::double-conversion
+  FastFloat::fast_float
   Folly::folly
 )
 

@@ -35,7 +35,16 @@ __device__ inline float arithCast(__nv_bfloat16 x) {
 }
 
 // Binary arithmetic.
-
+//
+// The return type is T, the FIRST operand's type, because GraphOptimizer's
+// promotion pass casts every tensor operand (and the output) to PyTorch's
+// promoted dtype before codegen. So a1 already carries the op's output dtype,
+// and returning T stores the result at that dtype. The other operands get
+// their own template types (T2, TAlpha) because they need not be tensors of
+// that dtype: the second operand of a *.Scalar op, and the alpha of add/sub,
+// are scalar constants emitted as C++ literals that the promotion pass does not
+// unify. They are folded in via arithCast + ordinary C++ promotion inside the
+// expression, then the result converts back to T on return.
 template <typename T, typename T2, typename TAlpha>
 __device__ inline T __add(T a1, T2 a2, TAlpha alpha) {
   return arithCast(a1) + arithCast(a2) * arithCast(alpha);
@@ -70,17 +79,61 @@ __device__ inline double __div(int32_t a1, int32_t a2) {
   return static_cast<double>(a1) / static_cast<double>(a2);
 }
 
+// Python/_operator.floordiv on integers: floor(a / b), rounding toward
+// negative infinity (C++ integer division truncates toward zero, so adjust
+// when the remainder is nonzero and the operand signs differ).
+template <typename T, typename T2 = T>
+__device__ inline int64_t __floordiv(T a1, T2 a2) {
+  int64_t a = static_cast<int64_t>(a1);
+  int64_t b = static_cast<int64_t>(a2);
+  int64_t q = a / b;
+  if ((a % b != 0) && ((a < 0) != (b < 0))) {
+    --q;
+  }
+  return q;
+}
+
+// Two-arg add/sub for scalar Python _operator.add / _operator.sub, which have
+// no alpha (unlike aten.add/aten.sub). Unlike the tensor ops above there is no
+// promotion pass and no anchoring tensor, so the result takes the deduced
+// promoted type of the operands -- exactly what plain `a1 + a2` yields -- which
+// is correct for SymInt, SymFloat, and mixed int/float operands. Forcing a
+// fixed type (e.g. int64) here would truncate a SymFloat operand.
+template <typename T, typename T2 = T>
+__device__ inline auto __opadd(T a1, T2 a2) {
+  return arithCast(a1) + arithCast(a2);
+}
+
+template <typename T, typename T2 = T>
+__device__ inline auto __opsub(T a1, T2 a2) {
+  return arithCast(a1) - arithCast(a2);
+}
+
+// PyTorch remainder: result = a - floor(a/b) * b, same sign as divisor.
+// C++ % truncates toward zero (sign of dividend), so we adjust.
 template <typename T, typename T2 = T>
 __device__ inline T __remainder(T a1, T2 a2) {
-  return a1 % a2;
+  T r = a1 % a2;
+  if (r != 0 && ((r ^ a2) < 0)) {
+    r += a2;
+  }
+  return r;
 }
 
 __device__ inline float __remainder(float a1, float a2) {
-  return remainderf(a1, a2);
+  float r = fmodf(a1, a2);
+  if (r != 0.0f && ((r < 0) != (a2 < 0))) {
+    r += a2;
+  }
+  return r;
 }
 
 __device__ inline double __remainder(double a1, double a2) {
-  return ::remainder(a1, a2);
+  double r = fmod(a1, a2);
+  if (r != 0.0 && ((r < 0) != (a2 < 0))) {
+    r += a2;
+  }
+  return r;
 }
 
 template <typename T, typename T2 = T>
@@ -425,6 +478,50 @@ __device__ inline T __clamp(T a1, TLo lo, THi hi) {
   return result;
 }
 
+// In-place variants. The mutated argument is bound by reference so the write
+// lands directly in the self tensor's storage (the codegen passes
+// storage<T>(self)[idx], an lvalue). PyTorch preserves these ops in
+// non-functionalized graphs (e.g. feature-transform normalization:
+// x.add_(mean).mul_(inv_std), x[:, :k].clamp_(lo, hi)), so torchwave must
+// execute them. The computation reuses the functional helper and assigns the
+// result back to self (keeping self's dtype, matching in-place semantics); the
+// returned value also flows to the result register when the output is used.
+
+template <typename T, typename T2, typename TAlpha>
+__device__ inline T __add_(T& a1, T2 a2, TAlpha alpha) {
+  a1 = __add<T, T2, TAlpha>(a1, a2, alpha);
+  return a1;
+}
+
+template <typename T, typename T2, typename TAlpha>
+__device__ inline T __sub_(T& a1, T2 a2, TAlpha alpha) {
+  a1 = __sub<T, T2, TAlpha>(a1, a2, alpha);
+  return a1;
+}
+
+template <typename T, typename T2 = T>
+__device__ inline T __mul_(T& a1, T2 a2) {
+  a1 = __mul<T, T2>(a1, a2);
+  return a1;
+}
+
+template <typename T, typename T2 = T>
+__device__ inline T __div_(T& a1, T2 a2) {
+  a1 = static_cast<T>(__div<T, T2>(a1, a2));
+  return a1;
+}
+
+template <
+    bool kHasMin = true,
+    bool kHasMax = true,
+    typename T,
+    typename TLo = T,
+    typename THi = T>
+__device__ inline T __clamp_(T& a1, TLo lo, THi hi) {
+  a1 = __clamp<kHasMin, kHasMax, T, TLo, THi>(a1, lo, hi);
+  return a1;
+}
+
 // NaN/Inf replacement.
 
 template <typename T>
@@ -463,8 +560,18 @@ __device__ inline T __minimum(T a1, T a2) {
   return a1 < a2 ? a1 : a2;
 }
 
+template <typename T, typename U>
+__device__ inline auto __minimum(T a1, U a2) -> decltype(a1 + a2) {
+  return a1 < a2 ? a1 : a2;
+}
+
 template <typename T>
 __device__ inline T __maximum(T a1, T a2) {
+  return a1 > a2 ? a1 : a2;
+}
+
+template <typename T, typename U>
+__device__ inline auto __maximum(T a1, U a2) -> decltype(a1 + a2) {
   return a1 > a2 ? a1 : a2;
 }
 
@@ -514,7 +621,208 @@ __device__ inline T __arange(int64_t idx) {
 // Shape query.
 
 __device__ inline int64_t __sym_size(Tensor* self, int64_t dim) {
-  return self->dims[self->rank - 1 - dim];
+  return self->dims[dim < 0 ? dim + self->rank : dim];
+}
+
+__device__ inline int64_t __numel(Tensor* self) {
+  return self->numEl;
+}
+
+// Index gather: returns source[indices[0][i]] for 1D indexing.
+// Takes a TensorList with a single index tensor.
+template <typename T, typename TIdx>
+__device__ inline T __index1d(Tensor* source, TIdx index) {
+  return storage<T>(source)[index * source->strides[0]];
+}
+
+// Elementwise index_put variants with scalar indices in registers.
+template <typename T>
+__device__ inline T __index_put_elt_one(
+    Tensor* dest,
+    int32_t idx0,
+    T value,
+    bool accumulate,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < dest->dims[0]) {
+    auto* dst = storage<T>(dest);
+    auto offset = indexOffset(dest, idx0);
+    if (accumulate) {
+      dst[offset] += value;
+    } else {
+      dst[offset] = value;
+    }
+  } else if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = 0;
+    block.debugInfo->extra[1] = idx0;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T __index_put_elt_two(
+    Tensor* dest,
+    int32_t idx0,
+    int32_t idx1,
+    T value,
+    bool accumulate,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < dest->dims[0] && idx1 >= 0 && idx1 < dest->dims[1]) {
+    auto* dst = storage<T>(dest);
+    auto offset = indexOffset(dest, idx0, idx1);
+    if (accumulate) {
+      dst[offset] += value;
+    } else {
+      dst[offset] = value;
+    }
+  } else if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = idx0 < 0 || idx0 >= dest->dims[0] ? 0 : 1;
+    block.debugInfo->extra[1] = idx0 < 0 || idx0 >= dest->dims[0] ? idx0 : idx1;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T __index_put_elt_three(
+    Tensor* dest,
+    int32_t idx0,
+    int32_t idx1,
+    int32_t idx2,
+    T value,
+    bool accumulate,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < dest->dims[0] && idx1 >= 0 && idx1 < dest->dims[1] &&
+      idx2 >= 0 && idx2 < dest->dims[2]) {
+    auto* dst = storage<T>(dest);
+    auto offset = indexOffset(dest, idx0, idx1, idx2);
+    if (accumulate) {
+      dst[offset] += value;
+    } else {
+      dst[offset] = value;
+    }
+  } else if (block.debugInfo) {
+    int32_t dim = idx0 < 0 || idx0 >= dest->dims[0] ? 0
+        : idx1 < 0 || idx1 >= dest->dims[1]         ? 1
+                                                    : 2;
+    int32_t badIdx = dim == 0 ? idx0 : (dim == 1 ? idx1 : idx2);
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = dim;
+    block.debugInfo->extra[1] = badIdx;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+// Elementwise index gather variants with scalar indices in registers.
+template <typename T>
+__device__ inline T
+__index_elt_one(Tensor* source, int32_t idx0, BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < source->dims[0]) {
+    return storage<T>(source)[indexOffset(source, idx0)];
+  }
+  if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = 0;
+    block.debugInfo->extra[1] = idx0;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T
+__index_elt_two(Tensor* source, int32_t idx0, int32_t idx1, BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < source->dims[0] && idx1 >= 0 &&
+      idx1 < source->dims[1]) {
+    return storage<T>(source)[indexOffset(source, idx0, idx1)];
+  }
+  if (block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = idx0 < 0 || idx0 >= source->dims[0] ? 0 : 1;
+    block.debugInfo->extra[1] =
+        idx0 < 0 || idx0 >= source->dims[0] ? idx0 : idx1;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+template <typename T>
+__device__ inline T __index_elt_three(
+    Tensor* source,
+    int32_t idx0,
+    int32_t idx1,
+    int32_t idx2,
+    BlockInfo& block) {
+  if (idx0 >= 0 && idx0 < source->dims[0] && idx1 >= 0 &&
+      idx1 < source->dims[1] && idx2 >= 0 && idx2 < source->dims[2]) {
+    return storage<T>(source)[indexOffset(source, idx0, idx1, idx2)];
+  }
+  if (block.debugInfo) {
+    int32_t dim = idx0 < 0 || idx0 >= source->dims[0] ? 0
+        : idx1 < 0 || idx1 >= source->dims[1]         ? 1
+                                                      : 2;
+    int32_t badIdx = dim == 0 ? idx0 : (dim == 1 ? idx1 : idx2);
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = dim;
+    block.debugInfo->extra[1] = badIdx;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  return T();
+}
+
+// Fused index gather from TensorList. Supports 1D to kMaxDims indexing.
+// Each index tensor selects a coordinate along its dimension. The linear
+// offset is sum(idx[dim] * source->strides[dim]).
+template <typename T>
+__device__ void __indexgather(
+    Tensor* source,
+    TensorList* indices,
+    Tensor* output,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    for (int32_t dim = 0; dim < indices->size; ++dim) {
+      auto* t = indices->tensors[dim];
+      assert(
+          (t->elementType == kScalarTypeInt ||
+           t->elementType == kScalarTypeLong) &&
+          "index tensor must be int or long");
+    }
+  }
+  __syncthreads();
+  auto n = indices->tensors[0]->numEl;
+  auto* src = storage<T>(source);
+  auto* dst = storage<T>(output);
+  for (uint32_t i = block.blockInOp * blockDim.x + threadIdx.x; i < n;
+       i += block.numBlocksInOp * blockDim.x) {
+    int32_t offset = 0;
+    bool valid = true;
+    for (int32_t dim = 0; dim < indices->size; ++dim) {
+      auto* idxTensor = indices->tensors[dim];
+      int32_t idx;
+      if (idxTensor->elementType == kScalarTypeLong) {
+        idx = static_cast<int32_t>(storage<int64_t>(idxTensor)[i]);
+      } else {
+        idx = storage<int32_t>(idxTensor)[i];
+      }
+      if (idx < 0 || idx >= source->dims[dim]) {
+        valid = false;
+        if (block.debugInfo) {
+          block.debugInfo->line = __LINE__;
+          block.debugInfo->extra[0] = dim;
+          block.debugInfo->extra[1] = idx;
+          SET_MSG(block.debugInfo, "Bad idx\0");
+        }
+        break;
+      }
+      offset += idx * source->strides[dim];
+    }
+    if (valid) {
+      dst[i] = src[offset];
+    }
+  }
 }
 
 } // namespace torch::wave

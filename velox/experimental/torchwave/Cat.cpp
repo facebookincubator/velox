@@ -24,7 +24,10 @@
 
 #include <ATen/ATen.h>
 #include <folly/CppAttributes.h>
+#include <gflags/gflags.h>
 #include <iostream>
+
+// elt_trace is now WaveConfig::kernelDebugOutput
 
 namespace torch::wave {
 
@@ -33,6 +36,11 @@ namespace {
 SizeExpr translateSizeExpr(const SizeExpr& expr, const FormalToActual& map) {
   SizeExpr result;
   result.op = expr.op;
+  // Preserve broadcast and constShapes: a pure factory operand (e.g.
+  // zeros(size=[1000])) carries its extent in constShapes with no tensor
+  // leaves, so dropping them collapses its size to the scalar default.
+  result.broadcast = expr.broadcast;
+  result.constShapes = expr.constShapes;
   for (auto id : expr.values) {
     auto it = map.find(id);
     result.values.push_back(it != map.end() ? it->second : id);
@@ -96,7 +104,10 @@ std::vector<std::vector<Dim>> reserveCatOutput(
   for (size_t i = 0; i < inputInfos.size(); ++i) {
     const auto& info = inputInfos[i];
     if (info.reserveShape) {
-      auto shapes = info.reserveShape(nullptr, frame, map);
+      static const NodeMap emptyNodeMap;
+      auto shapes =
+          info.reserveShape(nullptr, frame, map, nullptr, emptyNodeMap);
+
       int64_t s = 1;
       TORCH_CHECK(
           !shapes.empty(),
@@ -148,7 +159,8 @@ std::vector<std::vector<Dim>> reserveCatOutput(
       auto view = catTensor.narrow(0, offset, sizes.at(i));
       if (WaveConfig::get().trace & WaveConfig::kTensors) {
         std::cout << "  cat view v" << inputActualId << " of v" << catActualId
-                  << " " << traceIValue(c10::IValue(view)) << std::endl;
+                  << " offset=" << offset << " size=" << sizes.at(i) << " "
+                  << traceIValue(c10::IValue(view)) << std::endl;
       }
       frame.setIValue(inputActualId, std::move(view));
       offset += sizes.at(i);
@@ -157,8 +169,7 @@ std::vector<std::vector<Dim>> reserveCatOutput(
       auto view = catTensor.narrow(0, 0, sizes.at(i));
       if (WaveConfig::get().trace & WaveConfig::kTensors) {
         std::cout << "  cat view v" << inputActualId << " of v" << catActualId
-                  << " size=" << sizes.at(i) << " (offset pending)"
-                  << std::endl;
+                  << " offset=pending size=" << sizes.at(i) << std::endl;
       }
       frame.setIValue(inputActualId, std::move(view));
     }
@@ -230,10 +241,22 @@ void catSetOutputs(
       inputSizeExpr.op = SizeShortcut::kMax;
       inputSizeExpr.values.push_back(elem->id());
     }
+    OutputReserveFunc catReserve;
+    if (desc.reserveShape) {
+      auto inner = desc.reserveShape;
+      catReserve = [inner](
+                       NodeCP /*unused*/,
+                       nativert::ExecutionFrame& frame,
+                       const FormalToActual& map,
+                       NodeCP /*originalFormalNode*/,
+                       const NodeMap& nodeMap) {
+        return inner(frame, map, nodeMap);
+      };
+    }
     inputInfos.push_back(
         {elem->id(),
          std::move(inputSizeExpr),
-         desc.reserveShape,
+         std::move(catReserve),
          hasSod,
          false,
          elemIsView});
@@ -266,9 +289,9 @@ void catSetOutputs(
 
   catDesc.reserveShape =
       [inputInfos, catFormalId, dtype](
-          NodeCP /*unused*/,
           nativert::ExecutionFrame& frame,
-          const FormalToActual& map) -> std::vector<std::vector<Dim>> {
+          const FormalToActual& map,
+          const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
     return reserveCatOutput(inputInfos, catFormalId, dtype, frame, map);
   };
 
@@ -364,7 +387,7 @@ catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
     auto* exclusiveSum = graph->createNode(
         "torch.ops.aten.exclusive_sum.default", {{"input", cumsumInput}});
     exclusiveSum->addAttribute({"dim", static_cast<int64_t>(0)});
-    exclusiveSum->addAttribute({"dtype", std::string(c10::toString(dtype))});
+    exclusiveSum->addAttribute({"dtype", dtype});
     graph->insertBefore(exclusiveSum, const_cast<nativert::Node*>(node));
     auto* newOutput =
         waveGraph.newTensorValue(exclusiveSum, "exclusive_sum", dtype);
@@ -500,9 +523,11 @@ void catSpecialForm(
       if (!nextIsCopy) {
         ctx->callView(catOutput, nextElem, "offset", elemSize);
       }
-      ctx->emitCode(
-          "  TRACE0(printf(\"cat view[" + std::to_string(i + 1) +
-          "] offset=%ld\\n\", (long)offset));\n");
+      if (WaveConfig::get().kernelDebugOutput) {
+        ctx->emitCode(
+            "  TRACE0(printf(\"cat view[" + std::to_string(i + 1) +
+            "] offset=%ld\\n\", (long)offset));\n");
+      }
     }
   }
   if (needsViewFixup) {
@@ -513,8 +538,10 @@ void catSpecialForm(
       auto p = ctx->param(elements[j], op);
       ctx->emitCode("  offset += " + p + "->dims[0];\n");
     }
-    ctx->emitCode(
-        "  TRACE0(printf(\"cat final offset=%ld\\n\", (long)offset));\n");
+    if (WaveConfig::get().kernelDebugOutput) {
+      ctx->emitCode(
+          "  TRACE0(printf(\"cat final offset=%ld\\n\", (long)offset));\n");
+    }
     auto catP = ctx->param(catOutput, op);
     ctx->emitCode(
         "  if (threadIdx.x == 0) { " + catP +

@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,9 +66,9 @@ struct ModelFixture {
   /// Creates fresh node kernels (each executor consumes them).
   std::vector<std::unique_ptr<nativert::OpKernel>> makeKernels() const;
 
-  /// Creates a ModelContext for passing to WaveGraphExecutor, enabling
-  /// OpKernel recreation after graph mutations.
-  std::shared_ptr<ModelContext> makeModelContext() const;
+  /// Creates a ModelContext for passing to WaveGraphExecutor, moving the
+  /// graph out of this fixture. Can only be called once per fixture.
+  std::unique_ptr<ModelContext> makeModelContext();
 };
 
 /// Returns the path to a test data file. In fbcode (Buck), the CWD ends with
@@ -88,6 +89,25 @@ std::vector<c10::IValue> loadReferenceValues(const std::string& path);
 /// Returns the device tensors and the transfer time in microseconds.
 std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
     std::vector<c10::IValue>& inputs);
+
+/// Inserts an `aten._to_copy(self, device=cpu)` node before every input
+/// argument flagged `cpuOnly` in its wave Metadata (e.g. the indices of
+/// `aten.tensor_split.tensor_indices_or_sections`), repointing just that edge.
+/// This lets the generic nativert executor run the graph on GPU: tensor_split
+/// reads its indices on the host and returns views of `self`, so `self` and the
+/// outputs stay on GPU and no move-back is needed. Mutates `graph` in place, so
+/// call it on a clone reserved for the nativert-GPU run (wave handles cpuOnly
+/// args itself at runtime and must keep its own copy-free graph). Returns the
+/// number of nodes inserted.
+int32_t insertCpuOnlyCopies(nativert::Graph& graph);
+
+/// Rewrites ops that have no CUDA implementation to a CUDA-capable equivalent
+/// so the generic nativert executor can run the graph on GPU. Currently
+/// rewrites `fb.simple_1d_concat` (CUDA registration is a throwing dummy) to
+/// `aten.cat.default(dim=0)`, mirroring wave's MoreBuiltins rewrite. Mutates
+/// `graph`; call on the nativert-GPU clone. Returns the number of nodes
+/// rewritten.
+int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph);
 
 /// Snapshots a frame: returns a map from value id to shape string (e.g.
 /// "[3,4]") for tensors, "scalar" for scalars. None slots are omitted.
@@ -134,10 +154,14 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& deviceInputs);
 
   /// Runs a .pt2 model through the WaveGraphExecutor on device.
-  /// Verifies outputs match 'expected' and returns timing.
+  /// Verifies outputs match 'expected' and returns timing. If 'alterInputs'
+  /// is set, it is called after filling the frame but before execution,
+  /// allowing modification of input tensors (e.g. injecting bad indices).
   RunTiming runWave(
       ModelFixture& fixture,
-      const std::vector<c10::IValue>& expected);
+      const std::vector<c10::IValue>& expected,
+      const std::function<void(nativert::ExecutionFrame&)>& alterInputs =
+          nullptr);
 
   /// Loads a .pt2 model and reference results, runs serial on CPU, serial on
   /// device and wave, and logs the run times for each.
@@ -168,10 +192,24 @@ class ExecutorTestBase : public ::testing::Test {
   int64_t lastRefTensorsChecked_{0};
   int64_t lastRefNodesChecked_{0};
 
+  /// Display name for the current test, included in failure messages.
+  std::string displayName_;
+
   // Snapshot of the serial frame's initial state (after filling user inputs,
   // before execution). Maps value id to shape string or "none"/"scalar".
   // Used to verify that the wave frame has the same slots populated.
   std::unordered_map<int32_t, std::string> serialFrameSnapshot_;
+
+  // TorchWave debug: deep copies of every node output captured the instant the
+  // node ran in the serial (CPU nativert) reference run. Saved as the reference
+  // frame so that later in-place corruption of a value's storage cannot poison
+  // the recorded reference. Populated only when saving a reference.
+  std::unordered_map<int64_t, at::Tensor> capturedRefOutputs_;
+
+  // TorchWave debug: CPU copies of the serial (CPU nativert) run's final model
+  // outputs. Compared against the wave run's final outputs to check end-to-end
+  // correctness independent of intermediate dead-value noise.
+  std::vector<at::Tensor> nativertOutputs_;
 
   /// Loads sample inputs from the .pt2 package.
   std::vector<c10::IValue> loadSampleInputs(ModelFixture& fixture);

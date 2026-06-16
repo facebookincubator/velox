@@ -59,7 +59,7 @@ ARG CENTOS_TZDATA_VERSION
 # here as a defensive `install || downgrade` so this stage builds
 # correctly even before the centos9 image has been rebuilt with the pin.
 RUN dnf install -y -q --setopt=install_weak_deps=False \
-      java-17-openjdk less procps tzdata && \
+      java-17-openjdk less procps tzdata c-ares && \
     (dnf -y install "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch" || \
      dnf -y downgrade "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch") && \
     (dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \

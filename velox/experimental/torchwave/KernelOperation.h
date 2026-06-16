@@ -17,6 +17,7 @@
 #pragma once
 
 #include <deque>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -34,6 +35,7 @@
 namespace torch::wave {
 
 class CompileCtx;
+class OpInvocation;
 
 enum Listing { kExprs = 0, kGrids };
 
@@ -56,14 +58,30 @@ struct SizeExpr {
   std::vector<nativert::ValueId> values;
   std::vector<SizeExpr> args;
 
+  /// True when the referenced values are broadcast against each other (a
+  /// multi-input elementwise op whose operands differ in shape/rank). When set,
+  /// the size is the broadcast shape of all operands rather than the largest
+  /// single operand: dims() returns the broadcast shape and numElements()
+  /// returns its product. Only meaningful for kMax.
+  bool broadcast{false};
+
+  /// Constant shapes contributed by factory ops (zeros/ones/full) fused into an
+  /// elementwise subtree. Such ops have no tensor inputs, so their extent comes
+  /// from a `size` attribute rather than a frame value; it is broadcast in
+  /// alongside `values`/`args`. When non-empty, dims()/numElements() use the
+  /// broadcast (per-dimension max) path. Only meaningful for kMax.
+  std::vector<std::vector<Dim>> constShapes{};
+
   /// Accesses all Values and calls recursively on args and combines the
   /// results (numel() of Values) by 'op'. (max or sum). If largestOut is
   /// not null and op is kMax, assigns the ValueId with the largest numel.
+  /// When 'broadcast' is set, returns the product of the broadcast dims().
   int64_t numElements(FrameP frame, nativert::ValueId* largestOut = nullptr)
       const;
 
-  /// Returns the dims of the largest tensor among the referenced values. Only
-  /// valid for kMax. Errors on kSum.
+  /// For kMax: returns the broadcast shape of the referenced values when
+  /// 'broadcast' is set, otherwise the dims of the largest tensor. Errors on
+  /// kSum.
   std::vector<Dim> dims(FrameP frame) const;
 
   /// Substitutes Values in 'this' according to 'bindings' and returns a deep
@@ -76,7 +94,9 @@ struct SizeExpr {
 /// Describes a single output of a KernelOperation.
 struct OutputDesc {
   /// Determines the shape to allocate for this output.
-  OutputReserveFunc reserveShape;
+  std::function<std::vector<std::vector<
+      Dim>>(nativert::ExecutionFrame&, const FormalToActual&, const NodeMap&)>
+      reserveShape;
 
   /// True if device code sets the dims. If reserveFunc is nullptr,
   /// and shapeSetOnDevice is true, then the device code does a view and
@@ -96,13 +116,17 @@ struct OutputDesc {
   /// coordinated views.
   bool delegated{false};
 
-  /// If this is a view that is not allocated, it still gets a storage from some
-  /// Value.
-  ValueCP storageFrom{nullptr};
-
   /// If set, this output is produced by executing a standalone view node
   /// (e.g. view, reshape) rather than allocating a new tensor.
   NodeCP viewNode{nullptr};
+
+  /// If set, this output is the result of an in-place op (e.g. add_/clamp_)
+  /// whose return aliases its mutated self argument. Instead of allocating a
+  /// fresh buffer, the output is reserved as a view sharing self's storage, so
+  /// the returned tensor reflects self (including later in-place mutations),
+  /// matching eager Tensor(a!) semantics. Holds the self Value id (formal at
+  /// build time, translated to actual by toActual / LaunchData construction).
+  std::optional<nativert::ValueId> aliasSelfId;
 
   /// Shortcut for all elementwise, where we already know the largest input and
   /// can set the output shape by that.
@@ -306,6 +330,10 @@ class KernelOperation {
     return alwaysSingleBlock_;
   }
 
+  void setAlwaysSingleBlock(bool value) {
+    alwaysSingleBlock_ = value;
+  }
+
   bool isGridChoice() const {
     return isGridChoice_;
   }
@@ -318,7 +346,7 @@ class KernelOperation {
     return sizeExpr_;
   }
 
-  std::string toString() const;
+  std::string toString(const OpInvocation* invocation = nullptr) const;
 
   void setLabel(std::string label) {
     label_ = std::move(label);
