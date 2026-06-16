@@ -50,15 +50,19 @@ permissions:
 
 jobs:
   detect:
-    # Restrict to committer approvals (users with push access to the
-    # repo) to cap CI-minutes exposure from drive-by approvals on
-    # fork PRs. rerun-on-force-full re-derives the upstream event
-    # from workflow_run.id and applies the same filter to its dedup
-    # count so non-committer approvals on the same SHA don't bump
-    # the counter and dedup away a committer's first approval.
+    # Restrict to approvals from people with a prior relationship to
+    # the repo to cap CI-minutes exposure from drive-by approvals on
+    # fork PRs. CONTRIBUTOR is included because GitHub reports many
+    # active Velox maintainers as CONTRIBUTOR rather than MEMBER when
+    # their owning-org membership is private — without CONTRIBUTOR,
+    # the gate excludes the majority of real reviewer approvals.
+    # rerun-on-force-full re-derives the upstream event from
+    # workflow_run.id and applies the same filter to its dedup count
+    # so approvals outside this allowlist on the same SHA don't bump
+    # the counter and dedup away an eligible reviewer's first approval.
     if: >
       github.event.review.state == 'approved' &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'),
                github.event.review.author_association)
     runs-on: ubuntu-latest
     steps:

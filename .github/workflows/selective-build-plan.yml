@@ -72,10 +72,13 @@ jobs:
           persist-credentials: false
           sparse-checkout: .github/scripts
 
-      # Sticky approval: any standing approving review from a
-      # committer (push access — OWNER/MEMBER/COLLABORATOR) on this
-      # PR turns the build full from now on. Re-pushes after approval
-      # stay full. The author_association filter matches the gates in
+      # Sticky approval: any standing approving review from an
+      # eligible reviewer (OWNER/MEMBER/COLLABORATOR/CONTRIBUTOR) on
+      # this PR turns the build full from now on. Re-pushes after
+      # approval stay full. CONTRIBUTOR is included because GitHub
+      # reports many active Velox maintainers as CONTRIBUTOR rather
+      # than MEMBER when their owning-org membership is private. The
+      # author_association filter matches the gates in
       # detect-force-full.yml and rerun-on-force-full.yml so the
       # escalation chain and the sticky re-evaluation here agree on
       # which approvals count.
@@ -92,7 +95,8 @@ jobs:
                  | select(.state=="APPROVED" and .dismissed_at==null)
                  | select(.author_association == "OWNER"
                           or .author_association == "MEMBER"
-                          or .author_association == "COLLABORATOR")
+                          or .author_association == "COLLABORATOR"
+                          or .author_association == "CONTRIBUTOR")
                 ] | length')
           if [[ "${approved:-0}" -gt 0 ]]; then
             echo "is_approved=true" >> "$GITHUB_OUTPUT"
@@ -100,14 +104,15 @@ jobs:
             echo "is_approved=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Force-full request via PR comment: a committer posting
-      # `/full-build` on the PR escalates its build to full,
+      # Force-full request via PR comment: an eligible commenter
+      # posting `/full-build` on the PR escalates its build to full,
       # regardless of approval status. Useful when a reviewer wants
       # to validate against full coverage before approving, or when
       # the path-based heuristics underestimate impact. Restricted to
-      # committers (push access — OWNER/MEMBER/COLLABORATOR) to cap
-      # CI-minutes exposure from drive-by commenters; matches the
-      # gate in force-full-on-comment.yml.
+      # commenters with a prior repo relationship
+      # (OWNER/MEMBER/COLLABORATOR/CONTRIBUTOR) to cap CI-minutes
+      # exposure from drive-by commenters; matches the gate in
+      # force-full-on-comment.yml.
       - name: Check /full-build comment
         id: comment
         env:
@@ -121,7 +126,8 @@ jobs:
                  | select(.body | test("^/full-build(\\s|$)"; "m"))
                  | select(.author_association == "OWNER"
                           or .author_association == "MEMBER"
-                          or .author_association == "COLLABORATOR")
+                          or .author_association == "COLLABORATOR"
+                          or .author_association == "CONTRIBUTOR")
                 ] | length')
           if [[ "${requested:-0}" -gt 0 ]]; then
             echo "has_request=true" >> "$GITHUB_OUTPUT"
