@@ -264,10 +264,7 @@ class SubStringFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
     auto casted = cudf::cast(
-        indexColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
+        indexColumn, cudf::data_type{cudf::type_to_id<int64_t>()}, stream, mr);
     if (!indexColumn.has_nulls()) {
       return casted;
     }
@@ -395,10 +392,7 @@ class SubStringFunction : public CudfFunction {
         stream,
         mr);
     auto lengthColumn64 = cudf::cast(
-        lengthColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
+        lengthColumn, cudf::data_type{cudf::type_to_id<int64_t>()}, stream, mr);
     return makeStopColumnFromWideInputs(
         preLengthStartColumn64->view(),
         lengthColumn64->view(),

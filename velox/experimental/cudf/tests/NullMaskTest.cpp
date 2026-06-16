@@ -27,9 +27,11 @@
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <cuda_runtime_api.h>
-#include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+
+#include <cuda_runtime_api.h>
+
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <limits>
