@@ -213,6 +213,23 @@ if [[ ${BASH_SOURCE[0]} == "${0}" && $1 == "detect_sve_flags" ]]; then
   detect_sve_flags
 fi
 
+# Applies a patch with `patch -p1`, since the dependency directories are
+# extracted from tarballs rather than git checkouts and `git apply` silently
+# no-ops when run outside of a git working tree. Falls back to `git apply` if
+# `patch` isn't installed. Skips patches whose hunks are already present in
+# the source (e.g. already merged upstream in the dependency's release)
+# instead of failing.
+function apply_patch {
+  local PATCH_FILE=$1
+  if command -v patch >/dev/null 2>&1; then
+    if ! patch -p1 -R --dry-run --silent --force <"${PATCH_FILE}" 2>/dev/null; then
+      patch -p1 <"${PATCH_FILE}" || exit 1
+    fi
+  else
+    git apply "${PATCH_FILE}" || exit 1
+  fi
+}
+
 function wget_and_untar {
   local URL=$1
   local DIR=$2

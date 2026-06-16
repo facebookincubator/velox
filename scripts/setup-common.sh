@@ -236,16 +236,11 @@ function install_arrow {
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
     for patch in $VELOX_ARROW_CMAKE_PATCH; do
-      # Try patch command first (handles line number offsets), fall back to git apply
-      if command -v patch >/dev/null 2>&1; then
-        patch -p1 -i "$patch" || exit 1
-      else
-        git apply "$patch" || exit 1
-      fi
+      apply_patch "$patch"
     done
     # Presto needs this for Arrow Flight
     if [[ -n $EXTRA_ARROW_PATCH ]]; then
-      git apply "$EXTRA_ARROW_PATCH" || exit 1
+      apply_patch "$EXTRA_ARROW_PATCH"
     fi
   ) || exit 1
 
@@ -432,13 +427,13 @@ function install_uv {
     export UV_TOOL_BIN_DIR="${UV_TOOL_BIN_DIR:-$INSTALL_PREFIX/bin}"
     export UV_INSTALL_DIR=${UV_INSTALL_DIR:-"$UV_TOOL_BIN_DIR"}
 
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    curl -LsSf https://astral.sh/uv/install.sh | sudo --preserve-env sh
     uv tool update-shell
   fi
 }
 
 function uv_install {
-  uv tool install "$@" || {
+  sudo --preserve-env uv tool install "$@" || {
     ret=$?
     # exit code 2 means the binary already exists, so we can ignore that
     [ "$ret" -eq 2 ] || exit "$ret"
