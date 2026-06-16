@@ -35,7 +35,16 @@ __device__ inline float arithCast(__nv_bfloat16 x) {
 }
 
 // Binary arithmetic.
-
+//
+// The return type is T, the FIRST operand's type, because GraphOptimizer's
+// promotion pass casts every tensor operand (and the output) to PyTorch's
+// promoted dtype before codegen. So a1 already carries the op's output dtype,
+// and returning T stores the result at that dtype. The other operands get
+// their own template types (T2, TAlpha) because they need not be tensors of
+// that dtype: the second operand of a *.Scalar op, and the alpha of add/sub,
+// are scalar constants emitted as C++ literals that the promotion pass does not
+// unify. They are folded in via arithCast + ordinary C++ promotion inside the
+// expression, then the result converts back to T on return.
 template <typename T, typename T2, typename TAlpha>
 __device__ inline T __add(T a1, T2 a2, TAlpha alpha) {
   return arithCast(a1) + arithCast(a2) * arithCast(alpha);
@@ -68,6 +77,36 @@ __device__ inline double __div(int64_t a1, int64_t a2) {
 
 __device__ inline double __div(int32_t a1, int32_t a2) {
   return static_cast<double>(a1) / static_cast<double>(a2);
+}
+
+// Python/_operator.floordiv on integers: floor(a / b), rounding toward
+// negative infinity (C++ integer division truncates toward zero, so adjust
+// when the remainder is nonzero and the operand signs differ).
+template <typename T, typename T2 = T>
+__device__ inline int64_t __floordiv(T a1, T2 a2) {
+  int64_t a = static_cast<int64_t>(a1);
+  int64_t b = static_cast<int64_t>(a2);
+  int64_t q = a / b;
+  if ((a % b != 0) && ((a < 0) != (b < 0))) {
+    --q;
+  }
+  return q;
+}
+
+// Two-arg add/sub for scalar Python _operator.add / _operator.sub, which have
+// no alpha (unlike aten.add/aten.sub). Unlike the tensor ops above there is no
+// promotion pass and no anchoring tensor, so the result takes the deduced
+// promoted type of the operands -- exactly what plain `a1 + a2` yields -- which
+// is correct for SymInt, SymFloat, and mixed int/float operands. Forcing a
+// fixed type (e.g. int64) here would truncate a SymFloat operand.
+template <typename T, typename T2 = T>
+__device__ inline auto __opadd(T a1, T2 a2) {
+  return arithCast(a1) + arithCast(a2);
+}
+
+template <typename T, typename T2 = T>
+__device__ inline auto __opsub(T a1, T2 a2) {
+  return arithCast(a1) - arithCast(a2);
 }
 
 // PyTorch remainder: result = a - floor(a/b) * b, same sign as divisor.
@@ -521,8 +560,18 @@ __device__ inline T __minimum(T a1, T a2) {
   return a1 < a2 ? a1 : a2;
 }
 
+template <typename T, typename U>
+__device__ inline auto __minimum(T a1, U a2) -> decltype(a1 + a2) {
+  return a1 < a2 ? a1 : a2;
+}
+
 template <typename T>
 __device__ inline T __maximum(T a1, T a2) {
+  return a1 > a2 ? a1 : a2;
+}
+
+template <typename T, typename U>
+__device__ inline auto __maximum(T a1, U a2) -> decltype(a1 + a2) {
   return a1 > a2 ? a1 : a2;
 }
 
@@ -572,7 +621,11 @@ __device__ inline T __arange(int64_t idx) {
 // Shape query.
 
 __device__ inline int64_t __sym_size(Tensor* self, int64_t dim) {
-  return self->dims[self->rank - 1 - dim];
+  return self->dims[dim < 0 ? dim + self->rank : dim];
+}
+
+__device__ inline int64_t __numel(Tensor* self) {
+  return self->numEl;
 }
 
 // Index gather: returns source[indices[0][i]] for 1D indexing.

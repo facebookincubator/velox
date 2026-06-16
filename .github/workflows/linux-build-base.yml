@@ -22,10 +22,30 @@ on:
         default: false
         required: false
         type: boolean
+      is-full-mode:
+        description: >
+          When true, run the full set of build jobs (adapters, ubuntu-debug,
+          fedora-debug, cudf-tests). When false, only adpaters job runs and
+          uses cmake-targets to do a selective build.
+          Default true preserves prior behavior for callers that do not opt
+          into selective builds.
+        default: true
+        required: false
+        type: boolean
+      cmake-targets:
+        description: >
+          Space-separated cmake target list for the adapters job's selective
+          build. Empty = full build, non-empty = selective
+          (builds only the listed targets).
+        default: ''
+        required: false
+        type: string
 
 jobs:
 
   get-changes:
+    # Always runs — clang-tidy in the adapters job needs the changed-files
+    # list and diff range in both selective and full modes.
     runs-on: ubuntu-latest
     outputs:
       run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
@@ -79,7 +99,10 @@ jobs:
   adapters:
     name: Linux release with adapters
     needs: get-changes
-    # prevent errors when forks ff their main branch
+    # Always runs — this is the selective-build consumer pre-approval
+    # (cmake-targets non-empty -> targeted) and the full coverage post-
+    # approval / on push (cmake-targets empty -> full build). The repo
+    # check prevents errors when forks fast-forward their main branch.
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container: ghcr.io/czentgr/czentgr-test:thrift-deps
@@ -93,6 +116,9 @@ jobs:
       CUDA_VERSION: '12.9'
       faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
+      # Empty when full mode (or when the plan emitted no targets);
+      # space-separated cmake target names when running selective.
+      BUILD_TARGETS: ${{ inputs.cmake-targets }}
     outputs:
       cudf-changes: ${{ steps.changes.outputs.cudf }}
       build-outcome: ${{ steps.build.outcome }}
@@ -157,10 +183,20 @@ jobs:
           # Set compiler to GCC 14
           CUDA_FLAGS: -ccbin /opt/rh/gcc-toolset-14/root/usr/bin
         run: |
+          # Same cmake configure runs in both selective and full mode —
+          # the only difference is the TARGETS env var (empty = full
+          # build, non-empty = `cmake --build --target …`). Identical
+          # flags mean ccache hits transfer between modes, so the
+          # post-approval re-run is largely incremental on top of the
+          # pre-approval selective build. MONO_LIBRARY=OFF is required
+          # for selective to actually skip work — with MONO=ON every
+          # leaf target depends on libvelox.so which would re-link
+          # everything.
           # All adapters cmake flags (including compiler-conditional
-          # ones — Faiss, REMOTE_FUNCTIONS, and CUDF — are only added
-          # when USE_CLANG != true) live in .github/scripts/cmake-flags.sh.
-          # Edit the script, not this list.
+          # ones) live in .github/scripts/cmake-flags.sh — keep in
+          # sync with the dep-graph generator (BUILD_PROFILE=dep-graph
+          # there, which mirrors adapters minus the experimental gates)
+          # by editing the script, not this list.
           BUILD_PROFILE=adapters USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}")
           if [[ "${USE_CLANG}" = "true" ]]; then
@@ -170,7 +206,12 @@ jobs:
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
           # after sourcing GCC14.
-          CC=gcc CXX=g++ make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" 2>&1 | tee /tmp/build-output.log
+          # Empty TARGETS = full build (push, approved review, sticky).
+          # Non-empty = selective build of the requested targets.
+          CC=gcc CXX=g++ make release \
+            EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" \
+            TARGETS="$BUILD_TARGETS" \
+            2>&1 | tee /tmp/build-output.log
 
       - name: Extract build errors
         id: build-errors
@@ -206,8 +247,28 @@ jobs:
         run: |
           source /setup-classpath.sh
           ulimit -n 65536
+          # Selective mode: BUILD_TARGETS is the list of cmake targets we
+          # actually built. ctest by default runs every registered test in
+          # the build dir, including 500+ whose binaries don't exist in
+          # selective — they'd all report "Unable to find executable" and
+          # fail the step. Restrict ctest to the targets we built (anchored
+          # exact-name regex) and drop --no-tests=error so a build whose
+          # targets are libraries-only (no test executables) doesn't fail
+          # the job. Full mode keeps the original behavior unchanged.
+          CTEST_FILTER=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            regex_targets="$(
+              printf '%s\n' $BUILD_TARGETS |
+                sed -e 's/[][(){}.^$*+?|\\]/\\&/g' |
+                paste -sd '|' -
+            )"
+            CTEST_FILTER=(-R "^(${regex_targets})$")
+          else
+            CTEST_FILTER=(--no-tests=error)
+          fi
           ctest -j 24 --timeout 900 --label-exclude cuda_driver \
-            --output-on-failure --no-tests=error \
+            "${CTEST_FILTER[@]}" \
+            --output-on-failure \
             --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
 
       - name: Retry Flaky Tests
@@ -257,7 +318,10 @@ jobs:
       - name: Check cuDF Changes
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: changes
-        if: ${{ ! inputs.use-clang && always() }}
+        # Skip in selective mode — the cuDF test binaries this and the
+        # following steps prepare are only consumed by the cudf-tests
+        # job, which itself is gated on is-full-mode.
+        if: ${{ inputs.is-full-mode && ! inputs.use-clang && always() }}
         with:
           filters: |
             cudf:
@@ -265,7 +329,7 @@ jobs:
               - 'CMake/resolve_dependency_modules/cudf.cmake'
 
       - name: Copy Shared Libraries for cuDF Test Binaries
-        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        if: ${{ inputs.is-full-mode && ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
         env:
           CUDF_DIR: _build/release/velox/experimental/cudf
         run: |
@@ -309,7 +373,7 @@ jobs:
 
       - name: Upload cuDF Test Binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
+        if: ${{ inputs.is-full-mode && ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
         with:
           name: cudftestbinaries
           path: |
@@ -379,7 +443,7 @@ jobs:
   cudf-tests:
     runs-on: 4-core-ubuntu-gpu-t4
     needs: adapters
-    if: ${{ ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' && needs.adapters.result == 'success' && always() }}
+    if: ${{ inputs.is-full-mode && ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' && needs.adapters.result == 'success' && always() }}
     timeout-minutes: 30
     env:
       CUDF_DIR: _build/release/velox/experimental/cudf
@@ -446,8 +510,22 @@ jobs:
   ubuntu-debug:
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    # Full-mode only — selective coverage pre-approval comes from the
+    # adapters job. Ubuntu debug is part of the post-approval / on-push
+    # full-coverage suite (catches debug-only assertions and validates
+    # against system Ubuntu deps).
+    #
+    # CONTRACT: the job display name below ("Ubuntu debug with system
+    # dependencies") is matched by .github/actions/rerun-linux-build/
+    # action.yml's `find_run` step via the regex
+    # `^Build with GCC / Ubuntu debug` to detect whether an existing
+    # Linux Build run is already in full mode (skipped → selective;
+    # anything else → full). If you rename this job, update that regex
+    # — otherwise the rerun-skip optimization will silently break and
+    # the action will fall back to "always rerun", wasting CI minutes
+    # on duplicate full builds triggered by approvals / /full-build
+    # comments on PRs whose builds are already in full mode.
+    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -622,7 +700,10 @@ jobs:
           fi
 
   ubuntu-debug-build-status:
-    if: always()
+    # Skip when ubuntu-debug is skipped (selective mode) — otherwise
+    # this would post a misleading "passed" status for a job that
+    # didn't run.
+    if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
     runs-on: ubuntu-latest
     name: "BUILD: Ubuntu debug with system dependencies"
@@ -648,7 +729,7 @@ jobs:
           if-no-files-found: ignore
 
   ubuntu-debug-test-status:
-    if: always()
+    if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
     runs-on: ubuntu-latest
     name: "TEST: Ubuntu debug with system dependencies"
@@ -680,8 +761,9 @@ jobs:
   fedora-debug:
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:fedora
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    # Gated on is-full-mode so this build-only job runs only after the PR
+    # is approved (or on push to main).
+    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     name: Fedora debug
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -766,7 +848,7 @@ jobs:
           key: ccache-fedora-debug-default-gcc
 
   fedora-debug-build-status:
-    if: always()
+    if: ${{ inputs.is-full-mode && always() }}
     needs: fedora-debug
     runs-on: ubuntu-latest
     name: "BUILD: Fedora debug"
@@ -802,8 +884,13 @@ jobs:
 
   asan-ubsan-adapters:
     name: Linux ASAN/UBSAN with system dependencies
-    # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    # Full-mode only — selective coverage pre-approval comes from the
+    # adapters job. Like ubuntu-debug / fedora-debug, the sanitizer
+    # build is part of the post-approval / on-push full-coverage suite
+    # (catches memory and UB issues that the release build masks). The
+    # repo check prevents errors when forks fast-forward their main
+    # branch.
+    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
       image: ghcr.io/czentgr/czentgr-test:thrift-deps
@@ -936,7 +1023,7 @@ jobs:
           fi
 
   asan-ubsan-build-status:
-    if: always()
+    if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
     runs-on: ubuntu-latest
     name: "BUILD: Linux sanitizers with system dependencies"
@@ -962,7 +1049,7 @@ jobs:
           if-no-files-found: ignore
 
   asan-ubsan-test-status:
-    if: always()
+    if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
     runs-on: ubuntu-latest
     name: "TEST: Linux sanitizers with system dependencies"

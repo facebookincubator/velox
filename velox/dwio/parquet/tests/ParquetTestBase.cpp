@@ -91,10 +91,7 @@ ParquetReaderBuilder& ParquetReaderBuilder::options(
   return *this;
 }
 
-std::pair<
-    std::unique_ptr<ParquetReader>,
-    std::unique_ptr<dwio::common::RowReader>>
-ParquetReaderBuilder::build() {
+ParquetReaderBundle ParquetReaderBuilder::build() {
   VELOX_CHECK(
       filePath_.has_value() ^ (buffer_ != nullptr),
       "file path or in-memory buffer must be set");

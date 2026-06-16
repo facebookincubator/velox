@@ -50,7 +50,9 @@ velox_add_library(
   TimestampUtils.cpp
   Transform.cpp
   UnscaledValueFunction.cpp
+  XxHash64.cpp
   HEADERS
+  AnsiMode.h
   Arena.h
   Arithmetic.h
   ArrayAppend.h
@@ -102,6 +104,7 @@ velox_add_library(
   UnscaledValueFunction.h
   Uuid.h
   VarcharTypeWriteSideCheck.h
+  XxHash64.h
 )
 
 velox_link_libraries(

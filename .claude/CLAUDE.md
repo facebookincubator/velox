@@ -228,6 +228,12 @@ this list before finishing.
 - **Silently simplifying an approved plan.** If a step is harder than expected, say so and get approval before reducing scope.
 - **Working around infrastructure bugs.** Do not silently work around bugs in shared infrastructure. Report and discuss.
 
+## Commit Messages
+
+Draft commit messages with the `write-commit-message` skill
+(`.claude/skills/write-commit-message/`). The title follows conventional
+commits — see `CONTRIBUTING.md`.
+
 ## Design Documents
 
 Design (including proposals) live in `docs/designs/`.  When creating new
