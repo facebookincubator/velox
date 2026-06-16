@@ -131,7 +131,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
       "Decimal sum state requires INT64 count column (type is {})",
-      static_cast<int>(countCol.type().id()));
+      cudf::type_to_name(countCol.type()));
   auto numRows = sumCol.size();
   VELOX_CHECK_EQ(
       numRows,
