@@ -780,6 +780,12 @@ std::string_view SubIntSplitEncoding<T>::encode(
   // width, so the decode path is unaffected.
   Encoding::Options sectionOptions = options;
   sectionOptions.fixedBitWidthUseExactBits = true;
+  // FrequencyPartitionEncoding with NoIndex (options.frequencyPartitionIndex
+  // == 0) outputs values in tier-reordered order, which would desync this
+  // segment from sibling segments at decode time. Override to PerTierBitmaps
+  // (1) so materialize() preserves original row order for all sub-encodings
+  // that read this field.
+  sectionOptions.frequencyPartitionIndex = 1u; // FreqPartIndexType::PerTierBitmaps
 
   for (uint8_t s = 0; s < splitCount; ++s) {
     const auto& seg = segments[s];
