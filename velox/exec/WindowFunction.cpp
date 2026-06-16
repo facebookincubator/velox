@@ -75,7 +75,7 @@ TypePtr resolveWindowResultType(
 
   if (auto signatures = getWindowFunctionSignatures(sanitizedName)) {
     for (const auto& signature : signatures.value()) {
-      SignatureBinder binder(*signature, argTypes);
+      SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveReturnType();
       }
@@ -93,14 +93,15 @@ TypePtr resolveWindowResultType(
 TypePtr resolveWindowResultTypeWithCoercions(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   coercions.clear();
 
   auto sanitizedName = sanitizeName(name);
 
   if (auto signatures = getWindowFunctionSignatures(sanitizedName)) {
     if (auto type = tryResolveReturnTypeWithCoercions(
-            signatures.value(), argTypes, coercions)) {
+            signatures.value(), argTypes, coercions, coercer)) {
       return type;
     }
 
@@ -131,7 +132,7 @@ std::unique_ptr<WindowFunction> WindowFunction::create(
 
     const auto& signatures = func.value()->signatures;
     for (auto& signature : signatures) {
-      SignatureBinder binder(*signature, argTypes);
+      SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         auto type = binder.tryResolveType(signature->returnType());
         VELOX_USER_CHECK(

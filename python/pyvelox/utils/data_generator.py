@@ -68,6 +68,7 @@ def generate_tpch_data(
     plan_builder.tpch_gen(
         table_name=table,
         connector_id=TPCH_CONNECTOR_NAME,
+        # pyrefly: ignore [bad-argument-type]
         scale_factor=scale_factor,
         num_parts=num_files,
     ).table_write(

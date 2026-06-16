@@ -188,8 +188,8 @@ TEST_P(StripeStreamFormatTypeTest, planReads) {
       footer,
       nullptr,
       nullptr,
-      dataIoStats_.get(),
-      metadataIoStats_.get());
+      dataIoStats_,
+      metadataIoStats_);
   ColumnSelector cs{readerBase->schema(), std::vector<uint64_t>{2}, true};
 
   TestDecrypterFactory factory;
@@ -274,8 +274,8 @@ TEST_F(StripeStreamTest, filterSequences) {
       footer,
       nullptr,
       nullptr,
-      dataIoStats_.get(),
-      metadataIoStats_.get());
+      dataIoStats_,
+      metadataIoStats_);
 
   // mock a filter that we only need one node and one sequence
   ColumnSelector cs{readerBase->schema(), std::vector<std::string>{"a#[1]"}};
@@ -345,8 +345,8 @@ TEST_P(StripeStreamFormatTypeTest, zeroLength) {
       footer,
       nullptr,
       nullptr,
-      dataIoStats_.get(),
-      metadataIoStats_.get());
+      dataIoStats_,
+      metadataIoStats_);
 
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
@@ -482,8 +482,8 @@ TEST_P(StripeStreamFormatTypeTest, planReadsIndex) {
       footer,
       std::move(cache),
       nullptr,
-      dataIoStats_.get(),
-      metadataIoStats_.get());
+      dataIoStats_,
+      metadataIoStats_);
 
   TestDecrypterFactory factory;
   auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
@@ -670,8 +670,8 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
       footer,
       nullptr,
       std::move(handler),
-      dataIoStats_.get(),
-      metadataIoStats_.get());
+      dataIoStats_,
+      metadataIoStats_);
   auto stripeMetadata = std::make_unique<const StripeMetadata>(
       &readerBase->bufferedInput(),
       std::move(stripeFooter),
@@ -756,8 +756,8 @@ TEST_F(StripeStreamTest, schemaMismatch) {
       footer,
       nullptr,
       std::move(handler),
-      dataIoStats_.get(),
-      metadataIoStats_.get());
+      dataIoStats_,
+      metadataIoStats_);
   auto stripeMetadata = std::make_unique<const StripeMetadata>(
       &readerBase->bufferedInput(),
       std::move(stripeFooter),

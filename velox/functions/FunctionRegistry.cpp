@@ -152,17 +152,18 @@ bool hasCoercions(const std::vector<TypePtr>& coercions) {
 TypePtr resolveFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   // Check if this is a simple function.
   if (auto resolvedFunction =
           exec::simpleFunctions().resolveFunctionWithCoercions(
-              functionName, argTypes, coercions)) {
+              functionName, argTypes, coercions, coercer)) {
     if (hasCoercions(coercions)) {
       // Check if there is a vector function that can be invoked without
       // coercions.
       std::vector<TypePtr> alternativeCoersions;
       auto otherType = exec::resolveVectorFunctionWithCoercions(
-          functionName, argTypes, alternativeCoersions);
+          functionName, argTypes, alternativeCoersions, coercer);
       if (otherType != nullptr && !hasCoercions(alternativeCoersions)) {
         coercions.clear();
         return otherType;
@@ -174,7 +175,7 @@ TypePtr resolveFunctionWithCoercions(
 
   // Check if VectorFunctions has this function name + signature.
   return exec::resolveVectorFunctionWithCoercions(
-      functionName, argTypes, coercions);
+      functionName, argTypes, coercions, coercer);
 }
 
 std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
@@ -203,13 +204,15 @@ TypePtr resolveFunctionOrCallableSpecialForm(
 TypePtr resolveFunctionOrCallableSpecialFormWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   if (auto returnType = resolveCallableSpecialFormWithCoercions(
-          functionName, argTypes, coercions)) {
+          functionName, argTypes, coercions, coercer)) {
     return returnType;
   }
 
-  return resolveFunctionWithCoercions(functionName, argTypes, coercions);
+  return resolveFunctionWithCoercions(
+      functionName, argTypes, coercions, coercer);
 }
 
 TypePtr resolveCallableSpecialForm(
@@ -221,9 +224,10 @@ TypePtr resolveCallableSpecialForm(
 TypePtr resolveCallableSpecialFormWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   return exec::resolveTypeForSpecialFormWithCoercions(
-      functionName, argTypes, coercions);
+      functionName, argTypes, coercions, coercer);
 }
 
 TypePtr resolveSimpleFunction(
@@ -254,9 +258,10 @@ std::optional<std::pair<TypePtr, exec::VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadataWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   return exec::resolveVectorFunctionWithMetadataWithCoercions(
-      functionName, argTypes, coercions);
+      functionName, argTypes, coercions, coercer);
 }
 
 void removeFunction(const std::string& functionName) {

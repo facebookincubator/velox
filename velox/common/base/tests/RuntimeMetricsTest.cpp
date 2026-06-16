@@ -99,4 +99,81 @@ TEST_F(RuntimeMetricsTest, saturateCast) {
   EXPECT_EQ(rm.max, maxInt64);
 }
 
+class SetThreadLocalRuntimeStatTest : public testing::Test {
+ protected:
+  class RuntimeStatCollector : public BaseRuntimeStatWriter {
+   public:
+    void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
+        override {
+      stats_.insert_or_assign(std::string(name), metric);
+    }
+
+    const RuntimeMetric* getMetric(const std::string& name) const {
+      auto it = stats_.find(name);
+      return it != stats_.end() ? &it->second : nullptr;
+    }
+
+   private:
+    std::unordered_map<std::string, RuntimeMetric> stats_;
+  };
+};
+
+TEST_F(SetThreadLocalRuntimeStatTest, singleMetric) {
+  RuntimeStatCollector collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+
+  RuntimeMetric metric(RuntimeCounter::Unit::kNone);
+  metric.addValue(10);
+  metric.addValue(20);
+  metric.addValue(30);
+
+  setThreadLocalRuntimeStat("test.metric", metric);
+
+  const auto* result = collector.getMetric("test.metric");
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(result->count, 3);
+  EXPECT_EQ(result->sum, 60);
+  EXPECT_EQ(result->min, 10);
+  EXPECT_EQ(result->max, 30);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, existingMetric) {
+  RuntimeStatCollector collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+
+  RuntimeMetric first(RuntimeCounter::Unit::kNone);
+  first.addValue(100);
+  setThreadLocalRuntimeStat("test.metric", first);
+
+  RuntimeMetric second(RuntimeCounter::Unit::kNone);
+  second.addValue(5);
+  second.addValue(15);
+  setThreadLocalRuntimeStat("test.metric", second);
+
+  const auto* result = collector.getMetric("test.metric");
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(result->count, 2);
+  EXPECT_EQ(result->sum, 20);
+  EXPECT_EQ(result->min, 5);
+  EXPECT_EQ(result->max, 15);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, emptyMetric) {
+  RuntimeStatCollector collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+
+  RuntimeMetric empty(RuntimeCounter::Unit::kNone);
+  setThreadLocalRuntimeStat("test.empty", empty);
+
+  const auto* result = collector.getMetric("test.empty");
+  ASSERT_NE(result, nullptr);
+  EXPECT_EQ(result->count, 0);
+}
+
+TEST_F(SetThreadLocalRuntimeStatTest, noWriter) {
+  RuntimeMetric metric(RuntimeCounter::Unit::kNanos);
+  metric.addValue(42);
+  setThreadLocalRuntimeStat("test.nowriter", metric);
+}
+
 } // namespace facebook::velox

@@ -59,6 +59,7 @@ class FilterProject : public Operator {
   void close() override {
     Operator::close();
     if (exprs_ != nullptr) {
+      exprs_->finishTracers();
       exprs_->clear();
     } else {
       VELOX_CHECK(!initialized_);
@@ -127,5 +128,13 @@ class FilterProject : public Operator {
   // will load c1 only for rows where f(c0) is true. However, c1 identity
   // projection needs all rows.
   std::vector<column_index_t> multiplyReferencedFieldIndices_;
+
+  // Input channels that map to more than one output channel via identity
+  // projections. Their lazy vectors must be loaded before fillOutput to avoid
+  // sharing unloaded lazy vectors across multiple output fields. Skipped when
+  // `lazyDereference_` is true because LazyDereferenceNode guarantees no filter
+  // (no partial-row loading through pushdown hooks) and expects lazy vectors to
+  // remain unloaded for downstream parallel processing.
+  std::vector<column_index_t> reusedInputChannels_;
 };
 } // namespace facebook::velox::exec

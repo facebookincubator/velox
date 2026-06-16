@@ -50,6 +50,14 @@ uint64_t IoStatistics::writeIOTimeUs() const {
   return writeIOTimeUs_.load(std::memory_order_relaxed);
 }
 
+uint64_t IoStatistics::duplicateReadRegions() const {
+  return duplicateReadRegions_.load(std::memory_order_relaxed);
+}
+
+uint64_t IoStatistics::duplicateReadBytes() const {
+  return duplicateReadBytes_.load(std::memory_order_relaxed);
+}
+
 uint64_t IoStatistics::incRawBytesRead(int64_t v) {
   return rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
 }
@@ -76,6 +84,11 @@ uint64_t IoStatistics::incTotalScanTimeNs(int64_t v) {
 
 uint64_t IoStatistics::incWriteIOTimeUs(int64_t v) {
   return writeIOTimeUs_.fetch_add(v, std::memory_order_relaxed);
+}
+
+void IoStatistics::incDuplicateRead(int64_t regions, int64_t bytes) {
+  duplicateReadRegions_.fetch_add(regions, std::memory_order_relaxed);
+  duplicateReadBytes_.fetch_add(bytes, std::memory_order_relaxed);
 }
 
 void IoStatistics::incOperationCounters(
@@ -112,6 +125,8 @@ void IoStatistics::merge(const IoStatistics& other) {
   rawBytesRead_ += other.rawBytesRead_;
   rawBytesWritten_ += other.rawBytesWritten_;
   totalScanTimeNs_ += other.totalScanTimeNs_;
+  duplicateReadRegions_ += other.duplicateReadRegions_;
+  duplicateReadBytes_ += other.duplicateReadBytes_;
 
   rawOverreadBytes_ += other.rawOverreadBytes_;
   prefetch_.merge(other.prefetch_);
@@ -124,6 +139,7 @@ void IoStatistics::merge(const IoStatistics& other) {
   cacheWaitLatencyUs_.merge(other.cacheWaitLatencyUs_);
   coalescedSsdLoadLatencyUs_.merge(other.coalescedSsdLoadLatencyUs_);
   coalescedStorageLoadLatencyUs_.merge(other.coalescedStorageLoadLatencyUs_);
+  readGap_.merge(other.readGap_);
   {
     const auto& otherOperationStats = other.operationStats();
     std::lock_guard<std::mutex> l(operationStatsMutex_);

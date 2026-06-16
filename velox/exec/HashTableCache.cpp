@@ -118,6 +118,7 @@ void HashTableCache::put(
 
 void HashTableCache::drop(const std::string& key) {
   std::shared_ptr<HashTableCacheEntry> entry;
+  std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> guard(lock_);
     auto it = tables_.find(key);
@@ -131,7 +132,14 @@ void HashTableCache::drop(const std::string& key) {
   // is destroyed. This ensures the tablePool's memory is released
   // before any parent pools are destroyed.
   if (entry) {
+    promises = std::move(entry->buildPromises);
     entry->table.reset();
+  }
+
+  // Fulfill any pending build promises so waiting tasks are unblocked
+  // rather than hanging forever (e.g., after builder OOM).
+  for (auto& promise : promises) {
+    promise.setValue();
   }
 }
 

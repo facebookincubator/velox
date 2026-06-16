@@ -20,11 +20,14 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 class UnnestTest : public HiveConnectorTestBase,
                    public testing::WithParamInterface<vector_size_t> {
@@ -889,19 +892,21 @@ TEST_P(UnnestTest, barrier) {
     const int numExpectedOutputVectors =
         bits::divRoundUp(numRowsPerSplit * 3, testData.numOutputRows) *
         numSplits;
-    auto task = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kSparkPartitionId, "0")
-                    .config(
-                        core::QueryConfig::kMaxSplitPreloadPerDriver,
-                        std::to_string(tempFiles.size()))
-                    .splits(makeHiveConnectorSplits(tempFiles))
-                    .serialExecution(testData.serialExecution)
-                    .maxDrivers(testData.serialExecution ? 1 : 3)
-                    .barrierExecution(testData.barrierExecution)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(testData.numOutputRows))
-                    .assertResults(expectedResult);
+    auto task =
+        AssertQueryBuilder(plan)
+            .config(
+                SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId), "0")
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver,
+                std::to_string(tempFiles.size()))
+            .splits(makeHiveConnectorSplits(tempFiles))
+            .serialExecution(testData.serialExecution)
+            .maxDrivers(testData.serialExecution ? 1 : 3)
+            .barrierExecution(testData.barrierExecution)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                std::to_string(testData.numOutputRows))
+            .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);

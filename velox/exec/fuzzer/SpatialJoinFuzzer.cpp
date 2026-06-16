@@ -79,7 +79,7 @@ class GeometryInputGenerator : public AbstractInputGenerator {
 
  protected:
   std::pair<double, double> generateCoordinates() {
-    double x, y;
+    double x{0.0}, y{0.0};
     switch (distribution_) {
       case GeometryDistribution::kUniform: {
         x = fuzzer::rand<int32_t>(
@@ -107,6 +107,8 @@ class GeometryInputGenerator : public AbstractInputGenerator {
         y = fuzzer::rand<int32_t>(rng_, -kSparseSpread, kSparseSpread);
         break;
       }
+      default:
+        VELOX_UNREACHABLE();
     }
     return {x, y};
   }

@@ -93,3 +93,11 @@ Map Functions
         SELECT size(map(array(1, 2), array(3, 4)), true); -- 2
         SELECT size(NULL, true); -- -1
         SELECT size(NULL, false); -- NULL
+
+.. spark:function:: transform_values(map(K,V1), func) -> map(K,V2)
+
+    Returns a map that applies ``func`` to each entry of ``map`` and transforms
+    the values. Keys are left unchanged. ::
+
+        SELECT transform_values(map(1, 10, 2, 20), (k, v) -> v * 2); -- {1 -> 20, 2 -> 40}
+        SELECT transform_values(map(1, 10, 2, 20), (k, v) -> k + v); -- {1 -> 11, 2 -> 22}

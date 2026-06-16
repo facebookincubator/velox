@@ -98,7 +98,8 @@ class IndexLookupJoin : public Operator {
         override;
 
     // Sets a runtime metric in the index source stats map. Thread-safe.
-    void setRuntimeStat(const std::string& name, const RuntimeMetric& metric);
+    void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
+        override;
 
     // Returns a snapshot of the accumulated index source runtime stats.
     std::unordered_map<std::string, RuntimeMetric> runtimeStats() const;
@@ -350,6 +351,10 @@ class IndexLookupJoin : public Operator {
   const core::PlanNodeId indexSourceNodeId_;
   const connector::ConnectorTableHandlePtr lookupTableHandle_;
   const std::vector<core::IndexLookupConditionPtr> joinConditions_;
+  // Probe-side columns the connector wants forwarded into its lookup input
+  // even when no join key or join condition references them. Mirrors
+  // IndexLookupJoinNode::forwardedProbeColumns(). Empty by default.
+  const std::vector<core::FieldAccessTypedExprPtr> forwardedProbeColumns_;
   const connector::ColumnHandleMap lookupColumnHandles_;
   const std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   const std::shared_ptr<connector::Connector> connector_;

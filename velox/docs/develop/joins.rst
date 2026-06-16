@@ -313,6 +313,26 @@ Velox implements an optimization to finish the join early and return an empty
 set of results without waiting to receive all the probe side input. In this case
 all upstream operators are canceled to avoid unnecessary computation.
 
+Small Build Side Inputs
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Nested loop join materializes the entire build side before producing output.
+When the build side is small enough to fit into a single row or a single
+vector, Velox uses specialized paths to avoid processing one probe row at a
+time.
+
+If the build side has a single row, build-side projections are wrapped as
+constants and evaluated against the whole probe batch at once. If the build
+side has a single vector, Velox wraps probe-side and build-side rows in
+dictionaries and evaluates the join condition over a batched cross product that
+covers as many probe rows as fit within ``outputBatchSize_``.
+
+These paths reduce repeated cross-product materialization and join-condition
+setup for small build inputs while preserving the usual nested loop join
+semantics, including probe-side output order for inner and left joins. If the
+build side spans multiple vectors, Velox falls back to processing one probe row
+against one build vector at a time.
+
 Skipping Duplicate Keys
 ~~~~~~~~~~~~~~~~~~~~~~~
 

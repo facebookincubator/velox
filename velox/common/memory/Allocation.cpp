@@ -16,6 +16,9 @@
 
 #include "velox/common/memory/Allocation.h"
 
+#include <algorithm>
+#include <cstring>
+
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
@@ -52,6 +55,41 @@ void Allocation::appendMove(Allocation& other) {
   }
   other.runs_.clear();
   other.numPages_ = 0;
+}
+
+/*static*/ void
+Allocation::copy(const Allocation& source, Allocation& target, uint64_t bytes) {
+  VELOX_CHECK_LE(bytes, source.byteSize());
+  VELOX_CHECK_LE(bytes, target.byteSize());
+
+  int32_t sourceRunIndex = 0;
+  int32_t targetRunIndex = 0;
+  uint64_t sourceOffsetInRun = 0;
+  uint64_t targetOffsetInRun = 0;
+  uint64_t copiedBytes = 0;
+  while (copiedBytes < bytes) {
+    auto sourceRun = source.runAt(sourceRunIndex);
+    auto targetRun = target.runAt(targetRunIndex);
+    const auto bytesToCopy = std::min<uint64_t>(
+        {sourceRun.numBytes() - sourceOffsetInRun,
+         targetRun.numBytes() - targetOffsetInRun,
+         bytes - copiedBytes});
+    std::memcpy(
+        targetRun.data<char>() + targetOffsetInRun,
+        sourceRun.data<const char>() + sourceOffsetInRun,
+        bytesToCopy);
+    copiedBytes += bytesToCopy;
+    sourceOffsetInRun += bytesToCopy;
+    targetOffsetInRun += bytesToCopy;
+    if (sourceOffsetInRun == sourceRun.numBytes()) {
+      ++sourceRunIndex;
+      sourceOffsetInRun = 0;
+    }
+    if (targetOffsetInRun == targetRun.numBytes()) {
+      ++targetRunIndex;
+      targetOffsetInRun = 0;
+    }
+  }
 }
 
 void Allocation::findRun(uint64_t offset, int32_t* index, int32_t* offsetInRun)

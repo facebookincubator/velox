@@ -468,6 +468,7 @@ __ https://www.cse.ust.hk/~raywong/comp5331/References/EfficientComputationOfFre
         --{30.0->1.0, 22.5->2.0, 12.5->2.0}
 
 .. function:: numeric_histogram(buckets, value) -> map<double, double>
+   :noindex:
 
     Computes an approximate histogram with up to ``buckets`` number of buckets
     for all ``value``\ s. This function is equivalent to the variant of
@@ -575,6 +576,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_miss_rate(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_miss_rate` that takes a ``weight``, with a per-item weight of ``1``.
@@ -604,6 +606,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_fall_out(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_fall_out` that takes a ``weight``, with a per-item weight of ``1``.
@@ -633,6 +636,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_precision(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_precision` that takes a ``weight``, with a per-item weight of ``1``.
@@ -662,6 +666,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
     entries of ``y``, ``x``, and ``weight``, respectively.
 
 .. function:: classification_recall(buckets, y, x) -> array<double>
+   :noindex:
 
     This function is equivalent to the variant of
     :func:`!classification_recall` that takes a ``weight``, with a per-item weight of ``1``.
@@ -845,6 +850,7 @@ Counts, Sums, and Averages
     Otherwise, noise is drawn from a secure random.
 
 .. function:: noisy_sum_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+   :noindex:
 
     Calculates the sum over the input values in ``col`` and then adds a normally distributed
     random double value with 0 mean and standard deviation of ``noise_scale``.
@@ -862,6 +868,7 @@ Counts, Sums, and Averages
     Otherwise, noise is drawn from a secure random.
 
 .. function:: noisy_avg_gaussian(col, noise_scale, lower, upper[, random_seed]) -> double
+   :noindex:
 
     Calculates the average (arithmetic mean) of all the input values in ``col`` and then adds a
     normally distributed random double value with 0 mean and standard deviation of ``noise_scale``.

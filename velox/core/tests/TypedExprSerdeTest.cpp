@@ -156,4 +156,30 @@ TEST_F(TypedExprSerDeTest, lambda) {
   testSerde(expression);
 }
 
+TEST_F(TypedExprSerDeTest, nullIf) {
+  TypedExprPtr expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(INTERVAL_DAY_TIME(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(INTERVAL_DAY_TIME(), "b"),
+      INTERVAL_DAY_TIME());
+  testSerde(expression);
+
+  expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(DATE(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(DATE(), "b"),
+      DATE());
+  testSerde(expression);
+
+  expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(TIME(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(TIME(), "b"),
+      TIME());
+  testSerde(expression);
+
+  expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(TIME_MICRO_UTC(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(TIME_MICRO_UTC(), "b"),
+      TIME_MICRO_UTC());
+  testSerde(expression);
+}
+
 } // namespace facebook::velox::core::test

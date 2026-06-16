@@ -24,7 +24,8 @@ namespace {
 TypePtr resolveTypeInt(
     const std::vector<TypePtr>& argTypes,
     bool allowedCoercions,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   VELOX_CHECK_GT(
       argTypes.size(),
       0,
@@ -44,12 +45,12 @@ TypePtr resolveTypeInt(
       continue;
     }
 
-    if (allowedCoercions && TypeCoercer::coercible(argTypes[i], resultType)) {
+    if (allowedCoercions && coercer.coercible(argTypes[i], resultType)) {
       coercions[i] = resultType;
       continue;
     }
 
-    if (allowedCoercions && TypeCoercer::coercible(resultType, argTypes[i])) {
+    if (allowedCoercions && coercer.coercible(resultType, argTypes[i])) {
       resultType = argTypes[i];
       for (auto j = 0; j < i; j++) {
         coercions[j] = resultType;
@@ -69,7 +70,7 @@ TypePtr resolveTypeInt(
 
 TypePtr resolveTypeInt(const std::vector<TypePtr>& argTypes) {
   std::vector<TypePtr> coercions;
-  return resolveTypeInt(argTypes, false, coercions);
+  return resolveTypeInt(argTypes, false, coercions, TypeCoercer::defaults());
 }
 } // namespace
 
@@ -147,10 +148,11 @@ TypePtr CoalesceCallToSpecialForm::resolveType(
   return resolveTypeInt(argTypes);
 }
 
-TypePtr CoalesceCallToSpecialForm::resolveTypeWithCorsions(
+TypePtr CoalesceCallToSpecialForm::resolveTypeWithCoercions(
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
-  return resolveTypeInt(argTypes, true, coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
+  return resolveTypeInt(argTypes, true, coercions, coercer);
 }
 
 ExprPtr CoalesceCallToSpecialForm::constructSpecialForm(

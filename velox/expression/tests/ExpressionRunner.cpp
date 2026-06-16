@@ -24,7 +24,6 @@
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/expression/tests/ExpressionRunner.h"
 #include "velox/expression/tests/ExpressionVerifier.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/QueryPlanner.h"
 #include "velox/parse/TypeResolver.h"

@@ -15,9 +15,13 @@
  */
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 
+#include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
+#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/error.hpp>
@@ -196,8 +200,11 @@ std::unique_ptr<cudf::column> decimalDivide(
   CUDF_EXPECTS(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
+  // Combine input null masks (lhs and rhs nulls).
   auto [nullMask, nullCount] =
       cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
+
+  // Create output column with input null mask and perform division.
   auto out = cudf::make_fixed_width_column(
       outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
@@ -223,7 +230,8 @@ std::unique_ptr<cudf::column> decimalDivide(
         lhs, rhs, out->mutable_view(), aRescale, stream);
   }
 
-  return out;
+  // Scatter nulls where divisor is zero.
+  return scatterNullsAtZeroDivisor(std::move(out), rhs, stream, mr);
 }
 
 std::unique_ptr<cudf::column> decimalDivide(
@@ -286,8 +294,11 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
   }
 
+  // Copy rhs null mask.
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto nullCount = rhs.null_count();
+
+  // Create output column and perform division.
   auto out = cudf::make_fixed_width_column(
       outputType, rhs.size(), std::move(nullMask), nullCount, stream, mr);
 
@@ -315,7 +326,8 @@ std::unique_ptr<cudf::column> decimalDivide(
         lhsValue, rhs, out->mutable_view(), aRescale, stream);
   }
 
-  return out;
+  // Scatter nulls where divisor is zero.
+  return scatterNullsAtZeroDivisor(std::move(out), rhs, stream, mr);
 }
 
 } // namespace facebook::velox::cudf_velox

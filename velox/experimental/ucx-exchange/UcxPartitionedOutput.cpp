@@ -19,11 +19,13 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include <cudf/concatenate.hpp>
 #include <cudf/contiguous_split.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/partitioning.hpp>
 
 using namespace facebook::velox::cudf_velox;
@@ -128,23 +130,25 @@ void UcxPartitionedOutput::flushPending() {
           ? cv->getTableView()
           : cv->getTableView().select(remap_.begin(), remap_.end());
     } else {
-      // Sync all input streams so their GPU data is ready to read.
-      for (auto& v : pendingInputs_) {
-        v->stream().synchronize();
-      }
-
       // Collect (remapped) table views.
       std::vector<cudf::table_view> views;
+      std::vector<rmm::cuda_stream_view> inputStreams;
       views.reserve(pendingInputs_.size());
+      inputStreams.reserve(pendingInputs_.size());
       for (auto& v : pendingInputs_) {
+        inputStreams.push_back(v->stream());
         views.push_back(
             remap_.empty()
                 ? v->getTableView()
                 : v->getTableView().select(remap_.begin(), remap_.end()));
       }
 
+      cudf::detail::join_streams(inputStreams, stream);
       mergedTable = cudf::concatenate(
           views, stream, cudf::get_current_device_resource_ref());
+
+      orderCudfVectorDeallocationsAfterStream(
+          pendingInputs_, inputStreams, stream);
 
       // Free input GPU memory before partitioning (peak = 2x -> 1x).
       pendingInputs_.clear();

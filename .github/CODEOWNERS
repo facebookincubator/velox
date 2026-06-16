@@ -34,16 +34,16 @@ scripts/ @assignUser @majetideepak
 velox/experimental/breeze @dreveman
 
 # cuDF
-velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123
+velox/experimental/cudf/ @bdice @karthikeyann @devavret @mhaseeb123 @shrshi @simoneves @mattgara @jinchengchenghh
 
 # Parquet
-velox/dwio/parquet/ @majetideepak
+velox/dwio/parquet/ @majetideepak @PingLiuPing
 
 # Storage Adapters
 velox/connectors/hive/storage_adapters/ @majetideepak
 
 # Connectors
-velox/connectors/ @majetideepak
+velox/connectors/ @majetideepak @PingLiuPing
 
 # Caching
 velox/common/caching/ @majetideepak

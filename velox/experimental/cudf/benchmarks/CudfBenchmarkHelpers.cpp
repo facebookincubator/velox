@@ -50,10 +50,7 @@ TableInfo readTableInfo(
     }
 
     if (info.dataFiles.empty()) {
-      io::IoStatistics dataIoStats;
-      io::IoStatistics metadataIoStats;
-      dwio::common::ReaderOptions readerOptions{
-          pool, &dataIoStats, &metadataIoStats};
+      dwio::common::ReaderOptions readerOptions{pool};
       readerOptions.setFileFormat(format);
       auto readFile = filesystems::getFileSystem(entry.path().string(), nullptr)
                           ->openFileForRead(entry.path().string());

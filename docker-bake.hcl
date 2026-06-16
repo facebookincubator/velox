@@ -68,6 +68,13 @@ target "pyvelox" {
   args = {
     image              = "quay.io/pypa/manylinux_2_28:latest"
     VELOX_BUILD_SHARED = "OFF"
+    # pyvelox uses a manylinux base which is el8, not el9. The
+    # dockerfile's CENTOS_TZDATA_VERSION default is el9 (correct for
+    # the centos9/adapters targets); override here to the el8 build of
+    # the same upstream tzdata release. Keep the upstream version
+    # (2026a) in sync with CENTOS_TZDATA_VERSION at the top of
+    # scripts/docker/centos-multi.dockerfile.
+    CENTOS_TZDATA_VERSION = "2026a-1.el8"
   }
   matrix = {
     arch = ["amd64", "arm64"]

@@ -64,6 +64,15 @@ VELOX_DEFINE_EMBEDDED_ENUM_NAME(IExpr, Kind, kindNames)
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowCallExpr, WindowType, windowTypeNames);
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(WindowCallExpr, BoundType, boundTypeNames);
 
+// static
+const FieldAccessExpr* FieldAccessExpr::tryAsRootColumn(const ExprPtr& expr) {
+  const auto* field = dynamic_cast<const FieldAccessExpr*>(expr.get());
+  if (field == nullptr || !field->isRootColumn()) {
+    return nullptr;
+  }
+  return field;
+}
+
 bool FieldAccessExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kFieldAccess)) {
     return false;

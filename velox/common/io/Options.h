@@ -67,15 +67,26 @@ class ReaderOptions {
   static constexpr int32_t kDefaultCoalesceBytes = 128 << 20; // 128M
   static constexpr int32_t kDefaultPrefetchRowGroups = 1;
 
-  ReaderOptions(
-      velox::memory::MemoryPool* pool,
-      IoStatistics* dataIoStats,
-      IoStatistics* metadataIoStats)
-      : pool_{pool},
-        dataIoStats_{dataIoStats},
-        metadataIoStats_{metadataIoStats} {
-    VELOX_CHECK_NOT_NULL(dataIoStats);
-    VELOX_CHECK_NOT_NULL(metadataIoStats);
+  explicit ReaderOptions(velox::memory::MemoryPool* pool) : pool_{pool} {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
+
+  ReaderOptions& setDataIoStats(std::shared_ptr<IoStatistics> stats) {
+    VELOX_CHECK_NULL(dataIoStats_, "dataIoStats already set");
+    dataIoStats_ = std::move(stats);
+    return *this;
+  }
+
+  ReaderOptions& setMetadataIoStats(std::shared_ptr<IoStatistics> stats) {
+    VELOX_CHECK_NULL(metadataIoStats_, "metadataIoStats already set");
+    metadataIoStats_ = std::move(stats);
+    return *this;
+  }
+
+  ReaderOptions& setIndexIoStats(std::shared_ptr<IoStatistics> stats) {
+    VELOX_CHECK_NULL(indexIoStats_, "indexIoStats already set");
+    indexIoStats_ = std::move(stats);
+    return *this;
   }
 
   /// Modifies the autoPreloadLength
@@ -161,20 +172,25 @@ class ReaderOptions {
 
   /// IO statistics for tracking storage reads, SSD reads, RAM cache hits,
   /// and overread bytes for data stream IO.
-  IoStatistics* dataIoStats() const {
+  const std::shared_ptr<IoStatistics>& dataIoStats() const {
     return dataIoStats_;
   }
 
   /// IO statistics for tracking storage reads, SSD reads, RAM cache hits,
   /// and overread bytes for metadata IO (footer, stripe groups, index).
-  IoStatistics* metadataIoStats() const {
+  const std::shared_ptr<IoStatistics>& metadataIoStats() const {
     return metadataIoStats_;
+  }
+
+  const std::shared_ptr<IoStatistics>& indexIoStats() const {
+    return indexIoStats_;
   }
 
  protected:
   velox::memory::MemoryPool* pool_;
-  IoStatistics* dataIoStats_;
-  IoStatistics* metadataIoStats_;
+  std::shared_ptr<IoStatistics> dataIoStats_;
+  std::shared_ptr<IoStatistics> metadataIoStats_;
+  std::shared_ptr<IoStatistics> indexIoStats_;
 
   std::shared_ptr<folly::Executor> ioExecutor_;
 

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <vector>
 
 #include "velox/buffer/Buffer.h"
@@ -31,6 +32,18 @@ namespace facebook::velox {
 /// deserialization stream.
 class BufferPool {
  public:
+  /// Default upper bound on retained BufferPtr objects.
+  static constexpr size_t kDefaultCapacity = 32;
+
+  /// Constructs a pool retaining at most `capacity` BufferPtr objects.
+  /// The effective capacity is clamped to at least `kDefaultCapacity`
+  /// to guarantee a useful cache size; pass any value < kDefaultCapacity
+  /// and you still get kDefaultCapacity. To skip pooling entirely, callers
+  /// should avoid constructing a BufferPool (pass nullptr downstream
+  /// instead).
+  explicit BufferPool(size_t capacity)
+      : capacity_{std::max(kDefaultCapacity, capacity)} {}
+
   /// Returns a cached buffer with capacity >= minBytes, or nullptr if none
   /// available.
   BufferPtr get(uint64_t minBytes);
@@ -39,15 +52,17 @@ class BufferPool {
   BufferPtr get();
 
   /// Returns a buffer to the pool for future reuse. Drops the buffer if the
-  /// pool is full or if 'buffer' is null.
-  void release(BufferPtr buffer);
+  /// pool is full or if 'buffer' is null. The buffer must have a unique
+  /// reference (refcount == 1) to ensure safe reuse.
+  void release(BufferPtr&& buffer);
 
   /// Returns the number of cached buffers currently in the pool.
   size_t size() const;
 
  private:
-  // Maximum number of BufferPtr objects retained in the pool.
-  static constexpr size_t kMaxCached = 32;
+  // Configured upper bound on retained BufferPtr objects. 0 disables
+  // caching.
+  const size_t capacity_;
   // Cached buffers available for reuse.
   std::vector<BufferPtr> buffers_;
 };

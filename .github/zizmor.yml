@@ -17,5 +17,9 @@ rules:
       - build_pyvelox.yml
   dangerous-triggers:
     ignore:
-      - build-impact-comment.yml
+      - selective-build-comment.yml
       - ci-failure-comment.yml
+      - labeler.yml
+      - detect-force-full.yml
+      - rerun-on-force-full.yml
+      - force-full-on-comment.yml

@@ -23,8 +23,13 @@ namespace facebook::velox::connector::hive::paimon {
 /// Extends FileConfig with Paimon-specific settings.
 class PaimonConfig : public FileConfig {
  public:
+  /// Canonical connector name used to scope format-specific config keys.
+  static constexpr std::string_view kConnectorName = "paimon";
+
   explicit PaimonConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(std::move(config)) {}
+      : FileConfig(
+            std::move(config),
+            makeConnectorConfigPrefix(kConnectorName)) {}
 };
 
 } // namespace facebook::velox::connector::hive::paimon

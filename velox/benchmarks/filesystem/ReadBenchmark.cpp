@@ -87,21 +87,8 @@ std::shared_ptr<config::ConfigBase> readConfig(const std::string& filePath) {
 void ReadBenchmark::initialize() {
   executor_ = std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_threads);
   if (FLAGS_odirect) {
-    int32_t o_direct =
-#ifdef linux
-        O_DIRECT;
-#else
-        0;
-#endif
-    fd_ = open(
-        FLAGS_path.c_str(),
-        O_CREAT | O_RDWR | (FLAGS_odirect ? o_direct : 0),
-        S_IRUSR | S_IWUSR);
-    if (fd_ < 0) {
-      LOG(ERROR) << "Could not open " << FLAGS_path;
-      exit(1);
-    }
-    readFile_ = std::make_unique<LocalReadFile>(fd_);
+    readFile_ = std::make_unique<LocalReadFile>(
+        FLAGS_path, /*executor=*/nullptr, /*bufferIo=*/false);
   } else {
     filesystems::registerLocalFileSystem();
     filesystems::registerS3FileSystem();
@@ -114,10 +101,10 @@ void ReadBenchmark::initialize() {
     }
     auto fs = filesystems::getFileSystem(FLAGS_path, config);
     readFile_ = fs->openFileForRead(FLAGS_path);
-    fileSize_ = readFile_->size();
-    if (FLAGS_file_size_gb) {
-      fileSize_ = std::min<uint64_t>(FLAGS_file_size_gb << 30, fileSize_);
-    }
+  }
+  fileSize_ = readFile_->size();
+  if (FLAGS_file_size_gb) {
+    fileSize_ = std::min<uint64_t>(FLAGS_file_size_gb << 30, fileSize_);
   }
 
   if (fileSize_ <= FLAGS_measurement_size) {

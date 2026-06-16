@@ -36,9 +36,7 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForm(
       MakeDecimalCallToSpecialForm::kMakeDecimal,
       std::make_unique<MakeDecimalCallToSpecialForm>());
-  exec::registerFunctionCallToSpecialForm(
-      DecimalRoundCallToSpecialForm::kRoundDecimal,
-      std::make_unique<DecimalRoundCallToSpecialForm>());
+  registerDecimalRoundingForms();
   exec::registerFunctionCallToSpecialForm(
       AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
       std::make_unique<AtLeastNNonNullsCallToSpecialForm>());

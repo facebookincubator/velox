@@ -498,7 +498,8 @@ folly::dynamic CudfHiveInsertTableHandle::serialize() const {
 
   obj["inputColumns"] = arr;
   obj["locationHandle"] = locationHandle_->serialize();
-  obj["tableStorageFormat"] = dwio::common::toString(storageFormat_);
+  obj["tableStorageFormat"] =
+      dwio::common::FileFormatName::toName(storageFormat_);
 
   if (compressionKind_.has_value()) {
     obj["compressionKind"] = common::compressionKindToString(*compressionKind_);
@@ -530,7 +531,7 @@ CudfHiveInsertTableHandlePtr CudfHiveInsertTableHandle::create(
 std::string CudfHiveInsertTableHandle::toString() const {
   std::ostringstream out;
   out << "CudfHiveInsertTableHandle ["
-      << dwio::common::toString(storageFormat_);
+      << dwio::common::FileFormatName::toName(storageFormat_);
   if (compressionKind_.has_value()) {
     out << " " << common::compressionKindToString(compressionKind_.value());
   } else {

@@ -141,15 +141,17 @@ struct Stats {
 class MemoryAllocator;
 
 /// Memory collected from evicted cache entries. Non-contiguous page
-/// allocations and contiguous byte allocations are tracked separately so they
-/// can be freed back to the allocator before retrying allocation.
+/// allocations and byte allocations (from allocateBytes()) are tracked
+/// separately so they can be freed back to the allocator before retrying
+/// allocation.
 struct AcquiredMemory {
-  Allocation nonContiguous;
-  std::vector<std::pair<void*, uint64_t>> contiguous;
+  Allocation nonContiguousAllocs;
+  // Byte allocations from allocateBytes().
+  std::vector<std::pair<void*, uint64_t>> byteAllocations;
 
   uint64_t totalBytes() const {
-    uint64_t bytes = nonContiguous.byteSize();
-    for (const auto& [_, size] : contiguous) {
+    uint64_t bytes = nonContiguousAllocs.byteSize();
+    for (const auto& [_, size] : byteAllocations) {
       bytes += size;
     }
     return bytes;
@@ -158,7 +160,7 @@ struct AcquiredMemory {
   void free(MemoryAllocator* allocator);
 
   bool empty() const {
-    return nonContiguous.empty() && contiguous.empty();
+    return nonContiguousAllocs.empty() && byteAllocations.empty();
   }
 };
 
@@ -267,7 +269,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   static constexpr int32_t kMaxSizeClasses = 12;
   static constexpr uint16_t kMinAlignment = alignof(max_align_t);
-  static constexpr uint16_t kMaxAlignment = 64;
+  static constexpr uint16_t kDefaultAlignment = 64;
 
   /// Returns the kind of this memory allocator. For AsyncDataCache, it returns
   /// the kind of the delegated memory allocator underneath.
@@ -360,14 +362,27 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// space from 'cache()' if registered. But sufficient space is not
   /// guaranteed.
   ///
-  /// NOTE: 'alignment' must be power of two and in range of
-  /// [kMinAlignment, kMaxAlignment].
+  /// NOTE: 'alignment' must be power of two and >= kMinAlignment.
   void* allocateBytes(uint64_t bytes, uint16_t alignment = kMinAlignment);
 
   /// Allocates a zero-filled contiguous bytes. Returns nullptr if there is no
   /// space. The function might retry allocation failure by making space from
   /// 'cache()' if registered. But sufficient space is not guaranteed.
   void* allocateZeroFilled(uint64_t bytes);
+
+  /// Reallocates contiguous memory. Tries in-place reallocation first (via the
+  /// allocator-specific reallocateBytesWithoutRetry), falling back to
+  /// allocateBytes + memcpy + freeBytes if the allocator does not support
+  /// in-place reallocation. Returns nullptr on failure.
+  ///
+  /// When the underlying allocator is MallocAllocator (backed by jemalloc),
+  /// this uses ::realloc() which can often expand the allocation in-place,
+  /// avoiding the expensive memcpy.
+  void* reallocateBytes(
+      void* p,
+      uint64_t oldSize,
+      uint64_t newSize,
+      uint16_t alignment = kMinAlignment);
 
   /// Frees contiguous memory allocated by allocateBytes, allocateZeroFilled,
   /// reallocateBytes.
@@ -508,6 +523,16 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       uint16_t alignment) = 0;
 
   virtual void* allocateZeroFilledWithoutRetry(uint64_t bytes);
+
+  // Attempts to reallocate 'p' from 'oldSize' to 'newSize' bytes without
+  // retry through cache eviction. Returns nullptr if in-place reallocation
+  // is not supported or fails. The default implementation always returns
+  // nullptr; MallocAllocator overrides this to use ::realloc().
+  virtual void* reallocateBytesWithoutRetry(
+      void* p,
+      uint64_t oldSize,
+      uint64_t newSize,
+      uint16_t alignment);
 
   virtual bool growContiguousWithoutRetry(
       MachinePageCount increment,

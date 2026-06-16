@@ -111,6 +111,7 @@ add_executable(
   MultimapFromEntriesTest.cpp
   NotTest.cpp
   ParsePrestoDataSizeTest.cpp
+  PrestoQueryConfigTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp
@@ -147,7 +148,10 @@ add_executable(
 )
 
 if(VELOX_ENABLE_GEO)
-  target_sources(velox_functions_test PRIVATE GeometryFunctionsTest.cpp S2FunctionsTest.cpp)
+  target_sources(
+    velox_functions_test
+    PRIVATE GeometryFunctionsTest.cpp GooglePolylineFunctionsTest.cpp S2FunctionsTest.cpp
+  )
 endif()
 
 if(VELOX_ENABLE_FAISS)

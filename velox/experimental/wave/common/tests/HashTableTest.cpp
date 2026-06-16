@@ -232,13 +232,10 @@ class HashTableTest : public testing::Test {
 
   void updateJitMtxCoa(TestingRow* rows, HashRun& run, TestingRow* reference) {
     std::cout << "updateJitMtxCoa" << std::endl;
-    KernelSpec spec = {
-        jitMtxCoa,
-        {"facebook::velox::wave::jitSumMtxCoalesce"},
-        "sum1Jit.cu",
-        0,
-        nullptr,
-        nullptr};
+    KernelSpec spec;
+    spec.code = jitMtxCoa;
+    spec.entryPoints = {"facebook::velox::wave::jitSumMtxCoalesce"};
+    spec.filePath = "sum1Jit.cu";
     auto kernel = CompiledModule::create(spec);
     uint64_t micros = 0;
     {

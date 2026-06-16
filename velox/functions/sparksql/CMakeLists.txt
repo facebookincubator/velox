@@ -12,6 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+velox_add_library(
+  velox_spark_query_config
+  OBJECT
+  SparkConfigProvider.cpp
+  SparkQueryConfig.cpp
+  HEADERS
+  SparkConfigProvider.h
+  SparkQueryConfig.h
+)
+velox_link_libraries(velox_spark_query_config velox_config_property velox_core)
+
 add_subdirectory(specialforms)
 velox_add_library(
   velox_functions_spark_impl
@@ -27,6 +38,7 @@ velox_add_library(
   DecimalCeil.cpp
   DecimalCompare.cpp
   FilterFunction.cpp
+  FormatNumber.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
@@ -38,7 +50,9 @@ velox_add_library(
   TimestampUtils.cpp
   Transform.cpp
   UnscaledValueFunction.cpp
+  XxHash64.cpp
   HEADERS
+  AnsiMode.h
   Arena.h
   Arithmetic.h
   ArrayAppend.h
@@ -60,6 +74,7 @@ velox_add_library(
   DecimalCeil.h
   DecimalUtil.h
   Factorial.h
+  FormatNumber.h
   GetJsonObject.h
   Hash.h
   In.h
@@ -89,6 +104,7 @@ velox_add_library(
   UnscaledValueFunction.h
   Uuid.h
   VarcharTypeWriteSideCheck.h
+  XxHash64.h
 )
 
 velox_link_libraries(
@@ -122,4 +138,3 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(registration)
-add_subdirectory(types)

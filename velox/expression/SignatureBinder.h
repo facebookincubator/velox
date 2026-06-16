@@ -23,22 +23,24 @@ namespace facebook::velox::exec {
 
 class SignatureBinderBase {
  protected:
-  explicit SignatureBinderBase(const exec::FunctionSignature& signature)
-      : signature_{signature} {}
+  SignatureBinderBase(
+      const exec::FunctionSignature& signature,
+      const TypeCoercer& coercer)
+      : signature_{signature}, coercer_{coercer} {}
 
-  /// Return true if actualType can bind to typeSignature and update bindings_
-  /// accordingly. The number of parameters in typeSignature and actualType
-  /// must match. Return false otherwise.
+  // Return true if actualType can bind to typeSignature and update bindings_
+  // accordingly. The number of parameters in typeSignature and actualType
+  // must match. Return false otherwise.
   bool tryBind(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);
 
-  /// Like 'tryBind', but allows implicit type conversion if actualType
-  /// doesn't match typeSignature exactly.
-  ///
-  /// @param coercion Type coercion necessary to bind actualType to
-  /// typeSignature if there is no exact match. 'coercion.type' is null if
-  /// there is exact match.
+  // Like 'tryBind', but allows implicit type conversion if actualType
+  // doesn't match typeSignature exactly.
+  //
+  // @param coercion Type coercion necessary to bind actualType to
+  // typeSignature if there is no exact match. 'coercion.type' is null if
+  // there is exact match.
   bool tryBindWithCoercion(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType,
@@ -49,33 +51,37 @@ class SignatureBinderBase {
     return signature_.variables();
   }
 
-  /// The function signature we are trying to bind.
+  // The function signature we are trying to bind.
   const exec::FunctionSignature& signature_;
 
-  /// Record concrete types that are bound to type variables.
+  // Coercion rules used for implicit type conversion. Defaults to
+  // TypeCoercer::defaults() when no dialect-specific coercer is supplied.
+  const TypeCoercer& coercer_;
+
+  // Record concrete types that are bound to type variables.
   std::unordered_map<std::string, TypePtr> typeVariablesBindings_;
 
-  /// Record concrete values that are bound to integer variables.
+  // Record concrete values that are bound to integer variables.
   std::unordered_map<std::string, int> integerVariablesBindings_;
 
-  /// Record concrete values that are bound to LongEnumParameter variables.
+  // Record concrete values that are bound to LongEnumParameter variables.
   std::unordered_map<std::string, LongEnumParameter> longEnumVariablesBindings_;
 
-  /// Record concrete values that are bound to VarcharEnumParameter variables.
+  // Record concrete values that are bound to VarcharEnumParameter variables.
   std::unordered_map<std::string, VarcharEnumParameter>
       varcharEnumVariablesBindings_;
 
  private:
-  /// If the integer parameter is set, then it must match with value.
-  /// Returns false if values do not match or the parameter does not exist.
+  // If the integer parameter is set, then it must match with value.
+  // Returns false if values do not match or the parameter does not exist.
   bool checkOrSetIntegerParameter(const std::string& parameterName, int value);
 
-  /// Try to bind the LongEnumParameter from the actualType.
+  // Try to bind the LongEnumParameter from the actualType.
   bool checkOrSetLongEnumParameter(
       const std::string& parameterName,
       const LongEnumParameter& params);
 
-  /// Try to bind the VarcharEnumParameter from the actualType.
+  // Try to bind the VarcharEnumParameter from the actualType.
   bool checkOrSetVarcharEnumParameter(
       const std::string& parameterName,
       const VarcharEnumParameter& params);
@@ -86,7 +92,7 @@ class SignatureBinderBase {
       bool allowCoercion,
       Coercion& coercion);
 
-  /// Try to bind the integer parameter from the actualType.
+  // Try to bind the integer parameter from the actualType.
   bool tryBindIntegerParameters(
       const std::vector<exec::TypeSignature>& parameters,
       const TypePtr& actualType);
@@ -108,11 +114,12 @@ class SignatureBinderBase {
 /// corresponding to lambda inputs).
 class SignatureBinder : private SignatureBinderBase {
  public:
-  // Requires that signature and actualTypes are not r-values.
+  /// Requires that signature and actualTypes are not r-values.
   SignatureBinder(
       const exec::FunctionSignature& signature,
-      const std::vector<TypePtr>& actualTypes)
-      : SignatureBinderBase{signature}, actualTypes_{actualTypes} {}
+      const std::vector<TypePtr>& actualTypes,
+      const TypeCoercer& coercer)
+      : SignatureBinderBase{signature, coercer}, actualTypes_{actualTypes} {}
 
   /// Returns true if successfully resolved all generic type names.
   bool tryBind();
@@ -129,8 +136,8 @@ class SignatureBinder : private SignatureBinderBase {
     return tryResolveType(signature_.returnType());
   }
 
-  // Try resolve type for the specified signature. Return nullptr if cannot
-  // resolve.
+  /// Try resolve type for the specified signature. Return nullptr if cannot
+  /// resolve.
   TypePtr tryResolveType(const exec::TypeSignature& typeSignature) {
     return tryResolveType(
         typeSignature,
@@ -141,8 +148,8 @@ class SignatureBinder : private SignatureBinderBase {
         varcharEnumVariablesBindings_);
   }
 
-  // Try resolve types for all specified signatures. Return empty list if some
-  // signatures cannot be resolved.
+  /// Try resolve types for all specified signatures. Return empty list if some
+  /// signatures cannot be resolved.
   std::vector<TypePtr> tryResolveTypes(
       const folly::Range<const TypeSignature*>& typeSignatures) {
     std::vector<TypePtr> types;
@@ -158,8 +165,8 @@ class SignatureBinder : private SignatureBinderBase {
     return types;
   }
 
-  // Given a pre-computed binding for type variables resolve typeSignature if
-  // possible.
+  /// Given a pre-computed binding for type variables resolve typeSignature if
+  /// possible.
   static TypePtr tryResolveType(
       const exec::TypeSignature& typeSignature,
       const std::unordered_map<std::string, SignatureVariable>& variables,
@@ -176,9 +183,9 @@ class SignatureBinder : private SignatureBinderBase {
         dummyEmpty3);
   }
 
-  // Given a pre-computed binding for type variables and integer variables,
-  // resolve typeSignature if possible. integerVariablesBindings might will be
-  // updated with the bound value.
+  /// Given a pre-computed binding for type variables and integer variables,
+  /// resolve typeSignature if possible. integerVariablesBindings might will be
+  /// updated with the bound value.
   static TypePtr tryResolveType(
       const exec::TypeSignature& typeSignature,
       const std::unordered_map<std::string, SignatureVariable>& variables,
@@ -192,12 +199,12 @@ class SignatureBinder : private SignatureBinderBase {
  private:
   bool tryBind(bool allowCoercions, std::vector<Coercion>& coercions);
 
-  /// Pre-binds type variables to their least common super type across all
-  /// arguments. Runs before the main binding loop. Only binds type variables,
-  /// not integer variables (e.g. decimal precision/scale) — those are bound
-  /// later by tryBind. Does not check base type name match since coercion may
-  /// change the base type. Returns false if a type variable conflict is found
-  /// that would prevent binding; true otherwise.
+  // Pre-binds type variables to their least common super type across all
+  // arguments. Runs before the main binding loop. Only binds type variables,
+  // not integer variables (e.g. decimal precision/scale) -- those are bound
+  // later by tryBind. Does not check base type name match since coercion may
+  // change the base type. Returns false if a type variable conflict is found
+  // that would prevent binding; true otherwise.
   bool tryBindVariablesWithCoercion(
       const exec::TypeSignature& typeSignature,
       const TypePtr& actualType);
@@ -213,6 +220,7 @@ class SignatureBinder : private SignatureBinderBase {
 TypePtr tryResolveReturnTypeWithCoercions(
     const std::vector<FunctionSignaturePtr>& signatures,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 } // namespace facebook::velox::exec

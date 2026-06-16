@@ -35,6 +35,7 @@ velox_add_library(
   PlanNode.h
   QueryConfig.h
   QueryCtx.h
+  ScanBatchEvent.h
   SimpleFunctionMetadata.h
   TableWriteTraits.h
 )

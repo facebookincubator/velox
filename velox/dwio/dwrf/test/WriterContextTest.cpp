@@ -219,6 +219,44 @@ TEST_F(WriterContextTest, memory) {
   ASSERT_EQ(context.availableMemoryReservation(), 786368);
 }
 
+TEST_F(WriterContextTest, memoryBudgetDefault) {
+  auto pool = memory::memoryManager()->addRootPool("memoryBudgetDefault");
+  WriterContext context{std::make_shared<Config>(), pool};
+  ASSERT_EQ(context.getMemoryBudget(), pool->maxCapacity());
+}
+
+TEST_F(WriterContextTest, memoryBudgetLessThanPoolCapacity) {
+  const int64_t poolCapacity = 1L << 30;
+  const int64_t budget = 256L << 20;
+  auto pool = memory::memoryManager()->addRootPool(
+      "memoryBudgetLessThanPoolCapacity", poolCapacity);
+  WriterContext context{
+      std::make_shared<Config>(),
+      pool,
+      dwio::common::MetricsLog::voidLog(),
+      nullptr,
+      false,
+      nullptr,
+      budget};
+  ASSERT_EQ(context.getMemoryBudget(), budget);
+}
+
+TEST_F(WriterContextTest, memoryBudgetGreaterThanPoolCapacity) {
+  const int64_t poolCapacity = 256L << 20;
+  const int64_t budget = 1L << 30;
+  auto pool = memory::memoryManager()->addRootPool(
+      "memoryBudgetGreaterThanPoolCapacity", poolCapacity);
+  WriterContext context{
+      std::make_shared<Config>(),
+      pool,
+      dwio::common::MetricsLog::voidLog(),
+      nullptr,
+      false,
+      nullptr,
+      budget};
+  ASSERT_EQ(context.getMemoryBudget(), poolCapacity);
+}
+
 TEST_F(WriterContextTest, abort) {
   auto writerRoot = memory::memoryManager()->addRootPool(
       "abort", 1L << 30, exec::MemoryReclaimer::create());

@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace Aws::Auth {
 // Forward-declare the AWSCredentialsProvider class from the AWS SDK.
@@ -31,11 +32,21 @@ class ConfigBase;
 
 namespace facebook::velox::filesystems {
 
+class FileSystem;
+
 using CacheKeyFn = std::function<
     std::string(std::shared_ptr<const config::ConfigBase>, std::string_view)>;
 
+// Factory for substituting the FileSystem instance created for an S3 bucket.
+// This customizes the filesystem object, not S3FileSystem::Impl.
+using S3FileSystemFactory = std::function<std::shared_ptr<FileSystem>(
+    std::string bucketName,
+    std::shared_ptr<const config::ConfigBase> config)>;
+
 // Register the S3 filesystem.
-void registerS3FileSystem(CacheKeyFn cacheKeyFunc = nullptr);
+void registerS3FileSystem(
+    CacheKeyFn cacheKeyFunc = nullptr,
+    S3FileSystemFactory fileSystemFactory = nullptr);
 
 void registerS3Metrics();
 

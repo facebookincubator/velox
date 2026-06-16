@@ -51,19 +51,6 @@ struct AtomicTestType {
   static const MemoryOrder memory_order = Order;
 };
 
-struct AtomicTestNameGenerator {
-  template <typename T>
-  static std::string GetName(int) {
-    if constexpr (T::memory_order == MemoryOrder::kRelaxed)
-      return "relaxed";
-    if constexpr (T::memory_order == MemoryOrder::kAcquire)
-      return "acquire";
-    if constexpr (T::memory_order == MemoryOrder::kRelease)
-      return "release";
-    return "?";
-  }
-};
-
 template <typename TypeParam>
 class AtomicLoadTest : public testing::Test {};
 
@@ -71,7 +58,7 @@ using AtomicLoadTestTypes = ::testing::Types<
     AtomicTestType<MemoryOrder::kRelaxed>,
     AtomicTestType<MemoryOrder::kAcquire>>;
 
-TYPED_TEST_SUITE(AtomicLoadTest, AtomicLoadTestTypes, AtomicTestNameGenerator);
+TYPED_TEST_SUITE(AtomicLoadTest, AtomicLoadTestTypes);
 
 TYPED_TEST(AtomicLoadTest, load) {
   auto* allocator = getAllocator(getDevice());
@@ -91,10 +78,7 @@ using AtomicStoreTestTypes = ::testing::Types<
     AtomicTestType<MemoryOrder::kRelaxed>,
     AtomicTestType<MemoryOrder::kRelease>>;
 
-TYPED_TEST_SUITE(
-    AtomicStoreTest,
-    AtomicStoreTestTypes,
-    AtomicTestNameGenerator);
+TYPED_TEST_SUITE(AtomicStoreTest, AtomicStoreTestTypes);
 
 TYPED_TEST(AtomicStoreTest, store) {
   auto* allocator = getAllocator(getDevice());
@@ -113,10 +97,7 @@ using AtomicCompareExchangeTestTypes = ::testing::Types<
     AtomicTestType<MemoryOrder::kAcquire>,
     AtomicTestType<MemoryOrder::kRelease>>;
 
-TYPED_TEST_SUITE(
-    AtomicCompareExchangeTest,
-    AtomicCompareExchangeTestTypes,
-    AtomicTestNameGenerator);
+TYPED_TEST_SUITE(AtomicCompareExchangeTest, AtomicCompareExchangeTestTypes);
 
 TYPED_TEST(AtomicCompareExchangeTest, compare_exchange) {
   auto* allocator = getAllocator(getDevice());

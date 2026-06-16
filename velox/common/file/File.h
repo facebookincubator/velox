@@ -16,7 +16,7 @@
 
 // Abstraction of a simplified file interface.
 //
-// Implementations are available in this file for local disk and in-memory.
+// Implementations are available for local disk and in-memory.
 //
 // We implement only a small subset of the normal file operations, namely
 // Append for writing data and PRead for reading data.
@@ -141,6 +141,23 @@ class ReadFile {
       folly::Range<folly::IOBuf*> iobufs,
       const FileIoContext& context = {}) const;
 
+  // Positioned batch read API. Implementations can submit multiple independent
+  // reads together. 'buffers' must have one caller-owned destination per input
+  // region, and each destination length must match its region length.
+  // The default implementation reads one region at a time.
+  // Returns the total number of bytes read.
+  // This method should be thread safe.
+  virtual uint64_t preadv(
+      folly::Range<const common::Region*> regions,
+      folly::Range<const folly::Range<char*>*> buffers,
+      const FileIoContext& context = {}) const;
+
+  // Returns true if preadvAsync has a native implementation that is
+  // asynchronous. The default implementation is synchronous.
+  virtual bool hasPreadvAsync() const {
+    return false;
+  }
+
   /// Like preadv but may execute asynchronously and returns the read size or
   /// exception via SemiFuture. Use hasPreadvAsync() to check if the
   /// implementation is in fact asynchronous.
@@ -156,9 +173,10 @@ class ReadFile {
     }
   }
 
-  // Returns true if preadvAsync has a native implementation that is
-  // asynchronous. The default implementation is synchronous.
-  virtual bool hasPreadvAsync() const {
+  /// Returns true if this file requires direct-I/O alignment. Sets alignment to
+  /// the byte alignment required for positioned reads, or 1 otherwise.
+  virtual bool directIo(uint64_t& alignment) const {
+    alignment = 1;
     return false;
   }
 
@@ -190,7 +208,7 @@ class ReadFile {
   virtual uint64_t getNaturalReadSize() const = 0;
 
  protected:
-  mutable std::atomic<uint64_t> bytesRead_ = 0;
+  mutable std::atomic_uint64_t bytesRead_{0};
 };
 
 // A write-only file. Nothing written to the file should be read back until it
@@ -326,126 +344,6 @@ class InMemoryWriteFile final : public WriteFile {
   std::string* file_;
 };
 
-/// Current implementation for the local version is quite simple (e.g. no
-/// internal arenaing), as local disk writes are expected to be cheap. Local
-/// files match against any filepath starting with '/'.
-class LocalReadFile final : public ReadFile {
- public:
-  LocalReadFile(
-      std::string_view path,
-      folly::Executor* executor = nullptr,
-      bool bufferIo = true);
-
-  /// TODO: deprecate this after creating local file all through velox fs
-  /// interface.
-  LocalReadFile(int32_t fd, folly::Executor* executor = nullptr);
-
-  ~LocalReadFile();
-
-  std::string_view pread(
-      uint64_t offset,
-      uint64_t length,
-      void* buf,
-      const FileIoContext& context = {}) const final;
-
-  uint64_t size() const final;
-
-  uint64_t preadv(
-      uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
-      const FileIoContext& context = {}) const final;
-
-  folly::SemiFuture<uint64_t> preadvAsync(
-      uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers,
-      const FileIoContext& context = {}) const override;
-
-  bool hasPreadvAsync() const override {
-    return executor_ != nullptr;
-  }
-
-  uint64_t memoryUsage() const final;
-
-  bool shouldCoalesce() const final {
-    return false;
-  }
-
-  std::string getName() const override {
-    if (path_.empty()) {
-      return "<LocalReadFile>";
-    }
-    return path_;
-  }
-
-  uint64_t getNaturalReadSize() const override {
-    return 10 << 20;
-  }
-
- private:
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
-
-  folly::Executor* const executor_;
-  std::string path_;
-  int32_t fd_;
-  long size_;
-};
-
-class LocalWriteFile final : public WriteFile {
- public:
-  struct Attributes {
-    // If set to true, the file will not be subject to copy-on-write updates.
-    // This flag has an effect only on filesystems that support copy-on-write
-    // semantics, such as Btrfs.
-    static constexpr std::string_view kNoCow{"write-on-copy-disabled"};
-    static constexpr bool kDefaultNoCow{false};
-
-    static bool cowDisabled(
-        const std::unordered_map<std::string, std::string>& attrs);
-  };
-
-  // An error is thrown is a file already exists at |path|,
-  // unless flag shouldThrowOnFileAlreadyExists is false
-  explicit LocalWriteFile(
-      std::string_view path,
-      bool shouldCreateParentDirectories = false,
-      bool shouldThrowOnFileAlreadyExists = true,
-      bool bufferIo = true);
-
-  ~LocalWriteFile();
-
-  void append(std::string_view data) final;
-
-  void append(std::unique_ptr<folly::IOBuf> data) final;
-
-  void write(const std::vector<iovec>& iovecs, int64_t offset, int64_t length)
-      final;
-
-  void truncate(int64_t newSize) final;
-
-  void flush() final;
-
-  void setAttributes(
-      const std::unordered_map<std::string, std::string>& attributes) final;
-
-  std::unordered_map<std::string, std::string> getAttributes() const final;
-
-  void close() final;
-
-  uint64_t size() const final {
-    return size_;
-  }
-
-  const std::string getName() const final {
-    return path_;
-  }
-
- private:
-  // File descriptor.
-  int32_t fd_{-1};
-  std::string path_;
-  uint64_t size_{0};
-  std::unordered_map<std::string, std::string> attributes_{};
-  bool closed_{false};
-};
-
 } // namespace facebook::velox
+
+#include "velox/common/file/LocalFile.h"

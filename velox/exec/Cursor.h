@@ -41,22 +41,22 @@ struct CursorParameters {
   int32_t numConcurrentSplitGroups{1};
 
   /// Optional, created if not present.
-  std::shared_ptr<core::QueryCtx> queryCtx;
+  std::shared_ptr<core::QueryCtx> queryCtx{nullptr};
 
   uint64_t bufferedBytes{512 * 1024};
 
-  /// An optional memory pool to be used to allocate vectors returned by
-  /// MultiThreadedTaskCursor. A new pool is created if not specified.
-  ///
-  /// Only used if serialExecution is false.
-  std::shared_ptr<memory::MemoryPool> outputPool;
+  /// An optional memory pool to be used to allocate vectors returned by the
+  /// task cursor. If null and `copyResult` is true, the cursor creates a new
+  /// leaf pool internally. If `copyResult` is false, vectors are returned
+  /// without copy and outputPool is ignored.
+  std::shared_ptr<memory::MemoryPool> outputPool{nullptr};
 
   /// Ungrouped (by default) or grouped (bucketed) execution.
   core::ExecutionStrategy executionStrategy{
       core::ExecutionStrategy::kUngrouped};
 
   /// Contains leaf plan nodes that need to be executed in the grouped mode.
-  std::unordered_set<core::PlanNodeId> groupedExecutionLeafNodeIds;
+  std::unordered_set<core::PlanNodeId> groupedExecutionLeafNodeIds = {};
 
   /// Number of splits groups the task will be processing. Must be 1 for
   /// ungrouped execution.

@@ -122,7 +122,6 @@ target_link_libraries(
   velox_format_datetime_benchmark
   ${velox_benchmark_deps}
   velox_vector_test_lib
-  velox_functions_spark
   velox_functions_prestosql
   velox_row_fast
 )

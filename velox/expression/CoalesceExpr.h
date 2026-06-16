@@ -46,9 +46,10 @@ class CoalesceCallToSpecialForm : public FunctionCallToSpecialForm {
   /// argument types are the same.
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
-  TypePtr resolveTypeWithCorsions(
+  TypePtr resolveTypeWithCoercions(
       const std::vector<TypePtr>& argTypes,
-      std::vector<TypePtr>& coercions) override;
+      std::vector<TypePtr>& coercions,
+      const TypeCoercer& coercer) override;
 
   ExprPtr constructSpecialForm(
       const TypePtr& type,

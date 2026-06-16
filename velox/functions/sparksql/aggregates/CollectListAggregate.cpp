@@ -18,11 +18,15 @@
 
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/functions/lib/aggregates/ValueList.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 using namespace facebook::velox::aggregate;
 using namespace facebook::velox::exec;
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+using functions::sparksql::SparkQueryConfig;
+
 namespace {
 class CollectListAggregate {
  public:
@@ -49,7 +53,7 @@ class CollectListAggregate {
       const std::vector<TypePtr>& /*argTypes*/,
       const TypePtr& /*resultType*/,
       const core::QueryConfig& config) {
-    ignoreNulls_ = config.sparkCollectListIgnoreNulls();
+    ignoreNulls_ = SparkQueryConfig{config}.collectListIgnoreNulls();
   }
 
   struct AccumulatorType {

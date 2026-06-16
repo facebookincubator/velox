@@ -39,6 +39,10 @@ class Base32 {
   /// within the encoding base.
   using ReverseIndex = std::array<uint8_t, kReverseIndexSize>;
 
+  /// Encodes 'input' to a padded RFC 4648 Base32 string (uppercase A-Z, 2-7),
+  /// matching Google Guava's BaseEncoding.base32().
+  static std::string encode(std::string_view input);
+
   /// Decodes the specified number of characters from the 'input' and writes the
   /// result to the 'outputBuffer'.
   static Status decode(

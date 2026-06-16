@@ -52,6 +52,10 @@ enum class TokenType {
   Identifier,
   EndOfStream,
   Decimal,
+  // TimeMicroUtc must precede Time so the longer keyword is matched first
+  // by the prefix-iteration tokenizer (the same trick used for Timestamp
+  // vs Time).
+  TimeMicroUtc,
   Time,
   LeftRoundBracket,
   RightRoundBracket,

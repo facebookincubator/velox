@@ -498,7 +498,7 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
   }
 
   // Resolve lambda arguments.
-  exec::SignatureBinder binder(*signature, childTypes);
+  exec::SignatureBinder binder(*signature, childTypes, TypeCoercer::defaults());
   binder.tryBind();
   for (auto i = 0; i < numArgs; ++i) {
     if (signature->isLambdaArgumentAt(i)) {

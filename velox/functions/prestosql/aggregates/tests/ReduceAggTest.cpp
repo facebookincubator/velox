@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -248,6 +249,52 @@ TEST_F(ReduceAggTest, arraysGroupBy) {
        "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
        "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3)) "
        "FILTER (WHERE m)"},
+      {expected});
+}
+
+TEST_F(ReduceAggTest, nonConstantInitialValueGroupBy) {
+  auto data = makeRowVector(
+      {"k", "c0", "c1"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2}),
+          makeFlatVector<int64_t>({2, 3, 20}),
+          makeArrayVector<int64_t>({{1, 2}, {1, 3}, {2, 20}}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation(
+                      {"k"},
+                      {"reduce_agg(c0, c1, "
+                       "(s, x) -> concat(s, array[x]), "
+                       "(s, s2) -> concat(s, s2))"})
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Initial value in reduce_agg must be constant");
+}
+
+TEST_F(ReduceAggTest, allNullInputSkipsInitialValueCheck) {
+  auto data = makeRowVector(
+      {"k", "c0", "c1"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2}),
+          makeConstant<int64_t>(std::nullopt, 4),
+          makeArrayVector<int64_t>({{1, 2}, {1, 2}, {2, 20}, {2, 20}}),
+      });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeNullableArrayVector<int64_t>({std::nullopt, std::nullopt}),
+  });
+
+  testAggregations(
+      {data},
+      {"k"},
+      {"reduce_agg(c0, c1, "
+       "(s, x) -> concat(s, array[x]), "
+       "(s, s2) -> concat(s, s2))"},
       {expected});
 }
 

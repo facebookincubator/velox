@@ -62,6 +62,7 @@ Expand::Expand(
 }
 
 void Expand::initialize() {
+  Operator::initialize();
   if (constantProjections_.empty()) {
     return;
   }

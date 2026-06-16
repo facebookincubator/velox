@@ -73,9 +73,10 @@ class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
   /// Supports coercions for odd arguments (then and else branches).
-  TypePtr resolveTypeWithCorsions(
+  TypePtr resolveTypeWithCoercions(
       const std::vector<TypePtr>& argTypes,
-      std::vector<TypePtr>& coercions) override;
+      std::vector<TypePtr>& coercions,
+      const TypeCoercer& coercer) override;
 
   ExprPtr constructSpecialForm(
       const TypePtr& type,
@@ -92,9 +93,10 @@ class IfCallToSpecialForm : public SwitchCallToSpecialForm {
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
   /// Supports coercions for 2nd and 3rd arguments (then and else branches).
-  TypePtr resolveTypeWithCorsions(
+  TypePtr resolveTypeWithCoercions(
       const std::vector<TypePtr>& argTypes,
-      std::vector<TypePtr>& coercions) override;
+      std::vector<TypePtr>& coercions,
+      const TypeCoercer& coercer) override;
 };
 
 } // namespace facebook::velox::exec

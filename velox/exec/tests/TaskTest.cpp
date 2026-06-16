@@ -1061,6 +1061,43 @@ TEST_F(TaskTest, serialExecution) {
   VELOX_ASSERT_THROW(executeSerial(plan), "division by zero");
 }
 
+TEST_F(TaskTest, serialExecutionOutputPool) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+  });
+
+  auto outputPool =
+      memory::memoryManager()->addLeafPool("serialExecutionOutputPool");
+
+  CursorParameters params;
+  params.serialExecution = true;
+  params.outputPool = outputPool;
+  params.planNode = PlanBuilder().values({data}).planNode();
+
+  auto cursor = TaskCursor::create(params);
+  ASSERT_TRUE(cursor->moveNext());
+  EXPECT_EQ(cursor->current()->pool(), outputPool.get());
+}
+
+TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+  });
+
+  auto outputPool =
+      memory::memoryManager()->addLeafPool("serialExecutionOutputPoolZeroCopy");
+
+  CursorParameters params;
+  params.serialExecution = true;
+  params.outputPool = outputPool;
+  params.copyResult = false;
+  params.planNode = PlanBuilder().values({data}).planNode();
+
+  auto cursor = TaskCursor::create(params);
+  ASSERT_TRUE(cursor->moveNext());
+  EXPECT_NE(cursor->current()->pool(), outputPool.get());
+}
+
 // The purpose of the test is to check the running task list APIs.
 TEST_F(TaskTest, runningTaskList) {
   const auto data = makeRowVector({

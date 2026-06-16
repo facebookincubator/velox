@@ -57,7 +57,7 @@ TEST_F(MemoryManagerTest, ctor) {
     ASSERT_EQ(manager.numPools(), 3);
     ASSERT_EQ(manager.capacity(), kMaxMemory);
     ASSERT_EQ(0, manager.getTotalBytes());
-    ASSERT_EQ(manager.alignment(), MemoryAllocator::kMaxAlignment);
+    ASSERT_EQ(manager.alignment(), MemoryAllocator::kDefaultAlignment);
     ASSERT_EQ(manager.deprecatedSysRootPool().alignment(), manager.alignment());
     ASSERT_EQ(manager.deprecatedSysRootPool().capacity(), kMaxMemory);
     ASSERT_EQ(manager.deprecatedSysRootPool().maxCapacity(), kMaxMemory);
@@ -523,10 +523,10 @@ TEST_F(MemoryManagerTest, alignmentOptionCheck) {
       {MemoryAllocator::kMinAlignment, true},
       {MemoryAllocator::kMinAlignment * 2, true},
       {MemoryAllocator::kMinAlignment + 1, false},
-      {MemoryAllocator::kMaxAlignment - 1, false},
-      {MemoryAllocator::kMaxAlignment, true},
-      {MemoryAllocator::kMaxAlignment + 1, false},
-      {MemoryAllocator::kMaxAlignment * 2, false}};
+      {MemoryAllocator::kDefaultAlignment - 1, false},
+      {MemoryAllocator::kDefaultAlignment, true},
+      {MemoryAllocator::kDefaultAlignment + 1, false},
+      {MemoryAllocator::kDefaultAlignment * 2, true}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     MemoryManager::Options options;

@@ -293,21 +293,18 @@ ExprPtr compileCall(
         ctx.queryCtx->queryConfig());
   }
 
+  std::shared_ptr<VectorFunction> vectorFunction;
+  VectorFunctionMetadata metadata;
+
   if (auto functionWithMetadata = getVectorFunctionWithMetadata(
           call->name(),
           inputTypes,
           getConstantInputs(inputs),
           ctx.queryCtx->queryConfig())) {
-    return std::make_shared<Expr>(
-        resultType,
-        std::move(inputs),
-        functionWithMetadata->first,
-        functionWithMetadata->second,
-        call->name(),
-        trackCpuUsage);
-  }
-
-  if (auto simpleFunctionEntry =
+    vectorFunction = functionWithMetadata->first;
+    metadata = functionWithMetadata->second;
+  } else if (
+      auto simpleFunctionEntry =
           simpleFunctions().resolveFunction(call->name(), inputTypes)) {
     VELOX_USER_CHECK(
         resultType->equivalent(*simpleFunctionEntry->type().get()),
@@ -318,49 +315,56 @@ ExprPtr compileCall(
         resultType,
         folly::join(", ", inputTypes));
 
-    auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-        inputTypes,
-        getConstantInputs(inputs),
-        ctx.queryCtx->queryConfig(),
-        ctx.pool);
-    return std::make_shared<Expr>(
-        resultType,
-        std::move(inputs),
-        std::move(func),
-        simpleFunctionEntry->metadata(),
-        call->name(),
-        trackCpuUsage);
-  }
+    vectorFunction =
+        simpleFunctionEntry->createFunction()->createVectorFunction(
+            inputTypes,
+            getConstantInputs(inputs),
+            ctx.queryCtx->queryConfig(),
+            ctx.pool);
+    metadata = simpleFunctionEntry->metadata();
+  } else {
+    const auto& functionName = call->name();
+    auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
+    auto simpleFunctionSignatures =
+        simpleFunctions().getFunctionSignatures(functionName);
+    std::vector<std::string> signatures;
 
-  const auto& functionName = call->name();
-  auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
-  auto simpleFunctionSignatures =
-      simpleFunctions().getFunctionSignatures(functionName);
-  std::vector<std::string> signatures;
+    if (vectorFunctionSignatures.has_value()) {
+      for (const auto& signature : vectorFunctionSignatures.value()) {
+        signatures.push_back(fmt::format("({})", signature->toString()));
+      }
+    }
 
-  if (vectorFunctionSignatures.has_value()) {
-    for (const auto& signature : vectorFunctionSignatures.value()) {
+    for (const auto& signature : simpleFunctionSignatures) {
       signatures.push_back(fmt::format("({})", signature->toString()));
+    }
+
+    if (signatures.empty()) {
+      VELOX_USER_FAIL(
+          "Scalar function name not registered: {}, called with arguments: ({}).",
+          call->name(),
+          folly::join(", ", inputTypes));
+    } else {
+      VELOX_USER_FAIL(
+          "Scalar function {} not registered with arguments: ({}). "
+          "Found function registered with the following signatures:\n{}",
+          call->name(),
+          folly::join(", ", inputTypes),
+          folly::join("\n", signatures));
     }
   }
 
-  for (const auto& signature : simpleFunctionSignatures) {
-    signatures.push_back(fmt::format("({})", signature->toString()));
-  }
+  auto listeners = createVectorFunctionListeners(
+      call->name(), metadata, ctx.queryCtx->queryConfig());
 
-  if (signatures.empty()) {
-    VELOX_USER_FAIL(
-        "Scalar function name not registered: {}, called with arguments: ({}).",
-        call->name(),
-        folly::join(", ", inputTypes));
-  } else {
-    VELOX_USER_FAIL(
-        "Scalar function {} not registered with arguments: ({}). "
-        "Found function registered with the following signatures:\n{}",
-        call->name(),
-        folly::join(", ", inputTypes),
-        folly::join("\n", signatures));
-  }
+  return std::make_shared<Expr>(
+      resultType,
+      std::move(inputs),
+      std::move(vectorFunction),
+      metadata,
+      call->name(),
+      trackCpuUsage,
+      std::move(listeners));
 }
 
 ExprPtr compileCast(

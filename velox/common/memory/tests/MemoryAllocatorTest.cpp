@@ -1251,6 +1251,109 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   ASSERT_TRUE(instance_->checkConsistency());
 }
 
+TEST_P(MemoryAllocatorTest, reallocateBytes) {
+  // Test grow: allocate, fill, reallocate larger, verify data preserved.
+  {
+    const uint64_t kInitialSize = 1024;
+    const uint64_t kNewSize = 4096;
+    void* p = instance_->allocateBytes(kInitialSize);
+    ASSERT_NE(nullptr, p);
+    ::memset(p, 0xAB, kInitialSize);
+
+    auto usedBefore = instance_->totalUsedBytes();
+    void* newP = instance_->reallocateBytes(p, kInitialSize, kNewSize);
+    ASSERT_NE(nullptr, newP);
+    // Verify original data is preserved.
+    for (uint64_t i = 0; i < kInitialSize; ++i) {
+      ASSERT_EQ(static_cast<uint8_t>(0xAB), static_cast<uint8_t*>(newP)[i])
+          << "at byte " << i;
+    }
+    // Verify memory accounting: usage should have increased by the delta.
+    if (!useMmap_) {
+      ASSERT_EQ(
+          usedBefore + (kNewSize - kInitialSize), instance_->totalUsedBytes());
+    }
+    instance_->freeBytes(newP, kNewSize);
+  }
+
+  // Test shrink: allocate, fill, reallocate smaller, verify data preserved.
+  {
+    const uint64_t kInitialSize = 4096;
+    const uint64_t kNewSize = 1024;
+    void* p = instance_->allocateBytes(kInitialSize);
+    ASSERT_NE(nullptr, p);
+    ::memset(p, 0xCD, kInitialSize);
+
+    void* newP = instance_->reallocateBytes(p, kInitialSize, kNewSize);
+    ASSERT_NE(nullptr, newP);
+    for (uint64_t i = 0; i < kNewSize; ++i) {
+      ASSERT_EQ(static_cast<uint8_t>(0xCD), static_cast<uint8_t*>(newP)[i])
+          << "at byte " << i;
+    }
+    instance_->freeBytes(newP, kNewSize);
+  }
+
+  // Test with nullptr input: should behave like allocateBytes.
+  {
+    const uint64_t kSize = 2048;
+    void* newP = instance_->reallocateBytes(nullptr, 0, kSize);
+    ASSERT_NE(nullptr, newP);
+    ::memset(newP, 0xEF, kSize);
+    instance_->freeBytes(newP, kSize);
+  }
+
+  // Test memory accounting after full cycle.
+  if (!useMmap_) {
+    ASSERT_EQ(0, instance_->totalUsedBytes());
+  }
+  ASSERT_TRUE(instance_->checkConsistency());
+}
+
+TEST_P(MemoryAllocatorTest, reallocateBytesWithAlignment) {
+  // Non-default alignment should fall back to allocate+memcpy+free
+  // (MallocAllocator's reallocateBytesWithoutRetry returns nullptr for
+  // non-default alignment since ::realloc() cannot guarantee it).
+  const uint64_t kInitialSize = 1024;
+  const uint64_t kNewSize = 4096;
+  const uint16_t kAlignment = MemoryAllocator::kDefaultAlignment;
+  void* p = instance_->allocateBytes(kInitialSize, kAlignment);
+  ASSERT_NE(nullptr, p);
+  ASSERT_EQ(0, reinterpret_cast<uintptr_t>(p) % kAlignment);
+  ::memset(p, 0x42, kInitialSize);
+
+  void* newP =
+      instance_->reallocateBytes(p, kInitialSize, kNewSize, kAlignment);
+  ASSERT_NE(nullptr, newP);
+  ASSERT_EQ(0, reinterpret_cast<uintptr_t>(newP) % kAlignment);
+  for (uint64_t i = 0; i < kInitialSize; ++i) {
+    ASSERT_EQ(static_cast<uint8_t>(0x42), static_cast<uint8_t*>(newP)[i])
+        << "at byte " << i;
+  }
+  instance_->freeBytes(newP, kNewSize);
+  ASSERT_TRUE(instance_->checkConsistency());
+}
+
+TEST_P(MemoryAllocatorTest, reallocateBytesCapacityExceeded) {
+  if (useMmap_) {
+    // MmapAllocator has different capacity semantics; skip.
+    return;
+  }
+  // Allocate most of capacity, then try to reallocate beyond it.
+  const uint64_t kInitialSize = 1024;
+  const uint64_t kOverCapacity = kCapacityBytes + 1;
+  void* p = instance_->allocateBytes(kInitialSize);
+  ASSERT_NE(nullptr, p);
+
+  void* newP = instance_->reallocateBytes(p, kInitialSize, kOverCapacity);
+  ASSERT_EQ(nullptr, newP);
+  // Original pointer should still be valid after failed reallocation.
+  // Memory accounting should be unchanged.
+  ASSERT_EQ(kInitialSize, instance_->totalUsedBytes());
+  instance_->freeBytes(p, kInitialSize);
+  ASSERT_EQ(0, instance_->totalUsedBytes());
+  ASSERT_TRUE(instance_->checkConsistency());
+}
+
 TEST_P(MemoryAllocatorTest, allocateBytesWithAlignment) {
   struct {
     uint64_t allocateBytes;
@@ -1268,34 +1371,46 @@ TEST_P(MemoryAllocatorTest, allocateBytesWithAlignment) {
        MemoryAllocator::kMinAlignment + 1,
        false},
       {AllocationTraits::kPageSize / 4,
-       MemoryAllocator::kMaxAlignment + 1,
+       MemoryAllocator::kDefaultAlignment + 1,
        false},
       {AllocationTraits::kPageSize / 5,
-       MemoryAllocator::kMaxAlignment * 2,
+       MemoryAllocator::kDefaultAlignment * 2,
        false},
       {AllocationTraits::kPageSize / 4,
-       MemoryAllocator::kMaxAlignment * 2,
+       MemoryAllocator::kDefaultAlignment * 2,
+       true},
+      {AllocationTraits::kPageSize / 5,
+       MemoryAllocator::kDefaultAlignment,
        false},
-      {AllocationTraits::kPageSize / 5, MemoryAllocator::kMaxAlignment, false},
-      {AllocationTraits::kPageSize, MemoryAllocator::kMaxAlignment + 1, false},
-      {AllocationTraits::kPageSize, MemoryAllocator::kMaxAlignment * 2, false},
-      {AllocationTraits::kPageSize, MemoryAllocator::kMaxAlignment, true},
-      {AllocationTraits::kPageSize, MemoryAllocator::kMaxAlignment / 2, true},
-      {AllocationTraits::kPageSize * 2, MemoryAllocator::kMaxAlignment, true},
+      {AllocationTraits::kPageSize,
+       MemoryAllocator::kDefaultAlignment + 1,
+       false},
+      {AllocationTraits::kPageSize,
+       MemoryAllocator::kDefaultAlignment * 2,
+       true},
+      {AllocationTraits::kPageSize, MemoryAllocator::kDefaultAlignment, true},
+      {AllocationTraits::kPageSize,
+       MemoryAllocator::kDefaultAlignment / 2,
+       true},
       {AllocationTraits::kPageSize * 2,
-       MemoryAllocator::kMaxAlignment / 2,
+       MemoryAllocator::kDefaultAlignment,
        true},
-      {MemoryAllocator::kMaxAlignment, MemoryAllocator::kMaxAlignment, true},
-      {MemoryAllocator::kMaxAlignment / 2,
-       MemoryAllocator::kMaxAlignment / 2,
+      {AllocationTraits::kPageSize * 2,
+       MemoryAllocator::kDefaultAlignment / 2,
        true},
-      {MemoryAllocator::kMaxAlignment / 2,
+      {MemoryAllocator::kDefaultAlignment,
+       MemoryAllocator::kDefaultAlignment,
+       true},
+      {MemoryAllocator::kDefaultAlignment / 2,
+       MemoryAllocator::kDefaultAlignment / 2,
+       true},
+      {MemoryAllocator::kDefaultAlignment / 2,
        MemoryAllocator::kMinAlignment,
        true},
-      {MemoryAllocator::kMaxAlignment / 2,
+      {MemoryAllocator::kDefaultAlignment / 2,
        MemoryAllocator::kMinAlignment - 1,
        false},
-      {MemoryAllocator::kMaxAlignment / 2, 0, false}};
+      {MemoryAllocator::kDefaultAlignment / 2, 0, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(
         fmt::format("UseMmap: {}, {}", useMmap_, testData.debugString()));
@@ -1316,6 +1431,19 @@ TEST_P(MemoryAllocatorTest, allocateBytesWithAlignment) {
   }
 }
 
+TEST_P(MemoryAllocatorTest, allocateBytesLargeAlignment) {
+  for (uint16_t alignment : {128, 256, 512, 1'024, 4'096}) {
+    SCOPED_TRACE(fmt::format("alignment={}", alignment));
+    const uint64_t size = static_cast<uint64_t>(alignment) * 2;
+    auto* ptr = instance_->allocateBytes(size, alignment);
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % alignment, 0);
+    std::memset(ptr, 0x42, size);
+    instance_->freeBytes(ptr, size);
+    ASSERT_TRUE(instance_->checkConsistency());
+  }
+}
+
 TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
   constexpr int32_t kNumAllocs = 50;
   // Different sizes, including below minimum and above largest size class.
@@ -1325,7 +1453,7 @@ TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
       1000000,
       instance_->sizeClasses().back() * AllocationTraits::kPageSize + 100000};
   const std::vector<uint64_t> alignments = {
-      8, 16, 32, MemoryAllocator::kMaxAlignment};
+      8, 16, 32, MemoryAllocator::kDefaultAlignment};
   folly::Random::DefaultGenerator rng;
   rng.seed(1);
 

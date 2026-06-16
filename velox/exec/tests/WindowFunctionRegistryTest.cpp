@@ -64,7 +64,7 @@ class WindowFunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes) {
     if (auto windowFunctionSignatures = getWindowFunctionSignatures(name)) {
       for (const auto& signature : windowFunctionSignatures.value()) {
-        SignatureBinder binder(*signature, argTypes);
+        SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
         if (binder.tryBind()) {
           return binder.tryResolveReturnType();
         }
@@ -94,7 +94,8 @@ class WindowFunctionRegistryTest : public testing::Test {
         resolveWindowResultType(name, argTypes), expectedReturnType);
 
     std::vector<TypePtr> coercions;
-    auto type = resolveWindowResultTypeWithCoercions(name, argTypes, coercions);
+    auto type = resolveWindowResultTypeWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
     VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
     EXPECT_EQ(coercions, nullTypes(argTypes.size()));
   }
@@ -105,7 +106,8 @@ class WindowFunctionRegistryTest : public testing::Test {
       const TypePtr& expectedReturnType,
       const std::vector<TypePtr>& expectedCoercions) {
     std::vector<TypePtr> coercions;
-    auto type = resolveWindowResultTypeWithCoercions(name, argTypes, coercions);
+    auto type = resolveWindowResultTypeWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
     VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
     EXPECT_EQ(coercions.size(), expectedCoercions.size());
     for (auto i = 0; i < coercions.size(); ++i) {
@@ -194,7 +196,10 @@ TEST_F(WindowFunctionRegistryTest, resolveResultTypeErrors) {
     std::vector<TypePtr> coercions;
     VELOX_ASSERT_THROW(
         resolveWindowResultTypeWithCoercions(
-            "nonexistent_func", {BIGINT(), DOUBLE()}, coercions),
+            "nonexistent_func",
+            {BIGINT(), DOUBLE()},
+            coercions,
+            TypeCoercer::defaults()),
         "Window function not registered");
   }
 
@@ -203,7 +208,7 @@ TEST_F(WindowFunctionRegistryTest, resolveResultTypeErrors) {
     std::vector<TypePtr> coercions;
     VELOX_ASSERT_THROW(
         resolveWindowResultTypeWithCoercions(
-            "window_func", {VARCHAR()}, coercions),
+            "window_func", {VARCHAR()}, coercions, TypeCoercer::defaults()),
         "Window function signature is not supported");
   }
 
@@ -213,7 +218,10 @@ TEST_F(WindowFunctionRegistryTest, resolveResultTypeErrors) {
     std::vector<TypePtr> coercions;
     VELOX_ASSERT_THROW(
         resolveWindowResultTypeWithCoercions(
-            "window_func", {VARCHAR(), BIGINT()}, coercions),
+            "window_func",
+            {VARCHAR(), BIGINT()},
+            coercions,
+            TypeCoercer::defaults()),
         "Window function signature is not supported");
   }
 }

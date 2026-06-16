@@ -1,0 +1,62 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Generates and uploads the dependency-graph artifact for every push to main.
+# The artifact (`dependency-graph`) is consumed by the selective-build-plan
+# reusable workflow (called from linux-build.yml) to compute
+# targeted-build target lists for PRs.
+#
+# PR-side detection (fast / slow / full / noop) lives in
+# selective-build-plan.yml, not here.
+name: Dependency Graph
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - velox/**
+      - CMakeLists.txt
+      - CMake/**
+      - .github/workflows/dependency-graph.yml
+      - .github/scripts/generate-dependency-graph.py
+      - .github/actions/generate-dependency-graph/action.yml
+      - .github/scripts/cmake-flags.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  generate-graph:
+    runs-on: 8-core-ubuntu
+    container: ghcr.io/facebookincubator/velox-dev:adapters
+    env:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/generate-dependency-graph
+
+      - name: Upload dependency graph
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-graph
+          path: dependency-graph.json
+          retention-days: 90

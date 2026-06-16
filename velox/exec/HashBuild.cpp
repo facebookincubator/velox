@@ -217,7 +217,9 @@ bool HashBuild::receivedCachedHashTable() {
   // Ensure that table is ready.
   VELOX_CHECK(
       cacheEntry_->buildComplete,
-      "Signalled that cache table is ready but it is not built yet.");
+      "Hash table cache build failed for key '{}'. "
+      "The builder task may have encountered an error (e.g., OOM).",
+      cacheKey_);
   // Proceed through normal noMoreInput flow which will use the cache.
   setRunning();
   noMoreInput();
@@ -1423,6 +1425,11 @@ bool HashBuild::nonReclaimableState() const {
 
 void HashBuild::close() {
   Operator::close();
+
+  if (useHashTableCache() && cacheEntry_ != nullptr &&
+      !cacheEntry_->buildComplete && hashTableCacheBuilderTask()) {
+    HashTableCache::instance()->drop(cacheKey_);
+  }
 
   {
     // Free up major memory usage. Gate access to them as they can be accessed

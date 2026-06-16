@@ -34,13 +34,14 @@ TypePtr resolveTypeForSpecialForm(
 TypePtr resolveTypeForSpecialFormWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   auto specialForm = specialFormRegistry().getSpecialForm(functionName);
   if (specialForm == nullptr) {
     return nullptr;
   }
 
-  return specialForm->resolveTypeWithCorsions(argTypes, coercions);
+  return specialForm->resolveTypeWithCoercions(argTypes, coercions, coercer);
 }
 
 ExprPtr constructSpecialForm(

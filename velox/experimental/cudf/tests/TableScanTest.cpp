@@ -746,3 +746,75 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   EXPECT_EQ(it->second.sum, 0)
       << "Expected no remaining filter time when filter is fully extracted";
 }
+
+TEST_F(TableScanTest, decimalSubfieldFilter) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(5, 2), BIGINT()});
+  auto vector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({100, -500, -700, -500}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  std::vector<RowVectorPtr> vectors = {vector};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  int64_t{-500}, int64_t{-500}, /*nullAllowed*/ false))
+          .build();
+
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+TEST_F(TableScanTest, decimalRemainingFilter) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(5, 2), BIGINT()});
+  auto vector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({100, -500, -700, -500}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  std::vector<RowVectorPtr> vectors = {vector};
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .remainingFilter("c0 = CAST('-5.00' AS DECIMAL(5, 2))")
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}

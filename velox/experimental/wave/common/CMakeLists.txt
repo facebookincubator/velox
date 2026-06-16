@@ -20,6 +20,7 @@ add_library(
   Cuda.cu
   Exception.cpp
   KernelCache.cpp
+  KernelFsCache.cpp
   Type.cpp
   ResultStaging.cpp
 )

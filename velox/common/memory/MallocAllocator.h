@@ -117,6 +117,25 @@ class MallocAllocator : public MemoryAllocator {
 
   void* allocateZeroFilledWithoutRetry(uint64_t bytes) override;
 
+  /// Attempts in-place reallocation via ::realloc(). Returns nullptr when
+  /// ::realloc() cannot satisfy the request, in which case the caller falls
+  /// back to allocate + memcpy + free. Preconditions for using ::realloc():
+  /// 1. p must be non-null. ::realloc(nullptr, n) would behave like malloc,
+  ///    but we route nullptr through allocateBytes so the caller picks up
+  ///    cache eviction on the fallback.
+  /// 2. The requested alignment must be at most kMinAlignment. ::realloc()
+  ///    guarantees only kMinAlignment on the returned pointer (and may move
+  ///    the data to a new address), so larger alignments cannot be honored.
+  /// 3. p must already be aligned to the requested alignment. MemoryAllocator
+  ///    is a standalone module that may be used outside MemoryPool, so we
+  ///    cannot rely on the caller to pass an alignment matching the original
+  ///    allocation.
+  void* reallocateBytesWithoutRetry(
+      void* p,
+      uint64_t oldSize,
+      uint64_t newSize,
+      uint16_t alignment) override;
+
   // Increments current usage and check current 'allocatedBytes_' counter to
   // make sure current usage does not go above 'capacity_'. If it goes above
   // 'capacity_', the increment will not be applied. Returns true if within

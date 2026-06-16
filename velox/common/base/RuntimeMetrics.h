@@ -87,6 +87,11 @@ class BaseRuntimeStatWriter {
   virtual void addRuntimeStat(
       std::string_view /* name */,
       const RuntimeCounter& /* value */) {}
+
+  /// Sets a runtime metric by name, replacing any existing value for that key.
+  virtual void setRuntimeStat(
+      std::string_view /* name */,
+      const RuntimeMetric& /* metric */) {}
 };
 
 /// Setting a concrete runtime stats writer on the thread will ensure that any
@@ -103,6 +108,12 @@ BaseRuntimeStatWriter* getThreadLocalRunTimeStatWriter();
 void addThreadLocalRuntimeStat(
     std::string_view name,
     const RuntimeCounter& value);
+
+/// Sets a runtime metric on the current Operator, overriding any existing
+/// value for the given name.
+void setThreadLocalRuntimeStat(
+    std::string_view name,
+    const RuntimeMetric& metric);
 
 /// Scope guard to conveniently set and revert back the current stat writer.
 class RuntimeStatWriterScopeGuard {

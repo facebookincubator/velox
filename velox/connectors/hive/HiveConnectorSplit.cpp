@@ -37,7 +37,7 @@ folly::dynamic HiveConnectorSplit::serialize() const {
   obj["splitWeight"] = splitWeight;
   obj["cacheable"] = cacheable;
   obj["filePath"] = filePath;
-  obj["fileFormat"] = dwio::common::toString(fileFormat);
+  obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat);
   obj["start"] = start;
   obj["length"] = length;
 

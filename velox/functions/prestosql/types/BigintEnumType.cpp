@@ -23,7 +23,11 @@ BigintEnumType::BigintEnumType(const LongEnumParameter& parameters)
     : EnumTypeBase<int64_t, LongEnumParameter, BigintType>(parameters) {}
 
 std::string BigintEnumType::toString() const {
-  return fmt::format("{}:BigintEnum({})", name_, flippedMapToString());
+  return fmt::format("{}:{}({})", name_, kKind, flippedMapToString());
+}
+
+std::string BigintEnumType::toSql() const {
+  return toSqlImpl(kKind, [](int64_t value) { return std::to_string(value); });
 }
 
 BigintEnumTypePtr BigintEnumType::get(const LongEnumParameter& parameter) {

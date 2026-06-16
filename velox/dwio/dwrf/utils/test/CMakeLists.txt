@@ -17,6 +17,7 @@ add_executable(
   ProtoUtilsTests.cpp
   BitIteratorTests.cpp
   BufferedWriterTest.cpp
+  TypeAttributesTest.cpp
 )
 
 add_test(velox_dwio_dwrf_utils_test velox_dwio_dwrf_utils_test)

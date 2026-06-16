@@ -29,9 +29,11 @@ WriterContext::WriterContext(
     const dwio::common::MetricsLogPtr& metricLogger,
     const tz::TimeZone* sessionTimezone,
     const bool adjustTimestampToTimezone,
-    std::unique_ptr<encryption::EncryptionHandler> handler)
+    std::unique_ptr<encryption::EncryptionHandler> handler,
+    int64_t memoryBudget)
     : config_{config},
       pool_{std::move(pool)},
+      memoryBudget_{memoryBudget},
       dictionaryPool_{
           pool_->addLeafChild(fmt::format("{}.dictionary", pool_->name()))},
       outputStreamPool_{
@@ -69,7 +71,17 @@ WriterContext::WriterContext(
   }
   validateConfigs();
   VLOG(2) << fmt::format(
-      "Compression config: {}", common::compressionKindToString(compression_));
+      "DWRF WriterContext initialized: pool='{}', maxCapacity={}MB, "
+      "memoryBudget={}MB, effectiveBudget={}MB, "
+      "stripeSizeFlushThreshold={}MB, dictionarySizeFlushThreshold={}MB, "
+      "compression={}",
+      pool_->name(),
+      pool_->maxCapacity() / (1024 * 1024),
+      memoryBudget_ / (1024 * 1024),
+      getMemoryBudget() / (1024 * 1024),
+      stripeSizeFlushThreshold_ / (1024 * 1024),
+      dictionarySizeFlushThreshold_ / (1024 * 1024),
+      common::compressionKindToString(compression_));
 }
 
 WriterContext::~WriterContext() {

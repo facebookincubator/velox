@@ -16,7 +16,7 @@
 
 #include <cmath>
 
-#include <double-conversion/double-conversion.h>
+#include <fast_float/fast_float.h>
 #include <folly/Expected.h>
 
 #include "velox/expression/PrestoCastHooks.h"
@@ -86,39 +86,54 @@ Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
 
 namespace {
 
-using double_conversion::StringToDoubleConverter;
-
 template <typename T>
 Expected<T> doCastToFloatingPoint(const StringView& data) {
-  static const T kNan = std::numeric_limits<T>::quiet_NaN();
-  static StringToDoubleConverter stringToDoubleConverter{
-      StringToDoubleConverter::ALLOW_TRAILING_SPACES,
-      /*empty_string_value*/ kNan,
-      /*junk_string_value*/ kNan,
-      "Infinity",
-      "NaN"};
-  int processedCharactersCount;
-  T result;
-  auto* begin = std::find_if_not(data.begin(), data.end(), [](char c) {
+  const char* begin = std::find_if_not(data.begin(), data.end(), [](char c) {
     return functions::stringImpl::isAsciiWhiteSpace(c);
   });
-  auto length = data.end() - begin;
-  if (length == 0) {
-    // 'data' only contains white spaces.
+  const char* end = data.end();
+  if (begin == end) {
     return folly::makeUnexpected(Status::UserError());
   }
-  if constexpr (std::is_same_v<T, float>) {
-    result = stringToDoubleConverter.StringToFloat(
-        begin, length, &processedCharactersCount);
-  } else if constexpr (std::is_same_v<T, double>) {
-    result = stringToDoubleConverter.StringToDouble(
-        begin, length, &processedCharactersCount);
-  }
-  // Since we already removed leading space, if processedCharactersCount == 0,
-  // it means the remaining string is either empty or a junk string. So return a
-  // user error in this case.
-  if UNLIKELY (processedCharactersCount == 0) {
+  T result;
+  auto [ptr, ec] = fast_float::from_chars(
+      begin,
+      end,
+      result,
+      fast_float::chars_format::general |
+          fast_float::chars_format::allow_leading_plus);
+  // invalid_argument means the string is not a number at all.
+  // result_out_of_range means overflow — fast_float sets result to ±infinity,
+  // which is the correct Presto behavior for e.g. "1.7E308" cast to REAL.
+  if (ec == std::errc::invalid_argument) {
     return folly::makeUnexpected(Status::UserError());
+  }
+  // Presto allows trailing whitespace after the number but nothing else.
+  if (std::find_if_not(ptr, end, [](char c) {
+        return functions::stringImpl::isAsciiWhiteSpace(c);
+      }) != end) {
+    return folly::makeUnexpected(Status::UserError());
+  }
+  // fast_float parses NaN/Infinity case-insensitively, but Presto accepts only
+  // exact case: "NaN" and "Infinity" (with an optional leading +/-).
+  // Overflow paths (ec == result_out_of_range) don't need this check.
+  if (ec == std::errc{} && (std::isinf(result) || std::isnan(result))) {
+    const char* literalStart = begin;
+    if (literalStart < ptr && (*literalStart == '+' || *literalStart == '-')) {
+      ++literalStart;
+    }
+    auto literalLength = static_cast<size_t>(ptr - literalStart);
+    bool valid = std::isnan(result)
+        ? (literalLength == 3 && literalStart[0] == 'N' &&
+           literalStart[1] == 'a' && literalStart[2] == 'N')
+        : (literalLength == 8 && literalStart[0] == 'I' &&
+           literalStart[1] == 'n' && literalStart[2] == 'f' &&
+           literalStart[3] == 'i' && literalStart[4] == 'n' &&
+           literalStart[5] == 'i' && literalStart[6] == 't' &&
+           literalStart[7] == 'y');
+    if (!valid) {
+      return folly::makeUnexpected(Status::UserError());
+    }
   }
   return result;
 }

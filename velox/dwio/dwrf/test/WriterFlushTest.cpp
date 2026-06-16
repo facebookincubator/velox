@@ -100,6 +100,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
     return allocator_->allocateBytes(size);
   }
 
+  void reportExternalAllocation(int64_t size) override {
+    updateLocalMemoryUsage(size);
+  }
+
   void* allocateZeroFilled(int64_t numEntries, int64_t sizeEach) override {
     updateLocalMemoryUsage(numEntries * sizeEach);
     return allocator_->allocateZeroFilled(numEntries * sizeEach);
@@ -116,6 +120,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
 
   void free(void* p, int64_t size) override {
     allocator_->freeBytes(p, size);
+    updateLocalMemoryUsage(-size);
+  }
+
+  void reportExternalFree(int64_t size) override {
     updateLocalMemoryUsage(-size);
   }
 
@@ -187,6 +195,10 @@ class MockMemoryPool : public velox::memory::MemoryPool {
       std::unique_ptr<memory::MemoryReclaimer> reclaimer) override {}
 
   memory::MemoryReclaimer* reclaimer() const override {
+    return nullptr;
+  }
+
+  memory::MemoryArbitrator* arbitrator() const override {
     return nullptr;
   }
 

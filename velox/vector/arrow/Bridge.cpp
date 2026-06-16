@@ -16,6 +16,8 @@
 
 #include "velox/vector/arrow/Bridge.h"
 
+#include <cstring>
+
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
@@ -145,6 +147,9 @@ struct VeloxToArrowSchemaBridgeHolder {
   // format.
   std::string formatBuffer;
 
+  // Buffer required to keep ArrowSchema.metadata alive.
+  std::string metadataBuffer;
+
   void setChildAtIndex(
       size_t index,
       std::unique_ptr<ArrowSchema>&& child,
@@ -161,6 +166,88 @@ struct VeloxToArrowSchemaBridgeHolder {
     schema.children[index] = childrenOwned[index].get();
   }
 };
+
+constexpr std::string_view kVeloxTimestampTypeMetadataKey{
+    "velox.logical_timestamp"};
+constexpr std::string_view kVeloxTimestampUtcMetadataValue{"utc"};
+
+void appendInt32(std::string& metadata, int32_t value) {
+  constexpr auto kInt32Size = sizeof(int32_t);
+  const auto start = metadata.size();
+  metadata.resize(start + kInt32Size);
+  std::memcpy(metadata.data() + start, &value, kInt32Size);
+}
+
+const std::string& timestampUtcMetadataBlob() {
+  static const std::string metadata = [] {
+    std::string encoded;
+    appendInt32(encoded, 1);
+    appendInt32(
+        encoded, static_cast<int32_t>(kVeloxTimestampTypeMetadataKey.size()));
+    encoded.append(kVeloxTimestampTypeMetadataKey);
+    appendInt32(
+        encoded, static_cast<int32_t>(kVeloxTimestampUtcMetadataValue.size()));
+    encoded.append(kVeloxTimestampUtcMetadataValue);
+    return encoded;
+  }();
+  return metadata;
+}
+
+bool hasTimestampUtcMetadata(const char* metadata) {
+  if (metadata == nullptr) {
+    return false;
+  }
+
+  // Keep this decoding behavior in sync with arrow/c/bridge.cc::DecodeMetadata.
+  auto readInt32 = [&](int32_t* out) -> bool {
+    int32_t value;
+    std::memcpy(&value, metadata, sizeof(int32_t));
+    metadata += sizeof(int32_t);
+    *out = value;
+    return *out >= 0;
+  };
+
+  auto readStringView = [&](std::string_view* out) -> bool {
+    int32_t length;
+    if (!readInt32(&length)) {
+      return false;
+    }
+    *out = std::string_view{metadata, static_cast<size_t>(length)};
+    metadata += length;
+    return true;
+  };
+
+  int32_t numPairs;
+  if (!readInt32(&numPairs) || numPairs == 0) {
+    return false;
+  }
+
+  for (int32_t i = 0; i < numPairs; ++i) {
+    std::string_view key;
+    if (!readStringView(&key)) {
+      return false;
+    }
+
+    std::string_view value;
+    if (!readStringView(&value)) {
+      return false;
+    }
+
+    if (key == kVeloxTimestampTypeMetadataKey &&
+        value == kVeloxTimestampUtcMetadataValue) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+TypePtr importTimestampTypeFromArrow(const ArrowSchema& arrowSchema) {
+  if (hasTimestampUtcMetadata(arrowSchema.metadata)) {
+    return TIMESTAMP_UTC();
+  }
+  return TIMESTAMP();
+}
 
 // Release function for ArrowArray. Arrow standard requires it to recurse down
 // to children and dictionary arrays, and set release and private_data to null
@@ -231,6 +318,7 @@ static void releaseArrowSchema(ArrowSchema* arrowSchema) {
 }
 
 const char* exportArrowFormatTimestampStr(
+    const TypePtr& type,
     const ArrowOptions& options,
     std::string& formatBuffer) {
   switch (options.timestampUnit) {
@@ -250,7 +338,10 @@ const char* exportArrowFormatTimestampStr(
       VELOX_UNREACHABLE();
   }
 
-  if (options.timestampTimeZone.has_value()) {
+  // TimestampUtcType is timezone-agnostic, which never carries timezone
+  // information. The TimestampType represents local time, so we include the
+  // timezone information if it's provided in options.
+  if (type->equivalent(*TIMESTAMP()) && options.timestampTimeZone.has_value()) {
     formatBuffer += options.timestampTimeZone.value();
   }
 
@@ -294,10 +385,15 @@ const char* exportArrowFormatStr(
       return "i"; // int32
     case TypeKind::BIGINT:
       if (type->isTime()) {
-        VELOX_DCHECK(type->equivalent(*TIME()));
-        // TIME is stored as milliseconds since midnight in Velox.
-        // Export as Arrow time32 with milliseconds unit.
-        return "ttm";
+        if (type->equivalent(*TIME())) {
+          // TIME is stored as milliseconds since midnight in Velox.
+          // Export as Arrow time32 with milliseconds unit.
+          return "ttm";
+        }
+        VELOX_DCHECK(type->equivalent(*TIME_MICRO_UTC()));
+        // TIME MICRO UTC is stored as microseconds since midnight in Velox.
+        // Export as Arrow time64 with microseconds unit.
+        return "ttu";
       }
       return "l"; // int64
     case TypeKind::REAL:
@@ -322,7 +418,7 @@ const char* exportArrowFormatStr(
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
-      return exportArrowFormatTimestampStr(options, formatBuffer);
+      return exportArrowFormatTimestampStr(type, options, formatBuffer);
     // Complex/nested types.
     case TypeKind::ARRAY:
       static_assert(sizeof(vector_size_t) == 4);
@@ -735,17 +831,17 @@ void exportValidityBitmap(
 bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // - Velox's Timestamp representation (2x 64bit values) does not have an
   // equivalent in Arrow.
-  // - Velox's TIME is in milliseconds, Arrow time64 is in microseconds.
-  bool isTime = type->isTime();
-  if (isTime) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
-  }
+  // - Velox's TIME (millisecond precision) is exported as Arrow time32, which
+  // is narrower than the underlying BIGINT and therefore requires conversion.
+  // TIME_MICRO_UTC matches Arrow time64 in width and is zero-copy.
+  const bool needsTimeConversion = type->isTime() && type->equivalent(*TIME());
   if (options.useDecimalTypeWidth) {
     // Short decimal is zero-copy.
-    return !type->isTimestamp() && !isTime;
+    return !type->isTimestamp() && !needsTimeConversion;
   }
   // Short decimal requires conversion.
-  return !type->isShortDecimal() && !type->isTimestamp() && !isTime;
+  return !type->isShortDecimal() && !type->isTimestamp() &&
+      !needsTimeConversion;
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
@@ -756,9 +852,13 @@ size_t getArrowElementSize(const TypePtr& type, const ArrowOptions& options) {
   } else if (type->isTimestamp()) {
     return sizeof(int64_t);
   } else if (type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
-    // TIME is exported as Arrow time32 (int32_t).
-    return sizeof(int32_t);
+    if (type->equivalent(*TIME())) {
+      // TIME is exported as Arrow time32 (int32_t).
+      return sizeof(int32_t);
+    }
+    VELOX_DCHECK(type->equivalent(*TIME_MICRO_UTC()));
+    // TIME MICRO UTC is exported as Arrow time64 (int64_t).
+    return sizeof(int64_t);
   }
   return type->cppSizeInBytes();
 }
@@ -790,8 +890,9 @@ void exportValues(
             checkedMultiply<size_t>(out.length, size), pool);
   if (type->kind() == TypeKind::TIMESTAMP) {
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
-  } else if (type->kind() == TypeKind::BIGINT && type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
+  } else if (
+      type->kind() == TypeKind::BIGINT && type->isTime() &&
+      type->equivalent(*TIME())) {
     gatherFromTimeBuffer(vec, rows, *values);
   } else {
     gatherFromBuffer(*type, *vec.values(), rows, options, *values);
@@ -1395,7 +1496,7 @@ TypePtr importFromArrowImpl(
 
     case 't': // temporal types.
       if (format[1] == 's') {
-        return TIMESTAMP();
+        return importTimestampTypeFromArrow(arrowSchema);
       }
       if (format[1] == 'd' && format[2] == 'D') {
         return DATE();
@@ -1492,7 +1593,8 @@ void exportToArrow(
 
   arrowSchema.name = nullptr;
 
-  // No additional metadata for now.
+  // No additional metadata by default. Some types may set this later if needed
+  // (e.g. TIMESTAMP_UTC).
   arrowSchema.metadata = nullptr;
 
   // All supported types are semantically nullable.
@@ -1500,6 +1602,12 @@ void exportToArrow(
 
   // Allocate private data buffer holder and recurse down to children types.
   auto bridgeHolder = std::make_unique<VeloxToArrowSchemaBridgeHolder>();
+  auto setTimestampUtcMetadata = [&]() {
+    // Velox's TIMESTAMP_UTC type does not have a direct equivalent in Arrow,
+    // so we encode the timezone-agnostic information in schema metadata.
+    bridgeHolder->metadataBuffer = timestampUtcMetadataBlob();
+    arrowSchema.metadata = bridgeHolder->metadataBuffer.data();
+  };
 
   if (vec->encoding() == VectorEncoding::Simple::DICTIONARY) {
     arrowSchema.n_children = 0;
@@ -1509,7 +1617,12 @@ void exportToArrow(
       arrowSchema.dictionary = nullptr;
       arrowSchema.format =
           exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);
+      if (type->equivalent(*TIMESTAMP_UTC())) {
+        setTimestampUtcMetadata();
+      }
     } else {
+      // The top-level dictionary schema represents index type only.
+      arrowSchema.metadata = nullptr;
       arrowSchema.format = "i";
       bridgeHolder->dictionary = std::make_unique<ArrowSchema>();
       arrowSchema.dictionary = bridgeHolder->dictionary.get();
@@ -1548,6 +1661,9 @@ void exportToArrow(
     arrowSchema.format =
         exportArrowFormatStr(type, options, bridgeHolder->formatBuffer);
     arrowSchema.dictionary = nullptr;
+    if (type->equivalent(*TIMESTAMP_UTC())) {
+      setTimestampUtcMetadata();
+    }
 
     if (type->kind() == TypeKind::MAP) {
       // Need to wrap the key and value types in a struct type.

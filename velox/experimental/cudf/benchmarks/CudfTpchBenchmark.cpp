@@ -114,11 +114,6 @@ DEFINE_bool(
     false,
     "Use experimental groupby API for CudfGroupby.");
 
-DEFINE_int32(
-    cudf_batch_size_max_threshold,
-    std::numeric_limits<cudf::size_type>::max(),
-    "Batch size max threshold for cudf operators.");
-
 DEFINE_uint64(
     cudf_chunk_read_limit,
     0,
@@ -134,15 +129,11 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
-DEFINE_string(
-    cudf_memory_resource,
-    "async",
-    "Memory resource for cudf operators.");
-
 DEFINE_int32(
-    cudf_memory_percent,
-    50,
-    "Percentage of GPU memory to allocate for cudf operators.");
+    cudf_batch_size_max_threshold,
+    0,
+    "Maximum rows allowed in a concatenated cuDF batch. If 0, use cuDF's "
+    "size_type limit.");
 
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
@@ -166,33 +157,11 @@ DEFINE_int32(
     512 * 1024 * 1024,
     "Batch size in bytes when reading parquet during preload.");
 
-namespace {
-
-bool flagWasSet(const std::string& name) {
-  return !gflags::GetCommandLineFlagInfoOrDie(name.c_str()).is_default;
-}
-
-void applyLegacyCudfFlags() {
-  auto& config = cudf_velox::CudfConfig::getInstance();
-  if (flagWasSet("cudf_memory_resource")) {
-    config.memoryResource = FLAGS_cudf_memory_resource;
-  }
-  if (flagWasSet("cudf_memory_percent")) {
-    config.memoryPercent = FLAGS_cudf_memory_percent;
-  }
-  if (flagWasSet("cudf_debug_enabled")) {
-    config.debugEnabled = FLAGS_cudf_debug_enabled;
-  }
-}
-
-} // namespace
-
 void CudfTpchBenchmark::initialize() {
   auto& config = cudf_velox::CudfConfig::getInstance();
   if (!FLAGS_cudf_properties.empty()) {
     config.initialize(cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
   }
-  applyLegacyCudfFlags();
 
   TpchBenchmark::initialize();
 
@@ -226,16 +195,16 @@ void CudfTpchBenchmark::initialize() {
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
-  cudf_velox::CudfConfig::getInstance().memoryResource =
-      FLAGS_cudf_memory_resource;
-  cudf_velox::CudfConfig::getInstance().memoryPercent =
-      FLAGS_cudf_memory_percent;
-  cudf_velox::CudfConfig::getInstance().streamingGroupbyApiEnabled =
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.streamingGroupbyApiEnabled =
       FLAGS_cudf_use_experimental_groupby_api;
-  cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold =
-      FLAGS_cudf_batch_size_max_threshold;
+  if (FLAGS_cudf_batch_size_max_threshold > 0) {
+    cudfConfig.batchSizeMaxThreshold = FLAGS_cudf_batch_size_max_threshold;
+  } else {
+    cudfConfig.batchSizeMaxThreshold.reset();
+  }
 
-  cudf_velox::CudfConfig::getInstance().debugEnabled = FLAGS_cudf_debug_enabled;
+  cudfConfig.debugEnabled = FLAGS_cudf_debug_enabled;
   // Enable cuDF operators
   cudf_velox::registerCudf();
 
@@ -361,4 +330,10 @@ BENCHMARK(highCardinalityGroupBy) {
   auto* cudfBenchmark = dynamic_cast<CudfTpchBenchmark*>(benchmark.get());
   VELOX_CHECK_NOT_NULL(cudfBenchmark);
   cudfBenchmark->runHighCardinalityGroupBy();
+}
+
+// TODO (dm): Cleanup. Either remove bogus query 23 or high cardinality group by
+// or maybe even both
+BENCHMARK(q23) {
+  benchmark->runQuery(23);
 }

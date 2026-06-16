@@ -118,7 +118,10 @@ class LocalFileSystem : public FileSystem {
       std::string_view path,
       const FileOptions& options) override {
     return std::make_unique<LocalReadFile>(
-        extractPath(path), executor_.get(), options.bufferIo);
+        extractPath(path),
+        executor_.get(),
+        options.bufferIo,
+        options.useIoUring);
   }
 
   std::unique_ptr<WriteFile> openFileForWrite(

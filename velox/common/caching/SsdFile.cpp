@@ -138,6 +138,8 @@ SsdFile::SsdFile(const Config& config)
   regionPins_.resize(maxRegions_, 0);
   if (checkpointEnabled()) {
     initializeCheckpoint();
+  } else {
+    removeStaleRecoveryFiles();
   }
 
   if (disableFileCow_) {
@@ -231,6 +233,9 @@ CoalesceIoStats SsdFile::load(
           const std::vector<folly::Range<char*>>& buffers) {
         read(offset, buffers);
       });
+
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cache::SsdFile::load", this);
 
   for (auto i = 0; i < ssdPins.size(); ++i) {
     pins[i].checkedEntry()->setSsdFile(this, ssdPins[i].run().offset());
@@ -710,6 +715,28 @@ void SsdFile::deleteFile(std::unique_ptr<WriteFile> file) {
     ++stats_.deleteMetaFileErrors;
     VELOX_SSD_CACHE_LOG(ERROR)
         << fmt::format("Error in deleting file {}: {}", filePath, e.what());
+  }
+}
+
+void SsdFile::removeStaleRecoveryFiles() {
+  const auto checkpointPath = checkpointFilePath();
+  if (fs_->exists(checkpointPath)) {
+    try {
+      fs_->remove(checkpointPath);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(WARNING) << "Failed to remove stale checkpoint file "
+                                   << checkpointPath << ": " << e.what();
+    }
+  }
+  const auto logPath = evictLogFilePath();
+  if (fs_->exists(logPath)) {
+    try {
+      fs_->remove(logPath);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(WARNING)
+          << "Failed to remove stale eviction log file " << logPath << ": "
+          << e.what();
+    }
   }
 }
 

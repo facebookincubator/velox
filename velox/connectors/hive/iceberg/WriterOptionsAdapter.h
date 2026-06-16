@@ -57,6 +57,8 @@ std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
     dwio::common::FileFormat format);
 
 /// True if the Iceberg DataSink can write the given file format.
+/// Supported formats: PARQUET, ORC, DWRF, NIMBLE. ORC and DWRF share
+/// the same on-disk family and route through the same adapter.
 bool isSupportedFileFormat(dwio::common::FileFormat format);
 
 /// Maps a Velox file format to the string used in Iceberg manifest commit

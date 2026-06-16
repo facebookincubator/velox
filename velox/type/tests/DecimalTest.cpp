@@ -796,5 +796,27 @@ TEST(DecimalTest, castFromStringError) {
   testCastFromString<int64_t>(
       "09{xi+yD", 12, 2, "Value is not a number. Chars are invalid.");
 }
+
+TEST(DecimalTest, castFromStringNegativeExponent) {
+  testCastFromString<int128_t>(
+      std::vector<std::string>{
+          "123E-2",
+          "123E-3",
+          "567E-3",
+          "567E-4",
+          "5E-1",
+          "4E-1",
+          "-5E-1",
+          "-4E-1",
+          "500E-3",
+          "499E-3",
+          "6E-120",
+          "99999999999999999999999999999999999999E-38",
+          "50000000000000000000000000000000000000E-38",
+          "49999999999999999999999999999999999999E-38"},
+      38,
+      0,
+      std::vector<int128_t>{1, 0, 1, 0, 1, 0, -1, 0, 1, 0, 0, 1, 1, 0});
+}
 } // namespace
 } // namespace facebook::velox

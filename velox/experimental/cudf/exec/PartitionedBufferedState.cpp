@@ -22,6 +22,9 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
+// Avoid spinning forever when a single partition key cannot be split.
+constexpr uint32_t kMaxSplitSeedAttempts = 64;
+
 bool nodeEmpty(const PartitionedBufferedState::Node& node) {
   if (node.isLeaf()) {
     return node.leafState == nullptr;
@@ -34,6 +37,28 @@ bool nodeEmpty(const PartitionedBufferedState::Node& node) {
   }
   return true;
 }
+
+size_t countNonEmptyChildren(
+    const std::vector<std::unique_ptr<BufferedState>>& storedPartitions,
+    const std::vector<InputChunk>& incomingPartitions,
+    const BufferedStateOps& ops) {
+  VELOX_CHECK_EQ(storedPartitions.size(), incomingPartitions.size());
+
+  size_t nonEmptyChildren = 0;
+  for (size_t i = 0; i < incomingPartitions.size(); ++i) {
+    if ((storedPartitions[i] && ops.leafRowCount(*storedPartitions[i]) > 0) ||
+        !incomingPartitions[i].empty()) {
+      ++nonEmptyChildren;
+    }
+  }
+  return nonEmptyChildren;
+}
+
+struct SplitLeafAttempt {
+  PartitionSpec spec;
+  std::vector<std::unique_ptr<BufferedState>> storedPartitions;
+  std::vector<InputChunk> incomingPartitions;
+};
 
 } // namespace
 
@@ -76,7 +101,7 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
   }
 
   if (!node.isLeaf()) {
-    auto partitions = partitionInput(std::move(bufferedInput), *node.split);
+    auto partitions = partitionInput(bufferedInput, *node.split);
     VELOX_CHECK_EQ(partitions.size(), node.children.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
       if (!partitions[i].empty()) {
@@ -116,47 +141,55 @@ void PartitionedBufferedState::splitLeaf(Node& node, InputChunk bufferedInput) {
   VELOX_CHECK(node.leafState || !bufferedInput.empty());
 
   const auto totalRows = node.leafRows + bufferedInput.size();
-  auto spec = makePartitionSpec(totalRows);
+  auto splitAttempt = [&]() {
+    for (uint32_t attempt = 1;; ++attempt) {
+      auto spec = makePartitionSpec(totalRows);
+      auto storedPartitions = node.leafState
+          ? ops_->repartitionLeaf(*node.leafState, spec)
+          : std::vector<std::unique_ptr<BufferedState>>(spec.numPartitions);
+      auto incomingPartitions = partitionInput(bufferedInput, spec);
+      const auto nonEmptyChildren =
+          countNonEmptyChildren(storedPartitions, incomingPartitions, *ops_);
 
-  auto storedPartitions = node.leafState
-      ? ops_->repartitionLeaf(std::move(node.leafState), spec)
-      : std::vector<std::unique_ptr<BufferedState>>(spec.numPartitions);
-  auto incomingPartitions = partitionInput(std::move(bufferedInput), spec);
+      if (nonEmptyChildren > 1) {
+        return SplitLeafAttempt{
+            std::move(spec),
+            std::move(storedPartitions),
+            std::move(incomingPartitions)};
+      }
 
-  size_t nonEmptyChildren = 0;
-  for (size_t i = 0; i < incomingPartitions.size(); ++i) {
-    if ((storedPartitions[i] && ops_->leafRowCount(*storedPartitions[i]) > 0) ||
-        !incomingPartitions[i].empty()) {
-      ++nonEmptyChildren;
+      VELOX_CHECK_LT(
+          attempt,
+          kMaxSplitSeedAttempts,
+          "Partitioning buffered state made no progress after {} hash seed "
+          "attempts: {} rows exceeded the per-leaf limit of {} rows using {} "
+          "hash partitions. This can happen when every row has the same "
+          "partition key.",
+          kMaxSplitSeedAttempts,
+          totalRows,
+          maxRowsPerLeaf_,
+          spec.numPartitions);
     }
-  }
-
-  VELOX_CHECK_GT(
-      nonEmptyChildren,
-      1,
-      "Partitioning buffered state made no progress: {} rows exceeded the "
-      "per-leaf limit of {} rows using {} hash partitions.",
-      totalRows,
-      maxRowsPerLeaf_,
-      spec.numPartitions);
+  }();
 
   node.leafRows = 0;
-  node.split = spec;
+  node.leafState.reset();
+  node.split = splitAttempt.spec;
   node.children.clear();
-  node.children.reserve(spec.numPartitions);
-  for (int32_t i = 0; i < spec.numPartitions; ++i) {
+  node.children.reserve(splitAttempt.spec.numPartitions);
+  for (int32_t i = 0; i < splitAttempt.spec.numPartitions; ++i) {
     node.children.push_back(std::make_unique<Node>());
   }
 
   for (size_t i = 0; i < node.children.size(); ++i) {
-    if (storedPartitions[i]) {
+    if (splitAttempt.storedPartitions[i]) {
       auto& child = *node.children[i];
-      child.leafRows = ops_->leafRowCount(*storedPartitions[i]);
-      child.leafState = std::move(storedPartitions[i]);
+      child.leafRows = ops_->leafRowCount(*splitAttempt.storedPartitions[i]);
+      child.leafState = std::move(splitAttempt.storedPartitions[i]);
       ensureLeafWithinLimit(child);
     }
-    if (!incomingPartitions[i].empty()) {
-      insert(*node.children[i], std::move(incomingPartitions[i]));
+    if (!splitAttempt.incomingPartitions[i].empty()) {
+      insert(*node.children[i], std::move(splitAttempt.incomingPartitions[i]));
     }
   }
 }
@@ -205,10 +238,10 @@ void PartitionedBufferedState::ensureLeafWithinLimit(Node& node) {
 }
 
 std::vector<InputChunk> PartitionedBufferedState::partitionInput(
-    InputChunk input,
+    const InputChunk& input,
     const PartitionSpec& spec) {
   return input.empty() ? std::vector<InputChunk>(spec.numPartitions)
-                       : ops_->partitionInput(std::move(input), spec);
+                       : ops_->partitionInput(input, spec);
 }
 
 FlushableBufferedState::FlushableBufferedState(

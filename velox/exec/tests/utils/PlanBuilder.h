@@ -444,6 +444,21 @@ class PlanBuilder {
       return *this;
     }
 
+    IndexLookupJoinBuilder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
+    /// @param forwardedProbeColumns Probe-side column names the operator
+    /// should include in the connector's lookup input even when no join key
+    /// or join condition references them. See IndexLookupJoinNode for the
+    /// full contract.
+    IndexLookupJoinBuilder& forwardedProbeColumns(
+        std::vector<std::string> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
+      return *this;
+    }
+
     /// Stop the IndexLookupJoinBuilder.
     PlanBuilder& endIndexLookupJoin() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -463,6 +478,8 @@ class PlanBuilder {
     bool hasMarker_{false};
     std::vector<std::string> outputLayout_;
     core::JoinType joinType_{core::JoinType::kInner};
+    std::optional<bool> splitOutput_;
+    std::vector<std::string> forwardedProbeColumns_;
   };
 
   /// Start an IndexLookupJoinBuilder.
@@ -1497,11 +1514,22 @@ class PlanBuilder {
       bool generateRowNumber);
 
   /// Add a MarkDistinctNode to compute aggregate mask channel
-  /// @param markerKey Name of output mask channel
+  /// @param markerName Name of output mask channel
   /// @param distinctKeys List of columns to be marked distinct.
   PlanBuilder& markDistinct(
-      std::string markerKey,
+      std::string markerName,
       const std::vector<std::string>& distinctKeys);
+
+  /// Add a multi-mask MarkDistinctNode. Produces maskNames.size() + 1 marker
+  /// columns: one no-mask marker, followed by one marker for each mask.
+  /// @param markerNames Names of output boolean marker columns. Must have
+  ///   exactly maskNames.size() + 1 entries.
+  /// @param distinctKeys List of columns to check for distinct values.
+  /// @param maskNames Column names of the input boolean mask columns.
+  PlanBuilder& markDistinct(
+      std::vector<std::string> markerNames,
+      const std::vector<std::string>& distinctKeys,
+      const std::vector<std::string>& maskNames);
 
   /// Add an EnforceDistinctNode to ensure input has unique values for the
   /// specified keys at runtime. Throws with the specified error message if

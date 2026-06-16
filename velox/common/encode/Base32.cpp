@@ -63,6 +63,43 @@ constexpr const Base32::ReverseIndex kBase32ReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255 // 240-255
 };
 
+// Forward lookup table for encoding (RFC 4648 alphabet).
+constexpr std::string_view kBase32Charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+constexpr int kBitsPerByte = 8;
+// Each Base32 symbol encodes 5 bits; kSymbolMask isolates one symbol.
+constexpr int kBitsPerSymbol = 5;
+constexpr uint32_t kSymbolMask = (1U << kBitsPerSymbol) - 1;
+
+// static
+std::string Base32::encode(std::string_view input) {
+  std::string encoded;
+  // Each binary block encodes to one encoded block; round up.
+  encoded.reserve(
+      (input.size() + kBinaryBlockByteSize - 1) / kBinaryBlockByteSize *
+      kEncodedBlockByteSize);
+  uint32_t buffer{0};
+  int bitsLeft{0};
+  for (unsigned char byte : input) {
+    buffer = (buffer << kBitsPerByte) | byte;
+    bitsLeft += kBitsPerByte;
+    while (bitsLeft >= kBitsPerSymbol) {
+      bitsLeft -= kBitsPerSymbol;
+      encoded.push_back(kBase32Charset[(buffer >> bitsLeft) & kSymbolMask]);
+    }
+  }
+  // Encode the remaining bits, padding with zero bits on the right.
+  if (bitsLeft > 0) {
+    encoded.push_back(
+        kBase32Charset[(buffer << (kBitsPerSymbol - bitsLeft)) & kSymbolMask]);
+  }
+  // Pad to a multiple of the encoded block size.
+  while (encoded.size() % kEncodedBlockByteSize != 0) {
+    encoded.push_back(kPadding);
+  }
+  return encoded;
+}
+
 // static
 folly::Expected<uint8_t, Status> Base32::base32ReverseLookup(
     char encodedChar,

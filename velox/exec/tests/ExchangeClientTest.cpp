@@ -68,6 +68,7 @@ class ExchangeClientTest : public testing::Test,
   }
 
   void TearDown() override {
+    executor_->stop();
     exec::test::waitForAllTasksToBeDeleted();
     test::testingShutdownLocalExchangeSource();
   }
@@ -1108,6 +1109,7 @@ TEST_P(ExchangeClientTest, lazyFetching) {
     auto pages = fetchPages(1, *client, 1);
     ASSERT_EQ(1, pages.size());
 
+    bufferManager_->noMoreData(taskId);
     task->requestCancel();
     bufferManager_->removeTask(taskId);
     task.reset();
@@ -1143,6 +1145,7 @@ TEST_P(ExchangeClientTest, lazyFetching) {
     auto pages = fetchPages(1, *client, 1);
     ASSERT_EQ(1, pages.size());
 
+    bufferManager_->noMoreData(taskId);
     task->requestCancel();
     bufferManager_->removeTask(taskId);
     task.reset();

@@ -1,6 +1,10 @@
 %{
 #include <FlexLexer.h>
+#include <fmt/format.h>
+#include <boost/algorithm/string/predicate.hpp>
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/type/Type.h"
 #include "velox/functions/prestosql/types/parser/ParserUtil.h"
 %}
@@ -173,9 +177,14 @@ enum_map_entry : QUOTED_ID COLON SIGNED_INT {  $$ = "[" + $1 + "," + std::to_str
                | QUOTED_ID COLON QUOTED_ID  {  $$ = "[" + $1 + "," + $3 + "]"; }
                ;
 
-enum_kind : WORD { if ($1 != "BigintEnum" && $1 != "VarcharEnum" )
+enum_kind : WORD { if (!boost::iequals($1, BigintEnumType::kKind) &&
+                       !boost::iequals($1, VarcharEnumType::kKind))
                     {
-                        std::string msg = "Invalid type " + $1 + ", expected BigintEnum or VarcharEnum";
+                        std::string msg = fmt::format(
+                            "Invalid type {}, expected {} or {}",
+                            $1,
+                            BigintEnumType::kKind,
+                            VarcharEnumType::kKind);
                         error(msg.c_str());
                     }
                 $$ = $1; }

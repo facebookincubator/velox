@@ -19,6 +19,7 @@
 
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/XORShiftRandom.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -39,7 +40,7 @@ struct RandFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config) {
-    const auto partitionId = config.sparkPartitionId();
+    const auto partitionId = SparkQueryConfig{config}.partitionId();
     // Use folly::Random to generate a random seed for unseeded rand().
     int64_t seed = folly::Random::rand64();
     generator_.setSeed(seed + partitionId);
@@ -51,7 +52,7 @@ struct RandFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const TInput* seedInput) {
-    const auto partitionId = config.sparkPartitionId();
+    const auto partitionId = SparkQueryConfig{config}.partitionId();
     int64_t seed = seedInput ? static_cast<int64_t>(*seedInput) : 0;
     generator_.setSeed(seed + partitionId);
   }

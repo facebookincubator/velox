@@ -31,11 +31,18 @@ class VarcharEnumType
  public:
   static VarcharEnumTypePtr get(const VarcharEnumParameter& parameter);
 
+  /// Presto type signature kind, used by toString(), toSql() and the type
+  /// parser.
+  static constexpr std::string_view kKind = "VarcharEnum";
+
   const char* name() const override {
     return "VARCHAR_ENUM";
   }
 
   std::string toString() const override;
+
+  /// Serializes to a Presto type signature that round-trips through parseType.
+  std::string toSql() const;
 
   folly::dynamic serialize() const override;
 

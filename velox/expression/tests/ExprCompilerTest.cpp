@@ -18,6 +18,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/expression/VectorFunctionListener.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -441,6 +442,364 @@ TEST_F(ExprCompilerTest, simpleFunctionMemoryPool) {
 
   auto stringView = decoded.valueAt<StringView>(0);
   ASSERT_GT(stringView.size(), 0) << "HLL sketch is empty";
+}
+
+class TrackingListenerFactory : public VectorFunctionListenerFactory {
+ public:
+  std::optional<VectorFunctionListeners> create(
+      std::string_view name,
+      const VectorFunctionMetadata& /*metadata*/,
+      const core::QueryConfig& /*queryConfig*/) override {
+    trackedNames.emplace_back(name);
+    return std::nullopt;
+  }
+
+  std::vector<std::string> trackedNames;
+};
+
+class CountingListenerFactory : public VectorFunctionListenerFactory {
+ public:
+  CountingListenerFactory()
+      : preCount(std::make_shared<std::atomic<int>>(0)),
+        postCount(std::make_shared<std::atomic<int>>(0)) {}
+
+  std::optional<VectorFunctionListeners> create(
+      std::string_view /*functionName*/,
+      const VectorFunctionMetadata& /*metadata*/,
+      const core::QueryConfig& /*queryConfig*/) override {
+    return VectorFunctionListeners{
+        std::make_shared<PreApplyListener>(
+            [counter = preCount](
+                std::string_view /*functionName*/,
+                const SelectivityVector& /*rows*/,
+                const std::vector<VectorPtr>& /*args*/,
+                const TypePtr& /*outputType*/,
+                const EvalCtx& /*context*/) { ++(*counter); }),
+        std::make_shared<PostApplyListener>(
+            [counter = postCount](
+                std::string_view /*functionName*/,
+                const SelectivityVector& /*rows*/,
+                const std::vector<VectorPtr>& /*args*/,
+                const TypePtr& /*outputType*/,
+                const EvalCtx& /*context*/,
+                const VectorPtr& /*result*/,
+                std::exception_ptr /*error*/) { ++(*counter); }),
+    };
+  }
+
+  std::shared_ptr<std::atomic<int>> preCount;
+  std::shared_ptr<std::atomic<int>> postCount;
+};
+
+class SelectiveListenerFactory : public VectorFunctionListenerFactory {
+ public:
+  explicit SelectiveListenerFactory(
+      std::string targetName,
+      std::shared_ptr<std::atomic<int>> counter)
+      : targetName_(std::move(targetName)), counter_(std::move(counter)) {}
+
+  std::optional<VectorFunctionListeners> create(
+      std::string_view name,
+      const VectorFunctionMetadata& /*metadata*/,
+      const core::QueryConfig& /*queryConfig*/) override {
+    if (name != targetName_) {
+      return std::nullopt;
+    }
+    return VectorFunctionListeners{
+        std::make_shared<PreApplyListener>(
+            [counter = counter_](
+                std::string_view /*functionName*/,
+                const SelectivityVector& /*rows*/,
+                const std::vector<VectorPtr>& /*args*/,
+                const TypePtr& /*outputType*/,
+                const EvalCtx& /*context*/) { ++(*counter); }),
+        nullptr,
+    };
+  }
+
+ private:
+  std::string targetName_;
+  std::shared_ptr<std::atomic<int>> counter_;
+};
+
+TEST_F(ExprCompilerTest, listenerFactory) {
+  auto factory = std::make_shared<TrackingListenerFactory>();
+  registerVectorFunctionListenerFactory(factory);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+  ASSERT_EQ(factory->trackedNames.size(), 1);
+  EXPECT_EQ(factory->trackedNames[0], "plus");
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  auto expected = makeFlatVector<int64_t>({2, 3, 4});
+  velox::test::assertEqualVectors(expected, results[0]);
+  unregisterVectorFunctionListenerFactory(factory);
+}
+
+TEST_F(ExprCompilerTest, listenerNotCalledForSpecialForms) {
+  auto factory = std::make_shared<TrackingListenerFactory>();
+  registerVectorFunctionListenerFactory(factory);
+
+  auto rowType = ROW({"a", "b"}, {BOOLEAN(), BOOLEAN()});
+  auto field = makeField(rowType);
+  auto expression = andCall(field("a"), field("b"));
+  compile(expression);
+
+  EXPECT_TRUE(factory->trackedNames.empty());
+  unregisterVectorFunctionListenerFactory(factory);
+}
+
+TEST_F(ExprCompilerTest, listenerPrePostCallbacks) {
+  auto factory = std::make_shared<CountingListenerFactory>();
+  registerVectorFunctionListenerFactory(factory);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  EXPECT_EQ(factory->preCount->load(), 1);
+  EXPECT_EQ(factory->postCount->load(), 1);
+  auto expected = makeFlatVector<int64_t>({2, 3, 4});
+  velox::test::assertEqualVectors(expected, results[0]);
+  unregisterVectorFunctionListenerFactory(factory);
+}
+
+TEST_F(ExprCompilerTest, listenerSelectiveHooking) {
+  auto hookCount = std::make_shared<std::atomic<int>>(0);
+  auto factory = std::make_shared<SelectiveListenerFactory>("plus", hookCount);
+  registerVectorFunctionListenerFactory(factory);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression =
+      call("plus", {call("multiply", {field("a"), bigint(2)}), bigint(1)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  EXPECT_EQ(hookCount->load(), 1);
+  auto expected = makeFlatVector<int64_t>({3, 5, 7});
+  velox::test::assertEqualVectors(expected, results[0]);
+  unregisterVectorFunctionListenerFactory(factory);
+}
+
+TEST_F(ExprCompilerTest, listenerPreThrows) {
+  class ThrowingPreFactory : public VectorFunctionListenerFactory {
+   public:
+    std::optional<VectorFunctionListeners> create(
+        std::string_view /*functionName*/,
+        const VectorFunctionMetadata& /*metadata*/,
+        const core::QueryConfig& /*queryConfig*/) override {
+      return VectorFunctionListeners{
+          std::make_shared<PreApplyListener>(
+              [](std::string_view /*functionName*/,
+                 const SelectivityVector& /*rows*/,
+                 const std::vector<VectorPtr>& /*args*/,
+                 const TypePtr& /*outputType*/,
+                 const EvalCtx& /*context*/) {
+                VELOX_USER_FAIL("pre-listener error");
+              }),
+          nullptr,
+      };
+    }
+  };
+
+  auto factory = std::make_shared<ThrowingPreFactory>();
+  registerVectorFunctionListenerFactory(factory);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  VELOX_ASSERT_THROW(
+      exprSet->eval(rows, evalCtx, results), "pre-listener error");
+  unregisterVectorFunctionListenerFactory(factory);
+}
+
+TEST_F(ExprCompilerTest, listenerPostThrowsIsSwallowed) {
+  auto secondPostCalled = std::make_shared<bool>(false);
+
+  class ThrowingPostFactory : public VectorFunctionListenerFactory {
+   public:
+    std::optional<VectorFunctionListeners> create(
+        std::string_view /*functionName*/,
+        const VectorFunctionMetadata& /*metadata*/,
+        const core::QueryConfig& /*queryConfig*/) override {
+      return VectorFunctionListeners{
+          nullptr,
+          std::make_shared<PostApplyListener>(
+              [](std::string_view /*functionName*/,
+                 const SelectivityVector& /*rows*/,
+                 const std::vector<VectorPtr>& /*args*/,
+                 const TypePtr& /*outputType*/,
+                 const EvalCtx& /*context*/,
+                 const VectorPtr& /*result*/,
+                 std::exception_ptr /*error*/) {
+                VELOX_USER_FAIL("post-listener error");
+              }),
+      };
+    }
+  };
+
+  class CheckingPostFactory : public VectorFunctionListenerFactory {
+   public:
+    explicit CheckingPostFactory(std::shared_ptr<bool> called)
+        : called_(std::move(called)) {}
+
+    std::optional<VectorFunctionListeners> create(
+        std::string_view /*functionName*/,
+        const VectorFunctionMetadata& /*metadata*/,
+        const core::QueryConfig& /*queryConfig*/) override {
+      return VectorFunctionListeners{
+          nullptr,
+          std::make_shared<PostApplyListener>(
+              [called = called_](
+                  std::string_view /*functionName*/,
+                  const SelectivityVector& /*rows*/,
+                  const std::vector<VectorPtr>& /*args*/,
+                  const TypePtr& /*outputType*/,
+                  const EvalCtx& /*context*/,
+                  const VectorPtr& /*result*/,
+                  std::exception_ptr /*error*/) { *called = true; }),
+      };
+    }
+
+   private:
+    std::shared_ptr<bool> called_;
+  };
+
+  auto throwingFactory = std::make_shared<ThrowingPostFactory>();
+  auto checkingFactory =
+      std::make_shared<CheckingPostFactory>(secondPostCalled);
+  registerVectorFunctionListenerFactory(throwingFactory);
+  registerVectorFunctionListenerFactory(checkingFactory);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  auto expected = makeFlatVector<int64_t>({2, 3, 4});
+  velox::test::assertEqualVectors(expected, results[0]);
+  EXPECT_TRUE(*secondPostCalled);
+  unregisterVectorFunctionListenerFactory(throwingFactory);
+  unregisterVectorFunctionListenerFactory(checkingFactory);
+}
+
+TEST_F(ExprCompilerTest, listenerPostReceivesApplyError) {
+  auto postCalled = std::make_shared<std::atomic<bool>>(false);
+  auto receivedError = std::make_shared<std::atomic<bool>>(false);
+
+  class ErrorCapturingFactory : public VectorFunctionListenerFactory {
+   public:
+    ErrorCapturingFactory(
+        std::shared_ptr<std::atomic<bool>> postCalled,
+        std::shared_ptr<std::atomic<bool>> receivedError)
+        : postCalled_(std::move(postCalled)),
+          receivedError_(std::move(receivedError)) {}
+
+    std::optional<VectorFunctionListeners> create(
+        std::string_view /*functionName*/,
+        const VectorFunctionMetadata& /*metadata*/,
+        const core::QueryConfig& /*queryConfig*/) override {
+      return VectorFunctionListeners{
+          nullptr,
+          std::make_shared<PostApplyListener>(
+              [postCalled = postCalled_, receivedError = receivedError_](
+                  std::string_view /*functionName*/,
+                  const SelectivityVector& /*rows*/,
+                  const std::vector<VectorPtr>& /*args*/,
+                  const TypePtr& /*outputType*/,
+                  const EvalCtx& /*context*/,
+                  const VectorPtr& /*result*/,
+                  std::exception_ptr error) {
+                postCalled->store(true);
+                receivedError->store(error != nullptr);
+              }),
+      };
+    }
+
+   private:
+    std::shared_ptr<std::atomic<bool>> postCalled_;
+    std::shared_ptr<std::atomic<bool>> receivedError_;
+  };
+
+  auto factory =
+      std::make_shared<ErrorCapturingFactory>(postCalled, receivedError);
+  registerVectorFunctionListenerFactory(factory);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression = call("divide", {field("a"), bigint(0)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  EXPECT_THROW(exprSet->eval(rows, evalCtx, results), VeloxException);
+
+  EXPECT_TRUE(postCalled->load());
+  EXPECT_TRUE(receivedError->load());
+  unregisterVectorFunctionListenerFactory(factory);
+}
+
+TEST_F(ExprCompilerTest, multipleListenerFactories) {
+  auto factoryA = std::make_shared<CountingListenerFactory>();
+  auto factoryB = std::make_shared<CountingListenerFactory>();
+  registerVectorFunctionListenerFactory(factoryA);
+  registerVectorFunctionListenerFactory(factoryB);
+
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto field = makeField(rowType);
+  auto expression = call("plus", {field("a"), bigint(1)});
+  auto exprSet = compile(expression);
+
+  auto input = makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  SelectivityVector rows(3);
+  EvalCtx evalCtx(execCtx_.get(), exprSet.get(), input.get());
+  std::vector<VectorPtr> results(1);
+  exprSet->eval(rows, evalCtx, results);
+
+  EXPECT_EQ(factoryA->preCount->load(), 1);
+  EXPECT_EQ(factoryA->postCount->load(), 1);
+  EXPECT_EQ(factoryB->preCount->load(), 1);
+  EXPECT_EQ(factoryB->postCount->load(), 1);
+
+  auto expected = makeFlatVector<int64_t>({2, 3, 4});
+  velox::test::assertEqualVectors(expected, results[0]);
+  unregisterVectorFunctionListenerFactory(factoryA);
+  unregisterVectorFunctionListenerFactory(factoryB);
 }
 
 } // namespace facebook::velox::exec::test

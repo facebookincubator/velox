@@ -16,6 +16,8 @@
 
 #include "velox/common/memory/Allocation.h"
 
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -23,6 +25,42 @@
 namespace facebook::velox::memory {
 
 class AllocationTest : public testing::Test {};
+
+namespace {
+
+void fillAllocation(Allocation& allocation, uint64_t bytes) {
+  uint64_t offset = 0;
+  for (int32_t i = 0; i < allocation.numRuns(); ++i) {
+    auto run = allocation.runAt(i);
+    const auto bytesInRun = std::min<uint64_t>(run.numBytes(), bytes - offset);
+    for (uint64_t j = 0; j < bytesInRun; ++j) {
+      run.data<uint8_t>()[j] = static_cast<uint8_t>((offset + j) % 251);
+    }
+    offset += bytesInRun;
+    if (offset == bytes) {
+      return;
+    }
+  }
+}
+
+void expectAllocationBytes(const Allocation& allocation, uint64_t bytes) {
+  uint64_t offset = 0;
+  for (int32_t i = 0; i < allocation.numRuns(); ++i) {
+    auto run = allocation.runAt(i);
+    const auto bytesInRun = std::min<uint64_t>(run.numBytes(), bytes - offset);
+    for (uint64_t j = 0; j < bytesInRun; ++j) {
+      EXPECT_EQ(
+          run.data<const uint8_t>()[j],
+          static_cast<uint8_t>((offset + j) % 251));
+    }
+    offset += bytesInRun;
+    if (offset == bytes) {
+      return;
+    }
+  }
+}
+
+} // namespace
 
 TEST_F(AllocationTest, basic) {
   ASSERT_EQ(AllocationTraits::numPagesInHugePage(), 512);
@@ -81,6 +119,57 @@ TEST_F(AllocationTest, appendMove) {
   ASSERT_EQ(2, allocation.numRuns());
   ASSERT_EQ(0, otherAllocation.numRuns());
   allocation.clear();
+}
+
+TEST_F(AllocationTest, copy) {
+  constexpr auto kPageBytes = AllocationTraits::kPageSize;
+  constexpr uint64_t kBytes = (2 * kPageBytes) + 123;
+
+  std::vector<uint8_t> sourceRun1(kPageBytes);
+  std::vector<uint8_t> sourceRun2(2 * kPageBytes);
+  std::vector<uint8_t> targetRun1(2 * kPageBytes);
+  std::vector<uint8_t> targetRun2(kPageBytes);
+
+  Allocation source;
+  source.append(sourceRun1.data(), 1);
+  source.append(sourceRun2.data(), 2);
+  Allocation target;
+  target.append(targetRun1.data(), 2);
+  target.append(targetRun2.data(), 1);
+
+  fillAllocation(source, kBytes);
+  Allocation::copy(source, target, kBytes);
+  expectAllocationBytes(target, kBytes);
+
+  source.clear();
+  target.clear();
+}
+
+TEST_F(AllocationTest, copyOutOfRange) {
+  constexpr auto kPageBytes = AllocationTraits::kPageSize;
+  std::vector<uint8_t> sourceBuffer(kPageBytes);
+  std::vector<uint8_t> targetBuffer(kPageBytes);
+  std::vector<uint8_t> largerTargetBuffer(2 * kPageBytes);
+  std::vector<uint8_t> largerSourceBuffer(2 * kPageBytes);
+
+  Allocation source;
+  source.append(sourceBuffer.data(), 1);
+  Allocation target;
+  target.append(targetBuffer.data(), 1);
+  Allocation largerTarget;
+  largerTarget.append(largerTargetBuffer.data(), 2);
+  Allocation largerSource;
+  largerSource.append(largerSourceBuffer.data(), 2);
+
+  VELOX_ASSERT_THROW(
+      Allocation::copy(source, largerTarget, kPageBytes + 1), "");
+  VELOX_ASSERT_THROW(
+      Allocation::copy(largerSource, target, kPageBytes + 1), "");
+
+  source.clear();
+  target.clear();
+  largerTarget.clear();
+  largerSource.clear();
 }
 
 TEST_F(AllocationTest, maxPageRunLimit) {

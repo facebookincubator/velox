@@ -31,6 +31,7 @@ void registerRegexpFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "like", likeSignatures(), makeLike);
   registerRegexpReplace(prefix);
+  registerRegexpInstr(prefix);
 }
 
 } // namespace facebook::velox::functions::sparksql

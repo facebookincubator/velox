@@ -18,6 +18,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -47,7 +48,13 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
 
     VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
     VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterSpeculativeIoSizeSession);
+    VELOX_HIVE_CONFIG_REGISTER(kAllowInt32NarrowingSession);
+    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterMemoryTrackingThresholdSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
     VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
     VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
@@ -152,12 +159,38 @@ uint64_t HiveConfig::sortWriterMaxOutputBytes(
 }
 
 uint64_t HiveConfig::maxTargetFileSizeBytes(
+    dwio::common::FileFormat fileFormat,
     const config::ConfigBase* session) const {
+  const char* sessionKey;
+  const char* configKey;
+  const char* defaultValue;
+  switch (fileFormat) {
+    case dwio::common::FileFormat::PARQUET:
+      sessionKey = kParquetMaxTargetFileSizeSession;
+      configKey = kParquetMaxTargetFileSize;
+      defaultValue = kParquetMaxTargetFileSizeSessionProperty::defaultValue;
+      break;
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC:
+      sessionKey = kOrcMaxTargetFileSizeSession;
+      configKey = kOrcMaxTargetFileSize;
+      defaultValue = kOrcMaxTargetFileSizeSessionProperty::defaultValue;
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      sessionKey = kNimbleMaxTargetFileSizeSession;
+      configKey = kNimbleMaxTargetFileSize;
+      defaultValue = kNimbleMaxTargetFileSizeSessionProperty::defaultValue;
+      break;
+    default:
+      return 0;
+  }
+
+  auto maxTargetFileSize = session->get<std::string>(sessionKey);
+  if (!maxTargetFileSize.has_value()) {
+    maxTargetFileSize = config_->get<std::string>(configKey);
+  }
   return config::toCapacity(
-      session->get<std::string>(
-          kMaxTargetFileSizeSession,
-          config_->get<std::string>(kMaxTargetFileSize, "0B")),
-      config::CapacityUnit::BYTE);
+      maxTargetFileSize.value_or(defaultValue), config::CapacityUnit::BYTE);
 }
 
 } // namespace facebook::velox::connector::hive

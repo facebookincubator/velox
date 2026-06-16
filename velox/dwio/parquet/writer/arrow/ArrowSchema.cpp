@@ -457,7 +457,7 @@ Status fieldToNode(
         type = precision <= 9 ? ParquetType::kInt32 : ParquetType::kInt64;
       } else {
         type = ParquetType::kFixedLenByteArray;
-        length = DecimalType::DecimalSize(precision);
+        length = ::arrow::DecimalType::DecimalSize(precision);
       }
       PARQUET_CATCH_NOT_OK(
           logicalType = LogicalType::decimal(precision, scale));

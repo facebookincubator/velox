@@ -70,8 +70,9 @@ void TpchQueryBuilder::readFileSchema(
     const std::string& tableName,
     const std::string& filePath,
     const std::vector<std::string>& columns) {
-  dwio::common::ReaderOptions readerOptions{
-      pool_.get(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileFormat(format_);
   auto uniqueReadFile =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
@@ -158,7 +159,7 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
     case 8:
       return getQ8Plan();
     case 9:
-      return getQ9Plan();
+      return getQ9Plan("p_name like '%green%'");
     case 10:
       return getQ10Plan();
     case 11:
@@ -185,8 +186,19 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ21Plan();
     case 22:
       return getQ22Plan();
+    case 23:
+      return getQ23Plan();
     default:
       VELOX_NYI("TPC-H query {} is not supported yet", queryId);
+  }
+}
+
+TpchPlan TpchQueryBuilder::getAltPlan(int queryId) const {
+  switch (queryId) {
+    case 9:
+      return getQ9Plan("p_size <= 3");
+    default:
+      VELOX_NYI("TPC-H query {} has no alternate plan", queryId);
   }
 }
 
@@ -1107,7 +1119,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
   return context;
 }
 
-TpchPlan TpchQueryBuilder::getQ9Plan() const {
+TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
   std::vector<std::string> lineitemColumns = {
       "l_suppkey",
       "l_partkey",
@@ -1115,7 +1127,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
       "l_extendedprice",
       "l_orderkey",
       "l_quantity"};
-  std::vector<std::string> partColumns = {"p_name", "p_partkey"};
+  std::vector<std::string> partColumns = {"p_name", "p_size", "p_partkey"};
   std::vector<std::string> supplierColumns = {"s_suppkey", "s_nationkey"};
   std::vector<std::string> partsuppColumns = {
       "ps_partkey", "ps_suppkey", "ps_supplycost"};
@@ -1146,16 +1158,13 @@ TpchPlan TpchQueryBuilder::getQ9Plan() const {
   const std::vector<std::string> lineitemCommonColumns = {
       "l_extendedprice", "l_discount", "l_quantity"};
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .filtersAsNode(filtersAsNode_)
-                  .tableScan(
-                      kPart,
-                      partSelectedRowType,
-                      partFileColumns,
-                      {},
-                      "p_name like '%green%'")
-                  .captureScanNodeId(partScanNodeId)
-                  .planNode();
+  auto part =
+      PlanBuilder(planNodeIdGenerator, pool_.get())
+          .filtersAsNode(filtersAsNode_)
+          .tableScan(
+              kPart, partSelectedRowType, partFileColumns, {}, partFilter)
+          .captureScanNodeId(partScanNodeId)
+          .planNode();
 
   auto supplier =
       PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -1797,7 +1806,13 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId partsuppScanNodeId;
 
+  // Keep the IN-list literals as INTEGER so they match the INTEGER p_size
+  // column; widening them to BIGINT would cast the column and block the
+  // subfield filter pushdown.
+  parse::ParseOptions parseOptions;
+  parseOptions.parseIntegerAsBigint = false;
   auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .setParseOptions(parseOptions)
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kPart,
@@ -2463,6 +2478,39 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
   context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
   context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFiles[customerScanNodeIdWithKey] = getTableFilePaths(kCustomer);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ23Plan() const {
+  std::vector<std::string> lineitemColumns = {
+      "l_orderkey", "l_linenumber", "l_quantity", "l_extendedprice"};
+
+  const auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+
+  core::PlanNodeId lineitemScanNodeId;
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .filtersAsNode(filtersAsNode_)
+          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .captureScanNodeId(lineitemScanNodeId)
+          .partialAggregation(
+              {"l_orderkey", "l_linenumber"},
+              {"sum(l_quantity) AS sum_quantity",
+               "sum(l_extendedprice) AS sum_extendedprice",
+               "count(0) AS line_count"})
+          .localPartition(std::vector<std::string>{})
+          .finalAggregation()
+          // Keep this benchmark focused on high-cardinality aggregation rather
+          // than GPU-to-CPU transfer of the row-cardinality result.
+          .limit(0, 1024, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
   context.dataFileFormat = format_;
   return context;
 }

@@ -16,7 +16,6 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/DirectInputStream.h"
@@ -142,8 +141,6 @@ void DirectInputStream::loadSync() {
       bufferedInput_->pool()->allocateNonContiguous(numPages, data_);
     }
   }
-
-  process::TraceContext trace("DirectInputStream::loadSync");
 
   ioStats_->incRawBytesRead(loadedRegion_.length);
   auto ranges = makeRanges(loadedRegion_.length, data_, tinyData_);

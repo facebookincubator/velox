@@ -18,6 +18,8 @@
 #include <mutex>
 #include <random>
 
+#include <folly/SharedMutex.h>
+
 #include "velox/common/caching/CachedFactory.h"
 #include "velox/common/caching/SimpleLRUCache.h"
 #include "velox/common/io/IoStatistics.h"

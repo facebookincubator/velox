@@ -50,4 +50,12 @@ std::unique_ptr<cudf::column> decimalDivide(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+// Helper function to scatter nulls at zero-divisor positions.
+// Moved to .cpp file to allow use of VELOX_FAIL (incompatible with nvcc).
+std::unique_ptr<cudf::column> scatterNullsAtZeroDivisor(
+    std::unique_ptr<cudf::column> result,
+    const cudf::column_view& divisor,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 } // namespace facebook::velox::cudf_velox

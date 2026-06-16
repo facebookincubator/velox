@@ -244,8 +244,9 @@ class IndexReader {
       "numIndexLookupRequests";
 
   /// Tracks the total number of stripes that need to be read for all requests.
-  /// Multiple requests may share the same stripe, and each shared stripe is
-  /// counted once per request that needs it.
+  /// Within a single startLookup() call, a stripe shared by multiple requests
+  /// is counted once; across different startLookup() calls, the same stripe is
+  /// counted separately for each call.
   static constexpr std::string_view kNumIndexLookupStripes =
       "numIndexLookupStripes";
 
@@ -270,6 +271,32 @@ class IndexReader {
   /// overlapping ranges are merged to minimize I/O.
   static constexpr std::string_view kNumIndexLookupReadSegments =
       "numIndexLookupReadSegments";
+
+  /// Wall time spent loading stripes (or equivalent format-specific load unit)
+  /// during index lookup, summed across all stripe loads.
+  static constexpr std::string_view kIndexStripeLoadWallNanos =
+      "indexStripeLoadWallNanos";
+
+  /// CPU time spent loading stripes during index lookup. May undercount on
+  /// async/prefetch paths; see IndexSource::lookupTiming() for details.
+  static constexpr std::string_view kIndexStripeLoadCpuNanos =
+      "indexStripeLoadCpuNanos";
+
+  /// Wall time spent decoding column data from loaded stripes during index
+  /// lookup, summed across all read segments.
+  static constexpr std::string_view kIndexDataDecodeWallNanos =
+      "indexDataDecodeWallNanos";
+
+  /// CPU time spent decoding column data from loaded stripes during index
+  /// lookup. Same prefetch caveat as kIndexStripeLoadCpuNanos.
+  static constexpr std::string_view kIndexDataDecodeCpuNanos =
+      "indexDataDecodeCpuNanos";
+
+  /// Number of distinct stripes loaded across the lifetime of this index
+  /// reader. Useful for spotting redundant loads when comparing against
+  /// numStripeLoads (which counts every load call).
+  static constexpr std::string_view kNumIndexDistinctStripesLoaded =
+      "numIndexDistinctStripesLoaded";
 
   virtual ~IndexReader() = default;
 

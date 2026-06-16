@@ -490,6 +490,13 @@ void addOperatorRuntimeStats(
   statIt->second.addValue(value.value);
 }
 
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats.insert_or_assign(std::string(name), metric);
+}
+
 void aggregateOperatorRuntimeStats(
     std::unordered_map<std::string, RuntimeMetric>& stats) {
   for (auto& runtimeMetric : stats) {

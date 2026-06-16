@@ -27,9 +27,42 @@
 #include <cudf/partitioning.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
+#include <cuda_runtime_api.h>
+
 #include <limits>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+int getNumCudaDevices() {
+  int numDevices{};
+  CUDF_CUDA_TRY(cudaGetDeviceCount(&numDevices));
+  return numDevices;
+}
+
+int getCurrentCudaDevice() {
+  int device{};
+  CUDF_CUDA_TRY(cudaGetDevice(&device));
+  return device;
+}
+
+CudaEvent& eventForThread() {
+  // Intentionally leak per-thread, per-device events to avoid CUDA calls from
+  // thread-local destructors after CUDA context teardown.
+  thread_local static std::vector<CudaEvent*> events(getNumCudaDevices());
+  auto const device = getCurrentCudaDevice();
+  VELOX_CHECK_GE(device, 0);
+  auto const deviceIndex = static_cast<size_t>(device);
+  VELOX_CHECK_LT(deviceIndex, events.size());
+
+  if (events[deviceIndex] == nullptr) {
+    events[deviceIndex] = new CudaEvent(cudaEventDisableTiming);
+  }
+  return *events[deviceIndex];
+}
+
+} // namespace
 
 std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
@@ -104,11 +137,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   // the wrong stream.
   auto output = cudf::concatenate(tableViews, stream, mr);
 
-  // Order input deallocations after the concatenate read.
-  // Since memory resources are stream-ordered, deallocations
-  // on inputStreams will be ordered after the concatenate completes.
-  CudaEvent event(cudaEventDisableTiming);
-  streamsWaitForStream(event, inputStreams, stream);
+  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
   // Input tables are deallocated here when 'tables' goes out of scope.
   return output;
 }
@@ -186,12 +215,7 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
             stream,
             mr));
   }
-  // Order input deallocations after the concatenate reads by making all input
-  // streams wait for the output stream.
-  // Since memory resources are stream-ordered, deallocations
-  // on inputStreams will be ordered after the concatenate completes.
-  CudaEvent event(cudaEventDisableTiming);
-  streamsWaitForStream(event, inputStreams, stream);
+  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
 
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
@@ -272,7 +296,7 @@ std::vector<CudfVectorPtr> hashPartitionTable(
 
 void streamsWaitForStream(
     CudaEvent& event,
-    const std::vector<rmm::cuda_stream_view>& streams,
+    std::span<const rmm::cuda_stream_view> streams,
     rmm::cuda_stream_view stream) {
   event.recordFrom(stream);
   for (const auto& strm : streams) {
@@ -305,6 +329,21 @@ const CudaEvent& CudaEvent::recordFrom(rmm::cuda_stream_view stream) const {
 const CudaEvent& CudaEvent::waitOn(rmm::cuda_stream_view stream) const {
   CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
   return *this;
+}
+
+void orderCudfVectorDeallocationsAfterStream(
+    std::span<const CudfVectorPtr> vectors,
+    std::span<const rmm::cuda_stream_view> inputStreams,
+    rmm::cuda_stream_view stream) {
+  bool allRebound = true;
+  for (const auto& vector : vectors) {
+    VELOX_CHECK_NOT_NULL(vector);
+    allRebound &= vector->rebindStream(stream);
+  }
+
+  if (!allRebound) {
+    streamsWaitForStream(eventForThread(), inputStreams, stream);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

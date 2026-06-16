@@ -437,121 +437,151 @@ static bool areAllChildrenConstant(const OperatorExpression& operExpr) {
   return true;
 }
 
-// Parse an "operator", like NOT.
-core::ExprPtr parseOperatorExpr(
-    ParsedExpression& expr,
-    const ParseOptions& options) {
-  const auto& operExpr = dynamic_cast<OperatorExpression&>(expr);
-
-  // Code for array literal parsing (e.g. "ARRAY[1, 2, 3]")
-  if (expr.GetExpressionType() == ExpressionType::ARRAY_CONSTRUCTOR) {
-    if (areAllChildrenConstant(operExpr)) {
-      std::vector<Variant> arrayElements;
-      arrayElements.reserve(operExpr.children.size());
-
-      TypePtr valueType = UNKNOWN();
-      for (const auto& child : operExpr.children) {
-        if (auto constantExpr =
-                dynamic_cast<ConstantExpression*>(child.get())) {
-          auto& value = constantExpr->value;
-          if (value.type().id() == LogicalTypeId::INTEGER &&
-              options.parseIntegerAsBigint) {
-            value = Value::BIGINT(value.GetValue<int32_t>());
-          }
-          if (options.parseDecimalAsDouble &&
-              value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
-            value = Value::DOUBLE(value.GetValue<double>());
-          }
-          arrayElements.emplace_back(duckValueToVariant(value));
-          if (!value.IsNull()) {
-            valueType = toVeloxType(value.type());
-          }
-        } else {
-          VELOX_UNREACHABLE();
-        }
+// Folds one constant array/IN-list element into 'values', widening
+// INTEGER->BIGINT and DECIMAL->DOUBLE per 'options', and tracks the array
+// element type from the non-null elements. Handles a plain constant and a cast
+// of a constant (the IN parser emits CAST(NULL AS T) for a typed NULL). Sharing
+// this keeps `a IN (x, y)` equivalent to `a IN ARRAY[x, y]`.
+void appendConstantArrayElement(
+    ParsedExpression& element,
+    const ParseOptions& options,
+    std::vector<Variant>& values,
+    TypePtr& valueType) {
+  if (const auto castExpr = dynamic_cast<CastExpression*>(&element)) {
+    if (castExpr->child->GetExpressionType() ==
+        ExpressionType::VALUE_CONSTANT) {
+      auto constExpr = dynamic_cast<ConstantExpression*>(castExpr->child.get());
+      if (constExpr->value.IsNull()) {
+        // A typed NULL (e.g. CAST(NULL AS BIGINT)) has no value to cast;
+        // represent it as an UNKNOWN null and let the non-null elements
+        // determine the array element type.
+        values.emplace_back(Variant(TypeKind::UNKNOWN));
+      } else {
+        auto value = constExpr->value.DefaultCastAs(
+            castExpr->cast_type, !castExpr->try_cast);
+        values.emplace_back(duckValueToVariant(value));
+        valueType = toVeloxType(castExpr->cast_type);
       }
-      return std::make_shared<const core::ConstantExpr>(
-          ARRAY(valueType), Variant::array(arrayElements), getAlias(expr));
-    } else {
-      std::vector<core::ExprPtr> params;
-      params.reserve(operExpr.children.size());
-
-      for (const auto& child : operExpr.children) {
-        params.emplace_back(parseExpr(*child, options));
-      }
-      return callExpr(
-          "array_constructor", std::move(params), getAlias(expr), options);
+      return;
     }
   }
 
-  // Check if the operator is "IN" or "NOT IN".
-  if (expr.GetExpressionType() == ExpressionType::COMPARE_IN ||
-      expr.GetExpressionType() == ExpressionType::COMPARE_NOT_IN) {
-    auto numValues = operExpr.children.size() - 1;
+  if (auto constantExpr = dynamic_cast<ConstantExpression*>(&element)) {
+    auto& value = constantExpr->value;
+    if (value.type().id() == LogicalTypeId::INTEGER &&
+        options.parseIntegerAsBigint) {
+      value = Value::BIGINT(value.GetValue<int32_t>());
+    }
+    if (options.parseDecimalAsDouble &&
+        value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
+      value = Value::DOUBLE(value.GetValue<double>());
+    }
+    values.emplace_back(duckValueToVariant(value));
+    if (!value.IsNull()) {
+      valueType = toVeloxType(value.type());
+    }
+    return;
+  }
 
+  VELOX_UNSUPPORTED("Array / IN-list elements must be constant");
+}
+
+// Parses an array literal such as "ARRAY[1, 2, 3]".
+core::ExprPtr parseArrayConstructorExpr(
+    ParsedExpression& expr,
+    const ParseOptions& options) {
+  const auto& operExpr = dynamic_cast<OperatorExpression&>(expr);
+  if (areAllChildrenConstant(operExpr)) {
     std::vector<Variant> values;
-    if (options.parseInListAsArray) {
-      values.reserve(numValues);
-    }
-
-    std::vector<core::ExprPtr> params;
-    if (!options.parseInListAsArray) {
-      params.reserve(numValues + 1);
-    }
-    params.emplace_back(parseExpr(*operExpr.children[0], options));
-
+    values.reserve(operExpr.children.size());
     TypePtr valueType = UNKNOWN();
-    for (auto i = 0; i < numValues; i++) {
-      auto valueExpr = operExpr.children[i + 1].get();
+    for (const auto& child : operExpr.children) {
+      appendConstantArrayElement(*child, options, values, valueType);
+    }
+    return std::make_shared<const core::ConstantExpr>(
+        ARRAY(valueType), Variant::array(values), getAlias(expr));
+  }
+
+  std::vector<core::ExprPtr> params;
+  params.reserve(operExpr.children.size());
+  for (const auto& child : operExpr.children) {
+    params.emplace_back(parseExpr(*child, options));
+  }
+  return callExpr(
+      "array_constructor", std::move(params), getAlias(expr), options);
+}
+
+// Parses an IN or NOT IN predicate. With 'parseInListAsArray' the value list is
+// folded into a single array constant; otherwise it stays as varargs.
+core::ExprPtr parseInExpr(ParsedExpression& expr, const ParseOptions& options) {
+  const auto& operExpr = dynamic_cast<OperatorExpression&>(expr);
+  const auto numChildren = operExpr.children.size();
+
+  std::vector<core::ExprPtr> params;
+  params.reserve(options.parseInListAsArray ? 2 : numChildren);
+  params.emplace_back(parseExpr(*operExpr.children[0], options));
+
+  if (options.parseInListAsArray) {
+    // Fold the value list into a single array constant, identically to an
+    // `ARRAY[...]` literal, so `a IN (x, y)` == `a IN ARRAY[x, y]`.
+    std::vector<Variant> values;
+    values.reserve(numChildren - 1);
+    TypePtr valueType = UNKNOWN();
+    for (size_t i = 1; i < numChildren; ++i) {
+      appendConstantArrayElement(
+          *operExpr.children[i], options, values, valueType);
+    }
+    params.emplace_back(
+        std::make_shared<const core::ConstantExpr>(
+            ARRAY(valueType), Variant::array(values), std::nullopt));
+  } else {
+    for (size_t i = 1; i < numChildren; ++i) {
+      auto valueExpr = operExpr.children[i].get();
       if (const auto castExpr = dynamic_cast<CastExpression*>(valueExpr)) {
         if (castExpr->child->GetExpressionType() ==
             ExpressionType::VALUE_CONSTANT) {
           auto constExpr =
               dynamic_cast<ConstantExpression*>(castExpr->child.get());
-          auto value = constExpr->value.DefaultCastAs(
-              castExpr->cast_type, !castExpr->try_cast);
-          if (options.parseInListAsArray) {
-            values.emplace_back(duckValueToVariant(value));
-            valueType = toVeloxType(castExpr->cast_type);
-          } else {
-            params.emplace_back(parseExpr(*castExpr->child, options));
-          }
+          // Preserve the cast for a typed NULL so its type survives
+          // (parseCastExpr folds CAST(NULL AS T) to a typed null constant);
+          // a non-null constant keeps its folded value.
+          params.emplace_back(
+              constExpr->value.IsNull() ? parseExpr(*valueExpr, options)
+                                        : parseExpr(*castExpr->child, options));
           continue;
         }
       }
-
-      if (auto constantExpr = dynamic_cast<ConstantExpression*>(valueExpr)) {
-        if (options.parseInListAsArray) {
-          auto& value = constantExpr->value;
-          if (options.parseDecimalAsDouble &&
-              value.type().id() == duckdb::LogicalTypeId::DECIMAL) {
-            value = Value::DOUBLE(value.GetValue<double>());
-          }
-          values.emplace_back(duckValueToVariant(value));
-          if (!value.IsNull()) {
-            valueType = toVeloxType(value.type());
-          }
-        } else {
-          params.emplace_back(parseExpr(*constantExpr, options));
-        }
+      if (dynamic_cast<ConstantExpression*>(valueExpr)) {
+        params.emplace_back(parseExpr(*valueExpr, options));
         continue;
       }
-
       VELOX_UNSUPPORTED("IN list values need to be constant");
     }
-
-    if (options.parseInListAsArray) {
-      params.emplace_back(
-          std::make_shared<const core::ConstantExpr>(
-              ARRAY(valueType), Variant::array(values), std::nullopt));
-    }
-    auto inExpr = callExpr("in", std::move(params), getAlias(expr), options);
-    // Translate COMPARE_NOT_IN into NOT(IN()).
-    return (expr.GetExpressionType() == ExpressionType::COMPARE_IN)
-        ? inExpr
-        : callExpr("not", inExpr, std::nullopt, options);
   }
 
+  auto inExpr = callExpr("in", std::move(params), getAlias(expr), options);
+  // Translate COMPARE_NOT_IN into NOT(IN()).
+  return (expr.GetExpressionType() == ExpressionType::COMPARE_IN)
+      ? inExpr
+      : callExpr("not", inExpr, std::nullopt, options);
+}
+
+// Parses an operator expression: array literals, IN / NOT IN, STRUCT_EXTRACT,
+// IS NOT NULL, and the generic operator-to-function fallback.
+core::ExprPtr parseOperatorExpr(
+    ParsedExpression& expr,
+    const ParseOptions& options) {
+  switch (expr.GetExpressionType()) {
+    case ExpressionType::ARRAY_CONSTRUCTOR:
+      return parseArrayConstructorExpr(expr, options);
+    case ExpressionType::COMPARE_IN:
+    case ExpressionType::COMPARE_NOT_IN:
+      return parseInExpr(expr, options);
+    default:
+      break;
+  }
+
+  const auto& operExpr = dynamic_cast<OperatorExpression&>(expr);
   std::vector<core::ExprPtr> params;
   params.reserve(operExpr.children.size());
 
@@ -620,6 +650,68 @@ core::ExprPtr parseCaseExpr(
     return callExpr("if", std::move(params), getAlias(expr), options);
   }
 
+  // Detect simple CASE: DuckDB rewrites `CASE subject WHEN val THEN res` into
+  // a searched CASE where each when_expr is `COMPARE_EQUAL(subject_copy, val)`.
+  // The original form is lost in the AST (DuckDB's CaseExpression has no field
+  // to distinguish the two). We reverse-engineer it by checking whether all
+  // when_exprs are equality comparisons with a structurally identical left-hand
+  // side (the subject), and if so emit "case" instead of "switch". CaseExpr
+  // evaluates the subject exactly once and reuses the cached vector for each
+  // WHEN comparison, avoiding re-evaluation of non-deterministic subjects
+  // (e.g. rand()).
+  //
+  // Note: this detection can also match a user-written searched CASE whose
+  // conditions happen to be `x = v1`, `x = v2`, ... with the same LHS. This
+  // is semantically equivalent to `CASE x WHEN v1 ... WHEN v2 ...` for
+  // deterministic subjects. For non-deterministic subjects the evaluation
+  // count changes from per-branch to once, but writing a searched CASE with
+  // repeated non-deterministic equality checks against the same expression
+  // is unlikely in practice.
+  {
+    bool allEqWithSameSubject = true;
+    const ComparisonExpression* firstComp =
+        dynamic_cast<const ComparisonExpression*>(checks[0].when_expr.get());
+    const std::string subjectStr =
+        (firstComp && firstComp->type == ExpressionType::COMPARE_EQUAL)
+        ? firstComp->left->ToString()
+        : "";
+
+    if (!subjectStr.empty()) {
+      for (size_t i = 1; i < checks.size(); i++) {
+        const auto* comp = dynamic_cast<const ComparisonExpression*>(
+            checks[i].when_expr.get());
+        if (!comp || comp->type != ExpressionType::COMPARE_EQUAL ||
+            comp->left->ToString() != subjectStr) {
+          allEqWithSameSubject = false;
+          break;
+        }
+      }
+    } else {
+      allEqWithSameSubject = false;
+    }
+
+    if (allEqWithSameSubject) {
+      // Emit: case(subject, when_val_0, then_0, when_val_1, then_1,
+      //                       ..., [else])
+      std::vector<core::ExprPtr> inputs;
+      inputs.reserve(checks.size() * 2 + 2);
+      // Subject — parse from the left side of the first condition.
+      inputs.emplace_back(parseExpr(*firstComp->left, options));
+      for (const auto& check : checks) {
+        const auto& comp =
+            dynamic_cast<const ComparisonExpression&>(*check.when_expr);
+        inputs.emplace_back(parseExpr(*comp.right, options)); // WHEN value
+        inputs.emplace_back(parseExpr(*check.then_expr, options)); // THEN
+      }
+      auto elseExpr = parseExpr(*caseExpr.else_expr, options);
+      if (!isNullConstant(elseExpr)) {
+        inputs.emplace_back(elseExpr);
+      }
+      return callExpr("case", std::move(inputs), getAlias(expr), options);
+    }
+  }
+
+  // Searched CASE (or simple CASE that could not be detected): emit "switch".
   std::vector<core::ExprPtr> inputs;
   inputs.reserve(checks.size() * 2 + 1);
   for (auto& check : checks) {

@@ -24,8 +24,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
+#include "velox/dwio/common/FileSink.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive::iceberg;
@@ -55,6 +57,11 @@ class DeletionVectorWriterTest : public ::testing::Test {
 
   void SetUp() override {
     filesystems::registerLocalFileSystem();
+    // writePuffinFile now writes through dwio::common::FileSink::create, which
+    // dispatches by URI scheme to a registered factory. Register the
+    // local-filesystem sink so plain temp-file paths land through the same
+    // dispatch the production binary uses.
+    dwio::common::LocalFileSink::registerFactory();
     pool_ = memory::memoryManager()->addLeafPool("DeletionVectorWriterTest");
   }
 
@@ -252,9 +259,17 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
   writer.addDeletedPositions({3, 7, 42, 100});
   auto blobData = writer.serialize();
 
-  auto tempFile = TempFilePath::create();
-  auto [blobOffset, blobLength] = writePuffinFile(
-      tempFile->getPath(), blobData, "/data/test-data-file.parquet");
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/test-dv.puffin";
+  // FileSink::create dispatches by URI scheme; the registered LocalFileSink
+  // factory writes the puffin bytes to the local path.
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  VELOX_CHECK_NOT_NULL(sink);
+  auto [blobOffset, blobLength] =
+      writePuffinFile(*sink, *pool_, blobData, "/data/test-data-file.parquet");
+  sink->close();
 
   EXPECT_EQ(blobOffset, 4); // After "PUF1" magic.
   EXPECT_EQ(blobLength, blobData.size());
@@ -268,12 +283,12 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
       std::to_string(blobLength);
 
   // Get full file size.
-  std::ifstream in(tempFile->getPath(), std::ios::binary | std::ios::ate);
+  std::ifstream in(puffinPath, std::ios::binary | std::ios::ate);
   auto fileSize = static_cast<uint64_t>(in.tellg());
 
   IcebergDeleteFile dvFile(
       FileContent::kDeletionVector,
-      tempFile->getPath(),
+      puffinPath,
       dwio::common::FileFormat::DWRF,
       4,
       fileSize,

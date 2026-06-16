@@ -61,6 +61,7 @@ TEST_F(TypeOfTest, basic) {
   EXPECT_EQ("varbinary", typeOf(VARBINARY()));
 
   EXPECT_EQ("timestamp", typeOf(TIMESTAMP()));
+  EXPECT_EQ("timestamp utc", typeOf(TIMESTAMP_UTC()));
   EXPECT_EQ("date", typeOf(DATE()));
   EXPECT_EQ("time", typeOf(TIME()));
   EXPECT_EQ("time micro utc", typeOf(TIME_MICRO_UTC()));

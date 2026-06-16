@@ -23,6 +23,34 @@ namespace {
 
 class DecimalRoundTest : public SparkFunctionBaseTest {
  protected:
+  /// Computes result precision and scale for decimal rounding. Matches Spark's
+  /// logic from version 3.3+.
+  static std::pair<uint8_t, uint8_t> getResultPrecisionScale(
+      uint8_t precision,
+      uint8_t scale,
+      int32_t roundScale) {
+    const int32_t integralLeastNumDigits = precision - scale + 1;
+    if (roundScale < 0) {
+      const auto newPrecision = std::max(
+          integralLeastNumDigits,
+          -std::max(
+              roundScale,
+              -static_cast<int32_t>(LongDecimalType::kMaxPrecision)) +
+              1);
+      return {
+          std::min(
+              newPrecision,
+              static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
+          0};
+    }
+    const uint8_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
+    return {
+        std::min(
+            integralLeastNumDigits + newScale,
+            static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
+        newScale};
+  }
+
   core::CallTypedExprPtr createDecimalRound(
       const TypePtr& inputType,
       const std::optional<int32_t>& scaleOpt,
@@ -51,12 +79,11 @@ class DecimalRoundTest : public SparkFunctionBaseTest {
     const auto [inputPrecision, inputScale] =
         getDecimalPrecisionScale(*inputType);
     const auto [resultPrecision, resultScale] =
-        DecimalRoundCallToSpecialForm::getResultPrecisionScale(
-            inputPrecision, inputScale, scale);
+        getResultPrecisionScale(inputPrecision, inputScale, scale);
     return std::make_shared<const core::CallTypedExpr>(
         DECIMAL(resultPrecision, resultScale),
         std::move(inputs),
-        DecimalRoundCallToSpecialForm::kRoundDecimal);
+        kRoundDecimal);
   }
 
   void testDecimalRound(

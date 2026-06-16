@@ -16,7 +16,6 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -177,7 +176,6 @@ void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
 }
 
 void CacheInputStream::loadSync(const Region& region) {
-  process::TraceContext trace("loadSync");
   int64_t hitSize = region.length;
   if (window_.has_value()) {
     const int64_t regionEnd = region.offset + region.length;
@@ -292,7 +290,7 @@ bool CacheInputStream::loadFromSsd(
     file.load(ssdPins, pins);
   } catch (const std::exception& e) {
     LOG(ERROR) << "IOERR: Failed SSD loadSync " << entry.toString() << ' '
-               << e.what() << process::TraceContext::statusLine()
+               << e.what()
                << fmt::format(
                       "stream region {} {}b, start of load {} file {}",
                       region_.offset,

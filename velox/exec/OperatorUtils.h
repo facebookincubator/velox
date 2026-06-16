@@ -161,6 +161,12 @@ void addOperatorRuntimeStats(
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
+/// Sets a runtime metric on operator 'stats', overriding any existing value.
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& stats);
+
 /// Aggregates runtime metrics we want to see per operator rather than per
 /// event.
 void aggregateOperatorRuntimeStats(

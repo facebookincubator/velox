@@ -60,6 +60,21 @@ struct IcebergDeleteFile {
   /// "unassigned" (legacy V1 tables) and disables sequence number filtering.
   int64_t dataSequenceNumber{0};
 
+  /// Byte offset of the deletion-vector blob inside the Puffin file pointed to
+  /// by 'filePath'. Only meaningful for kDeletionVector content. A value of 0
+  /// is allowed (and is the default for non-DV files).
+  int64_t contentOffset{0};
+
+  /// Length in bytes of the deletion-vector blob inside the Puffin file pointed
+  /// to by 'filePath'. Only meaningful for kDeletionVector content. A value of
+  /// 0 means the consumer should fall back to reading until end-of-file.
+  int64_t contentLength{0};
+
+  /// For kDeletionVector content: path of the data file this DV applies to.
+  /// When set (non-empty), the reader can skip this DV for any other data file
+  /// as a belt-and-suspenders pruning step. Empty string disables the filter.
+  std::string referencedDataFile{};
+
   IcebergDeleteFile(
       FileContent _content,
       const std::string& _filePath,
@@ -69,7 +84,10 @@ struct IcebergDeleteFile {
       std::vector<int32_t> _equalityFieldIds = {},
       std::unordered_map<int32_t, std::string> _lowerBounds = {},
       std::unordered_map<int32_t, std::string> _upperBounds = {},
-      int64_t _dataSequenceNumber = 0)
+      int64_t _dataSequenceNumber = 0,
+      int64_t _contentOffset = 0,
+      int64_t _contentLength = 0,
+      std::string _referencedDataFile = {})
       : content(_content),
         filePath(_filePath),
         fileFormat(_fileFormat),
@@ -78,7 +96,10 @@ struct IcebergDeleteFile {
         equalityFieldIds(_equalityFieldIds),
         lowerBounds(_lowerBounds),
         upperBounds(_upperBounds),
-        dataSequenceNumber(_dataSequenceNumber) {}
+        dataSequenceNumber(_dataSequenceNumber),
+        contentOffset(_contentOffset),
+        contentLength(_contentLength),
+        referencedDataFile(std::move(_referencedDataFile)) {}
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
