@@ -391,9 +391,26 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   auto ok3 = compileExecExpr("substr(name, 1, 5)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok3, /*deep=*/true));
 
-  // Bad: start must be constant
-  auto badConst = compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
-  ASSERT_FALSE(canBeEvaluatedByCudf(badConst, /*deep=*/true));
+  // OK: Spark substr registers integer positions and lengths.
+  parse::ParseOptions sparkLiteralOptions;
+  sparkLiteralOptions.parseIntegerAsBigint = false;
+  auto okSparkLiteralArgs = compileExecExpr(
+      "substring(name, 1, 5)", rowType_, execCtx_.get(), sparkLiteralOptions);
+  ASSERT_TRUE(canBeEvaluatedByCudf(okSparkLiteralArgs, /*deep=*/true));
+
+  // OK: Spark substr supports integer start and length columns.
+  auto okStartColumn =
+      compileExecExpr("substr(name, c)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okStartColumn, /*deep=*/true));
+
+  auto okStartAndLengthColumns =
+      compileExecExpr("substring(name, c, c)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okStartAndLengthColumns, /*deep=*/true));
+
+  // Bad: Spark substr accepts integer positions, not bigint positions.
+  auto badBigintStart =
+      compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badBigintStart, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {

@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/NullMask.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Memory.h"
@@ -42,7 +43,6 @@
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
-#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/round.hpp>
@@ -294,35 +294,6 @@ static bool matchCallAgainstSignatures(
     return true;
   }
   return false;
-}
-
-void mergeNullSourceNullsIntoResult(
-    cudf::column& result,
-    cudf::column_view nullSourceColumn,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Merge null-source nulls back only when present to preserve Velox CPU
-  // null propagation semantics without extra mask work unless it is required.
-  VELOX_DCHECK_EQ(result.size(), nullSourceColumn.size());
-  if (!nullSourceColumn.has_nulls()) {
-    return;
-  }
-
-  if (!result.nullable()) {
-    result.set_null_mask(
-        cudf::copy_bitmask(nullSourceColumn, stream, mr),
-        nullSourceColumn.null_count());
-    return;
-  }
-
-  std::vector<cudf::bitmask_type const*> masks{
-      result.view().null_mask(),
-      nullSourceColumn.null_mask(),
-  };
-  std::vector<cudf::size_type> beginBits{0, nullSourceColumn.offset()};
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
-  result.set_null_mask(std::move(nullMask), nullCount);
 }
 
 } // namespace
@@ -2017,6 +1988,20 @@ bool registerCudfFunction(
     return false;
   }
   registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
+  return true;
+}
+
+bool registerCudfFunctionWithPrecedence(
+    const std::string& name,
+    CudfFunctionFactory factory,
+    const std::vector<exec::FunctionSignaturePtr>& signatures,
+    bool overwrite) {
+  auto& registry = getCudfFunctionRegistry();
+  auto& specs = registry[name];
+  if (!overwrite && !specs.empty()) {
+    return false;
+  }
+  specs.insert(specs.begin(), CudfFunctionSpec{std::move(factory), signatures});
   return true;
 }
 
