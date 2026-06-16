@@ -68,6 +68,15 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier ExceptionValues = 2;
   };
 
+  // SubIntSplit integration (re-enabled for NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS;
+  // was commented out by #636):
+  struct SubIntSplit {
+    // Section identifiers equal the section index (0..splitCount-1).
+    // Maximum 64 sections (one per bit of a 64-bit integer).
+    // The identifier is written directly as section_index, so no named
+    // constants are defined here; callers use the index directly.
+  };
+
   struct FrequencyPartition {
     // Partition metadata
     // Eventually we may want to allow for non-power-of-two bit partitions, but
