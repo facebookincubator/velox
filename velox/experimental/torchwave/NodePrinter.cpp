@@ -533,6 +533,11 @@ WithPrintOptions::WithPrintOptions(const std::string& opts)
   threadLocalDefaults() = &options_;
 }
 
+WithPrintOptions::WithPrintOptions(PrintOptions opts)
+    : previous_(threadLocalDefaults()), options_(std::move(opts)) {
+  threadLocalDefaults() = &options_;
+}
+
 WithPrintOptions::~WithPrintOptions() {
   threadLocalDefaults() = previous_;
 }

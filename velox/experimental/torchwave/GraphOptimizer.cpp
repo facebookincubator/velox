@@ -22,66 +22,19 @@ namespace torch::wave {
 
 namespace {
 
-// Returns the dtype that C++ would produce for a binary operation between
-// two types, following the standard arithmetic conversions.
-c10::ScalarType cppPromoteTypes(c10::ScalarType lhs, c10::ScalarType rhs) {
-  bool lhsFloat = c10::isFloatingType(lhs);
-  bool rhsFloat = c10::isFloatingType(rhs);
-  if (lhsFloat && rhsFloat) {
-    return c10::elementSize(lhs) >= c10::elementSize(rhs) ? lhs : rhs;
-  }
-  if (lhsFloat) {
-    return lhs;
-  }
-  if (rhsFloat) {
-    return rhs;
-  }
-  return c10::elementSize(lhs) >= c10::elementSize(rhs) ? lhs : rhs;
-}
-
-// Returns the narrowest float type whose mantissa can represent the given
-// integral type without precision loss.
-c10::ScalarType minFloatForIntegral(c10::ScalarType intType) {
-  switch (intType) {
-    case c10::ScalarType::Bool:
-    case c10::ScalarType::Byte:
-    case c10::ScalarType::Char:
-      // 10-bit mantissa (Half) covers 8-bit integers.
-      return c10::ScalarType::Half;
-    case c10::ScalarType::Short:
-      // 23-bit mantissa (Float) covers 16-bit integers.
-      return c10::ScalarType::Float;
-    case c10::ScalarType::Int:
-    case c10::ScalarType::Long:
-      // 52-bit mantissa (Double) is needed for 32/64-bit integers.
-      return c10::ScalarType::Double;
-    default:
-      return c10::ScalarType::Float;
-  }
-}
-
-// Promotes types for arithmetic so that the result float type is wide enough
-// to represent the integer operand without precision loss.  For example
-// Long * Float promotes to Double because Float's 23-bit mantissa cannot
-// represent all int64 values.
+// Promotes types for tensor-tensor arithmetic to match PyTorch.
 c10::ScalarType arithmeticPromoteTypes(
     c10::ScalarType lhs,
     c10::ScalarType rhs) {
-  auto base = c10::promoteTypes(lhs, rhs);
-  bool lhsInt = c10::isIntegralType(lhs, /*includeBool=*/true);
-  bool rhsInt = c10::isIntegralType(rhs, /*includeBool=*/true);
-  if (lhsInt && !rhsInt) {
-    auto minFloat = minFloatForIntegral(lhs);
-    if (c10::elementSize(minFloat) > c10::elementSize(base)) {
-      return minFloat;
-    }
-  } else if (rhsInt && !lhsInt) {
-    auto minFloat = minFloatForIntegral(rhs);
-    if (c10::elementSize(minFloat) > c10::elementSize(base)) {
-      return minFloat;
-    }
-  }
-  return base;
+  // Match PyTorch's tensor-tensor type promotion exactly. PyTorch promotes a
+  // mix of an integral and a floating tensor to the floating type (e.g.
+  // int64 * float32 -> float32); it does NOT widen to a float that can
+  // represent the integer exactly. An earlier heuristic upcast int*float to
+  // double (via minFloatForIntegral), which diverged from eager: a threshold
+  // like int64*float computed in double lands just above an integer and flips
+  // a `>=` comparison that eager (float32) evaluates as equal.
+  // c10::promoteTypes is the same function PyTorch uses, so use it directly.
+  return c10::promoteTypes(lhs, rhs);
 }
 
 } // namespace
@@ -202,9 +155,19 @@ void Optimizer::visitValue(const nativert::Value* value) {
     if (tensorInputs.size() >= 2) {
       auto pytorchType = arithmeticPromoteTypes(
           tensorInputs[0].second, tensorInputs[1].second);
-      auto cppType =
-          cppPromoteTypes(tensorInputs[0].second, tensorInputs[1].second);
-      if (pytorchType != cppType) {
+      // Cast any operand whose dtype differs from PyTorch's promoted type so
+      // the op is computed in exactly that type (e.g. int64 * float32 -> cast
+      // the int64 to float32, then multiply in float32, matching eager). The
+      // generated elementwise call would otherwise compute a mixed-type product
+      // in the wrong precision.
+      bool needsCast = false;
+      for (const auto& [ordinal, inputDtype] : tensorInputs) {
+        if (inputDtype != pytorchType) {
+          needsCast = true;
+          break;
+        }
+      }
+      if (needsCast) {
         auto* mutableProducer = const_cast<nativert::Node*>(producer);
         for (auto& [ordinal, inputDtype] : tensorInputs) {
           if (inputDtype == pytorchType) {
@@ -213,8 +176,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
           auto* originalValue = mutableProducer->inputs()[ordinal].value;
           auto* castNode = graph_->createNode(
               "torch.ops.aten.to.dtype", {{"self", originalValue}});
-          castNode->addAttribute(
-              {"dtype", std::string(c10::toString(pytorchType))});
+          castNode->addAttribute({"dtype", pytorchType});
           graph_->insertBefore(castNode, mutableProducer);
           auto* castOutput = waveGraph_.newTensorValue(
               castNode,
