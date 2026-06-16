@@ -995,25 +995,31 @@ support appending to existing partitions.</p></td>
 <td><p>True if reading the source file column names as lower case, and planner should guarantee
 the input column name and filter is also lower case to achive case-insensitive read.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.parquet.use-column-names</p></td>
+<tr class="row-odd"><td><p>hive.orc.use-column-names</p></td>
+<td><p>orc_use_column_names</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Map ORC table field names to file field names using names, not indices.</p></td>
+</tr>
+<tr class="row-even"><td><p>hive.parquet.use-column-names</p></td>
 <td><p>parquet_use_column_names</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Map Parquet table field names to file field names using names, not indices.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.parquet.allow-int32-narrowing</p></td>
+<tr class="row-odd"><td><p>hive.parquet.allow-int32-narrowing</p></td>
 <td><p>parquet_allow_int32_narrowing</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Allow reading INT32 Parquet columns as a narrower integer type.</p></td>
 </tr>
-<tr class="row-odd"><td><p>partition_path_as_lower_case</p></td>
+<tr class="row-even"><td><p>partition_path_as_lower_case</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If true, the partition directory will be converted to lowercase when executing a table write operation.</p></td>
 </tr>
-<tr class="row-even"><td><p>allow-null-partition-keys</p></td>
+<tr class="row-odd"><td><p>allow-null-partition-keys</p></td>
 <td><p>allow_null_partition_keys</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
@@ -1022,55 +1028,86 @@ not be null” error message when writing data with null partition key.
 Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
 For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.</p></td>
 </tr>
-<tr class="row-odd"><td><p>ignore_missing_files</p></td>
+<tr class="row-even"><td><p>ignore_missing_files</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, splits that refer to missing files don’t generate errors and are processed as empty splits.</p></td>
 </tr>
-<tr class="row-even"><td><p>max-coalesced-bytes</p></td>
+<tr class="row-odd"><td><p>max-coalesced-bytes</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>128MB</p></td>
 <td><p>Maximum size in bytes to coalesce requests to be fetched in a single request.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-coalesced-distance</p></td>
+<tr class="row-even"><td><p>max-coalesced-distance</p></td>
 <td></td>
 <td><p>capacity</p></td>
 <td><p>512KB</p></td>
 <td><p>Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.</p></td>
 </tr>
-<tr class="row-even"><td><p>load-quantum</p></td>
+<tr class="row-odd"><td><p>prefetch-rowgroups</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>1</p></td>
+<td><p>Number of row groups to prefetch.</p></td>
+</tr>
+<tr class="row-even"><td><p>parallel-unit-load-count</p></td>
+<td><p>parallel_unit_load_count</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Number of units, such as stripes, to load in parallel. 0 disables parallel unit loading.</p></td>
+</tr>
+<tr class="row-odd"><td><p>load-quantum</p></td>
 <td><p>load-quantum</p></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
 <td><p>Define the size of each coalesce load request. E.g. in Parquet scan, if it’s bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk</p></td>
 </tr>
-<tr class="row-odd"><td><p>num-cached-file-handles</p></td>
+<tr class="row-even"><td><p>num-cached-file-handles</p></td>
 <td></td>
 <td><p>integer</p></td>
 <td><p>20000</p></td>
 <td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
 indicates infinite cache capacity.</p></td>
 </tr>
-<tr class="row-even"><td><p>file-handle-cache-enabled</p></td>
+<tr class="row-odd"><td><p>file-handle-cache-enabled</p></td>
 <td></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enables caching of file handles if true. Disables caching if false. File handle cache should be
 disabled if files are not immutable, i.e. file content may change while file path stays the same.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sort-writer-max-output-rows</p></td>
+<tr class="row-even"><td><p>file-handle-expiration-duration-ms</p></td>
+<td></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Expiration time in milliseconds for file handle cache entries. 0 disables time-based expiration.</p></td>
+</tr>
+<tr class="row-odd"><td><p>write-file-create-config</p></td>
+<td></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>Free-form configuration passed to the underlying file system when creating write files. The legacy
+key <code class="docutils literal notranslate"><span class="pre">hive.write_file_create_config</span></code> is also accepted.</p></td>
+</tr>
+<tr class="row-even"><td><p>sort-writer-max-output-rows</p></td>
 <td><p>sort_writer_max_output_rows</p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort-writer-max-output-bytes</p></td>
+<tr class="row-odd"><td><p>sort-writer-max-output-bytes</p></td>
 <td><p>sort_writer_max_output_bytes</p></td>
 <td><p>capacity</p></td>
 <td><p>10MB</p></td>
 <td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
+</tr>
+<tr class="row-even"><td><p>sort-writer-finish-time-slice-limit-ms</p></td>
+<td><p>sort_writer_finish_time_slice_limit_ms</p></td>
+<td><p>integer</p></td>
+<td><p>5000</p></td>
+<td><p>Time slice limit in milliseconds for sort writer finish. 0 means no limit.</p></td>
 </tr>
 <tr class="row-odd"><td><p>hive.parquet.writer.max-target-file-size</p></td>
 <td><p>parquet_writer_max_target_file_size</p></td>
@@ -1105,6 +1142,20 @@ query which has high data locality.</p></td>
 filter execution order is totally determined by the filter type. Otherwise, the file
 reader will dynamically adjust the filter execution order based on the past filter
 execution stats.</p></td>
+</tr>
+<tr class="row-odd"><td><p>index-enabled</p></td>
+<td><p>index_enabled</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Use the cluster index for filter-based row pruning.</p></td>
+</tr>
+<tr class="row-even"><td><p>reader.timestamp-unit</p></td>
+<td><p>reader.timestamp_unit</p></td>
+<td><p>integer</p></td>
+<td><p>3</p></td>
+<td><p>Unit for reading timestamps from files. Supported values are <code class="docutils literal notranslate"><span class="pre">3</span></code> for milliseconds,
+<code class="docutils literal notranslate"><span class="pre">6</span></code> for microseconds, and <code class="docutils literal notranslate"><span class="pre">9</span></code> for nanoseconds. The legacy key
+<code class="docutils literal notranslate"><span class="pre">hive.reader.timestamp-unit</span></code> is also accepted.</p></td>
 </tr>
 <tr class="row-odd"><td><p>reader.timestamp-partition-value-as-local-time</p></td>
 <td><p>reader.timestamp_partition_value_as_local_time</p></td>
