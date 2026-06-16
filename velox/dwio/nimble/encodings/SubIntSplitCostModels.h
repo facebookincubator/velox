@@ -59,7 +59,8 @@ inline constexpr uint8_t storageWidthBits(int bw) noexcept {
 // Union of MetricFlags needed across all cost models below.
 inline MetricFlags allCostModelRequiredFlags() noexcept {
   return MetricFlag::MinMax | MetricFlag::RunStats | MetricFlag::UniqueCount |
-      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram | MetricFlag::DeltaStats;
+      MetricFlag::DominantValue | MetricFlag::BitWidthHistogram | MetricFlag::DeltaStats |
+      MetricFlag::FrequencyTiers;
 }
 
 // Trivial: store each value at its native storage width.
@@ -465,6 +466,49 @@ forCostBits(const SegmentMetrics& m, size_t numValues, int bitWidth) noexcept {
       packedBits;
 }
 
+// FrequencyPartition: tier-based dictionary encoding where the top-K
+// most-frequent values are stored with narrow (1/2-bit) keys. Requires an
+// indexed mode (PerTierBitmaps) that preserves original row order; without an
+// index, materialize() would desync sibling SubIntSplit segments.
+// Returns infinity when the unique count is unknown, capped, or > 1024
+// (FPE's overhead dominates for high-cardinality segments).
+// Required: UniqueCount, FrequencyTiers (topKCoverage populated)
+inline double frequencyPartitionCostBits(
+    const SegmentMetrics& m,
+    size_t numValues,
+    int bitWidth) noexcept {
+  if (numValues == 0 || m.uniqueCount == 0 || m.uniqueCountCapped ||
+      m.uniqueCount > 1024) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  const double n = static_cast<double>(numValues);
+
+  // Tier 0 (1-bit keys, capacity 2): top-2 most frequent values.
+  // Tier 1 (2-bit keys, capacity 4): next tier up to top-8 (proxy).
+  // Remainder: fallback at full storage width.
+  const double tier0Coverage = m.topKCoverage[1]; // top-2 values → 1-bit keys
+  const double tier1Coverage =
+      std::max(0.0, m.topKCoverage[3] - m.topKCoverage[1]); // next → 2-bit
+  const double fallbackCoverage = std::max(0.0, 1.0 - m.topKCoverage[3]);
+
+  const double keyCostBits = tier0Coverage * n * 1.0 +
+      tier1Coverage * n * 2.0 +
+      fallbackCoverage * n * static_cast<double>(storageWidthBits(bitWidth));
+
+  // PerTierBitmaps index: ~1 bit per value per active tier (2 tiers assumed).
+  const double indexBits = 2.0 * n;
+
+  // ~2 tier dictionaries + 2 key streams, each a nested sub-encoding with a
+  // ~7-byte header.
+  constexpr double kTierOverheadBits = 4.0 * 7.0 * 8.0;
+
+  // Outer prefix + numPartitions + nested partitionOffsets/partitionSizes.
+  constexpr double kOuterHeaderBits = (6.0 + 4.0 + 4.0 + 4.0 + 2.0 * 7.0) * 8.0;
+
+  return kOuterHeaderBits + keyCostBits + indexBits + kTierOverheadBits;
+}
+
 // Evaluate all cost models and return the minimum cost in bits.
 // Also sets `bestEncoding` to the winning EncodingType.
 inline double bestCostBits(
@@ -506,6 +550,12 @@ inline double bestCostBits(
       EncodingType::BlockBitPacking);
   consider(deltaCostBits(m, numValues, bitWidth), EncodingType::Delta);
   consider(forCostBits(m, numValues, bitWidth), EncodingType::FOR);
+  // FrequencyPartition is only viable for low-cardinality segments.
+  if (m.uniqueCount > 0 && !m.uniqueCountCapped && m.uniqueCount <= 1024) {
+    consider(
+        frequencyPartitionCostBits(m, numValues, bitWidth),
+        EncodingType::FrequencyPartition);
+  }
   return best;
 }
 
