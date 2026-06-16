@@ -176,8 +176,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
           auto* originalValue = mutableProducer->inputs()[ordinal].value;
           auto* castNode = graph_->createNode(
               "torch.ops.aten.to.dtype", {{"self", originalValue}});
-          castNode->addAttribute(
-              {"dtype", std::string(c10::toString(pytorchType))});
+          castNode->addAttribute({"dtype", pytorchType});
           graph_->insertBefore(castNode, mutableProducer);
           auto* castOutput = waveGraph_.newTensorValue(
               castNode,

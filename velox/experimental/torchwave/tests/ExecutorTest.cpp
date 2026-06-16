@@ -393,6 +393,28 @@ TEST_F(ExecutorTest, custom) {
   runTest(FLAGS_custom + ".pt2", FLAGS_custom + "_results.pt");
 }
 
+// Per-fix isolating tests for the ads-preproc torchwave fixes (each fails when
+// its fix is reverted).  Plain torch.export models exercised via runTest.
+// Mixed-dtype min/max operations: int32 and int64 inputs.
+TEST_F(ExecutorTest, mixedTypeMinMaxTest) {
+  runTest(
+      "data/mixed_type_minmax_test.pt2",
+      "data/mixed_type_minmax_test_results.pt");
+}
+
+// Clone with contiguous memory_format must not be elided.
+TEST_F(ExecutorTest, cloneContiguousTest) {
+  runTest(
+      "data/clone_contiguous_test.pt2",
+      "data/clone_contiguous_test_results.pt");
+}
+
+// Empty-tensor broadcast: [8,1] + [1,0] -> [8,0] without reading null storage.
+TEST_F(ExecutorTest, broadcastEmptyTest) {
+  runTest(
+      "data/broadcast_empty_test.pt2", "data/broadcast_empty_test_results.pt");
+}
+
 } // namespace
 } // namespace torch::wave
 

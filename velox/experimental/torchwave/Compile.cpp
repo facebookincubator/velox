@@ -132,12 +132,11 @@ void listConstantsImpl(
           if (meta && meta->isPresenceTemplateParam(attr.name)) {
             return;
           }
-          TORCH_CHECK(
-              false,
-              "Constant attribute '",
-              attr.name,
-              "' is None in node: ",
-              standaloneToString(n));
+          // A None constant attribute does not occupy a constant slot (e.g.
+          // searchsorted's side/sorter, repeat_interleave's output_size); skip
+          // it rather than erroring, so later nodes' constant indices are not
+          // shifted past the end of the constants vector.
+          return;
         }
         storage.push_back(std::move(iv));
       });
@@ -879,12 +878,30 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   };
 
   for (auto i = 0; i < node->inputs().size(); ++i) {
-    if (meta && meta->inputFromPreviousKernel.has_value() &&
-        i != meta->inputFromPreviousKernel.value()) {
+    bool isPrevKernel = meta && meta->inputFromPreviousKernel.has_value() &&
+        i == meta->inputFromPreviousKernel.value();
+    if (meta && meta->inputFromPreviousKernel.has_value() && !isPrevKernel) {
       continue;
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
+    if (isPrevKernel) {
+      // The producer of an inputFromPreviousKernel argument is always its own
+      // kernel stage: there is a kernel break between it and this op.  Place
+      // its own inputs, then push it directly.  Otherwise, when the producer's
+      // isKernelBreak is false (e.g. a single-block scan head) it returns
+      // kFused and is collected into this op's fusedInputs -- which the
+      // kFusedBreak path below discards, leaving this op reading a buffer its
+      // producer never wrote (an orphaned scan stage).
+      if (producer && !placed_.count(producer) &&
+          !(inputs_ && inputs_->count(producer))) {
+        placeKernels(producer, Context::kFused);
+        if (!placed_.count(producer)) {
+          pushdownFused(producer);
+        }
+      }
+      continue;
+    }
     auto inputKind = inputValue->type().kind();
     bool isScalarSize = isSizeArg(node->inputs()[i].name, meta) &&
         inputKind != nativert::Type::Kind::Tensor &&
@@ -957,6 +974,12 @@ void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
         bool found = false;
         forEachSortedAttribute(
             original, [&](NodeCP, const nativert::Attribute& origAttr) {
+              // None-valued attributes do not occupy a constant slot (see
+              // listConstants / makeConstantIndices), so skip them when
+              // computing the offset of 'attr' among the real constants.
+              if (nativert::constantToIValue(origAttr.value).isNone()) {
+                return;
+              }
               if (origAttr.name == attr.name) {
                 found = true;
               } else if (!found) {
@@ -1887,6 +1910,17 @@ std::string CompileCtx::cudaType(ValueCP value) const {
   }
   switch (kind) {
     case nativert::Type::Kind::SymInt:
+      return "int32_t";
+    case nativert::Type::Kind::None:
+      // Type not set during export.  Recover from TensorMeta if available,
+      // otherwise fall back to int32_t (covers integer scalar attributes
+      // like dim, index whose Kind was not annotated).
+      if (value->id() < types_.types.size() && types_.types[value->id()]) {
+        return cudaTypeString(types_.types[value->id()]->dtype());
+      }
+      LOG(WARNING) << "Value " << value->name()
+                   << " has Kind::None with no TensorMeta, defaulting to "
+                      "int32_t";
       return "int32_t";
     case nativert::Type::Kind::SymFloat:
       return "float";
