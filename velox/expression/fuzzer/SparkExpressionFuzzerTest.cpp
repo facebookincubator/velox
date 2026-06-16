@@ -64,6 +64,8 @@ int main(int argc, char** argv) {
       "regexp_extract",
       // https://github.com/facebookincubator/velox/issues/8438
       "regexp_replace",
+      // https://github.com/facebookincubator/velox/issues/17697
+      "regexp_instr",
       "rlike",
       "chr",
       "replace",

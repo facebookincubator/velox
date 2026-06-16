@@ -30,6 +30,8 @@ namespace facebook::velox::exec {
 
 class WindowPartition {
  public:
+  virtual ~WindowPartition() = default;
+
   /// The WindowPartition is used by the Window operator and WindowFunction
   /// objects to access the underlying data and columns of a partition of rows.
   /// The WindowPartition is constructed by WindowBuild from the input data.
@@ -57,20 +59,21 @@ class WindowPartition {
           sortKeyInfo);
 
   /// Adds remaining input 'rows' for a partial window partition.
-  void addRows(const std::vector<char*>& rows);
+  virtual void addRows(const std::vector<char*>& rows);
 
   /// Removes the first 'numRows' in 'rows_' from a partial window partition
   /// after been processed.
-  void removeProcessedRows(vector_size_t numRows);
+  virtual void removeProcessedRows(vector_size_t numRows);
 
   /// Returns the number of rows in the current WindowPartition.
-  vector_size_t numRows() const {
+  virtual vector_size_t numRows() const {
     return partition_.size();
   }
 
   /// Returns the number of rows in a window partition remaining for data
   /// processing.
-  vector_size_t numRowsForProcessing(vector_size_t partitionOffset) const;
+  virtual vector_size_t numRowsForProcessing(
+      vector_size_t partitionOffset) const;
 
   bool complete() const {
     return complete_;
@@ -88,9 +91,9 @@ class WindowPartition {
   }
 
   /// Copies the values at 'columnIndex' into 'result' (starting at
-  /// 'resultOffset') for the rows at positions in the 'rowNumbers'
-  /// array from the partition input data.
-  void extractColumn(
+  /// 'resultOffset') for the absolute partition row positions in the
+  /// 'rowNumbers' array. Negative row positions are copied as nulls.
+  virtual void extractColumn(
       int32_t columnIndex,
       folly::Range<const vector_size_t*> rowNumbers,
       vector_size_t resultOffset,
@@ -99,7 +102,7 @@ class WindowPartition {
   /// Copies the values at 'columnIndex' into 'result' (starting at
   /// 'resultOffset') for 'numRows' starting at positions 'partitionOffset'
   /// in the partition input data.
-  void extractColumn(
+  virtual void extractColumn(
       int32_t columnIndex,
       vector_size_t partitionOffset,
       vector_size_t numRows,
@@ -109,7 +112,7 @@ class WindowPartition {
   /// Extracts null positions at 'columnIndex' into 'nullsBuffer' for
   /// 'numRows' starting at positions 'partitionOffset' in the partition
   /// input data.
-  void extractNulls(
+  virtual void extractNulls(
       int32_t columnIndex,
       vector_size_t partitionOffset,
       vector_size_t numRows,
@@ -141,7 +144,7 @@ class WindowPartition {
   /// keys). So peerStart and peerEnd of the last row of this call are returned
   /// to be passed as prevPeerStart and prevPeerEnd to the subsequent
   /// call to computePeerBuffers.
-  std::pair<vector_size_t, vector_size_t> computePeerBuffers(
+  virtual std::pair<vector_size_t, vector_size_t> computePeerBuffers(
       vector_size_t start,
       vector_size_t end,
       vector_size_t prevPeerStart,
@@ -161,7 +164,7 @@ class WindowPartition {
   /// @param validFrames SelectivityVector to keep track of valid frames.
   /// This function unselect rows in validFrames where the frame bounds are NaN
   /// that are invalid.
-  void computeKRangeFrameBounds(
+  virtual void computeKRangeFrameBounds(
       bool isStartBound,
       bool isPreceding,
       column_index_t frameColumn,
@@ -170,6 +173,20 @@ class WindowPartition {
       const vector_size_t* rawPeerStarts,
       vector_size_t* rawFrameBounds,
       SelectivityVector& validFrames) const;
+
+ protected:
+  // Constructs a non-RowContainer-backed partition for subclasses that provide
+  // storage-specific accessors.
+  WindowPartition(
+      const std::vector<column_index_t>& inputMapping,
+      const std::vector<std::pair<column_index_t, core::SortOrder>>&
+          sortKeyInfo,
+      bool partial);
+
+  const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo()
+      const {
+    return sortKeyInfo_;
+  }
 
  private:
   WindowPartition(
@@ -181,13 +198,10 @@ class WindowPartition {
       bool partial,
       bool complete);
 
-  bool compareRowsWithSortKeys(const char* lhs, const char* rhs) const;
+  // Adapts RowContainer-backed rows to window partition computations.
+  class RowContainerAccessor;
 
-  // Finds the index of the last peer row in range of ['startRow', 'lastRow'].
-  vector_size_t findPeerRowEndIndex(
-      vector_size_t startRow,
-      vector_size_t lastRow,
-      const std::function<bool(const char*, const char*)>& peerCompare);
+  bool compareRowsWithSortKeys(const char* lhs, const char* rhs) const;
 
   // Removes 'numRows' from 'data_' and 'rows_'.
   void eraseRows(vector_size_t numRows);
@@ -198,45 +212,6 @@ class WindowPartition {
 
   // Removes the previous row from 'data_'.
   void removePreviousRow();
-
-  // Searches for 'currentRow[frameColumn]' in 'orderByColumn' of rows between
-  // 'start' and 'end' in the partition. 'firstMatch' specifies if first or last
-  // row is matched.
-  vector_size_t searchFrameValue(
-      bool firstMatch,
-      vector_size_t start,
-      vector_size_t end,
-      vector_size_t currentRow,
-      column_index_t orderByColumn,
-      column_index_t frameColumn,
-      const CompareFlags& flags) const;
-
-  vector_size_t linearSearchFrameValue(
-      bool firstMatch,
-      vector_size_t start,
-      vector_size_t end,
-      vector_size_t currentRow,
-      column_index_t orderByColumn,
-      column_index_t frameColumn,
-      const CompareFlags& flags) const;
-
-  /// Iterates over 'numBlockRows' and searches frame value for each row.
-  /// @tparam T The C++ type of the order-by and frame columns. When T is float
-  /// or double, this method checks for rows with NaN frame bound(s) but non-NaN
-  /// order-by value. These frames are invalid and we unselect these rows from
-  /// 'validFrames'. If the order-by and frame columns are not of floating-point
-  /// types, T should be set to void.
-  template <typename T>
-  void updateKRangeFrameBounds(
-      bool firstMatch,
-      bool isPreceding,
-      const CompareFlags& flags,
-      vector_size_t startRow,
-      vector_size_t numRows,
-      column_index_t frameColumn,
-      const vector_size_t* rawPeerBounds,
-      vector_size_t* rawFrameBounds,
-      SelectivityVector& validFrames) const;
 
   // Indicates if this is a partial partition for RowStreamWindowBuild
   // processing.

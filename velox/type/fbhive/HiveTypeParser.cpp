@@ -99,6 +99,13 @@ Result HiveTypeParser::parseType() {
   VELOX_CHECK(!nt.isEOS(), "Unexpected end of stream parsing type!!!");
 
   if (!nt.isValidType()) {
+    // An identifier that is not a builtin keyword may name a registered custom
+    // type (e.g. Presto's JSON). Resolve it generically through the custom-type
+    // registry before failing.
+    if (auto customType =
+            getCustomType(std::string(nt.value), /*parameters=*/{})) {
+      return Result{customType};
+    }
     VELOX_FAIL(
         "Unexpected token {} at {}. typeKind = {}",
         nt.value,

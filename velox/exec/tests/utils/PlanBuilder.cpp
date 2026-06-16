@@ -2737,6 +2737,9 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
         filter_, inputType, planBuilder_.options_, planBuilder_.pool_);
   }
 
+  auto forwardedProbeColumnFields = PlanBuilder::fields(
+      planBuilder_.planNode_->outputType(), forwardedProbeColumns_);
+
   return std::make_shared<core::IndexLookupJoinNode>(
       id,
       joinType_,
@@ -2748,6 +2751,7 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       splitOutput_,
       std::move(planBuilder_.planNode_),
       indexSource_,
-      std::move(outputType));
+      std::move(outputType),
+      std::move(forwardedProbeColumnFields));
 }
 } // namespace facebook::velox::exec::test

@@ -132,12 +132,11 @@ void listConstantsImpl(
           if (meta && meta->isPresenceTemplateParam(attr.name)) {
             return;
           }
-          TORCH_CHECK(
-              false,
-              "Constant attribute '",
-              attr.name,
-              "' is None in node: ",
-              n->toString());
+          // A None constant attribute does not occupy a constant slot (e.g.
+          // searchsorted's side/sorter, repeat_interleave's output_size); skip
+          // it rather than erroring, so later nodes' constant indices are not
+          // shifted past the end of the constants vector.
+          return;
         }
         storage.push_back(std::move(iv));
       });
@@ -739,23 +738,32 @@ void CompileCtx::setGridChoice(ProjectOperation* projectOp) {
   if (projectOp->grid_.empty() || projectOp->singleBlockGrid_.empty()) {
     return;
   }
-  auto& grid = projectOp->grid_;
-  auto& sbGrid = projectOp->singleBlockGrid_;
-  for (size_t i = 0; i < grid.size() && i < sbGrid.size(); ++i) {
-    for (size_t j = 0; j < grid[i].size() && j < sbGrid[i].size(); ++j) {
-      auto& gl = grid[i][j];
-      auto& sl = sbGrid[i][j];
-      if (gl.standalone && sl.standalone) {
-        TORCH_CHECK(
-            gl.standalone == sl.standalone,
-            "Grid and singleBlockGrid have standalone launches with different nodes");
-      } else if (gl.standalone || sl.standalone) {
-        TORCH_CHECK(
-            false,
-            "Grid and singleBlockGrid mismatch: one has a standalone and the other has a kernel");
-      } else if (gl.op && sl.op) {
-        gl.op->setIsGridChoice(true);
-        sl.op->setIsGridChoice(true);
+  // grid_ and singleBlockGrid_ are two complete alternative plans for the same
+  // ProjectOp; at runtime the executor picks one wholesale based on the
+  // grid-choice kernel's element count (see CompiledOp.cpp). Launches within a
+  // parallel step are data-independent, so their relative order can differ
+  // between the two grids (e.g. fusion can reorder a standalone view relative
+  // to sibling kernels). Match the grid-choice kernel across the two grids by
+  // node identity -- the original root node each kernel op was built from --
+  // rather than by position, which would spuriously flag a standalone in one
+  // grid against a kernel in the other when the orders diverge.
+  std::unordered_map<NodeCP, KernelOperation*> sbKernelByRoot;
+  for (auto& step : projectOp->singleBlockGrid_) {
+    for (auto& launch : step) {
+      if (launch.op && launch.op->expr()) {
+        sbKernelByRoot[originalFromVariant(launch.op->expr())] = launch.op;
+      }
+    }
+  }
+  for (auto& step : projectOp->grid_) {
+    for (auto& launch : step) {
+      if (!launch.op || !launch.op->expr()) {
+        continue;
+      }
+      auto it = sbKernelByRoot.find(originalFromVariant(launch.op->expr()));
+      if (it != sbKernelByRoot.end()) {
+        launch.op->setIsGridChoice(true);
+        it->second->setIsGridChoice(true);
         return;
       }
     }
@@ -870,12 +878,30 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   };
 
   for (auto i = 0; i < node->inputs().size(); ++i) {
-    if (meta && meta->inputFromPreviousKernel.has_value() &&
-        i != meta->inputFromPreviousKernel.value()) {
+    bool isPrevKernel = meta && meta->inputFromPreviousKernel.has_value() &&
+        i == meta->inputFromPreviousKernel.value();
+    if (meta && meta->inputFromPreviousKernel.has_value() && !isPrevKernel) {
       continue;
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
+    if (isPrevKernel) {
+      // The producer of an inputFromPreviousKernel argument is always its own
+      // kernel stage: there is a kernel break between it and this op.  Place
+      // its own inputs, then push it directly.  Otherwise, when the producer's
+      // isKernelBreak is false (e.g. a single-block scan head) it returns
+      // kFused and is collected into this op's fusedInputs -- which the
+      // kFusedBreak path below discards, leaving this op reading a buffer its
+      // producer never wrote (an orphaned scan stage).
+      if (producer && !placed_.count(producer) &&
+          !(inputs_ && inputs_->count(producer))) {
+        placeKernels(producer, Context::kFused);
+        if (!placed_.count(producer)) {
+          pushdownFused(producer);
+        }
+      }
+      continue;
+    }
     auto inputKind = inputValue->type().kind();
     bool isScalarSize = isSizeArg(node->inputs()[i].name, meta) &&
         inputKind != nativert::Type::Kind::Tensor &&
@@ -930,7 +956,7 @@ void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
               "Constant attribute '",
               attr.name,
               "' is None in node: ",
-              n->toString());
+              standaloneToString(n));
         }
 
         NodeCP original = originalFromVariant(n);
@@ -948,6 +974,12 @@ void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
         bool found = false;
         forEachSortedAttribute(
             original, [&](NodeCP, const nativert::Attribute& origAttr) {
+              // None-valued attributes do not occupy a constant slot (see
+              // listConstants / makeConstantIndices), so skip them when
+              // computing the offset of 'attr' among the real constants.
+              if (nativert::constantToIValue(origAttr.value).isNone()) {
+                return;
+              }
               if (origAttr.name == attr.name) {
                 found = true;
               } else if (!found) {
@@ -1522,6 +1554,11 @@ std::string CompileCtx::declareAttributes(
 
 std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
   std::string result;
+  // Schema-less scalar ops (isScalarElementwise) have no presence template
+  // params.
+  if (!meta.functionSchema) {
+    return result;
+  }
   const auto& schemaArgs = meta.functionSchema->arguments();
   const auto& nodeInputs = node->inputs();
   for (size_t i = 0; i < schemaArgs.size(); ++i) {
@@ -1699,9 +1736,19 @@ std::string CompileCtx::makeCall(
     } else {
       ss << outputs[i].variable;
     }
-    if (outputs[i].value && i < meta->returnMeta.size() &&
-        (meta->returnMeta[i].shapeSetOnDevice ||
-         meta->returnMeta[i].neededOnHost)) {
+    // A naked scalar that is this kernel's top-level output (e.g. sym_size /
+    // numel returned to host or consumed by another kernel as a host param)
+    // must be read back into the frame between launches. Mirrors the dynamic
+    // neededOnHost decision in KernelOperation::setOutputs (node == expr_).
+    // Fused interior uses emit to a register and do not reach this branch.
+    bool nakedScalarOutput = outputs[i].value && op.expr() == node &&
+        outputs[i].value->type().kind() != nativert::Type::Kind::Tensor &&
+        outputs[i].value->type().kind() != nativert::Type::Kind::TensorList;
+    if (outputs[i].value &&
+        ((i < meta->returnMeta.size() &&
+          (meta->returnMeta[i].shapeSetOnDevice ||
+           meta->returnMeta[i].neededOnHost)) ||
+         nakedScalarOutput)) {
       waveGraph_.addSyncableValueId(outputs[i].value->id());
     }
   }
@@ -1864,6 +1911,17 @@ std::string CompileCtx::cudaType(ValueCP value) const {
   switch (kind) {
     case nativert::Type::Kind::SymInt:
       return "int32_t";
+    case nativert::Type::Kind::None:
+      // Type not set during export.  Recover from TensorMeta if available,
+      // otherwise fall back to int32_t (covers integer scalar attributes
+      // like dim, index whose Kind was not annotated).
+      if (value->id() < types_.types.size() && types_.types[value->id()]) {
+        return cudaTypeString(types_.types[value->id()]->dtype());
+      }
+      LOG(WARNING) << "Value " << value->name()
+                   << " has Kind::None with no TensorMeta, defaulting to "
+                      "int32_t";
+      return "int32_t";
     case nativert::Type::Kind::SymFloat:
       return "float";
     case nativert::Type::Kind::SymBool:
@@ -1988,6 +2046,14 @@ bool isAllViews(
 }
 
 std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
+  // ProjectOperations are deduplicated only within a single compiled node.
+  // opStorage_ (which owns the ProjectOperations) is moved into this node's
+  // CompositeKernel at the end of this function, so any ProjectOperation*
+  // recorded in projectOps_ from a previous node points into a kernel that no
+  // longer belongs to the node being compiled. Reusing it here would launch an
+  // opcode whose case is absent from this node's kernel. Clear the map so dedup
+  // never crosses node boundaries.
+  projectOps_.clear();
   placedBeforeNode_ = placed_;
   inputs_ = &project.inputs();
   currentNodeId_ = project.id();

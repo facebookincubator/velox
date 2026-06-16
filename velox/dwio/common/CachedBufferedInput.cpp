@@ -18,7 +18,6 @@
 #include "folly/io/Cursor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 
@@ -329,6 +328,7 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
           uint64_t /*offset*/,
           const std::vector<char>& /*ranges*/) { ends.push_back(end); });
   ioStatistics_->readGap().merge(stats.gaps);
+  ioStatistics_->incDuplicateRead(stats.duplicateRegions, stats.duplicateBytes);
   return ends;
 }
 
@@ -583,7 +583,6 @@ void CachedBufferedInput::readRegions(
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
             [pendingLoad = load, ssdSavable = options_.cacheable()]() {
-              process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
       }

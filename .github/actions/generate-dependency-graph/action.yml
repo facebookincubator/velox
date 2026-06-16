@@ -34,21 +34,24 @@ runs:
       shell: bash
       env:
         MAKEFLAGS: NUM_THREADS=8
+        # Mirror the adapters job: build FAISS from source instead of
+        # resolving the system-installed package. The system FAISS
+        # config (/usr/local/share/faiss/faiss-config.cmake) sets the
+        # link interface of the imported `faiss` target to include
+        # OpenMP::OpenMP_CXX without ever calling find_package(OpenMP)
+        # to define it, so a SYSTEM resolution fails the configure.
+        faiss_SOURCE: BUNDLED
       run: |
+        # The adapters image exports CC/CXX pointing at GCC 12 (used
+        # during image build); without an explicit override the
+        # configure runs as GCC 12, which mismatches the actual
+        # adapters build's GCC 14. Mirror that setup so cmake feature
+        # detection sees the same toolchain.
         source /opt/rh/gcc-toolset-14/enable
-        cmake -B _build/release -GNinja \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-          -DVELOX_MONO_LIBRARY=OFF \
-          -DVELOX_ENABLE_BENCHMARKS=ON \
-          -DVELOX_ENABLE_EXAMPLES=ON \
-          -DVELOX_ENABLE_ARROW=ON \
-          -DVELOX_ENABLE_GEO=ON \
-          -DVELOX_ENABLE_PARQUET=ON \
-          -DVELOX_ENABLE_HDFS=ON \
-          -DVELOX_ENABLE_S3=ON \
-          -DVELOX_ENABLE_GCS=ON \
-          -DVELOX_ENABLE_ABFS=ON \
-          -DVELOX_ENABLE_WAVE=ON
+        export CC=gcc CXX=g++
+        # Flag set lives in .github/scripts/cmake-flags.sh.
+        BUILD_PROFILE=dep-graph source .github/scripts/cmake-flags.sh
+        cmake -B _build/release -GNinja "${CMAKE_FLAGS[@]}"
 
     - name: Generate dependency graph
       shell: bash

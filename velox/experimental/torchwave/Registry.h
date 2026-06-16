@@ -146,6 +146,18 @@ struct Metadata {
 
   std::vector<ArgumentMeta> argumentMeta;
 
+  /// Positional argument names for schema-less ops (no functionSchema, e.g. the
+  /// Python _operator.* scalar ops). nativert splits a node's operands across
+  /// inputs() (symbolic operands, by name) and attributes() (constant literals,
+  /// by name); neither container preserves positional order, only the names do.
+  /// forArguments binds each position to the operand carrying argumentNames[i].
+  /// These are the Python signature parameter names ("a", "b", ... for the
+  /// _operator builtins). A registered name absent from the node, or an operand
+  /// the node carries that is not a registered name, is a fatal error, so an op
+  /// whose serialized argument names differ from those registered fails loudly
+  /// rather than silently miscomputing. Empty for schema-backed ops.
+  std::vector<std::string> argumentNames;
+
   std::vector<ArgumentMeta> returnMeta;
 
   /// True if all values to be computed by a block must be ready before calling.
@@ -180,6 +192,14 @@ struct Metadata {
   /// a standalone rather than a fused op.
   bool isMetadataGetter{false};
 
+  /// If true, this is a scalar-producing elementwise op (e.g. the Python
+  /// _operator.* scalar arithmetic, or sym_size / sym_numel). Such ops have no
+  /// FunctionSchema; their operands and result are naked scalars (SymInt /
+  /// SymFloat), not tensors. When the top node of an elementwise kernel has
+  /// this flag, the elementwise loop runs a single iteration and assigns the
+  /// result to a scalar parameter instead of a tensor element.
+  bool isScalarElementwise{false};
+
   /// Translates a single node to a sequence of nodes that must be separated by
   /// kernel boundaries.
   std::function<nativert::Node*(NodeCP single, WaveGraph* waveGraph)>
@@ -211,8 +231,22 @@ struct Metadata {
 
   bool isStandalone(NodeCP node, const ValueTypes& types) const;
 
-  /// Unit cost for scheduling, e.g. proportional block assignment.
+  /// Default per-node cost for scheduling. Used by unitCost() when
+  /// costFunction is not set.
   float cost{1.0f};
+
+  /// If set, returns the per-element cost for this node given its metadata.
+  /// Takes precedence over 'cost' when computing kernel op costs.
+  std::function<float(NodeCP, const Metadata&)> costFunction;
+
+  /// Returns the per-element cost for 'node'. If costFunction is set, calls
+  /// it; otherwise returns 'cost'.
+  float unitCost(NodeCP node) const {
+    if (costFunction) {
+      return costFunction(node, *this);
+    }
+    return cost;
+  }
 
   /// If set, the output is a view over the argument at this ordinal.
   std::optional<int32_t> viewOfArg;
@@ -416,13 +450,20 @@ class Registry {
 /// Fluent builder for constructing and registering Metadata entries.
 class MetadataBuilder {
  public:
+  /// Tag for registering an op that has no FunctionSchema (e.g. the Python
+  /// _operator.* scalar ops). The caller must set numArgs / argumentMeta /
+  /// returnMeta explicitly since they cannot be derived from a schema.
+  struct NoSchema {};
+
   explicit MetadataBuilder(std::string_view qualifiedName);
   explicit MetadataBuilder(std::unique_ptr<c10::FunctionSchema> schema);
+  MetadataBuilder(std::string_view qualifiedName, NoSchema);
 
   MetadataBuilder& sizeShortcut(SizeShortcut shortcut);
   MetadataBuilder& sizeOrdinal(std::vector<int32_t> ordinal);
   MetadataBuilder& sizeArgsList(std::vector<bool> isList);
   MetadataBuilder& argumentMeta(std::vector<ArgumentMeta> meta);
+  MetadataBuilder& argumentNames(std::vector<std::string> names);
   MetadataBuilder& defaultInputMeta();
   MetadataBuilder& returnMeta(std::vector<ArgumentMeta> meta);
   MetadataBuilder& defaultOutputMeta();
@@ -444,6 +485,8 @@ class MetadataBuilder {
   MetadataBuilder& isStandaloneFunc(
       std::function<bool(NodeCP, const ValueTypes&)> func);
   MetadataBuilder& cost(float val);
+  MetadataBuilder& costFunction(
+      std::function<float(NodeCP, const Metadata&)> func);
   MetadataBuilder& viewOfArg(int32_t ordinal);
   MetadataBuilder& shapeAttr(std::string name);
   MetadataBuilder& ignoreAttrs(std::vector<std::string> attrs);
@@ -488,6 +531,7 @@ class MetadataBuilder {
   MetadataBuilder& hasIdxArg(bool val = true);
   MetadataBuilder& hasSizeArg(bool val = true);
   MetadataBuilder& hasBlockInfo(bool val = true);
+  MetadataBuilder& isScalarElementwise(bool val = true);
 
   Metadata build();
   void registerOp();

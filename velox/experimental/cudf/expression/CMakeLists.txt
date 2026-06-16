@@ -14,14 +14,18 @@
 
 add_library(
   velox_cudf_expression
+  ArrayAccessFunctions.cpp
   AstExpression.cpp
+  CommonFunctions.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernels.cu
-  DecimalTypeCheck.cpp
   ExpressionEvaluator.cpp
   JitExpression.cpp
   PrestoFunctions.cpp
+  prestosql/DatePlusIntervalFunction.cpp
   SparkFunctions.cpp
+  sparksql/DateAddFunction.cpp
+  sparksql/HashFunction.cpp
   SubfieldFiltersToAst.cpp
 )
 

@@ -17,7 +17,6 @@ include(FindPackageHandleStandardArgs)
 find_library(ARROW_LIB libarrow.a)
 find_library(ARROW_TESTING_LIB libarrow_testing.a)
 find_path(ARROW_INCLUDE_PATH arrow/api.h)
-find_package(Thrift)
 
 find_package_handle_standard_args(
   Arrow
@@ -25,24 +24,20 @@ find_package_handle_standard_args(
   ARROW_LIB
   ARROW_TESTING_LIB
   ARROW_INCLUDE_PATH
-  Thrift_FOUND
 )
 
 # Only add the libraries once.
 if(Arrow_FOUND AND NOT TARGET arrow)
   add_library(arrow STATIC IMPORTED GLOBAL)
   add_library(arrow_testing STATIC IMPORTED GLOBAL)
-  add_library(thrift ALIAS thrift::thrift)
 
   set_target_properties(
     arrow
     arrow_testing
     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${ARROW_INCLUDE_PATH}
   )
-  set_target_properties(
-    arrow
-    PROPERTIES IMPORTED_LOCATION ${ARROW_LIB} INTERFACE_LINK_LIBRARIES thrift
-  )
+  set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIB})
+
   # arrow_testing's gtest_util.cc.o references arrow::ipc::internal::json::*
   # and arrow::Initialize symbols defined in libarrow.a. We need libarrow.a
   # to appear AFTER libarrow_testing.a in the link line so ld --as-needed

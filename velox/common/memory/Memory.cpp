@@ -274,7 +274,7 @@ std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
       std::move(reclaimer),
       options);
   VELOX_CHECK_EQ(pool->capacity(), 0);
-  arbitrator_->addPool(pool);
+  pool->arbitrator()->addPool(pool);
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
   return pool;
@@ -285,6 +285,36 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     int64_t maxCapacity,
     std::unique_ptr<MemoryReclaimer> reclaimer,
     const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+  return addRootPoolImpl(
+      name,
+      maxCapacity,
+      std::move(reclaimer),
+      poolDebugOpts,
+      /*customAllocator=*/nullptr,
+      /*customArbitrator=*/nullptr);
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addCustomRootPool(
+    const std::string& name,
+    std::shared_ptr<CustomMemoryResource> resource,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+  VELOX_USER_CHECK_NOT_NULL(resource);
+  return addRootPoolImpl(
+      name,
+      resource->maxCapacity(),
+      resource->newReclaimer(),
+      poolDebugOpts,
+      resource->allocator(),
+      resource->arbitrator());
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addRootPoolImpl(
+    const std::string& name,
+    int64_t maxCapacity,
+    std::unique_ptr<MemoryReclaimer> reclaimer,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
+    MemoryAllocator* customAllocator,
+    MemoryArbitrator* customArbitrator) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -298,6 +328,8 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
   options.getPreferredSize = getPreferredSize_;
   options.debugOptions = poolDebugOpts;
+  options.customAllocator = customAllocator;
+  options.customArbitrator = customArbitrator;
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -308,7 +340,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       }
       pools_.emplace(poolName, pool);
     } catch (const VeloxRuntimeError&) {
-      arbitrator_->removePool(pool.get());
+      pool->arbitrator()->removePool(pool.get());
       throw;
     }
   }
@@ -340,7 +372,7 @@ uint64_t MemoryManager::shrinkPools(
 void MemoryManager::dropPool(MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(pool);
   VELOX_DCHECK_EQ(pool->reservedBytes(), 0);
-  arbitrator_->removePool(pool);
+  pool->arbitrator()->removePool(pool);
   if (disableMemoryPoolTracking_) {
     return;
   }

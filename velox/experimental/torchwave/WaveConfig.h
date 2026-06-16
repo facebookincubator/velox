@@ -38,6 +38,7 @@ struct WaveConfig {
   static constexpr int32_t kLaunches = 2;
   static constexpr int32_t kTensors = 4;
   static constexpr int32_t kFrame = 8;
+  static constexpr int32_t kTiming = 16;
 
   int32_t blockSize{256};
   bool allStandalone{false};
@@ -109,6 +110,10 @@ struct WaveConfig {
   // Each kernel op runs as a standalone invocation so device-side errors
   // can be attributed to a single op.
   bool debugSingleOps{false};
+
+  // If true, adjust per-op cost multipliers after each execution based on
+  // actual thread block clock distribution.
+  bool autoAdjustCost{false};
 
   /// Not thread-safe. All mutations must happen before concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
