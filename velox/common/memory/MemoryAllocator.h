@@ -19,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -249,6 +250,11 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     /// to std::malloc(). If zero, no allocations are delegated to malloc
     /// and 'smallAllocationReservePct' is automatically set to 0.
     int32_t maxMallocBytes{3072};
+
+    /// If set, invoked with the address and byte length of each region
+    /// MmapAllocator maps, before its pages are faulted in.
+    /// Not supported with 'useMmapArena'.
+    std::function<void(void* address, size_t bytes)> onMap{nullptr};
   };
 
   /// Defines the memory allocator kinds.
@@ -568,22 +574,6 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   // If 'data' is sufficiently large, enables/disables adaptive  huge pages
   // for the address range.
   void useHugePages(const ContiguousAllocation& data, bool enable);
-
-  // Allocation's run list is private and only mutable by friended allocators.
-  // These give every MemoryAllocator subclass a controlled seam to that state
-  // without each having to be friended individually. Appends a run of
-  // 'numPages' starting at 'address' to 'allocation'.
-  static void appendToAllocation(
-      Allocation& allocation,
-      uint8_t* address,
-      MachinePageCount numPages) {
-    allocation.append(address, numPages);
-  }
-
-  // Resets 'allocation' to empty, dropping its runs without freeing them.
-  static void clearAllocation(Allocation& allocation) {
-    allocation.clear();
-  }
 
   // The machine page counts corresponding to different sizes in order
   // of increasing size.

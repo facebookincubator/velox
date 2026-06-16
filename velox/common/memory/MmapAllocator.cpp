@@ -28,6 +28,7 @@ MmapAllocator::MmapAllocator(const Options& options)
     : MemoryAllocator(options.largestSizeClass),
       kind_(MemoryAllocator::Kind::kMmap),
       useMmapArena_(options.useMmapArena),
+      onMap_(options.onMap),
       maxMallocBytes_(options.maxMallocBytes),
       mallocReservedBytes_(
           maxMallocBytes_ == 0
@@ -40,6 +41,12 @@ MmapAllocator::MmapAllocator(const Options& options)
               64 * sizeClassSizes_.back())) {
   for (const auto& size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
+  }
+  // Size-class pages are not faulted until allocation, so bind here.
+  if (onMap_) {
+    for (const auto& sizeClass : sizeClasses_) {
+      onMap_(sizeClass->address(), sizeClass->byteSize());
+    }
   }
 
   if (useMmapArena_) {
@@ -355,6 +362,9 @@ bool MmapAllocator::allocateContiguousImpl(
     // be mapped.
     rollbackAllocation(numToMap);
     return false;
+  }
+  if (onMap_) {
+    onMap_(data, AllocationTraits::pageBytes(maxPages));
   }
   allocation.set(
       data,

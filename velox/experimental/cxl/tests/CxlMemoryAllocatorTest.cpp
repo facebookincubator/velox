@@ -25,6 +25,8 @@
 namespace facebook::velox::cxl {
 namespace {
 
+using namespace facebook::velox::memory;
+
 // A node id guaranteed to be out of range on any host: one past the highest
 // node libnuma reports.
 int32_t outOfRangeNode() {
