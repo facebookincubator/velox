@@ -80,6 +80,15 @@ DecimalSumStateColumns deserializeDecimalSumState(
 
   cudf::strings_column_view strings(stateCol);
 
+  auto const payloadSize = strings.chars_size(stream);
+  auto const expectedPayloadSize =
+      static_cast<int64_t>(numRows) * detail::kDecimalSumStateSize;
+  VELOX_CHECK(
+      payloadSize == expectedPayloadSize,
+      "Decimal sum state requires payload size {} (got {})",
+      expectedPayloadSize,
+      payloadSize);
+
   auto offsetsView = strings.offsets();
   auto charsPtr = reinterpret_cast<const uint8_t*>(strings.chars_begin(stream));
 
