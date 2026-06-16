@@ -282,7 +282,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
             std::pair{EncodingType::SimdForBitpack, 0.9f},
             std::pair{EncodingType::BlockBitPacking, 0.9f},
             std::pair{EncodingType::Delta, 0.85f},
-            std::pair{EncodingType::FOR, 0.85f}}) {
+            std::pair{EncodingType::FOR, 0.85f},
+            std::pair{EncodingType::FrequencyPartition, 0.85f}}) {
         nestedEncodingReadFactors.push_back(pair);
       }
     }
