@@ -1223,12 +1223,13 @@ TEST_F(CudfWindowTest, sumRangeWithDuplicateSortKeys) {
           makeFlatVector<int64_t>({10, 20, 30}),
       });
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .window({"sum(v) over (order by k "
-                           "range between unbounded preceding and current row) as s"})
-                  .orderBy({"k ASC NULLS LAST"}, false)
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (order by k "
+                   "range between unbounded preceding and current row) as s"})
+          .orderBy({"k ASC NULLS LAST"}, false)
+          .planNode();
 
   auto expected = makeRowVector(
       {"k", "v", "s"},
@@ -1417,7 +1418,8 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
           .copyResults(pool()),
       "Replacement with cuDF operator failed");
 
-  // Supported: RANGE UNBOUNDED PRECEDING to CURRENT ROW (peer groups by sort key)
+  // Supported: RANGE UNBOUNDED PRECEDING to CURRENT ROW (peer groups by sort
+  // key)
   auto plan1 =
       PlanBuilder()
           .values({data})

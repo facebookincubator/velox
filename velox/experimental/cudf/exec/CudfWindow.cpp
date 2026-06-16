@@ -596,8 +596,8 @@ RowVectorPtr CudfWindow::doGetOutput() {
     } else if (baseName == "first_value" || baseName == "last_value") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
-      windowResultCols.push_back(
-          computeNthValueColumn(partKeys, sortedView, inputCol, func, baseName, stream_));
+      windowResultCols.push_back(computeNthValueColumn(
+          partKeys, sortedView, inputCol, func, baseName, stream_));
     } else if (
         baseName == "sum" || baseName == "min" || baseName == "max" ||
         baseName == "count" || baseName == "avg") {
@@ -607,7 +607,13 @@ RowVectorPtr CudfWindow::doGetOutput() {
       bool isCountStar = (baseName == "count" && inputColIdx < 0);
       auto inputCol = sortedView.column(isCountStar ? 0 : inputColIdx);
       windowResultCols.push_back(computeAggregateColumn(
-          partKeys, sortedView, inputCol, func, baseName, isCountStar, stream_));
+          partKeys,
+          sortedView,
+          inputCol,
+          func,
+          baseName,
+          isCountStar,
+          stream_));
     } else {
       VELOX_FAIL("Unsupported window function for cudf: {}", baseName);
     }
