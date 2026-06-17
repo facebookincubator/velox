@@ -1158,7 +1158,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   auto flushPolicyFactory = []() {
     return std::make_unique<parquet::DefaultFlushPolicy>(1234, 0);
   };
-  auto writeOptions = std::make_shared<parquet::WriterOptions>();
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
   writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,

@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/parquet/writer/WriterConfig.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -43,15 +43,13 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     // - Timestamps must NOT be adjusted to UTC; written as-is without
     //   timezone conversion (empty string disables conversion).
     //
-    // Settings are routed through serdeParameters to avoid pulling in
-    // parquet-specific headers. Keys must match
-    // kParquetSerdeTimestampUnit and kParquetSerdeTimestampTimezone in
-    // velox/dwio/parquet/writer/Writer.h. The value "6" represents
-    // microseconds (TimestampPrecision::kMicroseconds).
-    options.serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit] =
-        "6";
-    options.serdeParameters
-        [parquet::WriterConfig::kParquetSerdeTimestampTimezone] = "";
+    // Settings are routed through serdeParameters so the common writer options
+    // can carry them before Parquet format options are created. The value "6"
+    // represents microseconds (TimestampPrecision::kMicroseconds).
+    options.serdeParameters[std::string(
+        parquet::ParquetConfig::kWriterSerdeTimestampUnit)] = "6";
+    options.serdeParameters[std::string(
+        parquet::ParquetConfig::kWriterSerdeTimestampTimezone)] = "";
   }
 };
 

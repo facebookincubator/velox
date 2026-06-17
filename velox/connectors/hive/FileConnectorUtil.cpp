@@ -16,7 +16,6 @@
 
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
-#include <string_view>
 #include <unordered_map>
 
 #include "velox/common/config/Config.h"
@@ -27,18 +26,6 @@
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
-
-namespace {
-
-// Returns configs whose keys start with 'prefix', stripping that prefix from
-// the returned config keys.
-config::ConfigBase filterConfigByPrefix(
-    const config::ConfigBase& config,
-    std::string_view prefix) {
-  return config::ConfigBase(config.rawConfigsWithPrefix(prefix));
-}
-
-} // namespace
 
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -155,11 +142,11 @@ void configureReaderOptions(
   const auto connectorFormatPrefix = formatPrefix.empty()
       ? std::string()
       : std::string(fileConfig->connectorConfigPrefix()) + formatPrefix;
-  auto formatConnectorConfig =
-      filterConfigByPrefix(*fileConfig->config(), connectorFormatPrefix);
-  auto formatSessionProperties = filterConfigByPrefix(
-      *sessionProperties,
-      dwio::common::formatConfigPrefix(fileSplit->fileFormat, "_"));
+  auto formatConnectorConfig = config::ConfigBase(
+      fileConfig->config()->rawConfigsWithPrefix(connectorFormatPrefix));
+  auto formatSessionProperties =
+      config::ConfigBase(sessionProperties->rawConfigsWithPrefix(
+          dwio::common::formatConfigPrefix(fileSplit->fileFormat, "_")));
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(

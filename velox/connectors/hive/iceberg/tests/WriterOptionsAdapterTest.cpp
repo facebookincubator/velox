@@ -19,7 +19,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/parquet/writer/WriterConfig.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
@@ -86,12 +86,12 @@ TEST(WriterOptionsAdapterTest, parquetPreConfigsSetsTimestampSerdeParameters) {
   adapter->applyPreConfigs(options);
 
   EXPECT_EQ(
-      options
-          .serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit],
+      options.serdeParameters[std::string(
+          parquet::ParquetConfig::kWriterSerdeTimestampUnit)],
       "6");
   EXPECT_EQ(
-      options.serdeParameters
-          [parquet::WriterConfig::kParquetSerdeTimestampTimezone],
+      options.serdeParameters[std::string(
+          parquet::ParquetConfig::kWriterSerdeTimestampTimezone)],
       "");
 }
 

@@ -19,6 +19,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -639,6 +640,20 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();
   options->maxTargetFileSizeBytes = maxTargetFileBytes_;
+  const auto formatPrefix =
+      dwio::common::formatConfigPrefix(writerFactory_->fileFormat(), ".");
+  const auto connectorFormatPrefix = formatPrefix.empty()
+      ? std::string()
+      : std::string(hiveConfig_->connectorConfigPrefix()) + formatPrefix;
+  auto formatConnectorConfig = config::ConfigBase(
+      hiveConfig_->config()->rawConfigsWithPrefix(connectorFormatPrefix));
+  auto formatSessionProperties =
+      config::ConfigBase(connectorSessionProperties->rawConfigsWithPrefix(
+          dwio::common::formatConfigPrefix(writerFactory_->fileFormat(), "_")));
+  if (options->formatSpecificOptions == nullptr) {
+    options->formatSpecificOptions = writerFactory_->createFormatOptions(
+        formatConnectorConfig, formatSessionProperties);
+  }
   options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
   return options;
 }

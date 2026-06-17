@@ -15,6 +15,7 @@
  */
 
 #include <folly/init/Init.h>
+#include <memory>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/io/IoStatistics.h"
@@ -210,7 +211,17 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   void writeToParquetFile(
       const std::string& path,
       const std::vector<RowVectorPtr>& data,
-      WriterOptions options) {
+      ParquetWriterOptions options) {
+    dwio::common::WriterOptions writerOptions;
+    writeToParquetFile(
+        path, data, std::move(writerOptions), std::move(options));
+  }
+
+  void writeToParquetFile(
+      const std::string& path,
+      const std::vector<RowVectorPtr>& data,
+      dwio::common::WriterOptions writerOptions,
+      ParquetWriterOptions options) {
     VELOX_CHECK_GT(data.size(), 0);
 
     auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
@@ -218,10 +229,11 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
         std::move(writeFile), path);
     auto childPool =
         rootPool_->addAggregateChild("ParquetTableScanTest.Writer");
-    options.memoryPool = childPool.get();
-
+    writerOptions.memoryPool = childPool.get();
+    writerOptions.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(std::move(options));
     auto writer = std::make_unique<Writer>(
-        std::move(sink), options, asRowType(data[0]->type()));
+        std::move(sink), writerOptions, asRowType(data[0]->type()));
 
     for (const auto& vector : data) {
       writer->write(vector);
@@ -230,7 +242,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   void testTimestampRead(
-      const WriterOptions& options,
+      const ParquetWriterOptions& options,
       TimestampPrecision readTimestampPrecision) {
     VELOX_CHECK(options.parquetWriteTimestampUnit.has_value());
     const auto [values, expectedValues] = timestampValues(
@@ -294,7 +306,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   }
 
   void testTimestampUtcRead(
-      const WriterOptions& options,
+      const ParquetWriterOptions& options,
       TimestampPrecision readTimestampPrecision) {
     VELOX_CHECK(options.parquetWriteTimestampUnit.has_value());
     const auto [values, expectedValues] = timestampValues(
@@ -576,7 +588,7 @@ TEST_F(ParquetTableScanTest, aggregatePushdownToSmallPages) {
         }));
   }
   const auto filePath = TempFilePath::create();
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.dataPageSize = 1;
   writeToParquetFile(filePath->getPath(), data, options);
   const auto plan =
@@ -941,7 +953,7 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
           makeFlatVector<double>(20, [](auto row) { return row + 1; }),
       })};
   auto filePath = TempFilePath::create();
-  WriterOptions options;
+  ParquetWriterOptions options;
   writeToParquetFile(filePath->getPath(), vectors, options);
   createDuckDbTable(vectors);
 
@@ -1169,7 +1181,7 @@ TEST_F(ParquetTableScanTest, sessionTimezone) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt64DictionaryMicro) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -1178,7 +1190,7 @@ TEST_F(ParquetTableScanTest, timestampInt64DictionaryMicro) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt64DictionaryMilli) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
@@ -1187,7 +1199,7 @@ TEST_F(ParquetTableScanTest, timestampInt64DictionaryMilli) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt64PlainMicro) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -1196,7 +1208,7 @@ TEST_F(ParquetTableScanTest, timestampInt64PlainMicro) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt64PlainMilli) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
@@ -1205,7 +1217,7 @@ TEST_F(ParquetTableScanTest, timestampInt64PlainMilli) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt96DictionaryMicro) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = true;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -1214,7 +1226,7 @@ TEST_F(ParquetTableScanTest, timestampInt96DictionaryMicro) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt96DictionaryMilli) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = true;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
@@ -1223,7 +1235,7 @@ TEST_F(ParquetTableScanTest, timestampInt96DictionaryMilli) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt96PlainMicro) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = true;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -1232,7 +1244,7 @@ TEST_F(ParquetTableScanTest, timestampInt96PlainMicro) {
 }
 
 TEST_F(ParquetTableScanTest, timestampInt96PlainMilli) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = true;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
@@ -1283,7 +1295,7 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
   auto schema = asRowType(vector->type());
   for (const auto writeInt96 : {true, false}) {
     auto file = TempFilePath::create();
-    WriterOptions options;
+    ParquetWriterOptions options;
     options.writeInt96AsTimestamp = writeInt96;
     writeToParquetFile(file->getPath(), {vector}, options);
     auto plan = PlanBuilder().tableScan(schema).planNode();
@@ -1305,7 +1317,7 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
 }
 
 TEST_F(ParquetTableScanTest, timestampUtcPlainMicro) {
-  parquet::WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -1314,7 +1326,7 @@ TEST_F(ParquetTableScanTest, timestampUtcPlainMicro) {
 }
 
 TEST_F(ParquetTableScanTest, timestampUtcDictionaryMicro) {
-  parquet::WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
@@ -1323,7 +1335,7 @@ TEST_F(ParquetTableScanTest, timestampUtcDictionaryMicro) {
 }
 
 TEST_F(ParquetTableScanTest, timestampUtcPlainMilli) {
-  parquet::WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = false;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
@@ -1332,7 +1344,7 @@ TEST_F(ParquetTableScanTest, timestampUtcPlainMilli) {
 }
 
 TEST_F(ParquetTableScanTest, timestampUtcDictionaryMilli) {
-  parquet::WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   options.enableDictionary = true;
   options.parquetWriteTimestampUnit = TimestampPrecision::kMilliseconds;
@@ -1391,7 +1403,7 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
   const std::shared_ptr<TempDirectoryPath> dataFileFolder =
       TempDirectoryPath::create();
   auto filePath = dataFileFolder->getPath() + "/" + "nested_data.parquet";
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   writeToParquetFile(filePath, {dataFileVectors}, options);
 
@@ -1468,7 +1480,7 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
   const std::shared_ptr<TempDirectoryPath> dataFileFolder =
       TempDirectoryPath::create();
   auto filePath = dataFileFolder->getPath() + "/" + "data.parquet";
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   writeToParquetFile(filePath, {dataFileVectors}, options);
 
@@ -1585,7 +1597,7 @@ TEST_F(ParquetTableScanTest, deltaByteArray) {
 }
 
 TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1610,15 +1622,18 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
 
     for (bool useV2 : {false, true}) {
       SCOPED_TRACE(fmt::format("T=int{} useV2={}", sizeof(T) * 8, useV2));
-      WriterOptions options;
+      ParquetWriterOptions options;
       options.enableDictionary = false;
       options.encoding =
           facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
       options.useParquetDataPageV2 = useV2;
-      options.compressionKind = common::CompressionKind::CompressionKind_NONE;
+      dwio::common::WriterOptions writerOptions;
+      writerOptions.compressionKind =
+          common::CompressionKind::CompressionKind_NONE;
 
       auto file = TempFilePath::create();
-      writeToParquetFile(file->getPath(), {vector}, options);
+      writeToParquetFile(
+          file->getPath(), {vector}, std::move(writerOptions), options);
       loadData(vector->rowType(), vector);
       assertSelect({makeSplit(file->getPath())}, {"c"}, "SELECT c FROM tmp");
     }
@@ -1629,7 +1644,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
 }
 
 TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth32) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1662,7 +1677,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidthSweep) {
     }
     auto vector = makeRowVector(names, children);
 
-    WriterOptions options;
+    ParquetWriterOptions options;
     options.enableDictionary = false;
     options.encoding =
         facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1679,7 +1694,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidthSweep) {
 }
 
 TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth33) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1698,7 +1713,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth33) {
 }
 
 TEST_F(ParquetTableScanTest, deltaBinaryPackedMixedMiniblockWidths) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1731,7 +1746,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedMixedMiniblockWidths) {
 }
 
 TEST_F(ParquetTableScanTest, deltaBinaryPackedFilterScalarTail) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1758,7 +1773,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedFilterScalarTail) {
 }
 
 TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding =
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
@@ -1778,7 +1793,7 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
 }
 
 TEST_F(ParquetTableScanTest, booleanRle) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
@@ -1826,7 +1841,7 @@ TEST_F(ParquetTableScanTest, booleanRle) {
 }
 
 TEST_F(ParquetTableScanTest, singleBooleanRle) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.enableDictionary = false;
   options.encoding = facebook::velox::parquet::arrow::Encoding::kRle;
   options.useParquetDataPageV2 = true;
@@ -1866,7 +1881,7 @@ TEST_F(ParquetTableScanTest, intToBigintRead) {
   const std::shared_ptr<TempDirectoryPath> dataFileFolder =
       TempDirectoryPath::create();
   auto filePath = dataFileFolder->getPath() + "/" + "data.parquet";
-  WriterOptions options;
+  ParquetWriterOptions options;
   options.writeInt96AsTimestamp = false;
   writeToParquetFile(filePath, {intDataFileVectors}, options);
 
@@ -1893,7 +1908,7 @@ TEST_F(ParquetTableScanTest, intNarrowingRejectedByDefault) {
                                    const TypePtr& targetType) {
     auto vectors = makeRowVector({"c1"}, {sourceVector});
     auto dataFile = TempFilePath::create();
-    writeToParquetFile(dataFile->getPath(), {vectors}, WriterOptions{});
+    writeToParquetFile(dataFile->getPath(), {vectors}, ParquetWriterOptions{});
     auto rowType = ROW({"c1"}, {targetType});
     auto op = PlanBuilder()
                   .startTableScan()
@@ -1968,7 +1983,7 @@ TEST_F(ParquetTableScanTest, intReadWithNarrowerType) {
       });
 
   auto dataFile = TempFilePath::create();
-  WriterOptions options;
+  ParquetWriterOptions options;
   writeToParquetFile(dataFile->getPath(), {intVectors}, options);
 
   auto rowType = ROW({"c1", "c2", "c3"}, {TINYINT(), SMALLINT(), TINYINT()});
@@ -2049,7 +2064,7 @@ TEST_F(ParquetTableScanTest, inFilter) {
               {"mary", "martin", "lucy", "alex", std::nullopt, "mary", "dan"}),
       })};
   auto filePath = TempFilePath::create();
-  WriterOptions options;
+  ParquetWriterOptions options;
   writeToParquetFile(filePath->getPath(), vectors, options);
   createDuckDbTable(vectors);
 
@@ -2095,7 +2110,7 @@ TEST_F(ParquetTableScanTest, reusedLazyVectors) {
        makeFlatVector<int64_t>({5, 7, 9, 11, 13})});
 
   const auto filePath = TempFilePath::create();
-  WriterOptions options;
+  ParquetWriterOptions options;
   writeToParquetFile(filePath->getPath(), data, options);
 
   const auto plan = PlanBuilder()
@@ -2111,7 +2126,7 @@ TEST_F(ParquetTableScanTest, reusedLazyVectors) {
 // Verify that entire Parquet files are pruned based on file-level column
 // statistics when the filter eliminates all data in the file.
 TEST_F(ParquetTableScanTest, statsBasedFileSkipping) {
-  WriterOptions options;
+  ParquetWriterOptions options;
   std::vector<std::string> filePaths;
   std::vector<RowVectorPtr> dataVectors;
   const vector_size_t numRows = 100;
@@ -2203,8 +2218,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
 
   // Write one Parquet file and one DWRF file.
   auto parquetFile = TempFilePath::create();
-  WriterOptions parquetOptions;
-  parquetOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions parquetOptions;
   writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
 
   auto dwrfFile = TempFilePath::create();

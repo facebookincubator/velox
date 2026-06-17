@@ -207,7 +207,7 @@ std::unique_ptr<facebook::velox::parquet::Writer> ParquetTestBase::createWriter(
         flushPolicy,
     const RowTypePtr& rowType,
     facebook::velox::common::CompressionKind compressionKind) {
-  facebook::velox::parquet::WriterOptions options;
+  dwio::common::WriterOptions options;
   options.memoryPool = rootPool_.get();
   options.flushPolicyFactory = flushPolicy;
   options.compressionKind = compressionKind;
@@ -230,15 +230,31 @@ std::vector<RowVectorPtr> ParquetTestBase::createBatches(
 
 dwio::common::MemorySink* ParquetTestBase::write(
     const RowVectorPtr& data,
-    const WriterOptions& writerOptions,
+    const ParquetWriterOptions& writerOptions,
+    const RowTypePtr& rowType) {
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  return write(data, options, writerOptions, rowType);
+}
+
+dwio::common::MemorySink* ParquetTestBase::write(
+    const RowVectorPtr& data,
+    const dwio::common::WriterOptions& options,
+    const ParquetWriterOptions& writerOptions,
     const RowTypePtr& rowType) {
   auto sink = std::make_unique<dwio::common::MemorySink>(
       200 * 1024 * 1024,
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto* sinkPtr = sink.get();
+  auto writerOptionsBase = options;
+  if (writerOptionsBase.memoryPool == nullptr) {
+    writerOptionsBase.memoryPool = rootPool_.get();
+  }
+  writerOptionsBase.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(writerOptions);
   auto writer = std::make_unique<Writer>(
       std::move(sink),
-      writerOptions,
+      writerOptionsBase,
       rowType != nullptr ? rowType : data->rowType());
   writer->write(data);
   writer->close();
@@ -248,14 +264,18 @@ dwio::common::MemorySink* ParquetTestBase::write(
 
 dwio::common::MemorySink* ParquetTestBase::write(
     const std::vector<RowVectorPtr>& batches,
-    const WriterOptions& writerOptions) {
+    const ParquetWriterOptions& writerOptions) {
   VELOX_CHECK(!batches.empty());
   auto sink = std::make_unique<dwio::common::MemorySink>(
       200 * 1024 * 1024,
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto* sinkPtr = sink.get();
-  auto writer = std::make_unique<Writer>(
-      std::move(sink), writerOptions, batches[0]->rowType());
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(writerOptions);
+  auto writer =
+      std::make_unique<Writer>(std::move(sink), options, batches[0]->rowType());
   for (size_t i = 0; i < batches.size(); ++i) {
     writer->write(batches[i]);
     if (i + 1 < batches.size()) {
@@ -271,13 +291,13 @@ dwio::common::MemorySink* ParquetTestBase::write(
     const RowVectorPtr& data,
     std::unordered_map<std::string, std::string> configFromFile,
     std::unordered_map<std::string, std::string> sessionProperties) {
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
-  auto connectorConfig = config::ConfigBase(std::move(configFromFile));
-  auto connectorSessionProperties =
-      config::ConfigBase(std::move(sessionProperties));
-  writerOptions.processConfigs(connectorConfig, connectorSessionProperties);
-  return write(data, writerOptions);
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  parquet::ParquetWriterOptions writerOptions;
+  writerOptions.processConfigs(
+      config::ConfigBase(std::move(configFromFile)),
+      config::ConfigBase(std::move(sessionProperties)));
+  return write(data, options, writerOptions);
 }
 
 std::unique_ptr<ParquetReader> ParquetTestBase::createReaderInMemory(
