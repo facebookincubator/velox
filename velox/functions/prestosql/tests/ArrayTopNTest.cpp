@@ -638,9 +638,10 @@ TEST_F(ArrayTopNTest, transformReturnsNull) {
   });
 
   // Transform that returns null for even numbers.
-  // Expected: odd numbers sorted descending, then nulls (evens).
+  // Odd numbers sorted descending, then the null-keyed evens. Among the
+  // null-keyed ties the later input element (4) is kept (reverse-stable).
   auto expected = makeArrayVectorFromJson<int32_t>({
-      "[3, 1, 2]",
+      "[3, 1, 4]",
   });
   auto result = evaluate(
       "array_top_n(c0, INTEGER '3', x -> if(x % 2 = 0, cast(null as integer), x))",
@@ -659,9 +660,9 @@ TEST_F(ArrayTopNTest, transformComplexExpression) {
   // Descending by (0 - abs(x-3)): 3 is closest (key=0), then 4,2 (key=-1), then
   // 1,5 (key=-2)
   // Use (0 - x) since unary negation is not supported for integers.
-  // Among elements with equal keys, ties are broken by original position, so
-  // 4 (index 3) precedes 2 (index 4).
-  auto expected = makeArrayVectorFromJson<int32_t>({"[3, 4, 2]"});
+  // Among elements with equal keys the later input index wins (reverse-stable),
+  // so 2 (index 4) precedes 4 (index 3).
+  auto expected = makeArrayVectorFromJson<int32_t>({"[3, 2, 4]"});
   auto result = evaluate(
       "array_top_n(c0, INTEGER '3', x -> 0 - abs(x - 3))",
       makeRowVector({input}));
@@ -722,6 +723,72 @@ TEST_F(ArrayTopNTest, transformNestedNulls) {
   // Both rows should be null because the comparison fails due to nested nulls.
   ASSERT_TRUE(result->isNullAt(0));
   ASSERT_TRUE(result->isNullAt(1));
+}
+
+TEST_F(ArrayTopNTest, transformDictionaryEncoded) {
+  // Dictionary-encode the input with distinct indices so the comparator's
+  // index indirection through the transform output is actually exercised
+  // (indices {0, 1, 0} map output rows to base rows 0, 1, 0).
+  auto base = makeArrayVectorFromJson<int32_t>({
+      "[10, 30, 20]",
+      "[5, 15, 25, 1]",
+  });
+  auto indices = makeIndices({0, 1, 0});
+  auto dictArray = wrapInDictionary(indices, 3, base);
+  auto input = makeRowVector({dictArray});
+
+  // Identity transform.
+  assertEqualVectors(
+      makeArrayVectorFromJson<int32_t>({
+          "[30, 20]",
+          "[25, 15]",
+          "[30, 20]",
+      }),
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", input));
+
+  // Non-identity transform (ascending via negation) over the same dictionary.
+  assertEqualVectors(
+      makeArrayVectorFromJson<int32_t>({
+          "[10, 20]",
+          "[1, 5]",
+          "[10, 20]",
+      }),
+      evaluate("array_top_n(c0, INTEGER '2', x -> 0 - x)", input));
+}
+
+TEST_F(ArrayTopNTest, transformLambdaError) {
+  // The lambda itself throws (division by zero on the 0 element). The error row
+  // must propagate the error, and return null under try().
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[0, 5, 10]",
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_top_n(c0, INTEGER '2', x -> 10 / x)", makeRowVector({input})),
+      "division by zero");
+
+  auto result = evaluate(
+      "try(array_top_n(c0, INTEGER '2', x -> 10 / x))", makeRowVector({input}));
+  assertEqualVectors(makeNullableArrayVector<int32_t>({std::nullopt}), result);
+}
+
+TEST_F(ArrayTopNTest, transformNullArray) {
+  // A top-level null array row should pass through as null.
+  auto input = makeArrayVectorFromJson<int32_t>({
+      "[3, 1, 2]",
+      "null",
+      "[5, 4]",
+  });
+
+  auto expected = makeArrayVectorFromJson<int32_t>({
+      "[3, 2]",
+      "null",
+      "[5, 4]",
+  });
+  auto result =
+      evaluate("array_top_n(c0, INTEGER '2', x -> x)", makeRowVector({input}));
+  assertEqualVectors(expected, result);
 }
 
 } // namespace

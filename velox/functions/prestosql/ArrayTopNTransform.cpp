@@ -80,10 +80,14 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
         context,
         newElements);
 
-    exec::LocalDecodedVector decodedKeys(
+    // Deselect rows where the lambda raised errors so the heap loop below does
+    // not read their unset transform-output slots.
+    context.deselectErrors(*remainingRows);
+
+    exec::LocalDecodedVector decodedElements(
         context, *newElements, validRowsInReusedResult);
-    auto* baseKeys = decodedKeys->base();
-    auto keyIndices = decodedKeys->indices();
+    auto* baseElements = decodedElements->base();
+    auto decodedIndices = decodedElements->indices();
 
     BufferPtr indices = allocateIndices(numElements, context.pool());
     auto* rawIndices = indices->asMutable<vector_size_t>();
@@ -98,15 +102,15 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
             CompareFlags::NullHandlingMode::kNullAsIndeterminate,
     };
 
-    // Min-heap comparator: returns true if left > right by the transform key.
-    // The heap keeps the smallest seen key at the top so we can evict it when
-    // a larger key arrives, maintaining the top-n by key in descending order.
-    // Top-level nulls are handled here so that compare() only fires on nested
-    // nulls inside non-null keys (where kNullAsIndeterminate throws).
+    // Min-heap comparator: returns true if left > right by the transform value.
+    // The heap keeps the smallest seen value at the top so we can evict it when
+    // a larger value arrives, maintaining the top-n by value in descending
+    // order. Top-level nulls are handled here so that compare() only fires on
+    // nested nulls inside non-null values (where kNullAsIndeterminate throws).
     struct GreaterThanComparator {
-      const DecodedVector* decodedKeys;
-      const BaseVector* baseKeys;
-      const vector_size_t* keyIndices;
+      const DecodedVector* decodedElements;
+      const BaseVector* baseElements;
+      const vector_size_t* decodedIndices;
       CompareFlags flags;
 
       bool operator()(vector_size_t leftIdx, vector_size_t rightIdx) const {
@@ -114,14 +118,14 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
           return false;
         }
 
-        bool leftNull = decodedKeys->isNullAt(leftIdx);
-        bool rightNull = decodedKeys->isNullAt(rightIdx);
+        bool leftNull = decodedElements->isNullAt(leftIdx);
+        bool rightNull = decodedElements->isNullAt(rightIdx);
 
         // Nulls sort last in descending top-n, so a null is never "greater"
-        // than a non-null. Among two nulls, tie-break by index for stable
-        // order.
+        // than a non-null. Among two nulls, the later input index wins, to
+        // match the reverse-stable order documented at the tie-break below.
         if (leftNull && rightNull) {
-          return leftIdx < rightIdx;
+          return leftIdx > rightIdx;
         }
         if (leftNull) {
           return false;
@@ -130,22 +134,24 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
           return true;
         }
 
-        auto leftKeyIdx = keyIndices ? keyIndices[leftIdx] : leftIdx;
-        auto rightKeyIdx = keyIndices ? keyIndices[rightIdx] : rightIdx;
+        auto leftElementIdx =
+            decodedIndices ? decodedIndices[leftIdx] : leftIdx;
+        auto rightElementIdx =
+            decodedIndices ? decodedIndices[rightIdx] : rightIdx;
 
-        auto result =
-            baseKeys->compare(baseKeys, leftKeyIdx, rightKeyIdx, flags);
+        auto result = baseElements->compare(
+            baseElements, leftElementIdx, rightElementIdx, flags);
 
         if (!result.has_value()) {
           VELOX_USER_FAIL("Ordering nulls is not supported");
         }
 
-        // Tie-break by original index so that, among elements with equal
-        // keys, earlier ones are kept (stable order). The min-heap evicts
-        // its top first, so the earlier index must be the "larger" element
-        // by this comparator to stay off the top.
+        // Reverse-stable tie-break to match Presto's array_top_n, which is
+        // SLICE(REVERSE(ARRAY_SORT(input, f)), 1, n): among equal values the
+        // later input index is treated as "larger", so it is kept by the
+        // min-heap and emitted before earlier ties.
         if (result.value() == 0) {
-          return leftIdx < rightIdx;
+          return leftIdx > rightIdx;
         }
 
         return result.value() > 0;
@@ -153,7 +159,7 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
     };
 
     GreaterThanComparator comparator{
-        decodedKeys.get(), baseKeys, keyIndices, flags};
+        decodedElements.get(), baseElements, decodedIndices, flags};
 
     // Use applyToSelectedNoThrow so that compare()-thrown errors are captured
     // per row (letting try() convert them to nulls) instead of escaping.
@@ -189,7 +195,7 @@ class ArrayTopNTransformFunction : public exec::VectorFunction {
         }
       }
 
-      // Pop in reverse so the final order is descending by transform key.
+      // Pop in reverse so the final order is descending by transform value.
       std::vector<vector_size_t> topIndices(minHeap.size());
       auto heapSize = minHeap.size();
       for (int i = heapSize - 1; i >= 0; --i) {
