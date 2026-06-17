@@ -57,6 +57,8 @@ class WriterFactory {
   virtual std::unique_ptr<dwio::common::WriterOptions>
   createWriterOptions() = 0;
 
+  /// Translates connector and session configs into format-owned writer options.
+  /// Returns nullptr if the format has no format-specific options.
   virtual std::shared_ptr<FormatSpecificOptions> createFormatOptions(
       const config::ConfigBase& /*connectorConfig*/,
       const config::ConfigBase& /*session*/) const {

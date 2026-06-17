@@ -644,47 +644,25 @@ ParquetWriterFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
   auto parquetOptions = std::make_shared<ParquetWriterOptions>();
-  parquetOptions->processConfigs(connectorConfig, session);
+  parquetOptions->parquetWriteTimestampUnit = toTimestampPrecision(
+      ParquetConfig::writerTimestampUnit(connectorConfig, session));
+  parquetOptions->enableDictionary = toBoolConfigValue(
+      ParquetConfig::writerEnableDictionary(connectorConfig, session),
+      "enable dictionary");
+  parquetOptions->enableStoreDecimalAsInteger = toBoolConfigValue(
+      ParquetConfig::writerEnableStoreDecimalAsInteger(
+          connectorConfig, session),
+      "enable store decimal as integer");
+  parquetOptions->dictionaryPageSizeLimit = toParquetPageSize(
+      ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session));
+  parquetOptions->useParquetDataPageV2 = isParquetV2(
+      ParquetConfig::writerDataPageVersion(connectorConfig, session));
+  parquetOptions->dataPageSize = toParquetPageSize(
+      ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->batchSize = toParquetBatchSize(
+      ParquetConfig::writerBatchSize(connectorConfig, session));
+  parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
   return parquetOptions;
-}
-
-void ParquetWriterOptions::processConfigs(
-    const config::ConfigBase& connectorConfig,
-    const config::ConfigBase& session) {
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit = toTimestampPrecision(
-        ParquetConfig::writerTimestampUnit(connectorConfig, session));
-  }
-  if (!enableDictionary) {
-    enableDictionary = toBoolConfigValue(
-        ParquetConfig::writerEnableDictionary(connectorConfig, session),
-        "enable dictionary");
-  }
-  if (!enableStoreDecimalAsInteger) {
-    enableStoreDecimalAsInteger = toBoolConfigValue(
-        ParquetConfig::writerEnableStoreDecimalAsInteger(
-            connectorConfig, session),
-        "enable store decimal as integer");
-  }
-  if (!dictionaryPageSizeLimit) {
-    dictionaryPageSizeLimit = toParquetPageSize(
-        ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session));
-  }
-  if (!useParquetDataPageV2) {
-    useParquetDataPageV2 = isParquetV2(
-        ParquetConfig::writerDataPageVersion(connectorConfig, session));
-  }
-  if (!dataPageSize) {
-    dataPageSize = toParquetPageSize(
-        ParquetConfig::writerPageSize(connectorConfig, session));
-  }
-  if (!batchSize) {
-    batchSize = toParquetBatchSize(
-        ParquetConfig::writerBatchSize(connectorConfig, session));
-  }
-  if (!createdBy) {
-    createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
-  }
 }
 
 } // namespace facebook::velox::parquet

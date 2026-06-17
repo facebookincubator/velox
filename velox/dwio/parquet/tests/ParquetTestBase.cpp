@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::parquet {
@@ -293,11 +294,12 @@ dwio::common::MemorySink* ParquetTestBase::write(
     std::unordered_map<std::string, std::string> sessionProperties) {
   dwio::common::WriterOptions options;
   options.memoryPool = rootPool_.get();
-  parquet::ParquetWriterOptions writerOptions;
-  writerOptions.processConfigs(
-      config::ConfigBase(std::move(configFromFile)),
-      config::ConfigBase(std::move(sessionProperties)));
-  return write(data, options, writerOptions);
+  ParquetWriterFactory factory;
+  auto writerOptions =
+      checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
+          config::ConfigBase(std::move(configFromFile)),
+          config::ConfigBase(std::move(sessionProperties))));
+  return write(data, options, *writerOptions);
 }
 
 std::unique_ptr<ParquetReader> ParquetTestBase::createReaderInMemory(

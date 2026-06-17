@@ -150,20 +150,14 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   /// If not provided, the field_id will be -1.
   /// The structure should match the schema hierarchy with nested children.
   std::vector<ParquetFieldId> parquetFieldIds;
-
-  // Process format-scoped connector and session configs.
-  void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session);
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
 class Writer : public dwio::common::Writer {
  public:
-  // Constructs a writer with output to 'sink'. A new row group is
-  // started every 'rowsInRowGroup' top level rows. 'pool' is used for
-  // temporary memory. 'properties' specifies Parquet-specific
-  // options. 'schema' specifies the file's overall schema, and it is always
+  // Constructs a writer with output to 'sink'. 'options' carries common writer
+  // options and Parquet-specific format options. 'pool' is used for temporary
+  // memory. 'schema' specifies the file's overall schema, and it is always
   // non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,

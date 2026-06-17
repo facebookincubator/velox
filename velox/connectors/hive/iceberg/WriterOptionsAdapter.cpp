@@ -44,8 +44,8 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     //   timezone conversion (empty string disables conversion).
     //
     // Settings are routed through serdeParameters so the common writer options
-    // can carry them before Parquet format options are created. The value "6"
-    // represents microseconds (TimestampPrecision::kMicroseconds).
+    // can carry them until the Parquet writer constructor reads them. The value
+    // "6" represents microseconds (TimestampPrecision::kMicroseconds).
     options.serdeParameters[std::string(
         parquet::ParquetConfig::kWriterSerdeTimestampUnit)] = "6";
     options.serdeParameters[std::string(
