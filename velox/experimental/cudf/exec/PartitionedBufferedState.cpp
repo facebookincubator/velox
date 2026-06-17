@@ -100,8 +100,10 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
     return;
   }
 
+  // If node is not a leaf, it is an internal node and any input has to be
+  // partitioned and inserted into child nodes.
   if (!node.isLeaf()) {
-    auto partitions = partitionInput(bufferedInput, *node.split);
+    auto partitions = partitionInput(bufferedInput, *node.partitionSpec);
     VELOX_CHECK_EQ(partitions.size(), node.children.size());
     for (size_t i = 0; i < partitions.size(); ++i) {
       if (!partitions[i].empty()) {
@@ -111,6 +113,7 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
     return;
   }
 
+  // If node is a leaf but empty, initialize it with the input.
   if (!node.leafState) {
     node.leafState = ops_->createLeaf(std::move(bufferedInput));
     if (node.leafState) {
@@ -120,10 +123,12 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
     return;
   }
 
+  // If node is a leaf and not empty, check if the input can be added to the
+  // leaf. If not, split the leaf and insert the input into the new subtree.
   const auto projectedRows =
       ops_->estimatedMergedRowUpperBound(*node.leafState, bufferedInput);
   if (projectedRows > maxRowsPerLeaf_) {
-    splitLeaf(node, std::move(bufferedInput));
+    splitLeafAndAddInput(node, std::move(bufferedInput));
     return;
   }
 
@@ -133,10 +138,12 @@ void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
 }
 
 void PartitionedBufferedState::splitLeaf(Node& node) {
-  splitLeaf(node, InputChunk{});
+  splitLeafAndAddInput(node, InputChunk{});
 }
 
-void PartitionedBufferedState::splitLeaf(Node& node, InputChunk bufferedInput) {
+void PartitionedBufferedState::splitLeafAndAddInput(
+    Node& node,
+    InputChunk bufferedInput) {
   VELOX_CHECK(node.isLeaf());
   VELOX_CHECK(node.leafState || !bufferedInput.empty());
 
@@ -152,6 +159,9 @@ void PartitionedBufferedState::splitLeaf(Node& node, InputChunk bufferedInput) {
           countNonEmptyChildren(storedPartitions, incomingPartitions, *ops_);
 
       if (nonEmptyChildren > 1) {
+        // Found a partition spec that can split the leaf into more than one
+        // child. If nonEmptyChildren = 1, then the partition spec could not
+        // split and we'd have no meaningful progress.
         return SplitLeafAttempt{
             std::move(spec),
             std::move(storedPartitions),
@@ -174,7 +184,7 @@ void PartitionedBufferedState::splitLeaf(Node& node, InputChunk bufferedInput) {
 
   node.leafRows = 0;
   node.leafState.reset();
-  node.split = splitAttempt.spec;
+  node.partitionSpec = splitAttempt.spec;
   node.children.clear();
   node.children.reserve(splitAttempt.spec.numPartitions);
   for (int32_t i = 0; i < splitAttempt.spec.numPartitions; ++i) {

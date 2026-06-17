@@ -541,6 +541,7 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
         owner_.aggregationInputChannels_.end());
 
     if (owner_.isPartialOutput_) {
+      // Handles both kPartial and kIntermediate aggregation steps.
       auto compacted = owner_.doGroupByAggregation(
           permutedInputView,
           owner_.groupingKeyOutputChannels_,
@@ -553,10 +554,13 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
     }
 
     if (!owner_.isSingleStep_) {
+      // kFinal aggregation step can avoid one initial compaction because the
+      // input and buffered result type are the same but possibly permuted.
       return makeBorrowedChunk(
           std::move(rawInput), owner_.bufferedResultType_, permutedInputView);
     }
 
+    // kSingle step.
     auto compacted = owner_.doGroupByAggregation(
         permutedInputView,
         owner_.groupingKeyOutputChannels_,
@@ -710,8 +714,7 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       cudf::table_view view,
       rmm::cuda_stream_view stream,
       std::shared_ptr<cudf::table> tableOwner) const {
-    return InputChunk{
-        pool, type, view, stream, nullptr, std::move(tableOwner)};
+    return InputChunk{pool, type, view, stream, nullptr, std::move(tableOwner)};
   }
 
   InputChunk mergeChunks(InputChunk left, InputChunk right) const {

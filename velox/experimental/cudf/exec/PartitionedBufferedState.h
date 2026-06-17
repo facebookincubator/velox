@@ -154,11 +154,11 @@ class PartitionedBufferedState {
   struct Node {
     size_t leafRows{0};
     std::unique_ptr<BufferedState> leafState;
-    std::optional<PartitionSpec> split;
+    std::optional<PartitionSpec> partitionSpec;
     std::vector<std::unique_ptr<Node>> children;
 
     bool isLeaf() const {
-      return !split.has_value();
+      return !partitionSpec.has_value();
     }
   };
 
@@ -178,7 +178,7 @@ class PartitionedBufferedState {
 
   void splitLeaf(Node& node);
 
-  void splitLeaf(Node& node, InputChunk bufferedInput);
+  void splitLeafAndAddInput(Node& node, InputChunk bufferedInput);
 
   CudfVectorPtr drainNextOutput(Node& node);
 
