@@ -89,7 +89,9 @@ TEST(OutputBufferManagerRegistryTest, registryOperations) {
   for (int32_t i = 0; i < numManagers; i++) {
     auto mgr = std::make_shared<MockOutputBufferManager>();
     OutputBufferManagerRegistry::global().insert(
-        fmt::format("mgr-{}", i), std::move(mgr));
+        fmt::format("mgr-{}", i),
+        std::make_shared<OutputBufferManagerEntry>(
+            OutputBufferManagerEntry{std::move(mgr), {}}));
   }
 
   for (int32_t i = 0; i < numManagers; i++) {
@@ -143,13 +145,19 @@ class OutputBufferManagerRegistryFixture : public testing::Test {
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverride) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto queryCtx = core::QueryCtx::create();
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
   auto queryMgr = std::make_shared<MockOutputBufferManager>();
-  queryRegistry->insert("obm", queryMgr);
+  queryRegistry->insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{queryMgr, {}}));
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
 
@@ -159,9 +167,44 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverride) {
   OutputBufferManagerRegistry::unregisterAll();
 }
 
+TEST_F(OutputBufferManagerRegistryFixture, containsIsPresenceOnly) {
+  auto queryCtx = core::QueryCtx::create();
+  EXPECT_FALSE(OutputBufferManagerRegistry::contains(*queryCtx, "obm"));
+
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<MockOutputBufferManager>(), {}}));
+
+  EXPECT_TRUE(OutputBufferManagerRegistry::contains(*queryCtx, "obm"));
+
+  OutputBufferManagerRegistry::unregisterAll();
+}
+
+TEST_F(OutputBufferManagerRegistryFixture, availabilityPredicateGatesTryGet) {
+  auto manager = std::make_shared<MockOutputBufferManager>();
+  // Predicate denies availability for every query.
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          manager, [](const core::QueryCtx&) { return false; }}));
+
+  auto queryCtx = core::QueryCtx::create();
+  // Present (contains) but not available (tryGet) for this query.
+  EXPECT_TRUE(OutputBufferManagerRegistry::contains(*queryCtx, "obm"));
+  EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "obm"), nullptr);
+  // The global, query-less tryGet ignores the predicate (presence only).
+  EXPECT_EQ(OutputBufferManagerRegistry::tryGet("obm"), manager);
+
+  OutputBufferManagerRegistry::unregisterAll();
+}
+
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedFallbackToGlobal) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto queryCtx = core::QueryCtx::create();
   auto queryRegistry = OutputBufferManagerRegistry::create(
@@ -176,7 +219,10 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedFallbackToGlobal) {
 
 TEST_F(OutputBufferManagerRegistryFixture, noQueryRegistryFallsBackToGlobal) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto queryCtx = core::QueryCtx::create();
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "obm"), globalMgr);
@@ -186,12 +232,18 @@ TEST_F(OutputBufferManagerRegistryFixture, noQueryRegistryFallsBackToGlobal) {
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedUnregisterAll) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto queryCtx = core::QueryCtx::create();
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
-  queryRegistry->insert("obm", std::make_shared<MockOutputBufferManager>());
+  queryRegistry->insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<MockOutputBufferManager>(), {}}));
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
 
@@ -205,7 +257,10 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedUnregisterAll) {
 
 TEST_F(OutputBufferManagerRegistryFixture, unregisterAllNoQueryRegistry) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto queryCtx = core::QueryCtx::create();
   OutputBufferManagerRegistry::unregisterAll(*queryCtx);
@@ -217,13 +272,17 @@ TEST_F(OutputBufferManagerRegistryFixture, unregisterAllNoQueryRegistry) {
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedGetAll) {
   OutputBufferManagerRegistry::global().insert(
-      "global-obm", std::make_shared<MockOutputBufferManager>());
+      "global-obm",
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<MockOutputBufferManager>(), {}}));
 
   auto queryCtx = core::QueryCtx::create();
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
   queryRegistry->insert(
-      "query-obm", std::make_shared<MockOutputBufferManager>());
+      "query-obm",
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<MockOutputBufferManager>(), {}}));
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
 
@@ -238,13 +297,19 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedGetAll) {
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto queryCtx = core::QueryCtx::create();
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
   auto overrideMgr = std::make_shared<MockOutputBufferManager>();
-  queryRegistry->insert("obm", overrideMgr);
+  queryRegistry->insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{overrideMgr, {}}));
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
 
@@ -265,14 +330,20 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
 
 TEST_F(OutputBufferManagerRegistryFixture, createWithNullParentIsolation) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
-  OutputBufferManagerRegistry::global().insert("obm", globalMgr);
+  OutputBufferManagerRegistry::global().insert(
+      "obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{globalMgr, {}}));
 
   auto isolated = OutputBufferManagerRegistry::create(nullptr);
   EXPECT_EQ(isolated->find("obm"), nullptr);
 
   auto localMgr = std::make_shared<MockOutputBufferManager>();
-  isolated->insert("local-obm", localMgr);
-  EXPECT_EQ(isolated->find("local-obm"), localMgr);
+  isolated->insert(
+      "local-obm",
+      std::make_shared<OutputBufferManagerEntry>(
+          OutputBufferManagerEntry{localMgr, {}}));
+  EXPECT_EQ(isolated->find("local-obm")->manager, localMgr);
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet("local-obm"), nullptr);
 
   auto snap = isolated->snapshot();

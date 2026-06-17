@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -31,6 +32,17 @@ class QueryCtx;
 
 namespace facebook::velox::exec {
 
+/// A registered output buffer manager together with an optional per-query
+/// availability predicate.
+struct OutputBufferManagerEntry {
+  /// The output buffer manager for a transport.
+  std::shared_ptr<IOutputBufferManager> manager;
+  /// Per-query availability predicate. When empty, the manager is always
+  /// available. When set, the manager is visible to tryGet() only for queries
+  /// where this returns true; it controls visibility, not instance count.
+  std::function<bool(const core::QueryCtx&)> isAvailable;
+};
+
 /// Manages output buffer manager registration and lookup. All methods are
 /// thread-safe.
 ///
@@ -45,7 +57,7 @@ namespace facebook::velox::exec {
 ///   process-wide lookups.
 class OutputBufferManagerRegistry {
  public:
-  using Registry = ScopedRegistry<std::string, IOutputBufferManager>;
+  using Registry = ScopedRegistry<std::string, OutputBufferManagerEntry>;
 
   /// Registry key for per-query output buffer manager overrides on QueryCtx.
   static constexpr std::string_view kRegistryKey = "outputBufferManagers";
@@ -67,6 +79,13 @@ class OutputBufferManagerRegistry {
   /// Return the output buffer manager with the specified ID from the global
   /// registry, or nullptr if not registered.
   static std::shared_ptr<IOutputBufferManager> tryGet(const std::string& id);
+
+  /// Return true if a manager with the specified ID is registered for the
+  /// given query (checking the per-query override then the global registry),
+  /// regardless of its availability predicate. Use this to distinguish a
+  /// capability gap (not registered at all) from a policy opt-out (registered
+  /// but unavailable for this query).
+  static bool contains(const core::QueryCtx& queryCtx, const std::string& id);
 
   /// Return all registered output buffer managers visible to the given query.
   /// Checks per-query override on QueryCtx first, falls back to the global

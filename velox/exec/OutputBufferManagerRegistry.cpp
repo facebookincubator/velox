@@ -27,8 +27,8 @@
 
 namespace facebook::velox::exec {
 
-ScopedRegistry<std::string, IOutputBufferManager>& outputBufferManagers() {
-  static ScopedRegistry<std::string, IOutputBufferManager> instance;
+ScopedRegistry<std::string, OutputBufferManagerEntry>& outputBufferManagers() {
+  static ScopedRegistry<std::string, OutputBufferManagerEntry> instance;
   return instance;
 }
 
@@ -58,13 +58,28 @@ OutputBufferManagerRegistry::create(const Registry* parent) {
 std::shared_ptr<IOutputBufferManager> OutputBufferManagerRegistry::tryGet(
     const core::QueryCtx& queryCtx,
     const std::string& id) {
-  return registryFor(queryCtx).find(id);
+  auto entry = registryFor(queryCtx).find(id);
+  if (entry == nullptr) {
+    return nullptr;
+  }
+  if (entry->isAvailable && !entry->isAvailable(queryCtx)) {
+    return nullptr;
+  }
+  return entry->manager;
 }
 
 // static
 std::shared_ptr<IOutputBufferManager> OutputBufferManagerRegistry::tryGet(
     const std::string& id) {
-  return global().find(id);
+  auto entry = global().find(id);
+  return entry == nullptr ? nullptr : entry->manager;
+}
+
+// static
+bool OutputBufferManagerRegistry::contains(
+    const core::QueryCtx& queryCtx,
+    const std::string& id) {
+  return registryFor(queryCtx).find(id) != nullptr;
 }
 
 // static
@@ -76,7 +91,12 @@ OutputBufferManagerRegistry::getAll(const core::QueryCtx& queryCtx) {
 // static
 std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
 OutputBufferManagerRegistry::getAll() {
-  return global().snapshot();
+  std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
+      result;
+  for (auto& [key, entry] : global().snapshot()) {
+    result.emplace_back(key, entry->manager);
+  }
+  return result;
 }
 
 // static
@@ -97,7 +117,12 @@ void OutputBufferManagerRegistry::unregisterAll() {
 // static
 std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
 OutputBufferManagerRegistry::snapshot(const core::QueryCtx& queryCtx) {
-  return registryFor(queryCtx).snapshot();
+  std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
+      result;
+  for (auto& [key, entry] : registryFor(queryCtx).snapshot()) {
+    result.emplace_back(key, entry->manager);
+  }
+  return result;
 }
 
 } // namespace facebook::velox::exec

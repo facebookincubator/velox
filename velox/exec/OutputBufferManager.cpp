@@ -33,9 +33,11 @@ const std::shared_ptr<OutputBufferManager>& OutputBufferManager::getInstanceRef(
       std::make_shared<OutputBufferManager>(options);
   const std::string httpTransport{core::TransportKind::kHttp};
   if (!outputBufferManagers().find(httpTransport)) {
+    // The default HTTP manager is always available; leave isAvailable empty.
     outputBufferManagers().insert(
         httpTransport,
-        instance,
+        std::make_shared<OutputBufferManagerEntry>(
+            OutputBufferManagerEntry{instance, {}}),
         /*overwrite=*/true);
   }
   return instance;
