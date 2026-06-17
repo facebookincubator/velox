@@ -550,6 +550,14 @@ struct TimePlusInterval {
       const arg_type<IntervalDayTime>& interval) {
     result = addToTime(time, interval);
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = pack(
+        addToTime(unpackMillisUtc(*time), interval), unpackZoneKeyId(*time));
+  }
 };
 
 template <typename T>
@@ -561,6 +569,14 @@ struct TimeMinusInterval {
       const arg_type<Time>& time,
       const arg_type<IntervalDayTime>& interval) {
     result = addToTime(time, -interval);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = pack(
+        addToTime(unpackMillisUtc(*time), -interval), unpackZoneKeyId(*time));
   }
 };
 
@@ -584,6 +600,13 @@ struct TimeMinusFunction {
 
     // Simple subtraction returns interval in milliseconds
     result = a - b;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<TimeWithTimezone>& a,
+      const arg_type<TimeWithTimezone>& b) {
+    result = unpackMillisUtc(*a) - unpackMillisUtc(*b);
   }
 };
 
@@ -668,6 +691,14 @@ struct IntervalPlusTime {
       const arg_type<IntervalDayTime>& interval,
       const arg_type<Time>& time) {
     result = addToTime(time, interval);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<IntervalDayTime>& interval,
+      const arg_type<TimeWithTimezone>& time) {
+    result = pack(
+        addToTime(unpackMillisUtc(*time), interval), unpackZoneKeyId(*time));
   }
 };
 
