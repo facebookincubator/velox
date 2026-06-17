@@ -1702,4 +1702,125 @@ TEST_F(AggregationTest, stddevSampAllNulls) {
   assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
 }
 
+// Masked count(col) + unmasked sum, single-stage (the reproducer shape).
+TEST_F(AggregationTest, maskedCountAndSumGrouped) {
+  auto data = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+       makeFlatVector<bool>({true, false, true, true, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"k"}, {"count(v)", "sum(v)"}, {"m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, count(v) FILTER (WHERE m), sum(v) FROM tmp GROUP BY k");
+}
+
+// Multi-stage masked count (partial + final) exercises partialAggregators_.
+TEST_F(AggregationTest, maskedCountMultiStage) {
+  auto data = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+       makeFlatVector<bool>({true, false, true, true, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .partialAggregation({"k"}, {"count(v)", "sum(v)"}, {"m"})
+                  .finalAggregation()
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, count(v) FILTER (WHERE m), sum(v) FROM tmp GROUP BY k");
+}
+
+// Masked count(*) counts mask-true rows; includes a null mask entry.
+TEST_F(AggregationTest, maskedCountStar) {
+  auto data = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+       makeNullableFlatVector<bool>(
+           {true, false, std::nullopt, false, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"k"}, {"count(1)"}, {"m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT k, count(*) FILTER (WHERE m) FROM tmp GROUP BY k");
+}
+
+// Fully-masked-out group -> sum NULL, count 0.
+TEST_F(AggregationTest, maskedAllExcludedGroup) {
+  auto data = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 2, 2}),
+       makeFlatVector<int64_t>({10, 20, 30, 40}),
+       makeFlatVector<bool>({false, false, true, true})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"k"}, {"sum(v)", "count(v)"}, {"m", "m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(v) FILTER (WHERE m), count(v) FILTER (WHERE m) "
+          "FROM tmp GROUP BY k");
+}
+
+// NULL mask values behave as false (excluded), on count(v) + sum(v).
+TEST_F(AggregationTest, maskedNullMaskExcludes) {
+  auto data = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 1}),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeNullableFlatVector<bool>({true, std::nullopt, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"k"}, {"sum(v)", "count(v)"}, {"m", "m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(v) FILTER (WHERE m), count(v) FILTER (WHERE m) "
+          "FROM tmp GROUP BY k");
+}
+
+// Global (reduce) masked sum/count incl. all-excluded -> sum NULL, count 0.
+TEST_F(AggregationTest, maskedGlobalReduce) {
+  auto data = makeRowVector(
+      {"v", "m"},
+      {makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<bool>({false, false, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"sum(v)", "count(v)"}, {"m", "m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT sum(v) FILTER (WHERE m), count(v) FILTER (WHERE m) FROM tmp");
+}
+
+// Masked min/max incl. varchar and a fully-masked group.
+TEST_F(AggregationTest, maskedMinMaxVarchar) {
+  auto data = makeRowVector(
+      {"k", "s", "m"},
+      {makeFlatVector<int64_t>({1, 1, 2, 2}),
+       makeFlatVector<std::string>({"b", "a", "c", "d"}),
+       makeFlatVector<bool>({true, false, false, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"k"}, {"min(s)", "max(s)"}, {"m", "m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, min(s) FILTER (WHERE m), max(s) FILTER (WHERE m) "
+          "FROM tmp GROUP BY k");
+}
+
 } // namespace facebook::velox::exec::test

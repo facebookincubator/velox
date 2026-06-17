@@ -33,6 +33,7 @@
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/unary.hpp>
 
 namespace {
@@ -44,42 +45,50 @@ using cudf_velox::get_temp_mr;
 using cudf_velox::GroupbyAggregator;
 using cudf_velox::ResolvedAggregateInfo;
 
-#define DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Name, name, KIND)                    \
-  struct Groupby##Name##Aggregator : GroupbyAggregator {                      \
-    Groupby##Name##Aggregator(                                                \
-        core::AggregationNode::Step step,                                     \
-        uint32_t inputIndex,                                                  \
-        VectorPtr constant,                                                   \
-        const TypePtr& resultType)                                            \
-        : GroupbyAggregator(step, inputIndex, constant, resultType) {}        \
-                                                                              \
-    void addGroupbyRequest(                                                   \
-        cudf::table_view const& tbl,                                          \
-        std::vector<cudf::groupby::aggregation_request>& requests) override { \
-      VELOX_CHECK(                                                            \
-          constant == nullptr,                                                \
-          #Name "Aggregator does not yet support constant input");            \
-      auto& request = requests.emplace_back();                                \
-      output_idx = requests.size() - 1;                                       \
-      request.values = tbl.column(inputIndex);                                \
-      request.aggregations.push_back(                                         \
-          cudf::make_##name##_aggregation<cudf::groupby_aggregation>());      \
-    }                                                                         \
-                                                                              \
-    std::unique_ptr<cudf::column> makeOutputColumn(                           \
-        std::vector<cudf::groupby::aggregation_result>& results,              \
-        rmm::cuda_stream_view stream) override {                              \
-      auto col = std::move(results[output_idx].results[0]);                   \
-      const auto cudfType =                                                   \
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));         \
-      if (col->type() != cudfType) {                                          \
-        col = cudf::cast(*col, cudfType, stream, get_output_mr());            \
-      }                                                                       \
-      return col;                                                             \
-    }                                                                         \
-                                                                              \
-   private:                                                                   \
-    uint32_t output_idx;                                                      \
+#define DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Name, name, KIND)               \
+  struct Groupby##Name##Aggregator : GroupbyAggregator {                 \
+    Groupby##Name##Aggregator(                                           \
+        core::AggregationNode::Step step,                                \
+        uint32_t inputIndex,                                             \
+        VectorPtr constant,                                              \
+        const TypePtr& resultType,                                       \
+        std::optional<uint32_t> maskIndex)                               \
+        : GroupbyAggregator(                                             \
+              step,                                                      \
+              inputIndex,                                                \
+              constant,                                                  \
+              resultType,                                                \
+              maskIndex) {}                                              \
+                                                                         \
+    void addGroupbyRequest(                                              \
+        cudf::table_view const& tbl,                                     \
+        std::vector<cudf::groupby::aggregation_request>& requests,       \
+        rmm::cuda_stream_view stream,                                    \
+        rmm::device_async_resource_ref mr) override {                    \
+      VELOX_CHECK(                                                       \
+          constant == nullptr,                                           \
+          #Name "Aggregator does not yet support constant input");       \
+      auto& request = requests.emplace_back();                           \
+      output_idx = requests.size() - 1;                                  \
+      request.values = maskedInput(tbl, inputIndex, stream, mr);         \
+      request.aggregations.push_back(                                    \
+          cudf::make_##name##_aggregation<cudf::groupby_aggregation>()); \
+    }                                                                    \
+                                                                         \
+    std::unique_ptr<cudf::column> makeOutputColumn(                      \
+        std::vector<cudf::groupby::aggregation_result>& results,         \
+        rmm::cuda_stream_view stream) override {                         \
+      auto col = std::move(results[output_idx].results[0]);              \
+      const auto cudfType =                                              \
+          cudf::data_type(cudf_velox::veloxToCudfTypeId(resultType));    \
+      if (col->type() != cudfType) {                                     \
+        col = cudf::cast(*col, cudfType, stream, get_output_mr());       \
+      }                                                                  \
+      return col;                                                        \
+    }                                                                    \
+                                                                         \
+   private:                                                              \
+    uint32_t output_idx;                                                 \
   };
 
 DEFINE_SIMPLE_GROUPBY_AGGREGATOR(Sum, sum, SUM)
@@ -91,31 +100,51 @@ struct GroupbyCountAggregator : GroupbyAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       CountInputKind inputKind,
-      const TypePtr& resultType)
-      : GroupbyAggregator(step, inputIndex, nullptr, resultType),
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : GroupbyAggregator(step, inputIndex, nullptr, resultType, maskIndex),
         inputKind_(inputKind) {}
 
   void addGroupbyRequest(
       cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
-    auto& request = requests.emplace_back();
-    outputIndex_ = requests.size() - 1;
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) override {
     // kCountAll and kNullConstant both submit a count-all-rows request;
     // kNullConstant overrides the result with zeros in makeOutputColumn.
     const bool countAll = (inputKind_ != CountInputKind::kColumn);
-    // For raw input, count(*) can use any column (column 0) since we just
-    // need a row count. For non-raw input (intermediate/final in streaming),
-    // the input is partial results where column 0 is the grouping key;
-    // we must use inputIndex to access the partial count column.
-    request.values =
-        tbl.column((countAll && exec::isRawInput(step)) ? 0 : inputIndex);
-    std::unique_ptr<cudf::groupby_aggregation> aggRequest =
-        exec::isRawInput(step)
-        ? cudf::make_count_aggregation<cudf::groupby_aggregation>(
+    auto& request = requests.emplace_back();
+    outputIndex_ = requests.size() - 1;
+    if (exec::isRawInput(step) && maskIndex.has_value()) {
+      if (countAll) {
+        // count(*)/count(const) FILTER(WHERE m): count mask-true rows via a
+        // validity-only column + COUNT_VALID.
+        maskedCount_ = cudf_velox::maskToValidityColumn(
+            tbl.column(*maskIndex), stream, mr);
+        request.values = maskedCount_->view();
+      } else {
+        // count(col) FILTER(WHERE m): null-inject col so validity = m &&
+        // valid(col).
+        request.values = maskedInput(tbl, inputIndex, stream, mr);
+      }
+      request.aggregations.push_back(
+          cudf::make_count_aggregation<cudf::groupby_aggregation>(
+              cudf::null_policy::EXCLUDE));
+    } else if (exec::isRawInput(step)) {
+      // For raw input, count(*) can use any column (column 0) since we just
+      // need a row count.
+      request.values = countAll ? tbl.column(0) : tbl.column(inputIndex);
+      request.aggregations.push_back(
+          cudf::make_count_aggregation<cudf::groupby_aggregation>(
               countAll ? cudf::null_policy::INCLUDE
-                       : cudf::null_policy::EXCLUDE)
-        : cudf::make_sum_aggregation<cudf::groupby_aggregation>();
-    request.aggregations.push_back(std::move(aggRequest));
+                       : cudf::null_policy::EXCLUDE));
+    } else {
+      // For non-raw input (intermediate/final in streaming), the input is
+      // partial results; sum the partial counts.
+      request.values = tbl.column(inputIndex);
+      request.aggregations.push_back(
+          cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+    }
   }
 
   std::unique_ptr<cudf::column> makeOutputColumn(
@@ -139,6 +168,9 @@ struct GroupbyCountAggregator : GroupbyAggregator {
  private:
   CountInputKind inputKind_;
   uint32_t outputIndex_;
+  // Transient validity column for masked count(*)/count(const), valid until the
+  // next addGroupbyRequest on this aggregator.
+  std::unique_ptr<cudf::column> maskedCount_;
 };
 
 struct GroupbyMeanAggregator : GroupbyAggregator {
@@ -146,12 +178,17 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : GroupbyAggregator(step, inputIndex, constant, resultType) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : GroupbyAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
+  // Masked avg falls back to CPU; never masked here.
   void addGroupbyRequest(
       cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      rmm::cuda_stream_view /*stream*/,
+      rmm::device_async_resource_ref /*mr*/) override {
+    VELOX_CHECK(!maskIndex.has_value(), "avg does not support masks");
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto& request = requests.emplace_back();
@@ -301,12 +338,17 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : GroupbyAggregator(step, inputIndex, constant, resultType) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : GroupbyAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
+  // Masked stddev falls back to CPU; never masked here.
   void addGroupbyRequest(
       cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) override {
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      rmm::cuda_stream_view /*stream*/,
+      rmm::device_async_resource_ref /*mr*/) override {
+    VELOX_CHECK(!maskIndex.has_value(), "stddev does not support masks");
     auto& request = requests.emplace_back();
     outputIdx_ = requests.size() - 1;
     request.values = tbl.column(inputIndex);
@@ -485,27 +527,31 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<GroupbySumAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
     VELOX_CHECK(p.countInputKind.has_value());
     return std::make_unique<GroupbyCountAggregator>(
-        p.companionStep, p.inputIndex, *p.countInputKind, p.resultType);
+        p.companionStep,
+        p.inputIndex,
+        *p.countInputKind,
+        p.resultType,
+        p.maskIndex);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<GroupbyMinAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "max", 0) == 0) {
     return std::make_unique<GroupbyMaxAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
     return std::make_unique<GroupbyMeanAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "stddev_samp", 0) == 0) {
     return std::make_unique<GroupbyStddevSampAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "stddev", 0) == 0) {
     // stddev is an alias for stddev_samp
     return std::make_unique<GroupbyStddevSampAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else {
     VELOX_NYI("Aggregation not yet supported, kind: {}", kind);
   }
@@ -515,13 +561,28 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
 
 namespace facebook::velox::cudf_velox {
 
+cudf::column_view GroupbyAggregator::maskedInput(
+    cudf::table_view const& tbl,
+    uint32_t valueIdx,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (!maskIndex.has_value()) {
+    return tbl.column(valueIdx);
+  }
+  VELOX_CHECK(exec::isRawInput(step), "mask only valid at raw-input steps");
+  maskedValues_ =
+      applyMask(tbl.column(valueIdx), tbl.column(*maskIndex), stream, mr);
+  return maskedValues_->view();
+}
+
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants) {
-  auto params =
-      resolveAggregateInfos(aggregationNode, step, outputType, constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels) {
+  auto params = resolveAggregateInfos(
+      aggregationNode, step, outputType, constants, maskChannels);
 
   std::vector<std::unique_ptr<GroupbyAggregator>> aggregators;
   aggregators.reserve(params.size());
@@ -564,10 +625,31 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    // `mask` is NOT supported (in testing do not appear to be be applied and
-    // return incorrect results )
     if (aggregate.mask) {
-      return false;
+      const auto companionStep = getCompanionStep(aggregate.call->name(), step);
+      // Masks only apply to raw rows.
+      if (!exec::isRawInput(companionStep)) {
+        return false;
+      }
+      // Mask must be a plain boolean column reference (it is projected via
+      // inputRowSchema->getChildIdx(mask->name())).
+      if (aggregate.mask->type()->kind() != TypeKind::BOOLEAN ||
+          aggregate.mask->kind() != core::ExprKind::kFieldAccess) {
+        return false;
+      }
+      // Only sum/count/min/max honor masks; every other aggregate (avg,
+      // stddev, approx_distinct, ...) ignores maskIndex and would silently
+      // produce an unmasked result, so fall back to CPU.
+      // TODO: Support masked avg/stddev (needs partial-struct null handling).
+      const auto originalName = getOriginalName(aggregate.call->name());
+      const auto prefix = CudfConfig::getInstance().functionNamePrefix;
+      const bool maskSupported = originalName.rfind(prefix + "sum", 0) == 0 ||
+          originalName.rfind(prefix + "count", 0) == 0 ||
+          originalName.rfind(prefix + "min", 0) == 0 ||
+          originalName.rfind(prefix + "max", 0) == 0;
+      if (!maskSupported) {
+        return false;
+      }
     }
 
     if (isCountFunctionName(aggregate.call->name())) {
@@ -642,7 +724,8 @@ void CudfGroupby::initialize() {
       *aggregationNode_,
       aggregationNode_->step(),
       outputType_,
-      aggregationInput.constants);
+      aggregationInput.constants,
+      aggregationInput.maskChannels);
   streamingEnabled_ = !hasCompanionAggregates(aggregationNode_->aggregates());
 
   // Make aggregators for intermediate step when streaming is enabled.
@@ -655,23 +738,30 @@ void CudfGroupby::initialize() {
         : outputType_;
 
     std::vector<VectorPtr> nullConstants(numAggregates_);
+    // Non-raw steps carry no masks; pass an empty maskChannels so maskIndex
+    // stays nullopt there.
     intermediateAggregators_ = toGroupbyAggregators(
         *aggregationNode_,
         core::AggregationNode::Step::kIntermediate,
         bufferedResultType_,
-        nullConstants);
+        nullConstants,
+        {});
 
     if (isSingleStep_) {
+      // The kSingle streaming partial path runs for a kSingle masked query, so
+      // it must carry the raw-input mask channels.
       partialAggregators_ = toGroupbyAggregators(
           *aggregationNode_,
           core::AggregationNode::Step::kPartial,
           bufferedResultType_,
-          aggregationInput.constants);
+          aggregationInput.constants,
+          aggregationInput.maskChannels);
       finalAggregators_ = toGroupbyAggregators(
           *aggregationNode_,
           core::AggregationNode::Step::kFinal,
           outputType_,
-          nullConstants);
+          nullConstants,
+          {});
     }
   }
 
@@ -850,7 +940,7 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
 
   std::vector<cudf::groupby::aggregation_request> requests;
   for (auto& aggregator : aggregators) {
-    aggregator->addGroupbyRequest(tableView, requests);
+    aggregator->addGroupbyRequest(tableView, requests, stream, get_temp_mr());
   }
 
   auto [groupKeys, results] =

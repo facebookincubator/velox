@@ -30,8 +30,10 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/reduction/approx_distinct_count.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
@@ -45,33 +47,49 @@ using facebook::velox::cudf_velox::get_temp_mr;
 using facebook::velox::cudf_velox::ReduceAggregator;
 using facebook::velox::cudf_velox::ResolvedAggregateInfo;
 
-#define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                    \
-  struct Reduce##Name##Aggregator : ReduceAggregator {                 \
-    Reduce##Name##Aggregator(                                          \
-        core::AggregationNode::Step step,                              \
-        uint32_t inputIndex,                                           \
-        VectorPtr constant,                                            \
-        const TypePtr& resultType)                                     \
-        : ReduceAggregator(step, inputIndex, constant, resultType) {}  \
-                                                                       \
-    std::unique_ptr<cudf::column> doReduce(                            \
-        cudf::table_view const& input,                                 \
-        TypePtr const& outputType,                                     \
-        rmm::cuda_stream_view stream,                                  \
-        vector_size_t /*inputRowCount*/) override {                    \
-      auto const aggRequest =                                          \
-          cudf::make_##name##_aggregation<cudf::reduce_aggregation>(); \
-      auto const cudfOutputType =                                      \
-          cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType));  \
-      auto const resultScalar = cudf::reduce(                          \
-          input.column(inputIndex),                                    \
-          *aggRequest,                                                 \
-          cudfOutputType,                                              \
-          stream,                                                      \
-          get_temp_mr());                                              \
-      return cudf::make_column_from_scalar(                            \
-          *resultScalar, 1, stream, get_output_mr());                  \
-    }                                                                  \
+#define DEFINE_SIMPLE_REDUCE_AGGREGATOR(Name, name)                         \
+  struct Reduce##Name##Aggregator : ReduceAggregator {                      \
+    Reduce##Name##Aggregator(                                               \
+        core::AggregationNode::Step step,                                   \
+        uint32_t inputIndex,                                                \
+        VectorPtr constant,                                                 \
+        const TypePtr& resultType,                                          \
+        std::optional<uint32_t> maskIndex)                                  \
+        : ReduceAggregator(                                                 \
+              step,                                                         \
+              inputIndex,                                                   \
+              constant,                                                     \
+              resultType,                                                   \
+              maskIndex) {}                                                 \
+                                                                            \
+    std::unique_ptr<cudf::column> doReduce(                                 \
+        cudf::table_view const& input,                                      \
+        TypePtr const& outputType,                                          \
+        rmm::cuda_stream_view stream,                                       \
+        vector_size_t /*inputRowCount*/) override {                         \
+      auto const aggRequest =                                               \
+          cudf::make_##name##_aggregation<cudf::reduce_aggregation>();      \
+      auto const cudfOutputType =                                           \
+          cudf::data_type(cudf_velox::veloxToCudfTypeId(outputType));       \
+      /* Mask only applies at raw input, where maskIndex is set; the        \
+         injected column owns the lifetime through cudf::reduce. cudf       \
+         reduce(SUM/MIN/MAX) over an all-null group yields a null           \
+         scalar -> NULL, matching Velox all-excluded semantics. */          \
+      std::unique_ptr<cudf::column> injected;                               \
+      if (maskIndex.has_value()) {                                          \
+        injected = cudf_velox::applyMask(                                   \
+            input.column(inputIndex),                                       \
+            input.column(*maskIndex),                                       \
+            stream,                                                         \
+            get_temp_mr());                                                 \
+      }                                                                     \
+      auto const reduceInput =                                              \
+          injected ? injected->view() : input.column(inputIndex);           \
+      auto const resultScalar = cudf::reduce(                               \
+          reduceInput, *aggRequest, cudfOutputType, stream, get_temp_mr()); \
+      return cudf::make_column_from_scalar(                                 \
+          *resultScalar, 1, stream, get_output_mr());                       \
+    }                                                                       \
   };
 
 DEFINE_SIMPLE_REDUCE_AGGREGATOR(Sum, sum)
@@ -83,8 +101,9 @@ struct ReduceCountAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       CountInputKind inputKind,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, nullptr, resultType),
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, nullptr, resultType, maskIndex),
         inputKind_(inputKind) {}
 
   std::unique_ptr<cudf::column> doReduce(
@@ -96,18 +115,38 @@ struct ReduceCountAggregator : ReduceAggregator {
       int64_t count;
       switch (inputKind_) {
         case CountInputKind::kNullConstant:
+          // count(<null constant>) is 0 regardless of any mask.
           count = 0;
           break;
         case CountInputKind::kCountAll:
-          count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
+          if (maskIndex.has_value()) {
+            // count(*) FILTER(WHERE m): count mask-true rows via a
+            // validity-only column.
+            auto injectedMask = cudf_velox::maskToValidityColumn(
+                input.column(*maskIndex), stream, get_temp_mr());
+            count = injectedMask->size() - injectedMask->null_count();
+          } else {
+            count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
+          }
           break;
         case CountInputKind::kColumn: {
           VELOX_CHECK_GT(
               input.num_columns(),
               0,
               "count(column) requires at least one input column");
-          auto inputCol = input.column(inputIndex);
-          count = inputCol.size() - inputCol.null_count();
+          if (maskIndex.has_value()) {
+            // count(col) FILTER(WHERE m): null-inject col so validity =
+            // m && valid(col), then count valid entries.
+            auto injected = cudf_velox::applyMask(
+                input.column(inputIndex),
+                input.column(*maskIndex),
+                stream,
+                get_temp_mr());
+            count = injected->size() - injected->null_count();
+          } else {
+            auto inputCol = input.column(inputIndex);
+            count = inputCol.size() - inputCol.null_count();
+          }
           break;
         }
         default:
@@ -145,14 +184,16 @@ struct ReduceMeanAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
       TypePtr const& outputType,
       rmm::cuda_stream_view stream,
       vector_size_t /*inputRowCount*/) override {
+    VELOX_CHECK(!maskIndex.has_value(), "avg does not support masks");
     switch (step) {
       case core::AggregationNode::Step::kSingle: {
         auto const aggRequest =
@@ -260,9 +301,10 @@ struct ApproxDistinctAggregator : ReduceAggregator {
       uint32_t inputIndex,
       VectorPtr constant,
       const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex,
       std::int32_t precision = 11) // Default 11 matches Velox's 2.3% standard
                                    // error (2^11 = 2048 buckets)
-      : ReduceAggregator{step, inputIndex, constant, resultType},
+      : ReduceAggregator{step, inputIndex, constant, resultType, maskIndex},
         precision_{precision} {
     VELOX_CHECK(
         constant == nullptr,
@@ -274,6 +316,8 @@ struct ApproxDistinctAggregator : ReduceAggregator {
       TypePtr const& outputType,
       rmm::cuda_stream_view stream,
       vector_size_t /*inputRowCount*/) override {
+    VELOX_CHECK(
+        !maskIndex.has_value(), "approx_distinct does not support masks");
     if (exec::isRawInput(step)) {
       return doPartialReduce(input, stream);
     } else if (step == core::AggregationNode::Step::kIntermediate) {
@@ -452,23 +496,27 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
   auto prefix = cudf_velox::CudfConfig::getInstance().functionNamePrefix;
   if (kind.rfind(prefix + "sum", 0) == 0) {
     return std::make_unique<ReduceSumAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "count", 0) == 0) {
     VELOX_CHECK(p.countInputKind.has_value());
     return std::make_unique<ReduceCountAggregator>(
-        p.companionStep, p.inputIndex, *p.countInputKind, p.resultType);
+        p.companionStep,
+        p.inputIndex,
+        *p.countInputKind,
+        p.resultType,
+        p.maskIndex);
   } else if (kind.rfind(prefix + "min", 0) == 0) {
     return std::make_unique<ReduceMinAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "max", 0) == 0) {
     return std::make_unique<ReduceMaxAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "avg", 0) == 0) {
     return std::make_unique<ReduceMeanAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else if (kind.rfind(prefix + "approx_distinct", 0) == 0) {
     return std::make_unique<ApproxDistinctAggregator>(
-        p.companionStep, p.inputIndex, p.constant, p.resultType);
+        p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
   } else {
     VELOX_NYI("Reduce aggregation not yet supported, kind: {}", kind);
   }
@@ -482,9 +530,10 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants) {
-  auto params =
-      resolveAggregateInfos(aggregationNode, step, outputType, constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels) {
+  auto params = resolveAggregateInfos(
+      aggregationNode, step, outputType, constants, maskChannels);
 
   std::vector<std::unique_ptr<ReduceAggregator>> aggregators;
   aggregators.reserve(params.size());
@@ -527,10 +576,31 @@ bool canReduceBeEvaluatedByCudf(
       return false;
     }
 
-    // `mask` is NOT supported (in testing do not appear to be be applied and
-    // return incorrect results )
     if (aggregate.mask) {
-      return false;
+      const auto companionStep = getCompanionStep(aggregate.call->name(), step);
+      // Masks only apply to raw rows.
+      if (!exec::isRawInput(companionStep)) {
+        return false;
+      }
+      // Mask must be a plain boolean column reference (it is projected via
+      // inputRowSchema->getChildIdx(mask->name())).
+      if (aggregate.mask->type()->kind() != TypeKind::BOOLEAN ||
+          aggregate.mask->kind() != core::ExprKind::kFieldAccess) {
+        return false;
+      }
+      // Only sum/count/min/max honor masks; every other aggregate (avg,
+      // stddev, approx_distinct, ...) ignores maskIndex and would silently
+      // produce an unmasked result, so fall back to CPU.
+      // TODO: Support masked avg/stddev (needs partial-struct null handling).
+      const auto originalName = getOriginalName(aggregate.call->name());
+      const auto prefix = CudfConfig::getInstance().functionNamePrefix;
+      const bool maskSupported = originalName.rfind(prefix + "sum", 0) == 0 ||
+          originalName.rfind(prefix + "count", 0) == 0 ||
+          originalName.rfind(prefix + "min", 0) == 0 ||
+          originalName.rfind(prefix + "max", 0) == 0;
+      if (!maskSupported) {
+        return false;
+      }
     }
 
     if (isCountFunctionName(aggregate.call->name())) {
@@ -586,7 +656,8 @@ void CudfReduce::initialize() {
       *aggregationNode_,
       aggregationNode_->step(),
       outputType_,
-      aggregationInput.constants);
+      aggregationInput.constants,
+      aggregationInput.maskChannels);
 
   aggregationNode_.reset();
 }

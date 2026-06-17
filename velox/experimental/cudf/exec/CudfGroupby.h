@@ -27,10 +27,13 @@ struct GroupbyAggregator {
   uint32_t inputIndex;
   VectorPtr constant;
   TypePtr resultType;
+  std::optional<uint32_t> maskIndex;
 
   virtual void addGroupbyRequest(
       cudf::table_view const& tbl,
-      std::vector<cudf::groupby::aggregation_request>& requests) = 0;
+      std::vector<cudf::groupby::aggregation_request>& requests,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) = 0;
 
   virtual std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
@@ -43,19 +46,39 @@ struct GroupbyAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
       : step(step),
         inputIndex(inputIndex),
         constant(constant),
-        resultType(resultType) {}
+        resultType(resultType),
+        maskIndex(maskIndex) {}
+
+  // Value column for 'valueIdx', masked if this aggregate has a mask. The
+  // masked column is materialized once into maskedValues_ and its view is
+  // valid until the next addGroupbyRequest on this aggregator;
+  // doGroupByAggregation fully consumes 'requests' via aggregate() before the
+  // next batch reuses the aggregator, so the view never dangles.
+  cudf::column_view maskedInput(
+      cudf::table_view const& tbl,
+      uint32_t valueIdx,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+ private:
+  std::unique_ptr<cudf::column> maskedValues_;
 };
 
 // Factory functions for creating groupby aggregators from plan nodes.
+// 'maskChannels' carries the post-permutation mask column index per aggregate;
+// pass the raw-input mask channels for raw base/partial steps and an empty
+// vector for intermediate/final steps.
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels);
 
 // Groupby-specific validation
 bool canGroupbyBeEvaluatedByCudf(
