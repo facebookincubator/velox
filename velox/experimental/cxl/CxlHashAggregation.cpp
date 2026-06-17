@@ -110,12 +110,10 @@ RowVectorPtr CxlHashAggregation::getOutput() {
 }
 
 bool CxlHashAggregation::canReclaim() const {
+  // Reclaimable only when there are DRAM rows to relocate; we do not spill.
   auto* groupingSet = this->groupingSet();
-  if (groupingSet != nullptr && groupingSet->table() != nullptr &&
-      groupingSet->table()->rows()->numRows() > 0) {
-    return true;
-  }
-  return exec::HashAggregation::canReclaim();
+  return groupingSet != nullptr && groupingSet->table() != nullptr &&
+      groupingSet->table()->rows()->numRows() > 0;
 }
 
 void CxlHashAggregation::reclaim(
@@ -135,12 +133,8 @@ void CxlHashAggregation::reclaim(
       // The CXL pool is exhausted mid-relocation.
     }
   }
-  // We get here only when the table cannot be relieved by relocating to CXL:
-  // the rows are already in CXL (and the pinned bucket array is over the cap),
-  // or the CXL pool is exhausted. The remaining option is to spill a
-  // CXL-resident table to disk, which is not implemented -- the stock spill
-  // clears the whole table, including the CXL container, and silently drops
-  // those groups. Fail loudly instead of corrupting results.
+  // Relocation failed: the CXL pool is exhausted. Spilling a CXL-resident table
+  // to disk is not implemented (the stock spill would clear the CXL container).
   VELOX_NYI(
       "Spilling a CXL-relocated aggregation to disk is not yet implemented; "
       "size the CXL pool and DRAM cap so the bucket array fits");
