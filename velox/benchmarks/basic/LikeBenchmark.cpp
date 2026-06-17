@@ -129,11 +129,9 @@ int main(int argc, char** argv) {
           "substrings", vectorMaker.rowVector({"col0"}, {substringsInput}))
       .addExpression("substrings_no_escape", R"(like(col0, '%foo%bar%'))")
       .addExpression(
-          "substrings_inert_default_escape",
-          R"(like(col0, '%foo%bar%', '\'))")
+          "substrings_inert_default_escape", R"(like(col0, '%foo%bar%', '\'))")
       .addExpression(
-          "substrings_inert_custom_escape",
-          R"(like(col0, '%foo%bar%', '!'))");
+          "substrings_inert_custom_escape", R"(like(col0, '%foo%bar%', '!'))");
 
   benchmarkBuilder.registerBenchmarks();
   benchmarkBuilder.testBenchmarks();
