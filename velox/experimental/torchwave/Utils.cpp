@@ -348,6 +348,43 @@ void setGraphDevice(nativert::Graph* graph, bool isCuda) {
       : c10::Device(c10::kCPU);
   nativert::Placement placement(target);
   graph->applyDevicePlacement(placement);
+
+  if (!isCuda) {
+    return;
+  }
+  // Factory ops (zeros, ones, full, empty, arange, ...) with a `device` schema
+  // parameter but no device attribute default to CPU.  applyDevicePlacement
+  // only rewrites existing device attributes, so their outputs would land on
+  // CPU and trip device-mismatch checks when combined with GPU tensors.  Inject
+  // device=target for any such node so the whole graph runs on the GPU.
+  for (auto& node : graph->nodes()) {
+    auto nodeTarget = node.target();
+    std::vector<std::string_view> atoms = c10::split(nodeTarget, '.');
+    if (atoms.size() < 3 || atoms[0] != "torch" || atoms[1] != "ops") {
+      continue;
+    }
+    if (node.tryGetAttribute("device") != nullptr ||
+        node.tryGetInput("device") != nullptr) {
+      continue;
+    }
+    auto schema = c10::Dispatcher::singleton().findSchema(
+        {fmt::format(
+             "{}::{}", atoms[atoms.size() - 3], atoms[atoms.size() - 2]),
+         std::string(atoms[atoms.size() - 1])});
+    if (!schema) {
+      continue;
+    }
+    bool hasDeviceArg = false;
+    for (const auto& arg : schema->schema().arguments()) {
+      if (arg.name() == "device") {
+        hasDeviceArg = true;
+        break;
+      }
+    }
+    if (hasDeviceArg) {
+      node.addAttribute(nativert::Attribute{"device", target});
+    }
+  }
 }
 
 namespace {
@@ -1204,6 +1241,28 @@ bool baseMutatedAfter(
     }
   }
   return false;
+}
+
+bool isUnreadyNoneDependency(ValueCP value, nativert::ExecutionFrame& frame) {
+  // A value whose static type is None (an `asNone` optional argument) is
+  // legitimately None and will never be produced -- it must not block its
+  // consumer.  Only a runtime-None value with a non-None static type is an
+  // unready dependency awaiting a producer.
+  return value->type().kind() != nativert::Type::Kind::None &&
+      frame.getIValue(value->id()).isNone();
+}
+
+bool nodeOutputsComputed(NodeCP node, nativert::ExecutionFrame& frame) {
+  const auto& outputs = node->outputs();
+  if (outputs.empty()) {
+    return false;
+  }
+  for (auto* output : outputs) {
+    if (frame.getIValue(output->id()).isNone()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 TraceState parseTraceValues(const std::string& csv) {

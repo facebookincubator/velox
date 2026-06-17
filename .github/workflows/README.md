@@ -106,11 +106,11 @@ Generates the cached `dependency-graph` artifact on every push to `main` (90-day
 Reusable workflow called by `linux-build.yml` to decide whether the build runs in **full** mode (all jobs, mono on) or **targeted** mode (only the cmake targets affected by the change):
 
 - Push to `main` → full
-- PR with a standing approving review **from a committer** on the current head SHA → full
-- PR where a **committer** has posted `/full-build` → full
+- PR with a standing approving review **from an eligible reviewer** on the current head SHA → full
+- PR where an **eligible commenter** has posted `/full-build` → full
 - Otherwise → targeted (fast path: cached graph; slow path: regenerate when CMake files change; falls back to full for `velox/experimental/` or `velox/external/` changes)
 
-"Committer" here means a user with push access — `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`. Approvals and `/full-build` comments from other authors are recorded by GitHub but do not escalate the build, capping CI-minutes exposure from drive-by activity on fork PRs.
+"Eligible" here means `author_association` of `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`. `CONTRIBUTOR` is included because GitHub reports many active Velox maintainers as `CONTRIBUTOR` rather than `MEMBER` when their owning-org membership is private — without it, the gate would exclude the majority of real reviewer activity. Approvals and `/full-build` comments from authors outside this allowlist (e.g. `NONE`, `FIRST_TIME_CONTRIBUTOR`) are recorded by GitHub but do not escalate the build, capping CI-minutes exposure from drive-by activity on fork PRs.
 
 The plan uploads a `selective-build-comment` artifact containing the comment markdown, which `selective-build-comment.yml` posts to the PR after the upstream workflow finishes.
 
@@ -118,10 +118,10 @@ The plan uploads a `selective-build-comment` artifact containing the comment mar
 
 Two events escalate an in-flight selective build to a full build, even for fork PRs:
 
-- **An approving review from a committer** — typically the final gate before merging.
-- **A committer posting `/full-build` as a PR comment** — for forcing full coverage *before* approving, or when the path-based heuristics underestimate impact.
+- **An approving review from an eligible reviewer** — typically the final gate before merging.
+- **An eligible commenter posting `/full-build` as a PR comment** — for forcing full coverage *before* approving, or when the path-based heuristics underestimate impact.
 
-Both signals are restricted to committers (`author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR` — i.e., users with push access). The same filter is applied at three points (escalation gate, escalation dedup, sticky re-evaluation in the plan workflow) so a non-committer's drive-by approval or `/full-build` comment is consistently ignored everywhere.
+Both signals are restricted to authors with `author_association` of `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`. `CONTRIBUTOR` is included because GitHub reports many active Velox maintainers as `CONTRIBUTOR` rather than `MEMBER` when their owning-org membership is private; restricting to push-access-only buckets would exclude the majority of real reviewer activity. The same filter is applied at three points (escalation gate, escalation dedup, sticky re-evaluation in the plan workflow) so an out-of-allowlist drive-by approval or `/full-build` comment is consistently ignored everywhere.
 
 Both signals are sticky: every subsequent push on the PR also runs in full mode while the approval stands or the `/full-build` comment exists. Deleting the comment or having the approval dismissed is a no-op for the in-flight build — symmetric in both directions.
 

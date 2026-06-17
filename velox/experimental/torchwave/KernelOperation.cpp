@@ -29,13 +29,17 @@ namespace torch::wave {
 
 int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
     const {
-  if (values.empty() && args.empty()) {
+  // A pure factory expression (e.g. zeros(size=[1000])) has no tensor leaves to
+  // size from -- its extent lives entirely in constShapes.  Fall through to the
+  // constShapes path below rather than returning the scalar default.
+  if (values.empty() && args.empty() && constShapes.empty()) {
     return 1;
   }
   // Broadcasting elementwise: the element count is the product of the broadcast
   // shape across all operands, which can exceed the largest single operand
-  // (e.g. [20,1] and [100] broadcast to [20,100]).
-  if (broadcast) {
+  // (e.g. [20,1] and [100] broadcast to [20,100]).  Also used when a fused
+  // factory op contributes a constant shape (constShapes) the leaves lack.
+  if (broadcast || !constShapes.empty()) {
     int64_t n = 1;
     for (auto dim : dims(frame)) {
       n *= dim;
@@ -45,7 +49,16 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
   int64_t result = 0;
   for (auto valueId : values) {
     auto& ivalue = frame->getIValue(valueId);
-    int64_t n = ivalue.isTensor() ? ivalue.toTensor().numel() : ivalue.toInt();
+    int64_t n;
+    if (ivalue.isTensor()) {
+      n = ivalue.toTensor().numel();
+    } else if (ivalue.isInt()) {
+      n = ivalue.toInt();
+    } else {
+      LOG(WARNING) << "SizeExpr: value " << valueId << " is "
+                   << ivalue.tagKind() << ", expected Tensor or Int";
+      n = 1;
+    }
     if (op == SizeShortcut::kMax) {
       if (n > result) {
         result = n;
@@ -75,22 +88,32 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
       op == SizeShortcut::kMax,
       "SizeExpr::dims only supported for kMax, got ",
       static_cast<int>(op));
-  if (values.empty() && args.empty()) {
+  if (values.empty() && args.empty() && constShapes.empty()) {
     return {1};
   }
   // Broadcasting: combine all operand shapes right-aligned, taking the max
   // (non-1) extent per dimension. Operands are assumed broadcast-compatible.
-  if (broadcast) {
+  // constShapes folds in factory-op extents (zeros/ones/full) fused into the
+  // subtree whose size comes from a `size` attribute, not a frame value.
+  if (broadcast || !constShapes.empty()) {
     std::vector<Dim> result;
     auto combine = [&result](const std::vector<Dim>& shape) {
-      // Right-align: grow result to the larger rank, then max each dim from
-      // the right.
+      // Right-align: grow result to the larger rank, then broadcast each dim
+      // from the right.  Broadcast rule: a size-1 dim takes the other operand's
+      // extent -- which may be 0 for an empty tensor (1 broadcasts to 0, so
+      // [N,1] vs [N,0] -> [N,0]).  Using max here would wrongly turn an empty
+      // result into a non-empty one and read past the empty operand.
       if (shape.size() > result.size()) {
         result.insert(result.begin(), shape.size() - result.size(), 1);
       }
       for (size_t i = 0; i < shape.size(); ++i) {
         auto& resultDim = result[result.size() - shape.size() + i];
-        resultDim = std::max<Dim>(resultDim, shape[i]);
+        if (resultDim == 1) {
+          resultDim = shape[i];
+        } else if (shape[i] != 1) {
+          // Both extents are non-1; in a valid broadcast they are equal.
+          resultDim = std::max<Dim>(resultDim, shape[i]);
+        }
       }
     };
     for (auto valueId : values) {
@@ -102,6 +125,9 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
     }
     for (auto& child : args) {
       combine(child.dims(frame));
+    }
+    for (const auto& shape : constShapes) {
+      combine(shape);
     }
     if (result.empty()) {
       result.push_back(1);
@@ -141,6 +167,7 @@ SizeExpr SizeExpr::toActual(
   SizeExpr result;
   result.op = op;
   result.broadcast = broadcast;
+  result.constShapes = constShapes;
   result.values.reserve(values.size());
   for (auto valueId : values) {
     auto it = bindings.find(valueId);
@@ -185,8 +212,16 @@ void makeConstantIndicesImpl(
     }
   }
   int32_t numAttrs = 0;
-  forEachSortedAttribute(
-      node, [&](NodeCP, const nativert::Attribute&) { ++numAttrs; });
+  forEachSortedAttribute(node, [&](NodeCP, const nativert::Attribute& attr) {
+    // Match listConstants: an attribute whose value is None does not occupy a
+    // constant slot, so it must not be counted here either.  Otherwise a None
+    // attribute (e.g. searchsorted's `side`/`sorter`, repeat_interleave's
+    // `output_size`) on a producer node shifts every later node's constant
+    // index past the end of the constants vector.
+    if (!nativert::constantToIValue(attr.value).isNone()) {
+      ++numAttrs;
+    }
+  });
   if (numAttrs > 0) {
     result[myOrdinal] = numAttrsSeen;
     numAttrsSeen += numAttrs;
@@ -726,6 +761,41 @@ void collectElementwiseLeaves(
   }
 }
 
+// Walks the elementwise subtree rooted at 'node' and records the `size`
+// attribute of any factory op (zeros/ones/full) in it.  Such ops have no
+// tensor inputs, so collectElementwiseLeaves finds no leaf to size the fused
+// subtree from; their extent lives in the `size` attribute instead and must be
+// broadcast into the output shape.
+void collectFactorySizes(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited,
+    std::vector<std::vector<Dim>>& constShapes) {
+  if (!visited.insert(node).second) {
+    return;
+  }
+  if (const auto* sizeAttr = node->tryGetAttribute("size")) {
+    if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+      const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
+      constShapes.emplace_back(sz.begin(), sz.end());
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    auto* value = input.value;
+    if (subgraphInputs.count(value)) {
+      continue;
+    }
+    auto* producer = value->producer();
+    if (!producer) {
+      continue;
+    }
+    auto* producerMeta = Registry::metadata(producer->target());
+    if (producerMeta && producerMeta->elementwise) {
+      collectFactorySizes(producer, subgraphInputs, visited, constShapes);
+    }
+  }
+}
+
 } // namespace
 
 SizeExpr KernelOperation::makeSizeExpr(
@@ -737,12 +807,16 @@ SizeExpr KernelOperation::makeSizeExpr(
     std::unordered_set<ValueCP> seen;
     std::vector<nativert::ValueId> leafIds;
     collectElementwiseLeaves(node, subgraphInputs, seen, leafIds);
+    std::unordered_set<NodeCP> factoryVisited;
+    std::vector<std::vector<Dim>> constShapes;
+    collectFactorySizes(node, subgraphInputs, factoryVisited, constShapes);
     // With more than one operand the result is their broadcast: the size is the
     // product of the broadcast shape, which can exceed the largest single
     // operand (e.g. [20,1] + [100] -> [20,100]). With one operand the size is
     // just that operand, so the broadcast path is unnecessary.
     SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
     expr.broadcast = expr.values.size() > 1;
+    expr.constShapes = std::move(constShapes);
     return expr;
   }
 
@@ -789,10 +863,14 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       std::unordered_set<ValueCP> seen;
       std::vector<nativert::ValueId> leafIds;
       collectElementwiseLeaves(expr_, inputs_, seen, leafIds);
+      std::unordered_set<NodeCP> factoryVisited;
+      std::vector<std::vector<Dim>> constShapes;
+      collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       // Multiple operands broadcast against each other; size by the broadcast
       // shape (see makeSizeExpr).
       SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
       expr.broadcast = expr.values.size() > 1;
+      expr.constShapes = std::move(constShapes);
       return expr;
     }
   }

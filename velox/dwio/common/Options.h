@@ -37,6 +37,7 @@
 #include "velox/dwio/common/FlatMapHelper.h"
 #include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/UnitLoader.h"
 #include "velox/dwio/common/encryption/Encryption.h"
@@ -119,6 +120,24 @@ enum class ColumnMappingMode {
   /// This is Parquet-specific. Readers for other formats should reject this
   /// mode instead of interpreting it as a generic column identity mechanism.
   kParquetFieldId,
+
+  /// Matches physical fields to requested columns by Iceberg field id carried
+  /// as per-type string attributes ("iceberg.id") in the file schema.
+  ///
+  /// Use this mode for DWRF/ORC files written for Iceberg, where a column's
+  /// identity is its field id rather than its name or position. Unlike
+  /// kParquetFieldId (which reads physical Parquet field_id metadata), this
+  /// mode
+  /// reads the ORC-spec attribute convention that DWRF/ORC writers stamp onto
+  /// each schema node. The caller provides ReaderOptions::fieldIds() describing
+  /// the requested (table) schema's field ids, aligned to fileSchema() at every
+  /// row-typed level. The reader renames the file's columns to the requested
+  /// names that share their field id, so a downstream name-based read resolves
+  /// renames, reorders, deletions, and drop/re-add-with-same-name correctly.
+  /// Physical nodes without an "iceberg.id" attribute do not match any positive
+  /// requested field id and are surfaced as missing (the connector materializes
+  /// them as null or the table format's default value).
+  kFieldId,
 };
 
 VELOX_DECLARE_ENUM_NAME(ColumnMappingMode);
@@ -724,6 +743,14 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Sets the requested (table) schema field ids for
+  /// ColumnMappingMode::kFieldId, one ParquetFieldId tree per top-level column,
+  /// aligned to fileSchema().
+  ReaderOptions& setFieldIds(std::vector<ParquetFieldId> fieldIds) {
+    fieldIds_ = std::move(fieldIds);
+    return *this;
+  }
+
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -761,6 +788,11 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the file schema.
   const std::shared_ptr<const velox::RowType>& fileSchema() const {
     return fileSchema_;
+  }
+
+  /// Gets the requested schema field ids for ColumnMappingMode::kFieldId.
+  const std::vector<ParquetFieldId>& fieldIds() const {
+    return fieldIds_;
   }
 
   SerDeOptions& serDeOptions() {
@@ -958,6 +990,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t tailLocation_{std::numeric_limits<uint64_t>::max()};
   FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
+  std::vector<ParquetFieldId> fieldIds_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;

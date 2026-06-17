@@ -177,6 +177,7 @@ Writer::Writer(
       options.adjustTimestampToTimezone,
       std::move(handler),
       options.memoryBudget);
+  writerBase_->setSchemaAttributes(options.schemaAttributes);
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),

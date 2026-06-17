@@ -124,12 +124,15 @@ void tensorsToDevice(
   auto device =
       c10::Device(c10::kCUDA, static_cast<c10::DeviceIndex>(deviceId));
 
-  // Compute total storage bytes needed. For non-contiguous tensors, the storage
-  // extent (first to last element) can exceed numel * element_size.
+  // Contiguify and force standard CPU allocation.  Pickle-deserialized
+  // tensors may sit on CUDA managed memory pages that SIGSEGV on memcpy
+  // into pinned memory.
+  std::vector<at::Tensor> contig(in.size());
   int64_t totalBytes = 0;
   std::vector<int64_t> sizes(in.size());
   for (size_t i = 0; i < in.size(); ++i) {
-    sizes[i] = storageExtentBytes(in[i]);
+    contig[i] = in[i].contiguous().cpu().clone();
+    sizes[i] = static_cast<int64_t>(contig[i].nbytes());
     totalBytes += sizes[i];
   }
 
@@ -139,21 +142,19 @@ void tensorsToDevice(
   auto* pinnedBase = pinned.data_ptr<uint8_t>();
   int64_t offset = 0;
   for (size_t i = 0; i < in.size(); ++i) {
-    TORCH_CHECK(i < sizes.size());
-    memcpy(pinnedBase + offset, in.at(i).data_ptr(), sizes.at(i));
+    memcpy(pinnedBase + offset, contig[i].data_ptr(), sizes[i]);
     offset += sizes[i];
   }
 
-  // Allocate device storage and async copy, preserving original strides.
+  // Allocate device storage and async copy.
   out.resize(in.size());
   offset = 0;
   for (size_t i = 0; i < in.size(); ++i) {
-    TORCH_CHECK(i < sizes.size());
-    int64_t numElements = sizes.at(i) / in.at(i).element_size();
-    auto deviceFlat = at::empty({numElements}, in[i].options().device(device));
+    auto deviceFlat =
+        at::empty({contig[i].numel()}, contig[i].options().device(device));
     stream.hostToDeviceAsync(
         deviceFlat.data_ptr(), pinnedBase + offset, sizes[i]);
-    out[i] = deviceFlat.as_strided(in[i].sizes(), in[i].strides());
+    out[i] = deviceFlat.reshape(contig[i].sizes());
     offset += sizes[i];
   }
 
@@ -316,6 +317,29 @@ void runStandalones(
         "No kernel for node ",
         actualNode->target());
 
+    // Skip if this node's output is already materialized (e.g. it was computed
+    // by runReadyGraphNodes after the producing composite).  See
+    // nodeOutputsComputed: re-executing would re-read recycled input buffers.
+    if (nodeOutputsComputed(actualNode, *state.frame)) {
+      continue;
+    }
+
+    // Skip standalone ops with None inputs — they depend on values
+    // from later PNs.  runDeferredStandalones will retry them.
+    bool hasNoneInput = false;
+    for (const auto& input : actualNode->inputs()) {
+      if (isUnreadyNoneDependency(input.value, *state.frame)) {
+        hasNoneInput = true;
+        break;
+      }
+    }
+    if (hasNoneInput) {
+      if (state.deferredStandalones) {
+        state.deferredStandalones->push_back(actualNode);
+      }
+      continue;
+    }
+
     SavedValues savedDeviceValues;
     if (data.launch && !data.launch->argOnCpu.empty()) {
       savedDeviceValues = replaceCpuOnlyArgs(*data.launch, *state.frame);
@@ -363,6 +387,21 @@ WaveGraphExecutor::WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext)
       kernel = nativert::PrimKernelRegistry()->Create(target, node);
     } else if (c10::starts_with(target, "torch.ops")) {
       kernel = std::make_unique<nativert::C10Kernel>(node);
+    } else {
+      bool hasSymIntOutput = false;
+      bool hasSymBoolOutput = false;
+      for (auto* output : node->outputs()) {
+        if (output->type().kind() == nativert::Type::Kind::SymInt) {
+          hasSymIntOutput = true;
+        } else if (output->type().kind() == nativert::Type::Kind::SymBool) {
+          hasSymBoolOutput = true;
+        }
+      }
+      if (hasSymIntOutput) {
+        kernel = std::make_unique<nativert::SymIntOpKernel>(node);
+      } else if (hasSymBoolOutput) {
+        kernel = std::make_unique<nativert::SymBoolOpKernel>(node);
+      }
     }
     if (kernel) {
       kernelMap_[node] = kernel.get();
@@ -390,6 +429,8 @@ std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::makeDeviceFrame() {
     if (iv.isTensor()) {
       tensorIds.push_back(id);
       hostTensors.push_back(iv.toTensor());
+    } else if (!iv.isNone()) {
+      frame->setIValue(id, iv);
     }
   }
 
@@ -577,9 +618,141 @@ void WaveGraphExecutor::executeWave(
   state.verifiedIds.clear();
 
   auto wallStart = std::chrono::high_resolution_clock::now();
+
+  std::vector<NodeCP> deferredStandalones;
+  state.deferredStandalones = &deferredStandalones;
+  // After each PN execution, run any graph nodes whose outputs are
+  // None but inputs are now ready.  This populates SymInt metadata
+  // (strides, sizes) from _assert_tensor_metadata and other standalone
+  // ops that the serial nativert executor would compute.
+  // Ad-hoc C10 kernels for graph nodes not in kernelMap (e.g.,
+  // sym_size, sym_storage_offset, _local_scalar_dense).
+  std::vector<std::unique_ptr<nativert::OpKernel>> adhocKernels;
+  folly::F14FastMap<NodeCP, nativert::OpKernel*> adhocKernelMap;
+
+  auto runReadyGraphNodes = [&]() {
+    auto& graph = *waveGraph.graph();
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (auto& gnode : graph.nodes()) {
+        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
+          continue;
+        }
+        bool hasNoneOutput = false;
+        for (auto* output : gnode.outputs()) {
+          if (frame.getIValue(output->id()).isNone()) {
+            hasNoneOutput = true;
+            break;
+          }
+        }
+        if (!hasNoneOutput) {
+          continue;
+        }
+        // Look up in both the main kernelMap and ad-hoc map.
+        nativert::OpKernel* kernel = nullptr;
+        auto kernelIt = state.kernelMap->find(&gnode);
+        if (kernelIt != state.kernelMap->end()) {
+          kernel = kernelIt->second;
+        } else {
+          auto adhocIt = adhocKernelMap.find(&gnode);
+          if (adhocIt != adhocKernelMap.end()) {
+            kernel = adhocIt->second;
+          } else {
+            std::string target(gnode.target());
+            std::unique_ptr<nativert::OpKernel> newKernel;
+            if (nativert::PrimKernelRegistry()->Has(target)) {
+              newKernel =
+                  nativert::PrimKernelRegistry()->Create(target, &gnode);
+            } else if (c10::starts_with(target, "torch.ops")) {
+              // Synthetic wave ops (e.g. exclusive_sum) have no real C10
+              // schema and are produced by wave's own lowered kernels, not by
+              // a standalone C10Kernel.  Skip them if no schema exists.
+              try {
+                newKernel = std::make_unique<nativert::C10Kernel>(&gnode);
+              } catch (const std::exception&) {
+                newKernel = nullptr;
+              }
+            } else {
+              bool hasSymIntOutput = false;
+              bool hasSymBoolOutput = false;
+              for (auto* output : gnode.outputs()) {
+                if (output->type().kind() == nativert::Type::Kind::SymInt) {
+                  hasSymIntOutput = true;
+                } else if (
+                    output->type().kind() == nativert::Type::Kind::SymBool) {
+                  hasSymBoolOutput = true;
+                }
+              }
+              if (hasSymIntOutput) {
+                newKernel = std::make_unique<nativert::SymIntOpKernel>(&gnode);
+              } else if (hasSymBoolOutput) {
+                newKernel = std::make_unique<nativert::SymBoolOpKernel>(&gnode);
+              }
+            }
+            if (newKernel) {
+              kernel = newKernel.get();
+              adhocKernelMap[&gnode] = kernel;
+              adhocKernels.push_back(std::move(newKernel));
+            }
+          }
+        }
+        if (!kernel) {
+          continue;
+        }
+        bool inputsReady = true;
+        for (const auto& input : gnode.inputs()) {
+          if (isUnreadyNoneDependency(input.value, frame)) {
+            inputsReady = false;
+            break;
+          }
+        }
+        if (inputsReady) {
+          executeNode(&gnode, kernel, frame);
+          progress = true;
+        }
+      }
+    }
+  };
+
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
+    runReadyGraphNodes();
   }
+  // Run deferred standalones whose inputs were produced by later PNs.
+  for (const auto& node : waveGraph.nodes()) {
+    node->runDeferredStandalones(state);
+  }
+
+  // Run grid standalones that were skipped due to None inputs.
+  {
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (auto* deferredNode : deferredStandalones) {
+        auto& output = frame.getIValue(deferredNode->outputs()[0]->id());
+        if (!output.isNone()) {
+          continue;
+        }
+        auto kernelIt = state.kernelMap->find(deferredNode);
+        if (kernelIt == state.kernelMap->end()) {
+          continue;
+        }
+        bool allReady = true;
+        for (const auto& input : deferredNode->inputs()) {
+          if (isUnreadyNoneDependency(input.value, frame)) {
+            allReady = false;
+            break;
+          }
+        }
+        if (allReady) {
+          executeNode(deferredNode, kernelIt->second, frame);
+          progress = true;
+        }
+      }
+    }
+  }
+  state.deferredStandalones = nullptr;
   // Sync the wave stream and the PyTorch default stream: eager standalone ops
   // run on the default stream while fused kernels run on the wave stream, and
   // the two are otherwise unordered. Both must complete before executeWave
