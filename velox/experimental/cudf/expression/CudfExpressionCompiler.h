@@ -16,76 +16,27 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/expression/CudfExprCtx.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 namespace facebook::velox::cudf_velox {
 
-/// Compiler that transforms TypedExpr trees into CudfExpressions by
-/// selecting the best evaluator for each sub-tree.
-///
-/// This class is intended for top-level operator compilation scopes
-/// (e.g. operator initialization). Recursive sub-expression compilation should
-/// use createCudfExpression().
-///
-/// The compile() method:
-///   1. Optimizes the expression (constant folding / rewrites) when QueryCtx
-///      and MemoryPool are available.
-///   2. Selects the best evaluator for the root expression.
-///   3. Creates the evaluator.  Each evaluator handles its own sub-tree
-///      compilation internally (e.g. FunctionExpression recursively calls
-///      createCudfExpression for children, AST calls createCudfExpression).
-///
-/// Usage:
-///   CudfExpressionCompiler compiler(schema, exprCtx);
-///   auto filter = compiler.compile(filterExpr);
-///   auto proj   = compiler.compile(projectExpr);
-class CudfExpressionCompiler {
- public:
-  /// Construct a compiler for the given input schema.
-  ///
-  /// @param inputRowSchema  The schema of the input row.
-  /// @param exprCtx         Expression compilation context.
-  CudfExpressionCompiler(
-      const RowTypePtr& inputRowSchema,
-      CudfExprCtx exprCtx);
+/// Selects the best cuDF evaluator for the given (already-optimized) expression
+/// and creates the corresponding CudfExpression.  Use for recursive evaluator
+/// hand-off, and for callers that have already optimized the expression because
+/// they also need the optimized tree (e.g. hash join's two-table AST checks and
+/// the data source's read-column collection).
+std::shared_ptr<CudfExpression> compile(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool);
 
-  /// Compile a single expression.
-  ///
-  /// If queryCtx and pool were provided at construction, the expression is
-  /// optimized (constant folding / rewrites) before compilation.  The
-  /// optimized root expression is retained and accessible via optimizedExpr().
-  std::shared_ptr<CudfExpression> compile(const core::TypedExprPtr& expr);
-
-  /// Compile a sub-expression without optimization.
-  ///
-  /// This is used by recursive evaluator internals after top-level compile()
-  /// has already optimized the root expression.
-  static std::shared_ptr<CudfExpression> compileSubExpression(
-      const core::TypedExprPtr& expr,
-      const RowTypePtr& inputRowSchema,
-      CudfExprCtx exprCtx);
-
-  /// The optimized expression from the most recent top-level compile() call.
-  ///
-  /// Compatibility note: this API exists for legacy CudfHashJoin usage.
-  /// New code should avoid depending on this stateful accessor.
-  const core::TypedExprPtr& optimizedExpr() const {
-    return rootOptimizedExpr_;
-  }
-
-  const RowTypePtr& inputRowSchema() const {
-    return schema_;
-  }
-
- private:
-  std::shared_ptr<CudfExpression> compileImpl(const core::TypedExprPtr& expr);
-
-  RowTypePtr schema_;
-  CudfExprCtx exprCtx_;
-
-  /// The optimized expression from the most recent top-level compile() call.
-  core::TypedExprPtr rootOptimizedExpr_;
-};
+/// Optimizes the expression (rewrites + constant folding through `queryCtx`)
+/// and compiles the result.  Use for top-level operator expressions that do not
+/// need the optimized tree separately.
+std::shared_ptr<CudfExpression> optimizeAndCompile(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 } // namespace facebook::velox::cudf_velox

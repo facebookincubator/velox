@@ -34,6 +34,10 @@
 #include <variant>
 #include <vector>
 
+namespace facebook::velox::core {
+class QueryCtx;
+} // namespace facebook::velox::core
+
 namespace facebook::velox::cudf_velox {
 
 // Holds either a non-owning cudf::column_view (zero-copy) or an owning
@@ -77,7 +81,8 @@ class CudfFunction {
 
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
-    const core::TypedExprPtr& expr)>;
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool)>;
 
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
@@ -101,7 +106,8 @@ void registerCudfFunctions(
 /// signature.
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const core::TypedExprPtr& expr);
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool);
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
@@ -126,7 +132,7 @@ class FunctionExpression : public CudfExpression {
   static std::shared_ptr<FunctionExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      CudfExprCtx exprCtx);
+      memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -159,13 +165,13 @@ class FunctionExpression : public CudfExpression {
 };
 
 /// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
-/// Delegates to CudfExpressionCompiler::compileSubExpression and does not
-/// optimize the expression. Prefer constructing a CudfExpressionCompiler
-/// directly in operator code and calling compile() at top-level entry points.
+/// Forwards to compile and does not apply expression-level
+/// optimization; callers that need optimization should run
+/// expression::optimize at the top-level entry point first.
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    CudfExprCtx exprCtx);
+    memory::MemoryPool* pool);
 
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.
@@ -178,7 +184,6 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr, bool deep = true);
 bool canBeEvaluatedByCudf(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
     bool deep = true);
 
 /// Return the best CudfExpressionEvaluatorEntry for the given expression,
@@ -188,89 +193,23 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
-inline std::optional<std::vector<std::string>> extractFieldPath(
-    const core::TypedExprPtr& expr) {
-  if (expr == nullptr) {
-    return std::nullopt;
-  }
-
-  if (expr->isFieldAccessKind()) {
-    const auto* field = expr->asUnchecked<core::FieldAccessTypedExpr>();
-    if (field->inputs().empty() || field->inputs()[0]->isInputKind()) {
-      return std::vector<std::string>{field->name()};
-    }
-
-    auto path = extractFieldPath(field->inputs()[0]);
-    if (!path.has_value()) {
-      return std::nullopt;
-    }
-    path->push_back(field->name());
-    return path;
-  }
-
-  if (expr->isDereferenceKind()) {
-    const auto* dereference = expr->asUnchecked<core::DereferenceTypedExpr>();
-    auto path = extractFieldPath(dereference->inputs()[0]);
-    if (!path.has_value()) {
-      return std::nullopt;
-    }
-    path->push_back(dereference->name());
-    return path;
-  }
-
-  return std::nullopt;
-}
+std::optional<std::vector<std::string>> extractFieldPath(
+    const core::TypedExprPtr& expr);
 
 /// Return the root (top-level) field name, or nullopt.
-inline std::optional<std::string> rootFieldName(
-    const core::TypedExprPtr& expr) {
-  auto path = extractFieldPath(expr);
-  if (!path.has_value() || path->empty()) {
-    return std::nullopt;
-  }
-  return path->front();
-}
+std::optional<std::string> rootFieldName(const core::TypedExprPtr& expr);
 
 /// True if the expression is a direct input field reference (possibly nested).
-inline bool isInputFieldReference(const core::TypedExprPtr& expr) {
-  return rootFieldName(expr).has_value();
-}
+bool isInputFieldReference(const core::TypedExprPtr& expr);
 
 /// Collect all top-level input field names referenced by an expression tree.
-inline void collectReferencedInputFields(
+void collectReferencedInputFields(
     const core::TypedExprPtr& expr,
     std::unordered_set<std::string>& fields,
-    const std::unordered_set<std::string>& lambdaInputs = {}) {
-  if (expr == nullptr) {
-    return;
-  }
-
-  if (auto root = rootFieldName(expr);
-      root.has_value() && !lambdaInputs.count(*root)) {
-    fields.insert(*root);
-  }
-
-  if (expr->isLambdaKind()) {
-    const auto* lambda = expr->asUnchecked<core::LambdaTypedExpr>();
-    auto scopedLambdaInputs = lambdaInputs;
-    for (const auto& name : lambda->signature()->names()) {
-      scopedLambdaInputs.insert(name);
-    }
-    collectReferencedInputFields(lambda->body(), fields, scopedLambdaInputs);
-    return;
-  }
-
-  for (const auto& input : expr->inputs()) {
-    collectReferencedInputFields(input, fields, lambdaInputs);
-  }
-}
+    const std::unordered_set<std::string>& lambdaInputs = {});
 
 /// Return the set of top-level input field names referenced by the expression.
-inline std::unordered_set<std::string> referencedInputFields(
-    const core::TypedExprPtr& expr) {
-  std::unordered_set<std::string> fields;
-  collectReferencedInputFields(expr, fields);
-  return fields;
-}
+std::unordered_set<std::string> referencedInputFields(
+    const core::TypedExprPtr& expr);
 
 } // namespace facebook::velox::cudf_velox

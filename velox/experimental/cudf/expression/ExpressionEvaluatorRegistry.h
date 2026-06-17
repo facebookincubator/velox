@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/expression/CudfExprCtx.h"
 #include "velox/core/Expressions.h"
 #include "velox/type/Type.h"
 
@@ -35,7 +34,7 @@ using CudfExpressionEvaluatorCreate =
     std::function<std::shared_ptr<CudfExpression>(
         const core::TypedExprPtr& expr,
         const RowTypePtr& inputRowSchema,
-        CudfExprCtx exprCtx)>;
+        memory::MemoryPool* pool)>;
 
 struct CudfExpressionEvaluatorEntry {
   int priority;

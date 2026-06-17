@@ -68,8 +68,8 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         CudfExprCtx exprCtx) {
-        return FunctionExpression::create(expr, row, exprCtx);
+         memory::MemoryPool* pool) {
+        return FunctionExpression::create(expr, row, pool);
       },
       /*overwrite=*/false);
 

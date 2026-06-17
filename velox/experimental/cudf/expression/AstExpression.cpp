@@ -33,14 +33,9 @@ cudf::ast::expression const& createAstTree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precomputeInstructions,
-    CudfExprCtx exprCtx) {
+    memory::MemoryPool* pool) {
   AstContext context{
-      tree,
-      scalars,
-      {inputRowSchema},
-      {precomputeInstructions},
-      exprCtx,
-      expr};
+      tree, scalars, {inputRowSchema}, {precomputeInstructions}, pool, expr};
   return context.pushExprToTree(expr);
 }
 
@@ -52,13 +47,13 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    CudfExprCtx exprCtx) {
+    memory::MemoryPool* pool) {
   AstContext context{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
       {leftPrecomputeInstructions, rightPrecomputeInstructions},
-      exprCtx,
+      pool,
       expr};
   return context.pushExprToTree(expr);
 }
@@ -66,15 +61,15 @@ cudf::ast::expression const& createAstTree(
 ASTExpression::ASTExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    CudfExprCtx exprCtx)
-    : expr_(expr), inputRowSchema_(inputRowSchema), exprCtx_(exprCtx) {
+    memory::MemoryPool* pool)
+    : expr_(expr), inputRowSchema_(inputRowSchema), pool_(pool) {
   createAstTree(
       expr,
       cudfTree_,
       scalars_,
       inputRowSchema,
       precomputeInstructions_,
-      exprCtx_);
+      pool_);
 }
 
 void ASTExpression::close() {
@@ -149,8 +144,8 @@ void registerAstEvaluator(int priority) {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         CudfExprCtx exprCtx) {
-        return std::make_shared<ASTExpression>(expr, row, exprCtx);
+         memory::MemoryPool* pool) {
+        return std::make_shared<ASTExpression>(expr, row, pool);
       },
       /*overwrite=*/false);
 }

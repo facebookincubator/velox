@@ -52,14 +52,25 @@ class TagFunction : public CudfFunction {
 };
 
 CudfFunctionFactory tagFactory(std::string tag) {
-  return [tag](const std::string&, const core::TypedExprPtr&) {
-    return std::make_shared<TagFunction>(tag);
-  };
+  return
+      [tag](
+          const std::string&, const core::TypedExprPtr&, memory::MemoryPool*) {
+        return std::make_shared<TagFunction>(tag);
+      };
 }
 
 std::string tagOf(const std::shared_ptr<CudfFunction>& fn) {
   auto* tagged = dynamic_cast<TagFunction*>(fn.get());
   return tagged ? tagged->tag() : std::string{"<null>"};
+}
+
+// The tests below exercise registry dispatch with mock TagFunctions that never
+// materialise constants, so they need no memory pool. This 2-argument overload
+// forwards a null pool to keep the call sites concise.
+std::shared_ptr<CudfFunction> createCudfFunction(
+    const std::string& name,
+    const core::TypedExprPtr& expr) {
+  return cudf_velox::createCudfFunction(name, expr, /*pool=*/nullptr);
 }
 
 // Synthetic typed call nodes let these tests exercise the cuDF registry without
@@ -71,8 +82,9 @@ core::TypedExprPtr makeCall(
   std::vector<core::TypedExprPtr> inputs;
   inputs.reserve(argTypes.size());
   for (size_t i = 0; i < argTypes.size(); ++i) {
-    inputs.push_back(std::make_shared<core::FieldAccessTypedExpr>(
-        argTypes[i], "c" + std::to_string(i)));
+    inputs.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            argTypes[i], "c" + std::to_string(i)));
   }
   return std::make_shared<core::CallTypedExpr>(
       returnType, std::move(inputs), name);
@@ -262,8 +274,7 @@ TEST_F(FunctionRegistryTest, canEvaluateMultipleSignatures) {
 // Field access expression, no registry setup. Test that `canEvaluate` returns
 // true without consulting the function registry at all.
 TEST_F(FunctionRegistryTest, canEvaluateFieldReference) {
-  auto fieldExpr =
-      std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c0");
+  auto fieldExpr = std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c0");
   EXPECT_TRUE(FunctionExpression::canEvaluate(fieldExpr));
 }
 

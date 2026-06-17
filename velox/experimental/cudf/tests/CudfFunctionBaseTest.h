@@ -22,7 +22,6 @@
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/expression/ExprOptimizer.h"
-
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 #include <string>
@@ -72,12 +71,10 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     auto mr = get_output_mr();
     auto cudfTable = velox::cudf_velox::with_arrow::toCudfTable(
         input, pool_.get(), stream, mr);
-    auto optimized = expression::optimize(
-        expr, execCtx_.queryCtx(), execCtx_.pool());
-    auto filterEvaluator = createCudfExpression(
-        optimized,
-        input->rowType(),
-        CudfExprCtx{execCtx_.queryCtx(), pool_.get()});
+    auto optimized =
+        expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
+    auto filterEvaluator =
+        createCudfExpression(optimized, input->rowType(), pool_.get());
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());

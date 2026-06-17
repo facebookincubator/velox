@@ -60,7 +60,8 @@ void checkAllTrue(
 } // namespace
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
-    const core::TypedExprPtr& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK_EQ(
       expr->inputs().size(),
       2,
@@ -84,7 +85,7 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
         expr->inputs()[1]->asUnchecked<core::ConstantTypedExpr>();
     const auto constValue = constExpr->hasValueVector()
         ? constExpr->valueVector()
-        : constExpr->toConstantVector(memory::memoryManager()->tracePool());
+        : constExpr->toConstantVector(pool);
     if (!constValue->isNullAt(0)) {
       auto millis = constValue->as<ConstantVector<int64_t>>()->value();
       VELOX_USER_CHECK_EQ(

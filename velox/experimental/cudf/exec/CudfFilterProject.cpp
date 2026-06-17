@@ -25,7 +25,6 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
 
-
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -124,8 +123,7 @@ CudfFilterProject::CudfFilterProject(
                   : std::static_pointer_cast<const core::PlanNode>(filter)),
       hasFilter_(filter != nullptr),
       project_(project),
-      filter_(filter),
-      exprCtx_{operatorCtx_->execCtx()->queryCtx(), operatorCtx_->pool()} {
+      filter_(filter) {
   if (filter_ != nullptr && project_ != nullptr) {
     folly::Synchronized<exec::OperatorStats>& opStats = Operator::stats();
     opStats.withWLock([&](auto& stats) {
@@ -181,24 +179,29 @@ void CudfFilterProject::initialize() {
       debugPrintTree(expr, 0, LOG(INFO));
     }
   }
-  CudfExpressionCompiler compiler(inputType, exprCtx_);
+  // Optimize (rewrites + constant folding) each expression before evaluator
+  // selection so CudfFunctions never see scalar-only operand sets, then
+  // compile.
+  auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
+  auto* const pool = operatorCtx_->pool();
   if (hasFilter_) {
     // First expr is Filter, rest are Project.
-    filterEvaluator_ = compiler.compile(allExprs.front());
+    filterEvaluator_ =
+        optimizeAndCompile(allExprs.front(), inputType, queryCtx, pool);
     std::transform(
         allExprs.begin() + 1,
         allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [&compiler](const core::TypedExprPtr& expr) {
-          return compiler.compile(expr);
+        [inputType, queryCtx, pool](const auto& expr) {
+          return optimizeAndCompile(expr, inputType, queryCtx, pool);
         });
   } else {
     std::transform(
         allExprs.begin(),
         allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [&compiler](const core::TypedExprPtr& expr) {
-          return compiler.compile(expr);
+        [inputType, queryCtx, pool](const auto& expr) {
+          return optimizeAndCompile(expr, inputType, queryCtx, pool);
         });
   }
 

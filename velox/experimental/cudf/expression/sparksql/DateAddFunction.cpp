@@ -22,7 +22,9 @@
 
 namespace facebook::velox::cudf_velox::sparksql {
 
-DateAddFunction::DateAddFunction(const core::TypedExprPtr& expr) {
+DateAddFunction::DateAddFunction(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK_EQ(
       expr->inputs().size(), 2, "date_add function expects exactly 2 inputs");
   VELOX_CHECK(
@@ -31,7 +33,7 @@ DateAddFunction::DateAddFunction(const core::TypedExprPtr& expr) {
   VELOX_CHECK(!expr->inputs()[0]->isConstantKind());
   // The date_add second argument could be int8_t, int16_t, int32_t.
   value_ = makeScalarFromConstantExpr(
-      expr->inputs()[1], cudf::type_id::DURATION_DAYS);
+      expr->inputs()[1], pool, cudf::type_id::DURATION_DAYS);
 }
 
 ColumnOrView DateAddFunction::eval(

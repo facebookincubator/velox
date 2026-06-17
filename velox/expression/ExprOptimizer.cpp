@@ -25,9 +25,8 @@ namespace {
 // Folds an all-constant expression to a single-row vector. Returns nullptr if
 // the expression cannot be folded. The two public optimize() overloads supply
 // an evaluator backed by a QueryCtx or an ExpressionEvaluator.
-using ConstantEvaluator = std::function<VectorPtr(
-    const core::TypedExprPtr& expr,
-    bool suppressEvaluationFailures)>;
+using ConstantEvaluator = std::function<
+    VectorPtr(const core::TypedExprPtr& expr, bool suppressEvaluationFailures)>;
 
 core::TypedExprPtr optimize(
     const core::TypedExprPtr& expr,
@@ -150,8 +149,7 @@ core::TypedExprPtr optimize(
   return optimize(
       expr,
       [queryCtx, pool](
-          const core::TypedExprPtr& foldExpr,
-          bool suppressEvaluationFailures) {
+          const core::TypedExprPtr& foldExpr, bool suppressEvaluationFailures) {
         return exec::tryEvaluateConstantExpression(
             foldExpr, pool, queryCtx, suppressEvaluationFailures);
       },
@@ -165,8 +163,7 @@ core::TypedExprPtr optimize(
   return optimize(
       expr,
       [evaluator](
-          const core::TypedExprPtr& foldExpr,
-          bool suppressEvaluationFailures) {
+          const core::TypedExprPtr& foldExpr, bool suppressEvaluationFailures) {
         return exec::tryEvaluateConstantExpression(
             foldExpr, evaluator, suppressEvaluationFailures);
       },

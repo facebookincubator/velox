@@ -59,8 +59,11 @@ void registerPrestoFunctions(const std::string& prefix) {
 
   registerCudfFunction(
       prefix + "plus",
-      [](const std::string&, const core::TypedExprPtr& expr) {
-        return std::make_shared<prestosql::DatePlusIntervalFunction>(expr);
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::DatePlusIntervalFunction>(
+            expr, pool);
       },
       {FunctionSignatureBuilder()
            .returnType("date")

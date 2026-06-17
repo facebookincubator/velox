@@ -22,13 +22,13 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
-
+#include "velox/expression/ExprOptimizer.h"
 #include "velox/type/TypeUtil.h"
 
 #include <cudf/aggregation.hpp>
@@ -348,7 +348,6 @@ CudfHashJoinProbe::CudfHashJoinProbe(
       joinNode_(joinNode),
       probeType_(joinNode_->sources()[0]->outputType()),
       buildType_(joinNode_->sources()[1]->outputType()),
-      exprCtx_{operatorCtx_->execCtx()->queryCtx(), operatorCtx_->pool()},
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   auto const& leftKeys = joinNode_->leftKeys(); // probe keys
   auto const& rightKeys = joinNode_->rightKeys(); // build keys
@@ -449,31 +448,17 @@ void CudfHashJoinProbe::initialize() {
     return;
   }
 
-  // Compile the filter expression against the concatenated (probe + build)
-  // schema.  The compiler folds constants and resolves evaluator boundaries.
-  std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
-  CudfExpressionCompiler compiler(
-      facebook::velox::type::concatRowTypes(filterRowTypes),
-      exprCtx_);
-  filterEvaluator_ = compiler.compile(joinNode_->filter());
+  auto* const pool = operatorCtx_->pool();
 
-  const auto& optimizedFilter = compiler.optimizedExpr();
+  // Optimize once so the filter evaluator and the two-table AST tree see the
+  // same constant-folded form.
+  const auto optimizedFilter = expression::optimize(
+      joinNode_->filter(), operatorCtx_->execCtx()->queryCtx(), pool);
 
   // Disable AST-based filtering (and force precomputation) if the filter
   // expression contains a type the AST/JIT evaluator can't handle, using the
   // same shallow check applied during regular expression evaluation.
   if (containsAstUnsupportedType(optimizedFilter)) {
-    useAstFilter_ = false;
-  }
-
-  // Check if the filter expression spans both join sides (e.g., switch
-  // expressions referencing columns from both probe and build). If so, we
-  // cannot use AST-based filtering and must fall back to filterEvaluator_.
-  if (useAstFilter_ &&
-      hasNonAstSubexprSpanningBothSides(
-          optimizedFilter, probeType_, buildType_)) {
-    VLOG(1) << "Filter expression spans both join sides, using "
-               "filterEvaluator_ instead of AST";
     useAstFilter_ = false;
   }
 
@@ -485,7 +470,23 @@ void CudfHashJoinProbe::initialize() {
         "AST expression evaluation must be enabled for semi-filter and anti joins.");
   }
 
-  if (!useAstFilter_) {
+  // Create a reusable evaluator for the filter column. This is expensive to
+  // build, and the expression + input schema are stable for the lifetime of
+  // the operator instance.
+  std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
+  filterEvaluator_ = compile(
+      optimizedFilter,
+      facebook::velox::type::concatRowTypes(filterRowTypes),
+      pool);
+
+  // Check if the filter expression spans both join sides (e.g., switch
+  // expressions referencing columns from both probe and build). If so, we
+  // cannot use AST-based filtering and must fall back to filterEvaluator_.
+  if (hasNonAstSubexprSpanningBothSides(
+          optimizedFilter, probeType_, buildType_)) {
+    VLOG(1) << "Filter expression spans both join sides, using "
+               "filterEvaluator_ instead of AST";
+    useAstFilter_ = false;
     return;
   }
 
@@ -495,29 +496,29 @@ void CudfHashJoinProbe::initialize() {
   // and the column locations in that schema translate to column locations
   // in whole tables
 
-  // Build a separate cudf::ast::tree for the two-table
-  // cudf::filter_join_indices() API, using the per-side schemas.
-  // Unsupported sub-expressions are compiled on-demand by the AST builder.
-  if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
-    createAstTree(
-        optimizedFilter,
-        tree_,
-        scalars_,
-        buildType_,
-        probeType_,
-        rightPrecomputeInstructions_,
-        leftPrecomputeInstructions_,
-          exprCtx_);
-  } else {
-    createAstTree(
-        optimizedFilter,
-        tree_,
-        scalars_,
-        probeType_,
-        buildType_,
-        leftPrecomputeInstructions_,
-        rightPrecomputeInstructions_,
-        exprCtx_);
+  if (useAstFilter_) {
+    // create ast tree
+    if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
+      createAstTree(
+          optimizedFilter,
+          tree_,
+          scalars_,
+          buildType_,
+          probeType_,
+          rightPrecomputeInstructions_,
+          leftPrecomputeInstructions_,
+          pool);
+    } else {
+      createAstTree(
+          optimizedFilter,
+          tree_,
+          scalars_,
+          probeType_,
+          buildType_,
+          leftPrecomputeInstructions_,
+          rightPrecomputeInstructions_,
+          pool);
+    }
   }
 }
 

@@ -199,11 +199,12 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 template <TypeKind Kind>
 static std::unique_ptr<cudf::scalar> createCudfScalar(
     const core::ConstantTypedExpr& value,
+    memory::MemoryPool* pool,
     std::optional<cudf::type_id> toType = std::nullopt) {
   using T = typename TypeTraits<Kind>::NativeType;
   const auto valueVector = value.hasValueVector()
       ? value.valueVector()
-      : value.toConstantVector(memory::memoryManager()->tracePool());
+      : value.toConstantVector(pool);
   auto vector = valueVector->as<velox::ConstantVector<T>>();
   return makeScalarFromValue<T>(
       vector->type(), vector->value(), vector->isNullAt(0), toType);
@@ -211,12 +212,13 @@ static std::unique_ptr<cudf::scalar> createCudfScalar(
 
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
     const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool,
     std::optional<cudf::type_id> toType = std::nullopt) {
   auto constExpr =
       std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr);
   VELOX_CHECK_NOT_NULL(constExpr);
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      createCudfScalar, constExpr->type()->kind(), *constExpr, toType);
+      createCudfScalar, constExpr->type()->kind(), *constExpr, pool, toType);
 }
 
 template <TypeKind kind>

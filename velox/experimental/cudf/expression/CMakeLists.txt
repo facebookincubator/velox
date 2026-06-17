@@ -25,10 +25,10 @@ add_library(
   ArrayAccessFunctions.cpp
   AstExpression.cpp
   CommonFunctions.cpp
+  CudfExpressionCompiler.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
-  CudfExpressionCompiler.cpp
   JitExpression.cpp
   PrestoFunctions.cpp
   prestosql/DatePlusIntervalFunction.cpp
