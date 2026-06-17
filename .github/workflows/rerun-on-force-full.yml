@@ -126,12 +126,13 @@ jobs:
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
-      # Dedup: count committer approving reviews on this exact head
+      # Dedup: count eligible approving reviews on this exact head
       # SHA. == 1 means we are the first; > 1 means an earlier
       # approval already triggered the re-run on this same SHA. The
       # author_association filter matches detect-force-full.yml's
-      # if: gate so non-committer approvals on the same SHA don't
-      # bump the counter and dedup away a committer's first approval.
+      # if: gate (OWNER/MEMBER/COLLABORATOR/CONTRIBUTOR) so approvals
+      # outside the allowlist on the same SHA don't bump the counter
+      # and dedup away an eligible reviewer's first approval.
       - name: Dedup
         if: steps.meta.outputs.pr_number
         id: dedup
@@ -147,9 +148,10 @@ jobs:
                    | select(.state == \"APPROVED\" and .commit_id == \"$SHA\")
                    | select(.author_association == \"OWNER\"
                             or .author_association == \"MEMBER\"
-                            or .author_association == \"COLLABORATOR\")
+                            or .author_association == \"COLLABORATOR\"
+                            or .author_association == \"CONTRIBUTOR\")
                   ] | length")
-          echo "committer approvals on this SHA: $approvals"
+          echo "eligible approvals on this SHA: $approvals"
           if [ "$approvals" -eq 1 ]; then
             echo "should_rerun=true" >> "$GITHUB_OUTPUT"
           else
