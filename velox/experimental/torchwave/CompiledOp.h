@@ -45,6 +45,15 @@ struct Launch {
   NodeCP standalone{nullptr};
   KernelOperation* op{nullptr};
 
+  /// For a standalone metadata-only op, the specific host-side shortcut, or
+  /// kNone. Set from the node target in the standalone constructor.
+  StandaloneShortcut standaloneShortcut{StandaloneShortcut::kNone};
+
+  /// True if 'standalone' only manipulates tensor metadata (no real compute).
+  /// Initialized from the op's Metadata, or true for prim.ListPack (which has
+  /// no registry entry).
+  bool metadataOnly{false};
+
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
@@ -263,6 +272,17 @@ struct LaunchData {
   const Launch* launch{nullptr};
   OpInvocation* invocation{nullptr};
   NodeCP standalone{nullptr};
+
+  /// For a metadata-only standalone shortcut (launch->standaloneShortcut !=
+  /// kNone): the op's operands in c10 schema order (first-to-last for
+  /// prim.ListPack, which has no schema). args[i] is the value operand, or
+  /// nullptr when that operand is an integer constant -- in which case
+  /// intArgs[i] holds the constant. intList holds an all-integer list operand
+  /// (e.g. aten.view's size) for direct pass-through to the ATen primitive.
+  std::vector<ValueCP> args;
+  std::vector<int64_t> intArgs;
+  std::vector<int64_t> intList;
+
   SizeExpr sizeExpr;
   int64_t numElements{0};
   std::vector<nativert::ValueId> actualInputs;
