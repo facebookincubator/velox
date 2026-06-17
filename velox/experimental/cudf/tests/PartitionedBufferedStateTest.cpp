@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -226,16 +227,20 @@ class PartitionedBufferedStateTest : public ::testing::Test,
     return keys;
   }
 
+  std::vector<int64_t> toKeys(const CudfVectorPtr& output) {
+    return toKeys(
+        InputChunk{
+            output->pool(),
+            rowType_,
+            output->getTableView(),
+            output->stream(),
+            output});
+  }
+
   std::vector<std::vector<int64_t>> drainAll(PartitionedBufferedState& state) {
     std::vector<std::vector<int64_t>> outputs;
     while (auto output = state.drainNextOutput()) {
-      auto keys = toKeys(
-          InputChunk{
-              output->pool(),
-              rowType_,
-              output->getTableView(),
-              output->stream(),
-              output});
+      auto keys = toKeys(output);
       std::sort(keys.begin(), keys.end());
       outputs.push_back(std::move(keys));
     }
@@ -326,6 +331,56 @@ TEST_F(PartitionedBufferedStateTest, noProgressSplitRetriesNewSeeds) {
 
   EXPECT_EQ(seeds, (std::vector<uint32_t>{0, 1, 2}));
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 3}, {2}}));
+  EXPECT_TRUE(state.empty());
+}
+
+TEST_F(PartitionedBufferedStateTest, flushableStateEmitsAtEnd) {
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  FlushableBufferedState state(
+      std::move(ops), 10, std::numeric_limits<uint64_t>::max());
+
+  EXPECT_TRUE(state.empty());
+  EXPECT_EQ(state.getOutput(false), nullptr);
+
+  state.addInput(makeCudfVector({1, 2}));
+
+  EXPECT_FALSE(state.empty());
+  EXPECT_EQ(state.getOutput(false), nullptr);
+
+  auto output = state.getOutput(true);
+  ASSERT_NE(output, nullptr);
+
+  auto keys = toKeys(output);
+  std::sort(keys.begin(), keys.end());
+  EXPECT_EQ(keys, (std::vector<int64_t>{1, 2}));
+  EXPECT_TRUE(state.empty());
+  EXPECT_EQ(state.getOutput(true), nullptr);
+}
+
+TEST_F(PartitionedBufferedStateTest, flushableStateFlushesBeforeRowLimitMerge) {
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  FlushableBufferedState state(
+      std::move(ops), 3, std::numeric_limits<uint64_t>::max());
+
+  state.addInput(makeCudfVector({1, 2}));
+  state.addInput(makeCudfVector({3, 4}));
+
+  EXPECT_FALSE(state.empty());
+
+  auto firstOutput = state.getOutput(false);
+  ASSERT_NE(firstOutput, nullptr);
+  auto firstKeys = toKeys(firstOutput);
+  std::sort(firstKeys.begin(), firstKeys.end());
+  EXPECT_EQ(firstKeys, (std::vector<int64_t>{1, 2}));
+
+  EXPECT_FALSE(state.empty());
+  EXPECT_EQ(state.getOutput(false), nullptr);
+
+  auto secondOutput = state.getOutput(true);
+  ASSERT_NE(secondOutput, nullptr);
+  auto secondKeys = toKeys(secondOutput);
+  std::sort(secondKeys.begin(), secondKeys.end());
+  EXPECT_EQ(secondKeys, (std::vector<int64_t>{3, 4}));
   EXPECT_TRUE(state.empty());
 }
 

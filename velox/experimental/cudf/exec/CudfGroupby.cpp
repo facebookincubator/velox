@@ -33,7 +33,10 @@
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/partitioning.hpp>
 #include <cudf/unary.hpp>
+
+#include <limits>
 
 namespace {
 
@@ -902,16 +905,16 @@ void CudfGroupby::initialize() {
     }
 
     auto const& cudfConfig = CudfConfig::getInstance();
-    maxBufferedRows_ = cudfConfig.batchSizeMaxThreshold.value_or(
+    const auto maxBufferedRows = cudfConfig.batchSizeMaxThreshold.value_or(
         std::numeric_limits<int32_t>::max());
-    VELOX_CHECK_GT(maxBufferedRows_, 0);
+    VELOX_CHECK_GT(maxBufferedRows, 0);
     if (isFinalOrSingle) {
       partitionedBufferedState_ = std::make_unique<PartitionedBufferedState>(
-          std::make_unique<GroupbyBufferedStateOps>(*this), maxBufferedRows_);
+          std::make_unique<GroupbyBufferedStateOps>(*this), maxBufferedRows);
     } else if (isPartialOutput_) {
       flushableBufferedState_ = std::make_unique<FlushableBufferedState>(
           std::make_unique<GroupbyBufferedStateOps>(*this),
-          maxBufferedRows_,
+          maxBufferedRows,
           maxPartialAggregationMemoryUsage_);
     }
   }
@@ -1019,8 +1022,8 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
       pool(), outputType, numRows, std::move(resultTable), stream);
 }
 
-CudfVectorPtr CudfGroupby::releasePartialOutput(CudfVectorPtr output) {
-  auto numOutputRows = output->size();
+void CudfGroupby::recordPartialFlushStats(const CudfVector& output) {
+  const auto numOutputRows = output.size();
   const double aggregationPct =
       numOutputRows == 0 ? 0 : (numOutputRows * 1.0) / numInputRows_ * 100;
   {
@@ -1036,7 +1039,6 @@ CudfVectorPtr CudfGroupby::releasePartialOutput(CudfVectorPtr output) {
   }
 
   numInputRows_ = 0;
-  return output;
 }
 
 RowVectorPtr CudfGroupby::doGetOutput() {
@@ -1047,7 +1049,8 @@ RowVectorPtr CudfGroupby::doGetOutput() {
     }
 
     if (auto output = flushableBufferedState_->getOutput(noMoreInput_)) {
-      return releasePartialOutput(std::move(output));
+      recordPartialFlushStats(*output);
+      return output;
     }
 
     if (noMoreInput_) {

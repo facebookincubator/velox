@@ -21,8 +21,6 @@
 
 #include <cudf/groupby.hpp>
 
-#include <limits>
-
 namespace facebook::velox::cudf_velox {
 
 class GroupbyBufferedStateOps;
@@ -109,7 +107,7 @@ class CudfGroupby : public CudfOperatorBase {
       TypePtr const& outputType,
       rmm::cuda_stream_view stream);
 
-  CudfVectorPtr releasePartialOutput(CudfVectorPtr output);
+  void recordPartialFlushStats(const CudfVector& output);
 
   void computePartialGroupbyStreaming(CudfVectorPtr tbl);
   void computeFinalGroupbyStreaming(CudfVectorPtr tbl);
@@ -143,8 +141,6 @@ class CudfGroupby : public CudfOperatorBase {
   RowTypePtr bufferedResultType_;
   std::unique_ptr<FlushableBufferedState> flushableBufferedState_;
   std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
-  size_t maxBufferedRows_{
-      static_cast<size_t>(std::numeric_limits<cudf::size_type>::max())};
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -125,9 +125,9 @@ class BufferedStateOps {
 //
 // PBS only manages the partition tree and leaf row limits. It does not know
 // the concrete type of state stored in a leaf. The caller supplies a
-// `LeafStateOps` implementation that defines:
+// `BufferedStateOps` implementation that defines:
 // - how raw input becomes an `InputChunk`,
-// - what concrete `LeafState` subclass each leaf holds,
+// - what concrete `BufferedState` subclass each leaf holds,
 // - how a chunk is added to a leaf,
 // - how a leaf reports its logical row count,
 // - how prepared input is partitioned at internal nodes,
