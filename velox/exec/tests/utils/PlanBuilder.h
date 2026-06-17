@@ -449,6 +449,16 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param forwardedProbeColumns Probe-side column names the operator
+    /// should include in the connector's lookup input even when no join key
+    /// or join condition references them. See IndexLookupJoinNode for the
+    /// full contract.
+    IndexLookupJoinBuilder& forwardedProbeColumns(
+        std::vector<std::string> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
+      return *this;
+    }
+
     /// Stop the IndexLookupJoinBuilder.
     PlanBuilder& endIndexLookupJoin() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -469,6 +479,7 @@ class PlanBuilder {
     std::vector<std::string> outputLayout_;
     core::JoinType joinType_{core::JoinType::kInner};
     std::optional<bool> splitOutput_;
+    std::vector<std::string> forwardedProbeColumns_;
   };
 
   /// Start an IndexLookupJoinBuilder.

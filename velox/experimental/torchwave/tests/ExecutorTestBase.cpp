@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <unordered_set>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h> // @manual
@@ -84,6 +85,11 @@ DEFINE_string(
     reference_frame,
     "",
     "Path to load reference frame for verifying wave intermediates");
+DEFINE_bool(
+    reference_from_gpu,
+    false,
+    "When saving a reference frame, capture it from the nativert GPU run "
+    "(cpuOnly args moved to CPU via inserted _to_copy) instead of the CPU run");
 DEFINE_bool(
     reverify,
     false,
@@ -279,6 +285,85 @@ std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
   }
 
   return {std::move(result), us};
+}
+
+int32_t insertCpuOnlyCopies(nativert::Graph& graph) {
+  // Collect insertion sites first; don't mutate the node list while iterating.
+  struct Site {
+    nativert::Node* consumer;
+    size_t inputIdx;
+    nativert::Value* deviceValue;
+  };
+  std::vector<Site> sites;
+  for (auto& node : graph.nodes()) {
+    const auto* meta = Registry::metadata(node.target());
+    if (!meta) {
+      continue;
+    }
+    auto& inputs = node.inputs();
+    for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size();
+         ++i) {
+      // cpuOnly is only set on tensor args (e.g. tensor_split indices), so a
+      // non-null value here is the tensor we must keep on host.
+      if (meta->argumentMeta[i].cpuOnly && inputs[i].value) {
+        sites.push_back({&node, i, inputs[i].value});
+      }
+    }
+  }
+
+  // For each cpuOnly tensor arg, insert aten._to_copy(self, device=cpu) right
+  // before the consumer and repoint only that edge. tensor_split (the only
+  // cpuOnly op) reads its indices on the host and returns views of self, so
+  // self and the outputs stay on GPU -- no move-back is needed. Lets the
+  // generic nativert executor run the graph on GPU (wave handles cpuOnly args
+  // itself at runtime; see Launch in CompiledOp.cpp).
+  for (const auto& site : sites) {
+    auto* copyNode = graph.createNode(
+        "torch.ops.aten._to_copy.default", {{"self", site.deviceValue}});
+    copyNode->addAttribute({"dtype", torch::nativert::None{}});
+    copyNode->addAttribute({"layout", torch::nativert::None{}});
+    copyNode->addAttribute({"device", c10::Device(c10::kCPU)});
+    copyNode->addAttribute({"pin_memory", torch::nativert::None{}});
+    copyNode->addAttribute({"non_blocking", false});
+    copyNode->addAttribute({"memory_format", torch::nativert::None{}});
+    auto* cpuValue = copyNode->addOutput(
+        graph.getUniqueValueName(), site.deviceValue->type());
+    graph.insertBefore(copyNode, site.consumer);
+    site.consumer->inputs()[site.inputIdx].value = cpuValue;
+    site.deviceValue->eraseUser(site.consumer);
+    cpuValue->addUser(site.consumer);
+  }
+  LOG(INFO) << "insertCpuOnlyCopies: inserted " << sites.size()
+            << " _to_copy(device=cpu) node(s)";
+  return static_cast<int32_t>(sites.size());
+}
+
+int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph) {
+  // fb::simple_1d_concat has no CUDA implementation -- its CUDA registration is
+  // a throwing Dummy
+  // (caffe2/torch/fb/sparsenn/cpu_operators/simple_concat.cpp). It is a plain
+  // 1-D concat, identical to aten.cat(tensors, dim=0), which does have a CUDA
+  // kernel. Mirror wave's rewrite (MoreBuiltins.cpp) so the generic nativert
+  // executor can run it on GPU. (The other fb ops in this model -- sigrid_hash,
+  // grouped_masked_select_jagged_1d, batch_flip_and_truncate_sparse,
+  // group_length_guard_sparse, fused_datafm_merge_and_dedup_by_reference --
+  // have real CUDA kernels in sparsenn_operators_gpu and self-register.)
+  int32_t rewritten = 0;
+  for (auto& node : graph.nodes()) {
+    if (node.target() == "torch.ops.fb.simple_1d_concat.default") {
+      node.setTarget("torch.ops.aten.cat.default");
+      // nativert matches node inputs to schema args by name; rename the
+      // TensorList input "inputs" -> "tensors" to match aten::cat's schema.
+      if (!node.inputs().empty()) {
+        node.inputs()[0].name = "tensors";
+      }
+      node.addAttribute({"dim", static_cast<int64_t>(0)});
+      ++rewritten;
+    }
+  }
+  LOG(INFO) << "rewriteGpuIncompatibleOps: rewrote " << rewritten
+            << " fb.simple_1d_concat -> aten.cat.default";
+  return rewritten;
 }
 
 std::vector<c10::IValue> outputsToHost(
@@ -505,6 +590,24 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
     }
   }
 
+  // Values used as the 'self' (first) input of an index_put node are scratch
+  // buffers (a clone or div result) that the wave rewrites to an in-place
+  // tw.masked_put_, reusing that buffer. The serial run keeps them functional,
+  // so their recorded value would never match the wave's reused buffer, and
+  // they are dead after the index_put. Skip recording them to avoid false
+  // positives.
+  std::unordered_set<int64_t> inPlaceSelfIds;
+  if (!FLAGS_save_reference_frame.empty()) {
+    for (size_t scanIdx = 1; scanIdx + 1 < nodeKernels.size(); ++scanIdx) {
+      auto* scanNode = nodeKernels[scanIdx]->node();
+      std::string target(scanNode->target());
+      if (target.find("index_put") != std::string::npos &&
+          !scanNode->inputs().empty() && scanNode->inputs()[0].value) {
+        inPlaceSelfIds.insert(scanNode->inputs()[0].value->id());
+      }
+    }
+  }
+
   for (size_t nodeIdx = 1; nodeIdx + 1 < nodeKernels.size(); ++nodeIdx) {
     auto* node = nodeKernels[nodeIdx]->node();
     nodeKernels[nodeIdx]->compute(frame);
@@ -514,6 +617,16 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
     }
     for (auto* output : node->outputs()) {
       if (output) {
+        // Capture a deep copy of each output the instant its node ran, so a
+        // later in-place overwrite of its storage cannot corrupt the reference.
+        // Skip scratch self-args of index_put (see inPlaceSelfIds above).
+        if (!FLAGS_save_reference_frame.empty() &&
+            !inPlaceSelfIds.count(output->id())) {
+          const auto& iv = frame.getIValue(output->id());
+          if (iv.isTensor() && iv.toTensor().numel() > 0) {
+            capturedRefOutputs_[output->id()] = iv.toTensor().detach().clone();
+          }
+        }
         std::vector<nativert::ValueId> ids = {output->id()};
         traceFrameValues("serial out", ids, frame, traceState);
       }
@@ -565,7 +678,10 @@ RunTiming ExecutorTestBase::runSerial(
 
   auto start = Clock::now();
   std::vector<c10::IValue> outputs;
-  if (traceSerial) {
+  // When saving a reference, run node-by-node so each output is captured at the
+  // moment its node assigns it (see capturedRefOutputs_).
+  bool nodeByNode = traceSerial || !FLAGS_save_reference_frame.empty();
+  if (nodeByNode) {
     auto traceKernels = fixture.makeKernels();
     nativert::SerialGraphExecutor tempExecutor(
         graph, std::move(traceKernels), serialConfig);
@@ -630,15 +746,8 @@ RunTiming ExecutorTestBase::runSerialOnDevice(
                        Clock::now() - start)
                        .count();
 
-  if (!FLAGS_save_reference_frame.empty()) {
-    saveReferenceFrame(
-        *frame,
-        static_cast<int32_t>(graph.numValues()),
-        FLAGS_save_reference_frame);
-    LOG(INFO) << "Saved GPU reference frame (" << graph.numValues()
-              << " slots) to " << FLAGS_save_reference_frame;
-  }
-
+  // The CPU serial run (runSerial) saves the authoritative reference; the
+  // GPU-serial path intentionally does not save, so it cannot overwrite it.
   auto hostOutputs = outputsToHost(outputs, "serial-gpu");
   verifyOutputs(hostOutputs, expected, "serial-gpu");
   return {dataMovUs, executeUs, {}};
@@ -1067,6 +1176,20 @@ void ExecutorTestBase::verifyOutputs(
           << actual.tagKind();
       EXPECT_EQ(actual.toBool(), exp.toBool())
           << fullLabel << " output " << i << " scalar mismatch";
+    } else if (exp.isString()) {
+      // String outputs are constant keys (e.g. KJT feature names) baked into
+      // the graph; compare them by value.
+      ASSERT_TRUE(actual.isString())
+          << fullLabel << " output " << i << " expected string, got "
+          << actual.tagKind();
+      EXPECT_EQ(actual.toStringRef(), exp.toStringRef())
+          << fullLabel << " output " << i << " string mismatch";
+    } else if (exp.isNone()) {
+      // None outputs are structural (e.g. optional/absent leaves in the
+      // out-spec); the actual must also be None.
+      EXPECT_TRUE(actual.isNone())
+          << fullLabel << " output " << i << " expected None, got "
+          << actual.tagKind();
     } else {
       ADD_FAILURE() << fullLabel << " output " << i
                     << " unsupported expected type: " << exp.tagKind();

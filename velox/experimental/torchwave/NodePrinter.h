@@ -189,6 +189,9 @@ class NodePrinter {
 class WithPrintOptions {
  public:
   explicit WithPrintOptions(const std::string& opts);
+  /// Installs the given options directly (e.g. a copy of the current defaults
+  /// with valueTypes/graph populated). Restores the previous override on exit.
+  explicit WithPrintOptions(PrintOptions opts);
   ~WithPrintOptions();
 
   WithPrintOptions(const WithPrintOptions&) = delete;

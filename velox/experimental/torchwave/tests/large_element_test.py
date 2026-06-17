@@ -96,6 +96,7 @@ class LargeElementTest(nn.Module):
             for op_code, inp_idx, scalar_val, nest_right in ops:
                 rhs = scalar_val if inp_idx == -1 else inputs[inp_idx]
                 if nest_right:
+                    # pyrefly: ignore [bad-argument-type]
                     val = _apply_op(op_code, rhs, val)
                 else:
                     val = _apply_op(op_code, val, rhs)

@@ -45,7 +45,9 @@ void registerArrayAccessFunction(
   registerCudfFunction(
       name,
       [policy](
-          const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+          const std::string&,
+          const std::shared_ptr<velox::exec::Expr>& expr,
+          const tz::TimeZone*) {
         return makeArrayAccessFunction(expr, policy);
       },
       signatures);

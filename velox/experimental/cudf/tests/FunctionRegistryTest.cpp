@@ -51,9 +51,11 @@ class TagFunction : public CudfFunction {
 };
 
 CudfFunctionFactory tagFactory(std::string tag) {
-  return [tag](const std::string&, const std::shared_ptr<exec::Expr>&) {
-    return std::make_shared<TagFunction>(tag);
-  };
+  return
+      [tag](
+          const std::string&,
+          const std::shared_ptr<exec::Expr>&,
+          const tz::TimeZone*) { return std::make_shared<TagFunction>(tag); };
 }
 
 std::string tagOf(const std::shared_ptr<CudfFunction>& fn) {
@@ -106,7 +108,7 @@ TEST_F(FunctionRegistryTest, singleSignatureDispatch) {
            .build()});
 
   auto expr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  auto fn = createCudfFunction(name, expr);
+  auto fn = createCudfFunction(name, expr, nullptr);
   ASSERT_NE(fn, nullptr);
   EXPECT_EQ(tagOf(fn), "double");
 }
@@ -135,12 +137,13 @@ TEST_F(FunctionRegistryTest, multipleSignaturesDispatchByInputTypes) {
            .build()});
 
   auto doubleExpr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  ASSERT_NE(createCudfFunction(name, doubleExpr), nullptr);
-  EXPECT_EQ(tagOf(createCudfFunction(name, doubleExpr)), "double");
+  ASSERT_NE(createCudfFunction(name, doubleExpr, nullptr), nullptr);
+  EXPECT_EQ(tagOf(createCudfFunction(name, doubleExpr, nullptr)), "double");
 
   auto dateExpr = makeCall(name, DATE(), {DATE(), INTERVAL_DAY_TIME()});
-  ASSERT_NE(createCudfFunction(name, dateExpr), nullptr);
-  EXPECT_EQ(tagOf(createCudfFunction(name, dateExpr)), "date_interval");
+  ASSERT_NE(createCudfFunction(name, dateExpr, nullptr), nullptr);
+  EXPECT_EQ(
+      tagOf(createCudfFunction(name, dateExpr, nullptr)), "date_interval");
 }
 
 // Function registration whose types don't match any registered spec returns
@@ -158,7 +161,7 @@ TEST_F(FunctionRegistryTest, noMatchingSignatureReturnsNull) {
            .build()});
 
   auto varcharExpr = makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()});
-  EXPECT_EQ(createCudfFunction(name, varcharExpr), nullptr);
+  EXPECT_EQ(createCudfFunction(name, varcharExpr, nullptr), nullptr);
 }
 
 // Empty signature list acts as a wildcard match (used by `cast`/`try_cast`).
@@ -168,7 +171,7 @@ TEST_F(FunctionRegistryTest, emptySignaturesMatchAnyCall) {
   registerCudfFunction(name, tagFactory("dynamic"), {});
 
   auto anyExpr = makeCall(name, DOUBLE(), {VARCHAR(), BIGINT()});
-  auto fn = createCudfFunction(name, anyExpr);
+  auto fn = createCudfFunction(name, anyExpr, nullptr);
   ASSERT_NE(fn, nullptr);
   EXPECT_EQ(tagOf(fn), "dynamic");
 }
@@ -189,10 +192,10 @@ TEST_F(FunctionRegistryTest, emptySignaturesActAsFallback) {
   registerCudfFunction(name, tagFactory("fallback"), {});
 
   auto matchExpr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(name, matchExpr)), "typed");
+  EXPECT_EQ(tagOf(createCudfFunction(name, matchExpr, nullptr)), "typed");
 
   auto mismatchExpr = makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()});
-  EXPECT_EQ(tagOf(createCudfFunction(name, mismatchExpr)), "fallback");
+  EXPECT_EQ(tagOf(createCudfFunction(name, mismatchExpr, nullptr)), "fallback");
 }
 
 // Two function registrations under the same name, second with
@@ -220,10 +223,10 @@ TEST_F(FunctionRegistryTest, overwriteFalsePreservesFirstRegistration) {
       /*overwrite=*/false));
 
   auto expr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(name, expr)), "first");
+  EXPECT_EQ(tagOf(createCudfFunction(name, expr, nullptr)), "first");
 
   auto dateExpr = makeCall(name, DATE(), {DATE(), INTERVAL_DAY_TIME()});
-  EXPECT_EQ(createCudfFunction(name, dateExpr), nullptr);
+  EXPECT_EQ(createCudfFunction(name, dateExpr, nullptr), nullptr);
 }
 
 // Two function registrations under the same name with different signatures.
@@ -296,7 +299,7 @@ TEST_F(FunctionRegistryTest, overwriteTrueAppendsSpec) {
   ASSERT_TRUE(registerCudfFunction(name, tagFactory("second"), {sig}));
 
   auto expr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(name, expr)), "first");
+  EXPECT_EQ(tagOf(createCudfFunction(name, expr, nullptr)), "first");
 }
 
 // One factory registered under two names via `registerCudfFunctions`. Test
@@ -315,10 +318,10 @@ TEST_F(FunctionRegistryTest, registerAliases) {
            .build()});
 
   auto primaryExpr = makeCall(primary, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(primary, primaryExpr)), "shared");
+  EXPECT_EQ(tagOf(createCudfFunction(primary, primaryExpr, nullptr)), "shared");
 
   auto aliasExpr = makeCall(alias, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(alias, aliasExpr)), "shared");
+  EXPECT_EQ(tagOf(createCudfFunction(alias, aliasExpr, nullptr)), "shared");
 }
 
 // Empty-signature (wildcard) registration added before a typed one under the
@@ -339,7 +342,7 @@ TEST_F(FunctionRegistryTest, emptySignatureRegisteredFirstShadowsTyped) {
            .build()});
 
   auto doubleExpr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(name, doubleExpr)), "fallback");
+  EXPECT_EQ(tagOf(createCudfFunction(name, doubleExpr, nullptr)), "fallback");
 }
 
 // Call against a name that was never registered. Test that both
@@ -347,7 +350,7 @@ TEST_F(FunctionRegistryTest, emptySignatureRegisteredFirstShadowsTyped) {
 TEST_F(FunctionRegistryTest, unregisteredNameReturnsNullAndFalse) {
   const std::string name = "regtest_never_registered";
   auto expr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(createCudfFunction(name, expr), nullptr);
+  EXPECT_EQ(createCudfFunction(name, expr, nullptr), nullptr);
   EXPECT_FALSE(FunctionExpression::canEvaluate(expr));
 }
 
@@ -391,10 +394,12 @@ TEST_F(FunctionRegistryTest, registerAliasesOverwriteFalse) {
       /*overwrite=*/false);
 
   auto originalExpr = makeCall(alreadyThere, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(alreadyThere, originalExpr)), "original");
+  EXPECT_EQ(
+      tagOf(createCudfFunction(alreadyThere, originalExpr, nullptr)),
+      "original");
 
   auto freshExpr = makeCall(fresh, DOUBLE(), {DOUBLE(), DOUBLE()});
-  EXPECT_EQ(tagOf(createCudfFunction(fresh, freshExpr)), "new");
+  EXPECT_EQ(tagOf(createCudfFunction(fresh, freshExpr, nullptr)), "new");
 }
 
 // Call made with fewer arguments than the registered signature expects.
@@ -412,7 +417,7 @@ TEST_F(FunctionRegistryTest, arityMismatchReturnsNull) {
            .build()});
 
   auto zeroArgExpr = makeCall(name, DOUBLE(), {});
-  EXPECT_EQ(createCudfFunction(name, zeroArgExpr), nullptr);
+  EXPECT_EQ(createCudfFunction(name, zeroArgExpr, nullptr), nullptr);
   EXPECT_FALSE(FunctionExpression::canEvaluate(zeroArgExpr));
 }
 

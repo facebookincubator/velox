@@ -70,7 +70,19 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          source scripts/setup-ubuntu.sh && install_apt_deps && install_faiss_deps
+          source scripts/setup-ubuntu.sh
+          install_apt_deps
+          install_faiss_deps
+          # Install FBOS deps due to patching fbthrift.
+          # Remove when upgrading FBOS to 20250511 or later.
+          install_fmt
+          install_boost
+          install_fast_float
+          install_folly
+          install_fizz
+          install_wangle
+          install_mvfst
+          install_fbthrift
 
       - name: Clear CCache Statistics
         run: |
@@ -79,6 +91,12 @@ jobs:
       - name: Make Debug Build
         env:
           VELOX_DEPENDENCY_SOURCE: BUNDLED
+          # Boost and Gflags are referenced by the previous re-install as coming
+          # from the system and when using the bundle the bundled build doesn't match.
+          # E.g. gflags is referecned as shared but the bundled build generates
+          # the static version (VELOX_BUILD_SHARED=OFF) leading to failures finding the library.
+          Boost_SOURCE: SYSTEM
+          gflags_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=16 MAX_HIGH_MEM_JOBS=4 MAX_LINK_JOBS=2
         run: |
