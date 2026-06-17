@@ -514,6 +514,27 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
     testSerde(plan);
   }
 
+  // with forwardedProbeColumns.
+  {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({left})
+                    .startIndexLookupJoin()
+                    .leftKeys({"t0"})
+                    .rightKeys({"u0"})
+                    .indexSource(indexTableScan)
+                    .outputLayout({"t0", "u1", "t2", "t1"})
+                    .joinType(core::JoinType::kInner)
+                    .forwardedProbeColumns({"t1", "t2"})
+                    .endIndexLookupJoin()
+                    .planNode();
+    auto indexLookupJoinNode =
+        std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(plan);
+    ASSERT_EQ(indexLookupJoinNode->forwardedProbeColumns().size(), 2);
+    ASSERT_EQ(indexLookupJoinNode->forwardedProbeColumns()[0]->name(), "t1");
+    ASSERT_EQ(indexLookupJoinNode->forwardedProbeColumns()[1]->name(), "t2");
+    testSerde(plan);
+  }
+
   // bad join type.
   {
     VELOX_ASSERT_USER_THROW(
@@ -576,6 +597,116 @@ TEST_P(IndexLookupJoinTest, planNodeAndSerde) {
             .planNode(),
         "The index lookup join node requires at least one join key");
   }
+
+  // Forwarded probe column not found in probe input.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .startIndexLookupJoin()
+            .leftKeys({"t0"})
+            .rightKeys({"u0"})
+            .indexSource(indexTableScan)
+            .outputLayout({"t0", "u1", "t2", "t1"})
+            .forwardedProbeColumns({"missing_column"})
+            .endIndexLookupJoin()
+            .planNode(),
+        "Field not found: missing_column");
+  }
+
+  // Forwarded probe column overlaps with a leftKey.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .startIndexLookupJoin()
+            .leftKeys({"t0"})
+            .rightKeys({"u0"})
+            .indexSource(indexTableScan)
+            .outputLayout({"t0", "u1", "t2", "t1"})
+            .forwardedProbeColumns({"t0"})
+            .endIndexLookupJoin()
+            .planNode(),
+        "Forwarded probe column t0 overlaps with a leftKey");
+  }
+
+  // Duplicate forwarded probe columns.
+  {
+    VELOX_ASSERT_THROW(
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .startIndexLookupJoin()
+            .leftKeys({"t0"})
+            .rightKeys({"u0"})
+            .indexSource(indexTableScan)
+            .outputLayout({"t0", "u1", "t2", "t1"})
+            .forwardedProbeColumns({"t1", "t1"})
+            .endIndexLookupJoin()
+            .planNode(),
+        "Duplicate forwarded probe column: t1");
+  }
+}
+
+TEST_F(IndexLookupJoinTest, forwardedProbeColumnOverlapsWithCondition) {
+  // The plan-node ctor catches forwarded columns that overlap with leftKeys.
+  // The remaining case — overlap with a probe column referenced by a join
+  // condition (e.g. a BETWEEN bound) — is caught by the operator at runtime
+  // when it walks the join conditions and assembles the lookup input set.
+  // This test verifies that runtime check fires with the expected message.
+  TestIndexTableHandle::registerSerDe();
+  auto indexConnectorHandle = makeIndexTableHandle(nullptr, true);
+
+  auto left = makeRowVector(
+      {"t0", "t1", "t2", "t3", "t4"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<int64_t>({40, 50, 60}),
+       makeArrayVector<int64_t>(
+           3,
+           [](auto row) { return row; },
+           [](auto /*unused*/, auto index) { return index; }),
+       makeArrayVector<int64_t>(
+           3,
+           [](auto row) { return row; },
+           [](auto /*unused*/, auto index) { return index; })});
+  auto right = makeRowVector(
+      {"u0", "u1", "u2"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<int64_t>({10, 30, 20})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto planBuilder = PlanBuilder();
+  auto indexTableScan = std::dynamic_pointer_cast<const core::TableScanNode>(
+      PlanBuilder::TableScanBuilder(planBuilder)
+          .tableHandle(indexConnectorHandle)
+          .outputType(asRowType(right->type()))
+          .endTableScan()
+          .planNode());
+
+  // BETWEEN's lower bound is t1 (a probe column reference). The operator's
+  // join-condition walk will add t1 to its lookup input set. Then the
+  // forwardedProbeColumns walk attempts to add t1 again and throws.
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .values({left})
+                  .startIndexLookupJoin()
+                  .leftKeys({"t0"})
+                  .rightKeys({"u0"})
+                  .indexSource(indexTableScan)
+                  .joinConditions({"u1 between t1 AND t2"})
+                  .outputLayout({"t0", "u1", "t2", "t1"})
+                  .joinType(core::JoinType::kInner)
+                  .forwardedProbeColumns({"t1"})
+                  .endIndexLookupJoin()
+                  .planNode();
+
+  // The plan itself constructs fine — leftKeys is {t0}, forwarded is {t1};
+  // no leftKey overlap. The overlap with the BETWEEN bound is detected at
+  // operator initialize() time.
+  VELOX_ASSERT_THROW(
+      exec::test::AssertQueryBuilder(plan).copyResults(pool_.get()),
+      "Forwarded probe column t1 overlaps with a column already referenced "
+      "by a join condition");
 }
 
 TEST_P(IndexLookupJoinTest, DISABLED_equalJoin) {

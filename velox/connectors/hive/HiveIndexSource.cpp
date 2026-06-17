@@ -18,6 +18,7 @@
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/FileDataSource.h"
@@ -446,6 +447,12 @@ class UnionResultIterator : public IndexSource::ResultIterator {
 // partition group matches the probe input.
 class EmptyIterator : public IndexSource::ResultIterator {
  public:
+  static const std::shared_ptr<IndexSource::ResultIterator>& instance() {
+    static const std::shared_ptr<IndexSource::ResultIterator> kInstance =
+        std::make_shared<EmptyIterator>();
+    return kInstance;
+  }
+
   bool hasNext() override {
     return false;
   }
@@ -453,7 +460,10 @@ class EmptyIterator : public IndexSource::ResultIterator {
   std::optional<std::unique_ptr<IndexSource::Result>> next(
       vector_size_t /*size*/,
       ContinueFuture& /*future*/) override {
-    return std::nullopt;
+    // Return a null Result to signal "done", not std::nullopt which means
+    // "async started, wait on future" and trips lookupFuture.valid() in
+    // IndexLookupJoin.
+    return std::unique_ptr<IndexSource::Result>(nullptr);
   }
 };
 
@@ -1146,9 +1156,9 @@ void HiveIndexSource::setPartitionValue(
 void HiveIndexSource::addSplits(
     std::vector<std::shared_ptr<ConnectorSplit>> splits) {
   VELOX_CHECK(
-      readers_.empty(),
-      "addSplits can only be called once for HiveIndexSource");
+      !splitsAdded_, "addSplits can only be called once for HiveIndexSource");
   VELOX_CHECK(!splits.empty(), "addSplits called with empty splits");
+  splitsAdded_ = true;
 
   std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits;
   hiveSplits.reserve(splits.size());
@@ -1157,68 +1167,35 @@ void HiveIndexSource::addSplits(
   }
 
   if (partitionIndexConditions_.empty()) {
-    // Non-partitioned path: single shared scan spec for all readers.
-    // Partition constants (if any) come from the first split's metadata.
-    // This is correct under partition-aware grouped execution (one partition
-    // per lifespan) and when the table has no partition columns. Under
-    // standard grouped execution with multiple partitions and partition
-    // columns in the output, each split may have different partition values
-    // but we apply only the first split's values to the shared scan spec.
-    // TODO: support per-split partition constants when splits span multiple
-    // partitions without partition index conditions.
-    const auto* partitionValues =
-        hiveSplits.empty() ? nullptr : &hiveSplits.front()->partitionKeys;
-    createReadersFromSplits(
-        std::move(hiveSplits), buildScanSpec(partitionValues));
-    defaultReaders_.reserve(readers_.size());
-    for (auto& reader : readers_) {
-      defaultReaders_.push_back(reader.get());
-    }
+    // Non-partitioned path: single group with all splits. Partition
+    // constants come from the first split only. Readers are created
+    // lazily on first lookup.
+    // TODO: Build per-split scan specs when splits span multiple partitions
+    // and partition columns appear in the output.
+    createSplitGroup(std::move(hiveSplits));
     return;
   }
   // Partitioned path: group splits by partition values, build a per-group
   // scan spec with partition constants set, and create readers per group.
+  // NOTE: splits with NULL routing partition values are silently skipped
+  // during grouping. If all splits are skipped, readers_ remains empty
+  // and lookup() returns an EmptyIterator for every request.
   buildPartitionGroups(std::move(hiveSplits));
 }
 
 void HiveIndexSource::buildPartitionGroups(
     std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits) {
   auto splitGroups = groupSplitsByPartitions(std::move(hiveSplits));
-  VELOX_CHECK(
-      !splitGroups.empty(), "No partition groups from non-empty splits");
+  if (splitGroups.empty()) {
+    // All splits had NULL routing partition values and were skipped.
+    return;
+  }
 
-  const bool readTimestampAsLocal =
-      hiveConfig_->readTimestampPartitionValueAsLocalTime(
-          connectorQueryCtx_->sessionProperties());
-
-  // For each distinct partition, build typed routing constants and a per-group
-  // scan spec where partition columns are emitted as constants by the
-  // underlying reader.
-  partitionGroups_.reserve(splitGroups.size());
+  // For each distinct partition, build a SplitGroup with its own scan spec,
+  // routing constants, and readers.
+  splitGroups_.reserve(splitGroups.size());
   for (auto& [_, groupSplits] : splitGroups) {
-    PartitionGroup group;
-    const auto& split = *groupSplits.front();
-
-    group.partitionValues.reserve(partitionIndexConditions_.size());
-    for (const auto& cond : partitionIndexConditions_) {
-      const auto& partitionValue =
-          extractPartitionValue(split, cond.partitionColumnName);
-      const auto& handle = partitionKeyHandles_.at(cond.partitionColumnName);
-      group.partitionValues.emplace_back(newConstantFromString(
-          handle->dataType(),
-          partitionValue,
-          pool_,
-          readTimestampAsLocal,
-          cond.isPartitionDateValueDaysSinceEpoch));
-    }
-
-    const auto groupReadersStartIdx = readers_.size();
-    createReadersFromSplits(
-        std::move(groupSplits), buildScanSpec(&split.partitionKeys));
-    for (size_t i = groupReadersStartIdx; i < readers_.size(); ++i) {
-      group.readers.emplace_back(readers_[i].get());
-    }
-    partitionGroups_.push_back(std::move(group));
+    createSplitGroup(std::move(groupSplits));
   }
 }
 
@@ -1233,35 +1210,76 @@ HiveIndexSource::groupSplitsByPartitions(
   PartitionSplitGroupMap splitGroups;
   for (auto& split : hiveSplits) {
     auto key = makePartitionKey(*split);
-    splitGroups[std::move(key)].push_back(std::move(split));
+    if (key.has_value()) {
+      splitGroups[std::move(key.value())].push_back(std::move(split));
+    }
   }
   return splitGroups;
 }
 
-std::string HiveIndexSource::makePartitionKey(
+std::optional<std::string> HiveIndexSource::makePartitionKey(
     const HiveConnectorSplit& split) const {
   // Encodes the partition values into an opaque grouping key using '\0' as
-  // field separator. Safe because Hive partition values come from filesystem
-  // directory names which cannot contain '\0'.
+  // field separator. Returns nullopt if any routing partition column has a
+  // NULL value — no probe row can match such splits (NULL != NULL).
   std::string key;
   for (const auto& cond : partitionIndexConditions_) {
     const auto& partitionValue =
         extractPartitionValue(split, cond.partitionColumnName);
-    VELOX_CHECK(
-        partitionValue.has_value(),
-        "Split has null partition value for routing column: {}",
-        cond.partitionColumnName);
+    if (!partitionValue.has_value()) {
+      return std::nullopt;
+    }
     key += *partitionValue;
     key += '\0';
   }
   return key;
 }
 
-void HiveIndexSource::createReadersFromSplits(
-    std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits,
-    const std::shared_ptr<common::ScanSpec>& scanSpec) {
+void HiveIndexSource::createSplitGroup(
+    std::vector<std::shared_ptr<const HiveConnectorSplit>> hiveSplits) {
+  VELOX_CHECK(!hiveSplits.empty());
+  const auto& split = *hiveSplits.front();
+
+  auto& group = splitGroups_.emplace_back();
+  group.scanSpec = buildScanSpec(&split.partitionKeys);
+
+  // Build typed routing constants from the splits' partition values. For the
+  // non-partitioned path partitionIndexConditions_ is empty, leaving
+  // partitionValues empty.
+  const bool readTimestampAsLocal =
+      hiveConfig_->readTimestampPartitionValueAsLocalTime(
+          connectorQueryCtx_->sessionProperties());
+  group.partitionValues.reserve(partitionIndexConditions_.size());
+  for (const auto& cond : partitionIndexConditions_) {
+    const auto& partitionValue =
+        extractPartitionValue(split, cond.partitionColumnName);
+    const auto& handle = partitionKeyHandles_.at(cond.partitionColumnName);
+    group.partitionValues.emplace_back(newConstantFromString(
+        handle->dataType(),
+        partitionValue,
+        pool_,
+        readTimestampAsLocal,
+        cond.isPartitionDateValueDaysSinceEpoch));
+  }
+
+  // Store splits for lazy reader creation on first access.
+  group.splits = std::move(hiveSplits);
+}
+
+void HiveIndexSource::ensureReadersCreated(SplitGroup& group) {
+  if (group.splits.empty()) {
+    // Readers already created: splits and scan spec were consumed, and the
+    // group holds its readers.
+    VELOX_CHECK_NULL(group.scanSpec);
+    VELOX_CHECK(!group.readers.empty());
+    return;
+  }
+  VELOX_CHECK_NOT_NULL(group.scanSpec);
+  VELOX_CHECK(group.readers.empty());
+
+  const auto readersStartIdx = readers_.size();
   auto* registry = IndexReaderFactoryRegistry::getInstance();
-  for (auto& hiveSplit : hiveSplits) {
+  for (auto& hiveSplit : group.splits) {
     const auto* factory = registry->getFactory(hiveSplit->fileFormat);
     if (factory != nullptr) {
       createCustomIndexReader(*factory, std::move(hiveSplit));
@@ -1271,18 +1289,30 @@ void HiveIndexSource::createReadersFromSplits(
               hiveSplit->fileFormat == dwio::common::FileFormat::FLUX ||
               hiveSplit->fileFormat == dwio::common::FileFormat::SST,
           "No IndexReaderFactory registered for format: {}",
-          dwio::common::toString(hiveSplit->fileFormat));
-      createFileIndexReader(std::move(hiveSplit), scanSpec);
+          dwio::common::FileFormatName::toName(hiveSplit->fileFormat));
+      createFileIndexReader(std::move(hiveSplit), group.scanSpec);
     }
   }
+  VELOX_CHECK_GT(
+      readers_.size(), readersStartIdx, "No index readers created from splits");
 
-  VELOX_CHECK(!readers_.empty(), "No index readers created from splits");
+  auto numReadersCreated = readers_.size() - readersStartIdx;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::connector::hive::HiveIndexSource::ensureReadersCreated",
+      &numReadersCreated);
+
+  group.readers.reserve(numReadersCreated);
+  for (size_t i = readersStartIdx; i < readers_.size(); ++i) {
+    group.readers.emplace_back(readers_[i].get());
+  }
+  group.scanSpec.reset();
+  group.splits.clear();
 }
 
-HiveIndexSource::PartitionGroup* HiveIndexSource::findPartitionGroup(
+HiveIndexSource::SplitGroup* HiveIndexSource::findSplitGroup(
     const RowVectorPtr& probeInput,
     vector_size_t row) {
-  for (auto& group : partitionGroups_) {
+  for (auto& group : splitGroups_) {
     bool match = true;
     for (size_t i = 0; i < partitionIndexConditions_.size(); ++i) {
       const auto& cond = partitionIndexConditions_[i];
@@ -1302,23 +1332,31 @@ HiveIndexSource::PartitionGroup* HiveIndexSource::findPartitionGroup(
 std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
     const Request& request) {
   VELOX_CHECK_GT(request.input->size(), 0, "Empty lookup request");
-  VELOX_CHECK(!readers_.empty(), "No index readers available for lookup");
+  VELOX_CHECK(splitsAdded_, "No splits added before lookup");
+
+  if (splitGroups_.empty()) {
+    // All splits were filtered out (e.g., all had NULL partition routing
+    // values).
+    return EmptyIterator::instance();
+  }
 
   auto options = SplitIndexReader::Options{
       .maxRowsPerRequest = static_cast<vector_size_t>(maxRowsPerIndexRequest_)};
 
-  if (partitionGroups_.empty()) {
-    return createLookupIterator(request, defaultReaders_, options);
+  // Non-partitioned path: single group, all rows match.
+  if (partitionIndexConditions_.empty()) {
+    VELOX_CHECK_EQ(splitGroups_.size(), 1);
+    ensureReadersCreated(splitGroups_[0]);
+    return createLookupIterator(request, splitGroups_[0].readers, options);
   }
 
   const auto numRows = request.input->size();
 
-  // Map each row to its partition group.
-  folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
-      partitionRowMap;
-  partitionRowMap.reserve(partitionGroups_.size());
+  // Partitioned path: route each row to its matching split group.
+  folly::F14FastMap<SplitGroup*, std::vector<vector_size_t>> partitionRowMap;
+  partitionRowMap.reserve(splitGroups_.size());
   for (vector_size_t row = 0; row < numRows; ++row) {
-    auto* group = findPartitionGroup(request.input, row);
+    auto* group = findSplitGroup(request.input, row);
     if (group != nullptr) {
       partitionRowMap[group].emplace_back(row);
     }
@@ -1328,10 +1366,13 @@ std::shared_ptr<IndexSource::ResultIterator> HiveIndexSource::lookup(
   }
 
   if (partitionRowMap.empty()) {
-    // No partition group matched any probe row.
-    static const std::shared_ptr<IndexSource::ResultIterator> kEmpty =
-        std::make_shared<EmptyIterator>();
-    return kEmpty;
+    // No split group matched any probe row.
+    return EmptyIterator::instance();
+  }
+
+  // Create readers lazily for matched groups.
+  for (auto& [group, rows] : partitionRowMap) {
+    ensureReadersCreated(*group);
   }
 
   if (partitionRowMap.size() == 1) {
@@ -1374,8 +1415,7 @@ HiveIndexSource::createLookupIterator(
 std::shared_ptr<IndexSource::ResultIterator>
 HiveIndexSource::createPartitionLookupIterator(
     const Request& request,
-    folly::F14FastMap<PartitionGroup*, std::vector<vector_size_t>>
-        partitionRowMap,
+    folly::F14FastMap<SplitGroup*, std::vector<vector_size_t>> partitionRowMap,
     const SplitIndexReader::Options& options) {
   // Create a PartitionIterator per group.
   std::vector<std::shared_ptr<IndexSource::ResultIterator>> partitionIters;
@@ -1649,7 +1689,7 @@ void HiveIndexSource::createCustomIndexReader(
   VELOX_CHECK_NOT_NULL(
       reader,
       "IndexReaderFactory returned null for format: {}",
-      dwio::common::toString(split->fileFormat));
+      dwio::common::FileFormatName::toName(split->fileFormat));
   readers_.push_back(std::move(reader));
 }
 

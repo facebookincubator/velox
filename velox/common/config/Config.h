@@ -121,6 +121,11 @@ class ConfigBase : public IConfig {
 
   std::unordered_map<std::string, std::string> rawConfigsCopy() const final;
 
+  /// Returns configs whose keys start with 'prefix'. The prefix is stripped
+  /// from keys in the returned map.
+  std::unordered_map<std::string, std::string> rawConfigsWithPrefix(
+      std::string_view prefix) const;
+
   /// Converts a session key to a config key by replacing '_' with '-'.
   static std::string toConfigKey(std::string_view sessionKey);
 

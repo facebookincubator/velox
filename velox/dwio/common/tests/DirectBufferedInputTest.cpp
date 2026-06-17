@@ -285,6 +285,71 @@ TEST_F(DirectBufferedInputTest, readAfterReset) {
   }
 }
 
+TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
+  constexpr int32_t kContentSize = 4 << 20; // 4MB
+  std::string content;
+  content.resize(kContentSize);
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>(i % 251);
+  }
+
+  for (const bool tinyRegion : {false, true}) {
+    SCOPED_TRACE(fmt::format("tinyRegion: {}", tinyRegion));
+
+    const uint64_t regionSize = tinyRegion
+        ? DirectBufferedInput::kTinySize - 100
+        : DirectBufferedInput::kTinySize + 1000;
+    auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+    io::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setLoadQuantum(1 << 20);
+
+    auto& ids = fileIds();
+    StringIdLease fileId(ids, fmt::format("duplicateRegions{}", tinyRegion));
+    StringIdLease groupId(
+        ids, fmt::format("duplicateRegionsGroup{}", tinyRegion));
+
+    DirectBufferedInput input(
+        readFile,
+        MetricsLog::voidLog(),
+        std::move(fileId),
+        tracker_,
+        std::move(groupId),
+        dataIoStats_,
+        nullptr,
+        executor_.get(),
+        readerOptions);
+
+    auto stream1 = input.enqueue(common::Region{123, regionSize}, nullptr);
+    auto stream2 = input.enqueue(common::Region{123, regionSize}, nullptr);
+    ASSERT_NE(stream1, nullptr);
+    ASSERT_NE(stream2, nullptr);
+
+    const auto duplicateRegionsBefore = dataIoStats_->duplicateReadRegions();
+    const auto duplicateBytesBefore = dataIoStats_->duplicateReadBytes();
+    input.load(LogType::TEST);
+
+    EXPECT_EQ(input.testingStreamToCoalescedLoadSize(), 2);
+    EXPECT_EQ(input.testingCoalescedLoads().size(), 1);
+    EXPECT_EQ(dataIoStats_->duplicateReadRegions() - duplicateRegionsBefore, 1);
+    EXPECT_EQ(
+        dataIoStats_->duplicateReadBytes() - duplicateBytesBefore, regionSize);
+    EXPECT_EQ(readFile->numReads(), 0);
+
+    auto next1 = getNext(*stream1);
+    ASSERT_TRUE(next1.has_value());
+    EXPECT_EQ(next1.value(), content.substr(123, regionSize));
+    EXPECT_EQ(readFile->numReads(), 1);
+
+    auto next2 = getNext(*stream2);
+    ASSERT_TRUE(next2.has_value());
+    EXPECT_EQ(next2.value(), content.substr(123, regionSize));
+    EXPECT_EQ(readFile->numReads(), 1);
+  }
+}
+
 DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB
   std::string content;

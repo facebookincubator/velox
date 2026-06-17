@@ -17,6 +17,8 @@
 
 #include <limits>
 #include <string>
+#include <string_view>
+#include <utility>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/config/ConfigProperty.h"
@@ -43,26 +45,6 @@ class FileConfig {
       bool,
       false,
       "Map ORC table field names to file field names using names, not indices.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kParquetUseColumnNamesSession,
-      kParquetUseColumnNames,
-      isParquetUseColumnNames,
-      "parquet_use_column_names",
-      "parquet.use-column-names",
-      bool,
-      false,
-      "Map Parquet table field names to file field names using names, not indices.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kAllowInt32NarrowingSession,
-      kAllowInt32Narrowing,
-      allowInt32Narrowing,
-      "allow_int32_narrowing",
-      "parquet.allow-int32-narrowing",
-      bool,
-      false,
-      "Allow reading INT32 Parquet columns as a narrower integer type.")
 
   VELOX_HIVE_CONFIG_LEGACY(
       kReadTimestampPartitionValueAsLocalTimeSession,
@@ -103,16 +85,6 @@ class FileConfig {
       uint64_t,
       256UL << 10,
       "Speculative tail-read size in bytes for ORC files.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kParquetFooterSpeculativeIoSizeSession,
-      kParquetFooterSpeculativeIoSize,
-      parquetFooterSpeculativeIoSize,
-      "parquet_footer_speculative_io_size",
-      "parquet.footer-speculative-io-size",
-      uint64_t,
-      256UL << 10,
-      "Speculative tail-read size in bytes for Parquet files.")
 
   VELOX_HIVE_CONFIG_LEGACY(
       kNimbleFooterSpeculativeIoSizeSession,
@@ -206,6 +178,14 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
+      kLazyColumnIoSession,
+      lazyColumnIo,
+      "nimble.lazy_column_io",
+      bool,
+      false,
+      "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
+
+  VELOX_HIVE_CONFIG(
       kCacheMetadataSession,
       cacheMetadata,
       "cache_metadata",
@@ -249,16 +229,6 @@ class FileConfig {
       true,
       "Enable selective Nimble reader.")
 
-  VELOX_HIVE_CONFIG(
-      kParquetFooterMemoryTrackingThresholdSession,
-      parquetFooterMemoryTrackingThreshold,
-      "parquet_footer_memory_tracking_threshold",
-      uint64_t,
-      std::numeric_limits<uint64_t>::max(),
-      "Serialized footer size in bytes beyond which the Parquet reader "
-      "estimates and reports the deserialized footer's heap footprint to "
-      "the memory pool. Defaults to disabled (max uint64).")
-
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(
@@ -295,13 +265,22 @@ class FileConfig {
   /// meta data together. Optimization to decrease the small IO requests.
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
-  explicit FileConfig(std::shared_ptr<const config::ConfigBase> config) {
+  explicit FileConfig(
+      std::shared_ptr<const config::ConfigBase> config,
+      std::string connectorConfigPrefix)
+      : connectorConfigPrefix_(std::move(connectorConfigPrefix)) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for FileConfig initialization");
     config_ = std::move(config);
   }
 
   virtual ~FileConfig() = default;
+
+  /// Returns the connector-owned config prefix. For example, "hive" returns
+  /// "hive.".
+  static std::string makeConnectorConfigPrefix(std::string_view connectorName) {
+    return std::string(connectorName) + ".";
+  }
 
   int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
@@ -316,6 +295,10 @@ class FileConfig {
 
   const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
+  }
+
+  std::string_view connectorConfigPrefix() const {
+    return connectorConfigPrefix_;
   }
 
  protected:
@@ -352,6 +335,8 @@ class FileConfig {
   }
 
   std::shared_ptr<const config::ConfigBase> config_;
+  // Prefix used to extract connector-scoped format configs, e.g. "hive.".
+  const std::string connectorConfigPrefix_;
 };
 
 } // namespace facebook::velox::connector::hive

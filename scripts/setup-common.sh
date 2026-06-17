@@ -21,6 +21,7 @@ source "$SCRIPT_DIR"/setup-versions.sh
 
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
 VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
+VELOX_FBTHRIFT_CMAKE_PATCH=${VELOX_FBTHRIFT_CMAKE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_GEOS="${BUILD_GEOS:-true}"
@@ -80,6 +81,19 @@ function install_mvfst {
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
+
+  # This patch is integrated into the latest FBOS version of folly and can be removed on upgrade.
+  if [ -z "${VELOX_FBTHRIFT_CMAKE_PATCH}" ]; then
+    # We need to set a different path when building the Dockerfile.
+    ABSOLUTE_SCRIPTDIR=$(realpath "${SCRIPT_DIR}")
+
+    VELOX_FBTHRIFT_CMAKE_PATCH="${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch"
+  fi
+  (
+    cd "$DEPENDENCY_DIR"/fbthrift || exit 1
+    git apply "${VELOX_FBTHRIFT_CMAKE_PATCH}" || exit 1
+  )
+
   # Apple Clang's libc++ no longer defines _LIBCPP_HAS_NO_ASAN (renamed to
   # _LIBCPP_INSTRUMENTED_WITH_ASAN), so folly's UninitializedMemoryHacks.h
   # causing undefined symbol. This is fixed in the latest FBOS versions and
@@ -215,20 +229,28 @@ function install_arrow {
     if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
       # We need to set a different path when building the Dockerfile.
       ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+
+      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch"
+      VELOX_ARROW_CMAKE_PATCH+=" $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
     fi
 
     cd "$DEPENDENCY_DIR"/arrow || exit 1
-    git apply "$VELOX_ARROW_CMAKE_PATCH"
+    for patch in $VELOX_ARROW_CMAKE_PATCH; do
+      # Try patch command first (handles line number offsets), fall back to git apply
+      if command -v patch >/dev/null 2>&1; then
+        patch -p1 -i "$patch" || exit 1
+      else
+        git apply "$patch" || exit 1
+      fi
+    done
     # Presto needs this for Arrow Flight
     if [[ -n $EXTRA_ARROW_PATCH ]]; then
-      git apply "$EXTRA_ARROW_PATCH"
+      git apply "$EXTRA_ARROW_PATCH" || exit 1
     fi
   ) || exit 1
 
   cmake_install_dir arrow/cpp \
     -DARROW_PARQUET=OFF \
-    -DARROW_WITH_THRIFT=ON \
     -DARROW_WITH_LZ4=ON \
     -DARROW_WITH_SNAPPY=ON \
     -DARROW_WITH_ZLIB=ON \
@@ -243,33 +265,6 @@ function install_arrow {
     -DARROW_BUILD_STATIC=ON \
     -DBOOST_ROOT="$INSTALL_PREFIX" \
     $EXTRA_ARROW_OPTIONS
-}
-
-function install_thrift {
-  wget_and_untar https://github.com/apache/thrift/archive/"${THRIFT_VERSION}".tar.gz thrift
-
-  EXTRA_CXXFLAGS="-O3 -fPIC"
-  # Clang will generate warnings and they need to be suppressed, otherwise the build will fail.
-  if [[ ${USE_CLANG} != "false" ]]; then
-    EXTRA_CXXFLAGS="-O3 -fPIC -Wno-inconsistent-missing-override -Wno-unused-but-set-variable"
-  fi
-
-  CXX_FLAGS="$EXTRA_CXXFLAGS" cmake_install_dir thrift \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_COMPILER=ON \
-    -DBUILD_EXAMPLES=OFF \
-    -DBUILD_TUTORIALS=OFF \
-    -DCMAKE_DEBUG_POSTFIX= \
-    -DWITH_AS3=OFF \
-    -DWITH_CPP=ON \
-    -DWITH_C_GLIB=OFF \
-    -DWITH_JAVA=OFF \
-    -DWITH_JAVASCRIPT=OFF \
-    -DWITH_LIBEVENT=OFF \
-    -DWITH_NODEJS=OFF \
-    -DWITH_PYTHON=OFF \
-    -DWITH_QT5=OFF \
-    -DWITH_ZLIB=OFF
 }
 
 function install_stemmer {

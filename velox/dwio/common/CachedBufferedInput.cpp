@@ -328,6 +328,7 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
           uint64_t /*offset*/,
           const std::vector<char>& /*ranges*/) { ends.push_back(end); });
   ioStatistics_->readGap().merge(stats.gaps);
+  ioStatistics_->incDuplicateRead(stats.duplicateRegions, stats.duplicateBytes);
   return ends;
 }
 

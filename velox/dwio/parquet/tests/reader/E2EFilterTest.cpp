@@ -104,7 +104,7 @@ class E2EFilterTest : public E2EFilterTestBase,
             std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
             readerOpts.memoryPool()),
         readerOpts);
-    const auto expected = static_cast<thrift::Encoding::type>(encoding);
+    const auto expected = static_cast<thrift::Encoding>(encoding);
     for (const auto fileEncoding :
          reader->fileMetaData().rowGroup(0).columnChunk(0).encodings()) {
       if (fileEncoding == expected) {

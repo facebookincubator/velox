@@ -128,6 +128,7 @@ TEST(FbHive, badParse) {
       parser.parse("uniontype< bigint , int, float"),
       "Unexpected token uniontype at < bigint , int, float");
   VELOX_ASSERT_THROW(parser.parse("badid"), "Unexpected token badid at ");
+  VELOX_ASSERT_THROW(parser.parse("not_a_real_type"), "Unexpected token");
   VELOX_ASSERT_THROW(
       parser.parse("struct<int, bigint>"), "Unexpected token ' bigint>'");
   VELOX_ASSERT_THROW(parser.parse("list<>"), "Unexpected token list at <>");
@@ -212,5 +213,51 @@ TEST(FbHive, parseOpaqueCustomTypeReturnsSingleton) {
   // signatures holds.
   EXPECT_EQ(parsed.get(), CustomFooRegistrar::singletonTypePtr().get());
   CustomFooRegistrar::unregisterType();
+}
+
+namespace {
+
+// A generic VARCHAR-backed custom type used solely to exercise the parser's
+// custom-type lookup. It is unrelated to any real type.
+class TestCustomType final : public VarcharType {
+  TestCustomType() = default;
+
+ public:
+  static std::shared_ptr<const TestCustomType> get() {
+    static const TestCustomType kInstance;
+    return {std::shared_ptr<const TestCustomType>{}, &kInstance};
+  }
+};
+
+class TestCustomTypeFactory : public CustomTypeFactory {
+ public:
+  TypePtr getType(const std::vector<TypeParameter>& parameters) const override {
+    VELOX_CHECK(parameters.empty());
+    return TestCustomType::get();
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    return nullptr;
+  }
+
+  AbstractInputGeneratorPtr getInputGenerator(
+      const InputGeneratorConfig& /*config*/) const override {
+    return nullptr;
+  }
+};
+
+} // namespace
+
+TEST(FbHive, parseCustomTypeReturnsSingleton) {
+  // An identifier that names a registered custom type must resolve to that
+  // registered singleton (not fail as an unknown token) so downstream
+  // type-equality with UDF signatures holds.
+  registerCustomType(
+      "test_custom_type", std::make_unique<const TestCustomTypeFactory>());
+  HiveTypeParser parser;
+  auto parsed = parser.parse("test_custom_type");
+  EXPECT_EQ(parsed.get(), TestCustomType::get().get());
+  EXPECT_EQ(parsed->kind(), TypeKind::VARCHAR);
+  unregisterCustomType("test_custom_type");
 }
 } // namespace facebook::velox::type::fbhive

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/WindowPartition.h"
-#include "velox/exec/KRangeFrameBound.h"
-#include "velox/exec/PeerGroupComputation.h"
+#include "velox/exec/window/KRangeFrameBound.h"
+#include "velox/exec/window/PeerGroupComputation.h"
 
 #include <algorithm>
 
@@ -54,6 +54,17 @@ WindowPartition::WindowPartition(
     const std::vector<column_index_t>& inputMapping,
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
     : WindowPartition(data, {}, inputMapping, sortKeyInfo, true, false) {}
+
+WindowPartition::WindowPartition(
+    const std::vector<column_index_t>& inputMapping,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    bool partial)
+    : partial_(partial),
+      data_(nullptr),
+      partition_(),
+      complete_(!partial),
+      inputMapping_(inputMapping),
+      sortKeyInfo_(sortKeyInfo) {}
 
 void WindowPartition::addRows(const std::vector<char*>& rows) {
   checkPartial();
@@ -287,7 +298,7 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
     vector_size_t* rawPeerStarts,
     vector_size_t* rawPeerEnds) {
   RowContainerAccessor rows{*this};
-  auto result = PeerGroupComputation::compute(
+  auto result = window::PeerGroupComputation::compute(
       rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
   if (result.previousRowConsumed) {
     removePreviousRow();
@@ -308,7 +319,7 @@ void WindowPartition::computeKRangeFrameBounds(
   const auto frameType = data_->columnTypes()[inputMapping_[frameColumn]];
 
   RowContainerAccessor rows{*this};
-  KRangeFrameBound::compute(
+  window::KRangeFrameBound::compute(
       rows,
       isStartBound,
       isPreceding,

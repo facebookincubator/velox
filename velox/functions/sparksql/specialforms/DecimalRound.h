@@ -16,34 +16,14 @@
 
 #pragma once
 
-#include "velox/expression/FunctionCallToSpecialForm.h"
-
 namespace facebook::velox::functions::sparksql {
 
-class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
- public:
-  // Throws not supported exception.
-  TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+/// Function name constants for the decimal rounding special forms.
+inline constexpr const char* kRoundDecimal = "decimal_round";
+inline constexpr const char* kCeilDecimal = "decimal_ceil";
+inline constexpr const char* kFloorDecimal = "decimal_floor";
 
-  /// @brief Returns an expression for decimal_round special form. The
-  /// expression is a regular expression based on a custom VectorFunction
-  /// implementation.
-  /// @param type Result type. Must be short or long decimal.
-  /// @param args One or two inputs. First input must be decimal. Second
-  /// optional input is the new scale to be rounded to, and must be constant
-  /// INTEGER.
-  exec::ExprPtr constructSpecialForm(
-      const TypePtr& type,
-      std::vector<exec::ExprPtr>&& args,
-      bool trackCpuUsage,
-      const core::QueryConfig& config) override;
+/// Registers decimal_round, decimal_ceil, and decimal_floor special forms.
+void registerDecimalRoundingForms();
 
-  /// Returns the result precision and scale after rounding from the input
-  /// precision and scale to a new scale. The calculation logic is consistent
-  /// with Spark version after 3.3.
-  static std::pair<uint8_t, uint8_t>
-  getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
-
-  static constexpr const char* kRoundDecimal = "decimal_round";
-};
 } // namespace facebook::velox::functions::sparksql

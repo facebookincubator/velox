@@ -57,6 +57,19 @@ class IcebergSplitReader : public FileSplitReader {
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
  private:
+  // Configures the base reader options. For DWRF/ORC Iceberg reads, selects
+  // ColumnMappingMode::kFieldId and populates ReaderOptions::fieldIds() from
+  // the Iceberg column handles so the reader resolves columns by field id,
+  // enabling schema evolution (rename, reorder, delete, drop + re-add with same
+  // name).
+  void configureBaseReaderOptions() override;
+
+  // Builds the requested-schema field-id trees, one per top-level column,
+  // aligned to tableHandle_->dataColumns(). Data columns without an Iceberg
+  // handle (e.g. unprojected) get a negative sentinel id that matches no
+  // physical field. Returns empty when no Iceberg handles are available.
+  std::vector<dwio::common::ParquetFieldId> buildFieldIds() const;
+
   /// Adapts the data file schema to match the table schema expected by the
   /// query.
   ///
@@ -170,6 +183,17 @@ class IcebergSplitReader : public FileSplitReader {
   std::optional<int64_t> firstRowId_;
   // Output column index of _row_id, if projected.
   std::optional<column_index_t> rowIdOutputIndex_;
+  // Output column index of $target_table_row_id, if projected. Populated in
+  // prepareSplit() when the reader output includes the synthetic MERGE INTO
+  // row-id ROW column. next() consumes this index to overwrite the placeholder
+  // child set by adaptColumns() with a freshly synthesized 4-field RowVector.
+  std::optional<column_index_t> targetTableRowIdOutputIndex_;
+  // Constant values needed to synthesize the spec_id and partition_data
+  // fields of $target_table_row_id. Sourced from the split's infoColumns map
+  // ($spec_id and partition_data). file_path comes from the split's filePath
+  // directly. row_position is computed in next() per row.
+  std::optional<int32_t> targetTableSpecId_;
+  std::optional<std::string> targetTablePartitionData_;
   // Whether an implicit row-number column is needed for _row_id computation
   // (set when filters, random-skip, or positional deletes make output
   // positions non-contiguous).

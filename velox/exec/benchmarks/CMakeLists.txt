@@ -109,7 +109,6 @@ if(${VELOX_ENABLE_PARQUET})
     velox_vector_test_lib
     Folly::follybenchmark
     arrow
-    thrift
   )
 endif()
 
@@ -162,6 +161,18 @@ target_link_libraries(
   velox_exec_test_lib
   velox_hive_connector
   velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark
+)
+
+add_executable(velox_rows_streaming_window_benchmark RowsStreamingWindowBenchmark.cpp)
+
+target_link_libraries(
+  velox_rows_streaming_window_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
   velox_vector_test_lib
   velox_window
   Folly::follybenchmark

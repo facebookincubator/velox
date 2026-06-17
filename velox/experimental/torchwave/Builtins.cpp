@@ -61,6 +61,12 @@ std::pair<c10::ScalarType, std::string> resolveOutDtype(
   } else {
     dtypeStr = c10::toString(outDtype);
   }
+  // An empty or unrecognized dtype string (e.g. dtype="" serialized for a
+  // factory op that infers its type from the input) must fall back to the
+  // resolved dtype name; otherwise downstream codegen defaults it to Float.
+  if (dtypeStr.empty()) {
+    dtypeStr = c10::toString(outDtype);
+  }
   return {outDtype, dtypeStr};
 }
 
@@ -226,7 +232,7 @@ void resolveDtypeFromInput(nativert::Node* node, const ValueTypes& types) {
     auto outDtype = c10::isIntegralType(inputDtype, /*includeBool=*/true)
         ? c10::ScalarType::Long
         : inputDtype;
-    node->addAttribute({"dtype", std::string(c10::toString(outDtype))});
+    node->addAttribute({"dtype", outDtype});
   }
 }
 
@@ -270,14 +276,28 @@ void castScalarAttrsToInputDtype(
       !types.types[inputId]) {
     return;
   }
-  if (!at::isFloatingType(types.types[inputId]->dtype())) {
+  auto dtype = types.types[inputId]->dtype();
+  if (!at::isFloatingType(dtype)) {
     return;
   }
+  // PyTorch performs Tensor-Scalar ops -- including the comparison chains that
+  // build selection masks (ge/lt/gt/le.Scalar) -- in the tensor's dtype: the
+  // scalar is first converted to that dtype. For a float32 tensor that means
+  // rounding the scalar to float32 before the op. Without this, a threshold
+  // like 0.1 stays a double and the generated `x >= threshold` promotes the
+  // float `x` to double, comparing in double; at a boundary value that flips
+  // the mask bit vs eager and the difference propagates into downstream
+  // jagged/masked-select counts. The float Constant kind is double, so we keep
+  // a double whose value is exactly representable as float32 -- a subsequent
+  // double comparison/arith then yields the same result as float.
+  const bool toFloat = (dtype == c10::ScalarType::Float);
   for (auto& attr : node->attributes()) {
-    if (std::holds_alternative<int64_t>(attr.value)) {
-      auto intVal = std::get<int64_t>(attr.value);
-      const_cast<nativert::Attribute&>(attr).value =
-          static_cast<double>(intVal);
+    auto& value = const_cast<nativert::Attribute&>(attr).value;
+    if (std::holds_alternative<int64_t>(value)) {
+      double d = static_cast<double>(std::get<int64_t>(value));
+      value = toFloat ? static_cast<double>(static_cast<float>(d)) : d;
+    } else if (toFloat && std::holds_alternative<double>(value)) {
+      value = static_cast<double>(static_cast<float>(std::get<double>(value)));
     }
   }
 }
@@ -286,7 +306,7 @@ void resolveDefaultDtype(nativert::Node* node, const ValueTypes& /*types*/) {
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
-  node->addAttribute({"dtype", std::string("Float")});
+  node->addAttribute({"dtype", c10::ScalarType::Float});
 }
 
 void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
@@ -301,7 +321,8 @@ void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
       break;
     }
   }
-  node->addAttribute({"dtype", std::string(hasFloat ? "Float" : "Long")});
+  node->addAttribute(
+      {"dtype", hasFloat ? c10::ScalarType::Float : c10::ScalarType::Long});
 }
 
 void resolveNanToNumDefaults(nativert::Node* node, const ValueTypes& types) {
@@ -356,7 +377,7 @@ void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
   auto inputId = node->inputs()[0].value->id();
   if (inputId < static_cast<int>(types.types.size()) && types.types[inputId]) {
     auto inputDtype = types.types[inputId]->dtype();
-    node->addAttribute({"dtype", std::string(c10::toString(inputDtype))});
+    node->addAttribute({"dtype", inputDtype});
   }
 }
 
@@ -390,8 +411,12 @@ std::vector<std::vector<Dim>> numBlocksShape(
     const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
   auto blockSize = WaveConfig::get().blockSize;
-  auto numBlocks =
-      static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize);
+  // At least one block: makeGrid always launches >=1 block (even for an empty
+  // input), and that block's head kernel unconditionally writes one per-block
+  // partial sum (out[blockInOp]).  A zero-length counts buffer would make that
+  // write dereference null storage.
+  auto numBlocks = std::max<Dim>(
+      1, static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize));
   return {{numBlocks}};
 }
 
@@ -606,6 +631,28 @@ void registerBuiltins() {
       .elementwise()
       .arithmeticPromotion()
       .costFunction(powCost)
+      .registerOp();
+
+  // In-place binary arithmetic. PyTorch keeps these in non-functionalized
+  // graphs (e.g. dense-feature normalization x.add_(mean).mul_(inv_std)).
+  // Registered as elementwise; the device functions take the mutated arg by
+  // reference so the write lands in self's storage. No arithmeticPromotion:
+  // in-place ops keep self's dtype rather than promoting the result.
+  MetadataBuilder("torch.ops.aten.add_.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Tensor")
+      .elementwise()
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Tensor")
+      .elementwise()
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Tensor")
+      .elementwise()
+      .costFunction(divCost)
       .registerOp();
 
   // Binary arithmetic (Tensor, Scalar).
@@ -892,6 +939,15 @@ void registerBuiltins() {
            {.hasPresentTemplateParam = true}})
       .normalize(castScalarAttrsToInputDtype)
       .registerOp();
+  // In-place clamp. Mirrors clamp.default; __clamp_(T&, lo, hi) writes self.
+  MetadataBuilder("torch.ops.aten.clamp_.default")
+      .elementwise()
+      .argumentMeta(
+          {{.isRegister = true},
+           {.hasPresentTemplateParam = true},
+           {.hasPresentTemplateParam = true}})
+      .normalize(castScalarAttrsToInputDtype)
+      .registerOp();
   MetadataBuilder("torch.ops.aten.nan_to_num.default")
       .elementwise()
       .normalize(resolveNanToNumDefaults)
@@ -900,6 +956,7 @@ void registerBuiltins() {
   // Type cast.
   MetadataBuilder("torch.ops.aten.to.dtype")
       .elementwiseFunc("__to")
+      .numArgs(1)
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -910,6 +967,72 @@ void registerBuiltins() {
            << ")";
       })
       .ignoreAttrs({"memory_format", "copy", "non_blocking"})
+      .registerOp();
+
+  // _to_copy: functional copy/cast. Same as to.dtype -- the cast is driven by
+  // the (here optional) dtype attribute, named "dtype" exactly as in to.dtype,
+  // so no attribute rename is needed. When dtype is absent (a pure device/copy
+  // with no type change) the cast is the identity. The other kwargs only affect
+  // placement/layout, which wave handles separately, so they are ignored.
+  MetadataBuilder("torch.ops.aten._to_copy.default")
+      .elementwiseFunc("__to")
+      .numArgs(1)
+      .generateCall([](std::stringstream& ss,
+                       NodeCP node,
+                       std::vector<std::string> args) {
+        TORCH_CHECK(!args.empty(), "_to_copy requires at least one input");
+        const auto* dtypeAttr = node->tryGetAttribute("dtype");
+        if (!dtypeAttr ||
+            std::holds_alternative<nativert::None>(dtypeAttr->value)) {
+          ss << args[0];
+          return;
+        }
+        ss << "static_cast<" << cudaTypeFromDtype(*dtypeAttr) << ">(" << args[0]
+           << ")";
+      })
+      .ignoreAttrs(
+          {"layout", "device", "pin_memory", "non_blocking", "memory_format"})
+      .registerOp();
+
+  // scalar_tensor: materialize a Scalar as a 0-d (single-element) tensor.
+  // Elementwise with one (register) scalar input; the output is always one
+  // element and its value is, like to.dtype, a static_cast of the scalar to the
+  // type named by the dtype attribute (the literal's own type when dtype is
+  // absent/None). The layout/device/pin_memory kwargs only affect placement, so
+  // they are ignored.
+  MetadataBuilder("torch.ops.aten.scalar_tensor.default")
+      .elementwiseFunc("__scalar_tensor")
+      .numArgs(1)
+      // The schema has 5 args (s, dtype, layout, device, pin_memory); only the
+      // scalar s is a real (register) input, the rest arrive as attributes.
+      // argumentMeta must still cover every schema argument.
+      .argumentMeta({{.isRegister = true}, {}, {}, {}, {}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserveShape = [](NodeCP /*node*/,
+                               nativert::ExecutionFrame& /*frame*/,
+                               const FormalToActual& /*map*/,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
+              // 0-d (rank-0) output: one element, matching PyTorch's
+              // scalar_tensor shape.
+              return {{}};
+            }}})
+      .generateCall([](std::stringstream& ss,
+                       NodeCP node,
+                       std::vector<std::string> args) {
+        TORCH_CHECK(!args.empty(), "scalar_tensor requires at least one input");
+        const auto* dtypeAttr = node->tryGetAttribute("dtype");
+        if (!dtypeAttr ||
+            std::holds_alternative<nativert::None>(dtypeAttr->value)) {
+          ss << args[0];
+          return;
+        }
+        ss << "static_cast<" << cudaTypeFromDtype(*dtypeAttr) << ">(" << args[0]
+           << ")";
+      })
+      .ignoreAttrs({"layout", "device", "pin_memory"})
       .registerOp();
 
   // Zeros.
@@ -985,14 +1108,29 @@ void registerBuiltins() {
             if (!sizeAttr) {
               return {};
             }
-            auto [outDtype, dtypeStr] = resolveOutDtype(node, &waveGraph);
+            auto outDtype = resolveOutDtype(node, &waveGraph).first;
             auto* graph = waveGraph.graph();
             auto* zerosNode =
                 graph->createNode("torch.ops.aten.zeros.default", {});
             zerosNode->addAttribute(
                 {sizeAttr->name,
                  std::get<std::vector<int64_t>>(sizeAttr->value)});
-            zerosNode->addAttribute({"dtype", dtypeStr});
+            // aten.zeros runs as a standalone via nativert C10Kernel, whose
+            // boxed schema expects an int ScalarType for `dtype`.  Emit a typed
+            // ScalarType (not the string name) so it unboxes natively, with no
+            // string-reinterpret workaround needed in
+            // prefillStackWithStaticArgs.
+            zerosNode->addAttribute({"dtype", outDtype});
+            // new_zeros inherits its input's device; the rewritten zeros has no
+            // such input, so pin it to the wave (GPU) device.  Without this the
+            // C10 zeros falls back to CPU and trips device-mismatch checks.
+            if (auto* dev = facebook::velox::wave::currentDevice()) {
+              zerosNode->addAttribute(
+                  {"device",
+                   c10::Device(
+                       c10::kCUDA,
+                       static_cast<c10::DeviceIndex>(dev->deviceId))});
+            }
             graph->insertBefore(zerosNode, const_cast<nativert::Node*>(node));
             auto* newOutput =
                 waveGraph.newTensorValue(zerosNode, "zeros", outDtype);
@@ -1051,8 +1189,70 @@ void registerBuiltins() {
       .elementwiseFunc("__sym_size")
       .argumentMeta(
           {{.isRegister = false, .wholeTensor = true}, {.isRegister = true}})
+      .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .isScalarElementwise()
       .registerOp();
+
+  // Element count. Like sym_size, reads tensor metadata; returns the numEl
+  // field of wave::Tensor. x.numel() on a dynamically-shaped tensor lowers to
+  // aten.sym_numel.default. Takes the whole tensor; output is a single int.
+  MetadataBuilder("torch.ops.aten.sym_numel.default")
+      .elementwiseFunc("__numel")
+      .argumentMeta({{.isRegister = false, .wholeTensor = true}})
+      .returnMeta({{.isRegister = true}})
+      .metadataGetter()
+      .isScalarElementwise()
+      .registerOp();
+
+  // _operator.* Python scalar ops (sym arithmetic / comparisons), e.g.
+  // sym_size // constant, size - 1, or a guard like sym_size >= 0. Operands and
+  // result are naked scalars (SymInt / SymFloat / SymBool), not tensors, and
+  // these ops are not in the PyTorch dispatcher, so they have no
+  // FunctionSchema. Register each schema-less with isScalarElementwise: the
+  // elementwise codegen then runs a single iteration and writes the result to a
+  // scalar parameter. The device functions are templated on the operand types,
+  // so one registration serves int and float operands.
+  auto registerScalarOp =
+      [](const char* opName, const char* deviceFunc, int32_t arity) {
+        std::vector<ArgumentMeta> args(arity, ArgumentMeta{.isRegister = true});
+        // The _operator builtins name their positional params with single
+        // letters from the Python signature: add(a, b), neg(a), etc. Bind by
+        // these names rather than by container order (see forArguments); a
+        // future op whose serialized names differ then errors instead of
+        // silently miscomputing.
+        std::vector<std::string> names;
+        names.reserve(arity);
+        for (int32_t i = 0; i < arity; ++i) {
+          names.emplace_back(1, static_cast<char>('a' + i));
+        }
+        MetadataBuilder(opName, MetadataBuilder::NoSchema{})
+            .elementwiseFunc(deviceFunc)
+            .numArgs(arity)
+            .isScalarElementwise()
+            .argumentMeta(std::move(args))
+            .argumentNames(std::move(names))
+            .returnMeta({{.isRegister = true}})
+            .registerOp();
+      };
+  // Binary arithmetic (result type follows operand promotion).
+  registerScalarOp("_operator.add", "__opadd", 2);
+  registerScalarOp("_operator.sub", "__opsub", 2);
+  registerScalarOp("_operator.mul", "__mul", 2);
+  registerScalarOp("_operator.floordiv", "__floordiv", 2);
+  registerScalarOp("_operator.mod", "__remainder", 2);
+  registerScalarOp("_operator.truediv", "__div", 2);
+  registerScalarOp("_operator.pow", "__pow", 2);
+  // Unary arithmetic.
+  registerScalarOp("_operator.neg", "__neg", 1);
+  registerScalarOp("_operator.abs", "__abs", 1);
+  // Comparisons (result is a bool).
+  registerScalarOp("_operator.eq", "__eq", 2);
+  registerScalarOp("_operator.ne", "__ne", 2);
+  registerScalarOp("_operator.lt", "__lt", 2);
+  registerScalarOp("_operator.le", "__le", 2);
+  registerScalarOp("_operator.gt", "__gt", 2);
+  registerScalarOp("_operator.ge", "__ge", 2);
 
   // Identity-like ops: output replaces first input.
   for (const auto* opName :
@@ -1146,18 +1346,61 @@ void registerBuiltins() {
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& /*types*/,
-             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
-            if (inputs.empty() || outputs.empty()) {
+            if (inputs.empty() || outputs.empty() || !inputs[0].value) {
               return {};
+            }
+            auto* source = inputs[0].value;
+            auto* outputNode = waveGraph.graph()->outputNode();
+            // clone(memory_format=contiguous_format) is not an identity: it
+            // produces a contiguous copy that a following view() relies on.
+            // Keep the clone (its __copyTensor writes a contiguous register)
+            // rather than eliding it.
+            const auto* mfAttr = node->tryGetAttribute("memory_format");
+            if (mfAttr) {
+              bool isContiguous = false;
+              if (std::holds_alternative<c10::MemoryFormat>(mfAttr->value)) {
+                isContiguous = std::get<c10::MemoryFormat>(mfAttr->value) ==
+                    c10::MemoryFormat::Contiguous;
+              } else if (std::holds_alternative<std::string>(mfAttr->value)) {
+                const auto& s = std::get<std::string>(mfAttr->value);
+                isContiguous = s == "contiguous_format" || s == "Contiguous";
+              }
+              if (isContiguous) {
+                return {};
+              }
             }
             for (auto* user : outputs[0]->users()) {
               if (isInPlaceMutation(user, outputs[0])) {
                 return {};
               }
+              // A returned clone must stay a real copy: it is a distinct output
+              // tensor, and aliasing it to its source can collide with another
+              // output that is the same value.
+              if (user == outputNode) {
+                return {};
+              }
             }
-            return {{outputs[0], inputs[0].value}};
+            // Do not eliminate the clone if its source storage is mutated in
+            // place later: the clone is a required snapshot of the pre-mutation
+            // value, so it cannot be aliased to its (later-overwritten) source.
+            if (baseMutatedAfter(*waveGraph.graph(), node, inputs[0].value)) {
+              return {};
+            }
+            // Otherwise eliminate the clone (alias its output to the source)
+            // only when the source is produced by an elementwise node whose
+            // result has no other user -- a fresh value read nowhere else.  In
+            // any other case (graph input, view, standalone, or shared) keep
+            // the clone as a real copy.
+            const auto* producer = source->producer();
+            const auto* producerMeta = producer ? nodeMeta(producer) : nullptr;
+            if (!producerMeta || !producerMeta->elementwise ||
+                source->users().size() != 1) {
+              return {};
+            }
+            return {{outputs[0], source}};
           })
       .ignoreAttrs({"memory_format"})
       .multiBlockReturnBarrier()
@@ -1235,11 +1478,49 @@ void registerBuiltins() {
     }
   }
 
-  // index_put: scatter values into a tensor at given indices.
+  // index_put (functional, out-of-place): route through the in-place path.
+  // Copy the first input with an aten.clone (unless it is already a clone with
+  // a single user, which is then safe to mutate directly) and retarget the node
+  // to aten.index_put_. The optimizer re-visits a node whose target changed, so
+  // index_put_'s maybeReplace then performs the elementwise / masked_put
+  // rewrites on the in-place form.
   MetadataBuilder("torch.ops.aten.index_put.default")
       .sizeOrdinal({0})
       .isStandalone()
       .ignoreAttrs({"accumulate"})
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (node->inputs().empty() || !node->inputs()[0].value) {
+              return {};
+            }
+            auto* mutableNode = const_cast<nativert::Node*>(node);
+            auto* selfVal = node->inputs()[0].value;
+            auto* selfProducer = selfVal->producer();
+            const bool alreadyClone = selfProducer &&
+                selfProducer->target() == "torch.ops.aten.clone.default" &&
+                selfVal->users().size() == 1;
+            if (!alreadyClone) {
+              auto selfId = selfVal->id();
+              if (selfId >= static_cast<int>(types.types.size()) ||
+                  !types.types[selfId]) {
+                // Type not resolved at optimization time; leave index_put as a
+                // standalone rather than risk a null dereference.
+                return {};
+              }
+              auto selfDtype = types.types[selfId]->dtype();
+              auto* graph = waveGraph.graph();
+              auto* cloneNode = graph->createNode(
+                  "torch.ops.aten.clone.default", {{"self", selfVal}});
+              graph->insertBefore(cloneNode, mutableNode);
+              auto* cloneOutput = waveGraph.newTensorValue(
+                  cloneNode, "index_put_clone", selfDtype);
+              mutableNode->inputs()[0].value = cloneOutput;
+            }
+            mutableNode->setTarget("torch.ops.aten.index_put_.default");
+            return {};
+          })
       .registerOp();
 
   // masked_put_: in-place scatter with bool mask. Shortcut for index_put_
@@ -1386,6 +1667,14 @@ void registerBuiltins() {
                       const_cast<nativert::Value*>(
                           listPack->inputs()[0].value)},
                      {"values", valuesVal}});
+                // Place the replacement at the original op's program position.
+                // createNode inserts at the graph's current insertion point,
+                // which is not the index_put_ site; leaving it there would put
+                // this in-place mutation out of program order and invert the
+                // memory-dependency edges computed in ParallelExpr (a read of
+                // self before the mutation could be scheduled after it).
+                graph->insertBefore(
+                    maskedPutNode, const_cast<nativert::Node*>(node));
                 auto* resultValue = waveGraph.newTensorValue(
                     maskedPutNode, "masked_put_result", selfDtype);
                 return {{node->outputs()[0], resultValue}};

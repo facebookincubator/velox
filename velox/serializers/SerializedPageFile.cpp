@@ -39,15 +39,10 @@ SerializedPageFile::SerializedPageFile(
   file_ = fs->openFileForWrite(
       path_,
       filesystems::FileOptions{
-          {{filesystems::FileOptions::kFileCreateConfig.toString(),
-            fileCreateConfig}},
-          nullptr,
-          std::nullopt,
-          false,
-          true,
-          true,
-          std::nullopt,
-          ioStats});
+          .values =
+              {{filesystems::FileOptions::kFileCreateConfig.toString(),
+                fileCreateConfig}},
+          .stats = ioStats});
 }
 
 void SerializedPageFile::finish() {

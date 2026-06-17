@@ -74,8 +74,10 @@ VectorPtr newConstantFromStringImpl(
                       VELOX_USER_FAIL("{}", status.message());
                     });
     if constexpr (kind == TypeKind::TIMESTAMP) {
-      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
-      if (isLocalTimestamp) {
+      // TIMESTAMP partition value is read as local time subject to the
+      // 'readTimestampPartitionValueAsLocalTime' setting. TIMESTAMP_UTC
+      // partition value is always read as UTC.
+      if (type->equivalent(*TIMESTAMP()) && isLocalTimestamp) {
         copy.toGMT(Timestamp::defaultTimezone());
       }
     }
@@ -163,6 +165,11 @@ FileSplitReader::FileSplitReader(
       emptySplit_(false) {
   baseReaderOpts_.setDataIoStats(dataIoStats_);
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
+}
+
+void FileSplitReader::setRemainingFilterColumns(
+    const folly::F14FastSet<std::string>& columns) {
+  baseRowReaderOpts_.setRemainingFilterColumns(columns);
 }
 
 void FileSplitReader::configureReaderOptions(
