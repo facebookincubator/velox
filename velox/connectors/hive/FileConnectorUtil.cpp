@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
+#include <fmt/format.h>
 #include <unordered_map>
 
 #include "velox/common/config/Config.h"
@@ -23,9 +24,29 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
+
+FormatScopedConfigs makeFormatScopedConfigs(
+    const FileConfig& fileConfig,
+    const config::ConfigBase& sessionProperties,
+    dwio::common::FileFormat fileFormat) {
+  VELOX_CHECK_NE(
+      fileFormat,
+      dwio::common::FileFormat::UNKNOWN,
+      "Cannot build format-specific configs for unknown file format");
+
+  return {
+      config::ConfigBase(fileConfig.config()->rawConfigsWithPrefix(
+          fmt::format(
+              "{}{}",
+              fileConfig.connectorConfigPrefix(),
+              dwio::common::formatConfigPrefix(fileFormat, ".")))),
+      config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
+          dwio::common::formatConfigPrefix(fileFormat, "_")))};
+}
 
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -137,20 +158,13 @@ void configureReaderOptions(
     return;
   }
 
-  const auto formatPrefix =
-      dwio::common::formatConfigPrefix(fileSplit->fileFormat, ".");
-  const auto connectorFormatPrefix = formatPrefix.empty()
-      ? std::string()
-      : std::string(fileConfig->connectorConfigPrefix()) + formatPrefix;
-  auto formatConnectorConfig = config::ConfigBase(
-      fileConfig->config()->rawConfigsWithPrefix(connectorFormatPrefix));
-  auto formatSessionProperties =
-      config::ConfigBase(sessionProperties->rawConfigsWithPrefix(
-          dwio::common::formatConfigPrefix(fileSplit->fileFormat, "_")));
+  auto formatScopedConfigs = makeFormatScopedConfigs(
+      *fileConfig, *sessionProperties, fileSplit->fileFormat);
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(
-              formatConnectorConfig, formatSessionProperties));
+              formatScopedConfigs.connectorConfig,
+              formatScopedConfigs.sessionProperties));
 }
 
 void configureRowReaderOptions(
