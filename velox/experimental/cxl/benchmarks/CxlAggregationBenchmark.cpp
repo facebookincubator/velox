@@ -33,9 +33,10 @@
 //   --config=interleave Stock HashAggregation, uncapped; run the process under
 //                       'numactl --interleave=0,<cxl_node>' so the OS stripes
 //                       pages across DRAM and CXL.
-//   --config=cxl        CxlHashAggregation with a real CXL pool; the DRAM pool
-//                       is capped (same as 'dram') so the arbitrator relocates
-//                       to CXL.
+//   --config=cxl        CxlHashAggregation with a real CXL pool; DRAM pool
+//                       capped (same as 'dram'), spill enabled. reclaim()
+//                       relocates to CXL first, spilling to disk only if the
+//                       CXL pool is exhausted.
 //
 // Each config is meant to run as a separate process (the DriverAdapter that
 // installs CxlHashAggregation is process-global and registered only for 'cxl',
@@ -102,7 +103,10 @@ DEFINE_int64(
     "device). The allocator pre-reserves this, so it must be bounded.");
 DEFINE_int32(num_trials, 5, "Number of measured trials.");
 DEFINE_int32(warmup, 1, "Number of warmup trials to discard.");
-DEFINE_string(spill_dir, "/tmp/cxl_bench_spill", "Spill directory for 'dram'.");
+DEFINE_string(
+    spill_dir,
+    "/tmp/cxl_bench_spill",
+    "Spill directory for 'dram' and 'cxl'.");
 
 using namespace facebook::velox;
 using exec::test::PlanBuilder;
@@ -309,7 +313,8 @@ TrialMetrics runTrial(
   params.queryCtx = queryCtx;
   params.maxDrivers = 1;
   params.copyResult = true;
-  if (FLAGS_config == "dram") {
+
+  if (FLAGS_config == "dram" || isCxlConfig()) {
     params.spillDirectory = FLAGS_spill_dir;
     params.queryConfigs[core::QueryConfig::kSpillEnabled] = "true";
     params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
@@ -369,7 +374,8 @@ void report(const std::vector<TrialMetrics>& trials) {
       last.aggWallNanos / 1e6,
       last.aggBlockedNanos / 1e6,
       last.aggPeakBytes / static_cast<double>(1 << 20));
-  if (FLAGS_config == "dram") {
+  // On 'cxl' a non-zero figure means the CXL pool overflowed to disk.
+  if (FLAGS_config == "dram" || isCxlConfig()) {
     std::cout << fmt::format(
         "spill: bytes={:.1f} MB rows={} write={:.1f} ms read={:.1f} ms\n",
         last.spilledBytes / static_cast<double>(1 << 20),

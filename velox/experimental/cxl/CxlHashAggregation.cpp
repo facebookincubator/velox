@@ -131,14 +131,19 @@ void CxlHashAggregation::reclaim(
       numMigrated.fetch_add(1, std::memory_order_relaxed);
       pool()->release();
       return;
-    } catch (const VeloxException& e) {
-      // The CXL pool is exhausted. relocateRowsToCxl empties the source only
-      // after a full copy, so the table is still valid; fall back to spill.
-      LOG(WARNING) << "CXL relocation failed, falling back to spill: "
-                   << e.what();
+    } catch (const VeloxException&) {
+      // The CXL pool is exhausted mid-relocation.
     }
   }
-  exec::HashAggregation::reclaim(targetBytes, stats);
+  // We get here only when the table cannot be relieved by relocating to CXL:
+  // the rows are already in CXL (and the pinned bucket array is over the cap),
+  // or the CXL pool is exhausted. The remaining option is to spill a
+  // CXL-resident table to disk, which is not implemented -- the stock spill
+  // clears the whole table, including the CXL container, and silently drops
+  // those groups. Fail loudly instead of corrupting results.
+  VELOX_NYI(
+      "Spilling a CXL-relocated aggregation to disk is not yet implemented; "
+      "size the CXL pool and DRAM cap so the bucket array fits");
 }
 
 int64_t numCxlHashAggregationsInitialized() {
