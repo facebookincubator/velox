@@ -31,6 +31,15 @@ class AggregationOutputSpiller;
 
 class GroupingSet {
  public:
+  /// Builds the group-by hash table. Defaults to
+  /// HashTable::createForAggregation; a caller can supply a custom
+  /// BaseHashTable, e.g. one backed by a tiered allocator.
+  using HashTableFactory = std::function<std::unique_ptr<BaseHashTable>(
+      bool ignoreNullKeys,
+      std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+      const std::vector<Accumulator>& accumulators,
+      memory::MemoryPool* pool)>;
+
   GroupingSet(
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
@@ -49,6 +58,10 @@ class GroupingSet {
       exec::SpillStats* spillStats);
 
   ~GroupingSet();
+
+  /// Overrides the factory that builds the group-by hash table. Must be called
+  /// before the table is created, i.e. before the first addInput().
+  void setHashTableFactory(HashTableFactory factory);
 
   /// Creates a GroupingSet for MarkDistinct and EnforceDistinct operators to
   /// identify rows with unique values for a set of keys. When
@@ -88,6 +101,15 @@ class GroupingSet {
       int32_t maxOutputBytes,
       RowContainerIterator& iterator,
       RowVectorPtr& result);
+
+  /// Copies the grouping keys and aggregates for 'groups', read from
+  /// 'container', into 'result'. Extracts the intermediate type for a partial
+  /// aggregation, the final result otherwise. 'container' supplies the row
+  /// layout; the group pointers may live in any container that shares it.
+  void extractGroups(
+      RowContainer* container,
+      folly::Range<char**> groups,
+      const RowVectorPtr& result);
 
   uint64_t allocatedBytes() const;
 
@@ -252,14 +274,6 @@ class GroupingSet {
   // spills enough to make output fit.
   void ensureOutputFits();
 
-  // Copies the grouping keys and aggregates for 'groups' into 'result' If
-  // partial output, extracts the intermediate type for aggregates, final result
-  // otherwise.
-  void extractGroups(
-      RowContainer* container,
-      folly::Range<char**> groups,
-      const RowVectorPtr& result);
-
   // Produces output in if spilling has occurred. First produces data
   // from non-spilled partitions, then merges spill runs and unspilled data
   // form spilled partitions. Returns nullptr when at end. 'maxOutputRows' and
@@ -384,6 +398,10 @@ class GroupingSet {
 
   // Place for the arguments of the aggregate being updated.
   std::vector<VectorPtr> tempVectors_;
+
+  // Builds 'table_'. Defaults to HashTable::createForAggregation;
+  // setHashTableFactory() overrides it before the table is created.
+  HashTableFactory tableFactory_;
   std::unique_ptr<BaseHashTable> table_;
   std::unique_ptr<HashLookup> lookup_;
   SelectivityVector activeRows_;

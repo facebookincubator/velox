@@ -30,21 +30,27 @@ HashAggregation::HashAggregation(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::AggregationNode>& aggregationNode)
+    : HashAggregation(
+        operatorId,
+        driverCtx,
+        aggregationNode,
+        aggregationNode->step() == core::AggregationNode::Step::kPartial
+          ? OperatorType::kPartialAggregation
+          : OperatorType::kAggregation) {}
+
+HashAggregation::HashAggregation(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const std::shared_ptr<const core::AggregationNode>& aggregationNode,
+    std::string_view operatorType)
     : Operator(
           driverCtx,
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? OperatorType::kPartialAggregation
-              : OperatorType::kAggregation,
+          operatorType,
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(
-                    operatorId,
-                    aggregationNode->step() ==
-                            core::AggregationNode::Step::kPartial
-                        ? OperatorType::kPartialAggregation
-                        : OperatorType::kAggregation)
+              ? driverCtx->makeSpillConfig(operatorId, operatorType)
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),

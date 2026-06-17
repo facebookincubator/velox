@@ -40,6 +40,21 @@ bool areAllLazyNotLoaded(const std::vector<VectorPtr>& vectors) {
   });
 }
 
+// The default group-by table: HashTable::createForAggregation.
+GroupingSet::HashTableFactory defaultTableFactory() {
+  return [](bool ignoreNullKeys,
+            std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+            const std::vector<Accumulator>& accumulators,
+            memory::MemoryPool* pool) -> std::unique_ptr<BaseHashTable> {
+    if (ignoreNullKeys) {
+      return HashTable<true>::createForAggregation(
+          std::move(hashers), accumulators, pool);
+    }
+    return HashTable<false>::createForAggregation(
+        std::move(hashers), accumulators, pool);
+  };
+}
+
 } // namespace
 
 GroupingSet::GroupingSet(
@@ -75,6 +90,7 @@ GroupingSet::GroupingSet(
       aggregates_(std::move(aggregates)),
       masks_(extractMaskChannels(aggregates_)),
       groupIdChannel_(groupIdChannel),
+      tableFactory_(defaultTableFactory()),
       stringAllocator_(pool_),
       rows_(pool_) {
   VELOX_CHECK_NOT_NULL(nonReclaimableSection_);
@@ -445,14 +461,16 @@ std::vector<Accumulator> GroupingSet::accumulators(bool excludeToIntermediate) {
   return accumulators;
 }
 
+void GroupingSet::setHashTableFactory(HashTableFactory factory) {
+  VELOX_CHECK_NOT_NULL(factory);
+  VELOX_CHECK_NULL(
+      table_, "setHashTableFactory must be called before the table is created");
+  tableFactory_ = std::move(factory);
+}
+
 void GroupingSet::createHashTable() {
-  if (ignoreNullKeys_) {
-    table_ = HashTable<true>::createForAggregation(
-        std::move(hashers_), accumulators(false), pool_);
-  } else {
-    table_ = HashTable<false>::createForAggregation(
-        std::move(hashers_), accumulators(false), pool_);
-  }
+  table_ = tableFactory_(
+      ignoreNullKeys_, std::move(hashers_), accumulators(false), pool_);
 
   RowContainer& rows = *table_->rows();
   initializeAggregates(aggregates_, rows, false);

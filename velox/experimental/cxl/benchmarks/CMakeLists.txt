@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# End-to-end aggregation benchmark: runs the TPC-H Q18 grouping subquery through
-# the exec stack with the CXL operator, so it pulls in the exec test harness,
-# the TPC-H connector, and the prestosql aggregate functions on top of the CXL
+# Aggregation microbenchmark: runs a grouping aggregation over a synthesized
+# Zipf key stream through the exec stack with the CXL operator, so it pulls in
+# the exec test harness and the prestosql aggregate functions on top of the CXL
 # operator library. External deps are listed explicitly (rather than left to
 # propagate through the velox mono library) so the link does not reference
 # bundled dependency archives by a path with no build rule. NUMA_LIBRARY is
@@ -31,7 +31,6 @@ target_link_libraries(
     velox_exec_test_lib
     velox_functions_prestosql
     velox_hive_connector
-    velox_tpch_connector
     velox_memory
     velox_vector
     velox_type

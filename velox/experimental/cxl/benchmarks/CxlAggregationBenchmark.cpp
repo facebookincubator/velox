@@ -14,38 +14,26 @@
  * limitations under the License.
  */
 
-// Benchmark for a grouping aggregation, selected with --query:
+// Microbenchmark for a grouping aggregation over a synthesized Zipf key stream:
 //
-//   q18 (default)
-//     SELECT l_orderkey FROM lineitem GROUP BY l_orderkey
-//     HAVING SUM(l_quantity) > 312
-//   q17
-//     SELECT l_partkey, avg(l_quantity) FROM lineitem GROUP BY l_partkey
-//   zipf
-//     SELECT k, sum(v) FROM <synthesized> GROUP BY k
+//   SELECT k, sum(v) FROM <synthesized> GROUP BY k
 //
-// The three differ in key arrival pattern, not in operator shape. dbgen emits
-// lineitem clustered by orderkey, so q18 touches each group's 1-7 rows
-// consecutively (~one cold probe per group, then cache hits). l_partkey is
-// uniform-random across rows, so q17 probes each of its 200K-per-SF groups
-// ~30 times scattered over the whole scan — the locality-adversarial case for
-// any payload that has been demoted to CXL. zipf synthesizes a skewed key
-// stream (--zipf_groups, --zipf_skew): a few hot groups take most updates in
-// random arrival order.
+// Keys follow a Zipf distribution over --zipf_groups ranks (--zipf_skew), so a
+// few hot groups take most updates in random arrival order — the hot/cold split
+// that DRAM-to-CXL tiering targets. --scale_factor sizes the input (1 = ~1GB).
 //
-// Each query runs across three memory-placement configurations, to measure
-// whether building the aggregation in DRAM and relocating to CXL under
-// pressure (the CxlHashAggregation operator) beats the alternatives:
+// The same input runs across memory-placement configurations to measure whether
+// building the table in DRAM and relocating to CXL under pressure (the
+// CxlHashAggregation operator) beats the alternatives:
 //
-//   --config=dram       Stock HashAggregation, DRAM pool capped below the group
-//                       table, on-disk spill enabled. The "no CXL" competitor.
-//   --config=dram_big   Stock HashAggregation, uncapped. The DRAM speed
-//   ceiling.
+//   --config=dram       Stock HashAggregation, DRAM pool capped at
+//                       --dram_limit_mb, on-disk spill enabled. The "no CXL"
+//                       competitor. Set a cap above the group table for the
+//                       no-pressure DRAM speed ceiling.
 //   --config=interleave Stock HashAggregation, uncapped; run the process under
 //                       'numactl --interleave=0,<cxl_node>' so the OS stripes
-//                       all pages across DRAM and CXL.
-//   --config=cxl        CxlHashAggregation with a real CXL pool; DRAM pool
-//   capped
+//                       pages across DRAM and CXL.
+//   --config=cxl        CxlHashAggregation with a real CXL pool; DRAM pool capped
 //                       (same as 'dram') so the arbitrator relocates to CXL.
 //
 // Each config is meant to run as a separate process (the DriverAdapter that
@@ -54,9 +42,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <iostream>
-#include <limits>
 #include <random>
 #include <thread>
 #include <vector>
@@ -65,20 +51,17 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 
-#include "velox/common/config/Config.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/experimental/cxl/CxlDriverAdapter.h"
 #include "velox/experimental/cxl/CxlHashAggregation.h"
 #include "velox/experimental/cxl/CxlMemoryResource.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -91,24 +74,17 @@
 DEFINE_string(
     config,
     "dram",
-    "Placement configuration: dram | dram_big | interleave | cxl.");
-DEFINE_string(
-    query,
-    "q18",
-    "Grouping aggregation: q18 = GROUP BY l_orderkey (clustered keys, one "
-    "cold probe per group) | q17 = GROUP BY l_partkey (random keys, ~30 "
-    "scattered probes per group) | zipf = synthesized skewed keys "
-    "(--zipf_groups, --zipf_skew; random arrival, hot groups).");
-DEFINE_int64(
-    zipf_groups,
-    1'000'000,
-    "Number of distinct grouping keys for --query=zipf.");
+    "Placement configuration: dram | interleave | cxl.");
+DEFINE_int64(zipf_groups, 1'000'000, "Number of distinct grouping keys.");
 DEFINE_double(
     zipf_skew,
     1.0,
-    "Zipf exponent for --query=zipf: rank r is drawn with probability "
-    "proportional to 1/r^skew. 0 = uniform.");
-DEFINE_double(scale_factor, 1.0, "TPC-H scale factor.");
+    "Zipf exponent: rank r is drawn with probability proportional to "
+    "1/r^zipf_skew. 0 is uniform; higher is more skewed.");
+DEFINE_double(
+    scale_factor,
+    1.0,
+    "Input size: scale_factor = 1 is ~1GB of (key, value) data.");
 DEFINE_int64(
     dram_limit_mb,
     48,
@@ -123,38 +99,14 @@ DEFINE_int64(
     0,
     "CXL pool capacity in MB (required for --config=cxl; size it to the CXL "
     "device). The allocator pre-reserves this, so it must be bounded.");
-DEFINE_int32(num_splits, 8, "Number of TPC-H scan splits.");
-DEFINE_int32(
-    pregen_drivers,
-    32,
-    "Number of parallel drivers for the untimed --pregen input scan. dbgen "
-    "synthesis is the dominant pregen cost and is per-driver, so this speeds "
-    "materialization without affecting the single-driver timed trials (the "
-    "input is identical regardless of how many drivers built it). The scan "
-    "uses 4x this many splits so each driver gets a few, smoothing dbgen's "
-    "non-uniform per-split cost. Keep at or below the cores the process is "
-    "pinned to (e.g. one NUMA node under 'numactl --cpunodebind').");
 DEFINE_int32(num_trials, 5, "Number of measured trials.");
 DEFINE_int32(warmup, 1, "Number of warmup trials to discard.");
 DEFINE_string(spill_dir, "/tmp/cxl_bench_spill", "Spill directory for 'dram'.");
-DEFINE_double(
-    having_threshold,
-    312.0,
-    "HAVING SUM(l_quantity) > threshold (q18 only).");
-DEFINE_bool(
-    pregen,
-    true,
-    "Materialize the scanned lineitem columns once before the trials and feed "
-    "them from a Values node, so per-trial time measures the aggregation "
-    "rather than on-the-fly TPC-H row generation. Disable for scale factors "
-    "whose two-column input does not fit in memory (roughly SF >= 100).");
 
 using namespace facebook::velox;
 using exec::test::PlanBuilder;
 
 namespace {
-
-constexpr std::string_view kConnectorId{"benchmark-tpch"};
 
 // Per-trial measurements pulled from the finished task's stats.
 struct TrialMetrics {
@@ -163,10 +115,8 @@ struct TrialMetrics {
   uint64_t aggWallNanos{0};
   uint64_t aggBlockedNanos{0};
   uint64_t aggPeakBytes{0};
-  // Rows produced by the aggregation operator = groups built, before the
-  // HAVING filter cuts the output down.
+  // Rows produced by the aggregation operator = groups built.
   uint64_t numGroups{0};
-  uint64_t scanIoNanos{0};
   uint64_t spilledBytes{0};
   uint64_t spilledRows{0};
   uint64_t spillWriteNanos{0};
@@ -188,52 +138,15 @@ int64_t dramCapacityBytes() {
   return memory::kMaxMemory;
 }
 
-// Returns the lineitem columns the query scans: the grouping key, then
-// l_quantity.
-std::vector<std::string> scanColumns() {
-  if (FLAGS_query == "q17") {
-    return {"l_partkey", "l_quantity"};
-  }
-  return {"l_orderkey", "l_quantity"};
+core::PlanNodePtr buildPlan(const std::vector<RowVectorPtr>& input) {
+  return PlanBuilder()
+      .values(input)
+      .singleAggregation({"k"}, {"sum(v) AS s"})
+      .planNode();
 }
 
-// Appends the selected query's aggregation (and, for q18, the HAVING filter)
-// to a source of (<grouping key>, <value>) rows.
-PlanBuilder& addAggregation(PlanBuilder& builder) {
-  if (FLAGS_query == "zipf") {
-    return builder.singleAggregation({"k"}, {"sum(v) AS s"});
-  }
-  if (FLAGS_query == "q17") {
-    return builder.singleAggregation(
-        {"l_partkey"}, {"avg(l_quantity) AS avg_quantity"});
-  }
-  return builder
-      .singleAggregation({"l_orderkey"}, {"sum(l_quantity) AS q"})
-      // Cast the threshold so it is a DOUBLE literal regardless of how fmt
-      // renders it (fmt prints 312.0 as "312", which would parse as BIGINT and
-      // fail to match gt(DOUBLE, DOUBLE)).
-      .filter(fmt::format("q > cast({} as double)", FLAGS_having_threshold));
-}
-
-core::PlanNodePtr buildScanPlan(core::PlanNodeId& scanId) {
-  auto builder = PlanBuilder()
-                     .tpchTableScan(
-                         tpch::Table::TBL_LINEITEM,
-                         scanColumns(),
-                         FLAGS_scale_factor,
-                         kConnectorId)
-                     .capturePlanNodeId(scanId);
-  return addAggregation(builder).planNode();
-}
-
-core::PlanNodePtr buildValuesPlan(const std::vector<RowVectorPtr>& input) {
-  auto builder = PlanBuilder().values(input);
-  return addAggregation(builder).planNode();
-}
-
-// Sums the output grouping-key column into a checksum so the three configs can
-// be cross-checked for identical results (guards the silent-null class of
-// bugs).
+// Sums the output grouping-key column into a checksum so the configs can be
+// cross-checked for identical results (guards the silent-null class of bugs).
 void accumulateResult(
     const std::vector<RowVectorPtr>& results,
     TrialMetrics& metrics) {
@@ -281,103 +194,21 @@ void collectOperatorStats(const exec::TaskStats& stats, TrialMetrics& metrics) {
             runtimeSum(op.runtimeStats, "spillWriteWallNanos");
         metrics.spillReadNanos +=
             runtimeSum(op.runtimeStats, "spillReadWallNanos");
-      } else if (op.operatorType == "TableScan") {
-        metrics.scanIoNanos +=
-            runtimeSum(op.runtimeStats, "dataSourceReadWallNanos");
       }
     }
   }
 }
 
-// Adds 'numSplits' TPC-H scan splits and signals no-more-splits, as required
-// before the cursor can drain output. The split count also sets how the table
-// is partitioned, so more splits means more, smaller scan units to spread over
-// the drivers.
-std::function<void(exec::TaskCursor*)> makeSplitAdder(
-    const core::PlanNodeId& scanId,
-    int32_t numSplits) {
-  return [scanId, numSplits](exec::TaskCursor* cursor) {
-    if (cursor->noMoreSplits()) {
-      return;
-    }
-    auto& task = cursor->task();
-    for (auto part = 0; part < numSplits; ++part) {
-      task->addSplit(
-          scanId,
-          exec::Split(
-              std::make_shared<connector::tpch::TpchConnectorSplit>(
-                  std::string{kConnectorId}, numSplits, part)));
-    }
-    task->noMoreSplits(scanId);
-    cursor->setNoMoreSplits();
-  };
-}
-
-// Runs the lineitem scan once, untimed, and returns the materialized
-// (<grouping key>, l_quantity) batches allocated from 'outputPool', which must
-// outlive the trials.
-std::vector<RowVectorPtr> pregenerateInput(
-    const std::shared_ptr<memory::MemoryPool>& outputPool,
-    folly::Executor* executor) {
-  core::PlanNodeId scanId;
-  auto plan = PlanBuilder()
-                  .tpchTableScan(
-                      tpch::Table::TBL_LINEITEM,
-                      scanColumns(),
-                      FLAGS_scale_factor,
-                      kConnectorId)
-                  .capturePlanNodeId(scanId)
-                  .planNode();
-
-  exec::CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::Builder()
-                        .executor(executor)
-                        .queryId("cxl-bench-pregen")
-                        .build();
-  // Parallelize the untimed scan: dbgen synthesis dominates here and scales
-  // with drivers. The trials stay single-driver; only this materialization is
-  // sped up, and the output is identical regardless of driver count.
-  params.maxDrivers = FLAGS_pregen_drivers;
-  params.copyResult = true;
-  params.outputPool = outputPool;
-
-  const auto startMs = getCurrentTimeMs();
-  auto [cursor, results] = exec::test::readCursor(
-      params, makeSplitAdder(scanId, 4 * FLAGS_pregen_drivers));
-  exec::test::waitForTaskCompletion(
-      cursor->task().get(), /*maxWaitMicros=*/600'000'000);
-
-  int64_t numRows = 0;
-  int64_t numBytes = 0;
-  for (const auto& batch : results) {
-    numRows += batch->size();
-    numBytes += batch->retainedSize();
-  }
-  VELOX_CHECK(!results.empty());
-  // The batches must live in the caller's pool: the cursor (and any pool it
-  // created internally) is destroyed when this function returns.
-  VELOX_CHECK_EQ(results.front()->pool()->name(), outputPool->name());
-  std::cout << fmt::format(
-                   "pregenerated {} lineitem rows in {} batches, {:.1f} MB, "
-                   "{} ms (excluded from trials)\n",
-                   numRows,
-                   results.size(),
-                   numBytes / static_cast<double>(1 << 20),
-                   getCurrentTimeMs() - startMs)
-            << std::flush;
-  return results;
-}
-
-// Synthesizes the --query=zipf input: (k BIGINT, v BIGINT) batches whose keys
-// follow a Zipf distribution over --zipf_groups ranks and arrive in random
-// order, allocated from 'outputPool', which must outlive the trials. The row
-// count matches lineitem at the same scale factor so timings are comparable
-// across queries. Per-batch seeds are fixed, so every config and trial
-// aggregates identical data and the result checksum must match.
+// Synthesizes the input: (k BIGINT, v BIGINT) batches whose keys follow a Zipf
+// distribution over --zipf_groups ranks and arrive in random order, allocated
+// from 'outputPool', which must outlive the trials. Per-batch seeds are fixed,
+// so every config and trial sees identical input.
 std::vector<RowVectorPtr> generateZipfInput(
     const std::shared_ptr<memory::MemoryPool>& outputPool) {
-  const auto numRows = static_cast<int64_t>(6'001'215 * FLAGS_scale_factor);
+  // Size the input by target bytes: scale_factor = 1 is ~1GB of (k, v) data.
+  constexpr int64_t kInputBytesPerRow = sizeof(int64_t) * 2;
+  const auto numRows =
+      static_cast<int64_t>(FLAGS_scale_factor * (1LL << 30)) / kInputBytesPerRow;
   const int64_t numGroups = FLAGS_zipf_groups;
   const auto startMs = getCurrentTimeMs();
 
@@ -440,7 +271,6 @@ std::vector<RowVectorPtr> generateZipfInput(
 
 TrialMetrics runTrial(
     const core::PlanNodePtr& plan,
-    const std::function<void(exec::TaskCursor*)>& addSplits,
     folly::Executor* executor,
     int32_t trial) {
   auto* manager = memory::memoryManager();
@@ -485,7 +315,8 @@ TrialMetrics runTrial(
   }
 
   cxl::resetCxlHashAggregationCounters();
-  auto [cursor, results] = exec::test::readCursor(params, addSplits);
+  auto [cursor, results] = exec::test::readCursor(
+      params, [](exec::TaskCursor* cursor) { cursor->setNoMoreSplits(); });
   exec::test::waitForTaskCompletion(
       cursor->task().get(), /*maxWaitMicros=*/600'000'000);
 
@@ -513,13 +344,13 @@ void report(const std::vector<TrialMetrics>& trials) {
 
   std::cout << "\n=== CXL aggregation benchmark ===\n";
   std::cout << fmt::format(
-                   "config={} query={} scale_factor={} dram_limit_mb={} "
-                   "splits={} trials={}",
+                   "config={} scale_factor={} zipf_groups={} zipf_skew={} "
+                   "dram_limit_mb={} trials={}",
                    FLAGS_config,
-                   FLAGS_query,
                    FLAGS_scale_factor,
+                   FLAGS_zipf_groups,
+                   FLAGS_zipf_skew,
                    FLAGS_dram_limit_mb,
-                   FLAGS_num_splits,
                    trials.size())
             << "\n";
   if (isCxlConfig()) {
@@ -529,13 +360,6 @@ void report(const std::vector<TrialMetrics>& trials) {
                      FLAGS_cxl_capacity_mb)
               << "\n";
   }
-  if (FLAGS_query == "zipf") {
-    std::cout << fmt::format(
-                     "zipf_groups={} zipf_skew={}",
-                     FLAGS_zipf_groups,
-                     FLAGS_zipf_skew)
-              << "\n";
-  }
   std::cout << fmt::format("median elapsed: {:.1f} ms\n", medianMs(elapsed));
   std::cout << fmt::format(
                    "aggregation: cpu={:.1f} ms wall={:.1f} ms blocked={:.1f} "
@@ -543,11 +367,7 @@ void report(const std::vector<TrialMetrics>& trials) {
                    last.aggCpuNanos / 1e6,
                    last.aggWallNanos / 1e6,
                    last.aggBlockedNanos / 1e6,
-                   last.aggPeakBytes / static_cast<double>(1 << 20))
-            << (FLAGS_pregen
-                    ? std::string("input: pregenerated Values (untimed)\n")
-                    : fmt::format(
-                          "scan io: {:.1f} ms\n", last.scanIoNanos / 1e6));
+                   last.aggPeakBytes / static_cast<double>(1 << 20));
   if (FLAGS_config == "dram") {
     std::cout << fmt::format(
         "spill: bytes={:.1f} MB rows={} write={:.1f} ms read={:.1f} ms\n",
@@ -577,17 +397,8 @@ void report(const std::vector<TrialMetrics>& trials) {
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
 
-  if (FLAGS_query != "q18" && FLAGS_query != "q17" && FLAGS_query != "zipf") {
-    LOG(ERROR) << "--query must be 'q18', 'q17' or 'zipf', got '" << FLAGS_query
-               << "'.";
-    return 1;
-  }
-  if (FLAGS_query == "zipf" && !FLAGS_pregen) {
-    LOG(ERROR) << "--query=zipf has no scan source; it requires --pregen.";
-    return 1;
-  }
-  if (FLAGS_query == "zipf" && FLAGS_zipf_groups <= 0) {
-    LOG(ERROR) << "--query=zipf requires --zipf_groups > 0.";
+  if (FLAGS_zipf_groups <= 0) {
+    LOG(ERROR) << "--zipf_groups must be > 0.";
     return 1;
   }
   if (isCxlConfig() && FLAGS_cxl_numa_node < 0) {
@@ -619,52 +430,32 @@ int main(int argc, char** argv) {
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
 
-  connector::tpch::TpchConnectorFactory factory;
-  auto tpchConnector = factory.newConnector(
-      std::string{kConnectorId},
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>{}));
-  connector::ConnectorRegistry::global().insert(
-      tpchConnector->connectorId(), tpchConnector);
-
   // Install the operator swap only for the CXL config; the other configs must
   // run the stock HashAggregation.
   if (isCxlConfig()) {
-    cxl::registerCxlHashAggregationAdapter();
+    cxl::registerCxlDriverAdapter();
   }
 
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(
       std::thread::hardware_concurrency());
 
-  // Either materialize the input once and aggregate from a Values node, or
-  // stream from the connector and let per-trial time include row generation.
-  // 'inputPool' is declared before 'input' and 'plan' because both hold
-  // vectors whose buffers free into it on destruction; it must die last.
+  // 'inputPool' is declared before 'input' and 'plan' because both hold vectors
+  // whose buffers free into it on destruction; it must die last.
   std::shared_ptr<memory::MemoryPool> inputPool;
   std::vector<RowVectorPtr> input;
   core::PlanNodePtr plan;
-  std::function<void(exec::TaskCursor*)> addSplits;
   try {
-    if (FLAGS_pregen) {
-      inputPool = memory::memoryManager()->addLeafPool("cxl-bench-input");
-      input = FLAGS_query == "zipf"
-          ? generateZipfInput(inputPool)
-          : pregenerateInput(inputPool, executor.get());
-      plan = buildValuesPlan(input);
-      addSplits = [](exec::TaskCursor* cursor) { cursor->setNoMoreSplits(); };
-    } else {
-      core::PlanNodeId scanId;
-      plan = buildScanPlan(scanId);
-      addSplits = makeSplitAdder(scanId, FLAGS_num_splits);
-    }
+    inputPool = memory::memoryManager()->addLeafPool("cxl-bench-input");
+    input = generateZipfInput(inputPool);
+    plan = buildPlan(input);
 
     for (auto i = 0; i < FLAGS_warmup; ++i) {
-      runTrial(plan, addSplits, executor.get(), /*trial=*/-1 - i);
+      runTrial(plan, executor.get(), /*trial=*/-1 - i);
     }
 
     std::vector<TrialMetrics> trials;
     for (auto i = 0; i < FLAGS_num_trials; ++i) {
-      trials.push_back(runTrial(plan, addSplits, executor.get(), i));
+      trials.push_back(runTrial(plan, executor.get(), i));
     }
 
     report(trials);
@@ -675,11 +466,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Tasks are destroyed asynchronously on executor threads and hold the plan
-  // — and with --pregen, the input vectors whose buffers free into
-  // 'inputPool'. Wait for them so no straggler outlives the pool.
+  // Tasks are destroyed asynchronously on executor threads and hold the plan and
+  // the input vectors whose buffers free into 'inputPool'. Wait for them so no
+  // straggler outlives the pool.
   exec::test::waitForAllTasksToBeDeleted(/*maxWaitUs=*/30'000'000);
-
-  connector::ConnectorRegistry::global().erase(std::string{kConnectorId});
   return 0;
 }

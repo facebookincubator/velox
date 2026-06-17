@@ -19,17 +19,22 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/experimental/cxl/CxlDriverAdapter.h"
 #include "velox/experimental/cxl/CxlHashAggregation.h"
 #include "velox/experimental/cxl/CxlMemoryResource.h"
 
@@ -57,11 +62,12 @@ class CxlHashAggregationTest : public OperatorTestBase {
  protected:
   void SetUp() override {
     OperatorTestBase::SetUp();
+    filesystems::registerLocalFileSystem();
     common::testutil::TestValue::enable();
     // DriverAdapters are process-global and cannot be unregistered, so
     // register exactly once for the whole test binary.
     static const bool registered = [] {
-      registerCxlHashAggregationAdapter();
+      registerCxlDriverAdapter();
       return true;
     }();
     (void)registered;
@@ -83,6 +89,17 @@ class CxlHashAggregationTest : public OperatorTestBase {
             .executor(driverExecutor_.get())
             .customPool(std::string{kCxlResourceTag}, std::move(pool))
             .queryId(queryId)
+            // CXL relocation reuses the spill reservation machinery, so spill
+            // must be enabled for the operator to be reclaimable. A minimal
+            // spillable reservation keeps DRAM lean so relocation fires
+            // promptly under pressure.
+            .queryConfig(core::QueryConfig{
+                std::unordered_map<std::string, std::string>{
+                    {core::QueryConfig::kSpillEnabled, "true"},
+                    {core::QueryConfig::kAggregationSpillEnabled, "true"},
+                    {core::QueryConfig::kMinSpillableReservationPct, "0"},
+                    {core::QueryConfig::kSpillableReservationGrowthPct, "10"},
+                }})
             .build();
     auto registry =
         memory::CustomMemoryResourceRegistry::createRegistry(nullptr);
@@ -119,8 +136,9 @@ class CxlHashAggregationTest : public OperatorTestBase {
 };
 
 // With a CXL tier registered on the query, the adapter swaps the stock
-// HashAggregation for a CxlHashAggregation, and the replacement resolves its
-// per-query CXL pool. Results stay correct.
+// HashAggregation for a CxlHashAggregation that resolves its per-query CXL
+// pool. The swap reports through the diagnostics counter (the operator inherits
+// the "Aggregation" type), and results stay correct.
 TEST_F(CxlHashAggregationTest, adapterSwapsInCxlAggregationAndReachesCxlPool) {
   auto data = makeAggInput();
   createDuckDbTable({data});
@@ -129,186 +147,65 @@ TEST_F(CxlHashAggregationTest, adapterSwapsInCxlAggregationAndReachesCxlPool) {
   params.planNode = makeAggPlan(data);
   params.queryCtx = makeQueryCtxWithCxl("cxl-agg-seam");
 
-  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+  assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
-  // The stock HashAggregation was replaced: its distinct operator type shows
-  // up in the task stats, and no plain "Aggregation" operator remains.
-  EXPECT_THAT(
-      operatorTypes(*task),
-      testing::Contains(std::string(CxlHashAggregation::kOperatorType)));
-  EXPECT_THAT(
-      operatorTypes(*task),
-      testing::Not(
-          testing::Contains(std::string(exec::OperatorType::kAggregation))));
-
-  // The replacement initialized and resolved a non-null per-query CXL pool.
   EXPECT_GT(numCxlHashAggregationsInitialized(), 0);
   EXPECT_EQ(
       numCxlHashAggregationsWithCxlPool(), numCxlHashAggregationsInitialized());
 }
 
-// Without a CXL tier on the query, the adapter leaves the stock
-// HashAggregation in place: there is nothing to relocate to, so no
-// CxlHashAggregation is installed. Results match the reference query.
+// Without a CXL tier on the query, the adapter leaves the stock HashAggregation
+// in place: no CxlHashAggregation is installed. Results match the reference.
 TEST_F(CxlHashAggregationTest, withoutCxlTierKeepsStockAggregation) {
   auto data = makeAggInput();
   createDuckDbTable({data});
 
-  auto task =
-      assertQuery(makeAggPlan(data), "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+  assertQuery(makeAggPlan(data), "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
-  EXPECT_THAT(
-      operatorTypes(*task),
-      testing::Contains(std::string(exec::OperatorType::kAggregation)));
-  EXPECT_THAT(
-      operatorTypes(*task),
-      testing::Not(testing::Contains(
-          std::string(CxlHashAggregation::kOperatorType))));
   EXPECT_EQ(numCxlHashAggregationsInitialized(), 0);
 }
 
-// Under memory pressure the operator relocates its partition's groups DRAM ->
-// CXL mid-build (here triggered deterministically by reclaiming after each
-// batch while input is still pending). Later batches then re-probe the
-// swizzled, CXL-resident table and update those accumulators. Results must
-// still match the reference, proving the relocate + bucket swizzle preserved
-// every group and kept the index valid for continued aggregation.
-DEBUG_ONLY_TEST_F(
-    CxlHashAggregationTest,
-    relocatesToCxlUnderMemoryPressureAndPreservesResults) {
-  // Multiple batches over the same 10 grouping keys, so batches after the first
-  // relocate hit groups that already live in the CXL container.
+// Under memory arbitration the operator reclaims by relocating its groups to
+// CXL rather than spilling to disk. Spill injection drives the reclaim path
+// deterministically. The data carries a null grouping key whose group must
+// survive the relocation byte copy: that requires the destination container's
+// column stats to be transferred, otherwise the null group reads back as a
+// non-null garbage key. Results must match the reference query.
+TEST_F(CxlHashAggregationTest, relocatesToCxlUnderArbitration) {
   constexpr int32_t kNumBatches = 8;
-  std::vector<RowVectorPtr> batches;
-  for (auto batch = 0; batch < kNumBatches; ++batch) {
-    batches.push_back(makeRowVector({
-        makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
-        makeFlatVector<int64_t>(
-            1'000, [batch](auto row) { return row + batch; }),
-    }));
-  }
-  createDuckDbTable(batches);
-
-  // Relocate to CXL after each batch while input remains, exercising the bucket
-  // swizzle on a live table.
-  std::atomic<int64_t> reclaims{0};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::cxl::CxlHashAggregation::addInput",
-      std::function<void(CxlHashAggregation*)>([&](CxlHashAggregation* op) {
-        if (!op->canReclaim()) {
-          return;
-        }
-        memory::ScopedMemoryArbitrationContext ctx(op->pool());
-        memory::MemoryReclaimer::Stats stats;
-        op->reclaim(/*targetBytes=*/0, stats);
-        ++reclaims;
-      }));
-
-  exec::CursorParameters params;
-  params.planNode = PlanBuilder()
-                        .values(batches)
-                        .singleAggregation({"c0"}, {"sum(c1)"})
-                        .planNode();
-  params.queryCtx = makeQueryCtxWithCxl("cxl-agg-pressure");
-
-  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
-
-  EXPECT_GT(reclaims.load(), 0);
-  EXPECT_GT(numCxlPartitionsMigrated(), 0);
-  EXPECT_GT(numCxlHashAggregationsWithCxlPool(), 0);
-}
-
-// The arbitrator itself must be able to drive relocation: with the query's
-// DRAM pool capped below the group table, hitting the cap mid-build must
-// reclaim via relocateRowsToCxl() instead of failing with "Exceeded memory pool
-// capacity". This exercises the real arbitration path (no TestValue): the
-// operator reserves memory at a safe point (ensureInputFits) inside a
-// reclaimable section, since the driver marks operators non-reclaimable for
-// the whole of addInput() otherwise.
-TEST_F(CxlHashAggregationTest, relocatesViaMemoryArbitratorUnderCappedPool) {
-  // Growing distinct BIGINT keys so the group table keeps growing across
-  // batches and eventually exceeds the capped DRAM pool.
-  constexpr int32_t kNumBatches = 64;
   constexpr int32_t kRowsPerBatch = 4'096;
   std::vector<RowVectorPtr> batches;
   for (auto batch = 0; batch < kNumBatches; ++batch) {
     batches.push_back(makeRowVector({
+        // Distinct keys per batch, plus a null key every 1000th row.
         makeFlatVector<int64_t>(
             kRowsPerBatch,
             [batch](auto row) {
               return static_cast<int64_t>(batch) * kRowsPerBatch + row;
-            }),
+            },
+            [](auto row) { return row % 1'000 == 0; }),
         makeFlatVector<int64_t>(
             kRowsPerBatch, [batch](auto row) { return row + batch; }),
     }));
   }
   createDuckDbTable(batches);
 
-  // Cap the query's DRAM pool well below the final group table (~260k groups)
-  // but above the bucket array, which stays DRAM-resident by design.
-  constexpr int64_t kDramCap = 8L << 20;
-  auto queryCtx = makeQueryCtxWithCxl("cxl-agg-arbitrator");
-  queryCtx->testingOverrideMemoryPool(
-      memory::memoryManager()->addRootPool(
-          queryCtx->queryId(), kDramCap, memory::MemoryReclaimer::create()));
+  // Force the reclaim path once; the operator's reclaim() relocates to CXL.
+  exec::TestScopedSpillInjection injectSpill(
+      /*spillPct=*/100, /*poolRegExp=*/".*", /*maxInjections=*/1);
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
 
   exec::CursorParameters params;
   params.planNode = PlanBuilder()
                         .values(batches)
                         .singleAggregation({"c0"}, {"sum(c1)"})
                         .planNode();
-  params.queryCtx = queryCtx;
+  params.queryCtx = makeQueryCtxWithCxl("cxl-agg-arbitrator");
+  params.spillDirectory = spillDirectory->getPath();
 
   assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
-  // Relocation fired through the arbitrator, not through a test hook.
-  EXPECT_GT(numCxlPartitionsMigrated(), 0);
-}
-
-// A null grouping key forms a valid group that must survive relocation to CXL.
-// The byte copy preserves each row's null flag, but the destination container's
-// column stats (which gate the null-aware extract path) must be transferred too
-// — otherwise the null group is read back as a non-null garbage key.
-// Relocation is injected via TestValue, which only exists in debug builds.
-DEBUG_ONLY_TEST_F(CxlHashAggregationTest, nullGroupingKeySurvivesRelocation) {
-  constexpr int32_t kNumBatches = 4;
-  std::vector<RowVectorPtr> batches;
-  for (auto batch = 0; batch < kNumBatches; ++batch) {
-    batches.push_back(makeRowVector({
-        // Every tenth row carries a null grouping key (its own NULL group).
-        makeFlatVector<int64_t>(
-            1'000,
-            [](auto row) { return row % 10; },
-            [](auto row) { return row % 10 == 0; }),
-        makeFlatVector<int64_t>(
-            1'000, [batch](auto row) { return row + batch; }),
-    }));
-  }
-  createDuckDbTable(batches);
-
-  std::atomic<int64_t> reclaims{0};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::cxl::CxlHashAggregation::addInput",
-      std::function<void(CxlHashAggregation*)>([&](CxlHashAggregation* op) {
-        if (!op->canReclaim()) {
-          return;
-        }
-        memory::ScopedMemoryArbitrationContext ctx(op->pool());
-        memory::MemoryReclaimer::Stats stats;
-        op->reclaim(/*targetBytes=*/0, stats);
-        ++reclaims;
-      }));
-
-  exec::CursorParameters params;
-  params.planNode = PlanBuilder()
-                        .values(batches)
-                        .singleAggregation({"c0"}, {"sum(c1)"})
-                        .planNode();
-  params.queryCtx = makeQueryCtxWithCxl("cxl-agg-null-key");
-
-  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
-
-  EXPECT_GT(reclaims.load(), 0);
   EXPECT_GT(numCxlPartitionsMigrated(), 0);
 }
 

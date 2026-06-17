@@ -18,11 +18,10 @@ set -euo pipefail
 awk '
   # A leg is bounded by the "config=..." line and its trailing "result:" line.
   /^config=/ {
-    config = ""; query = "-"; sf = ""; cap = ""; median = ""; peak = "";
+    config = ""; sf = ""; cap = ""; median = ""; peak = "";
     reloc = "-"; spill = "-";
     for (i = 1; i <= NF; i++) {
       if ($i ~ /^config=/)         { split($i, a, "="); config = a[2] }
-      if ($i ~ /^query=/)          { split($i, a, "="); query = a[2] }
       if ($i ~ /^scale_factor=/)   { split($i, a, "="); sf = a[2] }
       if ($i ~ /^dram_limit_mb=/)  { split($i, a, "="); cap = a[2] }
     }
@@ -37,8 +36,8 @@ awk '
   /^spill: bytes=/    { split($2, a, "="); spill = a[2] }   # bytes=NNN.N
   /^LEG FAILED/       { print "  !! " $0 }
   /^result:/ && have {
-    printf "%-11s %-4s SF%-4s cap=%-6s  median=%8s ms  peak=%9s MB  reloc=%-3s  spill=%-8s\n",
-      config, query, sf, (cap == "" ? "-" : cap "MB"), median, peak, reloc, spill;
+    printf "%-11s SF%-4s cap=%-6s  median=%8s ms  peak=%9s MB  reloc=%-3s  spill=%-8s\n",
+      config, sf, (cap == "" ? "-" : cap "MB"), median, peak, reloc, spill;
     have = 0
   }
 ' "${@:-/dev/stdin}"

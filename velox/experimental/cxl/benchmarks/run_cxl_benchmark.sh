@@ -25,20 +25,16 @@
 #   CXL_NODE      CXL NUMA node id from cxl_numa_setup.sh (required)
 #   CXL_MB        CXL pool capacity in MB for config C (default 4096)
 #   DRAM_NODE     DRAM/compute NUMA node (default 0)
-#   QUERY         grouping aggregation: q18 (default; clustered keys), q17
-#                 (random keys) or zipf (synthesized skewed keys; configure via
-#                 EXTRA="--zipf_groups=... --zipf_skew=...") — see the README's
-#                 query section. q17 has 7.5x fewer groups than q18 at the same
-#                 SF, so scale SF and the cap sweep accordingly.
-#   SF            TPC-H scale factor (default 10: ~15M q18 groups, ~1GB group
-#                 table, so the default 300-600MB cap sweep clears config C's
-#                 DRAM index floor, ~256MB at SF10)
-#   DRAM_MB_LIST  DRAM caps in MB to sweep for A and C (default "300 400 500 600")
+#   SF            input size, scale_factor = 1 is ~1GB of (k, v) data (default 1).
+#                 Tune SF, --zipf_groups (via EXTRA) and the cap sweep together
+#                 so the group table exceeds the cap — see the README.
+#   DRAM_MB_LIST  DRAM caps in MB to sweep for A and C (default "32 40 48 56",
+#                 sized for the default 1M-group table; rescale with zipf_groups)
 #   WEIGHTS_LIST  dram:cxl interleave weights to sweep for B (default "1:1")
 #   CONFIGS       which configs to run, space-separated subset of "A B C"
 #                 (default "A B C"). E.g. CONFIGS="B C" skips the slow spill leg.
-#   EXTRA         extra flags passed through to the benchmark
-#   RUN_LOG       path for the captured run log (default results/<query>-sf<SF>.log)
+#   EXTRA         extra flags passed through (e.g. --zipf_groups, --zipf_skew)
+#   RUN_LOG       path for the captured run log (default results/zipf-sf<SF>.log)
 #
 # All leg output is tee'd to RUN_LOG and a one-line-per-leg summary is printed
 # at the end via scripts/summarize.sh.
@@ -49,18 +45,17 @@ set -euo pipefail
 : "${CXL_NODE:?set CXL_NODE to the CXL NUMA node id (see cxl_numa_setup.sh)}"
 CXL_MB="${CXL_MB:-4096}"
 DRAM_NODE="${DRAM_NODE:-0}"
-QUERY="${QUERY:-q18}"
-SF="${SF:-10}"
-DRAM_MB_LIST="${DRAM_MB_LIST:-300 400 500 600}"
+SF="${SF:-1}"
+DRAM_MB_LIST="${DRAM_MB_LIST:-32 40 48 56}"
 WEIGHTS_LIST="${WEIGHTS_LIST:-1:1}"
 CONFIGS="${CONFIGS:-A B C}"
 EXTRA="${EXTRA:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUN_LOG="${RUN_LOG:-${SCRIPT_DIR}/results/${QUERY}-sf${SF}.log}"
+RUN_LOG="${RUN_LOG:-${SCRIPT_DIR}/results/zipf-sf${SF}.log}"
 mkdir -p "$(dirname "${RUN_LOG}")"
 
-common=(--query="${QUERY}" --scale_factor="${SF}" ${EXTRA})
+common=(--scale_factor="${SF}" ${EXTRA})
 
 # Returns true when config "$1" is in the requested CONFIGS set.
 want_config() {

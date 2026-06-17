@@ -75,6 +75,21 @@ class HashAggregation : public Operator {
 
   void close() override;
 
+ protected:
+  // For a subclass that replaces a HashAggregation in the same plan node:
+  // 'operatorType' sets a distinct stats/pool label so it does not collide with
+  // the replaced operator (the pool name is keyed by operator type).
+  HashAggregation(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const std::shared_ptr<const core::AggregationNode>& aggregationNode,
+      std::string_view operatorType);
+
+  // The GroupingSet, or null before initialize().
+  GroupingSet* groupingSet() const {
+    return groupingSet_.get();
+  }
+
  private:
   void updateRuntimeStats();
 

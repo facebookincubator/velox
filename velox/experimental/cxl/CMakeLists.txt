@@ -46,9 +46,11 @@ velox_add_library(
   velox_experimental_cxl_exec
   CxlHashTable.cpp
   CxlHashAggregation.cpp
+  CxlDriverAdapter.cpp
   HEADERS
   CxlHashTable.h
   CxlHashAggregation.h
+  CxlDriverAdapter.h
 )
 velox_link_libraries(velox_experimental_cxl_exec velox_experimental_cxl velox_exec)
 
