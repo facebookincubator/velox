@@ -48,8 +48,8 @@ CxlHashAggregation::CxlHashAggregation(
           driverCtx,
           aggregationNode,
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-            ? kCxlPartialAggregation
-            : kCxlAggregation) {}
+              ? kCxlPartialAggregation
+              : kCxlAggregation) {}
 
 void CxlHashAggregation::initialize() {
   exec::HashAggregation::initialize();
@@ -79,9 +79,10 @@ void CxlHashAggregation::initialize() {
 RowVectorPtr CxlHashAggregation::getOutput() {
   // Drain the CXL-relocated groups first. GroupingSet::getOutput reads only the
   // DRAM row container and clears the whole table (including the CXL container)
-  // once that drains, so the relocated groups must be emitted before delegating.
-  // Only after all input: relocation keeps filling 'cxlRows_' during the build,
-  // and draining early would mark it done before it holds the final groups.
+  // once that drains, so the relocated groups must be emitted before
+  // delegating. Only after all input: relocation keeps filling 'cxlRows_'
+  // during the build, and draining early would mark it done before it holds the
+  // final groups.
   if (noMoreInput_ && !cxlDrained_) {
     auto* groupingSet = this->groupingSet();
     auto* table = groupingSet != nullptr

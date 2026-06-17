@@ -33,8 +33,9 @@
 //   --config=interleave Stock HashAggregation, uncapped; run the process under
 //                       'numactl --interleave=0,<cxl_node>' so the OS stripes
 //                       pages across DRAM and CXL.
-//   --config=cxl        CxlHashAggregation with a real CXL pool; DRAM pool capped
-//                       (same as 'dram') so the arbitrator relocates to CXL.
+//   --config=cxl        CxlHashAggregation with a real CXL pool; the DRAM pool
+//                       is capped (same as 'dram') so the arbitrator relocates
+//                       to CXL.
 //
 // Each config is meant to run as a separate process (the DriverAdapter that
 // installs CxlHashAggregation is process-global and registered only for 'cxl',
@@ -207,8 +208,8 @@ std::vector<RowVectorPtr> generateZipfInput(
     const std::shared_ptr<memory::MemoryPool>& outputPool) {
   // Size the input by target bytes: scale_factor = 1 is ~1GB of (k, v) data.
   constexpr int64_t kInputBytesPerRow = sizeof(int64_t) * 2;
-  const auto numRows =
-      static_cast<int64_t>(FLAGS_scale_factor * (1LL << 30)) / kInputBytesPerRow;
+  const auto numRows = static_cast<int64_t>(FLAGS_scale_factor * (1LL << 30)) /
+      kInputBytesPerRow;
   const int64_t numGroups = FLAGS_zipf_groups;
   const auto startMs = getCurrentTimeMs();
 
@@ -362,12 +363,12 @@ void report(const std::vector<TrialMetrics>& trials) {
   }
   std::cout << fmt::format("median elapsed: {:.1f} ms\n", medianMs(elapsed));
   std::cout << fmt::format(
-                   "aggregation: cpu={:.1f} ms wall={:.1f} ms blocked={:.1f} "
-                   "ms peak={:.1f} MB\n",
-                   last.aggCpuNanos / 1e6,
-                   last.aggWallNanos / 1e6,
-                   last.aggBlockedNanos / 1e6,
-                   last.aggPeakBytes / static_cast<double>(1 << 20));
+      "aggregation: cpu={:.1f} ms wall={:.1f} ms blocked={:.1f} "
+      "ms peak={:.1f} MB\n",
+      last.aggCpuNanos / 1e6,
+      last.aggWallNanos / 1e6,
+      last.aggBlockedNanos / 1e6,
+      last.aggPeakBytes / static_cast<double>(1 << 20));
   if (FLAGS_config == "dram") {
     std::cout << fmt::format(
         "spill: bytes={:.1f} MB rows={} write={:.1f} ms read={:.1f} ms\n",
@@ -466,9 +467,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Tasks are destroyed asynchronously on executor threads and hold the plan and
-  // the input vectors whose buffers free into 'inputPool'. Wait for them so no
-  // straggler outlives the pool.
+  // Tasks are destroyed asynchronously on executor threads and hold the plan
+  // and the input vectors whose buffers free into 'inputPool'. Wait for them so
+  // no straggler outlives the pool.
   exec::test::waitForAllTasksToBeDeleted(/*maxWaitUs=*/30'000'000);
   return 0;
 }

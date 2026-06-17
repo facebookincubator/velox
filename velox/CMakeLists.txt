@@ -86,10 +86,7 @@ if(VELOX_ENABLE_CXL)
   if(UNIX AND NOT APPLE)
     add_subdirectory(experimental/cxl)
   else()
-    message(
-      WARNING
-      "VELOX_ENABLE_CXL is only supported on Linux; skipping experimental/cxl."
-    )
+    message(WARNING "VELOX_ENABLE_CXL is only supported on Linux; skipping experimental/cxl.")
   endif()
 endif()
 

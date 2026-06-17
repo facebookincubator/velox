@@ -93,8 +93,8 @@ class CxlHashAggregationTest : public OperatorTestBase {
             // must be enabled for the operator to be reclaimable. A minimal
             // spillable reservation keeps DRAM lean so relocation fires
             // promptly under pressure.
-            .queryConfig(core::QueryConfig{
-                std::unordered_map<std::string, std::string>{
+            .queryConfig(
+                core::QueryConfig{std::unordered_map<std::string, std::string>{
                     {core::QueryConfig::kSpillEnabled, "true"},
                     {core::QueryConfig::kAggregationSpillEnabled, "true"},
                     {core::QueryConfig::kMinSpillableReservationPct, "0"},

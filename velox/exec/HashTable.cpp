@@ -1857,8 +1857,7 @@ void HashTable<ignoreNullKeys>::decideHashMode(
 template <bool ignoreNullKeys>
 std::vector<RowContainer*> HashTable<ignoreNullKeys>::allRows() const {
   std::vector<RowContainer*> rowContainers;
-  rowContainers.reserve(
-      otherTables_.size() + otherRowContainers_.size() + 1);
+  rowContainers.reserve(otherTables_.size() + otherRowContainers_.size() + 1);
   rowContainers.push_back(rows_.get());
   for (auto& other : otherTables_) {
     rowContainers.push_back(other->rows_.get());

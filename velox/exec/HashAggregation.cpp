@@ -31,12 +31,12 @@ HashAggregation::HashAggregation(
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::AggregationNode>& aggregationNode)
     : HashAggregation(
-        operatorId,
-        driverCtx,
-        aggregationNode,
-        aggregationNode->step() == core::AggregationNode::Step::kPartial
-          ? OperatorType::kPartialAggregation
-          : OperatorType::kAggregation) {}
+          operatorId,
+          driverCtx,
+          aggregationNode,
+          aggregationNode->step() == core::AggregationNode::Step::kPartial
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation) {}
 
 HashAggregation::HashAggregation(
     int32_t operatorId,

@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-#
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
-# Licensed under the Apache License, Version 2.0 (the "License").
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # Runs the CXL aggregation benchmark across the placement configurations, each
 # in its own process with the appropriate numactl memory policy. The capped
@@ -55,7 +64,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_LOG="${RUN_LOG:-${SCRIPT_DIR}/results/zipf-sf${SF}.log}"
 mkdir -p "$(dirname "${RUN_LOG}")"
 
-common=(--scale_factor="${SF}" ${EXTRA})
+# Word-split EXTRA (e.g. "--zipf_groups=... --zipf_skew=...") into an array.
+read -ra extra_flags <<<"${EXTRA}"
+common=(--scale_factor="${SF}" "${extra_flags[@]}")
 
 # Returns true when config "$1" is in the requested CONFIGS set.
 want_config() {
@@ -64,7 +75,7 @@ want_config() {
 
 WEIGHT_DIR=/sys/kernel/mm/mempolicy/weighted_interleave
 supports_weighted_interleave() {
-  [[ -d "${WEIGHT_DIR}" ]] && numactl --help 2>&1 | grep -q "weighted-interleave"
+  [[ -d ${WEIGHT_DIR} ]] && numactl --help 2>&1 | grep -q "weighted-interleave"
 }
 
 # Writes a node's interleave weight, via sudo when the sysfs file is not
@@ -72,68 +83,68 @@ supports_weighted_interleave() {
 set_node_weight() {
   local node="$1" weight="$2"
   local file="${WEIGHT_DIR}/node${node}"
-  if [[ -w "${file}" ]]; then
-    echo "${weight}" > "${file}"
+  if [[ -w ${file} ]]; then
+    echo "${weight}" >"${file}"
   else
-    echo "${weight}" | sudo tee "${file}" > /dev/null
+    echo "${weight}" | sudo tee "${file}" >/dev/null
   fi
 }
 
 {
-for weights in ${WEIGHTS_LIST}; do
-  want_config B || break
-  dram_weight="${weights%%:*}"
-  cxl_weight="${weights##*:}"
-  if [[ "${weights}" == "1:1" ]] && ! supports_weighted_interleave; then
-    echo "######## B: CXL interleave dram:cxl=1:1 (classic) ########"
-    numactl --cpunodebind="${DRAM_NODE}" \
-      --interleave="${DRAM_NODE},${CXL_NODE}" \
-      "${BENCH}" --config=interleave "${common[@]}"
-  elif supports_weighted_interleave; then
-    echo "######## B: CXL interleave dram:cxl=${weights} (weighted) ########"
-    set_node_weight "${DRAM_NODE}" "${dram_weight}"
-    set_node_weight "${CXL_NODE}" "${cxl_weight}"
-    numactl --cpunodebind="${DRAM_NODE}" \
-      --weighted-interleave="${DRAM_NODE},${CXL_NODE}" \
-      "${BENCH}" --config=interleave "${common[@]}"
-  else
-    echo "######## B: skipping dram:cxl=${weights} — weighted interleave" \
-      "needs Linux 6.9+ (${WEIGHT_DIR}) and numactl --weighted-interleave ########"
-  fi
-done
+  for weights in ${WEIGHTS_LIST}; do
+    want_config B || break
+    dram_weight="${weights%%:*}"
+    cxl_weight="${weights##*:}"
+    if [[ ${weights} == "1:1" ]] && ! supports_weighted_interleave; then
+      echo "######## B: CXL interleave dram:cxl=1:1 (classic) ########"
+      numactl --cpunodebind="${DRAM_NODE}" \
+        --interleave="${DRAM_NODE},${CXL_NODE}" \
+        "${BENCH}" --config=interleave "${common[@]}"
+    elif supports_weighted_interleave; then
+      echo "######## B: CXL interleave dram:cxl=${weights} (weighted) ########"
+      set_node_weight "${DRAM_NODE}" "${dram_weight}"
+      set_node_weight "${CXL_NODE}" "${cxl_weight}"
+      numactl --cpunodebind="${DRAM_NODE}" \
+        --weighted-interleave="${DRAM_NODE},${CXL_NODE}" \
+        "${BENCH}" --config=interleave "${common[@]}"
+    else
+      echo "######## B: skipping dram:cxl=${weights} — weighted interleave" \
+        "needs Linux 6.9+ (${WEIGHT_DIR}) and numactl --weighted-interleave ########"
+    fi
+  done
 
-failures=0
-for dram_mb in ${DRAM_MB_LIST}; do
-  want_config A || want_config C || break
+  failures=0
+  for dram_mb in ${DRAM_MB_LIST}; do
+    want_config A || want_config C || break
 
-  if want_config A; then
-    echo "######## A: DRAM-only + spill (cap ${dram_mb} MB) ########"
+    if want_config A; then
+      echo "######## A: DRAM-only + spill (cap ${dram_mb} MB) ########"
+      if ! numactl --cpunodebind="${DRAM_NODE}" --membind="${DRAM_NODE}" \
+        "${BENCH}" --config=dram --dram_limit_mb="${dram_mb}" "${common[@]}"; then
+        echo ">>> LEG FAILED: dram at ${dram_mb} MB (cap infeasible or error above)"
+        failures=$((failures + 1))
+      fi
+    fi
+
+    want_config C || continue
+    echo "######## C: CXL-aware relocate (cap ${dram_mb} MB) ########"
+    # The CXL pool binds itself to CXL_NODE via libnuma; the process compute and
+    # DRAM stay on DRAM_NODE. A failure at a low cap is a legitimate sweep
+    # outcome: the bucket array stays DRAM-pinned, so config C has a hard DRAM
+    # floor that config A (which spills the whole table away) does not.
     if ! numactl --cpunodebind="${DRAM_NODE}" --membind="${DRAM_NODE}" \
-      "${BENCH}" --config=dram --dram_limit_mb="${dram_mb}" "${common[@]}"; then
-      echo ">>> LEG FAILED: dram at ${dram_mb} MB (cap infeasible or error above)"
+      "${BENCH}" --config=cxl --cxl_numa_node="${CXL_NODE}" \
+      --cxl_capacity_mb="${CXL_MB}" --dram_limit_mb="${dram_mb}" \
+      "${common[@]}"; then
+      echo ">>> LEG FAILED: cxl at ${dram_mb} MB (below the DRAM bucket-array" \
+        "floor, or error above)"
       failures=$((failures + 1))
     fi
-  fi
+  done
 
-  want_config C || continue
-  echo "######## C: CXL-aware relocate (cap ${dram_mb} MB) ########"
-  # The CXL pool binds itself to CXL_NODE via libnuma; the process compute and
-  # DRAM stay on DRAM_NODE. A failure at a low cap is a legitimate sweep
-  # outcome: the bucket array stays DRAM-pinned, so config C has a hard DRAM
-  # floor that config A (which spills the whole table away) does not.
-  if ! numactl --cpunodebind="${DRAM_NODE}" --membind="${DRAM_NODE}" \
-    "${BENCH}" --config=cxl --cxl_numa_node="${CXL_NODE}" \
-    --cxl_capacity_mb="${CXL_MB}" --dram_limit_mb="${dram_mb}" \
-    "${common[@]}"; then
-    echo ">>> LEG FAILED: cxl at ${dram_mb} MB (below the DRAM bucket-array" \
-      "floor, or error above)"
-    failures=$((failures + 1))
+  if [[ ${failures} -gt 0 ]]; then
+    echo ">>> ${failures} leg(s) failed; see markers above."
   fi
-done
-
-if [[ "${failures}" -gt 0 ]]; then
-  echo ">>> ${failures} leg(s) failed; see markers above."
-fi
 } 2>&1 | tee "${RUN_LOG}"
 
 echo

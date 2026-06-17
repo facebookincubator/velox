@@ -41,8 +41,9 @@ target_link_libraries(
 # of the CXL operator library. CxlHashTableTest drives the table directly to
 # cover the relocate-to-CXL primitive.
 add_executable(
-  velox_experimental_cxl_hash_aggregation_test CxlHashAggregationTest.cpp
-                                               CxlHashTableTest.cpp
+  velox_experimental_cxl_hash_aggregation_test
+  CxlHashAggregationTest.cpp
+  CxlHashTableTest.cpp
 )
 
 add_test(
