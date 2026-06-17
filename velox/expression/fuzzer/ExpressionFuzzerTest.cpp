@@ -311,6 +311,8 @@ std::unordered_set<std::string> skipFunctions = {
     "geometry_union_agg",
     "localtime",
     "s2_cells",
+    "google_polyline_decode",
+    "google_polyline_encode",
 };
 
 std::unordered_set<std::string> skipFunctionsSOT = {

@@ -108,8 +108,16 @@ void KernelFsCache::init() {
 }
 
 std::unique_ptr<CompiledKernel> KernelFsCache::getKernel(
-    const std::string& key,
+    const std::string& keyArg,
     KernelGenFunc genFunc) {
+  // Namespace the persistent cache by a salt over the resolved headers, target
+  // arch, and NVRTC flags. These affect the compiled CUBIN but are not part of
+  // the generated kernel source, so without the salt a header/arch/flag change
+  // would leave the key unchanged and serve a stale cubin. Prepending it to the
+  // key means it participates in the hash, the stored .cu, the collision
+  // compare, and the forwarded in-memory CompiledKernel cache uniformly.
+  const std::string key =
+      fmt::format("// wave-cache-salt:{:016x}\n", kernelCacheSalt()) + keyArg;
   auto hash = std::hash<std::string>{}(key);
   auto assignedOrdinal = std::make_shared<std::atomic<int32_t>>(-1);
 

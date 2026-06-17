@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
@@ -70,6 +75,15 @@ class WriterBase {
 
   void addUserMetadata(const std::string& key, const std::string& value) {
     userMetadata_[key] = value;
+  }
+
+  /// Sets the per-type attributes (e.g. Iceberg "iceberg.id") to stamp into the
+  /// footer, keyed by pre-order schema node id. Empty by default.
+  void setSchemaAttributes(
+      std::unordered_map<
+          uint32_t,
+          std::vector<std::pair<std::string, std::string>>> schemaAttributes) {
+    schemaAttributes_ = std::move(schemaAttributes);
   }
 
   // protected:
@@ -181,6 +195,8 @@ class WriterBase {
   std::unique_ptr<FooterWriteWrapper> footer_;
   proto::orc::Metadata metadata_;
   std::unordered_map<std::string, std::string> userMetadata_;
+  std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+      schemaAttributes_;
   std::unique_ptr<google::protobuf::Arena> arena_;
 
   friend class WriterTest;

@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <folly/container/F14Set.h>
+#include <unordered_set>
+
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
@@ -67,6 +70,7 @@ class FileDataSource : public DataSource {
   static constexpr std::string_view kLocalReadBytes{"localReadBytes"};
   static constexpr std::string_view kNumRamRead{"numRamRead"};
   static constexpr std::string_view kRamReadBytes{"ramReadBytes"};
+  static constexpr std::string_view kReadGapBytes{"readGapBytes"};
 
   FileDataSource(
       const RowTypePtr& outputType,
@@ -217,6 +221,9 @@ class FileDataSource : public DataSource {
   /// Field indices referenced in both remaining filter and output type. These
   /// columns need to be materialized eagerly to avoid missing values in output.
   std::vector<column_index_t> multiReferencedFields_;
+
+  // Column names referenced by the remaining filter expression.
+  folly::F14FastSet<std::string> remainingFilterColumns_;
 
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
 

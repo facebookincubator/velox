@@ -546,7 +546,8 @@ class SelectiveColumnReader {
     }
     formatData_->readNulls(
         numRows, incomingNulls, nullsInReadRange_, readsNullsOnly);
-    if (isFlatMapValue_ && nullsInReadRange_) {
+    if (isFlatMapValue_ && nullsInReadRange_ &&
+        flatMapValueNullsInReadRange_.get() != nullsInReadRange_.get()) {
       flatMapValueNullsInReadRange_ = nullsInReadRange_;
     }
   }

@@ -19,6 +19,7 @@ set(
   velox_exec_test_lib
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
+  velox_dwio_parquet_test_base
   velox_test_util
   GTest::gtest
   GTest::gtest_main
@@ -27,9 +28,21 @@ set(
   glog::glog
 )
 
+add_library(velox_dwio_parquet_test_base ParquetTestBase.cpp)
+velox_add_test_headers(velox_dwio_parquet_test_base ParquetTestBase.h)
+target_link_libraries(
+  velox_dwio_parquet_test_base
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
+  velox_vector_fuzzer
+  velox_vector_test_lib
+  velox_dwio_common_test_utils
+  GTest::gtest
+  GTest::gmock
+)
+
 add_subdirectory(common)
 add_subdirectory(reader)
-add_subdirectory(thrift)
 add_subdirectory(writer)
 
 add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
@@ -47,5 +60,3 @@ target_link_libraries(
 )
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/examples DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-
-velox_add_library(velox_dwio_parquet_test_base INTERFACE HEADERS ParquetTestBase.h)

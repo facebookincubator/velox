@@ -16,11 +16,8 @@
 
 #pragma once
 
-#include <memory>
 #include <vector>
 
-#include "velox/common/base/BitUtil.h"
-#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {

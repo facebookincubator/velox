@@ -26,6 +26,7 @@ velox_link_libraries(
   PUBLIC velox_flag_definitions velox_process Folly::folly fmt::fmt gflags::gflags glog::glog
 )
 
+include_directories(${FLEX_INCLUDE_DIRS})
 velox_add_library(
   velox_common_base
   AdmissionController.cpp
@@ -41,6 +42,7 @@ velox_add_library(
   SplitBlockBloomFilter.cpp
   StatsReporter.cpp
   SuccinctPrinter.cpp
+  YyFlexLexerShim.cpp
   HEADERS
   AdmissionController.h
   BitSet.h
@@ -58,6 +60,7 @@ velox_add_library(
   GTestMacros.h
   IOUtils.h
   IndexedPriorityQueue.h
+  IoCounter.h
   Nulls.h
   PeriodicStatsReporter.h
   Pointers.h

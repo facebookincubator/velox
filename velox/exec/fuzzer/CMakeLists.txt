@@ -284,7 +284,7 @@ target_link_libraries(
   velox_vector_fuzzer
 )
 
-# LocalRunnerService Library (requires FBThrift support)
+# LocalRunnerService Library
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   add_library(velox_local_runner_service_lib LocalRunnerService.cpp)
   velox_add_test_headers(velox_local_runner_service_lib LocalRunnerService.h)

@@ -16,12 +16,14 @@
 
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include <gtest/gtest.h>
+#include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/core/Expressions.h"
+#include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -32,6 +34,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 
 #ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #endif
 
@@ -55,10 +58,59 @@ const std::vector<UnsupportedFilterType> kUnsupportedFilterTypes = {
     {ROW({{"a", BIGINT()}}),
      variant::row({variant::create<TypeKind::BIGINT>(1)})},
 };
+
+class DummyNimbleReaderFactory : public dwio::common::ReaderFactory {
+ public:
+  explicit DummyNimbleReaderFactory(FileFormat format)
+      : ReaderFactory(format) {}
+
+  std::unique_ptr<dwio::common::Reader> createReader(
+      std::unique_ptr<dwio::common::BufferedInput>,
+      const dwio::common::ReaderOptions&) override {
+    VELOX_NYI("Test reader factory could not create readers.");
+  }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override {
+    assertUnqualifiedFormatConfigs(connectorConfig);
+    assertUnqualifiedFormatConfigs(session);
+    return nullptr;
+  }
+
+ private:
+  static void assertUnqualifiedFormatConfigs(const config::ConfigBase& config) {
+    for (const auto& [key, _] : config.rawConfigs()) {
+      VELOX_CHECK(
+          key.find('.') == std::string::npos,
+          "Unexpected qualified format config key: {}",
+          key);
+    }
+  }
+};
 } // namespace
 
 class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
  protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    orc::registerOrcReaderFactory();
+#ifdef VELOX_ENABLE_PARQUET
+    parquet::registerParquetReaderFactory();
+#endif
+    dwio::common::registerReaderFactory(
+        std::make_shared<DummyNimbleReaderFactory>(FileFormat::NIMBLE));
+  }
+
+  void TearDown() override {
+    dwio::common::unregisterReaderFactory(FileFormat::NIMBLE);
+#ifdef VELOX_ENABLE_PARQUET
+    parquet::unregisterParquetReaderFactory();
+#endif
+    orc::unregisterOrcReaderFactory();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static bool compareSerDeOptions(
       const SerDeOptions& l,
       const SerDeOptions& r) {
@@ -153,16 +205,14 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     expectedSerDe = SerDeOptions{};
   };
 
-  auto checkUseColumnNamesForColumnMapping = [&]() {
+  auto checkColumnMappingMode = [&]() {
+    auto expectedMappingMode = dwio::common::ColumnMappingMode::kPosition;
     if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
-      EXPECT_EQ(
-          readerOptions.useColumnNamesForColumnMapping(),
-          hiveConfig->isOrcUseColumnNames(&sessionProperties));
-    } else if (fileFormat == FileFormat::PARQUET) {
-      EXPECT_EQ(
-          readerOptions.useColumnNamesForColumnMapping(),
-          hiveConfig->isParquetUseColumnNames(&sessionProperties));
+      expectedMappingMode = hiveConfig->isOrcUseColumnNames(&sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
     }
+    EXPECT_EQ(readerOptions.columnMappingMode(), expectedMappingMode);
   };
 
   // Default.
@@ -180,7 +230,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
       hiveConfig->isFileColumnNamesReadAsLowerCase(&sessionProperties));
-  checkUseColumnNamesForColumnMapping();
+  checkColumnMappingMode();
   EXPECT_EQ(
       readerOptions.filePreloadThreshold(), hiveConfig->filePreloadThreshold());
   EXPECT_EQ(readerOptions.prefetchRowGroups(), hiveConfig->prefetchRowGroups());
@@ -301,15 +351,22 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_TRUE(readerOptions.cacheMetadata());
   clearDynamicParameters(FileFormat::ORC);
   performConfigure();
-  checkUseColumnNamesForColumnMapping();
+  checkColumnMappingMode();
   clearDynamicParameters(FileFormat::PARQUET);
   performConfigure();
-  checkUseColumnNamesForColumnMapping();
+  checkColumnMappingMode();
 }
 
 TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
   config::ConfigBase sessionProperties{
-      std::unordered_map<std::string, std::string>{}};
+      std::unordered_map<std::string, std::string>{
+          {"nimble.unused", "1"},
+          {"parquet.unused", "2"},
+          {"parquet_footer_speculative_io_size", "7777"},
+          {"parquet_footer_memory_tracking_threshold", "6666"},
+          {"hive.parquet.footer_speculative_io_size", "8888"},
+          {"unrelated.unused", "3"},
+      }};
   auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
       pool_.get(),
       pool_.get(),
@@ -326,8 +383,14 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 
   std::unordered_map<std::string, std::string> customHiveConfigProps;
   customHiveConfigProps[hive::HiveConfig::kOrcFooterSpeculativeIoSize] = "1111";
-  customHiveConfigProps[hive::HiveConfig::kParquetFooterSpeculativeIoSize] =
-      "2222";
+#ifdef VELOX_ENABLE_PARQUET
+  customHiveConfigProps["parquet.footer-speculative-io-size"] = "9999";
+  customHiveConfigProps["parquet.footer-memory-tracking-threshold"] = "9999";
+  customHiveConfigProps["hive.parquet.footer-speculative-io-size"] = "2222";
+  customHiveConfigProps["hive.parquet.footer-memory-tracking-threshold"] =
+      "5555";
+  customHiveConfigProps["iceberg.parquet.footer-speculative-io-size"] = "4444";
+#endif
   customHiveConfigProps[hive::HiveConfig::kNimbleFooterSpeculativeIoSize] =
       "3333";
   auto hiveConfig = std::make_shared<hive::HiveConfig>(
@@ -417,10 +480,10 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         split,
         split->serdeParameters,
         readerOptions);
-    EXPECT_EQ(
-        readerOptions.footerSpeculativeIoSize(),
-        hiveConfig->parquetFooterSpeculativeIoSize(&sessionProperties));
-    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 2222);
+    auto parquetOptions = checkedPointerCast<parquet::ParquetReaderOptions>(
+        readerOptions.formatSpecificOptions());
+    EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 7777);
+    EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 6666);
   }
 
   // Test Nimble format.

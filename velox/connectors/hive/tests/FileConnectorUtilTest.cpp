@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/type/Filter.h"
 
@@ -31,6 +32,16 @@ namespace facebook::velox::connector {
 
 class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
  protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    orc::registerOrcReaderFactory();
+  }
+
+  void TearDown() override {
+    orc::unregisterOrcReaderFactory();
+    HiveConnectorTestBase::TearDown();
+  }
+
   struct QueryCtxHolder {
     std::shared_ptr<config::ConfigBase> sessionProperties;
     std::unique_ptr<ConnectorQueryCtx> ctx;
@@ -40,7 +51,7 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
       std::unordered_map<std::string, std::string> sessionProps = {}) {
     QueryCtxHolder holder;
     holder.sessionProperties =
-        std::make_shared<config::ConfigBase>(std::move(sessionProps), true);
+        std::make_shared<config::ConfigBase>(std::move(sessionProps));
     holder.ctx = std::make_unique<ConnectorQueryCtx>(
         pool_.get(),
         pool_.get(),
@@ -60,7 +71,7 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<const hive::FileConfig> makeFileConfig(
       std::unordered_map<std::string, std::string> props = {}) {
     return std::make_shared<hive::FileConfig>(
-        std::make_shared<config::ConfigBase>(std::move(props)));
+        std::make_shared<config::ConfigBase>(std::move(props)), "hive.");
   }
 
   std::shared_ptr<const hive::FileConnectorSplit> makeSplit(
@@ -118,7 +129,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_FALSE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kPosition);
   }
 
   // Test with ORC format and useColumnNames enabled via session.
@@ -138,27 +151,9 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::ORC);
-    EXPECT_TRUE(readerOptions.useColumnNamesForColumnMapping());
-  }
-
-  // Test with Parquet format and useColumnNames enabled via session.
-  {
-    auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kParquetUseColumnNamesSession, "true"}});
-    auto split = makeSplit(dwio::common::FileFormat::PARQUET);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
-    readerOptions.setDataIoStats(dataIoStats_);
-    readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
-        fileConfig,
-        holder.ctx.get(),
-        /*fileSchema=*/nullptr,
-        split,
-        /*tableParameters=*/{},
-        readerOptions);
-
-    EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::PARQUET);
-    EXPECT_TRUE(readerOptions.useColumnNamesForColumnMapping());
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kName);
   }
 
   // Test format mismatch throws.
@@ -179,6 +174,26 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
             readerOptions),
         "received splits of different formats");
   }
+}
+
+TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
+  auto fileConfig = makeFileConfig();
+  auto holder = makeConnectorQueryCtx();
+  auto split = makeSplit(dwio::common::FileFormat::JSON);
+  dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+
+  hive::configureReaderOptions(
+      fileConfig,
+      holder.ctx.get(),
+      /*fileSchema=*/nullptr,
+      split,
+      /*tableParameters=*/{},
+      readerOptions);
+
+  EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::JSON);
+  EXPECT_EQ(readerOptions.formatSpecificOptions(), nullptr);
 }
 
 TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {

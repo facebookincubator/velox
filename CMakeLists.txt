@@ -173,11 +173,19 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
+option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
 # is broken if you use ninja.
 option(VELOX_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." OFF)
+
+# Enable the address and undefined behavior sanitizers. They can run together.
+option(
+  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+  "Builds velox with Clang ASAN and UBSAN sanitizer flags"
+  OFF
+)
 
 if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
@@ -210,6 +218,15 @@ endif()
 
 if(VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_BUILD_TEST_UTILS ON)
+endif()
+
+if(VELOX_ENABLE_TORCHWAVE)
+  set(VELOX_ENABLE_WAVE ON)
+  if(DEFINED ENV{TORCH_DIR})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{TORCH_DIR}")
+  endif()
+  find_package(Torch REQUIRED)
+  message(STATUS "Found Torch: ${TORCH_INSTALL_PREFIX}")
 endif()
 
 if(VELOX_ENABLE_CUDF)
@@ -339,8 +356,8 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
-  # are included in Arrow.
+  # Native Parquet reader requires Arrow Parquet writer, which are
+  # included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
@@ -404,9 +421,9 @@ endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D USE_VELOX_COMMON_BASE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
 if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
@@ -516,12 +533,8 @@ endif()
 
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
 # -latomic not found because it is added right after the compiler exe.
-if(
-  "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-  AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_GREATER_EQUAL 15
-)
-  set(CMAKE_EXE_LINKER_FLAGS "-latomic")
-endif()
+# Only link libatomic if compiler-rt is not available (compiler-rt provides atomic implementation)
+velox_configure_clang_atomic_linker_flags()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -547,19 +560,31 @@ velox_resolve_dependency(
 )
 
 set(
-  BOOST_INCLUDE_LIBRARIES
+  BOOST_COMPONENTS
   atomic
   context
   date_time
   filesystem
   program_options
   regex
-  system
   thread
+)
+set(
+  BOOST_OPTIONAL_COMPONENTS
+  system # Boost.System is header only since Boost 1.89
 )
 
 velox_set_source(Boost)
-velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+velox_resolve_dependency(
+  Boost
+  1.77.0
+  MODULE
+  COMPONENTS ${BOOST_COMPONENTS}
+  OPTIONAL_COMPONENTS ${BOOST_OPTIONAL_COMPONENTS}
+)
+if(NOT TARGET Boost::system)
+  add_library(Boost::system ALIAS Boost::headers)
+endif()
 
 velox_set_source(gflags)
 
@@ -653,7 +678,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)
@@ -703,6 +728,10 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Explicitly enable folly coroutines when compiler supports them.
   # This is required for folly::coro::AsyncGenerator to work correctly.
   add_compile_definitions(FOLLY_HAS_COROUTINES=1)
+elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "AppleClang")
+  # Handle Apple toolchain Clang change of name of variable.
+  # Remove when upgrading to the latest FBOS version where this has been addressed.
+  add_compile_options(-D_LIBCPP_HAS_NO_ASAN)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
@@ -776,7 +805,27 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
+# Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
+if(
+  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+  AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+  AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+)
+  set(
+    CMAKE_CXX_FLAGS
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+  )
+  # Skip alignment errors and member access check for now.
+  # https://github.com/facebookincubator/velox/issues/15811
+  # https://github.com/facebookincubator/velox/issues/15810
+  set(
+    CMAKE_EXE_LINKER_FLAGS
+    "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=vptr"
+  )
+endif()
+
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
+message("FINAL CMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
 
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)

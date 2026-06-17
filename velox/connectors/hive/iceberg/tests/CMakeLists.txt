@@ -99,6 +99,46 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(velox_hive_iceberg_merge_processor_test IcebergMergeProcessorTest.cpp)
+  add_test(velox_hive_iceberg_merge_processor_test velox_hive_iceberg_merge_processor_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_merge_processor_test
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_merge_sink_test
+    IcebergMergeSinkTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_merge_sink_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_merge_sink_test velox_hive_iceberg_merge_sink_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_merge_sink_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_merge_sink_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
+
   if(VELOX_ENABLE_PARQUET)
     target_link_libraries(velox_hive_iceberg_test velox_dwio_parquet_reader)
 

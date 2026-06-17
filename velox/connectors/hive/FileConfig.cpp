@@ -27,13 +27,10 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
   config::registerConfigProperty<FileConfig::constName##Property>(properties)
 
     VELOX_HIVE_CONFIG_REGISTER(kOrcUseColumnNamesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetUseColumnNamesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kAllowInt32NarrowingSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
     VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
     VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
     VELOX_HIVE_CONFIG_REGISTER(kOrcFooterSpeculativeIoSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
@@ -43,6 +40,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kLoadQuantumSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadStatsBasedFilterReorderDisabledSession);
     VELOX_HIVE_CONFIG_REGISTER(kIndexEnabledSession);
+    VELOX_HIVE_CONFIG_REGISTER(kLazyColumnIoSession);
     VELOX_HIVE_CONFIG_REGISTER(kCacheMetadataSession);
     VELOX_HIVE_CONFIG_REGISTER(kPinMetadataSession);
     VELOX_HIVE_CONFIG_REGISTER(kCacheIndexSession);

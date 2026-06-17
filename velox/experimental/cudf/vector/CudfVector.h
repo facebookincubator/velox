@@ -68,6 +68,10 @@ class CudfVector : public RowVector {
   /// first (which copies the data).
   std::unique_ptr<cudf::table> release();
 
+  /// Rebinds owned table buffers to use 'stream' for future deallocation.
+  /// Returns false when the storage cannot be rebound without materializing.
+  bool rebindStream(rmm::cuda_stream_view stream);
+
   uint64_t estimateFlatSize() const override;
 
  private:
