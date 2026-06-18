@@ -1005,7 +1005,7 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-  *  - nimble.lazy-column-io
+   * - nimble.lazy-column-io
      - nimble_lazy_column_io
      - boolean
      - false
