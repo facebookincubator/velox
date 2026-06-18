@@ -255,7 +255,7 @@ class FileConfig {
       "reader.timestamp_unit",
       uint8_t,
       3,
-      "Unit for reading timestamps (0=second, 3=millisecond, 6=microsecond, 9=nanosecond).")
+      "Unit for reading timestamps (3=millisecond, 6=microsecond, 9=nanosecond).")
   static constexpr const char* kReadTimestampUnit = "reader.timestamp-unit";
 
   // --- Server-only properties (no macro) ---

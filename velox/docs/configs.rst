@@ -960,7 +960,7 @@ ORC Options (prefix ``hive.orc.``)
    * - ``use-column-names``
      - bool
      - false
-     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``; do not prepend ``hive.``. Session: ``orc_use_column_names``.
+     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``. The legacy key ``hive.orc.use-column-names`` is also accepted. Session: ``orc_use_column_names``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
@@ -1135,7 +1135,7 @@ Nimble Options (prefix ``hive.nimble.``)
        materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
-       Session: ``nimble.lazy_column_io``.
+       Session: ``nimble_lazy_column_io``.
    * - ``string-decoder-zero-copy``
      - bool
      - false
