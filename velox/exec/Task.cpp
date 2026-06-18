@@ -1136,6 +1136,7 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
       }
       createDriverFactoriesLocked(maxDrivers);
     }
+    checkInputTransportCapabilities();
     initializePartitionOutput();
     createAndStartDrivers(concurrentSplitGroups);
   } catch (const std::exception&) {
@@ -1267,6 +1268,41 @@ void Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
   }
 }
 
+namespace {
+// Fails fast when 'annotation' selects a transport for 'nodeId' that has no
+// matching output buffer manager registered on this worker. Under worker
+// uniformity a missing capability is a deployment inconsistency, not a routine
+// fallback, so it surfaces at task start instead of aborting mid-driver. The
+// transport annotation string is used directly as the registry id; that
+// "annotation == registry key" identity is what lets one presence check answer
+// the capability question for both the receive and send sides. 'nodeKind' is
+// the article+noun for the message, e.g. "an input" or "an output".
+void checkTransportCapability(
+    const core::QueryCtx& queryCtx,
+    const core::PlanNodeId& nodeId,
+    const std::string& annotation,
+    std::string_view nodeKind) {
+  if (annotation == core::TransportKind::kUcx &&
+      !OutputBufferManagerRegistry::contains(queryCtx, annotation)) {
+    VELOX_FAIL(
+        "No output buffer manager registered for transport on this worker; the "
+        "coordinator annotated {} node for this transport but it is not "
+        "available here: node={}, transport={}",
+        nodeKind,
+        nodeId,
+        annotation);
+  }
+}
+} // namespace
+
+void Task::checkInputTransportCapabilities() {
+  for (const auto& [exchangeNodeId, annotation] :
+       planFragment_.inputTransportTypes) {
+    checkTransportCapability(
+        *queryCtx_, exchangeNodeId, annotation, "an input");
+  }
+}
+
 void Task::initializePartitionOutput() {
   VELOX_CHECK(
       isRunningLocked(),
@@ -1314,27 +1350,6 @@ void Task::initializePartitionOutput() {
     }
   }
 
-  // Mirror the output-side capability check for input (Exchange) nodes the
-  // coordinator annotated for UCX: the same worker-level UCX capability signal
-  // (registry presence) governs the receive side, so surface a missing
-  // capability as a deployment error at task start. The transport annotation
-  // string is used directly as the output buffer manager registry id here and
-  // below; that "annotation == registry key" identity is the contract that lets
-  // a single registry presence check answer the capability question for both
-  // the receive and send sides.
-  for (const auto& [exchangeNodeId, annotation] :
-       planFragment_.inputTransportTypes) {
-    if (annotation == core::TransportKind::kUcx &&
-        !OutputBufferManagerRegistry::contains(*queryCtx_, annotation)) {
-      VELOX_FAIL(
-          "No output buffer manager registered for transport on this worker; "
-          "the coordinator annotated an input node for this transport but it "
-          "is not available here: node={}, transport={}",
-          exchangeNodeId,
-          annotation);
-    }
-  }
-
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
@@ -1343,19 +1358,8 @@ void Task::initializePartitionOutput() {
     const std::string annotation = it != outputTransportTypes.end()
         ? it->second
         : std::string{core::TransportKind::kHttp};
-    // A node annotated for UCX with no UCX manager registered on this worker is
-    // a deployment inconsistency under worker uniformity, not a routine
-    // fallback. Fail fast here with a precise message instead of aborting
-    // mid-driver in PartitionedOutput::initialize().
-    if (annotation == core::TransportKind::kUcx &&
-        !OutputBufferManagerRegistry::contains(*queryCtx_, annotation)) {
-      VELOX_FAIL(
-          "No output buffer manager registered for transport on this worker; "
-          "the coordinator annotated an output node for this transport but it "
-          "is not available here: node={}, transport={}",
-          partitionedOutputNode->id(),
-          annotation);
-    }
+    checkTransportCapability(
+        *queryCtx_, partitionedOutputNode->id(), annotation, "an output");
     const std::string transportType{resolveTransport(*queryCtx_, annotation)};
     auto manager =
         OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);

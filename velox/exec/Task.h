@@ -904,6 +904,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // Creates driver factories.
   void createDriverFactoriesLocked(uint32_t maxDrivers);
 
+  // Fails fast when the coordinator annotated an input (Exchange) node for a
+  // transport whose output buffer manager is not registered on this worker.
+  // Runs for every task, including those without partitioned output.
+  void checkInputTransportCapabilities();
+
   // Creates the output buffer in partitioned output buffer manager if needed.
   void initializePartitionOutput();
 
