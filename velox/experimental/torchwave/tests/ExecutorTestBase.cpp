@@ -139,6 +139,11 @@ DEFINE_bool(
     false,
     "Adjust per-op cost multipliers after each execution based on actual thread block clocks");
 
+DEFINE_bool(
+    enable_reuse,
+    false,
+    "Reuse a value's buffer in place when an op is its unique last use (turn copying ops into in-place ops)");
+
 namespace torch::wave {
 
 using Clock = std::chrono::high_resolution_clock;
@@ -568,6 +573,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
+  WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -849,6 +855,19 @@ RunTiming ExecutorTestBase::runWave(
   auto hostOutputs = outputsToHost(waveOutputs, "wave");
   verifyOutputs(hostOutputs, expected, "wave");
   return {dataMovUs, waveUs, waveThreadInfo().debugInfo};
+}
+
+std::string ExecutorTestBase::runWaveExpectError(
+    ModelFixture& fixture,
+    const std::function<void(nativert::ExecutionFrame&)>& alterInputs) {
+  bool savedThrow = WaveConfig::get().throwOnError;
+  WaveConfig::get().throwOnError = false;
+  // Empty 'expected' makes runWave skip output verification: an erroring run
+  // has no meaningful reference to compare against.
+  runWave(fixture, /*expected=*/{}, alterInputs);
+  std::string errors = waveThreadInfo().errors;
+  WaveConfig::get().throwOnError = savedThrow;
+  return errors;
 }
 
 void ExecutorTestBase::runTest(
