@@ -103,6 +103,12 @@ DEFINE_int64(
     "device). The allocator pre-reserves this, so it must be bounded.");
 DEFINE_int32(num_trials, 5, "Number of measured trials.");
 DEFINE_int32(warmup, 1, "Number of warmup trials to discard.");
+DEFINE_int32(
+    num_drivers,
+    1,
+    "Local parallelism for the aggregation. 1 runs the serial single-stage "
+    "plan; >1 splits the input across that many source pipelines, "
+    "repartitions by key, and aggregates on that many drivers.");
 DEFINE_string(
     spill_dir,
     "/tmp/cxl_bench_spill",
@@ -143,9 +149,40 @@ int64_t dramCapacityBytes() {
   return memory::kMaxMemory;
 }
 
+// Splits 'input' batches round-robin into 'numChunks' disjoint groups so each
+// source pipeline aggregates its own slice with no overlap or duplication.
+std::vector<std::vector<RowVectorPtr>> splitInput(
+    const std::vector<RowVectorPtr>& input,
+    int32_t numChunks) {
+  std::vector<std::vector<RowVectorPtr>> chunks(numChunks);
+  for (auto i = 0; i < input.size(); ++i) {
+    chunks[i % numChunks].push_back(input[i]);
+  }
+  return chunks;
+}
+
 core::PlanNodePtr buildPlan(const std::vector<RowVectorPtr>& input) {
-  return PlanBuilder()
-      .values(input)
+  if (FLAGS_num_drivers <= 1) {
+    return PlanBuilder()
+        .values(input)
+        .singleAggregation({"k"}, {"sum(v) AS s"})
+        .planNode();
+  }
+  // Parallel plan: each disjoint input slice is read by its own (single-driver)
+  // source pipeline, then 'localPartition' repartitions the rows by key so each
+  // of the 'num_drivers' consumer drivers sees every row for the keys it owns
+  // and runs a complete aggregation. Equivalent result to the serial plan; the
+  // DriverAdapter still swaps the complete aggregation for CxlHashAggregation.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto chunks = splitInput(input, FLAGS_num_drivers);
+  std::vector<core::PlanNodePtr> sources;
+  sources.reserve(chunks.size());
+  for (const auto& chunk : chunks) {
+    sources.push_back(
+        PlanBuilder(planNodeIdGenerator).values(chunk).planNode());
+  }
+  return PlanBuilder(planNodeIdGenerator)
+      .localPartition({"k"}, sources)
       .singleAggregation({"k"}, {"sum(v) AS s"})
       .planNode();
 }
@@ -230,36 +267,75 @@ std::vector<RowVectorPtr> generateZipfInput(
 
   const auto rowType = ROW({"k", "v"}, {BIGINT(), BIGINT()});
   constexpr int32_t kBatchSize = 4'096;
-  std::vector<RowVectorPtr> batches;
-  int64_t numBytes = 0;
-  for (int64_t begin = 0; begin < numRows; begin += kBatchSize) {
-    const auto size = static_cast<vector_size_t>(
-        std::min<int64_t>(kBatchSize, numRows - begin));
-    std::mt19937_64 rng(42 + begin);
-    std::uniform_real_distribution<double> uniform(0.0, 1.0);
-    auto keys = BaseVector::create<FlatVector<int64_t>>(
-        BIGINT(), size, outputPool.get());
-    auto values = BaseVector::create<FlatVector<int64_t>>(
-        BIGINT(), size, outputPool.get());
-    for (vector_size_t i = 0; i < size; ++i) {
-      const int64_t rank =
-          std::upper_bound(cdf.begin(), cdf.end(), uniform(rng)) - cdf.begin();
-      // Scatter ranks over the key space so hot keys are not adjacent. The odd
-      // multiplier is invertible mod 2^64, so distinct ranks stay distinct.
-      keys->set(
-          i,
-          static_cast<int64_t>(
-              static_cast<uint64_t>(rank + 1) * 0x9E3779B97F4A7C15ULL));
-      values->set(i, static_cast<int64_t>(uniform(rng) * 100));
+  const int64_t numBatches = (numRows + kBatchSize - 1) / kBatchSize;
+  std::vector<RowVectorPtr> batches(numBatches);
+
+  // Fill the independent batches in parallel. Each batch is seeded only by its
+  // own row offset (42 + begin), so the data is bit-identical to a serial run
+  // and every config still sees the same input; 'outputPool' is thread-safe and
+  // each thread writes disjoint batch slots. This keeps generation (excluded
+  // from the measured trials) from dominating wall time at high scale factors.
+  const int64_t numThreads = std::min<int64_t>(
+      numBatches, std::max<unsigned>(1u, std::thread::hardware_concurrency()));
+  const int64_t batchesPerThread = (numBatches + numThreads - 1) / numThreads;
+  std::vector<int64_t> threadBytes(numThreads, 0);
+  std::vector<std::thread> threads;
+  threads.reserve(numThreads);
+  for (int64_t t = 0; t < numThreads; ++t) {
+    const int64_t firstBatch = t * batchesPerThread;
+    const int64_t lastBatch =
+        std::min<int64_t>(firstBatch + batchesPerThread, numBatches);
+    if (firstBatch >= lastBatch) {
+      break;
     }
-    auto batch = std::make_shared<RowVector>(
-        outputPool.get(),
-        rowType,
-        nullptr,
-        size,
-        std::vector<VectorPtr>{std::move(keys), std::move(values)});
-    numBytes += batch->retainedSize();
-    batches.push_back(std::move(batch));
+    threads.emplace_back([&, t, firstBatch, lastBatch]() {
+      for (int64_t batch = firstBatch; batch < lastBatch; ++batch) {
+        const int64_t begin = batch * kBatchSize;
+        const auto size = static_cast<vector_size_t>(
+            std::min<int64_t>(kBatchSize, numRows - begin));
+        std::mt19937_64 rng(42 + begin);
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
+        auto keys = BaseVector::create<FlatVector<int64_t>>(
+            BIGINT(), size, outputPool.get());
+        auto values = BaseVector::create<FlatVector<int64_t>>(
+            BIGINT(), size, outputPool.get());
+        for (vector_size_t i = 0; i < size; ++i) {
+          const int64_t globalRow = begin + i;
+          // Seed pass: the first 'numGroups' rows emit each group exactly once,
+          // so the full key space is always populated and the group-table size
+          // is held constant across skew (skew then varies only the access
+          // concentration of the remaining rows, not how many groups exist).
+          // Requires numRows >= numGroups, which the configured scale factors
+          // satisfy. Remaining rows draw their rank from the Zipf CDF.
+          const int64_t rank = globalRow < numGroups
+              ? globalRow
+              : std::upper_bound(cdf.begin(), cdf.end(), uniform(rng)) -
+                  cdf.begin();
+          // Scatter ranks over the key space so hot keys are not adjacent. The
+          // odd multiplier is invertible mod 2^64, so distinct ranks stay
+          // distinct.
+          keys->set(
+              i,
+              static_cast<int64_t>(
+                  static_cast<uint64_t>(rank + 1) * 0x9E3779B97F4A7C15ULL));
+          values->set(i, static_cast<int64_t>(uniform(rng) * 100));
+        }
+        batches[batch] = std::make_shared<RowVector>(
+            outputPool.get(),
+            rowType,
+            nullptr,
+            size,
+            std::vector<VectorPtr>{std::move(keys), std::move(values)});
+        threadBytes[t] += batches[batch]->retainedSize();
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  int64_t numBytes = 0;
+  for (const auto bytes : threadBytes) {
+    numBytes += bytes;
   }
   std::cout << fmt::format(
                    "generated {} zipf rows ({} groups, skew {}) in {} "
@@ -311,7 +387,7 @@ TrialMetrics runTrial(
   exec::CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
-  params.maxDrivers = 1;
+  params.maxDrivers = std::max(1, FLAGS_num_drivers);
   params.copyResult = true;
 
   if (FLAGS_config == "dram" || isCxlConfig()) {

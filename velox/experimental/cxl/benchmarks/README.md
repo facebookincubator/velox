@@ -11,9 +11,14 @@ see whether building the table in DRAM and relocating it to CXL under pressure
 (`CxlHashAggregation`) beats the alternatives. Keys are drawn Zipf(`--zipf_skew`)
 over `--zipf_groups` ranks and scattered across the key space, so a few hot
 groups take most updates in random arrival order — the hot/cold split that
-DRAM-to-CXL tiering targets. `--scale_factor` sizes the input: `1` is ~1 GB of
-`(k, v)` rows (16 B/row). The plan is driven Velox-local (`Values` →
-aggregation), so every config is apples-to-apples in one process.
+DRAM-to-CXL tiering targets. A seed pass emits each of the `--zipf_groups` ranks
+exactly once before sampling, so the whole key space is always populated and the
+group-table footprint is held constant across skew — skew then varies only the
+access concentration, not how many groups exist (this requires rows ≥ groups).
+`--scale_factor` sizes the input: `1` is ~1 GB of `(k, v)` rows (16 B/row). The
+plan is driven Velox-local (`Values` → aggregation), single-driver by default;
+`--num_drivers=N` repartitions the input by key across `N` drivers for a parallel
+run. Every config is apples-to-apples in one process.
 
 ## Configurations
 
@@ -142,8 +147,11 @@ ceiling) and bracket the sweep just under it.
 | 16M | ~256 MB | ~800 MB | `400 550 700 850` | `8192` |
 
 Pick `--scale_factor` so rows ≫ groups (SF1 is ~67M rows over the default 1M
-groups, ~67 hits per group on average and far more on the hot head). With groups
-≳ rows most groups are hit once and the skew that distinguishes C from B is lost.
+groups, ~67 hits per group on average and far more on the hot head). The seed
+pass requires rows ≥ groups: it emits each group once up front, so the table is
+fully populated and its footprint is constant across skew; the remaining rows
+sharpen the hot/cold split that distinguishes C from B. With fewer rows than
+groups only the first `rows` ranks would be emitted, shrinking the table.
 `CXL_MB` must hold the relocated payload (whole table minus the DRAM cap), so
 size it to the CXL device.
 
