@@ -2425,8 +2425,10 @@ bool registerBuiltinFunctions(const std::string& prefix) {
           .argumentType("date")
           .build()};
 
-      ExtractComponentFactory{cudf::datetime::datetime_component::YEAR},
-      timestampDateIntegerSignatures);
+      registerCudfFunction(
+          prefix + "year",
+          ExtractComponentFactory{cudf::datetime::datetime_component::YEAR},
+          timestampDateIntegerSignatures);
 
       registerCudfFunction(
           prefix + "month",
