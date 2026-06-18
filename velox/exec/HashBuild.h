@@ -306,9 +306,10 @@ class HashBuild final : public Operator {
 
   State state_{State::kRunning};
 
-  // For hash table caching: the cache key passed in at construction.
+  // For hash table caching: the resolved cache key from HashJoinNode.
   // If set, this operator coordinates via HashTableCache.
-  // Key format: "queryId:planNodeId"
+  // If HashJoinNode.cacheKey is not set, falls back to the legacy
+  // "queryId:planNodeId" format.
   std::string cacheKey_;
 
   // For hash table caching: cached entry containing the shared table and pool.

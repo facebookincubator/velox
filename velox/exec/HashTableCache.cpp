@@ -143,13 +143,13 @@ void HashTableCache::drop(const std::string& key) {
   }
 }
 
-std::shared_ptr<HashTableCacheEntry> HashTableCache::injectTable(
+std::shared_ptr<HashTableCacheEntry> HashTableCache::add(
     const std::string& key,
     std::shared_ptr<BaseHashTable> table,
     bool hasNullKeys,
     std::shared_ptr<memory::MemoryPool> tablePool) {
-  VELOX_CHECK_NOT_NULL(table, "Cannot inject null table");
-  VELOX_CHECK_NOT_NULL(tablePool, "Cannot inject with null pool");
+  VELOX_CHECK_NOT_NULL(table, "Cannot add null table");
+  VELOX_CHECK_NOT_NULL(tablePool, "Cannot add with null pool");
 
   std::vector<ContinuePromise> promises;
   std::shared_ptr<HashTableCacheEntry> entry;

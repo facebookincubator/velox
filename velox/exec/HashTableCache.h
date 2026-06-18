@@ -73,11 +73,11 @@ class HashTableCache {
   /// Removes a cache entry.
   void drop(const std::string& key);
 
-  /// Injects an externally built hash table.
+  /// Adds an externally built hash table.
   ///
   /// This is used when an external system (e.g., Gluten) pre-builds a hash
   /// table and wants Velox tasks to reuse it via HashBuild's cache path.
-  std::shared_ptr<HashTableCacheEntry> injectTable(
+  std::shared_ptr<HashTableCacheEntry> add(
       const std::string& key,
       std::shared_ptr<BaseHashTable> table,
       bool hasNullKeys,

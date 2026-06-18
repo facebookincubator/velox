@@ -314,7 +314,7 @@ TEST_F(HashTableCacheTest, builderFailureUnblocksWaiters) {
   cache->drop(key);
 }
 
-TEST_F(HashTableCacheTest, injectTableCreatesEntryAndIsDiscoverable) {
+TEST_F(HashTableCacheTest, addCreatesEntryAndIsDiscoverable) {
   auto* cache = HashTableCache::instance();
   const std::string key = "inject1";
   trackKey(key);
@@ -323,7 +323,7 @@ TEST_F(HashTableCacheTest, injectTableCreatesEntryAndIsDiscoverable) {
   auto tablePool = tableRoot->addLeafChild("leaf");
   auto table = makeTestJoinHashTable(tablePool.get());
 
-  auto entry = cache->injectTable(key, table, true, tablePool);
+  auto entry = cache->add(key, table, true, tablePool);
   ASSERT_NE(entry, nullptr);
   EXPECT_TRUE(entry->buildComplete);
   EXPECT_EQ(entry->builderTaskId, "external_gluten");
@@ -339,7 +339,7 @@ TEST_F(HashTableCacheTest, injectTableCreatesEntryAndIsDiscoverable) {
   EXPECT_FALSE(future.valid());
 }
 
-TEST_F(HashTableCacheTest, injectTableUnblocksExistingWaiters) {
+TEST_F(HashTableCacheTest, addUnblocksExistingWaiters) {
   auto* cache = HashTableCache::instance();
   const std::string key = "inject2";
   trackKey(key);
@@ -360,7 +360,7 @@ TEST_F(HashTableCacheTest, injectTableUnblocksExistingWaiters) {
   EXPECT_FALSE(waiterFuture2.isReady());
 
   auto table = makeTestJoinHashTable(entry->tablePool.get());
-  auto injectedEntry = cache->injectTable(key, table, false, entry->tablePool);
+  auto injectedEntry = cache->add(key, table, false, entry->tablePool);
 
   EXPECT_EQ(injectedEntry, entry);
   EXPECT_TRUE(entry->buildComplete);
@@ -372,7 +372,7 @@ TEST_F(HashTableCacheTest, injectTableUnblocksExistingWaiters) {
   EXPECT_TRUE(waiterFuture2.isReady());
 }
 
-TEST_F(HashTableCacheTest, injectTableDoesNotOverwriteCompleteEntry) {
+TEST_F(HashTableCacheTest, addDoesNotOverwriteCompleteEntry) {
   auto* cache = HashTableCache::instance();
   const std::string key = "inject3";
   trackKey(key);
@@ -380,7 +380,7 @@ TEST_F(HashTableCacheTest, injectTableDoesNotOverwriteCompleteEntry) {
   auto root1 = memory::memoryManager()->addRootPool("HashTableCacheInject3_1");
   auto pool1 = root1->addLeafChild("leaf");
   auto table1 = makeTestJoinHashTable(pool1.get());
-  auto entry1 = cache->injectTable(key, table1, false, pool1);
+  auto entry1 = cache->add(key, table1, false, pool1);
   ASSERT_NE(entry1, nullptr);
   ASSERT_TRUE(entry1->buildComplete);
   EXPECT_EQ(entry1->table, table1);
@@ -389,7 +389,7 @@ TEST_F(HashTableCacheTest, injectTableDoesNotOverwriteCompleteEntry) {
   auto root2 = memory::memoryManager()->addRootPool("HashTableCacheInject3_2");
   auto pool2 = root2->addLeafChild("leaf");
   auto table2 = makeTestJoinHashTable(pool2.get());
-  auto entry2 = cache->injectTable(key, table2, true, pool2);
+  auto entry2 = cache->add(key, table2, true, pool2);
 
   EXPECT_EQ(entry2, entry1);
   EXPECT_EQ(entry2->table, table1);
