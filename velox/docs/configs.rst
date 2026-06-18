@@ -741,9 +741,9 @@ index caching, file handle caching, table writes, and file-format-specific
 reader and writer behavior. In the common table below, property names are shown
 without the ``hive.`` prefix; for example, ``max-partitions-per-writers`` is
 configured as ``hive.max-partitions-per-writers``. In the ORC, Parquet, and
-Nimble tables, the listed value is a suffix that is appended to the prefix
-shown in the section title; for example, ORC ``writer.stripe-max-size`` is
-configured as ``hive.orc.writer.stripe-max-size``.
+Nimble tables, the listed value is usually appended to the prefix shown in the
+section title. When an option uses a legacy ``orc.`` or ``nimble.`` key
+instead, the description calls that out explicitly.
 
 Properties of type ``capacity`` accept human-readable size strings such as ``512kB``, ``128MB``, ``1GB``, etc.
 Properties of type ``integer`` with byte-valued defaults (shown as ``256KB``, ``8MB``, etc. for readability)
@@ -960,13 +960,14 @@ ORC Options (prefix ``hive.orc.``)
    * - ``use-column-names``
      - bool
      - false
-     - Map ORC table field names to file field names using names, not indices. Session: ``orc_use_column_names``.
+     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``; do not prepend ``hive.``. Session: ``orc_use_column_names``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
-       Set to 0 for adaptive mode. Session: ``orc_footer_speculative_io_size``.
+       Set to 0 for adaptive mode. Configure as ``orc.footer-speculative-io-size``; do not prepend ``hive.``.
+       Session: ``orc_footer_speculative_io_size``.
    * - ``writer.stripe-max-size``
      - string
      - 64M
@@ -1124,7 +1125,8 @@ Nimble Options (prefix ``hive.nimble.``)
      - 8MB
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
-       Set to 0 for adaptive mode. Session: ``nimble_footer_speculative_io_size``.
+       Set to 0 for adaptive mode. Configure as ``nimble.footer-speculative-io-size``; do not prepend ``hive.``.
+       Session: ``nimble_footer_speculative_io_size``.
    * - ``lazy-column-io``
      - boolean
      - false
@@ -1132,15 +1134,16 @@ Nimble Options (prefix ``hive.nimble.``)
        Lazy IO columns are loaded through a separate buffered input other than the one used by early
        materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
-       allow lazy IO across stripes. Session: ``nimble.lazy_column_io``.
+       allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
+       Session: ``nimble.lazy_column_io``.
    * - ``string-decoder-zero-copy``
      - bool
      - false
-     - Enable zero-copy string decoding in Nimble selective reader. Session: ``nimble_string_decoder_zero_copy``.
+     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false
-     - Preserve dictionary encoding for Nimble string column reads. Session: ``nimble_preserve_dictionary_encoding``.
+     - Preserve dictionary encoding for Nimble string column reads. Configure as ``nimble.preserve-dictionary-encoding``; do not prepend ``hive.``. Session: ``nimble_preserve_dictionary_encoding``.
    * - ``writer.max-target-file-size``
      - capacity
      - 0B
