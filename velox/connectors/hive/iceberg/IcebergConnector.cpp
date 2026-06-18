@@ -19,6 +19,7 @@
 #include <numeric>
 
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
@@ -57,6 +58,29 @@ std::unique_ptr<DataSource> IcebergConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  auto icebergTableHandle =
+      std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
+  VELOX_CHECK_NOT_NULL(icebergTableHandle, "IcebergTableHandle is null");
+
+  if (icebergTableHandle->isChangelogQuery()) {
+    // Create base data source that reads data files
+    auto baseDataSource = std::make_unique<IcebergDataSource>(
+        icebergTableHandle->dataColumns(),
+        tableHandle,
+        icebergTableHandle->getDataColumnHandles(),
+        &fileHandleFactory_,
+        ioExecutor_,
+        connectorQueryCtx,
+        hiveConfig_);
+
+    // Wrap with changelog data source that transforms output
+    return std::make_unique<IcebergChangelogDataSource>(
+        std::move(baseDataSource),
+        outputType,
+        columnHandles); // Changelog schema
+  }
+
+  // Regular query - return base data source
   return std::make_unique<IcebergDataSource>(
       outputType,
       tableHandle,

@@ -188,7 +188,10 @@ class HiveTableHandle : public FileTableHandle {
       const std::unordered_map<std::string, std::string>& tableParameters = {},
       std::vector<HiveColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
-      std::string dbName = "");
+      std::string dbName = "",
+      bool isChangelogQuery = false,
+      const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+          dataColumnHandles = {});
 
   /// Legacy constructor without indexColumns parameter for backward
   /// compatibility.
@@ -259,6 +262,15 @@ class HiveTableHandle : public FileTableHandle {
     return dbName_;
   }
 
+  bool isChangelogQuery() const {
+    return isChangelogQuery_;
+  }
+
+  const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+  getDataColumnHandles() const {
+    return dataColumnHandles_;
+  }
+
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -279,6 +291,14 @@ class HiveTableHandle : public FileTableHandle {
   const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
   const std::string dbName_;
+  /// Set to true when querying changelog metadata table.
+  const bool isChangelogQuery_;
+  /// DataColumnHandles_ will be non-empty only when isChangelogQuery_ is true.
+  /// These are base table columns' assignments that will be passed when
+  /// changelog table is queried. It is the mapping of dataColumns_ to their
+  /// column handles.
+  const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>
+      dataColumnHandles_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;

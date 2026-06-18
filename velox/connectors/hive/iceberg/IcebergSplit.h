@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitInfo.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -36,6 +37,10 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// number. A value of 0 means "unassigned" (legacy V1 tables) and disables
   /// sequence number filtering.
   int64_t dataSequenceNumber{0};
+
+  /// Changelog split information. If present, this split represents a changelog
+  /// table query and contains metadata about the changelog operation.
+  std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo;
 
   HiveIcebergSplit(
       const std::string& connectorId,
@@ -51,7 +56,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      int64_t dataSequenceNumber = 0);
+      int64_t dataSequenceNumber = 0,
+      std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo = nullptr);
 
   // For tests only
   HiveIcebergSplit(
@@ -69,7 +75,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       std::vector<IcebergDeleteFile> deletes = {},
       const std::unordered_map<std::string, std::string>& infoColumns = {},
       std::optional<FileProperties> fileProperties = std::nullopt,
-      int64_t dataSequenceNumber = 0);
+      int64_t dataSequenceNumber = 0,
+      std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo = nullptr);
 };
 
 /// Builds Iceberg splits with named parameters.
@@ -124,6 +131,12 @@ class IcebergSplitBuilder {
     return *this;
   }
 
+  IcebergSplitBuilder& changelogSplitInfo(
+      std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo) {
+    changelogSplitInfo_ = std::move(changelogSplitInfo);
+    return *this;
+  }
+
   std::shared_ptr<HiveIcebergSplit> build() const;
 
  private:
@@ -136,6 +149,7 @@ class IcebergSplitBuilder {
   std::unordered_map<std::string, std::string> infoColumns_;
   std::vector<IcebergDeleteFile> deleteFiles_;
   int64_t dataSequenceNumber_{0};
+  std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

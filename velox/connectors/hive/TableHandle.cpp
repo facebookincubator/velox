@@ -286,7 +286,10 @@ HiveTableHandle::HiveTableHandle(
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
     double sampleRate,
-    std::string dbName)
+    std::string dbName,
+    bool isChangelogQuery,
+    const std::unordered_map<std::string, velox::connector::ColumnHandlePtr>&
+        dataColumnHandles)
     : FileTableHandle(std::move(connectorId)),
       tableName_(tableName),
       subfieldFilters_(std::move(subfieldFilters)),
@@ -296,7 +299,9 @@ HiveTableHandle::HiveTableHandle(
       indexColumns_(std::move(indexColumns)),
       tableParameters_(tableParameters),
       filterColumnHandles_(std::move(filterColumnHandles)),
-      dbName_(std::move(dbName)) {
+      dbName_(std::move(dbName)),
+      isChangelogQuery_(isChangelogQuery),
+      dataColumnHandles_(dataColumnHandles) {
   VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
   VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
 }
@@ -377,6 +382,24 @@ std::string HiveTableHandle::toString() const {
     }
     out << "]";
   }
+
+  if (isChangelogQuery_) {
+    out << ", isChangelogQuery: [" << isChangelogQuery_ << "]";
+  }
+
+  if (!dataColumnHandles_.empty()) {
+    out << ", data column handles: [";
+    bool firstParam = true;
+    for (const auto& param : dataColumnHandles_) {
+      if (!firstParam) {
+        out << ", ";
+      }
+      out << param.first << ":" << param.second->toString();
+      firstParam = false;
+    }
+    out << "]";
+  }
+
   return out.str();
 }
 
@@ -427,6 +450,14 @@ folly::dynamic HiveTableHandle::serialize() const {
   if (!dbName_.empty()) {
     obj["dbName"] = dbName_;
   }
+
+  obj["isChangelogQuery"] = isChangelogQuery_;
+
+  folly::dynamic dataColumnHandles = folly::dynamic::object;
+  for (const auto& param : dataColumnHandles_) {
+    dataColumnHandles[param.first] = param.second->serialize();
+  }
+  obj["dataColumnHandles"] = dataColumnHandles;
 
   return obj;
 }
@@ -490,6 +521,21 @@ ConnectorTableHandlePtr HiveTableHandle::create(
     dbName = it->second.asString();
   }
 
+  bool isChangelogQuery;
+  if (auto it = obj.find("isChangelogQuery"); it != obj.items().end()) {
+    isChangelogQuery = it->second.asBool();
+  }
+
+  std::unordered_map<std::string, velox::connector::ColumnHandlePtr>
+      dataColumnHandles{};
+  const auto& dataColumnHandlesObj = obj["dataColumnHandles"];
+  for (const auto& key : dataColumnHandlesObj.keys()) {
+    const auto& value = dataColumnHandlesObj[key];
+    dataColumnHandles.emplace(
+        key.asString(),
+        ISerializable::deserialize<HiveColumnHandle>(value, context));
+  }
+
   return std::make_shared<const HiveTableHandle>(
       connectorId,
       tableName,
@@ -500,7 +546,9 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       tableParameters,
       std::move(filterColumnHandles),
       sampleRate,
-      std::move(dbName));
+      std::move(dbName),
+      isChangelogQuery,
+      dataColumnHandles);
 }
 
 void HiveTableHandle::registerSerDe() {
