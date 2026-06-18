@@ -1317,7 +1317,11 @@ void Task::initializePartitionOutput() {
   // Mirror the output-side capability check for input (Exchange) nodes the
   // coordinator annotated for UCX: the same worker-level UCX capability signal
   // (registry presence) governs the receive side, so surface a missing
-  // capability as a deployment error at task start.
+  // capability as a deployment error at task start. The transport annotation
+  // string is used directly as the output buffer manager registry id here and
+  // below; that "annotation == registry key" identity is the contract that lets
+  // a single registry presence check answer the capability question for both
+  // the receive and send sides.
   for (const auto& [exchangeNodeId, annotation] :
        planFragment_.inputTransportTypes) {
     if (annotation == core::TransportKind::kUcx &&
