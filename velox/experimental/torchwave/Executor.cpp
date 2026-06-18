@@ -123,6 +123,14 @@ void initialize() {
     return;
   }
   facebook::velox::wave::setDevice(device);
+  // Run the one-time NVRTC/system-header initialization here, on the
+  // (main) thread that sets up the executor, unless it was already done
+  // elsewhere. ensureInit() touches the filesystem and publishes the shared
+  // /tmp/wavesystemheaders.txt; doing it lazily on a Wave compile-pool thread
+  // inside a heavyweight host (NCCL/Thrift/folly) is what hangs warmup()
+  // (T275179010). initialize() is idempotent, so this is a cheap no-op if the
+  // header init has already happened.
+  facebook::velox::wave::CompiledKernel::initialize();
   auto* g = globals();
   // Unit allocation size for host-device communication buffers. Tensors are
   // allocated separately from the PyTorch caching allocator.

@@ -1232,7 +1232,12 @@ CompositeKernel::CompositeKernel(
     }
   }
 
-  // Only compile the kernel if a GPU is available.
+  // Only compile the kernel if a GPU is available. The one-time
+  // NVRTC/system-header initialization (CompiledKernel::initialize()) is run
+  // eagerly on the main thread by torch::wave::initialize() before any kernel
+  // is compiled, so the async compile enqueued below never triggers it lazily
+  // on a Wave compile-pool thread (which deadlocks warmup() in heavyweight
+  // NCCL/Thrift/folly hosts -- T275179010).
   if (facebook::velox::wave::currentDevice()) {
     auto genFunc = [code = std::move(code),
                     entryPoint,
