@@ -46,7 +46,7 @@ class FullSignatureBinder : public SignatureBinderBase {
       const exec::FunctionSignature& signature,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& returnType)
-      : SignatureBinderBase(signature) {
+      : SignatureBinderBase(signature, TypeCoercer::defaults()) {
     if (signature_.argumentTypes().size() != argTypes.size()) {
       return;
     }
@@ -729,6 +729,30 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::generateSwitchArgs(
   return inputExpressions;
 }
 
+std::vector<core::TypedExprPtr> ExpressionFuzzer::generateCaseArgs(
+    const CallableSignature& input) {
+  VELOX_CHECK_EQ(
+      input.args.size(),
+      3,
+      "Three inputs are expected from the template signature.");
+  size_t cases = rand32(1, 5);
+  bool useFinalElse = vectorFuzzer_->coinToss(0.5);
+
+  auto subjectType = input.args[0];
+  auto thenClauseType = input.args[2];
+  std::vector<core::TypedExprPtr> inputExpressions;
+  // Subject expression.
+  inputExpressions.push_back(generateArg(subjectType));
+  for (int case_idx = 0; case_idx < cases; case_idx++) {
+    inputExpressions.push_back(generateArg(subjectType)); // WHEN value
+    inputExpressions.push_back(generateArg(thenClauseType)); // THEN result
+  }
+  if (useFinalElse) {
+    inputExpressions.push_back(generateArg(thenClauseType));
+  }
+  return inputExpressions;
+}
+
 ExpressionFuzzer::FuzzedExpressionData ExpressionFuzzer::fuzzExpressions(
     const RowTypePtr& outType) {
   state_.reset();
@@ -854,6 +878,9 @@ std::vector<core::TypedExprPtr> ExpressionFuzzer::getArgsForCallable(
   // specified through argValuesGenerators_.
   if (callable.name == "switch") {
     return generateSwitchArgs(callable);
+  }
+  if (callable.name == "case") {
+    return generateCaseArgs(callable);
   }
 
   auto funcIt = argValuesGenerators_.find(callable.name);

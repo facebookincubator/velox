@@ -245,10 +245,11 @@ void FileIndexReader::parseIndexLookupConditions() {
 std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NOT_NULL(hiveSplit_);
 
-  dwio::common::ReaderOptions readerOpts(
-      connectorQueryCtx_->memoryPool(),
-      ioStatistics_.get(),
-      ioStatistics_.get());
+  dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
+  // TODO: Use separate IoStatistics for data and metadata.
+  readerOpts.setDataIoStats(ioStatistics_);
+  readerOpts.setMetadataIoStats(ioStatistics_);
+  readerOpts.setIndexIoStats(ioStatistics_);
   hive::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
@@ -256,6 +257,7 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
       hiveSplit_,
       hiveSplit_->serdeParameters,
       readerOpts);
+  readerOpts.setLoadClusterIndex(true);
   readerOpts.setScanSpec(scanSpec_);
   readerOpts.setFileFormat(hiveSplit_->fileFormat);
   VELOX_CHECK_NULL(readerOpts.randomSkip());

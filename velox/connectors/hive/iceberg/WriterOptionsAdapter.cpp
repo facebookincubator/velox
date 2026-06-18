@@ -18,10 +18,18 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/writer/WriterConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
+
+// Manifest format string emitted in Iceberg commit messages for files that
+// share the ORC on-disk family. Iceberg's manifest vocabulary has no DWRF or
+// NIMBLE enum, so DWRF and NIMBLE files are reported as "ORC" per the
+// cross-engine convention shared with the Java planner (see
+// FileFormat.{DWRF,NIMBLE}.toIceberg() in presto-facebook-iceberg).
+constexpr std::string_view kOrcManifestFormat{"ORC"};
 
 class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
  public:
@@ -40,15 +48,17 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     // kParquetSerdeTimestampUnit and kParquetSerdeTimestampTimezone in
     // velox/dwio/parquet/writer/Writer.h. The value "6" represents
     // microseconds (TimestampPrecision::kMicroseconds).
-    options.serdeParameters["parquet.writer.timestamp.unit"] = "6";
-    options.serdeParameters["parquet.writer.timestamp.timezone"] = "";
+    options.serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit] =
+        "6";
+    options.serdeParameters
+        [parquet::WriterConfig::kParquetSerdeTimestampTimezone] = "";
   }
 };
 
 class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
  public:
   std::string manifestFormatString() const override {
-    return "ORC";
+    return std::string{kOrcManifestFormat};
   }
 
   void applyPostConfigs(dwio::common::WriterOptions& options) const override {
@@ -66,18 +76,35 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
   }
 };
 
+class NimbleWriterOptionsAdapter : public WriterOptionsAdapter {
+ public:
+  // Reports NIMBLE files as ORC in the manifest so cross-engine readers
+  // (Presto coordinator, catalog) can interpret the commit message. The
+  // actual on-disk format is identified at read time via the file
+  // extension and on-disk magic bytes, not via this string.
+  std::string manifestFormatString() const override {
+    return std::string{kOrcManifestFormat};
+  }
+};
+
 } // namespace
 
 std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
     dwio::common::FileFormat format) {
-  // ORC is intentionally excluded until a dedicated ORC end-to-end test
-  // exists.
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (format) {
     case dwio::common::FileFormat::PARQUET:
       return std::make_unique<ParquetWriterOptionsAdapter>();
+    case dwio::common::FileFormat::ORC:
     case dwio::common::FileFormat::DWRF:
+      // ORC and DWRF share the same on-disk family — Meta's DWRF is an
+      // ORC implementation. Iceberg manifests have no DWRF enum, so both
+      // are reported as "ORC" per the cross-engine convention shared
+      // with the Java planner (see FileFormat.DWRF.toIceberg() in
+      // presto-facebook-iceberg).
       return std::make_unique<DwrfWriterOptionsAdapter>();
+    case dwio::common::FileFormat::NIMBLE:
+      return std::make_unique<NimbleWriterOptionsAdapter>();
     default:
       return nullptr;
   }
@@ -92,7 +119,7 @@ std::string toManifestFormatString(dwio::common::FileFormat format) {
   VELOX_CHECK_NOT_NULL(
       adapter,
       "Unsupported file format for Iceberg manifest: {}",
-      dwio::common::toString(format));
+      dwio::common::FileFormatName::toName(format));
   return adapter->manifestFormatString();
 }
 

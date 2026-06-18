@@ -19,8 +19,12 @@ set(
   IcebergColumnHandle.cpp
   IcebergConfig.cpp
   IcebergConnector.cpp
+  IcebergDataFileStatistics.cpp
   IcebergDataSink.cpp
   IcebergDataSource.cpp
+  IcebergDeletionVectorSink.cpp
+  IcebergMergeProcessor.cpp
+  IcebergMergeSink.cpp
   IcebergPartitionName.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
@@ -30,6 +34,10 @@ set(
   TransformExprBuilder.cpp
   WriterOptionsAdapter.cpp
 )
+
+if(VELOX_ENABLE_PARQUET)
+  list(APPEND ICEBERG_SOURCES IcebergParquetStatsCollector.cpp)
+endif()
 
 velox_add_library(
   velox_hive_iceberg_splitreader
@@ -41,10 +49,15 @@ velox_add_library(
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h
+  IcebergDataFileStatistics.h
   IcebergDataSink.h
   IcebergDataSource.h
   IcebergDeleteFile.h
+  IcebergDeletionVectorSink.h
+  IcebergMergeProcessor.h
+  IcebergMergeSink.h
   IcebergMetadataColumns.h
+  IcebergParquetStatsCollector.h
   IcebergPartitionName.h
   IcebergSplit.h
   IcebergSplitReader.h
@@ -64,7 +77,7 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_parquet_field_id)
+  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_arrow_parquet_writer)
 endif()
 
 if(${VELOX_BUILD_TESTING})

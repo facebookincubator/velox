@@ -16,6 +16,7 @@
 #include <folly/container/F14Map.h>
 #include <gtest/gtest.h>
 #include "velox/duckdb/conversion/DuckParser.h"
+#include "velox/parse/Expressions.h"
 #include "velox/parse/IExpr.h"
 
 namespace facebook::velox::core {
@@ -63,6 +64,30 @@ TEST_F(ExprTest, hashMap) {
     EXPECT_EQ(exprs.at(expr1), 5);
     EXPECT_EQ(exprs.at(expr2), 6);
     EXPECT_EQ(exprs.at(expr3), 5);
+  }
+}
+
+TEST_F(ExprTest, tryAsRootColumn) {
+  // Top-level field access on an input column.
+  {
+    auto expr = parse("a");
+    const auto* field = FieldAccessExpr::tryAsRootColumn(expr);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(field->name(), "a");
+  }
+
+  // Dereference (a.b) is a FieldAccess whose input is not an InputExpr.
+  {
+    auto expr = parse("a.b");
+    EXPECT_EQ(FieldAccessExpr::tryAsRootColumn(expr), nullptr);
+  }
+
+  // Non-FieldAccess expressions are not root columns.
+  {
+    EXPECT_EQ(FieldAccessExpr::tryAsRootColumn(parse("a + 1")), nullptr);
+    EXPECT_EQ(FieldAccessExpr::tryAsRootColumn(parse("42")), nullptr);
+    EXPECT_EQ(
+        FieldAccessExpr::tryAsRootColumn(parse("cast(a as bigint)")), nullptr);
   }
 }
 

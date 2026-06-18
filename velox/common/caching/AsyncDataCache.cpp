@@ -486,9 +486,9 @@ void CacheShard::acquireEvictedData(
     const uint64_t bytes = entry->size_;
     if (bytesToAcquire > 0) {
       bytesToAcquire = bytes > bytesToAcquire ? 0 : bytesToAcquire - bytes;
-      acquired.contiguous.emplace_back(entry->contiguousData_, bytes);
+      acquired.byteAllocations.emplace_back(entry->contiguousData_, bytes);
     } else {
-      toFree.contiguous.emplace_back(entry->contiguousData_, bytes);
+      toFree.byteAllocations.emplace_back(entry->contiguousData_, bytes);
     }
     entry->contiguousData_ = nullptr;
     largeEvicted += memory::AllocationTraits::pageBytes(
@@ -498,9 +498,9 @@ void CacheShard::acquireEvictedData(
     const auto bytes = entry->nonContiguousData_.byteSize();
     if (bytesToAcquire > 0) {
       bytesToAcquire = bytes > bytesToAcquire ? 0 : bytesToAcquire - bytes;
-      acquired.nonContiguous.appendMove(entry->nonContiguousData());
+      acquired.nonContiguousAllocs.appendMove(entry->nonContiguousData());
     } else {
-      toFree.nonContiguous.appendMove(entry->nonContiguousData());
+      toFree.nonContiguousAllocs.appendMove(entry->nonContiguousData());
     }
     VELOX_DCHECK(entry->nonContiguousData().empty());
     largeEvicted += bytes;
@@ -746,16 +746,16 @@ bool CacheShard::removeFileEntries(
         continue;
       }
 
-      numAgedOut_++;
+      ++numAgedOut_;
       ++numRemoved;
       if (cacheEntry->contiguousData_ != nullptr) {
         pagesRemoved += memory::AllocationTraits::numPages(cacheEntry->size_);
-        toFree.contiguous.emplace_back(
+        toFree.byteAllocations.emplace_back(
             cacheEntry->contiguousData_, cacheEntry->size_);
         cacheEntry->contiguousData_ = nullptr;
       } else {
         pagesRemoved += cacheEntry->nonContiguousData().numPages();
-        toFree.nonContiguous.appendMove(cacheEntry->nonContiguousData());
+        toFree.nonContiguousAllocs.appendMove(cacheEntry->nonContiguousData());
       }
       removeEntryLocked(cacheEntry.get());
       emptySlots_.push_back(entryIndex);

@@ -159,9 +159,17 @@ class FunctionExpression : public CudfExpression {
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
+  static std::unique_ptr<cudf::column> makeStructChildColumn(
+      ColumnOrView& structColumn,
+      cudf::size_type childIndex,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  // TODO: Remove once FieldReference can resolve index directly from RowType.
+  int32_t fieldIndex_{-1};
 
   RowTypePtr inputRowSchema_;
 };
@@ -196,5 +204,10 @@ class SessionTimeZoneScope {
 /// Return the session timezone set by the innermost SessionTimeZoneScope,
 /// or nullptr if none is active.
 const tz::TimeZone* getSessionTimeZone();
+
+/// Registers the Presto date_add GPU function under the given prefix. Called by
+/// registerPrestoFunctions(); kept separate because the implementation lives in
+/// ExpressionEvaluator.cpp where its file-local helpers are defined.
+void registerPrestoDateAddFunction(const std::string& prefix);
 
 } // namespace facebook::velox::cudf_velox

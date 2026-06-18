@@ -268,7 +268,7 @@ bool matchTypedCallAgainstSignatures(
   }
   for (const auto& sig : sigs) {
     std::vector<Coercion> coercions(n);
-    exec::SignatureBinder binder(*sig, argTypes);
+    exec::SignatureBinder binder(*sig, argTypes, TypeCoercer::defaults());
     if (!binder.tryBindWithCoercions(coercions)) {
       continue;
     }

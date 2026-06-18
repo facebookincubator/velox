@@ -176,7 +176,8 @@ SimpleFunctionRegistry::resolveFunction(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
     bool allowCoercion,
-    std::vector<TypePtr>& coercions) const {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) const {
   using Candidate = std::pair<const FunctionEntry*, TypePtr>;
 
   std::optional<Candidate> selectedCandidate;
@@ -186,7 +187,7 @@ SimpleFunctionRegistry::resolveFunction(
       std::optional<uint32_t> priority;
 
       for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
-        SignatureBinder binder(candidateSignature, argTypes);
+        SignatureBinder binder(candidateSignature, argTypes, coercer);
 
         std::vector<Coercion> requiredCoercions;
 

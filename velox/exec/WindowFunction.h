@@ -18,6 +18,7 @@
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/WindowPartition.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/type/TypeCoercer.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
@@ -191,10 +192,12 @@ TypePtr resolveWindowResultType(
 /// @param coercions A list of optional type coercions applied to resolve the
 /// function. Contains one entry per argument. The entry is null if no coercion
 /// is required for that argument.
+/// @param coercer Coercion rule set to use when resolving type coercions.
 TypePtr resolveWindowResultTypeWithCoercions(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 struct WindowFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;

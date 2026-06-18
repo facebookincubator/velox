@@ -18,16 +18,62 @@
 
 #include <algorithm>
 
+#include <folly/ScopeGuard.h>
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox::dwio::common;
+
+namespace {
+
+// Fills null slots in a BIGINT child vector with values produced by valueAt(i),
+// where i is the output row index. If the whole vector is a null constant,
+// replaces it with a flat vector. If only some slots are null, copies non-null
+// values and fills null slots with valueAt(i). No-op when no nulls are present.
+template <typename F>
+void fillNullsWithInt64(
+    facebook::velox::VectorPtr& child,
+    facebook::velox::memory::MemoryPool* pool,
+    F valueAt) {
+  using namespace facebook::velox;
+  child = BaseVector::loadedVectorShared(child);
+  const auto vectorSize = child->size();
+  if (vectorSize == 0) {
+    return;
+  }
+  if (child->isConstantEncoding() && child->isNullAt(0)) {
+    auto flat =
+        BaseVector::create<FlatVector<int64_t>>(BIGINT(), vectorSize, pool);
+    for (vector_size_t i = 0; i < vectorSize; ++i) {
+      flat->set(i, valueAt(i));
+    }
+    child = std::move(flat);
+  } else if (child->mayHaveNulls()) {
+    const DecodedVector decoded(*child);
+    if (decoded.mayHaveNulls()) {
+      auto flat =
+          BaseVector::create<FlatVector<int64_t>>(BIGINT(), vectorSize, pool);
+      for (vector_size_t i = 0; i < vectorSize; ++i) {
+        if (decoded.isNullAt(i)) {
+          flat->set(i, valueAt(i));
+        } else {
+          flat->set(i, decoded.valueAt<int64_t>(i));
+        }
+      }
+      child = std::move(flat);
+    }
+  }
+}
+
+} // namespace
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
@@ -66,7 +112,8 @@ IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<IoStats>& ioStats,
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
-    const std::shared_ptr<common::ScanSpec>& scanSpec)
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    std::shared_ptr<ColumnHandleMap> columnHandles)
     : FileSplitReader(
           icebergSplit,
           tableHandle,
@@ -83,24 +130,210 @@ IcebergSplitReader::IcebergSplitReader(
       icebergSplit_(icebergSplit),
       baseReadOffset_(0),
       splitOffset_(0),
-      deleteBitmap_(nullptr) {}
+      deleteBitmap_(nullptr),
+      columnHandles_(std::move(columnHandles)) {}
+
+void IcebergSplitReader::configureBaseReaderOptions() {
+  FileSplitReader::configureBaseReaderOptions();
+  const auto fileFormat = fileSplit_->fileFormat;
+  if (fileFormat != dwio::common::FileFormat::DWRF &&
+      fileFormat != dwio::common::FileFormat::ORC) {
+    // Parquet resolves field ids from physical metadata, not from the
+    // attribute-based kFieldId path.
+    return;
+  }
+  auto fieldIds = buildFieldIds();
+  if (fieldIds.empty()) {
+    return;
+  }
+  baseReaderOpts_.setColumnMappingMode(
+      dwio::common::ColumnMappingMode::kFieldId);
+  baseReaderOpts_.setFieldIds(std::move(fieldIds));
+}
+
+std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
+    const {
+  std::vector<dwio::common::ParquetFieldId> fieldIds;
+  const auto& dataColumns = tableHandle_->dataColumns();
+  if (dataColumns == nullptr || columnHandles_ == nullptr) {
+    return fieldIds;
+  }
+  // Column handles are keyed by output alias; index them by the underlying
+  // data-column name so we can align to dataColumns() order.
+  std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
+  for (const auto& [outputName, handle] : *columnHandles_) {
+    if (auto* icebergHandle =
+            dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
+      handleByName.emplace(icebergHandle->name(), icebergHandle);
+    }
+  }
+  if (handleByName.empty()) {
+    return fieldIds;
+  }
+
+  fieldIds.reserve(dataColumns->size());
+  int32_t sentinelFieldId = -1;
+  for (size_t i = 0; i < dataColumns->size(); ++i) {
+    auto it = handleByName.find(dataColumns->nameOf(static_cast<uint32_t>(i)));
+    if (it != handleByName.end()) {
+      fieldIds.push_back(it->second->field());
+    } else {
+      fieldIds.push_back(dwio::common::ParquetFieldId{sentinelFieldId--, {}});
+    }
+  }
+  return fieldIds;
+}
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
-  createReader();
+  // Temporarily extend the file schema with projected row-lineage columns
+  // (_row_id, _last_updated_sequence_number) so the reader allocates output
+  // slots for them. Scoped to createReader() so getAdaptedRowType() sees the
+  // original schema.
+  {
+    auto originalFileSchema = baseReaderOpts_.fileSchema();
+    auto restorer = folly::makeGuard([&] {
+      if (originalFileSchema) {
+        baseReaderOpts_.setFileSchema(originalFileSchema);
+      }
+    });
+    if (originalFileSchema) {
+      auto names = originalFileSchema->names();
+      auto types = originalFileSchema->children();
+      bool modified = false;
+      for (const auto* colName :
+           {IcebergMetadataColumn::kRowIdColumnName,
+            IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName}) {
+        if (readerOutputType_->containsChild(colName) &&
+            !originalFileSchema->containsChild(colName)) {
+          names.emplace_back(colName);
+          types.emplace_back(BIGINT());
+          modified = true;
+        }
+      }
+      if (modified) {
+        baseReaderOpts_.setFileSchema(ROW(std::move(names), std::move(types)));
+      }
+    }
+    createReader(fileReadOps);
+  }
+
   if (emptySplit_) {
     return;
   }
 
   configureEqualityDeleteColumns();
 
+  firstRowId_ = std::nullopt;
+  if (auto it = icebergSplit_->infoColumns.find(
+          IcebergMetadataColumn::kFirstRowIdInfoColumn);
+      it != icebergSplit_->infoColumns.end()) {
+    try {
+      firstRowId_ = folly::to<int64_t>(it->second);
+    } catch (const folly::ConversionError&) {
+      VELOX_FAIL(
+          "Invalid $first_row_id value in split info columns: {}", it->second);
+    }
+    VELOX_CHECK_GE(*firstRowId_, 0, "First row ID must be non-negative");
+  }
+
+  dataSequenceNumber_ = std::nullopt;
+  if (auto it = icebergSplit_->infoColumns.find(
+          IcebergMetadataColumn::kDataSequenceNumberInfoColumn);
+      it != icebergSplit_->infoColumns.end()) {
+    try {
+      dataSequenceNumber_ = folly::to<int64_t>(it->second);
+    } catch (const folly::ConversionError&) {
+      VELOX_FAIL(
+          "Invalid $data_sequence_number value in split info columns: {}",
+          it->second);
+    }
+    VELOX_CHECK_GE(
+        *dataSequenceNumber_, 0, "Data sequence number must be non-negative");
+  }
+
+  // getAdaptedRowType() calls adaptColumns(), which may set
+  // _last_updated_sequence_number to a constant. Must run after
+  // dataSequenceNumber_ and firstRowId_ are initialized.
   auto rowType = getAdaptedRowType();
+
+  lastUpdatedSeqNumOutputIndex_ = std::nullopt;
+  if (dataSequenceNumber_.has_value() && firstRowId_.has_value()) {
+    auto* seqNumSpec = scanSpec_->childByName(
+        IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName);
+    if (seqNumSpec && !seqNumSpec->isConstant()) {
+      lastUpdatedSeqNumOutputIndex_ = readerOutputType_->getChildIdxIfExists(
+          IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName);
+    }
+  }
+
+  rowIdOutputIndex_ = std::nullopt;
+  if (firstRowId_.has_value()) {
+    rowIdOutputIndex_ = readerOutputType_->getChildIdxIfExists(
+        IcebergMetadataColumn::kRowIdColumnName);
+  }
+
+  // Iceberg MERGE INTO row-id synthesis: detect projection of
+  // $target_table_row_id and cache the constant fields (spec_id,
+  // partition_data) so next() can build the composite RowVector cheaply.
+  // file_path comes from the split's filePath directly; row_position is
+  // computed per row in next() using either the injected row-number column
+  // (filter / skip / positional-delete paths) or the contiguous formula.
+  targetTableRowIdOutputIndex_ = std::nullopt;
+  targetTableSpecId_ = std::nullopt;
+  targetTablePartitionData_ = std::nullopt;
+  if (readerOutputType_->containsChild(
+          IcebergMetadataColumn::kTargetTableRowIdColumnName)) {
+    targetTableRowIdOutputIndex_ = readerOutputType_->getChildIdxIfExists(
+        IcebergMetadataColumn::kTargetTableRowIdColumnName);
+    if (auto it = icebergSplit_->infoColumns.find(
+            IcebergMetadataColumn::kSpecIdInfoColumn);
+        it != icebergSplit_->infoColumns.end()) {
+      try {
+        targetTableSpecId_ = folly::to<int32_t>(it->second);
+      } catch (const folly::ConversionError&) {
+        VELOX_FAIL(
+            "Invalid $spec_id value in split info columns: {}", it->second);
+      }
+    }
+    if (auto it = icebergSplit_->infoColumns.find(
+            IcebergMetadataColumn::kPartitionDataInfoColumn);
+        it != icebergSplit_->infoColumns.end()) {
+      targetTablePartitionData_ = it->second;
+    }
+  }
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
     return;
+  }
+
+  // Inject a row-number column when filters, random-skip, or positional
+  // deletes make the output-to-file-position mapping non-contiguous.
+  // Check split metadata rather than positionalDeleteFileReaders_ because
+  // the row reader must be configured before delete files are opened. Both
+  // _row_id and $target_table_row_id need accurate file-absolute positions,
+  // so request injection when either is projected.
+  const bool hasPositionalDeletes = std::any_of(
+      icebergSplit_->deleteFiles.begin(),
+      icebergSplit_->deleteFiles.end(),
+      [](const IcebergDeleteFile& deleteFile) {
+        return deleteFile.content == FileContent::kPositionalDeletes &&
+            deleteFile.recordCount > 0;
+      });
+  useRowNumberColumn_ = (rowIdOutputIndex_.has_value() ||
+                         targetTableRowIdOutputIndex_.has_value()) &&
+      (scanSpec_->hasFilter() || baseReaderOpts_.randomSkip() != nullptr ||
+       hasPositionalDeletes);
+  if (useRowNumberColumn_) {
+    dwio::common::RowNumberColumnInfo rowNumInfo;
+    rowNumInfo.insertPosition = readerOutputType_->size();
+    rowNumInfo.name = "";
+    baseRowReaderOpts_.setRowNumberColumnInfo(rowNumInfo);
+  } else {
+    baseRowReaderOpts_.setRowNumberColumnInfo(std::nullopt);
   }
 
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
@@ -191,6 +424,22 @@ void IcebergSplitReader::prepareSplit(
                 icebergSplit_->dataSequenceNumber,
                 /*isEqualityDelete=*/false)) {
           continue;
+        }
+
+        // If 'referencedDataFile' is set and does not match the split's
+        // data file, log a warning. Do NOT skip the DV: silently dropping
+        // a coordinator-shipped DV could mask deletes if the planner and
+        // worker disagree on path normalization (trailing slash, scheme
+        // prefix like s3:// vs s3a://, percent-encoding). The coordinator
+        // already filters per-split, so the worker-side check is purely
+        // diagnostic.
+        if (!deleteFile.referencedDataFile.empty() &&
+            deleteFile.referencedDataFile != fileSplit_->filePath) {
+          LOG(WARNING)
+              << "Iceberg DV referencedDataFile does not match split path. "
+              << "Applying DV anyway. referencedDataFile='"
+              << deleteFile.referencedDataFile << "' splitPath='"
+              << fileSplit_->filePath << "'";
         }
 
         deletionVectorReaders_.push_back(
@@ -391,6 +640,120 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
 
+  auto* pool = connectorQueryCtx_->memoryPool();
+
+  if (rowsScanned > 0 &&
+      (lastUpdatedSeqNumOutputIndex_.has_value() ||
+       rowIdOutputIndex_.has_value() ||
+       targetTableRowIdOutputIndex_.has_value())) {
+    auto* rowOutput = output->as<RowVector>();
+    VELOX_DCHECK_NOT_NULL(
+        rowOutput, "Expected RowVector output from table scan");
+
+    if (lastUpdatedSeqNumOutputIndex_.has_value()) {
+      VELOX_DCHECK(dataSequenceNumber_.has_value());
+      auto& seqNumChild = rowOutput->childAt(*lastUpdatedSeqNumOutputIndex_);
+      const int64_t seqNum = static_cast<int64_t>(*dataSequenceNumber_);
+      fillNullsWithInt64(
+          seqNumChild, pool, [seqNum](vector_size_t) { return seqNum; });
+    }
+
+    // Resolve file-absolute row positions once and reuse for both
+    // _row_id and $target_table_row_id. When useRowNumberColumn_ is true,
+    // the reader appended a row-number column at index
+    // readerOutputType_->size(). Otherwise the output is contiguous and we
+    // derive positions from the split offset plus per-row index.
+    const bool needRowPositions = rowIdOutputIndex_.has_value() ||
+        targetTableRowIdOutputIndex_.has_value();
+    std::optional<DecodedVector> decodedRowNumsHolder;
+    if (needRowPositions && useRowNumberColumn_) {
+      decodedRowNumsHolder.emplace(
+          *rowOutput->childAt(readerOutputType_->size()));
+    }
+    auto rowPositionAt = [&](vector_size_t i) -> int64_t {
+      if (useRowNumberColumn_) {
+        return decodedRowNumsHolder->valueAt<int64_t>(i);
+      }
+      return static_cast<int64_t>(splitOffset_ + baseReadOffset_) +
+          static_cast<int64_t>(i);
+    };
+
+    if (rowIdOutputIndex_.has_value() && firstRowId_.has_value()) {
+      auto& rowIdChild = rowOutput->childAt(*rowIdOutputIndex_);
+      const int64_t firstRowId = static_cast<int64_t>(*firstRowId_);
+      fillNullsWithInt64(rowIdChild, pool, [&](vector_size_t i) {
+        return firstRowId + rowPositionAt(i);
+      });
+    }
+
+    if (targetTableRowIdOutputIndex_.has_value()) {
+      // Build the 4-field composite ROW for Iceberg MERGE INTO row-id:
+      //   ROW(file_path:VARCHAR, row_position:BIGINT, spec_id:INTEGER,
+      //       partition_data:VARCHAR).
+      // file_path and partition_data are constant per split; spec_id is
+      // constant per split. row_position is per row, sourced from
+      // rowPositionAt(). Use ConstantVector children for the constants so
+      // we avoid copying the file path / partition data once per row.
+      static const std::string emptyPartitionData;
+      const auto& rowIdType =
+          readerOutputType_->childAt(*targetTableRowIdOutputIndex_);
+      VELOX_CHECK(
+          rowIdType->isRow() && rowIdType->size() == 4,
+          "$target_table_row_id must be a 4-field ROW; got {}",
+          rowIdType->toString());
+      const auto& rowIdRowType = rowIdType->asRow();
+      const auto numRows = static_cast<vector_size_t>(rowsScanned);
+
+      auto filePathConst = BaseVector::createConstant(
+          rowIdRowType.childAt(0),
+          variant(icebergSplit_->filePath),
+          numRows,
+          pool);
+
+      auto rowPositionFlat = BaseVector::create<FlatVector<int64_t>>(
+          rowIdRowType.childAt(1), numRows, pool);
+      for (vector_size_t i = 0; i < numRows; ++i) {
+        rowPositionFlat->set(i, rowPositionAt(i));
+      }
+
+      const int32_t specId = targetTableSpecId_.value_or(0);
+      auto specIdConst = BaseVector::createConstant(
+          rowIdRowType.childAt(2), variant(specId), numRows, pool);
+
+      const std::string& partitionData = targetTablePartitionData_.has_value()
+          ? *targetTablePartitionData_
+          : emptyPartitionData;
+      auto partitionDataConst = BaseVector::createConstant(
+          rowIdRowType.childAt(3), variant(partitionData), numRows, pool);
+
+      std::vector<VectorPtr> children = {
+          std::move(filePathConst),
+          std::move(rowPositionFlat),
+          std::move(specIdConst),
+          std::move(partitionDataConst)};
+      rowOutput->childAt(*targetTableRowIdOutputIndex_) =
+          std::make_shared<RowVector>(
+              pool,
+              rowIdType,
+              /*nulls=*/nullptr,
+              numRows,
+              std::move(children));
+    }
+
+    // Strip the injected row-number column (always last, allocated when
+    // useRowNumberColumn_ is true). Done once for both row-id paths.
+    if (useRowNumberColumn_) {
+      auto children = rowOutput->children();
+      children.pop_back();
+      output = std::make_shared<RowVector>(
+          rowOutput->pool(),
+          readerOutputType_,
+          rowOutput->nulls(),
+          rowOutput->size(),
+          std::move(children));
+    }
+  }
+
   // Apply equality deletes after reading base data. Unlike positional deletes
   // (which set bits before reading), equality deletes require the data values
   // to be available for comparison.
@@ -403,8 +766,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
 
     // Use a separate bitmap for equality deletes to track which rows to
     // remove from the output.
-    BufferPtr eqDeleteBitmap = AlignedBuffer::allocate<bool>(
-        numRows, connectorQueryCtx_->memoryPool());
+    BufferPtr eqDeleteBitmap = AlignedBuffer::allocate<bool>(numRows, pool);
     std::memset(
         eqDeleteBitmap->asMutable<uint8_t>(), 0, eqDeleteBitmap->size());
 
@@ -429,8 +791,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
         // prematurely stop scanning remaining rows in the data file.
         // Instead, set output to an empty vector and return the original
         // scanned count so the caller continues reading.
-        output = BaseVector::create(
-            outputRowVector->type(), 0, connectorQueryCtx_->memoryPool());
+        output = BaseVector::create(outputRowVector->type(), 0, pool);
       } else {
         // Build a list of surviving row ranges and use it to compact.
         std::vector<BaseVector::CopyRange> ranges;
@@ -442,10 +803,8 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
           }
         }
 
-        auto newOutput = BaseVector::create(
-            outputRowVector->type(),
-            numSurviving,
-            connectorQueryCtx_->memoryPool());
+        auto newOutput =
+            BaseVector::create(outputRowVector->type(), numSurviving, pool);
         newOutput->copyRanges(outputRowVector.get(), ranges);
         newOutput->resize(numSurviving);
         output = newOutput;
@@ -465,6 +824,9 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
   std::vector<TypePtr> columnTypes = fileType->children();
   auto& childrenSpecs = scanSpec_->children();
   const auto& splitInfoColumns = icebergSplit_->infoColumns;
+  const bool readTimestampAsLocalTime =
+      fileConfig_->readTimestampPartitionValueAsLocalTime(
+          connectorQueryCtx_->sessionProperties());
   // Iceberg table stores all column's data in data file.
   for (const auto& childSpec : childrenSpecs) {
     const std::string& fieldName = childSpec->fieldName();
@@ -475,8 +837,7 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()),
+          readTimestampAsLocalTime,
           false);
       childSpec->setConstantValue(constant);
     } else {
@@ -493,33 +854,139 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           // try to bind this output channel to a file read.
           continue;
         }
-        childSpec->setConstantValue(nullptr);
-        auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
-        columnTypes[*fileTypeIdx] = outputType;
-      } else if (!fileTypeIdx.has_value()) {
-        // Handle columns missing from the data file in three scenarios:
-        // 1. Schema evolution: Column was added after the data file was
-        //    written and doesn't exist in older data files.
-        // 2. Partition columns from a Hive-migrated table where partition
-        //    column values are stored in partition metadata rather than in
-        //    the data file itself.
-        // 3. Equality-delete partition columns not in the user's projection:
-        //    'configureEqualityDeleteColumns' has already pre-installed the
-        //    partition value as a constant, so this branch leaves it alone.
-        if (childSpec->isConstant()) {
-          // Constant already set (case 3, or set on a previous prepareSplit
-          // call for the same scanSpec). Nothing to do.
-          continue;
-        }
-        auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
-        if (partitionIt != fileSplit_->partitionKeys.end()) {
-          setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
-        } else {
+        if (!firstRowId_.has_value() &&
+            (fieldName == IcebergMetadataColumn::kRowIdColumnName ||
+             fieldName ==
+                 IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName)) {
+          // Null first_row_id: spec requires null for both lineage columns.
           childSpec->setConstantValue(
               BaseVector::createNullConstant(
-                  tableSchema->findChild(fieldName),
-                  1,
-                  connectorQueryCtx_->memoryPool()));
+                  BIGINT(), 1, connectorQueryCtx_->memoryPool()));
+          continue;
+        }
+        childSpec->setConstantValue(nullptr);
+        auto& outputType = readerOutputType_->childAt(*outputTypeIdx);
+        auto& columnType = columnTypes[*fileTypeIdx];
+        if (childSpec->isFlatMapAsStruct()) {
+          VELOX_CHECK(
+              outputType->isRow(),
+              "Unexpected output type for flat-map-as-struct column: {}.",
+              outputType->toString());
+          VELOX_CHECK(
+              columnType->isMap(),
+              "Unexpected column type for flat-map-as-struct column: {}.",
+              columnType->toString());
+        } else {
+          columnType = outputType;
+        }
+      } else if (!fileTypeIdx.has_value()) {
+        // Handle columns missing from the data file in several scenarios:
+        // 1. Partition columns from a Hive-migrated table where partition
+        //    column values are stored in partition metadata rather than in
+        //    the data file itself.
+        // 2. Schema evolution with default values (Iceberg V3): Column was
+        //    added with an initial-default value. Use the default instead of
+        //    NULL.
+        // 3. Schema evolution: Column was added after the data file was
+        //    written and doesn't exist in older data files.
+        // 4. _last_updated_sequence_number: For Iceberg V3 row lineage, if
+        //    the column is not in the file, inherit the data sequence number
+        //    from the file's manifest entry.
+        // 5. _row_id: For Iceberg V3 row lineage, if the column is not in
+        //    the file, set as NULL constant here. When first_row_id is
+        //    available, next() will replace NULL with first_row_id + file
+        //    position.
+        // 6. Equality-delete partition columns not in the user's projection:
+        //    'configureEqualityDeleteColumns' has already pre-installed the
+        //    partition value as a constant, so this branch leaves it alone.
+        if (fieldName ==
+            IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName) {
+          // Column absent from file. Use data_sequence_number constant when
+          // first_row_id is present; null otherwise (spec requirement).
+          if (dataSequenceNumber_.has_value() && firstRowId_.has_value()) {
+            childSpec->setConstantValue(
+                std::make_shared<ConstantVector<int64_t>>(
+                    connectorQueryCtx_->memoryPool(),
+                    1,
+                    false,
+                    BIGINT(),
+                    static_cast<int64_t>(*dataSequenceNumber_)));
+          } else {
+            childSpec->setConstantValue(
+                BaseVector::createNullConstant(
+                    BIGINT(), 1, connectorQueryCtx_->memoryPool()));
+          }
+        } else if (fieldName == IcebergMetadataColumn::kRowIdColumnName) {
+          // Column absent from file. next() fills nulls with first_row_id +
+          // _pos when first_row_id is present.
+          childSpec->setConstantValue(
+              BaseVector::createNullConstant(
+                  BIGINT(), 1, connectorQueryCtx_->memoryPool()));
+        } else if (
+            fieldName == IcebergMetadataColumn::kTargetTableRowIdColumnName) {
+          // Synthesized Iceberg MERGE row-id column. Install a null
+          // placeholder constant of the full ROW type so the reader
+          // allocates the output slot with the right shape; next() will
+          // overwrite the child with a freshly built flat RowVector whose
+          // four fields (file_path, row_position, spec_id, partition_data)
+          // are populated from the split's info columns and the file row
+          // positions. This mirrors the Java IcebergPageSourceProvider
+          // synthesis path that backs MERGE_TARGET_ROW_ID_DATA.
+          auto columnType = readerOutputType_->findChild(fieldName);
+          VELOX_CHECK_NOT_NULL(
+              columnType,
+              "$target_table_row_id type missing from readerOutputType");
+          childSpec->setConstantValue(
+              BaseVector::createNullConstant(
+                  columnType, 1, connectorQueryCtx_->memoryPool()));
+        } else if (childSpec->isConstant()) {
+          // Constant already set (equality-delete partition column, or set on
+          // a previous prepareSplit call for the same scanSpec). Nothing to do.
+          continue;
+        } else if (auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
+                   partitionIt != fileSplit_->partitionKeys.end()) {
+          setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
+        } else {
+          // Check if column has an initial-default value (Iceberg V3)
+          bool hasDefaultValue = false;
+          // The columnHandles_ map is keyed by output name (which may be an
+          // alias). We need to find the column handle where the handle's name()
+          // matches fieldName. fieldName is the table column name from
+          // readerOutputType_.
+          for (const auto& [outputName, handle] : *columnHandles_) {
+            if (handle->name() == fieldName) {
+              auto icebergColumnHandle =
+                  std::dynamic_pointer_cast<const IcebergColumnHandle>(handle);
+              if (icebergColumnHandle &&
+                  icebergColumnHandle->initialDefaultValue().has_value()) {
+                // Use initial-default value for schema evolution.
+                auto columnType = tableSchema->findChild(fieldName);
+                VELOX_CHECK_NOT_NULL(
+                    columnType,
+                    "Column '{}' not found in table schema",
+                    fieldName);
+                auto constant = newConstantFromString(
+                    columnType,
+                    icebergColumnHandle->initialDefaultValue().value(),
+                    connectorQueryCtx_->memoryPool(),
+                    readTimestampAsLocalTime,
+                    false);
+                childSpec->setConstantValue(constant);
+                hasDefaultValue = true;
+                break;
+              }
+            }
+          }
+
+          // Fall back to NULL if no default value
+          if (!hasDefaultValue) {
+            auto columnType = tableSchema->findChild(fieldName);
+            VELOX_CHECK_NOT_NULL(
+                columnType, "Column '{}' not found in table schema", fieldName);
+            childSpec->setConstantValue(
+                BaseVector::createNullConstant(
+                    columnType, 1, connectorQueryCtx_->memoryPool()));
+          }
         }
       }
     }

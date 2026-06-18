@@ -18,7 +18,12 @@
 
 #include <iterator>
 #include <limits>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
@@ -29,6 +34,9 @@
 #include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::dwrf {
+
+/// DWRF-specific file metadata wrapper. Currently a placeholder.
+class DwrfFileMetadata : public dwio::common::FileMetadata {};
 
 struct WriterOptions : public dwio::common::WriterOptions {
   std::shared_ptr<const Config> config = std::make_shared<Config>();
@@ -45,6 +53,13 @@ struct WriterOptions : public dwio::common::WriterOptions {
   const tz::TimeZone* sessionTimezone{nullptr};
   bool adjustTimestampToTimezone{false};
   DwrfFormat format{DwrfFormat::kDwrf};
+
+  /// Per-type string attributes (e.g. Iceberg "iceberg.id") keyed by pre-order
+  /// schema node id (the index into the footer's types(), matching
+  /// TypeWithId::id()). Stamped into the footer proto at write time. Empty by
+  /// default, which keeps the footer wire format byte-identical.
+  std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+      schemaAttributes;
 
   void processConfigs(
       const config::ConfigBase& connectorConfig,
@@ -86,7 +101,7 @@ class Writer : public dwio::common::Writer {
     return true;
   }
 
-  virtual void close() override;
+  virtual std::unique_ptr<dwio::common::FileMetadata> close() override;
 
   virtual void abort() override;
 

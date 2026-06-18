@@ -11,6 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+velox_add_library(
+  velox_presto_query_config
+  OBJECT
+  PrestoConfigProvider.cpp
+  PrestoQueryConfig.cpp
+  HEADERS
+  PrestoConfigProvider.h
+  PrestoQueryConfig.h
+)
+velox_link_libraries(velox_presto_query_config velox_config_property velox_core)
+
+add_subdirectory(coercion)
 add_subdirectory(json)
 add_subdirectory(types)
 add_subdirectory(window)
@@ -85,6 +97,7 @@ velox_add_library(
   Fail.h
   FloatingPointFunctions.h
   GeometryFunctions.h
+  GooglePolylineFunctions.h
   GreatestLeast.h
   HyperLogLogFunctions.h
   IPAddressFunctions.h
@@ -140,6 +153,7 @@ velox_link_libraries(
   velox_functions_lib
   velox_expression
   velox_external_md5
+  velox_presto_query_config
   velox_type_tz
   velox_presto_types
   velox_functions_util
@@ -155,6 +169,8 @@ endif()
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)
+
+  velox_sources(velox_functions_prestosql_impl PRIVATE GooglePolylineFunctions.cpp)
 
   # S2 cell operations are isolated in a separate library to prevent a
   # nallocx symbol conflict between s2geometry's malloc_extension.h and

@@ -32,7 +32,7 @@ endforeach()
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
   COMMAND protobuf::protoc ${PROTO_PATH_ARGS} --cpp_out ${PROJECT_BINARY_DIR} ${PROTO_FILES_FULL}
-  DEPENDS protobuf::protoc
+  DEPENDS protobuf::protoc ${PROTO_FILES_FULL}
   COMMENT "Running PROTO compiler"
   VERBATIM
 )

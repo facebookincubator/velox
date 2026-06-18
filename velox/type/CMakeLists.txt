@@ -60,6 +60,7 @@ velox_add_library(
   Type.h
   TypeCoercer.h
   TypeEncodingUtil.h
+  TypeSerde.h
   TypeUtil.h
   Variant.h
   WideRangeDateConversion.h
