@@ -197,7 +197,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
     rowReaderOptions.setLazyColumnIo(
-        fileConfig->lazyColumnIo(sessionProperties));
+        fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }
