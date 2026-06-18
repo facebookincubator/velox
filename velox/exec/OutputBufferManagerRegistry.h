@@ -112,4 +112,14 @@ class OutputBufferManagerRegistry {
   snapshot(const core::QueryCtx& queryCtx);
 };
 
+/// Resolve the effective transport for a node given the coordinator's
+/// annotation and the query. Returns TransportKind::kHttp unless the annotation
+/// is TransportKind::kUcx and a UCX output buffer manager is available for this
+/// query, in which case it returns TransportKind::kUcx. This is the single
+/// reconciliation point consulted by Task output-buffer-manager selection and
+/// by the cuDF send/receive operator adapters, so all three decisions agree.
+std::string_view resolveTransport(
+    const core::QueryCtx& queryCtx,
+    std::string_view annotation);
+
 } // namespace facebook::velox::exec

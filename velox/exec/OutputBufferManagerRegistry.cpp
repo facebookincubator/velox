@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/IOutputBufferManager.h"
 #include "velox/exec/OutputBufferManagerRegistryInternal.h"
@@ -123,6 +124,18 @@ OutputBufferManagerRegistry::snapshot(const core::QueryCtx& queryCtx) {
     result.emplace_back(key, entry->manager);
   }
   return result;
+}
+
+std::string_view resolveTransport(
+    const core::QueryCtx& queryCtx,
+    std::string_view annotation) {
+  if (annotation != core::TransportKind::kUcx) {
+    return core::TransportKind::kHttp;
+  }
+  return OutputBufferManagerRegistry::tryGet(
+             queryCtx, std::string{core::TransportKind::kUcx}) != nullptr
+      ? core::TransportKind::kUcx
+      : core::TransportKind::kHttp;
 }
 
 } // namespace facebook::velox::exec

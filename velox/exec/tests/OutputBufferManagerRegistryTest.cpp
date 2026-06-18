@@ -199,6 +199,41 @@ TEST_F(OutputBufferManagerRegistryFixture, availabilityPredicateGatesTryGet) {
   OutputBufferManagerRegistry::unregisterAll();
 }
 
+TEST_F(OutputBufferManagerRegistryFixture, resolveTransport) {
+  auto queryCtx = core::QueryCtx::create();
+
+  // A non-UCX annotation always resolves to HTTP.
+  EXPECT_EQ(
+      resolveTransport(*queryCtx, core::TransportKind::kHttp),
+      core::TransportKind::kHttp);
+  // A UCX annotation with no UCX entry registered degrades to HTTP.
+  EXPECT_EQ(
+      resolveTransport(*queryCtx, core::TransportKind::kUcx),
+      core::TransportKind::kHttp);
+
+  // A UCX annotation with an available UCX entry resolves to UCX.
+  OutputBufferManagerRegistry::global().insert(
+      std::string(core::TransportKind::kUcx),
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<MockOutputBufferManager>(), {}}));
+  EXPECT_EQ(
+      resolveTransport(*queryCtx, core::TransportKind::kUcx),
+      core::TransportKind::kUcx);
+
+  // The same entry made unavailable by predicate degrades to HTTP.
+  OutputBufferManagerRegistry::global().insert(
+      std::string(core::TransportKind::kUcx),
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<MockOutputBufferManager>(),
+          [](const core::QueryCtx&) { return false; }}),
+      /*overwrite=*/true);
+  EXPECT_EQ(
+      resolveTransport(*queryCtx, core::TransportKind::kUcx),
+      core::TransportKind::kHttp);
+
+  OutputBufferManagerRegistry::unregisterAll();
+}
+
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedFallbackToGlobal) {
   auto globalMgr = std::make_shared<MockOutputBufferManager>();
   OutputBufferManagerRegistry::global().insert(
