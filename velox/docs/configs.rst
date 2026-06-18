@@ -1006,7 +1006,7 @@ must be specified as raw byte counts.
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
    * - nimble.lazy-column-io
-     - nimble.lazy_column_io
+     - nimble_lazy_column_io
      - boolean
      - false
      - Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
