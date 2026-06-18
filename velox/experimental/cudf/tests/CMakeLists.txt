@@ -151,6 +151,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_timezone_unsupported_test
+  SOURCES Main.cpp TimezoneUnsupportedTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_group_id_test
   SOURCES Main.cpp GroupIdTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
