@@ -1314,14 +1314,45 @@ void Task::initializePartitionOutput() {
     }
   }
 
+  // Mirror the output-side capability check for input (Exchange) nodes the
+  // coordinator annotated for UCX: the same worker-level UCX capability signal
+  // (registry presence) governs the receive side, so surface a missing
+  // capability as a deployment error at task start.
+  for (const auto& [exchangeNodeId, annotation] :
+       planFragment_.inputTransportTypes) {
+    if (annotation == core::TransportKind::kUcx &&
+        !OutputBufferManagerRegistry::contains(*queryCtx_, annotation)) {
+      VELOX_FAIL(
+          "No output buffer manager registered for transport on this worker; "
+          "the coordinator annotated an input node for this transport but it "
+          "is not available here: node={}, transport={}",
+          exchangeNodeId,
+          annotation);
+    }
+  }
+
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
     const auto& outputTransportTypes = planFragment_.outputTransportTypes;
     const auto it = outputTransportTypes.find(partitionedOutputNode->id());
-    const std::string transportType = it != outputTransportTypes.end()
+    const std::string annotation = it != outputTransportTypes.end()
         ? it->second
         : std::string{core::TransportKind::kHttp};
+    // A node annotated for UCX with no UCX manager registered on this worker is
+    // a deployment inconsistency under worker uniformity, not a routine
+    // fallback. Fail fast here with a precise message instead of aborting
+    // mid-driver in PartitionedOutput::initialize().
+    if (annotation == core::TransportKind::kUcx &&
+        !OutputBufferManagerRegistry::contains(*queryCtx_, annotation)) {
+      VELOX_FAIL(
+          "No output buffer manager registered for transport on this worker; "
+          "the coordinator annotated an output node for this transport but it "
+          "is not available here: node={}, transport={}",
+          partitionedOutputNode->id(),
+          annotation);
+    }
+    const std::string transportType{resolveTransport(*queryCtx_, annotation)};
     auto manager =
         OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
     if (!manager && transportType == core::TransportKind::kHttp) {

@@ -1511,13 +1511,18 @@ TEST_F(TaskTest, partitionedOutputErrorsOnTransportMismatch) {
   // type. The default PartitionedOutput operator only handles the HTTP
   // OutputBufferManager, so it must error rather than send output to the wrong
   // manager.
-  const std::string transportType{"test-mismatch-transport"};
+  // Annotate UCX and register a non-HTTP manager that IS available for this
+  // query. Resolution selects it (capability present, policy allows), and the
+  // stock PartitionedOutput then rejects it via its defense-in-depth cast.
+  const std::string transportType{core::TransportKind::kUcx};
   plan.outputTransportTypes[outputNodeId] = transportType;
 
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
   queryRegistry->insert(
-      transportType, std::make_shared<NonHttpOutputBufferManager>());
+      transportType,
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<NonHttpOutputBufferManager>(), {}}));
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
@@ -1537,6 +1542,73 @@ TEST_F(TaskTest, partitionedOutputErrorsOnTransportMismatch) {
           "PartitionedOutput requires the default OutputBufferManager") !=
       std::string::npos)
       << task->errorMessage();
+}
+
+TEST_F(TaskTest, partitionedOutputFailsFastWhenUcxTransportNotRegistered) {
+  // No UCX manager is registered in this binary (cuDF is not loaded here), so a
+  // node the coordinator annotated for UCX is a capability gap: fail fast at
+  // task start rather than aborting mid-driver.
+  OutputBufferManagerRegistry::unregisterAll();
+  auto values = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan =
+      PlanBuilder().values({values}).partitionedOutput({}, 1).planFragment();
+  const auto outputNodeId = plan.planNode->id();
+  plan.outputTransportTypes[outputNodeId] =
+      std::string(core::TransportKind::kUcx);
+
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  auto task = Task::create(
+      "task-ucx-missing",
+      std::move(plan),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
+
+  VELOX_ASSERT_THROW(
+      task->start(1, 1),
+      "No output buffer manager registered for transport on this worker");
+  // Re-register the default HTTP manager for subsequent tests.
+  OutputBufferManager::getInstanceRef();
+}
+
+TEST_F(TaskTest, partitionedOutputDegradesToHttpWhenUcxUnavailable) {
+  // A UCX entry exists (capability present) but its predicate denies this
+  // query (policy opt-out): degrade to the default HTTP manager and run.
+  auto values = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan =
+      PlanBuilder().values({values}).partitionedOutput({}, 1).planFragment();
+  const auto outputNodeId = plan.planNode->id();
+  plan.outputTransportTypes[outputNodeId] =
+      std::string(core::TransportKind::kUcx);
+
+  auto queryRegistry = OutputBufferManagerRegistry::create(
+      &OutputBufferManagerRegistry::global());
+  queryRegistry->insert(
+      std::string(core::TransportKind::kUcx),
+      std::make_shared<OutputBufferManagerEntry>(OutputBufferManagerEntry{
+          std::make_shared<NonHttpOutputBufferManager>(),
+          [](const core::QueryCtx&) { return false; }}));
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(
+      OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
+
+  auto task = Task::create(
+      "task-ucx-degrade",
+      std::move(plan),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
+  task->start(1, 1);
+  // Resolved to the default HTTP manager, so the stock PartitionedOutput runs.
+  // The plan has a single partition, so the partitioned output buffer expects
+  // exactly one destination buffer; updateOutputBuffers succeeds on the HTTP
+  // manager that the degrade path selected.
+  EXPECT_TRUE(task->updateOutputBuffers(1, true /*noMoreBuffers*/));
+
+  // Terminate the running task so it is deleted before TearDown asserts there
+  // are no pending tasks.
+  task->requestCancel();
+  waitForTaskCompletion(task.get());
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
