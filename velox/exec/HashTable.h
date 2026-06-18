@@ -484,8 +484,7 @@ class BaseHashTable {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  static TagVector
-  loadTags(uint8_t* tags, int64_t tagIndex) {
+  static TagVector loadTags(uint8_t* tags, int64_t tagIndex) {
     // Cannot use xsimd::batch::unaligned here because we need to skip TSAN.
     auto src = tags + tagIndex;
 #if XSIMD_WITH_SSE2
@@ -702,8 +701,9 @@ class HashTable : public BaseHashTable {
     return hashMode_;
   }
 
-  void addRuntimeStats(std::unordered_map<std::string, RuntimeMetric>&
-                           runtimeStats) const override {
+  void addRuntimeStats(
+      std::unordered_map<std::string, RuntimeMetric>& runtimeStats)
+      const override {
     runtimeStats[std::string(kCapacity)] = RuntimeMetric(capacity_);
     runtimeStats[std::string(kHashMode)] =
         RuntimeMetric(static_cast<int64_t>(hashMode_));
