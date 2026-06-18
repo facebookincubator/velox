@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -23,6 +24,7 @@
 #include "velox/type/Filter.h"
 
 #include "velox/common/EnumDefine.h"
+#include "velox/common/serialization/NativeSerdeIO.h"
 
 namespace facebook::velox::common {
 
@@ -419,6 +421,41 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::create(
       new BigintValuesUsingBloomFilter(nullAllowed, std::move(blocks)));
 }
 
+void BigintValuesUsingBloomFilter::serializeBinary(std::string& out) const {
+  common::NativeStringWriter writer(out);
+  writer.writeValue<bool>(nullAllowed());
+  writer.writeValue<uint32_t>(xsimd::batch<uint32_t>::size);
+  writer.writeValue<uint32_t>(blocks_.size());
+  for (const auto& block : blocks_) {
+    for (auto word : block.data) {
+      writer.writeValue<uint32_t>(word);
+    }
+  }
+}
+
+std::unique_ptr<Filter> BigintValuesUsingBloomFilter::deserializeBinary(
+    std::string_view data) {
+  common::NativeStringReader reader(data);
+  const auto nullAllowed = reader.readValue<bool>();
+  const auto simdWidth = reader.readValue<uint32_t>();
+  VELOX_USER_CHECK_EQ(
+      simdWidth,
+      xsimd::batch<uint32_t>::size,
+      "Cannot deserialize BigintValuesUsingBloomFilter serialized on hardware with different SIMD length");
+  const auto numBlocks = reader.readValue<uint32_t>();
+  std::vector<SplitBlockBloomFilter::Block> blocks(numBlocks);
+  for (auto& block : blocks) {
+    for (auto& word : block.data) {
+      word = reader.readValue<uint32_t>();
+    }
+  }
+  VELOX_USER_CHECK(
+      reader.atEnd(),
+      "Trailing bytes in BigintValuesUsingBloomFilter binary data");
+  return std::unique_ptr<BigintValuesUsingBloomFilter>(
+      new BigintValuesUsingBloomFilter(nullAllowed, std::move(blocks)));
+}
+
 bool BigintValuesUsingBloomFilter::testingEquals(const Filter& other) const {
   auto* typedOther =
       Filter::testingBaseEquals<BigintValuesUsingBloomFilter>(other);
@@ -654,9 +691,8 @@ std::unique_ptr<Filter> BigintMultiRange::create(const folly::dynamic& obj) {
   std::vector<std::unique_ptr<BigintRange>> ranges;
   ranges.reserve(arr.size());
   for (const auto& r : arr) {
-    ranges.push_back(
-        std::make_unique<BigintRange>(
-            *ISerializable::deserialize<BigintRange>(r)));
+    ranges.push_back(std::make_unique<BigintRange>(
+        *ISerializable::deserialize<BigintRange>(r)));
   }
   return std::make_unique<BigintMultiRange>(std::move(ranges), nullAllowed);
 }
@@ -1273,26 +1309,24 @@ bool NegatedBytesRange::testBytesRange(
 std::unique_ptr<Filter> NegatedBytesRange::toMultiRange() const {
   std::vector<std::unique_ptr<Filter>> accepted;
   if (!isLowerUnbounded()) {
-    accepted.push_back(
-        std::make_unique<BytesRange>(
-            "",
-            true,
-            false,
-            lower(),
-            false,
-            !testBytes(lower().data(), lower().length()),
-            false));
+    accepted.push_back(std::make_unique<BytesRange>(
+        "",
+        true,
+        false,
+        lower(),
+        false,
+        !testBytes(lower().data(), lower().length()),
+        false));
   }
   if (!isUpperUnbounded()) {
-    accepted.push_back(
-        std::make_unique<BytesRange>(
-            upper(),
-            false,
-            !testBytes(upper().data(), upper().length()),
-            "",
-            true,
-            false,
-            false));
+    accepted.push_back(std::make_unique<BytesRange>(
+        upper(),
+        false,
+        !testBytes(upper().data(), upper().length()),
+        "",
+        true,
+        false,
+        false));
   }
 
   if (accepted.size() == 0) {
@@ -1578,9 +1612,8 @@ std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
       }
 
       if (!byteValues.empty()) {
-        merged.emplace_back(
-            std::make_unique<BytesValues>(
-                std::move(byteValues), bothNullAllowed));
+        merged.emplace_back(std::make_unique<BytesValues>(
+            std::move(byteValues), bothNullAllowed));
       }
 
       if (merged.empty()) {
@@ -1742,19 +1775,16 @@ std::unique_ptr<Filter> combineNegatedRangeOnIntRanges(
   for (int i = 0; i < ranges.size(); ++i) {
     if (negatedUpper < ranges[i]->lower() ||
         ranges[i]->upper() < negatedLower) {
-      outRanges.emplace_back(
-          std::make_unique<BigintRange>(
-              ranges[i]->lower(), ranges[i]->upper(), false));
+      outRanges.emplace_back(std::make_unique<BigintRange>(
+          ranges[i]->lower(), ranges[i]->upper(), false));
     } else {
       if (ranges[i]->lower() < negatedLower) {
-        outRanges.emplace_back(
-            std::make_unique<BigintRange>(
-                ranges[i]->lower(), negatedLower - 1, false));
+        outRanges.emplace_back(std::make_unique<BigintRange>(
+            ranges[i]->lower(), negatedLower - 1, false));
       }
       if (negatedUpper < ranges[i]->upper()) {
-        outRanges.emplace_back(
-            std::make_unique<BigintRange>(
-                negatedUpper + 1, ranges[i]->upper(), false));
+        outRanges.emplace_back(std::make_unique<BigintRange>(
+            negatedUpper + 1, ranges[i]->upper(), false));
       }
     }
   }
@@ -1770,9 +1800,8 @@ std::vector<std::unique_ptr<BigintRange>> negatedValuesToRanges(
   std::vector<std::unique_ptr<BigintRange>> res;
   res.reserve(values.size() + 1);
   if (*back > std::numeric_limits<int64_t>::min()) {
-    res.emplace_back(
-        std::make_unique<BigintRange>(
-            std::numeric_limits<int64_t>::min(), *back - 1, false));
+    res.emplace_back(std::make_unique<BigintRange>(
+        std::numeric_limits<int64_t>::min(), *back - 1, false));
   }
   while (front != values.end()) {
     if (*back + 1 <= *front - 1) {
@@ -1783,9 +1812,8 @@ std::vector<std::unique_ptr<BigintRange>> negatedValuesToRanges(
     ++back;
   }
   if (*back < std::numeric_limits<int64_t>::max()) {
-    res.emplace_back(
-        std::make_unique<BigintRange>(
-            *back + 1, std::numeric_limits<int64_t>::max(), false));
+    res.emplace_back(std::make_unique<BigintRange>(
+        *back + 1, std::numeric_limits<int64_t>::max(), false));
   }
   return res;
 }
@@ -1898,9 +1926,8 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
       bool bothNullAllowed = nullAllowed_ && other->testNull();
       auto otherRange = static_cast<const BigintRange*>(other);
       std::vector<std::unique_ptr<common::BigintRange>> rangeList;
-      rangeList.emplace_back(
-          std::make_unique<BigintRange>(
-              otherRange->lower(), otherRange->upper(), false));
+      rangeList.emplace_back(std::make_unique<BigintRange>(
+          otherRange->lower(), otherRange->upper(), false));
       return combineNegatedRangeOnIntRanges(
           this->lower(), this->upper(), rangeList, bothNullAllowed);
     }
@@ -1918,20 +1945,17 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
         int64_t bigLower = otherNegatedRange->lower();
         int64_t bigUpper = otherNegatedRange->upper();
         if (smallLower > std::numeric_limits<int64_t>::min()) {
-          outRanges.emplace_back(
-              std::make_unique<common::BigintRange>(
-                  std::numeric_limits<int64_t>::min(), smallLower - 1, false));
+          outRanges.emplace_back(std::make_unique<common::BigintRange>(
+              std::numeric_limits<int64_t>::min(), smallLower - 1, false));
         }
         if (smallUpper < std::numeric_limits<int64_t>::max() &&
             bigLower > std::numeric_limits<int64_t>::min()) {
-          outRanges.emplace_back(
-              std::make_unique<common::BigintRange>(
-                  smallUpper + 1, bigLower - 1, false));
+          outRanges.emplace_back(std::make_unique<common::BigintRange>(
+              smallUpper + 1, bigLower - 1, false));
         }
         if (bigUpper < std::numeric_limits<int64_t>::max()) {
-          outRanges.emplace_back(
-              std::make_unique<common::BigintRange>(
-                  bigUpper + 1, std::numeric_limits<int64_t>::max(), false));
+          outRanges.emplace_back(std::make_unique<common::BigintRange>(
+              bigUpper + 1, std::numeric_limits<int64_t>::max(), false));
         }
         return combineBigintRanges(std::move(outRanges), bothNullAllowed);
       }
@@ -2663,31 +2687,28 @@ std::unique_ptr<Filter> NegatedBytesValues::mergeWith(
       ranges.reserve(rejectedValues.size() + 1);
       auto back = rejectedValues.begin();
       auto front = ++(rejectedValues.begin());
-      ranges.emplace_back(
-          std::make_unique<BytesRange>(
-              bytesRangeOther->lower(),
-              bytesRangeOther->lowerUnbounded(),
-              loExclusive,
-              *back,
-              false, // not unbounded
-              true, // exclusive
-              false));
+      ranges.emplace_back(std::make_unique<BytesRange>(
+          bytesRangeOther->lower(),
+          bytesRangeOther->lowerUnbounded(),
+          loExclusive,
+          *back,
+          false, // not unbounded
+          true, // exclusive
+          false));
       while (front != rejectedValues.end()) {
-        ranges.emplace_back(
-            std::make_unique<BytesRange>(
-                *back, false, true, *front, false, true, false));
+        ranges.emplace_back(std::make_unique<BytesRange>(
+            *back, false, true, *front, false, true, false));
         ++front;
         ++back;
       }
-      ranges.emplace_back(
-          std::make_unique<BytesRange>(
-              *back,
-              false,
-              true,
-              bytesRangeOther->upper(),
-              bytesRangeOther->upperUnbounded(),
-              hiExclusive,
-              false));
+      ranges.emplace_back(std::make_unique<BytesRange>(
+          *back,
+          false,
+          true,
+          bytesRangeOther->upper(),
+          bytesRangeOther->upperUnbounded(),
+          hiExclusive,
+          false));
       return std::make_unique<MultiRange>(std::move(ranges), bothNullAllowed);
     }
     default:

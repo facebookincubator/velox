@@ -21,9 +21,14 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/process/TraceContext.h"
+#include "velox/common/serialization/NativeSerdeIO.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/AdaptivePrefetch.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
+#include "velox/vector/FlatVector.h"
+
+#include <algorithm>
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -2006,9 +2011,8 @@ void HashTable<ignoreNullKeys>::prepareJoinTable(
   }
   otherTables_.reserve(tables.size());
   for (auto& table : tables) {
-    otherTables_.emplace_back(
-        std::unique_ptr<HashTable<ignoreNullKeys>>(
-            dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
+    otherTables_.emplace_back(std::unique_ptr<HashTable<ignoreNullKeys>>(
+        dynamic_cast<HashTable<ignoreNullKeys>*>(table.release())));
   }
 
   // If there are multiple tables, we need to merge the 'columnHasNulls' flags
@@ -2567,5 +2571,627 @@ void HashTable<ignoreNullKeys>::prepareForJoinProbe(
 
   populateLookupRows(rows, lookup.rows);
 }
+namespace {
+
+class CountingWriter {
+ public:
+  void write(const void*, size_t size) {
+    size_ += size;
+  }
+
+  template <typename T>
+  void writeValue(T value) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    write(&value, sizeof(value));
+  }
+
+  void flush() {}
+
+  size_t size() const {
+    return size_;
+  }
+
+ private:
+  size_t size_{0};
+};
+
+class MemoryWriter {
+ public:
+  MemoryWriter(void* data, size_t size)
+      : begin_(static_cast<char*>(data)),
+        current_(static_cast<char*>(data)),
+        end_(begin_ + size) {
+    VELOX_CHECK_NOT_NULL(
+        data, "Serialized hash table destination cannot be null");
+  }
+
+  void write(const void* data, size_t size) {
+    VELOX_CHECK_LE(
+        size,
+        remaining(),
+        "Insufficient space in serialized hash table buffer");
+    std::memcpy(current_, data, size);
+    current_ += size;
+  }
+
+  template <typename T>
+  void writeValue(T value) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    write(&value, sizeof(value));
+  }
+
+  void flush() {}
+
+  size_t writtenSize() const {
+    return static_cast<size_t>(current_ - begin_);
+  }
+
+ private:
+  size_t remaining() const {
+    return static_cast<size_t>(end_ - current_);
+  }
+
+  char* begin_;
+  char* current_;
+  char* end_;
+};
+
+} // namespace
+
+template <bool ignoreNullKeys>
+template <typename Writer>
+void HashTable<ignoreNullKeys>::serializeImpl(Writer& writer) const {
+  VELOX_CHECK(isJoinBuild_, "Only join-build hash tables are supported");
+  uint64_t totalRows = rows_ != nullptr ? rows_->numRows() : 0;
+  for (const auto& other : otherTables_) {
+    if (other->rows() != nullptr) {
+      totalRows += other->rows()->numRows();
+    }
+  }
+  VELOX_CHECK(
+      totalRows == 0 || table_ != nullptr,
+      "Serialization requires a prepared join table");
+
+  LOG(INFO) << "Serializing HashTable: "
+            << const_cast<HashTable<ignoreNullKeys>*>(this)->toString();
+
+  auto writeValue = [&](auto value) { writer.writeValue(value); };
+
+  // Serialize magic and version.
+  writeValue(static_cast<uint32_t>(0x48415348)); // "HASH"
+  writeValue(
+      static_cast<uint32_t>(8)); // Version 8: added constructor parameters for
+                                 // complete reconstruction
+
+  // Serialize base metadata, including all constructor parameters.
+  writeValue(static_cast<bool>(ignoreNullKeys));
+  writeValue(allowDuplicates_);
+  writeValue(isJoinBuild_);
+  writeValue(minTableSizeForParallelJoinBuild_);
+  writeValue(bloomFilterMaxSize_);
+  writeValue(hasDuplicates_.check());
+  writeValue(numDistinct_);
+  writeValue(static_cast<int32_t>(hashMode_));
+
+  // Serialize RowContainer flags.
+  const bool hasProbedFlag = rows_->probedFlagOffset() != 0;
+  const bool hasCountFlag = rows_->countOffset() != 0;
+  writeValue(hasProbedFlag);
+  writeValue(hasCountFlag);
+
+  // Serialize VectorHasher metadata.
+  writeValue(static_cast<uint32_t>(hashers_.size()));
+  for (const auto& hasher : hashers_) {
+    auto typeStr = hasher->type()->toString();
+    writeValue(static_cast<uint32_t>(typeStr.length()));
+    writer.write(typeStr.c_str(), typeStr.length());
+    writeValue(hasher->channel());
+  }
+
+  // Serialize dependentTypes metadata.
+  const auto& allColumnTypes = rows_->columnTypes();
+  const auto numKeyColumns = hashers_.size();
+  const auto numDependentColumns = allColumnTypes.size() > numKeyColumns
+      ? allColumnTypes.size() - numKeyColumns
+      : 0;
+
+  writeValue(static_cast<uint32_t>(numDependentColumns));
+  for (size_t i = numKeyColumns; i < allColumnTypes.size(); ++i) {
+    auto typeStr = allColumnTypes[i]->toString();
+    writeValue(static_cast<uint32_t>(typeStr.length()));
+    writer.write(typeStr.c_str(), typeStr.length());
+  }
+
+  // Serialize row data. For join build, RowContainer stores all build rows,
+  // which can exceed numDistinct_ when duplicate keys exist. Therefore we must
+  // use rows_->numRows() instead of numDistinct_, otherwise listRows() would
+  // not enumerate the full input and validation would fail. We also need to
+  // include rows from otherTables_ because parallel build may spread data
+  // across multiple tables.
+  writeValue(totalRows);
+
+  const bool serializeNormalizedKeys = hashMode_ == HashMode::kNormalizedKey;
+  raw_vector<normalized_key_t> normalizedKeys(0, pool_);
+  if (serializeNormalizedKeys) {
+    normalizedKeys.reserve(totalRows);
+  }
+
+  if (totalRows > 0) {
+    uint32_t numColumns = rows_->columnTypes().size();
+    writeValue(numColumns);
+
+    // Serialize column types.
+    for (int32_t col = 0; col < numColumns; ++col) {
+      auto typeStr = rows_->columnTypes()[col]->toString();
+      writeValue(static_cast<uint32_t>(typeStr.length()));
+      writer.write(typeStr.c_str(), typeStr.length());
+    }
+
+    // Serialize rows for all tables. Keep per-table serialized batches instead
+    // of copying into one large flatSerialized buffer while preserving the
+    // existing "all hashes -> all rows" wire layout.
+    std::vector<VectorPtr> serializedRowBatches;
+    serializedRowBatches.reserve(
+        (rows_ != nullptr ? 1 : 0) + otherTables_.size());
+    raw_vector<uint64_t> allHashes(0, pool_);
+    allHashes.reserve(totalRows);
+    vector_size_t serializedRowCount = 0;
+    auto* self = const_cast<HashTable<ignoreNullKeys>*>(this);
+
+    auto serializeRowsFrom = [&](RowContainer* sourceRows) {
+      if (sourceRows == nullptr || sourceRows->numRows() == 0) {
+        return;
+      }
+
+      const auto numSourceRows = sourceRows->numRows();
+      std::vector<char*> tableRows(numSourceRows);
+      RowContainerIterator iter;
+      const auto listed =
+          sourceRows->listRows(&iter, numSourceRows, tableRows.data());
+      VELOX_CHECK_EQ(listed, numSourceRows, "Failed to list serialized rows");
+
+      auto serializedBatch = BaseVector::create<FlatVector<StringView>>(
+          VARCHAR(), numSourceRows, sourceRows->pool());
+      sourceRows->extractSerializedRows(
+          folly::Range<char**>(tableRows.data(), tableRows.size()),
+          serializedBatch);
+      serializedRowBatches.push_back(serializedBatch);
+      serializedRowCount += numSourceRows;
+      if (serializeNormalizedKeys) {
+        for (auto* row : tableRows) {
+          normalizedKeys.push_back(RowContainer::normalizedKey(row));
+        }
+      }
+
+      raw_vector<uint64_t> tableHashes(numSourceRows, pool_);
+      bool hashSuccess = self->hashRows(
+          folly::Range<char**>(tableRows.data(), tableRows.size()),
+          false,
+          tableHashes);
+
+      // Fall back to full hashes when hashRows fails, e.g. kArray cannot
+      // produce value IDs for the current state.
+      if (!hashSuccess) {
+        for (vector_size_t i = 0; i < numSourceRows; ++i) {
+          sourceRows->hash(
+              0,
+              folly::Range<char**>(tableRows.data() + i, 1),
+              false,
+              &tableHashes[i]);
+          for (int32_t j = 1; j < self->hashers_.size(); ++j) {
+            sourceRows->hash(
+                j,
+                folly::Range<char**>(tableRows.data() + i, 1),
+                true,
+                &tableHashes[i]);
+          }
+        }
+      }
+
+      for (const auto hash : tableHashes) {
+        allHashes.push_back(hash);
+      }
+    };
+
+    serializeRowsFrom(rows_.get());
+    for (const auto& other : otherTables_) {
+      serializeRowsFrom(other->rows());
+    }
+
+    VELOX_CHECK_EQ(serializedRowCount, totalRows, "Total rows mismatch");
+    VELOX_CHECK_EQ(allHashes.size(), totalRows, "Total hashes mismatch");
+    if (serializeNormalizedKeys) {
+      VELOX_CHECK_EQ(
+          normalizedKeys.size(), totalRows, "Total normalized keys mismatch");
+    }
+
+    // Write all hashes.
+    for (uint64_t hash : allHashes) {
+      writeValue(hash);
+    }
+
+    // Write serialized row data batch by batch to avoid copying into one large
+    // intermediate buffer.
+    for (const auto& serializedBatch : serializedRowBatches) {
+      const auto* flatBatch =
+          serializedBatch->template asUnchecked<FlatVector<StringView>>();
+      for (vector_size_t i = 0; i < flatBatch->size(); ++i) {
+        const auto serialized = flatBatch->valueAt(i);
+        writeValue(static_cast<uint32_t>(serialized.size()));
+        if (serialized.size() > 0) {
+          writer.write(serialized.data(), serialized.size());
+        }
+      }
+    }
+  } else {
+    writeValue(static_cast<uint32_t>(0));
+  }
+
+  // Serialize columnHasNulls_.
+  writeValue(static_cast<uint32_t>(columnHasNulls_.size()));
+  for (bool hasNull : columnHasNulls_) {
+    writeValue(hasNull);
+  }
+
+  writeValue(capacity_);
+  writeValue(static_cast<uint32_t>(hashers_.size()));
+  for (const auto& hasher : hashers_) {
+    const auto stateSize = hasher->serializedStateSize();
+    writeValue(stateSize);
+    if (stateSize > 0) {
+      auto state = hasher->serializeState();
+      VELOX_CHECK_EQ(
+          state.size(),
+          stateSize,
+          "Serialized VectorHasher state size mismatch");
+      writer.write(state.data(), state.size());
+    }
+  }
+
+  writeValue(static_cast<bool>(serializeNormalizedKeys));
+  if (serializeNormalizedKeys && totalRows > 0) {
+    for (const auto normalizedKey : normalizedKeys) {
+      writeValue(normalizedKey);
+    }
+  }
+
+  // Flush explicitly so write failures surface at the serialization call site.
+  writer.flush();
+}
+
+template <bool ignoreNullKeys>
+size_t HashTable<ignoreNullKeys>::serializedSize() const {
+  CountingWriter writer;
+  serializeImpl(writer);
+  return writer.size();
+}
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::serializeTo(void* data, size_t size) const {
+  MemoryWriter writer(data, size);
+  serializeImpl(writer);
+  VELOX_CHECK_EQ(
+      writer.writtenSize(), size, "Hash table serialized size mismatch");
+}
+
+template <bool ignoreNullKeys>
+template <typename Reader>
+std::unique_ptr<HashTable<ignoreNullKeys>> HashTable<
+    ignoreNullKeys>::deserializeImpl(Reader& reader, memory::MemoryPool* pool) {
+  auto readValue = [&]<typename T>() -> T {
+    return reader.template readValue<T>();
+  };
+
+  // Read and validate magic and version.
+  uint32_t magic = readValue.template operator()<uint32_t>();
+  uint32_t version = readValue.template operator()<uint32_t>();
+
+  VELOX_CHECK_EQ(magic, 0x48415348, "Invalid magic number");
+  VELOX_CHECK_EQ(
+      version,
+      8,
+      "Expected version 8, got {}. Version 7 is deprecated due to issues.",
+      version);
+
+  // Read metadata.
+  bool ignoreNulls = readValue.template operator()<bool>();
+  VELOX_CHECK_EQ(ignoreNulls, ignoreNullKeys, "ignoreNullKeys mismatch");
+
+  bool allowDuplicates = readValue.template operator()<bool>();
+  bool isJoinBuild = readValue.template operator()<bool>();
+  uint32_t minTableSizeForParallelJoinBuild =
+      readValue.template operator()<uint32_t>();
+  uint64_t bloomFilterMaxSize = readValue.template operator()<uint64_t>();
+  bool hasDuplicates = readValue.template operator()<bool>();
+
+  int64_t numDistinct = readValue.template operator()<int64_t>();
+  int32_t hashModeInt = readValue.template operator()<int32_t>();
+  VELOX_CHECK(
+      hashModeInt == static_cast<int32_t>(HashMode::kHash) ||
+          hashModeInt == static_cast<int32_t>(HashMode::kArray) ||
+          hashModeInt == static_cast<int32_t>(HashMode::kNormalizedKey),
+      "Invalid hash mode in serialized HashTable: {}",
+      hashModeInt);
+
+  // Read RowContainer flags.
+  bool hasProbedFlag = readValue.template operator()<bool>();
+  bool hasCountFlag = readValue.template operator()<bool>();
+
+  // Read VectorHasher metadata.
+  uint32_t numHashers = readValue.template operator()<uint32_t>();
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  std::vector<TypePtr> keyTypes;
+  hashers.reserve(numHashers);
+  keyTypes.reserve(numHashers);
+
+  auto parseType = [](const std::string& typeStr) -> TypePtr {
+    auto normalized = typeStr;
+    std::replace(normalized.begin(), normalized.end(), '<', '(');
+    std::replace(normalized.begin(), normalized.end(), '>', ')');
+    std::replace(normalized.begin(), normalized.end(), ':', ' ');
+    return functions::prestosql::parseType(normalized);
+  };
+
+  for (uint32_t i = 0; i < numHashers; ++i) {
+    uint32_t typeLen = readValue.template operator()<uint32_t>();
+    std::string typeStr(typeLen, '\0');
+    if (typeLen > 0) {
+      reader.read(typeStr.data(), typeLen);
+    }
+
+    column_index_t channel = readValue.template operator()<column_index_t>();
+
+    TypePtr type = parseType(typeStr);
+    keyTypes.push_back(type);
+    hashers.push_back(std::make_unique<VectorHasher>(type, channel));
+  }
+
+  // Read dependentTypes metadata.
+  uint32_t numDependentTypes = readValue.template operator()<uint32_t>();
+  std::vector<TypePtr> dependentTypes;
+  dependentTypes.reserve(numDependentTypes);
+  for (uint32_t i = 0; i < numDependentTypes; ++i) {
+    uint32_t typeLen = readValue.template operator()<uint32_t>();
+    std::string typeStr(typeLen, '\0');
+    if (typeLen > 0) {
+      reader.read(typeStr.data(), typeLen);
+    }
+    dependentTypes.push_back(parseType(typeStr));
+  }
+
+  // Read row data. The serialization format writes numColumns and column types
+  // only when numRows > 0, so deserialization must follow the same condition
+  // to keep the stream position aligned for empty tables.
+  uint64_t numRows = readValue.template operator()<uint64_t>();
+  uint32_t numColumns = 0;
+
+  std::vector<TypePtr> columnTypes;
+  if (numRows > 0) {
+    numColumns = readValue.template operator()<uint32_t>();
+    if (numColumns > 0) {
+      columnTypes.reserve(numColumns);
+      for (uint32_t col = 0; col < numColumns; ++col) {
+        uint32_t typeLen = readValue.template operator()<uint32_t>();
+        std::string typeStr(typeLen, '\0');
+        if (typeLen > 0) {
+          reader.read(typeStr.data(), typeLen);
+        }
+        columnTypes.push_back(parseType(typeStr));
+      }
+    }
+  } else {
+    // When numRows == 0, serialization writes an extra 0 for numColumns.
+    // Consume it here to keep the stream aligned.
+    readValue.template operator()<uint32_t>();
+  }
+
+  // Create the HashTable using all serialized constructor parameters.
+  auto table = std::make_unique<HashTable<ignoreNullKeys>>(
+      std::move(hashers),
+      std::vector<Accumulator>{},
+      dependentTypes,
+      allowDuplicates,
+      isJoinBuild,
+      hasProbedFlag,
+      hasCountFlag,
+      minTableSizeForParallelJoinBuild,
+      pool,
+      bloomFilterMaxSize);
+
+  if (numRows > 0) {
+    const auto expectedNumColumns = keyTypes.size() + dependentTypes.size();
+    VELOX_CHECK_EQ(
+        columnTypes.size(),
+        expectedNumColumns,
+        "Serialized row schema has {} columns, but HashTable expects {}",
+        columnTypes.size(),
+        expectedNumColumns);
+    for (size_t i = 0; i < columnTypes.size(); ++i) {
+      const auto& expectedType = i < keyTypes.size()
+          ? keyTypes[i]
+          : dependentTypes[i - keyTypes.size()];
+      VELOX_CHECK(
+          columnTypes[i]->equivalent(*expectedType),
+          "Serialized row schema mismatch at column {}: got {}, expected {}",
+          i,
+          columnTypes[i]->toString(),
+          expectedType->toString());
+    }
+  }
+
+  // Restore the hasDuplicates flag.
+  if (hasDuplicates) {
+    table->hasDuplicates_.set();
+  }
+
+  std::vector<uint64_t> precomputedHashes;
+  if (numRows > 0) {
+    precomputedHashes.reserve(numRows);
+    for (uint64_t i = 0; i < numRows; ++i) {
+      precomputedHashes.push_back(readValue.template operator()<uint64_t>());
+    }
+  }
+
+  // Restore row data.
+  std::vector<char*> allRows;
+  allRows.reserve(numRows);
+
+  if (numRows > 0) {
+    std::string serializedRowBuffer;
+    for (uint64_t i = 0; i < numRows; ++i) {
+      char* newRow = table->rows_->newRow();
+
+      // Initialize nextRow pointer to nullptr to avoid garbage values
+      // that could cause crashes or incorrect results in listJoinResults.
+      // This must be done before storeSerializedRow because the serialized
+      // data does not include the nextRow pointer (it's an internal hash
+      // table structure), and uninitialized memory may contain random values.
+      if (table->nextOffset_) {
+        *reinterpret_cast<char**>(newRow + table->nextOffset_) = nullptr;
+      }
+
+      uint32_t rowSize = readValue.template operator()<uint32_t>();
+      if (rowSize > 0) {
+        serializedRowBuffer.resize(rowSize);
+        reader.read(serializedRowBuffer.data(), rowSize);
+        table->rows_->storeSerializedRow(
+            std::string_view(serializedRowBuffer.data(), rowSize), newRow);
+      } else {
+        table->rows_->storeSerializedRow(std::string_view{}, newRow);
+      }
+
+      // Initialize probed flag to false (0) if applicable
+      if (hasProbedFlag && table->rows_->probedFlagOffset() != 0) {
+        bits::clearBit(newRow, table->rows_->probedFlagOffset());
+      }
+
+      // Initialize count to 1 for counting joins. Each deserialized row
+      // represents one occurrence of the key. This matches the behavior of
+      // RowContainer::initializeRow() which also sets count to 1.
+      if (hasCountFlag && table->rows_->countOffset() != 0) {
+        *reinterpret_cast<int32_t*>(newRow + table->rows_->countOffset()) = 1;
+      }
+
+      allRows.push_back(newRow);
+    }
+  }
+
+  // Read columnHasNulls_.
+  uint32_t numColumnFlags = readValue.template operator()<uint32_t>();
+  table->columnHasNulls_.resize(numColumnFlags);
+  for (uint32_t i = 0; i < numColumnFlags; ++i) {
+    table->columnHasNulls_[i] = readValue.template operator()<bool>();
+  }
+
+  table->numDistinct_ = numDistinct;
+  const auto serializedCapacity = readValue.template operator()<uint64_t>();
+  const auto serializedHasherCount = readValue.template operator()<uint32_t>();
+  VELOX_CHECK_EQ(
+      serializedHasherCount,
+      table->hashers_.size(),
+      "Serialized VectorHasher count mismatch");
+
+  for (uint32_t i = 0; i < serializedHasherCount; ++i) {
+    const auto stateSize = readValue.template operator()<uint32_t>();
+    std::string state(stateSize, '\0');
+    if (stateSize > 0) {
+      reader.read(state.data(), stateSize);
+    }
+    table->hashers_[i]->deserializeState(state);
+  }
+
+  const bool hasNormalizedKeys = readValue.template operator()<bool>();
+  if (hasNormalizedKeys) {
+    VELOX_CHECK_EQ(
+        hashModeInt,
+        static_cast<int32_t>(HashMode::kNormalizedKey),
+        "Serialized normalized keys require normalized hash mode");
+    for (auto* row : allRows) {
+      RowContainer::normalizedKey(row) =
+          readValue.template operator()<normalized_key_t>();
+    }
+  }
+
+  table->hashMode_ = static_cast<HashMode>(hashModeInt);
+  if (table->hashMode_ == HashMode::kHash) {
+    table->rows_->disableNormalizedKeys();
+  }
+
+  if (!allRows.empty()) {
+    if (table->hashMode_ == HashMode::kArray) {
+      table->capacity_ = serializedCapacity;
+      const auto bytes = table->capacity_ * tableSlotSize();
+      const auto numPages = memory::AllocationTraits::numPages(bytes);
+      table->rows_->pool()->allocateContiguous(
+          numPages, table->tableAllocation_);
+      table->table_ = table->tableAllocation_.template data<char*>();
+      memset(table->table_, 0, bytes);
+    } else {
+      table->allocateTables(serializedCapacity, kNoSpillInputStartPartitionBit);
+    }
+
+    VELOX_CHECK_EQ(
+        precomputedHashes.size(),
+        allRows.size(),
+        "Serialized join-table format requires stored hashes");
+
+    // Recompute value IDs for kArray to match the deserialized VectorHasher
+    // state. This is required because serialized hashes may be full hashes
+    // when hashRows fell back, or value IDs produced from a different
+    // VectorHasher state.
+    if (table->hashMode_ == HashMode::kArray) {
+      raw_vector<uint64_t> valueIds(allRows.size(), pool);
+      bool success = table->hashRows(
+          folly::Range<char**>(allRows.data(), allRows.size()),
+          false,
+          valueIds);
+      VELOX_CHECK(
+          success,
+          "Failed to compute value IDs in kArray mode during deserialization. "
+          "This indicates the data type does not support value IDs.");
+
+      table->insertForJoin(
+          allRows.data(), valueIds.data(), allRows.size(), nullptr);
+    } else {
+      // For kHash and kNormalizedKey, reuse the stored hashes directly.
+      table->insertForJoin(
+          allRows.data(), precomputedHashes.data(), allRows.size(), nullptr);
+    }
+  }
+  table->numDistinct_ = numDistinct;
+  LOG(INFO) << "Deserialized HashTable: " << table->toString();
+
+  return table;
+}
+
+template <bool ignoreNullKeys>
+std::unique_ptr<HashTable<ignoreNullKeys>>
+HashTable<ignoreNullKeys>::deserializeFrom(
+    const void* data,
+    size_t size,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(data, "Serialized hash table data cannot be null");
+  common::NativeStringReader reader(
+      std::string_view(static_cast<const char*>(data), size));
+  auto table = deserializeImpl(reader, pool);
+  VELOX_CHECK(
+      reader.atEnd(), "Trailing bytes after hash table deserialization");
+  return table;
+}
+
+template size_t HashTable<true>::serializedSize() const;
+template size_t HashTable<false>::serializedSize() const;
+
+template void HashTable<true>::serializeTo(void* data, size_t size) const;
+template void HashTable<false>::serializeTo(void* data, size_t size) const;
+
+template std::unique_ptr<HashTable<true>> HashTable<true>::deserializeFrom(
+    const void* data,
+    size_t size,
+    memory::MemoryPool* pool);
+template std::unique_ptr<HashTable<false>> HashTable<false>::deserializeFrom(
+    const void* data,
+    size_t size,
+    memory::MemoryPool* pool);
 
 } // namespace facebook::velox::exec
