@@ -64,10 +64,12 @@ void formatTypeAnnotation(
     if (static_cast<size_t>(id) < types.types.size() && types.types[id]) {
       dl = dtypeLetter(types.types[id]->dtype());
     }
+    // '#' after the dtype letter marks a value not known to be contiguous.
+    const char* nc = types.contiguous(value) ? "" : "#";
     if (r < 0) {
-      ss << "(?" << dl << ")";
+      ss << "(?" << dl << nc << ")";
     } else {
-      ss << "(" << static_cast<int>(r) << "D" << dl << ")";
+      ss << "(" << static_cast<int>(r) << "D" << dl << nc << ")";
     }
   } else if (kind == nativert::Type::Kind::SymInt) {
     ss << "(L)";
