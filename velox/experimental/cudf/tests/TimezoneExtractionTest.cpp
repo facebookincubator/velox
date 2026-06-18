@@ -33,6 +33,13 @@
 // under UTC proves the divergence is specifically timezone-driven and not a
 // pre-existing extraction bug.
 //
+// IMPORTANT: these tests assert the *current* gap, so they pass only while the
+// gap exists. The divergence tests assert CPU != GPU; once the GPU path honors
+// the session timezone they will (correctly) start failing. At that point flip
+// them to equality assertions (CPU == GPU), the same way the UTC controls below
+// already assert. Do not "fix" a future failure by adjusting the expected
+// divergence -- a green divergence test means the bug is still present.
+//
 // The plan/operator path is used here rather than
 // CudfFunctionBaseTest::assertExpressionMatchesCpu because that lightweight
 // harness evaluates the expression with finalize=false and cannot relabel a

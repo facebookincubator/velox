@@ -35,6 +35,13 @@
 // CudfFunctionBaseTest::evaluate forces GPU execution (it does not consult
 // allowCpuFallback), so these unsupported expressions surface as real throws.
 //
+// IMPORTANT: these tests assert the *current* gap, so they pass only while the
+// gap exists. They assert that GPU evaluation throws; once these functions (and
+// a TIMESTAMP WITH TIME ZONE type) are implemented on GPU they will (correctly)
+// start failing. At that point replace each assertGpuThrows with a correctness
+// assertion that the GPU result matches CPU. A green throw assertion means the
+// function is still unsupported on GPU.
+//
 // These tests require a GPU and are labeled cuda_driver; they will not run in a
 // CPU-only environment.
 //
