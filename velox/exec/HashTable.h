@@ -484,7 +484,8 @@ class BaseHashTable {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  static TagVector loadTags(uint8_t* tags, int64_t tagIndex) {
+  static TagVector
+  loadTags(uint8_t* tags, int64_t tagIndex) {
     // Cannot use xsimd::batch::unaligned here because we need to skip TSAN.
     auto src = tags + tagIndex;
 #if XSIMD_WITH_SSE2
@@ -701,9 +702,8 @@ class HashTable : public BaseHashTable {
     return hashMode_;
   }
 
-  void addRuntimeStats(
-      std::unordered_map<std::string, RuntimeMetric>& runtimeStats)
-      const override {
+  void addRuntimeStats(std::unordered_map<std::string, RuntimeMetric>&
+                           runtimeStats) const override {
     runtimeStats[std::string(kCapacity)] = RuntimeMetric(capacity_);
     runtimeStats[std::string(kHashMode)] =
         RuntimeMetric(static_cast<int64_t>(hashMode_));
@@ -780,6 +780,23 @@ class HashTable : public BaseHashTable {
   /// are left till the end of the table.
   std::string toString(int64_t startBucket, int64_t numBuckets = 1) const;
 
+  /// Returns the exact serialized size in bytes for the current hash table.
+  size_t serializedSize() const;
+
+  /// Serializes the hash table directly to a caller-provided memory buffer.
+  /// @param data Destination buffer
+  /// @param size Size of destination buffer in bytes. Must equal
+  /// serializedSize().
+  void serializeTo(void* data, size_t size) const;
+
+  /// Deserializes the hash table directly from a contiguous memory buffer.
+  /// @param data Serialized hash table bytes
+  /// @param size Serialized hash table size in bytes
+  /// @param pool Memory pool for allocating deserialized data
+  /// @return A new HashTable instance with deserialized data
+  static std::unique_ptr<HashTable<ignoreNullKeys>>
+  deserializeFrom(const void* data, size_t size, memory::MemoryPool* pool);
+
   /// Invoked to check the consistency of the internal state. The function scans
   /// all the table slots to check if the relevant slot counting are correct
   /// such as the number of used slots ('numDistinct_') and the number of
@@ -814,6 +831,14 @@ class HashTable : public BaseHashTable {
   }
 
  private:
+  template <typename Writer>
+  void serializeImpl(Writer& writer) const;
+
+  template <typename Reader>
+  static std::unique_ptr<HashTable<ignoreNullKeys>> deserializeImpl(
+      Reader& reader,
+      memory::MemoryPool* pool);
+
   // Enables debug stats for collisions for debug build.
 #ifdef NDEBUG
   static constexpr bool kTrackLoads = false;

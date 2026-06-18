@@ -23,6 +23,8 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include <string_view>
+
 namespace facebook::velox::exec {
 namespace test {
 class RowContainerTestHelper;
@@ -429,6 +431,10 @@ class RowContainer {
       vector_size_t index,
       char* row);
 
+  /// Copies serialized row bytes produced by 'extractSerializedRows' into the
+  /// container.
+  void storeSerializedRow(std::string_view serialized, char* row);
+
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
   /// corresponding row in 'result' to null.
@@ -598,7 +604,8 @@ class RowContainer {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  int32_t listRows(
+  int32_t
+  listRows(
       RowContainerIterator* iter,
       int32_t maxRows,
       uint64_t maxBytes,
@@ -709,7 +716,8 @@ class RowContainer {
   __attribute__((__no_sanitize__("thread")))
 #endif
 #endif
-  void setProbedFlag(char** rows, int32_t numRows);
+  void
+  setProbedFlag(char** rows, int32_t numRows);
 
   /// Compares the value at 'column' in 'row' with the value at 'index' in
   /// 'decoded'. Returns 0 for equal, < 0 for 'row' < 'decoded', > 0 otherwise.
