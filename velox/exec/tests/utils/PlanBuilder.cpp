@@ -1350,6 +1350,42 @@ PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count, bool isPartial) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    std::vector<core::PlanNodePtr> plans,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(plans),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry));
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::stateSource(
+    const std::string& stateName,
+    const RowTypePtr& outputType,
+    bool delta) {
+  VELOX_CHECK_NULL(planNode_, "StateSource must be the source node");
+  planNode_ = std::make_shared<core::StateSourceNode>(
+      nextPlanNodeId(), stateName, outputType, delta);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::stateHashJoin(
+    const std::string& stateName,
+    std::vector<std::string> probeKeys,
+    const RowTypePtr& outputType) {
+  VELOX_CHECK_NOT_NULL(planNode_, "StateHashJoin cannot be the source node");
+  planNode_ = std::make_shared<core::StateHashJoinNode>(
+      nextPlanNodeId(), stateName, std::move(probeKeys), outputType, planNode_);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::enforceSingleRow() {
   planNode_ =
       std::make_shared<core::EnforceSingleRowNode>(nextPlanNodeId(), planNode_);
