@@ -1908,6 +1908,20 @@ std::string CompileCtx::cudaType(ValueCP value) const {
         value->name());
     return cudaTypeString(types_.types[value->id()]->dtype());
   }
+  // A TensorList's element type (all elements share a dtype) lets an op
+  // template on a list input, e.g. group_length_guard_final templates on the
+  // head_list (offset) and values element types.
+  if (kind == nativert::Type::Kind::TensorList) {
+    auto elements = value->getListElements();
+    TORCH_CHECK(
+        !elements.empty(), "Empty TensorList for cudaType: ", value->name());
+    auto elemId = elements[0]->id();
+    TORCH_CHECK(
+        elemId < types_.types.size() && types_.types[elemId],
+        "No TensorMeta for TensorList element of ",
+        value->name());
+    return cudaTypeString(types_.types[elemId]->dtype());
+  }
   switch (kind) {
     case nativert::Type::Kind::SymInt:
       return "int32_t";
@@ -2059,26 +2073,11 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   currentNodeId_ = project.id();
   numDistinctOps_ = 0;
   auto& nodes = project.nodes();
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    currentExprOrdinal_ = static_cast<int32_t>(i);
-    auto* node = nodes[i];
-    if (node->target() == "prim.Input" || placed_.count(node)) {
-      continue;
-    }
-    if (node->target() == "prim.ListUnpack") {
-      auto* listValue = node->inputs()[0].value;
-      auto* producer = listValue->producer();
-      // A prim.listunpack over a placed fused op is a no-op. The fused code
-      // assigns the tensors in the list directly.
-      if (producer) {
-        auto* producerMeta = Registry::metadata(producer->target());
-        if (producerMeta && !producerMeta->isStandalone(producer, types_)) {
-          placed_.insert(node);
-          continue;
-        }
-      }
-    }
-    auto sg = extractSubgraph(node, project.inputs(), placed_);
+
+  // Generates the kernel / standalone for a single node: extract its subgraph
+  // and either reuse a duplicate ProjectOperation or build a new one.
+  auto generateNode = [&](NodeCP genNode) {
+    auto sg = extractSubgraph(genNode, project.inputs(), placed_);
     auto it = projectOps_.find(sg);
     if (it != projectOps_.end()) {
       ops_.emplace_back(it->second, sg, ivalueStorage_);
@@ -2114,6 +2113,50 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
         addSelfExtraBindings(ops_.back(), projectOp->extraValues());
       }
     }
+  };
+
+  // Fused ops whose only consumer is a no-op prim.ListUnpack (the fused code
+  // assigns the list tensors directly). They are skipped during the main pass;
+  // any that a downstream consumer pulls into its own kernel become placed, and
+  // the genuinely orphaned ones (e.g. a single-use list result feeding graph
+  // outputs, like group_length_guard_final) are generated in the cleanup pass.
+  std::vector<NodeCP> deferredFusedProducers;
+
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    currentExprOrdinal_ = static_cast<int32_t>(i);
+    auto* node = nodes[i];
+    if (node->target() == "prim.Input" || placed_.count(node)) {
+      continue;
+    }
+    if (node->target() == "prim.ListUnpack") {
+      auto* listValue = node->inputs()[0].value;
+      auto* producer = listValue->producer();
+      // A prim.listunpack over a fused op is a no-op. Mark the unpack placed
+      // and defer its producer: it is generated on its own only if nothing else
+      // pulls it into a kernel (see the cleanup pass below).
+      if (producer) {
+        auto* producerMeta = Registry::metadata(producer->target());
+        if (producerMeta && !producerMeta->isStandalone(producer, types_)) {
+          placed_.insert(node);
+          if (!placed_.count(producer)) {
+            deferredFusedProducers.push_back(producer);
+          }
+          continue;
+        }
+      }
+    }
+    generateNode(node);
+  }
+
+  // Cleanup pass: generate any deferred fused producer that no consumer pulled
+  // into a kernel, rooted at the producer rather than the (no-op) unpack.
+  for (size_t k = 0; k < deferredFusedProducers.size(); ++k) {
+    auto* producer = deferredFusedProducers[k];
+    if (placed_.count(producer)) {
+      continue;
+    }
+    currentExprOrdinal_ = static_cast<int32_t>(nodes.size() + k);
+    generateNode(producer);
   }
   if (ops_.empty()) {
     return nullptr;

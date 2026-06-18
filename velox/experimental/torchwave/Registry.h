@@ -67,6 +67,20 @@ struct ElementwiseOp {
 /// largest input, as in all elementwise, kSum is concatenation.
 enum class SizeShortcut { kNone, kMax, kSum };
 
+/// Identifies a metadata-only standalone op (no real compute, only tensor
+/// metadata manipulation) so the executor can apply a host-side shortcut
+/// instead of a generic eager dispatch. kNone means no shortcut applies.
+enum class StandaloneShortcut {
+  kNone,
+  kListPack,
+  kView,
+  kSlice,
+  kSelectInt,
+  kUnsqueeze,
+  kTranspose,
+  kNarrow,
+};
+
 /// Specifies which arguments determine the number of elements a kernel
 /// processes.
 struct SizeArguments {
@@ -225,6 +239,13 @@ struct Metadata {
   /// If true, the op only supports 1-d (flat) inputs. Falls back to standalone
   /// when any input has rank > 1 or unknown rank.
   bool only1d{false};
+
+  /// If true, the op only manipulates tensor metadata (e.g. a view, slice, or
+  /// select) and does no real compute, so a standalone instance can be served
+  /// by a host-side shortcut. Set via the builder for known metadata-only ops.
+  /// prim.ListPack is also metadata-only but has no Metadata entry; that case
+  /// is handled directly where standalone Launches are built.
+  bool metadataOnly{false};
 
   /// If set, called to determine standalone status when isStandalone_ is false.
   std::function<bool(NodeCP, const ValueTypes&)> isStandaloneFunc;
@@ -482,6 +503,7 @@ class MetadataBuilder {
   MetadataBuilder& inPlaceIfLastUse(bool val = true);
   MetadataBuilder& isStandalone(bool val = true);
   MetadataBuilder& only1d(bool val = true);
+  MetadataBuilder& metadataOnly(bool val = true);
   MetadataBuilder& isStandaloneFunc(
       std::function<bool(NodeCP, const ValueTypes&)> func);
   MetadataBuilder& cost(float val);
