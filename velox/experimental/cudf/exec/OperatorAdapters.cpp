@@ -42,6 +42,7 @@
 #include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
@@ -1044,6 +1045,19 @@ std::string_view transportTypeOf(
   }
   return core::TransportKind::kHttp;
 }
+
+// Returns whether the node's exchange operator should use the UCX transport:
+// the coordinator annotated the node UCX and a UCX output buffer manager is
+// available for this query, i.e. one is registered and its per-query
+// availability predicate holds. Derives the decision from the same per-query
+// verdict (tryGet) that Task uses to select the output buffer manager, so the
+// operator and the manager always agree.
+bool usesUcxTransport(exec::DriverCtx* ctx, std::string_view annotation) {
+  return annotation == core::TransportKind::kUcx &&
+      exec::OutputBufferManagerRegistry::tryGet(
+          *ctx->task->queryCtx(), std::string{core::TransportKind::kUcx}) !=
+      nullptr;
+}
 } // namespace
 
 /// ExchangeAdapter - Replaces with UcxExchange for UCX transport.
@@ -1060,12 +1074,9 @@ class ExchangeAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    if (!CudfConfig::getInstance().exchange) {
-      return false;
-    }
-    const auto transportType = transportTypeOf(
+    const auto annotation = transportTypeOf(
         ctx->task->planFragment().inputTransportTypes, planNode->id());
-    return transportType == core::TransportKind::kUcx;
+    return usesUcxTransport(ctx, annotation);
   }
 
   bool acceptsGpuInput() const override {
@@ -1118,12 +1129,9 @@ class ExchangeAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    if (!CudfConfig::getInstance().exchange) {
-      return true;
-    }
-    const auto transportType = transportTypeOf(
+    const auto annotation = transportTypeOf(
         ctx->task->planFragment().inputTransportTypes, planNode->id());
-    return transportType != core::TransportKind::kUcx;
+    return !usesUcxTransport(ctx, annotation);
   }
 };
 
@@ -1142,12 +1150,9 @@ class MergeExchangeAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    if (!CudfConfig::getInstance().exchange) {
-      return false;
-    }
-    const auto transportType = transportTypeOf(
+    const auto annotation = transportTypeOf(
         ctx->task->planFragment().inputTransportTypes, planNode->id());
-    return transportType == core::TransportKind::kUcx;
+    return usesUcxTransport(ctx, annotation);
   }
 
   bool acceptsGpuInput() const override {
@@ -1179,12 +1184,9 @@ class MergeExchangeAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    if (!CudfConfig::getInstance().exchange) {
-      return true;
-    }
-    const auto transportType = transportTypeOf(
+    const auto annotation = transportTypeOf(
         ctx->task->planFragment().inputTransportTypes, planNode->id());
-    return transportType != core::TransportKind::kUcx;
+    return !usesUcxTransport(ctx, annotation);
   }
 };
 
@@ -1203,12 +1205,9 @@ class PartitionedOutputAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    if (!CudfConfig::getInstance().exchange) {
-      return false;
-    }
-    const auto transportType = transportTypeOf(
+    const auto annotation = transportTypeOf(
         ctx->task->planFragment().outputTransportTypes, planNode->id());
-    return transportType == core::TransportKind::kUcx;
+    return usesUcxTransport(ctx, annotation);
   }
 
   bool acceptsGpuInput() const override {
@@ -1241,12 +1240,9 @@ class PartitionedOutputAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
-    if (!CudfConfig::getInstance().exchange) {
-      return true;
-    }
-    const auto transportType = transportTypeOf(
+    const auto annotation = transportTypeOf(
         ctx->task->planFragment().outputTransportTypes, planNode->id());
-    return transportType != core::TransportKind::kUcx;
+    return !usesUcxTransport(ctx, annotation);
   }
 };
 
@@ -1271,7 +1267,19 @@ void registerAllOperatorAdapters() {
         std::string{core::TransportKind::kUcx},
         std::make_shared<exec::OutputBufferManagerEntry>(
             exec::OutputBufferManagerEntry{
-                ucx_exchange::UcxOutputQueueManager::getInstanceRef(), {}}),
+                ucx_exchange::UcxOutputQueueManager::getInstanceRef(),
+                // Per-query policy: UCX is usable only when cuDF is enabled and
+                // cuDF exchange is selected for this query. Capability (the
+                // entry's presence) is gated by the surrounding exchange flag.
+                [](const core::QueryCtx& queryCtx) {
+                  const auto& config = queryCtx.queryConfig();
+                  return config.get<bool>(
+                             CudfConfig::kCudfEnabled,
+                             CudfConfig::getInstance().enabled) &&
+                      config.get<bool>(
+                          CudfConfig::kUcxExchange,
+                          CudfConfig::getInstance().exchange);
+                }}),
         /*overwrite=*/true);
   }
 

@@ -40,9 +40,12 @@ class ExchangeAdapterSelectionTest : public OperatorTestBase {
  protected:
   void SetUp() override {
     OperatorTestBase::SetUp();
-    cudf_velox::registerCudf();
     savedExchange_ = cudf_velox::CudfConfig::getInstance().exchange;
     cudf_velox::CudfConfig::getInstance().exchange = true;
+    // Register with exchange enabled so the UCX output buffer manager entry is
+    // present; the adapters require the entry to be available (tryGet) to
+    // select UCX.
+    cudf_velox::registerCudf();
   }
 
   void TearDown() override {
@@ -227,6 +230,88 @@ TEST_F(
   EXPECT_TRUE(props.canRunOnGPU);
   EXPECT_TRUE(props.producesGpuOutput);
   EXPECT_FALSE(props.acceptsGpuInput);
+}
+
+TEST_F(ExchangeAdapterSelectionTest, exchangeReplacementHonorsPerQueryFlags) {
+  auto& registry = cudf_velox::OperatorAdapterRegistry::getInstance();
+  struct Case {
+    const char* enabled;
+    const char* exchange;
+    bool expectReplace;
+  };
+  const std::vector<Case> cases = {
+      {"true", "true", true},
+      {"true", "false", false},
+      {"false", "true", false},
+      {"false", "false", false},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(fmt::format("enabled={} exchange={}", c.enabled, c.exchange));
+    auto plan = makeExchangePlan();
+    auto planNode = plan.planNode;
+    setTransportTypes(plan, planNode->id(), TransportKind::kUcx);
+    auto queryCtx = core::QueryCtx::create(
+        nullptr,
+        core::QueryConfig{
+            {{std::string(cudf_velox::CudfConfig::kCudfEnabled), c.enabled},
+             {std::string(cudf_velox::CudfConfig::kUcxExchange), c.exchange}}});
+    auto task = makeTask("test-exchange-task", std::move(plan), queryCtx);
+    auto driverCtx = makeDriverCtx(task);
+    Exchange exchangeOp(
+        0,
+        driverCtx.get(),
+        std::dynamic_pointer_cast<const core::ExchangeNode>(planNode),
+        nullptr);
+
+    auto* adapter = registry.findAdapter(&exchangeOp);
+    ASSERT_NE(adapter, nullptr);
+    EXPECT_EQ(
+        !adapter->keepOperator(&exchangeOp, planNode, driverCtx.get()),
+        c.expectReplace);
+  }
+}
+
+TEST_F(
+    ExchangeAdapterSelectionTest,
+    partitionedOutputReplacementHonorsPerQueryFlags) {
+  auto& registry = cudf_velox::OperatorAdapterRegistry::getInstance();
+  struct Case {
+    const char* enabled;
+    const char* exchange;
+    bool expectReplace;
+  };
+  const std::vector<Case> cases = {
+      {"true", "true", true},
+      {"true", "false", false},
+      {"false", "true", false},
+      {"false", "false", false},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(fmt::format("enabled={} exchange={}", c.enabled, c.exchange));
+    auto plan = makePartitionedOutputPlan();
+    auto planNode = plan.planNode;
+    setTransportTypes(
+        plan, "", TransportKind::kHttp, planNode->id(), TransportKind::kUcx);
+    auto queryCtx = core::QueryCtx::create(
+        nullptr,
+        core::QueryConfig{
+            {{std::string(cudf_velox::CudfConfig::kCudfEnabled), c.enabled},
+             {std::string(cudf_velox::CudfConfig::kUcxExchange), c.exchange}}});
+    auto task =
+        makeTask("test-partitioned-output-task", std::move(plan), queryCtx);
+    auto poDriverCtx = makeDriverCtx(task);
+    PartitionedOutput poOp(
+        0,
+        poDriverCtx.get(),
+        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(planNode),
+        false);
+
+    auto* adapter = registry.findAdapter(&poOp);
+    ASSERT_NE(adapter, nullptr);
+    EXPECT_EQ(
+        !adapter->keepOperator(&poOp, planNode, poDriverCtx.get()),
+        c.expectReplace);
+  }
 }
 
 TEST_F(
