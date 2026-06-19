@@ -267,6 +267,32 @@ inline bool builtin_add_overflow(T a, U b, T* result) {
     }
 }
 
+// Overload for mixed signed/unsigned types in subtraction (e.g., int32_t - int8_t)
+template<typename T, typename U>
+inline bool builtin_sub_overflow(T a, U b, T* result) {
+    static_assert(std::is_integral_v<T> && std::is_integral_v<U>,
+                  "T and U must be integral types");
+
+    if constexpr (std::is_signed_v<T> && std::is_unsigned_v<U>) {
+        if (b > static_cast<U>(std::numeric_limits<T>::max())) {
+            return true; // b is too large to safely subtract
+        }
+        return builtin_sub_overflow(a, static_cast<T>(b), result);
+    } else if constexpr (std::is_unsigned_v<T> && std::is_signed_v<U>) {
+        if (b < 0) {
+            // Subtracting a negative is addition - check overflow.
+            if (static_cast<T>(-b) > std::numeric_limits<T>::max() - a) {
+                return true;
+            }
+            *result = a + static_cast<T>(-b);
+            return false;
+        }
+        return builtin_sub_overflow(a, static_cast<T>(b), result);
+    } else {
+        return builtin_sub_overflow(a, static_cast<T>(b), result);
+    }
+}
+
 } // namespace facebook::velox::windows
 
 // Define macros that replace GCC builtins with our implementations

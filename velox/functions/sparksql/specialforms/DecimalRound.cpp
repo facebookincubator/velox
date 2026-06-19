@@ -193,7 +193,14 @@ struct RoundHalfUpPolicy {
     TResult rescaledValue;
     DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
         rescaledValue, input, factors_.divideFactor.value_or(1), false, 0, 0);
+#ifdef _WIN32
+    // MSVC's Int128 shim does not implicitly narrow in compound assignment;
+    // cast the 128-bit factor to the result type explicitly. The product fits
+    // in TResult by construction (the rounded short-decimal result precision).
+    rescaledValue *= static_cast<TResult>(factors_.multiplyFactor.value_or(1));
+#else
     rescaledValue *= factors_.multiplyFactor.value_or(1);
+#endif
     return rescaledValue;
   }
 

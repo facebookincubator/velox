@@ -24,6 +24,25 @@
 namespace facebook::velox::functions::sparksql {
 using int256_t = boost::multiprecision::int256_t;
 
+// Widen an integer to int256_t. On MSVC, velox int128_t/uint128_t are shim
+// classes that boost::multiprecision cannot convert directly, so bridge them
+// via their 64-bit limbs. On POSIX this is a plain static_cast (byte-identical
+// to the previous direct conversions), because boost supports native __int128.
+template <typename T>
+inline int256_t toInt256(const T& value) {
+#ifdef _WIN32
+  if constexpr (
+      std::is_same_v<T, int128_t> || std::is_same_v<T, uint128_t>) {
+    return int256_t(value.high()) * (int256_t(1) << 64) +
+        int256_t(value.low());
+  } else {
+    return static_cast<int256_t>(value);
+  }
+#else
+  return static_cast<int256_t>(value);
+#endif
+}
+
 // DecimalUtil holds the utility function for Spark sql.
 class DecimalUtil {
  public:
@@ -54,6 +73,37 @@ class DecimalUtil {
       typename = std::enable_if_t<
           std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>>>
   inline static T convert(int256_t in, bool& overflow) {
+#ifdef _WIN32
+    // MSVC: velox int128_t/uint128_t are shim classes, so boost's
+    // `.convert_to<__uint128_t>()` and direct int256<->shim casts used by the
+    // POSIX path are unavailable. Extract the low limbs explicitly instead.
+    const bool isNegative = in < 0;
+    int256_t inAbs = abs(in);
+    if ((inAbs >> (sizeof(T) * 8)) > 0) {
+      // Value does not fit in sizeof(T) bits.
+      overflow = true;
+      return 0;
+    }
+    constexpr int256_t kU64Mask = std::numeric_limits<uint64_t>::max();
+    const uint64_t lo = (inAbs & kU64Mask).template convert_to<uint64_t>();
+    T result;
+    if constexpr (std::is_same_v<T, int64_t>) {
+      if (lo > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        overflow = true;
+        return 0;
+      }
+      result = static_cast<int64_t>(lo);
+    } else {
+      const uint64_t hi =
+          ((inAbs >> 64) & kU64Mask).template convert_to<uint64_t>();
+      if (hi > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        overflow = true;
+        return 0;
+      }
+      result = int128_t(static_cast<int64_t>(hi), lo);
+    }
+    return isNegative ? -result : result;
+#else
     typedef typename std::
         conditional<std::is_same_v<T, int64_t>, uint64_t, __uint128_t>::type UT;
     T result = 0;
@@ -75,6 +125,7 @@ class DecimalUtil {
       result = static_cast<T>(unsignResult);
     }
     return isNegative ? -result : result;
+#endif
   }
 
   // Returns the abs value of input value.
@@ -185,9 +236,9 @@ class DecimalUtil {
         overflow = true;
         return R(-1);
       }
-      int256_t aLarge = a;
+      int256_t aLarge = toInt256(a);
       int256_t aLargeScaledUp = aLarge * getPowersOfTen(aRescale);
-      int256_t bLarge = b;
+      int256_t bLarge = toInt256(b);
       int256_t resultLarge = aLargeScaledUp / bLarge;
       int256_t remainderLarge = aLargeScaledUp % bLarge;
       /// Since we are scaling up and then, scaling down, round-up the result

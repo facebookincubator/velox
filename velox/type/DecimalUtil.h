@@ -117,8 +117,7 @@ class DecimalUtil {
   FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
       T value,
       uint8_t precision) {
-    const T powerOfTen = static_cast<T>(kPowersOfTen[precision]);
-    return value < powerOfTen && value > -powerOfTen;
+    return value < kPowersOfTen[precision] && value > -kPowersOfTen[precision];
   }
 
   /// Helper function to convert a decimal value to string.

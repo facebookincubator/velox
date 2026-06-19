@@ -37,8 +37,17 @@ struct DecimalCeilFunction {
 
   template <typename R, typename A>
   void call(R& out, const A& a) {
+#ifdef _WIN32
+    // MSVC: int128_t is a shim class; promote `a` to int128_t so mixed
+    // int64/int128 modulo and division resolve, and narrow the result back to
+    // R explicitly (the shim has no implicit narrowing conversion).
+    const int128_t scaled = static_cast<int128_t>(a);
+    const auto increment = (scaled % rescaleFactor_) > 0 ? 1 : 0;
+    out = static_cast<R>(scaled / rescaleFactor_ + increment);
+#else
     const auto increment = (a % rescaleFactor_) > 0 ? 1 : 0;
     out = a / rescaleFactor_ + increment;
+#endif
   }
 
  private:
