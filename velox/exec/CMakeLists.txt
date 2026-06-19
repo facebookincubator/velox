@@ -236,6 +236,7 @@ velox_link_libraries(
   velox_exec_window
   velox_expression
   velox_file
+  velox_presto_type_parser
   velox_presto_serializer
   velox_trace
   velox_time
