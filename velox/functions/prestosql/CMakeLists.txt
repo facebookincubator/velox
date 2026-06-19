@@ -159,12 +159,16 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   FastFloat::fast_float
-  stemmer::stemmer
 )
 
 if(VELOX_ENABLE_FAISS)
   velox_link_libraries(velox_functions_prestosql_impl FAISS::faiss)
   velox_compile_definitions(velox_functions_prestosql_impl PRIVATE VELOX_ENABLE_FAISS)
+endif()
+
+# stemmer (Snowball) is unavailable on Windows; word_stem is disabled there.
+if(NOT WIN32)
+  velox_link_libraries(velox_functions_prestosql_impl stemmer::stemmer)
 endif()
 
 if(VELOX_ENABLE_GEO)
@@ -183,6 +187,11 @@ endif()
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE high_memory_pool)
+endif()
+
+# On Windows MSVC, DecimalFunctions.cpp generates too many sections
+if(MSVC)
+  velox_compile_options(velox_functions_prestosql_impl PRIVATE /bigobj)
 endif()
 
 if(${VELOX_ENABLE_AGGREGATES})

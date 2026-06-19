@@ -19,9 +19,38 @@ velox_add_library(
   TimeZoneMap.h
   TimeZoneDatabase.cpp
   TimeZoneLinks.cpp
-  TimeZoneMap.cpp
   TimeZoneNames.h
   TimeZoneNames.cpp
 )
 
-velox_link_libraries(velox_type_tz velox_exception velox_external_tzdb fmt::fmt Folly::folly)
+# On Windows, use TimeZoneMapStubs.cpp which builds the timezone database from
+# the static data in TimeZoneDatabase.cpp without any velox_external_tzdb
+# dependency (named zones fall back to UTC). TimeZoneMapStubsTzdbList.cpp
+# provides stub implementations for tzdb symbols used by other modules
+# (DateTimeFormatter, TimeWithTimezoneRegistration) that directly call into tzdb.
+if(WIN32)
+  if(VELOX_MONO_LIBRARY)
+    target_sources(velox PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/TimeZoneMapStubs.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/TimeZoneMapStubsTzdbList.cpp)
+  else()
+    target_sources(velox_type_tz PRIVATE
+      TimeZoneMapStubs.cpp
+      TimeZoneMapStubsTzdbList.cpp)
+  endif()
+else()
+  target_sources(velox_type_tz PRIVATE TimeZoneMap.cpp)
+endif()
+
+velox_link_libraries(velox_type_tz velox_exception fmt::fmt Folly::folly)
+
+# Link to velox_external_tzdb only on non-Windows platforms. Windows uses the
+# TimeZoneMapStubs.cpp path which has no tzdb dependency.
+if(NOT WIN32)
+  velox_link_libraries(velox_type_tz velox_external_tzdb)
+endif()
+
+# Add Windows-specific glog defines
+if(WIN32)
+  velox_compile_definitions(velox_type_tz PRIVATE GLOG_USE_GLOG_EXPORT)
+endif()

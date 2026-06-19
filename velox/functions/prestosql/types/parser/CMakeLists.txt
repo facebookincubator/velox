@@ -16,42 +16,56 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-bison_target(
-  TypeParser
-  TypeParser.yy
-  ${CMAKE_CURRENT_BINARY_DIR}/TypeParser.yy.cc
-  DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/TypeParser.yy.h
-  COMPILE_FLAGS "-Werror -Wno-deprecated"
-)
-
-flex_target(
-  TypeParserScanner
-  TypeParser.ll
-  ${CMAKE_CURRENT_BINARY_DIR}/Scanner.cpp
-  COMPILE_FLAGS "-Cf --prefix=veloxprestotp"
-)
-
-add_flex_bison_dependency(TypeParserScanner TypeParser)
-
-if(VELOX_MONO_LIBRARY)
-  add_custom_target(
-    velox_presto_type_parser_gen_src
-    DEPENDS ${BISON_TypeParser_OUTPUTS} ${FLEX_TypeParserScanner_OUTPUTS}
+if(BISON_FOUND AND FLEX_FOUND)
+  bison_target(
+    TypeParser
+    TypeParser.yy
+    ${CMAKE_CURRENT_BINARY_DIR}/TypeParser.yy.cc
+    DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/TypeParser.yy.h
+    COMPILE_FLAGS "-Werror -Wno-deprecated"
   )
-  add_dependencies(velox velox_presto_type_parser_gen_src)
+
+  flex_target(
+    TypeParserScanner
+    TypeParser.ll
+    ${CMAKE_CURRENT_BINARY_DIR}/Scanner.cpp
+    COMPILE_FLAGS "--prefix=veloxprestotp"
+  )
+
+  add_flex_bison_dependency(TypeParserScanner TypeParser)
+  set(_PARSER_SRCS ${BISON_TypeParser_OUTPUTS} ${FLEX_TypeParserScanner_OUTPUTS})
+
+  if(VELOX_MONO_LIBRARY)
+    add_custom_target(
+      velox_presto_type_parser_gen_src
+      DEPENDS ${BISON_TypeParser_OUTPUTS} ${FLEX_TypeParserScanner_OUTPUTS}
+    )
+    add_dependencies(velox velox_presto_type_parser_gen_src)
+  endif()
+else()
+  message(STATUS "Bison/Flex not found - using pre-generated parser files for presto_type_parser")
+  set(_PARSER_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/generated/TypeParser.yy.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/generated/Scanner.cpp
+  )
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/generated)
 endif()
+
 velox_add_library(
   velox_presto_type_parser
-  ${BISON_TypeParser_OUTPUTS}
-  ${FLEX_TypeParserScanner_OUTPUTS}
+  ${_PARSER_SRCS}
   ParserUtil.cpp
   HEADERS
   ParserUtil.h
   Scanner.h
   TypeParser.h
 )
-velox_include_directories(
-  velox_presto_type_parser
-  PRIVATE ${PROJECT_BINARY_DIR} ${FLEX_INCLUDE_DIRS}
-)
+velox_include_directories(velox_presto_type_parser PRIVATE ${PROJECT_BINARY_DIR})
+if(FLEX_FOUND)
+  velox_include_directories(velox_presto_type_parser PRIVATE ${FLEX_INCLUDE_DIRS})
+endif()
 velox_link_libraries(velox_presto_type_parser velox_common_base)
+
+if(WIN32)
+  velox_compile_definitions(velox_presto_type_parser PRIVATE YY_NO_UNISTD_H)
+endif()

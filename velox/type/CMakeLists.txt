@@ -79,3 +79,8 @@ velox_link_libraries(
   Folly::folly
   re2::re2
 )
+
+# Add Windows-specific glog defines
+if(WIN32)
+  velox_compile_definitions(velox_type PRIVATE GLOG_USE_GLOG_EXPORT)
+endif()

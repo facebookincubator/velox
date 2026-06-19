@@ -12,6 +12,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# On Windows with MSVC and vcpkg, use Arrow's CMake config
+if(MSVC)
+  # Avoid recursive calls
+  if(NOT _VELOX_FINDING_ARROW)
+    set(_VELOX_FINDING_ARROW TRUE)
+    
+    find_package(Arrow CONFIG QUIET)
+    if(Arrow_FOUND)
+      find_package(Parquet CONFIG QUIET)
+      find_package(Thrift CONFIG QUIET)
+      
+      # Create aliases for compatibility
+      if(NOT TARGET arrow)
+        if(TARGET Arrow::arrow_shared)
+          add_library(arrow ALIAS Arrow::arrow_shared)
+        elseif(TARGET Arrow::arrow_static)
+          add_library(arrow ALIAS Arrow::arrow_static)
+        endif()
+      endif()
+      
+      if(NOT TARGET parquet)
+        if(TARGET Parquet::parquet_shared)
+          add_library(parquet ALIAS Parquet::parquet_shared)
+        elseif(TARGET Parquet::parquet_static)
+          add_library(parquet ALIAS Parquet::parquet_static)
+        endif()
+      endif()
+      
+      if(NOT TARGET arrow_testing)
+        # Arrow testing library may not be available in vcpkg build
+        add_library(arrow_testing INTERFACE)
+      endif()
+      
+      if(NOT TARGET thrift AND TARGET thrift::thrift)
+        add_library(thrift ALIAS thrift::thrift)
+      endif()
+      
+      unset(_VELOX_FINDING_ARROW)
+      return()
+    endif()
+    
+    unset(_VELOX_FINDING_ARROW)
+  else()
+    # We're being called recursively, just return
+    return()
+  endif()
+endif()
+
 include(FindPackageHandleStandardArgs)
 
 find_library(ARROW_LIB libarrow.a)
