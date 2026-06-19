@@ -67,6 +67,10 @@ struct ResolvedAggregateInfo {
   // Post-permutation index of this aggregate's boolean mask column. Set only
   // for masked aggregates at raw-input steps; nullopt otherwise.
   std::optional<uint32_t> maskIndex;
+  // True if the aggregate was declared on a decimal raw input in the plan.
+  // Routing keys off the function family, not the physical batch type (which is
+  // VARBINARY/STRING on intermediate and final steps).
+  bool isDecimalAggregate;
 };
 
 // Parse aggregate inputs from the aggregation node and resolve companion steps,

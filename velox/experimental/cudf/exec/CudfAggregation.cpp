@@ -171,6 +171,8 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     const auto resultType = exec::isPartialOutput(companionStep)
         ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
         : outputType->childAt(numKeys + i);
+    const auto isDecimalAggregate = aggregate.rawInputTypes.size() == 1 &&
+        aggregate.rawInputTypes[0]->isDecimal();
 
     // Masks apply only at raw-input steps; non-raw steps (kIntermediate/kFinal)
     // gate it off so maskIndex stays nullopt there.
@@ -188,7 +190,8 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
         isCountFunctionName(aggregate.call->name())
             ? std::make_optional(getCountInputKind(aggregate, constants[i]))
             : std::nullopt,
-        maskIndex);
+        maskIndex,
+        isDecimalAggregate);
   }
   return params;
 }
