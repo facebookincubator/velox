@@ -77,6 +77,7 @@ class HashTableCache {
   ///
   /// This is used when an external system (e.g., Gluten) pre-builds a hash
   /// table and wants Velox tasks to reuse it via HashBuild's cache path.
+  /// The key must not already exist in the cache.
   std::shared_ptr<HashTableCacheEntry> add(
       const std::string& key,
       std::shared_ptr<BaseHashTable> table,
@@ -84,7 +85,7 @@ class HashTableCache {
       std::shared_ptr<memory::MemoryPool> tablePool);
 
   /// Returns true if a table exists and build is complete for the given key.
-  bool hasTable(const std::string& key);
+  bool exist(const std::string& key);
 
  private:
   HashTableCache() = default;

@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
@@ -330,7 +331,7 @@ TEST_F(HashTableCacheTest, addCreatesEntryAndIsDiscoverable) {
   EXPECT_EQ(entry->table, table);
   EXPECT_TRUE(entry->hasNullKeys);
 
-  EXPECT_TRUE(cache->hasTable(key));
+  EXPECT_TRUE(cache->exist(key));
 
   ContinueFuture future = ContinueFuture::makeEmpty();
   auto getEntry = cache->get(key, "task1", queryCtx_.get(), &future);
@@ -339,7 +340,26 @@ TEST_F(HashTableCacheTest, addCreatesEntryAndIsDiscoverable) {
   EXPECT_FALSE(future.valid());
 }
 
-TEST_F(HashTableCacheTest, addUnblocksExistingWaiters) {
+TEST_F(HashTableCacheTest, addRejectsInvalidArguments) {
+  auto* cache = HashTableCache::instance();
+
+  auto tableRoot =
+      memory::memoryManager()->addRootPool("HashTableCacheInvalidArgs");
+  auto tablePool = tableRoot->addLeafChild("leaf");
+  auto table = makeTestJoinHashTable(tablePool.get());
+
+  VELOX_ASSERT_THROW(
+      cache->add("", table, false, tablePool),
+      "Cannot add table with empty key");
+  VELOX_ASSERT_THROW(
+      cache->add("inject_invalid_null_table", nullptr, false, tablePool),
+      "Cannot add null table");
+  VELOX_ASSERT_THROW(
+      cache->add("inject_invalid_null_pool", table, false, nullptr),
+      "Cannot add with null pool");
+}
+
+TEST_F(HashTableCacheTest, addFailsIfEntryAlreadyExists) {
   auto* cache = HashTableCache::instance();
   const std::string key = "inject2";
   trackKey(key);
@@ -360,19 +380,15 @@ TEST_F(HashTableCacheTest, addUnblocksExistingWaiters) {
   EXPECT_FALSE(waiterFuture2.isReady());
 
   auto table = makeTestJoinHashTable(entry->tablePool.get());
-  auto injectedEntry = cache->add(key, table, false, entry->tablePool);
-
-  EXPECT_EQ(injectedEntry, entry);
-  EXPECT_TRUE(entry->buildComplete);
-  EXPECT_EQ(entry->builderTaskId, "task_builder");
-  EXPECT_EQ(entry->table, table);
-  EXPECT_FALSE(entry->hasNullKeys);
-
-  EXPECT_TRUE(waiterFuture1.isReady());
-  EXPECT_TRUE(waiterFuture2.isReady());
+  VELOX_ASSERT_THROW(
+      cache->add(key, table, false, entry->tablePool),
+      "Cannot add table for existing key");
+  EXPECT_FALSE(entry->buildComplete);
+  EXPECT_FALSE(waiterFuture1.isReady());
+  EXPECT_FALSE(waiterFuture2.isReady());
 }
 
-TEST_F(HashTableCacheTest, addDoesNotOverwriteCompleteEntry) {
+TEST_F(HashTableCacheTest, addFailsIfCompleteEntryAlreadyExists) {
   auto* cache = HashTableCache::instance();
   const std::string key = "inject3";
   trackKey(key);
@@ -389,11 +405,46 @@ TEST_F(HashTableCacheTest, addDoesNotOverwriteCompleteEntry) {
   auto root2 = memory::memoryManager()->addRootPool("HashTableCacheInject3_2");
   auto pool2 = root2->addLeafChild("leaf");
   auto table2 = makeTestJoinHashTable(pool2.get());
-  auto entry2 = cache->add(key, table2, true, pool2);
+  VELOX_ASSERT_THROW(
+      cache->add(key, table2, true, pool2),
+      "Cannot add table for existing key");
+  EXPECT_EQ(entry1->table, table1);
+  EXPECT_FALSE(entry1->hasNullKeys);
+}
 
-  EXPECT_EQ(entry2, entry1);
-  EXPECT_EQ(entry2->table, table1);
-  EXPECT_FALSE(entry2->hasNullKeys);
+TEST_F(HashTableCacheTest, existApiReflectsCacheState) {
+  auto* cache = HashTableCache::instance();
+
+  const std::string getPutKey = "query_exist_get_put";
+  trackKey(getPutKey);
+  EXPECT_FALSE(cache->exist(getPutKey));
+
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  auto entry = cache->get(getPutKey, "task1", queryCtx_.get(), &future);
+  ASSERT_NE(entry, nullptr);
+  EXPECT_FALSE(future.valid());
+  EXPECT_FALSE(cache->exist(getPutKey))
+      << "Placeholder entry should not exist until build completes";
+
+  cache->put(getPutKey, nullptr, false);
+  EXPECT_TRUE(cache->exist(getPutKey));
+
+  cache->drop(getPutKey);
+  EXPECT_FALSE(cache->exist(getPutKey));
+
+  const std::string addKey = "query_exist_add";
+  trackKey(addKey);
+  EXPECT_FALSE(cache->exist(addKey));
+
+  auto tableRoot = memory::memoryManager()->addRootPool("HashTableCacheExist");
+  auto tablePool = tableRoot->addLeafChild("leaf");
+  auto table = makeTestJoinHashTable(tablePool.get());
+  auto addEntry = cache->add(addKey, table, true, tablePool);
+  ASSERT_NE(addEntry, nullptr);
+  EXPECT_TRUE(cache->exist(addKey));
+
+  cache->drop(addKey);
+  EXPECT_FALSE(cache->exist(addKey));
 }
 
 } // namespace facebook::velox::exec::test

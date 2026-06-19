@@ -148,45 +148,30 @@ std::shared_ptr<HashTableCacheEntry> HashTableCache::add(
     std::shared_ptr<BaseHashTable> table,
     bool hasNullKeys,
     std::shared_ptr<memory::MemoryPool> tablePool) {
+  VELOX_CHECK(!key.empty(), "Cannot add table with empty key");
   VELOX_CHECK_NOT_NULL(table, "Cannot add null table");
   VELOX_CHECK_NOT_NULL(tablePool, "Cannot add with null pool");
 
-  std::vector<ContinuePromise> promises;
-  std::shared_ptr<HashTableCacheEntry> entry;
+  std::shared_ptr<HashTableCacheEntry> entry =
+      std::make_shared<HashTableCacheEntry>(
+          key, "external_gluten", std::move(tablePool));
+  entry->table = std::move(table);
+  entry->hasNullKeys = hasNullKeys;
+  entry->buildComplete = true;
 
   {
     std::lock_guard<std::mutex> guard(lock_);
-
-    auto it = tables_.find(key);
-    if (it != tables_.end()) {
-      entry = it->second;
-      if (entry->buildComplete) {
-        return entry;
-      }
-
-      VELOX_CHECK_NULL(entry->table, "Table already set for key '{}'", key);
-      entry->table = std::move(table);
-      entry->hasNullKeys = hasNullKeys;
-      entry->buildComplete = true;
-      promises = std::move(entry->buildPromises);
-    } else {
-      entry = std::make_shared<HashTableCacheEntry>(
-          key, "external_gluten", std::move(tablePool));
-      entry->table = std::move(table);
-      entry->hasNullKeys = hasNullKeys;
-      entry->buildComplete = true;
-      tables_.insert({key, entry});
-    }
-  }
-
-  for (auto& promise : promises) {
-    promise.setValue();
+    VELOX_CHECK(
+        tables_.find(key) == tables_.end(),
+        "Cannot add table for existing key '{}'",
+        key);
+    tables_.insert({key, entry});
   }
 
   return entry;
 }
 
-bool HashTableCache::hasTable(const std::string& key) {
+bool HashTableCache::exist(const std::string& key) {
   std::lock_guard<std::mutex> guard(lock_);
   auto it = tables_.find(key);
   return it != tables_.end() && it->second->buildComplete;
