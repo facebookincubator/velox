@@ -1222,6 +1222,12 @@ include_directories(.)
 # MSVC: Large translation units need /bigobj to exceed COFF section limit
 if(MSVC)
   add_compile_options(/bigobj)
+  # MSVC reports C4716 ("must return a value") as an error for functions that
+  # only ever throw via VELOX_UNSUPPORTED/VELOX_FAIL/VELOX_UNREACHABLE because it
+  # does not always honor the [[noreturn]] on the throw helper across template
+  # instantiations. The core library masks this via /w; test targets compile at
+  # /W3, so suppress it globally here. POSIX builds are unaffected.
+  add_compile_options(/wd4716)
 endif()
 
 # On Windows, add vcpkg include directory globally to ensure all targets

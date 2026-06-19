@@ -142,9 +142,9 @@ std::unique_ptr<Subfield::PathElement> Tokenizer::matchUnquotedSubscript() {
   if (token.empty()) {
     invalidSubfieldPath();
   }
-  long index = 0;
+  int64_t index = 0;
   try {
-    index = std::stol(token);
+    index = std::stoll(token);
   } catch (...) {
     VELOX_FAIL("Invalid index {}", token);
   }

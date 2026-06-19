@@ -1377,7 +1377,7 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
       hours,
       minutes,
       seconds,
-      remainMillis);
+      static_cast<int64_t>(remainMillis));
 
   return buf;
 }

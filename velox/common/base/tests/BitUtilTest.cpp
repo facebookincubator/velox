@@ -804,7 +804,7 @@ TEST_F(BitUtilTest, forBatches) {
       auto bitfield =
           reinterpret_cast<const uint64_t*>(bits)[index / 64] & mask;
       EXPECT_NE(0, bitfield & mask);
-      numSet += __builtin_popcountl(bitfield);
+      numSet += __builtin_popcountll(bitfield);
     });
     EXPECT_EQ(numOnes, numSet);
   };
@@ -860,15 +860,15 @@ TEST_F(BitUtilTest, bswap128) {
 TEST_F(BitUtilTest, countLeadingZeros) {
   EXPECT_EQ(countLeadingZeros<uint64_t>(0), 64);
   EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
-  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
+  EXPECT_EQ(countLeadingZeros<uint128_t>(0), 128);
+  EXPECT_EQ(countLeadingZeros<uint128_t>(1), 127);
+  EXPECT_EQ(countLeadingZeros<uint128_t>(1), 127);
   EXPECT_EQ(
-      countLeadingZeros<__uint128_t>(
+      countLeadingZeros<uint128_t>(
           HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
       4);
   EXPECT_EQ(
-      countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
+      countLeadingZeros<uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
 }
 
 TEST_F(BitUtilTest, storeBitsToByte) {

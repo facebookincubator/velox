@@ -19,6 +19,14 @@
 #include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#ifdef _MSC_VER
+// The Windows SDK (<winnt.h>) defines `typedef BYTE BOOLEAN;`, which collides
+// with velox's BOOLEAN() type factory under `using namespace facebook::velox;`.
+// Redirect the function-like form to the fully-qualified factory; only
+// `BOOLEAN(` token sequences expand, so `TypeKind::BOOLEAN` is unaffected.
+#define BOOLEAN() ::facebook::velox::BOOLEAN()
+#endif
+
 using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::test;

@@ -101,15 +101,25 @@ std::unique_ptr<SimpleVector<uint64_t>> BiasVector<T>::hashAll() const {
 template <typename T>
 typename SimpleVector<T>::TValueAt BiasVector<T>::valueAtFast(
     vector_size_t idx) const {
-  switch (valueType_) {
-    case TypeKind::INTEGER:
-      return bias_ + reinterpret_cast<const int32_t*>(rawValues_)[idx];
-    case TypeKind::SMALLINT:
-      return bias_ + reinterpret_cast<const int16_t*>(rawValues_)[idx];
-    case TypeKind::TINYINT:
-      return bias_ + reinterpret_cast<const int8_t*>(rawValues_)[idx];
-    default:
-      VELOX_UNSUPPORTED("Invalid type");
+  // BiasVector only ever stores narrowed integral values. Guard the body with
+  // if constexpr so MSVC does not eagerly instantiate the integer arithmetic
+  // for non-integral T (e.g. StringView) when a test forces the vtable via
+  // BaseVector::as<BiasVector<T>>(). is_constructible_v<T, int32_t> keeps the
+  // exact set of POSIX instantiations (including int128_t) and codegen
+  // unchanged, so GCC/Clang object files are byte-identical.
+  if constexpr (std::is_constructible_v<T, int32_t>) {
+    switch (valueType_) {
+      case TypeKind::INTEGER:
+        return bias_ + reinterpret_cast<const int32_t*>(rawValues_)[idx];
+      case TypeKind::SMALLINT:
+        return bias_ + reinterpret_cast<const int16_t*>(rawValues_)[idx];
+      case TypeKind::TINYINT:
+        return bias_ + reinterpret_cast<const int8_t*>(rawValues_)[idx];
+      default:
+        VELOX_UNSUPPORTED("Invalid type");
+    }
+  } else {
+    VELOX_UNSUPPORTED("Invalid type");
   }
 }
 

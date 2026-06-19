@@ -76,6 +76,13 @@ class Int128 {
     constexpr double k2pow64 = 18446744073709551616.0; // 2^64
     return static_cast<double>(high_) * k2pow64 + static_cast<double>(low_);
   }
+
+  // MSVC provides no implicit Int128->float conversion; bridge through double so
+  // static_cast<float>(int128_t) compiles like it does on platforms with a
+  // native __int128. POSIX builds use the compiler builtin and never see this.
+  explicit operator float() const {
+    return static_cast<float>(static_cast<double>(*this));
+  }
   
   // Comparison with primitive integer types
   constexpr bool operator<(int64_t other) const {
@@ -899,6 +906,9 @@ class UInt128 {
     return static_cast<double>(high_) * 18446744073709551616.0 +
         static_cast<double>(low_);
   }
+  explicit operator float() const {
+    return static_cast<float>(static_cast<double>(*this));
+  }
   
   // Arithmetic operators. See Int128 for rationale.
   constexpr UInt128 operator+(const UInt128& other) const {
@@ -1284,32 +1294,11 @@ struct hasher<facebook::velox::UInt128> {
 template <class Tgt>
 typename std::enable_if<folly::IsSomeString<Tgt>::value, void>::type
 toAppend(const facebook::velox::Int128& value, Tgt* result) {
-  // Convert to hexadecimal string representation
-  // Handle negative values by showing sign and absolute value in hex
-  char buf[64];
-  if (value.high() < 0) {
-    result->append("-");
-    // Get absolute value
-    facebook::velox::Int128 absValue = -value;
-    if (absValue.high() != 0) {
-      snprintf(buf, sizeof(buf), "0x%llx%016llx", 
-               static_cast<unsigned long long>(absValue.high()),
-               static_cast<unsigned long long>(absValue.low()));
-    } else {
-      snprintf(buf, sizeof(buf), "0x%llx", 
-               static_cast<unsigned long long>(absValue.low()));
-    }
-  } else {
-    if (value.high() != 0) {
-      snprintf(buf, sizeof(buf), "0x%llx%016llx", 
-               static_cast<unsigned long long>(value.high()),
-               static_cast<unsigned long long>(value.low()));
-    } else {
-      snprintf(buf, sizeof(buf), "0x%llx", 
-               static_cast<unsigned long long>(value.low()));
-    }
-  }
-  result->append(buf);
+  // Match POSIX `folly::to<std::string>(__int128)`, which yields a base-10
+  // representation.  Delegating to Int128::toString() keeps folly::to<>,
+  // the fmt formatter, and operator<< consistent (all decimal).
+  const std::string str = value.toString();
+  result->append(str.data(), str.size());
 }
 
 template <class Tgt>

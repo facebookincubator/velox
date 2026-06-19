@@ -52,7 +52,10 @@ TEST(HugeIntTest, basic) {
   // 0xF{16}F{16} = -1
   auto uint64Max = static_cast<int128_t>(std::numeric_limits<uint64_t>::max());
   int128_t hugeInt = -1;
-  testBasic(hugeInt, uint64Max, uint64Max);
+  testBasic(
+      hugeInt,
+      static_cast<uint64_t>(uint64Max),
+      static_cast<uint64_t>(uint64Max));
 
   hugeInt = std::numeric_limits<int128_t>::max() - 0x12345;
   uint64_t upper = 0x7FFFFFFFFFFFFFFF;

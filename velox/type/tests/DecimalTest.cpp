@@ -317,10 +317,12 @@ TEST(DecimalTest, valueInPrecisionRange) {
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1234, 3));
   ASSERT_TRUE(
       DecimalUtil::valueInPrecisionRange<int64_t>(
-          DecimalUtil::kShortDecimalMax, ShortDecimalType::kMaxPrecision));
+          static_cast<int64_t>(DecimalUtil::kShortDecimalMax),
+          ShortDecimalType::kMaxPrecision));
   ASSERT_FALSE(
       DecimalUtil::valueInPrecisionRange<int64_t>(
-          DecimalUtil::kShortDecimalMax + 1, ShortDecimalType::kMaxPrecision));
+          static_cast<int64_t>(DecimalUtil::kShortDecimalMax + 1),
+          ShortDecimalType::kMaxPrecision));
   ASSERT_TRUE(
       DecimalUtil::valueInPrecisionRange<int128_t>(
           DecimalUtil::kLongDecimalMax, LongDecimalType::kMaxPrecision));
@@ -579,9 +581,17 @@ TEST(DecimalTest, castToString) {
   testcastToString<int64_t>(-12, 5, 5, 8, "-0.00012");
   testcastToString<int64_t>(-12, 5, 5, 8, "-0.00012");
   testcastToString<int64_t>(
-      DecimalUtil::kShortDecimalMax, 18, 0, 19, std::string(18, '9'));
+      static_cast<int64_t>(DecimalUtil::kShortDecimalMax),
+      18,
+      0,
+      19,
+      std::string(18, '9'));
   testcastToString<int64_t>(
-      DecimalUtil::kShortDecimalMin, 18, 0, 19, "-" + std::string(18, '9'));
+      static_cast<int64_t>(DecimalUtil::kShortDecimalMin),
+      18,
+      0,
+      19,
+      "-" + std::string(18, '9'));
 
   testcastToString<int128_t>(
       HugeInt::parse("-18446744073709551616"),

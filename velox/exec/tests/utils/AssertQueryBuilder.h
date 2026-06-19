@@ -214,7 +214,13 @@ class AssertQueryBuilder {
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
+#ifdef _WIN32
+        // The vcpkg folly predates folly::available_concurrency(); fall back to
+        // the older folly::hardware_concurrency() on Windows.
+        folly::hardware_concurrency());
+#else
         folly::available_concurrency());
+#endif
   }
 
   // Used by the created task as the default driver executor.
