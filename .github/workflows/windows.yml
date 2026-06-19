@@ -1,0 +1,108 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Windows / MSVC build. Starts as an OPTIONAL (non-required) check; the matrix is
+# intentionally minimal (core engine + Parquet/Arrow + Presto functions) and grows
+# over time, the same way the macOS job started small.
+name: Windows Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - velox/**
+      - '!velox/docs/**'
+      - CMakeLists.txt
+      - CMake/**
+      - windows/**
+      - .github/workflows/windows.yml
+  pull_request:
+    paths:
+      - velox/**
+      - '!velox/docs/**'
+      - CMakeLists.txt
+      - CMake/**
+      - windows/**
+      - .github/workflows/windows.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  windows-build:
+    if: ${{ github.repository == 'facebookincubator/velox' }}
+    name: windows-2022-${{ matrix.type }}
+    strategy:
+      fail-fast: false
+      matrix:
+        type: [release]
+    runs-on: windows-2022
+    env:
+      # vcpkg binary caching via GitHub Actions cache -> deps build once, then restore.
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      VELOX_BUILD_TYPE: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Required for the vcpkg "x-gha" binary cache backend.
+      - name: Export GitHub Actions cache env
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install WinFlexBison
+        shell: pwsh
+        run: |
+          choco install winflexbison3 --no-progress -y
+          # Velox's parser generation needs BISON_PKGDATADIR (m4sugar).
+          $m4 = Get-ChildItem "$env:ChocolateyInstall" -Recurse -Filter m4sugar.m4 -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($m4) { "BISON_PKGDATADIR=$($m4.Directory.Parent.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B _build/release -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+            -DVCPKG_OVERLAY_TRIPLETS="$PWD/windows/oss-triplets" `
+            -DVCPKG_OVERLAY_PORTS="$PWD/windows/vcpkg/ports" `
+            -DVCPKG_MANIFEST_DIR="$PWD/windows/vcpkg" `
+            -DCMAKE_CXX_STANDARD=20 `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" `
+            -DVELOX_BUILD_STATIC=ON -DVELOX_BUILD_SHARED=OFF -DVELOX_BUILD_TESTING=OFF `
+            -DVELOX_ENABLE_BENCHMARKS=OFF -DVELOX_ENABLE_EXAMPLES=OFF `
+            -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF -DVELOX_ENABLE_HDFS=OFF -DVELOX_ENABLE_GEO=OFF `
+            -DVELOX_ENABLE_ABFS=OFF -DVELOX_ENABLE_HIVE_CONNECTOR=OFF -DVELOX_ENABLE_SPARK_FUNCTIONS=OFF `
+            -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PRESTO_FUNCTIONS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build _build/release --config Release --target velox -- /m
+
+      # Tests are intentionally disabled at first (like macOS shipped). A curated
+      # ctest subset (seeded from the known-passing Windows suites) is enabled next.
+      - name: Run Tests
+        if: false
+        shell: pwsh
+        run: ctest --test-dir _build/release -C Release --output-on-failure --no-tests=error

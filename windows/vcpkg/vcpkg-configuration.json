@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg-configuration.schema.json",
+  "default-registry": {
+    "kind": "git",
+    "repository": "https://github.com/microsoft/vcpkg",
+    "baseline": "980c981a8ab8dcf9389c9d10c3e1bc20b6ee23f9"
+  },
+  "overlay-ports": [
+    "./ports/arrow",
+    "./ports/folly",
+    "./ports/icu"
+  ],
+  "overlay-triplets": [
+    "../oss-triplets"
+  ]
+}

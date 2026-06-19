@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "velox",
+  "version-string": "0.5.0",
+  "builtin-baseline": "980c981a8ab8dcf9389c9d10c3e1bc20b6ee23f9",
+  "dependencies": [
+    "abseil",
+    { "name": "arrow", "features": ["compute", "parquet", "filesystem"] },
+    "azure-storage-blobs-cpp",
+    "azure-storage-files-datalake-cpp",
+    "azure-identity-cpp",
+    "boost-chrono",
+    "boost-circular-buffer",
+    "boost-crc",
+    "boost-filesystem",
+    "boost-random",
+    "boost-system",
+    "boost-thread",
+    "boost-uuid",
+    "double-conversion",
+    "fmt",
+    { "name": "folly", "features": ["lz4", "snappy", "zstd"] },
+    "gflags",
+    "glog",
+    "icu",
+    "libevent",
+    "lz4",
+    "lzo",
+    "nlohmann-json",
+    "openssl",
+    "protobuf",
+    "re2",
+    "simdjson",
+    "snappy",
+    "xsimd",
+    "zlib",
+    "zstd"
+  ],
+  "overrides": [
+    { "name": "abseil", "version": "20250127.1" }
+  ]
+}

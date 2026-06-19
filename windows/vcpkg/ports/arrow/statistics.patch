@@ -1,0 +1,29 @@
+diff --git a/cpp/src/parquet/statistics.cc b/cpp/src/parquet/statistics.cc
+index 2ea91e951f..7da844f1d2 100644
+--- a/cpp/src/parquet/statistics.cc
++++ b/cpp/src/parquet/statistics.cc
+@@ -114,7 +114,13 @@ struct CompareHelper {
+   static T Min(int type_length, T a, T b) { return a < b ? a : b; }
+   static T Max(int type_length, T a, T b) { return a < b ? b : a; }
+ 
+-  static bool IsNan(T val) { return std::isnan(val); }
++  static bool IsNan(T val) {
++    if constexpr (std::is_floating_point_v<T>) {
++      return std::isnan(val);
++    } else {
++      return false;
++    }
++  }
+ };
+ 
+ template <typename DType>
+@@ -432,9 +438,6 @@ optional<std::pair<FLBA, FLBA>> CleanStatistic(std::pair<FLBA, FLBA> min_max,
+ 
+ optional<std::pair<ByteArray, ByteArray>> CleanStatistic(
+     std::pair<ByteArray, ByteArray> min_max, LogicalType::Type::type) {
+-  if (min_max.first.ptr == nullptr || min_max.second.ptr == nullptr) {
+-    return ::std::nullopt;
+-  }
+   return min_max;
+ }
+ 
