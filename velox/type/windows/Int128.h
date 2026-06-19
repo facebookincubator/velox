@@ -902,6 +902,12 @@ class UInt128 {
   explicit operator bool() const { return high_ != 0 || low_ != 0; }
   explicit operator uint64_t() const { return low_; }
   explicit operator int64_t() const { return static_cast<int64_t>(low_); }
+  explicit operator int32_t() const { return static_cast<int32_t>(low_); }
+  explicit operator uint32_t() const { return static_cast<uint32_t>(low_); }
+  explicit operator int16_t() const { return static_cast<int16_t>(low_); }
+  explicit operator uint16_t() const { return static_cast<uint16_t>(low_); }
+  explicit operator int8_t() const { return static_cast<int8_t>(low_); }
+  explicit operator uint8_t() const { return static_cast<uint8_t>(low_); }
   explicit operator double() const {
     return static_cast<double>(high_) * 18446744073709551616.0 +
         static_cast<double>(low_);
