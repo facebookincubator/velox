@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/compression/Compression.h>
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/VectorStream.h"
@@ -285,6 +286,7 @@ class RowIteratorImpl : public velox::RowIterator {
 
   std::vector<std::string_view> nextBatch(size_t maxRows) override {
     VELOX_UNSUPPORTED("nextBatch is not supported");
+    return {}; // Unreachable, required for MSVC
   }
 
  private:

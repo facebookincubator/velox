@@ -20,6 +20,11 @@
 #include <set>
 #include <string>
 
+#ifdef _MSC_VER
+#include "velox/common/base/windows/BuiltinUtil.h"
+#endif
+
+#include "velox/common/base/Exceptions.h"
 #include "velox/type/Filter.h"
 
 #include "velox/common/EnumDefine.h"

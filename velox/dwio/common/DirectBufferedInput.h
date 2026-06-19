@@ -113,6 +113,17 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return size;
   }
 
+  void cancel() override {
+    folly::SemiFuture<bool> waitFuture(false);
+    if (state() == State::kLoading && !loadOrFuture(&waitFuture)) {
+      waitFuture.wait();
+    }
+    for (auto& request : requests_) {
+      pool_->freeNonContiguous(request.data);
+    }
+    CoalescedLoad::cancel();
+  }
+
  private:
   const std::shared_ptr<IoStatistics> ioStatistics_;
   const std::shared_ptr<velox::IoStats> ioStats_;
@@ -235,6 +246,7 @@ class DirectBufferedInput : public BufferedInput {
 
   uint64_t nextFetchSize() const override {
     VELOX_NYI();
+    return 0; // WINDOWS BUILD: MSVC requires return value
   }
 
   /// Resets the buffered input for reuse across different operations.

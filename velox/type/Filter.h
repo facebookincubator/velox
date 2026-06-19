@@ -1868,6 +1868,8 @@ template <>
 inline xsimd::batch_bool<double> FloatingPointRange<float>::testValues(
     xsimd::batch<double>) const {
   VELOX_FAIL("Not defined for float filter");
+  // Unreachable (VELOX_FAIL throws), but MSVC requires a return here (C4716).
+  return xsimd::batch_bool<double>();
 }
 
 template <>

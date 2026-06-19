@@ -17,6 +17,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 #include <utility>
+#include <tuple>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/RuntimeMetrics.h"
@@ -335,6 +336,21 @@ MemoryReclaimer::Stats& MemoryReclaimer::Stats::operator+=(
   return *this;
 }
 
+#ifdef _MSC_VER
+bool MemoryReclaimer::Stats::operator==(const Stats& other) const {
+  return std::tie(
+             numNonReclaimableAttempts,
+             reclaimExecTimeUs,
+             reclaimedBytes,
+             reclaimWaitTimeUs) ==
+      std::tie(
+             other.numNonReclaimableAttempts,
+             other.reclaimExecTimeUs,
+             other.reclaimedBytes,
+             other.reclaimWaitTimeUs);
+}
+#endif
+
 MemoryArbitrator::Stats::Stats(
     uint64_t _numRequests,
     uint64_t _numRunning,
@@ -417,6 +433,7 @@ bool MemoryArbitrator::Stats::operator==(const Stats& other) const {
              other.numNonReclaimableAttempts);
 }
 
+#ifndef _MSC_VER
 std::strong_ordering MemoryArbitrator::Stats::operator<=>(
     const Stats& other) const {
   uint32_t gtCount{0};
@@ -447,6 +464,47 @@ std::strong_ordering MemoryArbitrator::Stats::operator<=>(
       : gtCount > 0  ? std::strong_ordering::greater
                      : std::strong_ordering::equal;
 }
+#else
+bool MemoryArbitrator::Stats::operator<(const Stats& other) const {
+  uint32_t gtCount{0};
+  uint32_t ltCount{0};
+#define UPDATE_COUNTER(counter)           \
+  do {                                    \
+    if (counter < other.counter) {        \
+      ++ltCount;                          \
+    } else if (counter > other.counter) { \
+      ++gtCount;                          \
+    }                                     \
+  } while (0);
+
+  UPDATE_COUNTER(numRequests);
+  UPDATE_COUNTER(numSucceeded);
+  UPDATE_COUNTER(numAborted);
+  UPDATE_COUNTER(numFailures);
+  UPDATE_COUNTER(reclaimedFreeBytes);
+  UPDATE_COUNTER(reclaimedUsedBytes);
+  UPDATE_COUNTER(numNonReclaimableAttempts);
+#undef UPDATE_COUNTER
+  VELOX_CHECK(
+      !((gtCount > 0) && (ltCount > 0)),
+      "gtCount {} ltCount {}",
+      gtCount,
+      ltCount);
+  return ltCount > 0;
+}
+
+bool MemoryArbitrator::Stats::operator>(const Stats& other) const {
+  return other < *this;
+}
+
+bool MemoryArbitrator::Stats::operator<=(const Stats& other) const {
+  return !(other < *this);
+}
+
+bool MemoryArbitrator::Stats::operator>=(const Stats& other) const {
+  return !(*this < other);
+}
+#endif
 
 MemoryArbitrationContext::MemoryArbitrationContext(const MemoryPool* requestor)
     : type(Type::kLocal), requestorName(requestor->name()) {}

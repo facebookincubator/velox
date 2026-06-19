@@ -864,10 +864,10 @@ int32_t extractISODayOfTheWeek(int64_t daysSinceEpoch) {
   // 7  = 4
   if (daysSinceEpoch < 0) {
     // negative date: start off at 4 and cycle downwards
-    return (7 - ((-int128_t(daysSinceEpoch) + 3) % 7));
+    return static_cast<int32_t>(7 - ((-int128_t(daysSinceEpoch) + 3) % 7));
   } else {
     // positive date: start off at 4 and cycle upwards
-    return ((int128_t(daysSinceEpoch) + 3) % 7) + 1;
+    return static_cast<int32_t>(((int128_t(daysSinceEpoch) + 3) % 7) + 1);
   }
 }
 
@@ -992,7 +992,7 @@ Timestamp fromParsedTimestampWithTimeZone(
   } else if (parsed.offsetMillis.has_value()) {
     auto seconds = parsed.timestamp.getSeconds();
     // use int128_t to avoid overflow.
-    __int128_t nanos = parsed.timestamp.getNanos();
+    int128_t nanos = parsed.timestamp.getNanos();
     seconds -= parsed.offsetMillis.value() / util::kMillisPerSecond;
     nanos -= (parsed.offsetMillis.value() % util::kMillisPerSecond) *
         util::kNanosPerMicro * util::kMicrosPerMsec;
@@ -1003,7 +1003,7 @@ Timestamp fromParsedTimestampWithTimeZone(
       seconds += 1;
       nanos -= Timestamp::kNanosInSecond;
     }
-    parsed.timestamp = Timestamp(seconds, nanos);
+    parsed.timestamp = Timestamp(seconds, static_cast<uint64_t>(nanos));
   } else {
     if (sessionTimeZone) {
       parsed.timestamp.toGMT(*sessionTimeZone);

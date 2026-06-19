@@ -78,6 +78,13 @@
 #define PARQUET_NORETURN ARROW_NORETURN
 #define PARQUET_DEPRECATED ARROW_DEPRECATED
 
+// Windows defines OPTIONAL as a macro which conflicts with our enum
+#ifdef _WIN32
+#ifdef OPTIONAL
+#undef OPTIONAL
+#endif
+#endif
+
 // If ARROW_VALGRIND set when compiling unit tests, also define
 // PARQUET_VALGRIND.
 #ifdef ARROW_VALGRIND

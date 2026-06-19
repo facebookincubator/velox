@@ -27,8 +27,8 @@
 #define VELOX_CACHE_ERROR(errorMessage)                             \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kNoCacheSpace.c_str(),         \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kNoCacheSpace,         \
       /* isRetriable */ true,                                       \
       "{}",                                                         \
       errorMessage);

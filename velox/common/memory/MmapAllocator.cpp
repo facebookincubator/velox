@@ -16,12 +16,21 @@
 
 #include "velox/common/memory/MmapAllocator.h"
 
+#ifndef _WIN32
 #include <sys/mman.h>
+#else
+// Windows compatibility - provides posix_* wrapper functions for aligned allocations
+#include "velox/common/memory/windows/PosixMemoryCompat.h"
+#endif
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/memory/Memory.h"
+
+#if defined(_MSC_VER)
+#include "velox/common/base/Builtins.h"
+#endif
 
 namespace facebook::velox::memory {
 MmapAllocator::MmapAllocator(const Options& options)
@@ -52,8 +61,15 @@ MmapAllocator::MmapAllocator(const Options& options)
 }
 
 MmapAllocator::~MmapAllocator() {
+#ifdef _WIN32
+  if ((numAllocated_ != 0) || (numExternalMapped_ != 0)) {
+    VELOX_MEM_LOG(ERROR) << "Memory leak in MmapAllocator destructor: "
+                         << toString();
+  }
+#else
   VELOX_CHECK(
       (numAllocated_ == 0) && (numExternalMapped_ == 0), "{}", toString());
+#endif
 }
 
 bool MmapAllocator::allocateNonContiguousWithoutRetry(
@@ -437,8 +453,13 @@ void* MmapAllocator::allocateBytesWithoutRetry(
   alignmentCheck(bytes, alignment);
 
   if (useMalloc(bytes)) {
+#ifdef _WIN32
+    auto* result = alignment > kMinAlignment ? ::posix_aligned_alloc(alignment, bytes)
+                                              : ::malloc(bytes);
+#else
     auto* result = alignment > kMinAlignment ? ::aligned_alloc(alignment, bytes)
-                                             : ::malloc(bytes);
+                                              : ::malloc(bytes);
+#endif
     if (FOLLY_UNLIKELY(result == nullptr)) {
       VELOX_MEM_LOG(ERROR) << "Failed to allocateBytes " << bytes
                            << " bytes with " << alignment << " alignment";
@@ -477,7 +498,11 @@ void* MmapAllocator::allocateBytesWithoutRetry(
 
 void MmapAllocator::freeBytes(void* p, uint64_t bytes) noexcept {
   if (useMalloc(bytes)) {
+#ifdef _WIN32
+    ::posix_free(p); // Use smart wrapper on Windows for aligned allocation tracking
+#else
     ::free(p); // NOLINT
+#endif
     numMallocBytes_ -= bytes;
     return;
   }
@@ -711,7 +736,7 @@ uint32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
 
 xsimd::batch<uint64_t> MmapAllocator::SizeClass::mappedFreeBits(int32_t index) {
   return (xsimd::load_unaligned(pageAllocated_.data() + index) ^
-          xsimd::broadcast<uint64_t>(~0UL)) &
+          xsimd::broadcast<uint64_t>(~0ULL)) &
       xsimd::load_unaligned(pageMapped_.data() + index);
 }
 
@@ -911,7 +936,7 @@ void MmapAllocator::SizeClass::allocateAny(
   for (int32_t i = 0; i < toAlloc; ++i) {
     const int bit = __builtin_ctzll(freeBits);
     bits::setBit(&pageAllocated_[wordIndex], bit);
-    if (!(pageMapped_[wordIndex] & (1UL << bit))) {
+    if (!(pageMapped_[wordIndex] & (1ULL << bit))) {
       numUnmapped += unitSize_;
     } else {
       --numMappedFreePages_;

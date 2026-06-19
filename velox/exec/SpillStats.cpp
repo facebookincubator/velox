@@ -16,6 +16,9 @@
 
 #include "velox/exec/SpillStats.h"
 #include <folly/system/HardwareConcurrency.h>
+#ifdef _WIN32
+#include "velox/common/base/windows/FollyConcurrencyCompat.h"
+#endif
 #include <sstream>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"

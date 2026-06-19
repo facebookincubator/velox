@@ -17,6 +17,9 @@
 #pragma once
 
 #include <cstdint>
+#ifdef _MSC_VER
+#include "velox/type/HugeInt.h"
+#endif
 
 namespace facebook::velox::dwio::common {
 
@@ -26,7 +29,12 @@ constexpr uint32_t LONG_BYTE_SIZE = 8;
 
 constexpr uint64_t BASE_128_MASK = 0x7f;
 constexpr uint64_t BASE_256_MASK = 0xff;
+#ifndef _MSC_VER
 constexpr __int128_t INT128_BASE_256_MASK = 0xff;
+#else
+// MSVC uses uint128_t wrapper defined in velox/type/windows/Int128.h
+constexpr facebook::velox::uint128_t INT128_BASE_256_MASK{0xff};
+#endif
 
 // Timezone constants
 constexpr int64_t SECONDS_PER_HOUR = 60 * 60;

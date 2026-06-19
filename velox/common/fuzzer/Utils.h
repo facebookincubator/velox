@@ -98,6 +98,7 @@ inline T rand(
     FuzzerGenerator& /*rng*/,
     DataSpec /*dataSpec*/ = {false, false}) {
   VELOX_NYI();
+  return T{}; // Unreachable, but needed for Windows MSVC.
 }
 
 template <>
@@ -209,9 +210,24 @@ std::string timezoneOffsetToString(int16_t offsetMinutes);
 
 template <
     typename T,
-    typename std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+    typename std::enable_if_t<
+        std::is_arithmetic_v<T> || std::is_same_v<T, int128_t>,
+        int> = 0>
 inline T rand(FuzzerGenerator& rng, T min, T max) {
-  if constexpr (std::is_integral_v<T>) {
+  if constexpr (std::is_same_v<T, int128_t>) {
+    // int128_t is not supported by boost's distributions. Compose a random
+    // 128-bit value from two random 64-bit halves. This stays portable across
+    // the native __int128 and the MSVC int128_t shim.
+    const uint64_t lo = boost::random::uniform_int_distribution<uint64_t>()(rng);
+    const uint64_t hi = boost::random::uniform_int_distribution<uint64_t>()(rng);
+    const uint128_t uval =
+        (static_cast<uint128_t>(hi) << 64) | static_cast<uint128_t>(lo);
+    if (max > min) {
+      const uint128_t range = static_cast<uint128_t>(max - min) + 1;
+      return min + static_cast<int128_t>(uval % range);
+    }
+    return min;
+  } else if constexpr (std::is_integral_v<T>) {
     return boost::random::uniform_int_distribution<T>(min, max)(rng);
   } else {
     return boost::random::uniform_real_distribution<T>(min, max)(rng);

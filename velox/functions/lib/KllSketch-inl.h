@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cmath>
+#include <numeric>
 #include <queue>
 #include <type_traits>
 #include "velox/common/base/Exceptions.h"

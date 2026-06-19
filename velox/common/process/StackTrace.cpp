@@ -130,7 +130,11 @@ std::string StackTrace::log(
   msg += "Host: " + getHostName();
   msg += "\nProcessID: " + pid;
   msg += "\nThreadID: " +
+#ifdef _WIN32
+      folly::to<std::string>(static_cast<uintptr_t>(getThreadId()));
+#else
       folly::to<std::string>(reinterpret_cast<uintptr_t>(getThreadId()));
+#endif
   msg += "\nName: " + getAppName();
   msg += "\nType: ";
   if (errorType) {

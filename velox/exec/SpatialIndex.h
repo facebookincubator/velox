@@ -110,7 +110,9 @@ struct Envelope {
         .maxY = -std::numeric_limits<float>::infinity()};
   }
 
-  static constexpr inline Envelope from(
+  // NOTE: not constexpr because std::nextafterf is not constexpr outside of
+  // GCC's builtin extension (MSVC C3615, portable C++ pre-C++23).
+  static inline Envelope from(
       double minX,
       double minY,
       double maxX,

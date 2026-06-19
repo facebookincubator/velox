@@ -57,6 +57,13 @@ DEFINE_bool(avx2, true, "Enables use of AVX2 when available");
 
 DEFINE_bool(bmi2, true, "Enables use of BMI2 when available");
 
+// Used in common/base/AsyncSource.h
+
+DEFINE_bool(
+    account_for_off_thread_times,
+    false,
+    "Account for time spent in off-thread execution in AsyncSource");
+
 // Used in exec/Expr.cpp
 
 DEFINE_string(

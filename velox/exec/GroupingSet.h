@@ -117,7 +117,7 @@ class GroupingSet {
   /// Returns number of global grouping sets rows if there is default output.
   std::optional<vector_size_t> numDefaultGlobalGroupingSetRows() const {
     if (hasDefaultGlobalGroupingSetOutput()) {
-      return globalGroupingSets_.size();
+      return static_cast<vector_size_t>(globalGroupingSets_.size());
     }
     return std::nullopt;
   }

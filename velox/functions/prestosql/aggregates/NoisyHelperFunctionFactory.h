@@ -144,9 +144,11 @@ class NoisyHelperFunctionFactory {
         std::is_same_v<T, facebook::velox::Timestamp>) {
       VELOX_FAIL("Noisy function does not support this data type.");
     } else {
-      // Handle not a number.
-      if (std::isnan(decodedValue.valueAt<T>(i))) {
-        return;
+      // Handle not a number (only for floating-point types).
+      if constexpr (std::is_floating_point_v<T>) {
+        if (std::isnan(decodedValue.valueAt<T>(i))) {
+          return;
+        }
       }
       accumulator.clipUpdateSum(
           static_cast<double>(decodedValue.valueAt<T>(i)));

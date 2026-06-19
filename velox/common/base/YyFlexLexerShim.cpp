@@ -17,6 +17,13 @@
 
 #include "velox/common/base/Exceptions.h"
 
+#ifdef _MSC_VER
+// These methods are unreachable stubs that always throw via VELOX_FAIL. MSVC
+// does not treat VELOX_FAIL as [[noreturn]] in this context and emits C4716
+// ("must return a value"), which is promoted to an error under /WX.
+#pragma warning(disable : 4716)
+#endif
+
 // Provide a dedicated translation unit for yyFlexLexer so the linker has a
 // single, always-linked home for its vtable and typeinfo. Some builds,
 // especially mono-library builds with sanitizers, can otherwise fail to

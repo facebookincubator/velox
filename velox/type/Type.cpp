@@ -1359,13 +1359,13 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
     sign = "-";
     remainMillis = -remainMillis;
   }
-  const int64_t days = remainMillis / kMillisInDay;
+  const int64_t days = static_cast<int64_t>(remainMillis / kMillisInDay);
   remainMillis -= days * kMillisInDay;
-  const int64_t hours = remainMillis / kMillisInHour;
+  const int64_t hours = static_cast<int64_t>(remainMillis / kMillisInHour);
   remainMillis -= hours * kMillisInHour;
-  const int64_t minutes = remainMillis / kMillisInMinute;
+  const int64_t minutes = static_cast<int64_t>(remainMillis / kMillisInMinute);
   remainMillis -= minutes * kMillisInMinute;
-  const int64_t seconds = remainMillis / kMillisInSecond;
+  const int64_t seconds = static_cast<int64_t>(remainMillis / kMillisInSecond);
   remainMillis -= seconds * kMillisInSecond;
   char buf[64];
   snprintf(

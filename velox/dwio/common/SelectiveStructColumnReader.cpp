@@ -428,6 +428,7 @@ void SelectiveStructColumnReaderBase::read(
   if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
     VELOX_CHECK(!childSpecs.empty());
   }
+
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     const auto& childSpec = childSpecs[i];
 
@@ -560,6 +561,7 @@ void SelectiveStructColumnReaderBase::getValues(
   if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
     VELOX_CHECK(!scanSpec_->children().empty());
   }
+
   VELOX_CHECK_NOT_NULL(
       *result, "SelectiveStructColumnReaderBase expects a non-null result");
 
@@ -698,7 +700,14 @@ namespace detail {
 
 xsimd::batch<int32_t> bitsToInt32s[256];
 
+#ifdef _MSC_VER
+// MSVC doesn't support __attribute__((constructor)), use static initialization
+namespace {
+struct BitsToInt32sInitializer {
+  BitsToInt32sInitializer() {
+#else
 __attribute__((constructor)) void initBitsToInt32s() {
+#endif
   for (int i = 0; i < 256; ++i) {
     int32_t data[8];
     for (int j = 0; j < 8; ++j) {
@@ -706,7 +715,14 @@ __attribute__((constructor)) void initBitsToInt32s() {
     }
     bitsToInt32s[i] = xsimd::load_unaligned(data);
   }
+#ifdef _MSC_VER
+  }
+};
+static BitsToInt32sInitializer initializer;
+} // anonymous namespace
+#else
 }
+#endif
 
 #endif
 

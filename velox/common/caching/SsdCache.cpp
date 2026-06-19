@@ -36,10 +36,21 @@ SsdCache::SsdCache(const Config& config)
       maxEntries_(config.maxEntries) {
   // Make sure the given path of Ssd files has the prefix for local file system.
   // Local file system would be derived based on the prefix.
+#ifdef _WIN32
+  // On Windows, local paths start with a drive letter (e.g., "C:\...").
+  VELOX_CHECK(
+      filePrefix_.find('/') == 0 || filePrefix_.find("faulty:/") == 0 ||
+          (filePrefix_.size() >= 3 && std::isalpha(filePrefix_[0]) &&
+           filePrefix_[1] == ':' &&
+           (filePrefix_[2] == '\\' || filePrefix_[2] == '/')),
+      "Ssd path '{}' does not start with '/' or drive letter that points to local file system.",
+      filePrefix_);
+#else
   VELOX_CHECK(
       filePrefix_.find('/') == 0 || filePrefix_.find("faulty:/") == 0,
       "Ssd path '{}' does not start with '/' that points to local file system.",
       filePrefix_);
+#endif
   VELOX_CHECK_NOT_NULL(executor_);
 
   VELOX_SSD_CACHE_LOG(INFO) << "SSD cache config: " << config.toString();

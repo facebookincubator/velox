@@ -153,7 +153,7 @@ PlanNodePtr toVeloxPlan(
   const auto& columnIds = logicalGet.column_ids;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
-  constexpr uint64_t kNone = ~0UL;
+  constexpr uint64_t kNone = ~0ULL;
   for (auto i = 0; i < columnIds.size(); ++i) {
     if (columnIds[i] == kNone) {
       continue;
@@ -603,7 +603,8 @@ PlanNodePtr toVeloxPlan(
       joinType = JoinType::kLeftSemiProject;
       break;
     default:
-      VELOX_NYI("Bad Duck join type {}", static_cast<int32_t>(join.join_type));
+      VELOX_NYI(
+          "Bad Duck join type {}", static_cast<int32_t>(join.join_type));
   }
 
   std::vector<std::string> names;
@@ -915,6 +916,9 @@ static void customScalarFunction(
 
 static ::duckdb::idx_t customAggregateState() {
   VELOX_UNREACHABLE();
+#ifdef _MSC_VER
+  return 0; // Unreachable, but MSVC requires a return statement.
+#endif
 }
 
 static void customAggregateInitialize(::duckdb::data_ptr_t) {

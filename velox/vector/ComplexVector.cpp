@@ -334,11 +334,8 @@ void RowVector::copyRanges(
           baseRanges.back().targetIndex + 1 == targetIndex) {
         ++baseRanges.back().count;
       } else {
-        baseRanges.push_back({
-            .sourceIndex = baseIndex,
-            .targetIndex = targetIndex,
-            .count = 1,
-        });
+        BaseVector::CopyRange range{baseIndex, targetIndex, 1};
+        baseRanges.push_back(range);
       }
     });
 
@@ -371,6 +368,8 @@ uint64_t RowVector::hashValueAt(vector_size_t index) const {
 
 std::unique_ptr<SimpleVector<uint64_t>> RowVector::hashAll() const {
   VELOX_NYI();
+  // Unreachable, but required for MSVC
+  return nullptr;
 }
 
 std::string RowVector::toString(vector_size_t index) const {
@@ -1148,6 +1147,8 @@ uint64_t ArrayVector::hashValueAt(vector_size_t index) const {
 
 std::unique_ptr<SimpleVector<uint64_t>> ArrayVector::hashAll() const {
   VELOX_NYI();
+  // Unreachable, but required for MSVC
+  return nullptr;
 }
 
 std::string ArrayVector::toString(vector_size_t index) const {
@@ -1381,6 +1382,8 @@ uint64_t MapVector::hashValueAt(vector_size_t index) const {
 
 std::unique_ptr<SimpleVector<uint64_t>> MapVector::hashAll() const {
   VELOX_NYI();
+  // Unreachable, but required for MSVC
+  return nullptr;
 }
 
 bool MapVector::isSorted(vector_size_t index) const {

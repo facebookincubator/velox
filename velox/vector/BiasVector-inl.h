@@ -94,7 +94,8 @@ std::unique_ptr<SimpleVector<uint64_t>> BiasVector<T>::hashAll() const {
       std::nullopt /*distinctValueCount*/,
       0 /* nullCount */,
       false /*isSorted*/,
-      sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /*representedBytes*/);
 }
 
 template <typename T>

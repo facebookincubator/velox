@@ -26,6 +26,9 @@
 #elif defined(__GNUC__)
 #define DIAGNOSTIC_PUSH _Pragma("GCC diagnostic push")
 #define DIAGNOSTIC_POP _Pragma("GCC diagnostic pop")
+#elif defined(_MSC_VER)
+#define DIAGNOSTIC_PUSH __pragma(warning(push))
+#define DIAGNOSTIC_POP __pragma(warning(pop))
 #else
 #error ("Unknown compiler")
 #endif

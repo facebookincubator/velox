@@ -100,6 +100,25 @@ class LoggedException : public velox::VeloxException {
 
 } // namespace common::exception
 
+#ifdef _MSC_VER
+// MSVC doesn't support statement expressions, use do-while(0) instead
+#define DWIO_WARN_IF(e, ...)                                                \
+  do {                                                                      \
+    auto const& _tmp = (e);                                                 \
+    if (_tmp) {                                                             \
+      auto logger =                                                         \
+          ::facebook::velox::dwio::common::exception::getExceptionLogger(); \
+      if (logger) {                                                         \
+        logger->logWarning(                                                 \
+            __FILE__,                                                       \
+            __LINE__,                                                       \
+            __FUNCTION__,                                                   \
+            #e,                                                             \
+            ::folly::to<std::string>(__VA_ARGS__).c_str());                 \
+      }                                                                     \
+    }                                                                       \
+  } while (0)
+#else
 #define DWIO_WARN_IF(e, ...)                                                \
   ({                                                                        \
     auto const& _tmp = (e);                                                 \
@@ -116,6 +135,7 @@ class LoggedException : public velox::VeloxException {
       }                                                                     \
     }                                                                       \
   })
+#endif
 
 #define DWIO_WARN(...) DWIO_WARN_IF(true, ##__VA_ARGS__)
 
@@ -147,18 +167,18 @@ class LoggedException : public velox::VeloxException {
  */
 #define DWIO_ENFORCE_CUSTOM(                            \
     exception, expression, errorSource, errorCode, ...) \
-  ({                                                    \
-    auto const& _tmp = (expression);                    \
-    _tmp ? _tmp                                         \
-         : throw exception(                             \
-               __FILE__,                                \
-               __LINE__,                                \
-               __FUNCTION__,                            \
-               #expression,                             \
-               ::folly::to<std::string>(__VA_ARGS__),   \
-               errorSource,                             \
-               errorCode);                              \
-  })
+  do {                                                  \
+    if (!(expression)) {                                \
+      throw exception(                                  \
+          __FILE__,                                     \
+          __LINE__,                                     \
+          __FUNCTION__,                                 \
+          #expression,                                  \
+          ::folly::to<std::string>(__VA_ARGS__),        \
+          errorSource,                                  \
+          errorCode);                                   \
+    }                                                   \
+  } while (0)
 
 /*
 Unconditionally throws an exception derived from VeloxException

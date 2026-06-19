@@ -463,7 +463,7 @@ struct ArrayCumSumFunction {
         if constexpr (std::is_floating_point_v<NativeType>) {
           sum += in[i].value();
         } else {
-          sum = checkedPlus<NativeType>(sum, in[i].value());
+          sum = functions::checkedPlus<NativeType>(sum, in[i].value());
         }
         out.add_item() = sum;
       } else {
@@ -485,7 +485,7 @@ struct ArrayCumSumFunction {
       if constexpr (std::is_floating_point_v<NativeType>) {
         sum += item;
       } else {
-        sum = checkedPlus<NativeType>(sum, item);
+        sum = functions::checkedPlus<NativeType>(sum, item);
       }
       out.add_item() = sum;
     }

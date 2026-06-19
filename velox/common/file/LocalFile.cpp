@@ -17,10 +17,15 @@
 #include "velox/common/file/LocalFile.h"
 
 #include "velox/common/base/Fs.h"
+#ifndef _WIN32
+// io_uring is a Linux kernel feature; the reader is unavailable on Windows.
 #include "velox/common/file/IoUringReader.h"
+#endif // _WIN32
 
 #include <fcntl.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif // _WIN32
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
@@ -37,9 +42,115 @@
 
 #ifdef linux
 #include <linux/fs.h>
-#endif // linux
 #include <sys/ioctl.h>
+#endif // linux
 #include <sys/stat.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <algorithm>
+#include <crtdbg.h>
+#include <stdlib.h>
+#include <windows.h>
+
+// Suppress MSVC CRT invalid parameter handler (which calls abort())
+// when calling CRT functions with invalid file descriptors.
+static void _silentInvalidParameterHandler(
+    const wchar_t*,
+    const wchar_t*,
+    const wchar_t*,
+    unsigned int,
+    uintptr_t) {}
+
+// Get Windows HANDLE from fd, returning INVALID_HANDLE_VALUE on failure
+// without triggering MSVC's default invalid parameter handler (abort).
+inline HANDLE _safeGetOsfHandle(int fd) {
+  auto old = _set_invalid_parameter_handler(_silentInvalidParameterHandler);
+  int oldMode = _CrtSetReportMode(_CRT_ASSERT, 0);
+  HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  _CrtSetReportMode(_CRT_ASSERT, oldMode);
+  _set_invalid_parameter_handler(old);
+  return h;
+}
+
+// Windows wrappers for Unix file functions
+inline int ftruncate(int fd, int64_t length) {
+  return _chsize_s(fd, length);
+}
+
+inline int fsync(int fd) {
+  return _commit(fd);
+}
+
+// Thread-safe pread using Win32 ReadFile with OVERLAPPED (like POSIX pread).
+// Does NOT modify the file pointer, so concurrent calls on the same fd are safe.
+// Use int64_t instead of off_t because off_t is 32-bit on Windows,
+// which would truncate offsets for files larger than 2GB.
+inline ssize_t pread(int fd, void* buf, size_t count, int64_t offset) {
+  HANDLE h = _safeGetOsfHandle(fd);
+  if (h == INVALID_HANDLE_VALUE) {
+    errno = EBADF;
+    return -1;
+  }
+
+  size_t totalRead = 0;
+  auto* dest = static_cast<char*>(buf);
+  while (totalRead < count) {
+    DWORD toRead = static_cast<DWORD>(
+        std::min<size_t>(count - totalRead, 1u << 30)); // 1GB max per call
+    OVERLAPPED ov = {};
+    int64_t pos = static_cast<int64_t>(offset) + totalRead;
+    ov.Offset = static_cast<DWORD>(pos & 0xFFFFFFFF);
+    ov.OffsetHigh = static_cast<DWORD>((pos >> 32) & 0xFFFFFFFF);
+    DWORD bytesRead = 0;
+    if (!ReadFile(h, dest + totalRead, toRead, &bytesRead, &ov)) {
+      DWORD err = GetLastError();
+      if (err == ERROR_HANDLE_EOF) break;
+      errno = EIO;
+      return -1;
+    }
+    if (bytesRead == 0) break; // EOF
+    totalRead += bytesRead;
+  }
+  return static_cast<ssize_t>(totalRead);
+}
+
+// Thread-safe pwritev using Win32 WriteFile with OVERLAPPED.
+// Use int64_t instead of off_t because off_t is 32-bit on Windows.
+inline ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, int64_t offset) {
+  HANDLE h = _safeGetOsfHandle(fd);
+  if (h == INVALID_HANDLE_VALUE) {
+    errno = EBADF;
+    return -1;
+  }
+
+  ssize_t totalWritten = 0;
+  int64_t pos = static_cast<int64_t>(offset);
+  for (int i = 0; i < iovcnt; ++i) {
+    size_t remaining = iov[i].iov_len;
+    auto* src = static_cast<const char*>(iov[i].iov_base);
+    while (remaining > 0) {
+      DWORD toWrite = static_cast<DWORD>(
+          std::min<size_t>(remaining, 1u << 30));
+      OVERLAPPED ov = {};
+      ov.Offset = static_cast<DWORD>(pos & 0xFFFFFFFF);
+      ov.OffsetHigh = static_cast<DWORD>((pos >> 32) & 0xFFFFFFFF);
+      DWORD bytesWritten = 0;
+      if (!WriteFile(h, src, toWrite, &bytesWritten, &ov)) return -1;
+      totalWritten += bytesWritten;
+      src += bytesWritten;
+      remaining -= bytesWritten;
+      pos += bytesWritten;
+      if (bytesWritten < toWrite) break;
+    }
+  }
+  return totalWritten;
+}
+
+// Windows file permission constants
+#define S_IRUSR _S_IREAD
+#define S_IWUSR _S_IWRITE
+#endif // _WIN32
 
 namespace facebook::velox {
 
@@ -53,6 +164,9 @@ namespace {
 
 int32_t openReadFile(const std::string& path, bool directIo) {
   int32_t flags = O_RDONLY;
+#ifdef _WIN32
+  flags |= O_BINARY; // Windows: prevent text-mode translation.
+#endif // _WIN32
 #ifdef linux
   if (directIo) {
     flags |= O_DIRECT;
@@ -73,6 +187,18 @@ int32_t openReadFile(const std::string& path, bool directIo) {
 }
 
 long fileSize(int32_t fd, std::string_view path) {
+#ifdef _WIN32
+  // Use Win32 GetFileSizeEx to reliably get the 64-bit file size. CRT lseek
+  // uses 32-bit off_t on Windows and can fail/truncate on files > 2GB.
+  HANDLE h = _safeGetOsfHandle(fd);
+  LARGE_INTEGER fileSizeResult;
+  VELOX_CHECK(
+      h != INVALID_HANDLE_VALUE && GetFileSizeEx(h, &fileSizeResult),
+      "GetFileSizeEx failure in LocalReadFile constructor, {} {}.",
+      path,
+      GetLastError());
+  return static_cast<long>(fileSizeResult.QuadPart);
+#else
   const off_t ret = lseek(fd, 0, SEEK_END);
   VELOX_CHECK_GE(
       ret,
@@ -82,6 +208,7 @@ long fileSize(int32_t fd, std::string_view path) {
       path,
       folly::errnoStr(errno));
   return ret;
+#endif // _WIN32
 }
 
 FOLLY_ALWAYS_INLINE void checkNotClosed(bool closed) {
@@ -148,10 +275,14 @@ bool validateUseIoUringConfig(bool directIo, bool useIoUring) {
 
   VELOX_CHECK(
       directIo, "LocalReadFile useIoUring requested but direct IO is disabled");
+#ifndef _WIN32
   VELOX_CHECK(
       IoUringReader::available(),
       "LocalReadFile useIoUring requested but io_uring is unavailable");
   return true;
+#else
+  VELOX_FAIL("LocalReadFile useIoUring requested but io_uring is unavailable");
+#endif // _WIN32
 }
 
 template <typename T>
@@ -234,7 +365,13 @@ std::string_view LocalReadFile::pread(
 uint64_t LocalReadFile::preadv(
     uint64_t offset,
     const std::vector<folly::Range<char*>>& buffers,
-    const FileIoContext& /*context*/) const {
+    const FileIoContext& context) const {
+#ifdef _WIN32
+  // On Windows, folly::preadv uses lseek+readv with 32-bit off_t, which is
+  // not thread-safe and truncates offsets > 2GB. Fall back to the base class
+  // implementation which uses our thread-safe pread (ReadFile + OVERLAPPED).
+  return ReadFile::preadv(offset, buffers, context);
+#else
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
   static thread_local std::vector<char> droppedBytes(16 * 1024);
@@ -286,6 +423,7 @@ uint64_t LocalReadFile::preadv(
   }
 
   return totalBytesRead;
+#endif // _WIN32
 }
 
 uint64_t LocalReadFile::preadv(
@@ -296,10 +434,14 @@ uint64_t LocalReadFile::preadv(
     return ReadFile::preadv(regions, buffers, context);
   }
 
+#ifndef _WIN32
   const auto length = checkBatchRead(regions, buffers);
   // TODO: Extend io_uring support to the other read APIs.
   bytesRead_ += length;
   return ThreadLocalIoUringReader::get().read(fd_, regions, buffers);
+#else
+  VELOX_FAIL("io_uring is not supported on Windows");
+#endif // _WIN32
 }
 
 folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
@@ -322,6 +464,15 @@ folly::SemiFuture<uint64_t> LocalReadFile::preadvAsync(
 }
 
 uint64_t LocalReadFile::size() const {
+#ifdef _MSC_VER
+  // On Windows, the file may be extended by another handle (e.g., SsdFile
+  // opens separate read/write handles). Query the actual file size so that
+  // ReadFile::preadv (the Windows fallback) sees the current size.
+  const auto actual = _filelengthi64(fd_);
+  if (actual >= 0) {
+    return static_cast<uint64_t>(actual);
+  }
+#endif // _MSC_VER
   return size_;
 }
 
@@ -347,12 +498,15 @@ LocalWriteFile::LocalWriteFile(
   const auto dir = fs::path(path_).parent_path();
   if (shouldCreateParentDirectories && !fs::exists(dir)) {
     VELOX_CHECK(
-        common::generateFileDirectory(dir.c_str()),
+        common::generateFileDirectory(dir.string().c_str()),
         "Failed to generate file directory");
   }
 
   // File open flags: write-only, create the file if it doesn't exist.
   int32_t flags = O_WRONLY | O_CREAT;
+#ifdef _WIN32
+  flags |= O_BINARY; // Windows: prevent text-mode translation.
+#endif // _WIN32
   if (shouldThrowOnFileAlreadyExists) {
     flags |= O_EXCL;
   }
@@ -380,7 +534,13 @@ LocalWriteFile::LocalWriteFile(
       path_,
       folly::errnoStr(errno));
 
+#ifdef _WIN32
+  // Use _lseeki64 on Windows because off_t/lseek are 32-bit (long), which
+  // fails for files > 2GB with EINVAL.
+  const int64_t ret = _lseeki64(fd_, 0, SEEK_END);
+#else
   const off_t ret = lseek(fd_, 0, SEEK_END);
+#endif // _WIN32
   VELOX_CHECK_GE(
       ret,
       0,
@@ -467,7 +627,11 @@ void LocalWriteFile::truncate(int64_t newSize) {
       "ftruncate failed in LocalWriteFile::truncate: {}.",
       folly::errnoStr(errno));
   // Reposition the file offset to the end of the file for append().
+#ifdef _WIN32
+  _lseeki64(fd_, newSize, SEEK_SET);
+#else
   ::lseek(fd_, newSize, SEEK_SET);
+#endif // _WIN32
   size_ = newSize;
 }
 

@@ -22,7 +22,10 @@
 #include "velox/functions/prestosql/SplitToMap.h"
 #include "velox/functions/prestosql/SplitToMultiMap.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#ifndef _WIN32
+// stemmer (Snowball) is unavailable on Windows; word_stem is disabled there.
 #include "velox/functions/prestosql/WordStem.h"
+#endif
 
 namespace facebook::velox::functions {
 
@@ -243,10 +246,12 @@ void registerStringFunctions(const std::string& prefix) {
   registerFunction<NormalizeFunction, Varchar, Varchar, Varchar>(
       {prefix + "normalize"});
 
-  // word_stem function
+#ifndef _WIN32
+  // word_stem function (requires stemmer/Snowball, unavailable on Windows)
   registerFunction<WordStemFunction, Varchar, Varchar>({prefix + "word_stem"});
   registerFunction<WordStemFunction, Varchar, Varchar, Varchar>(
       {prefix + "word_stem"});
+#endif
 
   registerFunction<KeySamplingPercentFunction, double, Varchar>(
       {prefix + "key_sampling_percent"});

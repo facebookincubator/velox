@@ -16,7 +16,9 @@
 #pragma once
 
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <cstdlib>
 #include <fstream>
 #include <memory>

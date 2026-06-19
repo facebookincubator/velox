@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+// WINDOWS BUILD: Prevent Windows afunix.h from conflicting with Folly's sockaddr_un
+// Folly provides its own cross-platform sockaddr_un definition in NetOps.h
+#ifdef _WIN32
+#define _AFX_NO_SOCK_NAMESPACE
+#define _AFUNIX_
+#endif
+
 #include "velox/dwio/parquet/writer/Writer.h"
 
 #include <algorithm>
@@ -450,8 +457,11 @@ void Writer::flush() {
 dwio::common::StripeProgress getStripeProgress(
     uint64_t stagingRows,
     int64_t stagingBytes) {
-  return dwio::common::StripeProgress{
-      .stripeRowCount = stagingRows, .stripeSizeEstimate = stagingBytes};
+  // WINDOWS BUILD: Traditional C++17 initialization instead of designated initializers
+  dwio::common::StripeProgress progress;
+  progress.stripeRowCount = stagingRows;
+  progress.stripeSizeEstimate = stagingBytes;
+  return progress;
 }
 
 /**

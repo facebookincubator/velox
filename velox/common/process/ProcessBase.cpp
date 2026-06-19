@@ -19,14 +19,24 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <time.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#define NOMINMAX
+#include <windows.h>
+#include <processthreadsapi.h>
+#include <direct.h>
+#define getcwd _getcwd
+#endif
 
 #include <folly/CpuId.h>
 #include <folly/FileUtil.h>
 #include <folly/String.h>
 #include <gflags/gflags.h>
 
+#ifndef _WIN32
 constexpr const char* kProcSelfCmdline = "/proc/self/cmdline";
+#endif
 
 DECLARE_bool(avx2); // Enables use of AVX2 when available NOLINT
 
@@ -40,6 +50,11 @@ namespace process {
  * Current executable's name.
  */
 std::string getAppName() {
+#ifdef _WIN32
+  char buffer[MAX_PATH];
+  GetModuleFileNameA(NULL, buffer, MAX_PATH);
+  return buffer;
+#else
   const char* result = getenv("_");
   if (result) {
     return result;
@@ -57,12 +72,21 @@ std::string getAppName() {
   }
 
   return "";
+#endif
 }
 
 /**
  * This machine's name.
  */
 std::string getHostName() {
+#ifdef _WIN32
+  char hostbuf[256];
+  DWORD size = sizeof(hostbuf);
+  if (GetComputerNameA(hostbuf, &size)) {
+    return hostbuf;
+  }
+  return "";
+#else
   char hostbuf[_POSIX_HOST_NAME_MAX + 1] = {0};
   if (gethostname(hostbuf, _POSIX_HOST_NAME_MAX + 1) < 0) {
     return "";
@@ -73,34 +97,66 @@ std::string getHostName() {
     hostbuf[_POSIX_HOST_NAME_MAX] = '\0';
     return hostbuf;
   }
+#endif
 }
 
 /**
  * Process identifier.
  */
+#ifdef _WIN32
 pid_t getProcessId() {
+  return GetCurrentProcessId();
+}
+#else
+::pid_t getProcessId() {
   return getpid();
 }
+#endif
 
 /**
  * Current thread's identifier.
  */
+#ifdef _WIN32
 pthread_t getThreadId() {
+  return GetCurrentThreadId();
+}
+#else
+::pthread_t getThreadId() {
   return pthread_self();
 }
+#endif
 
 /**
  * Get current working directory.
  */
 std::string getCurrentDirectory() {
+#ifdef _WIN32
+  char buf[MAX_PATH];
+  return getcwd(buf, MAX_PATH);
+#else
   char buf[PATH_MAX];
   return getcwd(buf, PATH_MAX);
+#endif
 }
 
 uint64_t threadCpuNanos() {
+#ifdef _WIN32
+  FILETIME creationTime, exitTime, kernelTime, userTime;
+  if (GetThreadTimes(GetCurrentThread(), &creationTime, &exitTime, &kernelTime, &userTime)) {
+    ULARGE_INTEGER kt, ut;
+    kt.LowPart = kernelTime.dwLowDateTime;
+    kt.HighPart = kernelTime.dwHighDateTime;
+    ut.LowPart = userTime.dwLowDateTime;
+    ut.HighPart = userTime.dwHighDateTime;
+    // Convert 100-nanosecond intervals to nanoseconds
+    return (kt.QuadPart + ut.QuadPart) * 100;
+  }
+  return 0;
+#else
   timespec ts;
   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
   return ts.tv_sec * 1'000'000'000 + ts.tv_nsec;
+#endif
 }
 
 namespace {

@@ -28,10 +28,16 @@
 #include <fcntl.h>
 #ifdef linux
 #include <linux/fs.h>
-#endif // linux
 #include <sys/ioctl.h>
+#endif // linux
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#ifdef _WIN32
+// Windows doesn't have sys/ioctl.h - define what we need
+#define BLKGETSIZE64 0
+#endif
+#include <fstream>
 #include <numeric>
 
 DECLARE_bool(velox_ssd_odirect);

@@ -25,6 +25,8 @@ namespace facebook::velox {
 template <>
 const bool* FlatVector<bool>::rawValues() const {
   VELOX_UNSUPPORTED("rawValues() for bool is not supported");
+  // Unreachable, but required for MSVC
+  return nullptr;
 }
 
 template <>
@@ -36,17 +38,6 @@ SimpleVector<bool>::TValueAt FlatVector<bool>::valueAtFast(
 template <>
 Range<bool> FlatVector<bool>::asRange() const {
   return Range<bool>(rawValues<int64_t>(), 0, BaseVector::length_);
-}
-
-template <>
-void FlatVector<bool>::set(vector_size_t idx, bool value) {
-  VELOX_DCHECK_LT(idx, BaseVector::length_);
-  ensureValues();
-  VELOX_DCHECK(!values_->isView());
-  if (BaseVector::rawNulls_) {
-    BaseVector::setNull(idx, false);
-  }
-  bits::setBit(reinterpret_cast<uint64_t*>(rawValues_), idx, value);
 }
 
 template <>
@@ -154,7 +145,7 @@ void FlatVector<StringView>::acquireSharedStringBuffers(
     default:
       VELOX_UNREACHABLE(
           "unexpected encoding inside acquireSharedStringBuffers: {}",
-          source->toString());
+          mapSimpleToName(source->encoding()));
   }
 }
 
@@ -237,7 +228,7 @@ void FlatVector<StringView>::acquireSharedStringBuffersRecursive(
     case VectorEncoding::Simple::FUNCTION:
       VELOX_UNREACHABLE(
           "unexpected encoding inside acquireSharedStringBuffersRecursive: {}",
-          source->toString());
+          mapSimpleToName(source->encoding()));
   }
 }
 

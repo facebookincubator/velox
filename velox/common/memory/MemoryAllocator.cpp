@@ -16,8 +16,17 @@
 
 #include "velox/common/memory/MemoryAllocator.h"
 
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <sys/resource.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>  // For GetProcessMemoryInfo
+#pragma comment(lib, "psapi.lib")
+#endif
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -497,6 +506,7 @@ std::string MemoryAllocator::getAndClearFailureMessage() {
 }
 
 namespace {
+#ifndef _WIN32
 struct TraceState {
   struct rusage rusage;
   Stats allocatorStats;
@@ -511,12 +521,46 @@ int64_t toUsec(struct timeval tv) {
 int32_t elapsedUsec(struct timeval end, struct timeval begin) {
   return toUsec(end) - toUsec(begin);
 }
+#else
+// Windows implementation using GetProcessTimes
+struct TraceState {
+  Stats allocatorStats;
+  int64_t ioTotal;
+  FILETIME creationTime;
+  FILETIME exitTime;
+  FILETIME kernelTime;
+  FILETIME userTime;
+  int64_t wallClockStart;
+  SIZE_T workingSetSize;
+  SIZE_T pageFaultCount;
+};
+
+// Convert FILETIME (100-nanosecond intervals) to microseconds
+int64_t fileTimeToUsec(const FILETIME& ft) {
+  ULARGE_INTEGER uli;
+  uli.LowPart = ft.dwLowDateTime;
+  uli.HighPart = ft.dwHighDateTime;
+  return uli.QuadPart / 10; // 100ns -> microseconds
+}
+
+int64_t elapsedFileTimeUsec(const FILETIME& end, const FILETIME& begin) {
+  return fileTimeToUsec(end) - fileTimeToUsec(begin);
+}
+
+int64_t getWallClockUsec() {
+  LARGE_INTEGER frequency, counter;
+  QueryPerformanceFrequency(&frequency);
+  QueryPerformanceCounter(&counter);
+  return (counter.QuadPart * 1000000LL) / frequency.QuadPart;
+}
+#endif
 } // namespace
 
 void MemoryAllocator::getTracingHooks(
     std::function<void()>& init,
     std::function<std::string()>& report,
     std::function<int64_t()> ioVolume) {
+#ifndef _WIN32
   auto allocator = shared_from_this();
   auto state = std::make_shared<TraceState>();
   init = [state, allocator, ioVolume]() {
@@ -554,6 +598,73 @@ void MemoryAllocator::getTracingHooks(
     out << allocator->toString() << std::endl;
     return out.str();
   };
+#else
+  // Windows implementation using GetProcessTimes and GetProcessMemoryInfo
+  auto allocator = shared_from_this();
+  auto state = std::make_shared<TraceState>();
+  init = [state, allocator, ioVolume]() {
+    HANDLE process = GetCurrentProcess();
+    GetProcessTimes(
+        process,
+        &state->creationTime,
+        &state->exitTime,
+        &state->kernelTime,
+        &state->userTime);
+    
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(process, &pmc, sizeof(pmc))) {
+      state->workingSetSize = pmc.WorkingSetSize;
+      state->pageFaultCount = pmc.PageFaultCount;
+    } else {
+      state->workingSetSize = 0;
+      state->pageFaultCount = 0;
+    }
+    
+    state->wallClockStart = getWallClockUsec();
+    state->allocatorStats = allocator->stats();
+    state->ioTotal = ioVolume ? ioVolume() : 0;
+  };
+  
+  report = [state, allocator, ioVolume]() -> std::string {
+    HANDLE process = GetCurrentProcess();
+    FILETIME creation, exit, kernel, user;
+    GetProcessTimes(process, &creation, &exit, &kernel, &user);
+    
+    PROCESS_MEMORY_COUNTERS pmc;
+    SIZE_T currentWorkingSet = 0;
+    SIZE_T currentPageFaults = 0;
+    if (GetProcessMemoryInfo(process, &pmc, sizeof(pmc))) {
+      currentWorkingSet = pmc.WorkingSetSize;
+      currentPageFaults = pmc.PageFaultCount;
+    }
+    
+    int64_t wallClockNow = getWallClockUsec();
+    float elapsed = static_cast<float>(wallClockNow - state->wallClockStart);
+    float u = static_cast<float>(elapsedFileTimeUsec(user, state->userTime));
+    float s = static_cast<float>(elapsedFileTimeUsec(kernel, state->kernelTime));
+    
+    auto m = allocator->stats() - state->allocatorStats;
+    float pageFaults = static_cast<float>(currentPageFaults - state->pageFaultCount);
+    
+    int64_t io = 0;
+    if (ioVolume) {
+      io = ioVolume() - state->ioTotal;
+    }
+    
+    std::stringstream out;
+    out << std::endl
+        << std::endl
+        << fmt::format(
+               "user%={:.1f} sys%={:.1f} pagefaults/s={:.1f}, io={} MB/s\n",
+               100 * u / elapsed,
+               100 * s / elapsed,
+               pageFaults / (elapsed / 1000000),
+               io / elapsed);
+    out << m.toString() << std::endl;
+    out << allocator->toString() << std::endl;
+    return out.str();
+  };
+#endif
 }
 
 } // namespace facebook::velox::memory

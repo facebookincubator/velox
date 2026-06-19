@@ -56,6 +56,7 @@ WindowFunction::Metadata getWindowFunctionMetadata(const std::string& name) {
   } else {
     VELOX_USER_FAIL(
         "Window function metadata not found for function: {}", name);
+    return {}; // Unreachable, but MSVC requires a return statement
   }
 }
 

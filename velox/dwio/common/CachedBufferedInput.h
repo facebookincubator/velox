@@ -217,6 +217,7 @@ class CachedBufferedInput : public BufferedInput {
 
   uint64_t nextFetchSize() const override {
     VELOX_NYI();
+    return 0; // WINDOWS BUILD: MSVC requires return value
   }
 
   /// Resets the buffered input for reuse across different operations.
