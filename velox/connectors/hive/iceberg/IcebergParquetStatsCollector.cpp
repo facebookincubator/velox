@@ -80,7 +80,7 @@ IcebergParquetStatsCollector::IcebergParquetStatsCollector(
 }
 
 IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
-    std::unique_ptr<dwio::common::FileMetadata> fileMetadata) {
+    std::unique_ptr<dwio::common::FileMetadata> fileMetadata) const {
   // Empty data file.
   if (!fileMetadata) {
     return std::make_shared<IcebergDataFileStatistics>(
@@ -169,6 +169,22 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
     }
   }
   return dataFileStats;
+}
+
+void IcebergParquetStatsCollector::configureWriterOptions(
+    dwio::common::WriterOptions& options) const {
+  auto* parquetOptions = dynamic_cast<parquet::WriterOptions*>(&options);
+  if (parquetOptions == nullptr) {
+    return;
+  }
+  parquetOptions->parquetFieldIds = parquetFieldIds_.children;
+}
+
+IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::collect(
+    dwio::common::Writer& /* writer */,
+    std::unique_ptr<dwio::common::FileMetadata>& closeMetadata) const {
+  // Parquet statistics come from the FileMetadata returned by Writer::close().
+  return aggregate(std::move(closeMetadata));
 }
 
 } // namespace facebook::velox::connector::hive::iceberg
