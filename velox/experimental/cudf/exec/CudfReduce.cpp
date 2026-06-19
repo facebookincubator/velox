@@ -462,9 +462,9 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : ReduceAggregator(step, inputIndex, constant, resultType, std::nullopt) {
-  }
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : ReduceAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
   std::unique_ptr<cudf::column> doReduce(
       cudf::table_view const& input,
@@ -472,10 +472,16 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) override {
-    // Decimal sum uses a dedicated path that does not honor masks; masked
-    // decimal sum falls back to CPU (see canReduceBeEvaluatedByCudf).
-    VELOX_CHECK(!maskIndex.has_value(), "decimal sum does not support masks");
     cudf::column_view inputCol = input.column(inputIndex);
+    // Mask applies only at raw-input steps (kSingle/kPartial), where maskIndex
+    // is set. Null-inject masked rows so cuDF's null-excluding sum and count
+    // honor the mask; the injected column owns the lifetime through doReduce.
+    std::unique_ptr<cudf::column> maskedInput;
+    if (maskIndex.has_value()) {
+      maskedInput = cudf_velox::applyMask(
+          inputCol, input.column(*maskIndex), stream, get_temp_mr());
+      inputCol = maskedInput->view();
+    }
     switch (step) {
       case core::AggregationNode::Step::kSingle:
         return singleOrRawDecimalSumWithCast(inputCol, outputType, stream, mr);
@@ -741,7 +747,7 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
   if (kind.rfind(prefix + "sum", 0) == 0) {
     if (p.isDecimalAggregate) {
       return std::make_unique<ReduceDecimalSumAggregator>(
-          p.companionStep, p.inputIndex, p.constant, p.resultType);
+          p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
     }
     return std::make_unique<ReduceSumAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
@@ -851,14 +857,6 @@ bool canReduceBeEvaluatedByCudf(
           originalName.rfind(prefix + "min", 0) == 0 ||
           originalName.rfind(prefix + "max", 0) == 0;
       if (!maskSupported) {
-        return false;
-      }
-      // Decimal sum uses a dedicated GPU path that does not honor masks; fall
-      // back to CPU for masked decimal sum. Decimal min/max use the generic
-      // masked aggregators and decimal avg is already excluded above.
-      const bool isDecimal = aggregate.rawInputTypes.size() == 1 &&
-          aggregate.rawInputTypes[0]->isDecimal();
-      if (isDecimal && originalName.rfind(prefix + "sum", 0) == 0) {
         return false;
       }
     }

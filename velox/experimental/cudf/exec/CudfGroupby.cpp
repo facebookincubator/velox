@@ -188,15 +188,13 @@ void addDecimalFinalSumOnlyRequest(
 }
 
 void addDecimalRawPartialSingleSumRequest(
-    cudf::table_view const& tbl,
-    uint32_t inputIndex,
+    cudf::column_view input,
     std::vector<cudf::groupby::aggregation_request>& requests,
     bool includeCountAggregation,
     rmm::cuda_stream_view stream,
     uint32_t& sumIdx,
     std::unique_ptr<cudf::column>& castedInput) {
-  auto inputView = castDecimal64InputToDecimal128(
-      tbl.column(inputIndex), castedInput, stream);
+  auto inputView = castDecimal64InputToDecimal128(input, castedInput, stream);
   auto& request = requests.emplace_back();
   sumIdx = requests.size() - 1;
   request.values = inputView;
@@ -214,22 +212,15 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
       core::AggregationNode::Step step,
       uint32_t inputIndex,
       VectorPtr constant,
-      const TypePtr& resultType)
-      : GroupbyAggregator(
-            step,
-            inputIndex,
-            constant,
-            resultType,
-            std::nullopt) {}
+      const TypePtr& resultType,
+      std::optional<uint32_t> maskIndex)
+      : GroupbyAggregator(step, inputIndex, constant, resultType, maskIndex) {}
 
-  // Decimal sum uses a dedicated path that does not honor masks; masked decimal
-  // sum falls back to CPU (see canGroupbyBeEvaluatedByCudf).
   void addGroupbyRequest(
       cudf::table_view const& tbl,
       std::vector<cudf::groupby::aggregation_request>& requests,
       rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref /*mr*/) override {
-    VELOX_CHECK(!maskIndex.has_value(), "decimal sum does not support masks");
+      rmm::device_async_resource_ref mr) override {
     if (step == core::AggregationNode::Step::kIntermediate) {
       addDecimalDecodedSumCountRequests(
           tbl,
@@ -245,9 +236,11 @@ struct GroupbyDecimalSumAggregator : GroupbyAggregator {
       addDecimalFinalSumOnlyRequest(
           tbl, inputIndex, resultType, requests, stream, sumIdx_, decodedSum_);
     } else {
+      // Raw input (kPartial/kSingle): null-inject masked rows so cuDF's
+      // null-excluding sum (and the partial count) honor the mask. maskedInput
+      // returns the plain column when this aggregate has no mask.
       addDecimalRawPartialSingleSumRequest(
-          tbl,
-          inputIndex,
+          maskedInput(tbl, inputIndex, stream, mr),
           requests,
           step == core::AggregationNode::Step::kPartial,
           stream,
@@ -323,8 +316,7 @@ struct GroupbyDecimalAvgAggregator : GroupbyAggregator {
           decodedCount_);
     } else {
       addDecimalRawPartialSingleSumRequest(
-          tbl,
-          inputIndex,
+          tbl.column(inputIndex),
           requests,
           step == core::AggregationNode::Step::kPartial ||
               step == core::AggregationNode::Step::kSingle,
@@ -804,7 +796,7 @@ std::unique_ptr<GroupbyAggregator> createGroupbyAggregator(
   if (kind.rfind(prefix + "sum", 0) == 0) {
     if (p.isDecimalAggregate) {
       return std::make_unique<GroupbyDecimalSumAggregator>(
-          p.companionStep, p.inputIndex, p.constant, p.resultType);
+          p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
     }
     return std::make_unique<GroupbySumAggregator>(
         p.companionStep, p.inputIndex, p.constant, p.resultType, p.maskIndex);
@@ -932,14 +924,6 @@ bool canGroupbyBeEvaluatedByCudf(
           originalName.rfind(prefix + "min", 0) == 0 ||
           originalName.rfind(prefix + "max", 0) == 0;
       if (!maskSupported) {
-        return false;
-      }
-      // Decimal sum uses a dedicated GPU path that does not honor masks; fall
-      // back to CPU for masked decimal sum. Decimal min/max use the generic
-      // masked aggregators and decimal avg is already excluded above.
-      const bool isDecimal = aggregate.rawInputTypes.size() == 1 &&
-          aggregate.rawInputTypes[0]->isDecimal();
-      if (isDecimal && originalName.rfind(prefix + "sum", 0) == 0) {
         return false;
       }
     }
