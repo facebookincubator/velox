@@ -476,11 +476,11 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
     // Mask applies only at raw-input steps (kSingle/kPartial), where maskIndex
     // is set. Null-inject masked rows so cuDF's null-excluding sum and count
     // honor the mask; the injected column owns the lifetime through doReduce.
-    std::unique_ptr<cudf::column> maskedInput;
+    std::unique_ptr<cudf::column> injected;
     if (maskIndex.has_value()) {
-      maskedInput = cudf_velox::applyMask(
+      injected = cudf_velox::applyMask(
           inputCol, input.column(*maskIndex), stream, get_temp_mr());
-      inputCol = maskedInput->view();
+      inputCol = injected->view();
     }
     switch (step) {
       case core::AggregationNode::Step::kSingle:

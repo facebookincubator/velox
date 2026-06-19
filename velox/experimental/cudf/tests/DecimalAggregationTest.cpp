@@ -943,6 +943,29 @@ TEST_F(CudfDecimalTest, decimalSumMaskedGlobalSingle) {
       .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
 }
 
+// Masked global (reduce) sum where every row is masked out: the input reduces
+// to the empty set, so the result is NULL. Runs on GPU (fallback off).
+TEST_F(CudfDecimalTest, decimalSumMaskedGlobalAllMasked) {
+  auto input = makeRowVector(
+      {"d", "m"},
+      {
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({false, false, false, false, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
+}
+
 TEST_F(CudfDecimalTest, decimalSumGroupbySingleDecimal64Overflow) {
   // One group of 12 values of 9e17 (DECIMAL(18,0)) sums to 1.08e19, past 2^63.
   // sum(decimal(18,0)) -> decimal(38,0), computed in 128 bits, no wrap.
