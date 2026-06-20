@@ -80,6 +80,10 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return bytesFlushed_ + buffer_.size();
   }
 
+  int64_t bufferedBytes() const {
+    return buffer_.size();
+  }
+
   ::arrow::Status Close() override {
     ARROW_RETURN_NOT_OK(Flush());
     sink_->close();
@@ -475,7 +479,8 @@ void Writer::write(const VectorPtr& data) {
   PARQUET_THROW_NOT_OK(arrowContext_->writer->writeRecordBatch(*recordBatch));
 
   if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->writer->currentRowGroupBufferedBytes()))) {
+          arrowContext_->writer->currentRowGroupBufferedBytes() +
+          stream_->bufferedBytes()))) {
     flush();
   }
 }
