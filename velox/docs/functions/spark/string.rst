@@ -513,7 +513,17 @@ String Functions
 
     - It prints null input as "NULL" rather than producing null output.
 
-    - It prints binary values using the hex format.
+    - For binary values, the rendering follows the ``binary_output_style``
+      Spark session config (mirrors Spark's ``spark.sql.binaryOutputStyle``).
+      Supported values are ``HEX_DISCRETE`` (default), ``HEX``, ``BASE64``,
+      ``UTF-8``, and ``BASIC``. For the bytes ``[0x31, 0x32, 0x33]`` the
+      renderings are:
+
+      - ``HEX_DISCRETE``: ``[31 32 33]``
+      - ``HEX``: ``313233``
+      - ``BASE64``: ``MTIz``
+      - ``UTF-8``: ``123``
+      - ``BASIC``: ``[49, 50, 51]``
 
     ::
 
