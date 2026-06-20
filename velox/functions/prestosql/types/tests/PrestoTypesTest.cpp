@@ -17,6 +17,8 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/BigintEnumRegistration.h"
+#include "velox/functions/prestosql/types/BigintEnumType.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
@@ -31,6 +33,9 @@
 #include "velox/functions/prestosql/types/TDigestType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/functions/prestosql/types/VarcharEnumRegistration.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
+#include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/type/Time.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -69,6 +74,33 @@ TEST(PrestoTypeSqlTest, custom) {
   EXPECT_EQ(PrestoTypes::toSql(IPPREFIX()), "IPPREFIX");
   EXPECT_EQ(PrestoTypes::toSql(UUID()), "UUID");
   EXPECT_EQ(PrestoTypes::toSql(BINGTILE()), "BINGTILE");
+}
+
+TEST(PrestoTypeSqlTest, enums) {
+  registerBigintEnumType();
+  registerVarcharEnumType();
+
+  auto bigintEnum = BIGINT_ENUM(
+      LongEnumParameter("test.enum.mood", {{"CURIOUS", -2}, {"HAPPY", 0}}));
+  // Keys are sorted and rendered with their raw integer values.
+  EXPECT_EQ(
+      PrestoTypes::toSql(bigintEnum),
+      R"(test.enum.mood:BigintEnum(test.enum.mood{"CURIOUS": -2, "HAPPY": 0}))");
+  // toSql output round-trips through parseType back to the same type.
+  EXPECT_EQ(
+      *functions::prestosql::parseType(PrestoTypes::toSql(bigintEnum)),
+      *bigintEnum);
+
+  auto varcharEnum = VARCHAR_ENUM(VarcharEnumParameter(
+      "test.enum.color", {{"RED", "red"}, {"BLUE", "blue"}}));
+  // Keys are sorted and values are base32-encoded: "blue" -> "MJWHKZI=",
+  // "red" -> "OJSWI===".
+  EXPECT_EQ(
+      PrestoTypes::toSql(varcharEnum),
+      R"(test.enum.color:VarcharEnum(test.enum.color{"BLUE": "MJWHKZI=", "RED": "OJSWI==="}))");
+  EXPECT_EQ(
+      *functions::prestosql::parseType(PrestoTypes::toSql(varcharEnum)),
+      *varcharEnum);
 }
 
 TEST(PrestoTypeSqlTest, complex) {

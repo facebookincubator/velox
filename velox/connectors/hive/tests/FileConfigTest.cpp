@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/FileConfig.h"
 #include <gtest/gtest.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 
@@ -25,12 +26,12 @@ using namespace facebook::velox::connector::hive;
 TEST(FileConfigTest, defaultConfig) {
   FileConfig config(
       std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
+          std::unordered_map<std::string, std::string>()),
+      "hive.");
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
   EXPECT_FALSE(config.isOrcUseColumnNames(emptySession.get()));
-  EXPECT_FALSE(config.isParquetUseColumnNames(emptySession.get()));
   EXPECT_FALSE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_FALSE(config.ignoreMissingFiles(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 128 << 20);
@@ -52,17 +53,15 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.pinIndex(emptySession.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
   EXPECT_EQ(
-      config.parquetFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
-  EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
   EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
+  EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
       {FileConfig::kOrcUseColumnNames, "true"},
-      {FileConfig::kParquetUseColumnNames, "true"},
       {FileConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {FileConfig::kMaxCoalescedBytes, "100"},
       {FileConfig::kMaxCoalescedDistance, "100kB"},
@@ -78,18 +77,17 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kCacheIndex, "true"},
       {FileConfig::kPinIndex, "true"},
       {FileConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
-      {FileConfig::kParquetFooterSpeculativeIoSize, std::to_string(1UL << 20)},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
+      {FileConfig::kNimbleLazyColumnIo, "true"},
   };
   FileConfig config(
-      std::make_shared<config::ConfigBase>(std::move(configFromFile)));
+      std::make_shared<config::ConfigBase>(std::move(configFromFile)), "hive.");
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
   EXPECT_TRUE(config.isOrcUseColumnNames(emptySession.get()));
-  EXPECT_TRUE(config.isParquetUseColumnNames(emptySession.get()));
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 100);
   EXPECT_EQ(config.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
@@ -106,20 +104,19 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.pinIndex(emptySession.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
   EXPECT_EQ(
-      config.parquetFooterSpeculativeIoSize(emptySession.get()), 1UL << 20);
-  EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
+  EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
   FileConfig config(
       std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
+          std::unordered_map<std::string, std::string>()),
+      "hive.");
   std::unordered_map<std::string, std::string> sessionOverride = {
       {FileConfig::kOrcUseColumnNamesSession, "true"},
-      {FileConfig::kParquetUseColumnNamesSession, "true"},
       {FileConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {FileConfig::kIgnoreMissingFilesSession, "true"},
       {FileConfig::kMaxCoalescedDistanceSession, "3MB"},
@@ -134,18 +131,16 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kPinIndexSession, "true"},
       {FileConfig::kOrcFooterSpeculativeIoSizeSession,
        std::to_string(128UL << 10)},
-      {FileConfig::kParquetFooterSpeculativeIoSizeSession,
-       std::to_string(512UL << 10)},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
       {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
+      {FileConfig::kNimbleLazyColumnIoSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
 
   EXPECT_TRUE(config.isOrcUseColumnNames(session.get()));
-  EXPECT_TRUE(config.isParquetUseColumnNames(session.get()));
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(session.get()));
   EXPECT_TRUE(config.ignoreMissingFiles(session.get()));
   EXPECT_EQ(config.maxCoalescedDistanceBytes(session.get()), 3 << 20);
@@ -159,21 +154,23 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.cacheIndex(session.get()));
   EXPECT_TRUE(config.pinIndex(session.get()));
   EXPECT_EQ(config.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
-  EXPECT_EQ(config.parquetFooterSpeculativeIoSize(session.get()), 512UL << 10);
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
+  EXPECT_TRUE(config.nimbleLazyColumnIo(session.get()));
 }
 
 TEST(FileConfigTest, nullConfig) {
   VELOX_ASSERT_THROW(
-      FileConfig(nullptr), "Config is null for FileConfig initialization");
+      FileConfig(nullptr, "hive."),
+      "Config is null for FileConfig initialization");
 }
 
 TEST(FileConfigTest, invalidTimestampUnit) {
   FileConfig config(
       std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
+          std::unordered_map<std::string, std::string>()),
+      "hive.");
   std::unordered_map<std::string, std::string> sessionOverride = {
       {FileConfig::kReadTimestampUnitSession, "5"},
   };

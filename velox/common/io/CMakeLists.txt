@@ -14,4 +14,4 @@
 
 velox_add_library(velox_common_io IoStatistics.cpp HEADERS IoStatistics.h Options.h)
 
-velox_link_libraries(velox_common_io Folly::folly glog::glog)
+velox_link_libraries(velox_common_io velox_common_base Folly::folly glog::glog)

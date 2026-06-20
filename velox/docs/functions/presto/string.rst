@@ -34,6 +34,7 @@ String Functions
     Returns the Unicode code point of the only character of ``string``.
 
 .. function:: concat(string1, ..., stringN) -> varchar
+   :noindex:
 
     Returns the concatenation of ``string1``, ``string2``, ``...``, ``stringN``.
     This function provides the same functionality as the
@@ -71,6 +72,7 @@ String Functions
     Returns the Jaro-Winkler similarity of ``string1`` and ``string2``.
 
 .. function:: length(string) -> bigint
+   :noindex:
 
     Returns the length of ``string`` in characters.
 
@@ -187,6 +189,7 @@ String Functions
     Raises an error if there are duplicate keys.
 
 .. function:: split_to_map(string, entryDelimiter, keyValueDelimiter, function(K,V1,V2,R)) -> map<varchar, varchar>
+   :noindex:
 
     Splits ``string`` by ``entryDelimiter`` and ``keyValueDelimiter`` and returns a map.
     ``entryDelimiter`` splits ``string`` into key-value pairs. ``keyValueDelimiter`` splits
@@ -311,6 +314,7 @@ String Functions
     the ``word`` in lowercase is returned.
 
 .. function:: word_stem(word, lang) -> varchar
+   :noindex:
 
     Returns the stem of ``word`` in the ``lang`` language. This function supports the following languages:
 
@@ -350,6 +354,7 @@ Unicode Functions
     Transforms ``string`` with NFC normalization form.
 
 .. function:: normalize(string, form) -> varchar
+   :noindex:
 
     Reference: https://unicode.org/reports/tr15/#Norm_Forms
     Transforms ``string`` with the specified normalization form.

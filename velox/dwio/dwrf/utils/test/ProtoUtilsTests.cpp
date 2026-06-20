@@ -55,3 +55,89 @@ TEST(ProtoUtilsTests, Projection) {
 
   EXPECT_EQ("struct<a:boolean,c:smallint,d:struct<b:int,c:int>>", res);
 }
+
+TEST(ProtoUtilsTests, AttributesRoundTrip) {
+  // iceberg.id stamped on a subset of nodes must survive footer serialization
+  // and come back keyed by the same pre-order node id, leaving the schema
+  // intact. Node ids: 0=root, 1=a, 2=b, 3=c, 4=c.x, 5=c.y.
+  HiveTypeParser parser;
+  auto schema = parser.parse("struct<a:int,b:bigint,c:struct<x:int,y:int>>");
+  proto::Footer footer;
+  auto footerWrapper = FooterWriteWrapper(&footer);
+
+  const std::unordered_map<uint32_t, std::string> idByNode{
+      {1, "10"}, {2, "20"}, {4, "40"}};
+  ProtoUtils::writeType(
+      *schema, footerWrapper, /*parent=*/nullptr, [&](uint32_t typeId) {
+        std::vector<std::pair<std::string, std::string>> attributes;
+        auto it = idByNode.find(typeId);
+        if (it != idByNode.end()) {
+          attributes.emplace_back("iceberg.id", it->second);
+        }
+        return attributes;
+      });
+
+  std::string serialized;
+  ASSERT_TRUE(footer.SerializeToString(&serialized));
+  proto::Footer parsed;
+  ASSERT_TRUE(parsed.ParseFromString(serialized));
+
+  const std::
+      unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+          expected{
+              {1, {{"iceberg.id", "10"}}},
+              {2, {{"iceberg.id", "20"}}},
+              {4, {{"iceberg.id", "40"}}}};
+  EXPECT_EQ(ProtoUtils::readAttributes(FooterWrapper(&parsed)), expected);
+  EXPECT_EQ(
+      HiveTypeSerializer::serialize(ProtoUtils::fromFooter(parsed)),
+      "struct<a:int,b:bigint,c:struct<x:int,y:int>>");
+}
+
+TEST(ProtoUtilsTests, AttributesRoundTripOrc) {
+  // The same iceberg.id round-trip must work for ORC footers: DWRF/ORC Iceberg
+  // reads resolve columns by field id from these attributes, and Iceberg
+  // manifest-tags DWRF files as ORC. Node ids: 0=root, 1=a, 2=b, 3=c, 4=c.x,
+  // 5=c.y.
+  HiveTypeParser parser;
+  auto schema = parser.parse("struct<a:int,b:bigint,c:struct<x:int,y:int>>");
+  proto::orc::Footer footer;
+  auto footerWrapper = FooterWriteWrapper(&footer);
+
+  const std::unordered_map<uint32_t, std::string> idByNode{
+      {1, "10"}, {2, "20"}, {4, "40"}};
+  ProtoUtils::writeType(
+      *schema, footerWrapper, /*parent=*/nullptr, [&](uint32_t typeId) {
+        std::vector<std::pair<std::string, std::string>> attributes;
+        auto it = idByNode.find(typeId);
+        if (it != idByNode.end()) {
+          attributes.emplace_back("iceberg.id", it->second);
+        }
+        return attributes;
+      });
+
+  std::string serialized;
+  ASSERT_TRUE(footer.SerializeToString(&serialized));
+  proto::orc::Footer parsed;
+  ASSERT_TRUE(parsed.ParseFromString(serialized));
+
+  const std::
+      unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+          expected{
+              {1, {{"iceberg.id", "10"}}},
+              {2, {{"iceberg.id", "20"}}},
+              {4, {{"iceberg.id", "40"}}}};
+  EXPECT_EQ(ProtoUtils::readAttributes(FooterWrapper(&parsed)), expected);
+}
+
+TEST(ProtoUtilsTests, AttributesAbsentByDefault) {
+  // A type written without an attribute provider -- the existing path for every
+  // DWRF file today -- yields an empty attribute map.
+  HiveTypeParser parser;
+  auto schema = parser.parse("struct<a:int,b:bigint>");
+  proto::Footer footer;
+  auto footerWrapper = FooterWriteWrapper(&footer);
+  ProtoUtils::writeType(*schema, footerWrapper);
+
+  EXPECT_TRUE(ProtoUtils::readAttributes(FooterWrapper(&footer)).empty());
+}

@@ -170,8 +170,8 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   return wg;
 }
 
-WaveGraph::WaveGraph(std::shared_ptr<ModelContext> modelContext)
-    : graph_(modelContext->graph), modelContext_(std::move(modelContext)) {
+WaveGraph::WaveGraph(ModelContext* modelContext)
+    : graph_(modelContext->graph.get()), modelContext_(modelContext) {
   waveGraph() = this;
   SCOPE_EXIT {
     waveGraph() = nullptr;
@@ -412,6 +412,16 @@ nativert::Value* WaveGraph::newScalarValue(
   }
   idToValue_[id] = value;
   createdValueDtypes_[value->id()] = dtype;
+  return value;
+}
+
+nativert::Value* WaveGraph::newListValue(
+    nativert::Node* node,
+    std::string_view name) {
+  auto uname = uniqueName(name);
+  auto* value =
+      node->addOutput(uname, nativert::Type(nativert::Type::Kind::TensorList));
+  idToValue_[value->id()] = value;
   return value;
 }
 

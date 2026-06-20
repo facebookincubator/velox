@@ -1233,6 +1233,200 @@ TEST_F(TableScanTest, missingColumnsInRepeatedColumns) {
       .assertResults(expected);
 }
 
+// Verifies struct field resolution by name, including missing, renamed,
+// case-variant, and nested fields, plus filter pushdown on unresolved paths.
+TEST_F(TableScanTest, structMatchByName) {
+  const auto assertSelectUseColumnNames =
+      [this](
+          const RowTypePtr& outputType,
+          const std::string& sql,
+          const std::string& filePath,
+          const std::string& remainingFilter = "") {
+        const auto plan =
+            PlanBuilder().tableScan(outputType, {}, remainingFilter).planNode();
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                "true")
+            .split(makeHiveConnectorSplit(filePath))
+            .assertResults(sql);
+      };
+  const auto id = makeFlatVector<int64_t>({2, 4, 6, 8, 10});
+  const std::vector<VectorPtr> names = {
+      makeFlatVector<std::string>({
+          "Janet",
+          "Bob",
+          "Alice",
+          "Carol",
+          "David",
+      }),
+      makeFlatVector<std::string>({
+          "Jones",
+          "Brown",
+          "White",
+          "Green",
+          "Black",
+      }),
+  };
+  const auto address = makeFlatVector<std::string>({
+      "567 Maple Drive",
+      "1 Oak St",
+      "9 Pine Rd",
+      "22 Cedar Ave",
+      "77 Birch Blvd",
+  });
+
+  {
+    const auto name = makeRowVector({"first", "last"}, names);
+    const auto vector =
+        makeRowVector({"id", "name", "address"}, {id, name, address});
+
+    const auto file = TempFilePath::create();
+    writeToFile(file->getPath(), {vector});
+    createDuckDbTable({vector});
+
+    assertSelectUseColumnNames(
+        asRowType(vector->type()),
+        "SELECT id, name, address from tmp",
+        file->getPath());
+
+    const auto assertMissingFieldFilter =
+        [&](const RowTypePtr& outputType,
+            const std::string& projectionSql,
+            const std::string& missingFieldFilter) {
+          assertSelectUseColumnNames(
+              outputType, projectionSql, file->getPath());
+          assertSelectUseColumnNames(
+              outputType,
+              "SELECT * from tmp where false",
+              file->getPath(),
+              missingFieldFilter);
+        };
+
+    // Add one non-existing subfield 'middle' to the 'name' field and rename
+    // field 'address'.
+    {
+      const auto rowType = ROW(
+          {"id", "name", "email"},
+          {BIGINT(),
+           ROW({"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+           VARCHAR()});
+      assertMissingFieldFilter(
+          rowType,
+          "SELECT id, row(name.first, null, name.last), null FROM tmp",
+          "not(is_null(name.middle))");
+    }
+
+    // Rename subfields of the 'name' field.
+    {
+      const auto rowType =
+          ROW({"id", "name", "address"},
+              {BIGINT(), ROW({"a", "b"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+      assertMissingFieldFilter(
+          rowType,
+          "SELECT id, row(null, null), address FROM tmp",
+          "not(is_null(name.a))");
+    }
+
+    // Deletion of one subfield from the 'name' field.
+    {
+      const auto rowType =
+          ROW({"id", "name", "address"},
+              {BIGINT(), ROW({"full"}, {VARCHAR()}), VARCHAR()});
+      assertMissingFieldFilter(
+          rowType,
+          "SELECT id, row(null), address FROM tmp",
+          "not(is_null(name.full))");
+    }
+
+    // No subfield in the 'name' field.
+    {
+      const auto rowType =
+          ROW({"id", "name", "address"}, {BIGINT(), ROW({}, {}), VARCHAR()});
+      const auto op = PlanBuilder()
+                          .startTableScan()
+                          .outputType(rowType)
+                          .dataColumns(rowType)
+                          .endTableScan()
+                          .planNode();
+      const auto split = makeHiveConnectorSplit(file->getPath());
+      const auto result =
+          AssertQueryBuilder(op)
+              .connectorSessionProperty(
+                  kHiveConnectorId,
+                  connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                  "true")
+              .split(split)
+              .copyResults(pool());
+      const auto rows = result->as<RowVector>();
+      const auto expected = makeRowVector(ROW({}, {}), 5);
+      facebook::velox::test::assertEqualVectors(expected, rows->childAt(1));
+    }
+  }
+
+  // Case sensitivity and lower-case conversion when matching by name.
+  {
+    const auto name = makeRowVector({"FIRST", "LAST"}, names);
+    const auto vector =
+        makeRowVector({"id", "name", "address"}, {id, name, address});
+
+    const auto file = TempFilePath::create();
+    writeToFile(file->getPath(), {vector});
+    createDuckDbTable({vector});
+
+    const auto rowType = ROW(
+        {"id", "name", "address"},
+        {BIGINT(), ROW({"first", "last"}, {VARCHAR(), VARCHAR()}), VARCHAR()});
+    assertSelectUseColumnNames(
+        rowType,
+        "SELECT id, row(null, null), address FROM tmp",
+        file->getPath());
+
+    // Case insensitivity when matching by name and reading as lower case.
+    const auto op =
+        PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
+    AssertQueryBuilder(op, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+            "true")
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
+            "true")
+        .split(makeHiveConnectorSplit(file->getPath()))
+        .assertResults("SELECT id, name, address FROM tmp");
+  }
+
+  // Nested struct: rename inner fields to verify recursive name-based matching.
+  {
+    const auto nested = makeRowVector(
+        {"a"},
+        {makeRowVector(
+            {"b", "c"},
+            {
+                makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+                makeFlatVector<std::string>({"x", "y", "z", "u", "v"}),
+            })});
+    const auto file = TempFilePath::create();
+    writeToFile(file->getPath(), {nested});
+    createDuckDbTable({nested});
+
+    const auto nestedRowType =
+        ROW({"a"}, {ROW({"c", "b_renamed"}, {VARCHAR(), INTEGER()})});
+    assertSelectUseColumnNames(
+        nestedRowType, "SELECT row(a.c, null) FROM tmp", file->getPath());
+
+    // Filter pushdown on renamed (missing) inner field.
+    assertSelectUseColumnNames(
+        nestedRowType,
+        "SELECT * FROM tmp WHERE false",
+        file->getPath(),
+        "not(is_null(a.b_renamed))");
+  }
+}
+
 // Tests queries that use Lazy vectors with multiple layers of wrapping.
 TEST_F(TableScanTest, constDictLazy) {
   vector_size_t size = 1'000;
@@ -2520,9 +2714,14 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   writeToFile(filePaths[0]->getPath(), rowVector);
   createDuckDbTable({rowVector});
 
+  // Keep integer literals as INTEGER so an IN over an INTEGER column (c1) stays
+  // a subfield filter rather than getting a column cast that blocks skipping.
+  parse::ParseOptions parseOptions;
+  parseOptions.parseIntegerAsBigint = false;
   auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
         PlanBuilder(pool_.get())
+            .setParseOptions(parseOptions)
             .tableScan(asRowType(rowVector->type()), {filter})
             .planNode(),
         filePaths,
@@ -5299,6 +5498,60 @@ TEST_F(TableScanTest, timestampPartitionKey) {
           "false")
       .splits(getSplits())
       .assertResults(getExpected(false));
+}
+
+TEST_F(TableScanTest, timestampUtcPartitionKey) {
+  const char* inputs[] = {"2023-10-14 07:00:00.0", "2024-01-06 04:00:00.0"};
+
+  auto vectors = makeVectors(1, 1);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  const auto getSplits = [&]() {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (const auto& timestampInput : inputs) {
+      splits.push_back(
+          exec::test::HiveConnectorSplitBuilder(filePath->getPath())
+              .partitionKey("t", timestampInput)
+              .build());
+    }
+    return splits;
+  };
+
+  std::vector<Timestamp> expectedValues;
+  for (const auto& timestampInput : inputs) {
+    expectedValues.push_back(
+        util::fromTimestampString(
+            timestampInput, util::TimestampParseMode::kPrestoCast)
+            .value());
+  }
+  auto expected = makeRowVector(
+      {"t"}, {makeFlatVector<Timestamp>(expectedValues, TIMESTAMP_UTC())});
+
+  connector::ColumnHandleMap assignments = {
+      {"t", partitionKey("t", TIMESTAMP_UTC())}};
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({"t"}, {TIMESTAMP_UTC()}))
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  // TIMESTAMP_UTC partition values must always be interpreted as UTC,
+  // independent of local-time partition parsing setting.
+  const char* configValues[] = {"true", "false"};
+  for (const auto* configValue : configValues) {
+    SCOPED_TRACE(
+        fmt::format("readTimestampPartitionValueAsLocalTime={}", configValue));
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kHiveConnectorId,
+            connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            configValue)
+        .splits(getSplits())
+        .assertResults(expected);
+  }
 }
 
 TEST_F(TableScanTest, partitionKeyNotMatchPartitionKeysHandle) {

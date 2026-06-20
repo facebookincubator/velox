@@ -148,8 +148,7 @@ bool MemoryAllocator::isAlignmentValid(
   // alignmentBytes must be a power of two, so we can replace the expensive
   // modulo operation with bitwise and.
   return (alignmentBytes == kMinAlignment) ||
-      (alignmentBytes >= kMinAlignment && alignmentBytes <= kMaxAlignment &&
-       bits::isPowerOfTwo(alignmentBytes) &&
+      (alignmentBytes >= kMinAlignment && bits::isPowerOfTwo(alignmentBytes) &&
        (allocateBytes & (alignmentBytes - 1)) == 0);
 }
 

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
@@ -102,6 +103,8 @@ class FileSplitReader {
 
   void configureReaderOptions(
       std::shared_ptr<random::RandomSkipTracker> randomSkip);
+
+  void setRemainingFilterColumns(const folly::F14FastSet<std::string>& columns);
 
   /// This function is used by different table formats like Iceberg and Hudi to
   /// do additional preparations before reading the split, e.g. Open delete

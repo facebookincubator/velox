@@ -60,7 +60,52 @@ struct LaunchDebugInfo {
   DebugInfo* pinnedInfo;
   DebugInfo* deviceInfo;
   int32_t numBlocks;
+  int32_t sequenceNumber;
+  int32_t stepIdx;
 };
+
+/// Per-launch metadata stored in thread-local alongside the DebugInfo.
+struct LaunchMeta {
+  int32_t sequenceNumber{0};
+  int32_t stepIdx{0};
+  int32_t numBlocks{0};
+  int64_t gatherUs{0};
+  int64_t gridUs{0};
+  int64_t allocUs{0};
+  int64_t fillUs{0};
+  int64_t kernelUs{0};
+  int64_t standaloneUs{0};
+  // Wall time of the metadata-only shortcut-standalone batch (one
+  // hardware_timestamp pair around the tight loop).
+  int64_t shortcutUs{0};
+  bool standaloneBound{false};
+  bool noDtoH{false};
+  int64_t inputBytes{0};
+  int64_t outputBytes{0};
+  // Time spent on reference-frame device-to-host copy and comparison for this
+  // step (debug-only; excluded from the reported e2e time).
+  int64_t refCheckUs{0};
+};
+
+/// Per-thread debug info from the most recent wave execution. Populated by
+/// executeWave when WaveConfig::keepStatsOnThread is true.
+struct WaveThreadInfo {
+  std::vector<std::vector<DebugInfo>> debugInfo;
+  std::vector<LaunchMeta> launchMeta;
+  std::string errors;
+  /// Standalone execution times, sorted descending. Indices line up with
+  /// standaloneLabels and standaloneTargets.
+  std::vector<int64_t> standaloneTimes;
+  /// Human-readable label for each standalone, parallel to standaloneTimes.
+  std::vector<std::string> standaloneLabels;
+  /// Operator target string for each standalone, parallel to standaloneTimes.
+  std::vector<std::string> standaloneTargets;
+  /// Performance report, filled when trace kTiming is on.
+  std::string perfReport;
+};
+
+/// Returns the thread-local WaveThreadInfo for the current thread.
+const WaveThreadInfo& waveThreadInfo();
 
 /// Preallocated vectors reused across executions for a given
 /// (compositeInvocation, stepIdx) pair.  Avoids per-step heap allocation
@@ -69,6 +114,10 @@ struct StepVectors {
   /// Used by CompositeInvocation::execute / gatherLaunches.
   std::vector<LaunchData> kernels;
   std::vector<LaunchData> standalones;
+  /// Metadata-only standalones with a StandaloneShortcut, split out from
+  /// 'standalones' so they run in a tight switch loop (no per-op timing, no
+  /// stream sync) and are timed as one batch.
+  std::vector<LaunchData> shortcutStandalones;
   std::vector<int64_t> paramOffsets;
 
   /// Used by makeGrid (output).
@@ -109,6 +158,30 @@ struct StepVectors {
   /// Set by gatherLaunches when any kernel op in this step has op barriers
   /// (multi-block synchronization). Causes cooperative launch.
   bool isCgGrid{false};
+
+  /// Set by gatherLaunches when this step has at least one standalone that does
+  /// device-side work (a non-shortcut op). Shortcut standalones only manipulate
+  /// host-side tensor metadata and never read wave-stream buffers, so when this
+  /// is false the wave stream need not be synced before running them.
+  bool hasGpuStandalones{false};
+
+  // Timing fields, populated when kTiming trace bit or printTiming is on.
+  int64_t gatherUs{0};
+  int64_t gridUs{0};
+  int64_t allocUs{0};
+  int64_t fillUs{0};
+  int64_t kernelUs{0};
+  int64_t standaloneUs{0};
+  // Wall time of the metadata-only shortcut-standalone batch (one
+  // hardware_timestamp pair around the tight loop).
+  int64_t shortcutUs{0};
+  bool standaloneBound{false};
+  bool noDtoH{false};
+  int64_t inputBytes{0};
+  int64_t outputBytes{0};
+  // Time spent on reference-frame device-to-host copy and comparison for this
+  // step (debug-only; excluded from the reported e2e time).
+  int64_t refCheckUs{0};
 };
 
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
@@ -129,8 +202,11 @@ struct ExecutionState {
   const folly::F14FastMap<NodeCP, int32_t>* standaloneIndices{nullptr};
   std::vector<StandaloneStats>* standaloneStats{nullptr};
 
-  /// Per-launch debug info collected during execution (owned by executor).
-  std::vector<LaunchDebugInfo>* launchDebugInfos{nullptr};
+  // Standalone nodes skipped during step execution due to None inputs.
+  std::vector<NodeCP>* deferredStandalones{nullptr};
+
+  /// Per-launch debug info collected during execution.
+  std::vector<LaunchDebugInfo> launchDebugInfos;
 
   /// Counters for reference frame verification (owned by executor).
   int64_t* numRefTensorsChecked{nullptr};
@@ -138,8 +214,13 @@ struct ExecutionState {
 
   /// Reusable device buffers indexed by [sequenceNumber][stepIdx].
   std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>> deviceBuffers;
-  /// Reusable pinned buffers indexed by [sequenceNumber][stepIdx].
+  /// Reusable pinned buffers indexed by
+  /// [sequenceNumber][stepIdx]. These are on;ly to be used for their
+  /// particular sequence and step and must not be
+  /// overwritten. Constant parts of the frame are kept in these
+  /// buffers between runs of the pipeline.
   std::vector<std::vector<facebook::velox::wave::WaveBufferPtr>> pinnedBuffers;
+
   /// Preallocated per-step vectors indexed by [sequenceNumber][stepIdx].
   std::vector<std::vector<StepVectors>> stepVectors;
 
@@ -149,6 +230,10 @@ struct ExecutionState {
   /// Value ids that passed reference verification. Used by reverify to detect
   /// corruption of previously correct values.
   std::vector<nativert::ValueId> verifiedIds;
+
+  /// Generation counter from the last execution. Incremented by returnFrame
+  /// to signal that launch caches are stale.
+  uint64_t lastFrameGeneration{0};
 };
 
 /// Executes a single node via its OpKernel with tracing and error logging.
@@ -158,20 +243,33 @@ void executeNode(
     nativert::ExecutionFrame& frame);
 
 /// Runs standalone launches by mapping each formal node to the actual node
-/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel,
-/// and recording timing in standaloneStats.
+/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel.
+/// When 'timing' is true, syncs the PyTorch default stream after each op and
+/// records its elapsed time in standaloneStats; when false, no clock is read
+/// and standaloneStats is left untouched.
 void runStandalones(
     const std::vector<LaunchData>& standalones,
     ExecutionState& state,
     const folly::F14FastMap<NodeCP, nativert::OpKernel*>& kernelMap,
     const folly::F14FastMap<NodeCP, int32_t>& standaloneIndices,
-    std::vector<StandaloneStats>& standaloneStats);
+    std::vector<StandaloneStats>& standaloneStats,
+    bool timing);
+
+/// Runs the metadata-only shortcut standalones in a tight loop (just the
+/// per-op switch in runStandaloneShortcut), with no per-op timing or stream
+/// sync. When 'timing' is true, records the whole batch's wall time (via
+/// folly::hardware_timestamp) into 'outUs'.
+void runShortcutStandalones(
+    const std::vector<LaunchData>& shortcuts,
+    ExecutionState& state,
+    bool timing,
+    int64_t& outUs);
 
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
 int32_t makeGrid(
-    const std::vector<LaunchData>& launches,
+    std::vector<LaunchData>& launches,
     StepVectors& sv,
     int32_t maxBlocksPerSM = 0);
 
@@ -196,11 +294,38 @@ int64_t paramSymInt(
     nativert::ExecutionFrame& frame,
     const FormalToActual& map);
 
+/// Returns the int64 value for a named argument that may be either an input
+/// value (translated via map) or an attribute (on the actual node found via
+/// nodeMap).
+int64_t paramIntByName(
+    NodeCP node,
+    std::string_view name,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    const NodeMap& nodeMap);
+
+/// Returns the int64 list for a named argument that may be either an input
+/// value / prim.ListPack (translated via map) or a vector<int64_t> attribute
+/// (on the actual node found via nodeMap).
+std::vector<int64_t> paramIntListByName(
+    NodeCP node,
+    std::string_view name,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    const NodeMap& nodeMap);
+
+/// Formats a NodeMap as human-readable text with one formal -> actual pair
+/// per entry, each node printed with NodePrinter stopping at inputs.
+std::string printNodeMap(const NodeMap& nodeMap);
+
 /// Executes a WaveGraph as a GraphExecutorBase subclass, allowing it to
 /// be used wherever the standard nativert executors are used.
 class WaveGraphExecutor : public nativert::GraphExecutorBase {
  public:
-  explicit WaveGraphExecutor(std::shared_ptr<ModelContext> modelContext);
+  /// Takes exclusive ownership of the nativert::Graph in modelContext and
+  /// mutates it internally during WaveGraph compilation. The graph must not
+  /// be used externally after construction.
+  explicit WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext);
 
   /// Creates an ExecutionFrame on CPU with all constants and weights
   /// pre-filled.
@@ -226,11 +351,15 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Returns 'frame' to the pool after clearing non-persistent values.
   void returnFrame(std::unique_ptr<nativert::ExecutionFrame> frame);
 
-  /// Returns per-block DebugInfo from the most recent execution. Transfers
-  /// device-side debug info to host. The outer vector has one element per
-  /// kernel launch; the inner vector has one DebugInfo per block in that
-  /// launch.
-  std::vector<std::vector<DebugInfo>> getDebugInfo();
+  /// Returns a human-readable error string from the most recent execution.
+  /// Checks thread-local debug info for non-zero error lines and maps each
+  /// error back to the originating kernel op via the WaveGraph structure.
+  std::string errorString() const;
+
+  /// Produces a performance report with per-node timing, throughput,
+  /// thread block balance, and top consumers. Called inside executeWave
+  /// while execution state is live.
+  std::string makePerfReport(ExecutionState& state, int64_t wallUs) const;
 
   /// Returns standalone execution stats: pairs of (node string, micros)
   /// from the most recent execution. The node string is formatted as in
@@ -239,6 +368,10 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   WaveGraph* waveGraph() const {
     return waveGraph_.get();
+  }
+
+  const nativert::Graph& graph() const {
+    return *modelContext_->graph;
   }
 
   int64_t numRefTensorsChecked() const {
@@ -261,7 +394,16 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Runs the WaveGraph on the given frame.
   void executeWave(nativert::ExecutionFrame& frame, WaveGraph& waveGraph);
 
-  std::shared_ptr<ModelContext> modelContext_;
+  /// Transfers device-side debug info to host and stores in thread-local
+  /// WaveThreadInfo.
+  void collectDebugInfo(ExecutionState& state);
+
+  /// Adjusts per-launch costAdjustFactor based on actual vs expected thread
+  /// block clock distribution. Invalidates the grid cache when the adjustment
+  /// exceeds 1.1x.
+  void adjustCosts(ExecutionState& state);
+
+  std::unique_ptr<ModelContext> modelContext_;
 
   std::unique_ptr<WaveGraph> waveGraph_;
 
@@ -271,8 +413,7 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
 
-  /// Per-launch debug info from the most recent execution.
-  std::vector<LaunchDebugInfo> launchDebugInfos_;
+  uint64_t frameGeneration_{0};
 
   int64_t numRefTensorsChecked_{0};
   int64_t numRefNodesChecked_{0};

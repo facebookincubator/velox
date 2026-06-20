@@ -37,10 +37,12 @@ std::shared_ptr<exec::VectorFunction> makeArrayShuffle(
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 arrayShuffleWithCustomSeedSignatures();
 
-/// Shuffle with custom seed (Spark's behavior).
+/// Shuffle with caller-supplied seed offset (Spark's behavior). The shuffle
+/// seed is the constant 'bigint' second argument plus 'seedOffset'. Callers
+/// typically pass the Spark partition id as the offset so different
+/// partitions produce different sequences for the same input seed.
 std::shared_ptr<exec::VectorFunction> makeArrayShuffleWithCustomSeed(
-    const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& config);
+    int32_t seedOffset);
 
 } // namespace facebook::velox::functions

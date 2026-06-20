@@ -31,11 +31,18 @@ class BigintEnumType
  public:
   static BigintEnumTypePtr get(const LongEnumParameter& parameter);
 
+  /// Presto type signature kind, used by toString(), toSql() and the type
+  /// parser.
+  static constexpr std::string_view kKind = "BigintEnum";
+
   const char* name() const override {
     return "BIGINT_ENUM";
   }
 
   std::string toString() const override;
+
+  /// Serializes to a Presto type signature that round-trips through parseType.
+  std::string toSql() const;
 
   folly::dynamic serialize() const override;
 

@@ -161,7 +161,9 @@ void Registry::registerElementwise(std::string_view qualifiedName) {
   md.inPlaceIfLastUse = true;
   md.argumentMeta.resize(
       schema->arguments().size(), ArgumentMeta{.isRegister = true});
-  md.returnMeta = {ArgumentMeta{.isRegister = true, .sizeArgs = {{0}, {}}}};
+  // No sizeArgs: elementwise output size is the broadcast of the operands,
+  // computed from the collected leaves in KernelOperation::makeSizeExpr.
+  md.returnMeta = {ArgumentMeta{.isRegister = true}};
   md.elementwise = std::make_unique<ElementwiseOp>();
   md.elementwise->functionName = fmt::format("__{}", opName);
 
@@ -182,7 +184,9 @@ void Registry::registerElementwiseOp(
   md.isStandalone_ = isStandalone;
   md.argumentMeta.resize(
       schema->arguments().size(), ArgumentMeta{.isRegister = true});
-  md.returnMeta = {ArgumentMeta{.isRegister = true, .sizeArgs = {{0}, {}}}};
+  // No sizeArgs: elementwise output size is the broadcast of the operands,
+  // computed from the collected leaves in KernelOperation::makeSizeExpr.
+  md.returnMeta = {ArgumentMeta{.isRegister = true}};
   md.elementwise = std::make_unique<ElementwiseOp>();
   md.elementwise->functionName = std::string(elementwiseFuncName);
 
@@ -207,6 +211,9 @@ MetadataBuilder::MetadataBuilder(std::string_view qualifiedName)
   TORCH_CHECK(
       md_.functionSchema, "FunctionSchema not found for: ", qualifiedName);
 }
+
+MetadataBuilder::MetadataBuilder(std::string_view qualifiedName, NoSchema)
+    : name_(qualifiedName) {}
 
 MetadataBuilder::MetadataBuilder(std::unique_ptr<c10::FunctionSchema> schema) {
   name_ = schema->name();
@@ -269,8 +276,8 @@ MetadataBuilder& MetadataBuilder::inputFromPreviousKernel(int32_t ordinal) {
   return *this;
 }
 
-MetadataBuilder& MetadataBuilder::kernelBreakForMultiblock(bool val) {
-  md_.kernelBreakForMultiblock = val;
+MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
+  md_.multiBlockReturnBarrier = val;
   return *this;
 }
 
@@ -321,6 +328,11 @@ MetadataBuilder& MetadataBuilder::only1d(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::metadataOnly(bool val) {
+  md_.metadataOnly = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::isStandaloneFunc(
     std::function<bool(NodeCP, const ValueTypes&)> func) {
   md_.isStandaloneFunc = std::move(func);
@@ -329,6 +341,12 @@ MetadataBuilder& MetadataBuilder::isStandaloneFunc(
 
 MetadataBuilder& MetadataBuilder::cost(float val) {
   md_.cost = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::costFunction(
+    std::function<float(NodeCP, const Metadata&)> func) {
+  md_.costFunction = std::move(func);
   return *this;
 }
 
@@ -455,16 +473,16 @@ MetadataBuilder& MetadataBuilder::elementwise() {
   TORCH_CHECK(atoms.size() >= 3, "Invalid qualified op name: ", name_);
   auto opName = atoms[atoms.size() - 2];
   ensureElementwise().functionName = fmt::format("__{}", opName);
-  builderSizeArgs_.ordinal = {0};
-  sizeArgsSet_ = true;
+  // No sizeArgs: the output size of an elementwise op is the broadcast of its
+  // operands, computed from the collected elementwise leaves in
+  // KernelOperation::makeSizeExpr, not from returnMeta.sizeArgs.
   md_.inPlaceIfLastUse = true;
   return *this;
 }
 
 MetadataBuilder& MetadataBuilder::elementwiseFunc(std::string funcName) {
   ensureElementwise().functionName = std::move(funcName);
-  builderSizeArgs_.ordinal = {0};
-  sizeArgsSet_ = true;
+  // No sizeArgs; see elementwise().
   md_.inPlaceIfLastUse = true;
   return *this;
 }
@@ -481,6 +499,22 @@ MetadataBuilder& MetadataBuilder::hasIdxArg(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
   ensureElementwise().hasSizeArg = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
+  ensureElementwise().hasBlockInfo = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::isScalarElementwise(bool val) {
+  md_.isScalarElementwise = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::argumentNames(
+    std::vector<std::string> names) {
+  md_.argumentNames = std::move(names);
   return *this;
 }
 

@@ -22,9 +22,14 @@ set(
   IcebergDataFileStatistics.cpp
   IcebergDataSink.cpp
   IcebergDataSource.cpp
+  IcebergDeletionVectorSink.cpp
+  IcebergDwrfStatsCollector.cpp
+  IcebergMergeProcessor.cpp
+  IcebergMergeSink.cpp
   IcebergPartitionName.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
+  IcebergStatsCollector.cpp
   PartitionSpec.cpp
   PositionalDeleteFileReader.cpp
   TransformEvaluator.cpp
@@ -50,11 +55,16 @@ velox_add_library(
   IcebergDataSink.h
   IcebergDataSource.h
   IcebergDeleteFile.h
+  IcebergDeletionVectorSink.h
+  IcebergDwrfStatsCollector.h
+  IcebergMergeProcessor.h
+  IcebergMergeSink.h
   IcebergMetadataColumns.h
   IcebergParquetStatsCollector.h
   IcebergPartitionName.h
   IcebergSplit.h
   IcebergSplitReader.h
+  IcebergStatsCollector.h
   PartitionSpec.h
   PositionalDeleteFileReader.h
   TransformEvaluator.h
@@ -65,7 +75,6 @@ velox_add_library(
 velox_link_libraries(
   velox_hive_iceberg_splitreader
   velox_connector
-  velox_dwio_parquet_field_id
   velox_functions_iceberg
   velox_dwio_dwrf_writer
   Folly::folly

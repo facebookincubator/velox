@@ -42,8 +42,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
     auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+                    .startTableScan(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -119,8 +118,7 @@ TEST_F(IcebergInsertTest, singleColumnPartition) {
     }
 
     auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+                    .startTableScan(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -236,8 +234,7 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
     ASSERT_EQ(splits.size(), commitTasks.size());
 
     auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+                    .startTableScan(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -246,7 +243,8 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 }
 
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
-  setConnectorSessionProperty(HiveConfig::kMaxTargetFileSizeSession, "4KB");
+  setConnectorSessionProperty(
+      HiveConfig::kParquetMaxTargetFileSizeSession, "4KB");
 
   const auto outputPath = TempDirectoryPath::create()->getPath();
   const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
@@ -258,8 +256,7 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
 
   auto splits = createSplitsForDirectory(outputPath);
   auto plan = exec::test::PlanBuilder()
-                  .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
+                  .startTableScan(test::kIcebergConnectorId)
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();

@@ -40,7 +40,7 @@ BufferPtr BufferPool::get() {
 }
 
 void BufferPool::release(BufferPtr&& buffer) {
-  if (buffer == nullptr || !buffer->unique() || buffers_.size() >= kMaxCached) {
+  if (buffer == nullptr || !buffer->unique() || buffers_.size() >= capacity_) {
     return;
   }
   buffers_.push_back(std::move(buffer));

@@ -101,20 +101,27 @@ struct Int32X32 {
     blockInfo.debugInfo =                                                      \
         params.debugInfo ? &params.debugInfo[blockIdx.x] : nullptr;            \
     blockInfo.barrierClocks = 0;                                               \
-    if (blockInfo.debugInfo) {                                                 \
+    if (blockInfo.debugInfo && blockInfo.op != kDebugNoOp) {                   \
       blockInfo.start = clock64();                                             \
       memset(blockInfo.debugInfo, 0, sizeof(DebugInfo));                       \
     }                                                                          \
   }                                                                            \
   __syncthreads();
 
-#define LEAVE()                                                   \
-  __syncthreads();                                                \
-  if (threadIdx.x == 0 && blockInfo.debugInfo) {                  \
-    blockInfo.debugInfo->clocks = clock64() - blockInfo.start;    \
-    blockInfo.debugInfo->barrierClocks = blockInfo.barrierClocks; \
-    blockInfo.debugInfo->op = blockInfo.op;                       \
+#define LEAVE()                                                                \
+  __syncthreads();                                                             \
+  if (threadIdx.x == 0 && blockInfo.debugInfo && blockInfo.op != kDebugNoOp) { \
+    blockInfo.debugInfo->clocks = clock64() - blockInfo.start;                 \
+    blockInfo.debugInfo->barrierClocks = blockInfo.barrierClocks;              \
+    blockInfo.debugInfo->op = blockInfo.op;                                    \
   }
+
+#define SET_MSG(info, str)                                   \
+  do {                                                       \
+    static const __device__ char __msg[] __align__(8) = str; \
+    *reinterpret_cast<int64_t*>((info)->message) =           \
+        *reinterpret_cast<const int64_t*>(__msg);            \
+  } while (0)
 
 // NVIDIA GPU warp size. All scan/reduce templates assume this value.
 constexpr int32_t kWarpThreads = 32;
@@ -169,6 +176,70 @@ __device__ inline void opBarrier(BlockInfo& info, int32_t counterOffset) {
     info.barrierClocks += clock64() - barrierStart;
   }
   __syncthreads();
+}
+
+// Copies all elements from source to dest using grid-strided loop.
+template <typename T>
+__device__ void __copyTensor(Tensor* source, Tensor* dest, BlockInfo& block) {
+  __copy<T>(source, storage<T>(dest), block);
+}
+
+// Computes linear offset from scalar index values in registers.
+__device__ inline int32_t indexOffset(Tensor* tensor, int32_t index0) {
+  return index0 * tensor->strides[0];
+}
+
+__device__ inline int32_t
+indexOffset(Tensor* tensor, int32_t index0, int32_t index1) {
+  return index0 * tensor->strides[0] + index1 * tensor->strides[1];
+}
+
+__device__ inline int32_t
+indexOffset(Tensor* tensor, int32_t index0, int32_t index1, int32_t index2) {
+  return index0 * tensor->strides[0] + index1 * tensor->strides[1] +
+      index2 * tensor->strides[2];
+}
+
+// Scatter values into dest where mask is true. Supports broadcast: mask
+// or source of length 1 broadcast to dest size.
+template <typename T>
+__device__ void __masked_put(
+    Tensor* dest,
+    Tensor* mask,
+    Tensor* source,
+    Tensor* /*output*/,
+    uint32_t& size,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    auto destN = dest->numEl;
+    auto maskN = mask->numEl;
+    if (maskN != destN && maskN != 1) {
+      size = 0;
+      if (block.debugInfo) {
+        block.debugInfo->line = __LINE__;
+        block.debugInfo->extra[0] = destN;
+        block.debugInfo->extra[1] = maskN;
+        SET_MSG(block.debugInfo, "sz msmt\0");
+      }
+    } else {
+      size = destN;
+    }
+  }
+  __syncthreads();
+  if (size == 0) {
+    return;
+  }
+  auto* dst = storage<T>(dest);
+  auto* msk = storage<bool>(mask);
+  auto* src = storage<T>(source);
+  bool broadcastMask = mask->numEl == 1;
+  bool broadcastSrc = source->numEl == 1;
+  for (uint32_t i = block.blockInOp * blockDim.x + threadIdx.x; i < size;
+       i += block.numBlocksInOp * blockDim.x) {
+    if (msk[broadcastMask ? 0 : i]) {
+      dst[i] = src[broadcastSrc ? 0 : i];
+    }
+  }
 }
 
 } // namespace torch::wave

@@ -151,6 +151,11 @@ void addIoStatsToRuntimeStats(
       key(FileDataSource::kRamReadBytes),
       RuntimeCounter::Unit::kBytes,
       res);
+  addIoStatsMetric(
+      ioStats.readGap(),
+      key(FileDataSource::kReadGapBytes),
+      RuntimeCounter::Unit::kBytes,
+      res);
 }
 
 } // namespace
@@ -267,7 +272,12 @@ FileDataSource::FileDataSource(
     for (int i = 0; i < readColumnNames.size(); ++i) {
       columnNames[readColumnNames[i]] = i;
     }
+    // Capture top-level column names referenced by the remaining filter.
+    // These columns must be loaded eagerly (not lazily) so the filter
+    // can evaluate before lazy columns are accessed.
+    folly::F14FastSet<std::string> remainingFilterColumns;
     for (auto& input : remainingFilterExpr->distinctFields()) {
+      remainingFilterColumns.insert(input->field());
       auto it = columnNames.find(input->field());
       if (it != columnNames.end()) {
         if (shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
@@ -281,6 +291,7 @@ FileDataSource::FileDataSource(
       readColumnNames.push_back(input->field());
       readColumnTypes.push_back(input->type());
     }
+    remainingFilterColumns_ = std::move(remainingFilterColumns);
     remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
     if (VLOG_IS_ON(1)) {
       VLOG(1) << fmt::format(
@@ -512,6 +523,7 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
   splitReader_->configureReaderOptions(randomSkip_);
+  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
   readerOutputType_ = splitReader_->readerOutputType();
 }

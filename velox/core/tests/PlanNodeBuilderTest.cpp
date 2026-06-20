@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
@@ -1183,28 +1184,113 @@ TEST_F(PlanNodeBuilderTest, rowNumberNode) {
 
 TEST_F(PlanNodeBuilderTest, markDistinctNode) {
   const PlanNodeId id = "mark_distinct_node_id";
-  const std::string markerName = "is_distinct";
   const std::vector<FieldAccessTypedExprPtr> distinctKeys{
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
 
-  const auto verify = [&](const std::shared_ptr<const MarkDistinctNode>& node) {
-    EXPECT_EQ(node->id(), id);
-    EXPECT_EQ(node->markerName(), markerName);
-    EXPECT_EQ(node->distinctKeys(), distinctKeys);
-    EXPECT_EQ(node->sources().size(), 1);
-    EXPECT_EQ(node->sources()[0], source_);
-  };
+  {
+    SCOPED_TRACE("single-marker");
+    const std::vector<std::string> markerNames{"is_distinct"};
+    const auto verify =
+        [&](const std::shared_ptr<const MarkDistinctNode>& node) {
+          EXPECT_EQ(node->id(), id);
+          EXPECT_EQ(node->markerNames(), markerNames);
+          EXPECT_TRUE(node->masks().empty());
+          EXPECT_EQ(node->distinctKeys(), distinctKeys);
+          EXPECT_EQ(node->sources().size(), 1);
+          EXPECT_EQ(node->sources()[0], source_);
+        };
 
-  const auto node = MarkDistinctNode::Builder()
-                        .id(id)
-                        .markerName(markerName)
-                        .distinctKeys(distinctKeys)
-                        .source(source_)
-                        .build();
-  verify(node);
+    const auto node = MarkDistinctNode::Builder()
+                          .id(id)
+                          .markerNames(markerNames)
+                          .distinctKeys(distinctKeys)
+                          .source(source_)
+                          .build();
+    verify(node);
 
-  const auto node2 = MarkDistinctNode::Builder(*node).build();
-  verify(node2);
+    const auto node2 = MarkDistinctNode::Builder(*node).build();
+    verify(node2);
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    const std::vector<std::string> markerNames{"nomask", "m0", "m1"};
+    const std::vector<FieldAccessTypedExprPtr> masks{
+        std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c1"),
+        std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c2")};
+
+    const auto verify =
+        [&](const std::shared_ptr<const MarkDistinctNode>& node) {
+          EXPECT_EQ(node->id(), id);
+          EXPECT_EQ(node->markerNames(), markerNames);
+          EXPECT_EQ(node->masks(), masks);
+          EXPECT_EQ(node->distinctKeys(), distinctKeys);
+          EXPECT_EQ(node->sources().size(), 1);
+          EXPECT_EQ(node->sources()[0], source_);
+        };
+
+    const auto node = MarkDistinctNode::Builder()
+                          .id(id)
+                          .markerNames(markerNames)
+                          .masks(masks)
+                          .distinctKeys(distinctKeys)
+                          .source(source_)
+                          .build();
+    verify(node);
+
+    const auto node2 = MarkDistinctNode::Builder(*node).build();
+    verify(node2);
+  }
+}
+
+TEST_F(PlanNodeBuilderTest, markDistinctNodeMarkerCountMismatch) {
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> masks{
+      std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c1")};
+
+  VELOX_ASSERT_THROW(
+      MarkDistinctNode::Builder()
+          .id("test_id")
+          .markerNames({"m0", "m1", "m2"})
+          .distinctKeys(distinctKeys)
+          .masks(masks)
+          .source(source_)
+          .build(),
+      "markerNames must have exactly one more entry than masks");
+}
+
+TEST_F(PlanNodeBuilderTest, markDistinctNodeNonBooleanMask) {
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> intMasks{
+      std::make_shared<FieldAccessTypedExpr>(INTEGER(), "c1")};
+
+  VELOX_ASSERT_THROW(
+      MarkDistinctNode::Builder()
+          .id("test_id")
+          .markerNames({"nomask", "m0"})
+          .distinctKeys(distinctKeys)
+          .masks(intMasks)
+          .source(source_)
+          .build(),
+      "MarkDistinct mask must be BOOLEAN");
+}
+
+TEST_F(PlanNodeBuilderTest, markDistinctNodeEmptyMarkerName) {
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys{
+      std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
+  const std::vector<FieldAccessTypedExprPtr> masks{
+      std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "c1")};
+
+  VELOX_ASSERT_THROW(
+      MarkDistinctNode::Builder()
+          .id("test_id")
+          .markerNames({"nomask", ""})
+          .distinctKeys(distinctKeys)
+          .masks(masks)
+          .source(source_)
+          .build(),
+      "MarkDistinct marker name cannot be empty");
 }
 
 TEST_F(PlanNodeBuilderTest, topNRowNumberNode) {

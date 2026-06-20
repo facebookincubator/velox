@@ -1693,6 +1693,9 @@ folly::dynamic HashJoinNode::serialize() const {
   obj["nullAware"] = nullAware_;
   obj["nullAsValue"] = nullAsValue_;
   obj["useHashTableCache"] = useHashTableCache_;
+  if (cacheKey_.has_value()) {
+    obj["cacheKey"] = cacheKey_.value();
+  }
   return obj;
 }
 
@@ -1710,6 +1713,10 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
   auto nullAware = obj["nullAware"].asBool();
   auto nullAsValue = obj.getDefault("nullAsValue", false).asBool();
   auto useHashTableCache = obj.getDefault("useHashTableCache", false).asBool();
+  std::optional<std::string> cacheKey = std::nullopt;
+  if (obj.count("cacheKey")) {
+    cacheKey = obj["cacheKey"].asString();
+  }
   auto leftKeys = deserializeFields(obj["leftKeys"], context);
   auto rightKeys = deserializeFields(obj["rightKeys"], context);
 
@@ -1731,7 +1738,8 @@ PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
       sources[1],
       outputType,
       useHashTableCache,
-      nullAsValue);
+      nullAsValue,
+      std::move(cacheKey));
 }
 
 MergeJoinNode::MergeJoinNode(
@@ -1823,7 +1831,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     std::optional<bool> splitOutput,
     PlanNodePtr left,
     TableScanNodePtr right,
-    RowTypePtr outputType)
+    RowTypePtr outputType,
+    std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns)
     : IndexLookupJoinNode(
           id,
           joinType,
@@ -1835,7 +1844,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
           std::move(left),
           std::move(right),
           std::move(outputType),
-          splitOutput) {}
+          splitOutput,
+          std::move(forwardedProbeColumns)) {}
 
 IndexLookupJoinNode::IndexLookupJoinNode(
     const PlanNodeId& id,
@@ -1848,7 +1858,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
     PlanNodePtr left,
     TableScanNodePtr right,
     RowTypePtr outputType,
-    std::optional<bool> splitOutput)
+    std::optional<bool> splitOutput,
+    std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns)
     : AbstractJoinNode(
           id,
           joinType,
@@ -1861,7 +1872,8 @@ IndexLookupJoinNode::IndexLookupJoinNode(
       lookupSourceNode_(std::move(right)),
       joinConditions_(joinConditions),
       hasMarker_(hasMarker),
-      splitOutput_(splitOutput) {
+      splitOutput_(splitOutput),
+      forwardedProbeColumns_(std::move(forwardedProbeColumns)) {
   VELOX_USER_CHECK(
       !leftKeys.empty(),
       "The index lookup join node requires at least one join key");
@@ -1889,6 +1901,39 @@ IndexLookupJoinNode::IndexLookupJoinNode(
         leftType->containsChild(key->name()),
         "Left side join key not found in left side output: {}",
         key->name());
+  }
+  // Validate forwarded probe columns: each must exist in the probe input,
+  // must not overlap with any leftKey, and must not duplicate another
+  // forwarded column. Overlap with joinCondition-referenced probe columns
+  // is enforced by the operator's initLookupInput at runtime where the
+  // full set of referenced names is already being assembled.
+  if (!forwardedProbeColumns_.empty()) {
+    folly::F14FastSet<std::string> leftKeyNames;
+    leftKeyNames.reserve(leftKeys_.size());
+    for (const auto& key : leftKeys_) {
+      leftKeyNames.insert(key->name());
+    }
+    folly::F14FastSet<std::string> forwardedNames;
+    forwardedNames.reserve(forwardedProbeColumns_.size());
+    for (const auto& col : forwardedProbeColumns_) {
+      VELOX_CHECK_NOT_NULL(
+          col, "Forwarded probe column expression must not be null");
+      const auto& name = col->name();
+      VELOX_CHECK(
+          leftType->containsChild(name),
+          "Forwarded probe column not found in probe input: {}",
+          name);
+      VELOX_CHECK_EQ(
+          leftKeyNames.count(name),
+          0,
+          "Forwarded probe column {} overlaps with a leftKey; remove it "
+          "from forwardedProbeColumns (left keys are forwarded already).",
+          name);
+      VELOX_CHECK(
+          forwardedNames.insert(name).second,
+          "Duplicate forwarded probe column: {}",
+          name);
+    }
   }
   auto rightType = sources_[1]->outputType();
   for (const auto& key : rightKeys_) {
@@ -1953,6 +1998,12 @@ PlanNodePtr IndexLookupJoinNode::create(
     splitOutput = obj["splitOutput"].asBool();
   }
 
+  std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns;
+  if (obj.count("forwardedProbeColumns")) {
+    forwardedProbeColumns =
+        deserializeFields(obj["forwardedProbeColumns"], context);
+  }
+
   auto outputType = deserializeRowType(obj["outputType"]);
 
   return std::make_shared<IndexLookupJoinNode>(
@@ -1966,7 +2017,8 @@ PlanNodePtr IndexLookupJoinNode::create(
       splitOutput,
       sources[0],
       std::move(lookupSource),
-      std::move(outputType));
+      std::move(outputType),
+      std::move(forwardedProbeColumns));
 }
 
 folly::dynamic IndexLookupJoinNode::serialize() const {
@@ -1985,6 +2037,13 @@ folly::dynamic IndexLookupJoinNode::serialize() const {
   if (splitOutput_.has_value()) {
     obj["splitOutput"] = splitOutput_.value();
   }
+  if (!forwardedProbeColumns_.empty()) {
+    folly::dynamic serializedForwarded = folly::dynamic::array();
+    for (const auto& col : forwardedProbeColumns_) {
+      serializedForwarded.push_back(col->serialize());
+    }
+    obj["forwardedProbeColumns"] = std::move(serializedForwarded);
+  }
   return obj;
 }
 
@@ -1994,19 +2053,26 @@ bool IndexLookupJoinNode::needsIndexSplit() const {
 
 void IndexLookupJoinNode::addDetails(std::stringstream& stream) const {
   AbstractJoinNode::addDetails(stream);
-  if (joinConditions_.empty()) {
-    return;
+  if (!joinConditions_.empty()) {
+    std::vector<std::string> joinConditionstrs;
+    joinConditionstrs.reserve(joinConditions_.size());
+    for (const auto& joinCondition : joinConditions_) {
+      joinConditionstrs.push_back(joinCondition->toString());
+    }
+    stream << ", joinConditions: [" << folly::join(", ", joinConditionstrs)
+           << " ], filter: ["
+           << (filter_ == nullptr ? "null" : filter_->toString())
+           << "], hasMarker: [" << (hasMarker_ ? "true" : "false") << "]";
   }
-
-  std::vector<std::string> joinConditionstrs;
-  joinConditionstrs.reserve(joinConditions_.size());
-  for (const auto& joinCondition : joinConditions_) {
-    joinConditionstrs.push_back(joinCondition->toString());
+  if (!forwardedProbeColumns_.empty()) {
+    std::vector<std::string> forwardedNames;
+    forwardedNames.reserve(forwardedProbeColumns_.size());
+    for (const auto& col : forwardedProbeColumns_) {
+      forwardedNames.push_back(col->name());
+    }
+    stream << ", forwardedProbeColumns: [" << folly::join(", ", forwardedNames)
+           << "]";
   }
-  stream << ", joinConditions: [" << folly::join(", ", joinConditionstrs)
-         << " ], filter: ["
-         << (filter_ == nullptr ? "null" : filter_->toString())
-         << "], hasMarker: [" << (hasMarker_ ? "true" : "false") << "]";
 }
 
 void IndexLookupJoinNode::accept(
@@ -2461,12 +2527,13 @@ PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
 
 RowTypePtr getMarkDistinctOutputType(
     const RowTypePtr& inputType,
-    const std::string& markerName) {
+    const std::vector<std::string>& markerNames) {
   std::vector<std::string> names = inputType->names();
   std::vector<TypePtr> types = inputType->children();
-
-  names.emplace_back(markerName);
-  types.emplace_back(BOOLEAN());
+  for (const auto& name : markerNames) {
+    names.emplace_back(name);
+    types.emplace_back(BOOLEAN());
+  }
   return ROW(std::move(names), std::move(types));
 }
 
@@ -2475,20 +2542,48 @@ MarkDistinctNode::MarkDistinctNode(
     std::string markerName,
     std::vector<FieldAccessTypedExprPtr> distinctKeys,
     PlanNodePtr source)
+    : MarkDistinctNode(
+          std::move(id),
+          std::vector<std::string>{std::move(markerName)},
+          std::move(distinctKeys),
+          /*masks=*/{},
+          std::move(source)) {}
+
+MarkDistinctNode::MarkDistinctNode(
+    PlanNodeId id,
+    std::vector<std::string> markerNames,
+    std::vector<FieldAccessTypedExprPtr> distinctKeys,
+    std::vector<FieldAccessTypedExprPtr> masks,
+    PlanNodePtr source)
     : PlanNode(std::move(id)),
-      markerName_(std::move(markerName)),
+      markerNames_(std::move(markerNames)),
+      masks_(std::move(masks)),
       distinctKeys_(std::move(distinctKeys)),
       sources_{std::move(source)},
       outputType_(
-          getMarkDistinctOutputType(sources_[0]->outputType(), markerName_)) {
-  VELOX_USER_CHECK_GT(markerName_.size(), 0);
+          getMarkDistinctOutputType(sources_[0]->outputType(), markerNames_)) {
+  VELOX_USER_CHECK_EQ(
+      markerNames_.size(),
+      masks_.size() + 1,
+      "markerNames must have exactly one more entry than masks");
   VELOX_USER_CHECK_GT(distinctKeys_.size(), 0);
+  for (const auto& name : markerNames_) {
+    VELOX_USER_CHECK(!name.empty(), "MarkDistinct marker name cannot be empty");
+  }
+  for (const auto& mask : masks_) {
+    VELOX_USER_CHECK_EQ(
+        mask->type()->kind(),
+        TypeKind::BOOLEAN,
+        "MarkDistinct mask must be BOOLEAN: {}",
+        mask->name());
+  }
 }
 
 folly::dynamic MarkDistinctNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["distinctKeys"] = ISerializable::serialize(this->distinctKeys_);
-  obj["markerName"] = this->markerName_;
+  obj["distinctKeys"] = ISerializable::serialize(distinctKeys_);
+  obj["markerNames"] = ISerializable::serialize(markerNames_);
+  obj["masks"] = ISerializable::serialize(masks_);
   return obj;
 }
 
@@ -2502,10 +2597,14 @@ void MarkDistinctNode::accept(
 PlanNodePtr MarkDistinctNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
   auto distinctKeys = deserializeFields(obj["distinctKeys"], context);
-  auto markerName = obj["markerName"].asString();
-
+  auto markerNames = deserializeStrings(obj["markerNames"]);
+  auto masks = deserializeFields(obj["masks"], context);
   return std::make_shared<MarkDistinctNode>(
-      deserializePlanNodeId(obj), markerName, distinctKeys, source);
+      deserializePlanNodeId(obj),
+      std::move(markerNames),
+      std::move(distinctKeys),
+      std::move(masks),
+      source);
 }
 
 EnforceDistinctNode::EnforceDistinctNode(
@@ -3761,6 +3860,11 @@ PlanNodePtr OrderByNode::create(const folly::dynamic& obj, void* context) {
 
 void MarkDistinctNode::addDetails(std::stringstream& stream) const {
   addFields(stream, distinctKeys_);
+  if (!masks_.empty()) {
+    stream << ", masks: [";
+    addFields(stream, masks_);
+    stream << "]";
+  }
 }
 
 void EnforceDistinctNode::addDetails(std::stringstream& stream) const {
