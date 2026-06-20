@@ -183,6 +183,63 @@ TEST_F(TimestampWithTimeZoneCastTest, fromVarcharWithoutTimezone) {
   testCast(stringVector, expected);
 }
 
+TEST_F(TimestampWithTimeZoneCastTest, fromTimestampDstGap) {
+  // Set session timezone to America/Los_Angeles without
+  // adjustTimestampToTimezone so that TIMESTAMP is treated as wall time and
+  // toGMT is called.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+  });
+
+  auto laZoneId = tz::getTimeZoneID("America/Los_Angeles");
+
+  // 2024-03-10 02:30:00 does not exist in America/Los_Angeles (DST gap).
+  // Should be adjusted forward to 03:30:00 PDT = 10:30:00 UTC.
+  auto gapTs = parseTimestamp("2024-03-10 02:30:00");
+  auto expectedUtcMillis = parseTimestamp("2024-03-10 10:30:00").toMillis();
+
+  const auto tsVector = makeNullableFlatVector<Timestamp>({gapTs});
+  auto expected = makeFlatVector<int64_t>(
+      {pack(expectedUtcMillis, laZoneId)}, TIMESTAMP_WITH_TIME_ZONE());
+
+  testCast(tsVector, expected);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, fromVarcharDstGap) {
+  // Cast a VARCHAR with a DST gap time and explicit timezone.
+  // 2024-03-10 02:30:00 does not exist in America/Los_Angeles.
+  // Should be adjusted forward to 03:30:00 PDT = 10:30:00 UTC.
+  const auto stringVector = makeNullableFlatVector<StringView>(
+      {"2024-03-10 02:30:00 America/Los_Angeles"});
+  auto expectedUtcMillis = parseTimestamp("2024-03-10 10:30:00").toMillis();
+  auto laZoneId = tz::getTimeZoneID("America/Los_Angeles");
+
+  const auto expected = makeFlatVector<int64_t>(
+      {pack(expectedUtcMillis, laZoneId)}, TIMESTAMP_WITH_TIME_ZONE());
+
+  testCast(stringVector, expected);
+}
+
+TEST_F(TimestampWithTimeZoneCastTest, fromVarcharWithoutTimezoneDstGap) {
+  // Cast a VARCHAR without timezone during a DST gap, using session timezone.
+  setQueryTimeZone("America/Los_Angeles");
+
+  const auto stringVector =
+      makeNullableFlatVector<StringView>({"2024-03-10 02:30:00"});
+  auto expectedUtcMillis = parseTimestamp("2024-03-10 10:30:00").toMillis();
+  auto laZoneId = tz::getTimeZoneID("America/Los_Angeles");
+
+  auto timestamps = std::vector<int64_t>{expectedUtcMillis};
+  auto timezones = std::vector<TimeZoneKey>{(int16_t)laZoneId};
+
+  const auto expected = makeTimestampWithTimeZoneVector(
+      timestamps.size(),
+      [&](int32_t index) { return timestamps[index]; },
+      [&](int32_t index) { return timezones[index]; });
+
+  testCast(stringVector, expected);
+}
+
 TEST_F(TimestampWithTimeZoneCastTest, fromVarcharInvalidInput) {
   const auto invalidStringVector1 = makeNullableFlatVector<StringView>(
       {"2012-10-31 01:00:47fooAmerica/Los_Angeles"});
