@@ -1609,8 +1609,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
 
-    ASSERT_EQ(*output->type(), *UNKNOWN());
-    EXPECT_EQ(output->size(), 4);
+    ASSERT_EQ(*UNKNOWN(), *output->type());
+    EXPECT_EQ(4, output->size());
 
     DecodedVector decoded(*output);
     EXPECT_TRUE(decoded.mayHaveNulls());
