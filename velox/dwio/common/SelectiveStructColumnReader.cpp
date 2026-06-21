@@ -16,7 +16,6 @@
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
@@ -321,7 +320,6 @@ void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
     const Mutation* mutation) {
-  process::TraceContext trace("SelectiveStructColumnReaderBase::next");
   mutation_ = mutation;
   hasDeletion_ = common::hasDeletion(mutation);
   const RowSet rows(iota(numValues, rows_), numValues);
@@ -425,7 +423,11 @@ void SelectiveStructColumnReaderBase::read(
   }
 
   const auto& childSpecs = scanSpec_->children();
-  VELOX_CHECK(!childSpecs.empty());
+  // When using name-based mapping, empty child specs are valid
+  // (e.g., when all struct fields are renamed/deleted).
+  if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
+    VELOX_CHECK(!childSpecs.empty());
+  }
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     const auto& childSpec = childSpecs[i];
 
@@ -512,27 +514,27 @@ void SelectiveStructColumnReaderBase::recordParentNullsInChildren(
 
 bool SelectiveStructColumnReaderBase::isChildMissing(
     const velox::common::ScanSpec& childSpec) const {
-  // The below check is trying to determine if this is a missing field in a
-  // struct that should be constant null.
-  if (isRoot_ || // If we're in the root struct channel is meaningless in this
-                 // context and it will be a null constant anyway if it's
-                 // missing.
-      childSpec.channel() ==
-          velox::common::ScanSpec::kNoChannel || // This can happen if there's
-                                                 // a filter on a subfield of a
-                                                 // row type that doesn't exist
-                                                 // in the output.
-      fileType_->type()->kind() ==
-          TypeKind::MAP) { // If this is the case it means this is a flat map,
-                           // so it can't have "missing" fields.
-    return false;
-  }
-
-  if (fileType_->type()->isRow()) {
-    return !fileType_->type()->asRow().containsChild(childSpec.fieldName());
-  }
-
-  return childSpec.channel() >= fileType_->size();
+  return
+      // The below check is trying to determine if this is a missing field in a
+      // struct that should be constant null.
+      (!isRoot_ && // If we're in the root struct channel is meaningless in this
+                   // context and it will be a null constant anyway if it's
+                   // missing.
+       childSpec.channel() !=
+           velox::common::ScanSpec::kNoChannel && // This can happen if there's
+                                                  // a filter on a subfield of a
+                                                  // row type that doesn't exist
+                                                  // in the output.
+       fileType_->type()->kind() !=
+           TypeKind::MAP // If this is the case it means this is a flat map,
+                         // so it can't have "missing" fields.
+       ) &&
+      // Name-based missing-field check applies only to row types, not flat
+      // maps.
+      ((fileType_->type()->isRow() &&
+        columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName)
+           ? !asRowType(fileType_->type())->containsChild(childSpec.fieldName())
+           : childSpec.channel() >= fileType_->size());
 }
 
 std::unique_ptr<velox::dwio::common::ColumnLoader>
@@ -554,7 +556,10 @@ SelectiveStructColumnReaderBase::makeColumnLoader(vector_size_t index) {
 void SelectiveStructColumnReaderBase::getValues(
     const RowSet& rows,
     VectorPtr* result) {
-  VELOX_CHECK(!scanSpec_->children().empty());
+  // See comment in read().
+  if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
+    VELOX_CHECK(!scanSpec_->children().empty());
+  }
   VELOX_CHECK_NOT_NULL(
       *result, "SelectiveStructColumnReaderBase expects a non-null result");
 

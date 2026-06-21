@@ -172,6 +172,19 @@ Map Functions
         SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[1,2]); -- {}
         SELECT map_subset(MAP(ARRAY[], ARRAY[]), ARRAY[]); -- {}
 
+.. function:: map_subset_key_in_range(map(K,V), low_key, high_key) -> map(K,V)
+
+    Returns a sub-map containing only the entries from the input map whose keys fall
+    within the inclusive range ``[low_key, high_key]``. Both bounds are inclusive.
+    If ``low_key > high_key``, returns an empty map. Entries with null values are
+    preserved. If the input map, ``low_key``, or ``high_key`` is ``NULL``, the
+    result is ``NULL``. ``K`` must be an orderable type. ::
+
+        SELECT map_subset_key_in_range(MAP(ARRAY[1,2,3,4,5], ARRAY[10,20,30,40,50]), 2, 4); -- {2->20, 3->30, 4->40}
+        SELECT map_subset_key_in_range(MAP(ARRAY[7,10,14,20], ARRAY[70,100,140,200]), 7, 14); -- {7->70, 10->100, 14->140}
+        SELECT map_subset_key_in_range(MAP(ARRAY[1,2,3], ARRAY[10,20,30]), 5, 1); -- {}
+        SELECT map_subset_key_in_range(MAP(ARRAY[], ARRAY[]), 1, 10); -- {}
+
 .. function:: map_intersect(map(K,V), array(K)) -> map(K,V)
 
     Returns a map containing only the entries from the input map whose keys are present in the given array.

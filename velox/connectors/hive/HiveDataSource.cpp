@@ -144,7 +144,8 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
-      ioStatistics_,
+      dataIoStats_,
+      metadataIoStats_,
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
@@ -164,7 +165,8 @@ HiveDataSource::getRuntimeStats() {
   }
   for (const auto& [format, count] : numSplitsByFileFormat_) {
     result.insert(
-        {fmt::format("{}{}", kFileFormat, dwio::common::toString(format)),
+        {fmt::format(
+             "{}{}", kFileFormat, dwio::common::FileFormatName::toName(format)),
          RuntimeMetric(count)});
   }
   return result;
@@ -196,7 +198,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         ioExecutor_,
         connectorQueryCtx_,
         hiveConfig_,
-        ioStatistics_,
+        dataIoStats_,
         remainingFilterExprSet(),
         metadataFilter());
   }

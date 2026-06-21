@@ -15,6 +15,8 @@ velox_add_library(
   velox_functions_spark_aggregates
   ApproxPercentileAggregate.cpp
   AverageAggregate.cpp
+  BitmapConstructAggAggregate.cpp
+  BitmapOrAggAggregate.cpp
   BitwiseXorAggregate.cpp
   BloomFilterAggAggregate.cpp
   CentralMomentsAggregate.cpp
@@ -32,6 +34,8 @@ velox_add_library(
   HEADERS
   ApproxPercentileAggregate.h
   AverageAggregate.h
+  BitmapConstructAggAggregate.h
+  BitmapOrAggAggregate.h
   BitwiseXorAggregate.h
   BloomFilterAggAggregate.h
   CentralMomentsAggregate.h

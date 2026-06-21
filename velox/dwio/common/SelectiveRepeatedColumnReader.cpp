@@ -337,31 +337,25 @@ void SelectiveListColumnReader::getValues(
 
 uint64_t SelectiveMapColumnReaderBase::skip(uint64_t numValues) {
   numValues = formatData_->skipNulls(numValues);
-  if (keyReader_ || elementReader_) {
-    std::array<int32_t, kBufferSize> buffer;
-    uint64_t childElements{0};
-    uint64_t lengthsRead{0};
-    while (lengthsRead < numValues) {
-      const uint64_t chunk =
-          std::min(numValues - lengthsRead, static_cast<uint64_t>(kBufferSize));
-      readLengths(buffer.data(), chunk, nullptr);
-      for (size_t i = 0; i < chunk; ++i) {
-        childElements += buffer[i];
-      }
-      lengthsRead += chunk;
+  std::array<int32_t, kBufferSize> buffer;
+  uint64_t childElements{0};
+  uint64_t lengthsRead{0};
+  while (lengthsRead < numValues) {
+    const uint64_t chunk =
+        std::min(numValues - lengthsRead, static_cast<uint64_t>(kBufferSize));
+    readLengths(buffer.data(), chunk, nullptr);
+    for (size_t i = 0; i < chunk; ++i) {
+      childElements += buffer[i];
     }
-
-    if (keyReader_) {
-      keyReader_->seekTo(keyReader_->readOffset() + childElements, false);
-    }
-    if (elementReader_) {
-      elementReader_->seekTo(
-          elementReader_->readOffset() + childElements, false);
-    }
-    childTargetReadOffset_ += childElements;
-  } else {
-    VELOX_FAIL("repeated reader with no children");
+    lengthsRead += chunk;
   }
+  if (keyReader_) {
+    keyReader_->seekTo(keyReader_->readOffset() + childElements, false);
+  }
+  if (elementReader_) {
+    elementReader_->seekTo(elementReader_->readOffset() + childElements, false);
+  }
+  childTargetReadOffset_ += childElements;
   return numValues;
 }
 
@@ -603,7 +597,22 @@ void SelectiveMapAsStructColumnReader::getValues(
   BaseVector::prepareForReuse(*result, rows.size());
   auto* resultRow = result->get()->asChecked<RowVector>();
   setComplexNulls(rows, *result);
-  for (auto& child : resultRow->children()) {
+  for (column_index_t i = 0; i < resultRow->childrenSize(); ++i) {
+    auto& child = resultRow->childAt(i);
+    // prepareForReuse() above reuses or reallocates existing children, but it
+    // skips children left as nullptr by prepareResult() in
+    // SelectiveStructColumnReaderBase, which only pre-allocates ROW-typed
+    // children -- the non-ROW value columns of a flat-map-as-struct result are
+    // left null. Unlike a regular struct, this reader scatters into its
+    // children with copyRanges() rather than recreating them per batch, so it
+    // must ensure they exist. Create any missing child here (directly at the
+    // final size); resize the rest, which prepareForReuse() shrank to 0.
+    if (FOLLY_UNLIKELY(!child)) {
+      child =
+          BaseVector::create(resultRow->type()->childAt(i), rows.size(), pool_);
+    } else {
+      child->resize(rows.size());
+    }
     bits::fillBits(child->mutableRawNulls(), 0, rows.size(), bits::kNull);
   }
   numValues_ = rows.size();

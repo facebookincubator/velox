@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
@@ -32,7 +33,7 @@ namespace facebook::velox::dwrf {
 
 class WriterTest : public Test {
  public:
-  static void SetUpTestCase() {
+  static void SetUpTestSuite() {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
   }
 
@@ -61,7 +62,9 @@ class WriterTest : public Test {
     std::string data(sinkPtr_->data(), sinkPtr_->size());
     auto readFile = std::make_shared<InMemoryReadFile>(std::move(data));
     auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
-    dwio::common::ReaderOptions readerOpts{pool_.get()};
+    dwio::common::ReaderOptions readerOpts(pool_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ReaderBase>(readerOpts, std::move(input));
     reader->loadCache();
     return reader;
@@ -91,6 +94,10 @@ class WriterTest : public Test {
   std::shared_ptr<MemoryPool> pool_;
   MemorySink* sinkPtr_;
   std::unique_ptr<WriterBase> writer_;
+  std::shared_ptr<io::IoStatistics> dataIoStats_{
+      std::make_shared<io::IoStatistics>()};
+  std::shared_ptr<io::IoStatistics> metadataIoStats_{
+      std::make_shared<io::IoStatistics>()};
 };
 
 class SupportedCompressionTest
@@ -196,6 +203,41 @@ TEST_P(AllWriterCompressionTest, compression) {
       compressionKind_ == CompressionKind::CompressionKind_MAX
           ? config->get(Config::COMPRESSION)
           : compressionKind_);
+}
+
+TEST_F(WriterTest, SchemaAttributesStamped) {
+  // Attributes set on the writer must be stamped into the footer per node id
+  // and survive a write/read round-trip. Node ids: 0=root, 1=a, 2=b, 3=c.
+  auto config = std::make_shared<Config>();
+  config->set(Config::COMPRESSION, CompressionKind::CompressionKind_NONE);
+  auto& writer = createWriter(config);
+  writer.setSchemaAttributes(
+      {{1, {{"iceberg.id", "10"}}},
+       {2, {{"iceberg.id", "20"}}},
+       {3, {{"iceberg.id", "30"}}}});
+
+  HiveTypeParser parser;
+  auto schema = parser.parse("struct<a:int,b:float,c:string>");
+  // writeFooter requires one statistics entry per type node.
+  for (size_t i = 0; i < 4; ++i) {
+    getFooter()->addStatistics();
+  }
+  writeFooter(*schema);
+  writer.close();
+
+  auto reader = createReader();
+  auto& footer = reader->footer();
+  ASSERT_EQ(footer.typesSize(), 4);
+  EXPECT_EQ(footer.types(0).attributesSize(), 0);
+  EXPECT_EQ(
+      footer.types(1).attribute(0),
+      std::make_pair(std::string("iceberg.id"), std::string("10")));
+  EXPECT_EQ(
+      footer.types(2).attribute(0),
+      std::make_pair(std::string("iceberg.id"), std::string("20")));
+  EXPECT_EQ(
+      footer.types(3).attribute(0),
+      std::make_pair(std::string("iceberg.id"), std::string("30")));
 }
 
 TEST_P(SupportedCompressionTest, WriteFooter) {

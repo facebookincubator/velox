@@ -92,9 +92,9 @@ DEFINE_string(
 
 DEFINE_string(
     special_forms,
-    "and,or,cast,coalesce,if,switch",
+    "and,or,cast,coalesce,if,switch,case",
     "Comma-separated list of special forms to use in generated expression. "
-    "Supported special forms: and, or, coalesce, if, switch, cast.");
+    "Supported special forms: and, or, coalesce, if, switch, case, cast.");
 
 DEFINE_int32(
     velox_fuzzer_max_level_of_nesting,

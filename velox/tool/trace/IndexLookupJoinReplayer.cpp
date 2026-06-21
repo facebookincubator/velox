@@ -53,6 +53,7 @@ core::PlanNodePtr IndexLookupJoinReplayer::createPlanNode(
       indexLookupJoinNode->joinConditions(),
       indexLookupJoinNode->filter(),
       indexLookupJoinNode->hasMarker(),
+      indexLookupJoinNode->splitOutput(),
       source,
       replayLookupSource,
       indexLookupJoinNode->outputType());

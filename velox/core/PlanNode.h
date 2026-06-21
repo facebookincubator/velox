@@ -1299,7 +1299,7 @@ class AggregationNode : public PlanNode {
   };
 
   bool supportsBarrier() const override {
-    return isPreGrouped();
+    return true;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -3309,7 +3309,8 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr right,
       RowTypePtr outputType,
       bool useHashTableCache = false,
-      bool nullAsValue = false)
+      bool nullAsValue = false,
+      std::optional<std::string> cacheKey = std::nullopt)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3321,12 +3322,19 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(outputType)),
         nullAware_{nullAware},
         nullAsValue_{nullAsValue},
-        useHashTableCache_{useHashTableCache} {
+        useHashTableCache_{useHashTableCache},
+        cacheKey_{std::move(cacheKey)} {
     validate();
 
     VELOX_USER_CHECK(
         !nullAware || !nullAsValue,
         "nullAware and nullAsValue are mutually exclusive");
+    VELOX_USER_CHECK(
+        !cacheKey_.has_value() || useHashTableCache_,
+        "cacheKey can only be set when useHashTableCache is enabled");
+    VELOX_USER_CHECK(
+        !cacheKey_.has_value() || !cacheKey_->empty(),
+        "cacheKey must be non-empty if set");
 
     if (isCountingJoin()) {
       VELOX_USER_CHECK(
@@ -3358,6 +3366,7 @@ class HashJoinNode : public AbstractJoinNode {
       nullAware_ = other.isNullAware();
       nullAsValue_ = other.isNullAsValue();
       useHashTableCache_ = other.useHashTableCache();
+      cacheKey_ = other.cacheKey();
     }
 
     Builder& nullAware(bool value) {
@@ -3372,6 +3381,11 @@ class HashJoinNode : public AbstractJoinNode {
 
     Builder& useHashTableCache(bool value) {
       useHashTableCache_ = value;
+      return *this;
+    }
+
+    Builder& cacheKey(std::optional<std::string> value) {
+      cacheKey_ = std::move(value);
       return *this;
     }
 
@@ -3403,13 +3417,15 @@ class HashJoinNode : public AbstractJoinNode {
           right_.value(),
           outputType_.value(),
           useHashTableCache_.value_or(false),
-          nullAsValue_.value_or(false));
+          nullAsValue_.value_or(false),
+          cacheKey_);
     }
 
    private:
     std::optional<bool> nullAware_;
     std::optional<bool> nullAsValue_;
     std::optional<bool> useHashTableCache_;
+    std::optional<std::string> cacheKey_;
   };
 
   std::string_view name() const override {
@@ -3449,6 +3465,10 @@ class HashJoinNode : public AbstractJoinNode {
     return useHashTableCache_;
   }
 
+  const std::optional<std::string>& cacheKey() const {
+    return cacheKey_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3459,6 +3479,7 @@ class HashJoinNode : public AbstractJoinNode {
   const bool nullAware_;
   const bool nullAsValue_;
   const bool useHashTableCache_;
+  const std::optional<std::string> cacheKey_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;
@@ -3701,6 +3722,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// @param hasMarker if true, the output type includes a boolean
   /// column at the end to indicate if a join output row has a match or not.
   /// This only applies for left join.
+  /// @param forwardedProbeColumns Probe-side columns that the operator must
+  /// include in the connector's lookup input vector even when no join key or
+  /// join condition references them. Connectors that need per-row probe
+  /// values (e.g. cumulative-weight caps fetched per probe) use this to
+  /// declare which columns they expect to find in the request input. Defaults
+  /// to empty, in which case behavior is unchanged. A forwarded column may
+  /// not overlap with any column already referenced by leftKeys or by a join
+  /// condition.
   IndexLookupJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
@@ -3711,7 +3740,29 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       bool hasMarker,
       PlanNodePtr left,
       TableScanNodePtr right,
-      RowTypePtr outputType);
+      RowTypePtr outputType,
+      std::optional<bool> splitOutput = std::nullopt,
+      std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns = {});
+
+  /// @param splitOutput Optional flag to control whether the operator should
+  /// split output batches if they are too large. If true, output is split into
+  /// batches according to Operator's outputBatchRows logic. If false, output is
+  /// not split and output batches match input batches 1:1. If not set, defaults
+  /// to the value of the index_lookup_join_split_output config in the
+  /// QueryConfig.
+  IndexLookupJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+      const std::vector<IndexLookupConditionPtr>& joinConditions,
+      TypedExprPtr filter,
+      bool hasMarker,
+      std::optional<bool> splitOutput,
+      PlanNodePtr left,
+      TableScanNodePtr right,
+      RowTypePtr outputType,
+      std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns = {});
 
   class Builder
       : public AbstractJoinNode::Builder<IndexLookupJoinNode, Builder> {
@@ -3723,6 +3774,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       joinConditions_ = other.joinConditions();
       filter_ = other.filter();
       hasMarker_ = other.hasMarker();
+      splitOutput_ = other.splitOutput();
+      forwardedProbeColumns_ = other.forwardedProbeColumns();
     }
 
     /// Set lookup conditions for index lookup that can't be converted into
@@ -3742,6 +3795,22 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     /// Set whether to include a marker column for left joins.
     Builder& hasMarker(bool hasMarker) {
       hasMarker_ = hasMarker;
+      return *this;
+    }
+
+    /// Set whether to split large output into multiple batches, std::nullopt
+    /// means respect index_lookup_join_split_output in the QueryConfig.
+    Builder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
+    /// Set probe-side columns that should be forwarded to the connector's
+    /// lookup input even though no join key or join condition references
+    /// them. See the IndexLookupJoinNode constructor for the contract.
+    Builder& forwardedProbeColumns(
+        std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
       return *this;
     }
 
@@ -3768,14 +3837,18 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           joinConditions_,
           filter_.value_or(nullptr),
           hasMarker_,
+          splitOutput_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
-          outputType_.value());
+          outputType_.value(),
+          forwardedProbeColumns_);
     }
 
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
     bool hasMarker_{false};
+    std::optional<bool> splitOutput_;
+    std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns_;
   };
 
   bool supportsBarrier() const override {
@@ -3796,6 +3869,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
     return joinConditions_;
   }
 
+  /// Probe-side columns the operator forwards into the connector's lookup
+  /// input vector beyond what leftKeys and joinConditions reference. Connectors
+  /// that need per-row probe values (e.g. cumulative-weight caps) declare
+  /// them here. Empty by default.
+  const std::vector<FieldAccessTypedExprPtr>& forwardedProbeColumns() const {
+    return forwardedProbeColumns_;
+  }
+
   std::string_view name() const override {
     return "IndexLookupJoin";
   }
@@ -3803,6 +3884,10 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// Returns whether this node includes a marker column for left joins.
   bool hasMarker() const {
     return hasMarker_;
+  }
+
+  const std::optional<bool>& splitOutput() const {
+    return splitOutput_;
   }
 
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
@@ -3828,6 +3913,16 @@ class IndexLookupJoinNode : public AbstractJoinNode {
 
   /// Whether to include a marker column for left joins to indicate matches.
   const bool hasMarker_;
+
+  /// Optional flag to control whether to split output batches. When set,
+  /// overrides the index_lookup_join_split_output QueryConfig.
+  const std::optional<bool> splitOutput_;
+
+  /// Probe-side columns to forward to the connector's lookup input even if
+  /// they are not referenced by leftKeys or joinConditions. Validated in the
+  /// constructor to be present in the probe input type and to not overlap
+  /// with leftKeys or joinCondition-referenced columns.
+  const std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
@@ -4873,6 +4968,14 @@ class EnforceSingleRowNode : public PlanNode {
     return sources_;
   }
 
+  /// Validates that input produces exactly one row, so the pipeline must
+  /// observe all rows sequentially on a single driver. Multiple drivers
+  /// would each independently produce a row (or NULL on empty input),
+  /// breaking the single-row contract.
+  bool requiresSingleThread() const override {
+    return true;
+  }
+
   void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
       const override;
 
@@ -5385,17 +5488,39 @@ class RowNumberNode : public PlanNode {
 
 using RowNumberNodePtr = std::shared_ptr<const RowNumberNode>;
 
-/// The MarkDistinct operator marks unique rows based on distinctKeys.
-/// The result is put in a new markerName column alongside the original input.
-/// @param markerName Name of the output mask channel.
-/// @param distinctKeys Names of grouping keys.
-/// column.
+/// Marks unique rows based on a set of distinct keys. Always produces
+/// masks.size() + 1 boolean marker columns:
+///
+/// markers[0]: no-mask marker — true for the first occurrence of each distinct
+/// key combination, regardless of any mask.
+///
+/// markers[i+1]: per-mask marker — true for the first occurrence of each
+/// distinct key combination where masks[i] is true.
+///
+/// When masks is empty (single-marker mode), only the no-mask marker is
+/// produced.
 class MarkDistinctNode : public PlanNode {
  public:
+  /// Constructs a single-marker MarkDistinct node.
+  /// @param markerName Name of the output boolean marker column.
+  /// @param distinctKeys Columns to check for distinct values.
   MarkDistinctNode(
       PlanNodeId id,
       std::string markerName,
       std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      PlanNodePtr source);
+
+  /// Constructs a MarkDistinct node that produces one no-mask marker followed
+  /// by one marker per mask column.
+  /// @param markerNames Names of output boolean marker columns. Must have
+  ///   exactly masks.size() + 1 entries.
+  /// @param distinctKeys Columns to check for distinct values.
+  /// @param masks Boolean input columns used as masks. Can be empty.
+  MarkDistinctNode(
+      PlanNodeId id,
+      std::vector<std::string> markerNames,
+      std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      std::vector<FieldAccessTypedExprPtr> masks,
       PlanNodePtr source);
 
   class Builder {
@@ -5404,7 +5529,8 @@ class MarkDistinctNode : public PlanNode {
 
     explicit Builder(const MarkDistinctNode& other) {
       id_ = other.id();
-      markerName_ = other.markerName();
+      markerNames_ = other.markerNames();
+      masks_ = other.masks();
       distinctKeys_ = other.distinctKeys();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
@@ -5415,8 +5541,13 @@ class MarkDistinctNode : public PlanNode {
       return *this;
     }
 
-    Builder& markerName(std::string markerName) {
-      markerName_ = std::move(markerName);
+    Builder& markerNames(std::vector<std::string> markerNames) {
+      markerNames_ = std::move(markerNames);
+      return *this;
+    }
+
+    Builder& masks(std::vector<FieldAccessTypedExprPtr> masks) {
+      masks_ = std::move(masks);
       return *this;
     }
 
@@ -5433,7 +5564,7 @@ class MarkDistinctNode : public PlanNode {
     std::shared_ptr<MarkDistinctNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MarkDistinctNode id is not set");
       VELOX_USER_CHECK(
-          markerName_.has_value(), "MarkDistinctNode markerName is not set");
+          markerNames_.has_value(), "MarkDistinctNode markerNames is not set");
       VELOX_USER_CHECK(
           distinctKeys_.has_value(),
           "MarkDistinctNode distinctKeys is not set");
@@ -5442,14 +5573,16 @@ class MarkDistinctNode : public PlanNode {
 
       return std::make_shared<MarkDistinctNode>(
           id_.value(),
-          markerName_.value(),
+          markerNames_.value(),
           distinctKeys_.value(),
+          masks_.value_or(std::vector<FieldAccessTypedExprPtr>{}),
           source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
-    std::optional<std::string> markerName_;
+    std::optional<std::vector<std::string>> markerNames_;
+    std::optional<std::vector<FieldAccessTypedExprPtr>> masks_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> distinctKeys_;
     std::optional<PlanNodePtr> source_;
   };
@@ -5475,8 +5608,22 @@ class MarkDistinctNode : public PlanNode {
     return queryConfig.markDistinctSpillEnabled();
   }
 
-  const std::string& markerName() const {
-    return markerName_;
+  /// Returns the no-mask marker name (markerNames[0]). Retained for callers
+  /// not yet migrated to markerNames(); to be removed in a follow-up.
+  [[deprecated("Use markerNames()[0]")]] const std::string& markerName() const {
+    return markerNames_[0];
+  }
+
+  /// Returns all marker names: [0] is the no-mask marker, [1..N] correspond
+  /// to masks[0..N-1]. The constructor invariant markerNames_.size() ==
+  /// masks_.size() + 1 guarantees this is always non-empty.
+  const std::vector<std::string>& markerNames() const {
+    return markerNames_;
+  }
+
+  /// Returns mask column references. Empty for single-marker mode.
+  const std::vector<FieldAccessTypedExprPtr>& masks() const {
+    return masks_;
   }
 
   const std::vector<FieldAccessTypedExprPtr>& distinctKeys() const {
@@ -5490,7 +5637,12 @@ class MarkDistinctNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::string markerName_;
+  // markerNames_[0] is the no-mask marker; markerNames_[i+1] corresponds to
+  // masks_[i]. Always has masks_.size() + 1 entries.
+  const std::vector<std::string> markerNames_;
+
+  // Mask channel references. Empty in single-marker mode.
+  const std::vector<FieldAccessTypedExprPtr> masks_;
 
   const std::vector<FieldAccessTypedExprPtr> distinctKeys_;
 

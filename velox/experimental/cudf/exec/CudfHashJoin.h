@@ -72,12 +72,18 @@ class CudfHashJoinBridge : public exec::JoinBridge {
 
   std::optional<rmm::cuda_stream_view> getBuildStream();
 
+  void setBuildReadyEvent(std::shared_ptr<CudaEvent> buildReadyEvent);
+
+  std::shared_ptr<CudaEvent> getBuildReadyEvent();
+
  private:
   /** @brief Hash tables and join objects transferred from build to probe
    * operators */
   std::optional<hash_type> hashObject_;
   /** @brief CUDA stream used by build operator for proper synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+  /** @brief Event recorded after build-side CUDA work is ready for probes */
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
 };
 
 /**
@@ -170,11 +176,16 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  void waitForBuildReady(rmm::cuda_stream_view stream);
+
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
 
   // Filter related members
+  /** @brief Whether to use AST-based filtering (false if filter spans both
+   * sides or if filter deals with decimal types) */
+  bool useAstFilter_{true};
   /** @brief CUDF AST tree for join filter evaluation */
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
@@ -209,7 +220,6 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /** @brief Output column positions for right table columns */
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
-  bool useAstFilter_{true};
 
   /// True if any build table has NULL values in join key columns.
   /// Used for null-aware LEFT SEMI PROJECT to determine match column
@@ -227,6 +237,8 @@ class CudfHashJoinProbe : public CudfOperatorBase {
 
   /** @brief CUDA stream from build operator for synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+  /** @brief Event recorded after build-side CUDA work is ready for probes */
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
   /** @brief CUDA event for coordinating stream synchronization */
   std::unique_ptr<CudaEvent> cudaEvent_;
 

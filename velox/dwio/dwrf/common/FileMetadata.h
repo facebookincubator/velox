@@ -357,6 +357,25 @@ class TypeWrapper : public ProtoWrapperBase {
                                         : orcPtr()->fieldnames(index);
   }
 
+  /// Number of string-keyed attributes on this type. Iceberg encodes per-field
+  /// metadata (e.g. "iceberg.id") here for files manifest-tagged as ORC.
+  int attributesSize() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->attributes_size()
+                                        : orcPtr()->attributes_size();
+  }
+
+  /// Returns the (key, value) attribute pair at 'index'. Insertion order is
+  /// preserved on the wire, matching how it was stamped at write time.
+  std::pair<std::string, std::string> attribute(int index) const {
+    return format_ == DwrfFormat::kDwrf
+        ? std::make_pair(
+              dwrfPtr()->attributes(index).key(),
+              dwrfPtr()->attributes(index).value())
+        : std::make_pair(
+              orcPtr()->attributes(index).key(),
+              orcPtr()->attributes(index).value());
+  }
+
  private:
   // private helper with no format checking
   inline const proto::Type* dwrfPtr() const {
@@ -1165,6 +1184,20 @@ class TypeWriteWrapper : public ProtoWriteWrapperBase {
   void addSubtypes(int fieldName) {
     format_ == DwrfFormat::kDwrf ? dwrfPtr()->add_subtypes(fieldName)
                                  : orcPtr()->add_subtypes(fieldName);
+  }
+
+  /// Appends a string-keyed attribute to this type. Iceberg uses this to stamp
+  /// per-field metadata such as "iceberg.id" for files manifest-tagged as ORC.
+  void addAttribute(const std::string& key, const std::string& value) {
+    if (format_ == DwrfFormat::kDwrf) {
+      auto* attribute = dwrfPtr()->add_attributes();
+      attribute->set_key(key);
+      attribute->set_value(value);
+    } else {
+      auto* attribute = orcPtr()->add_attributes();
+      attribute->set_key(key);
+      attribute->set_value(value);
+    }
   }
 
  private:

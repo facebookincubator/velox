@@ -30,7 +30,7 @@
 #include "velox/dwio/parquet/reader/TimeColumnReader.h"
 #include "velox/dwio/parquet/reader/TimestampColumnReader.h"
 #include "velox/dwio/parquet/reader/UnknownColumnReader.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
 
@@ -41,10 +41,16 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
     common::ScanSpec& scanSpec) {
+  VELOX_CHECK_EQ(
+      static_cast<int>(scanSpec.extractionType()),
+      static_cast<int>(common::ScanSpec::ExtractionType::kNone),
+      "Parquet reader does not support extraction pushdown");
   auto colName = scanSpec.fieldName();
 
   if (fileType->type()->isTime()) {
-    VELOX_CHECK(fileType->type()->equivalent(*TIME()));
+    VELOX_CHECK(
+        fileType->type()->equivalent(*TIME()) ||
+        fileType->type()->equivalent(*TIME_MICRO_UTC()));
     return std::make_unique<TimeColumnReader>(
         requestedType, fileType, params, scanSpec);
   }

@@ -1,0 +1,10 @@
+{
+  "packages": {
+    "spdlog": {
+      "version": "1.15.3",
+      "git_url": "https://github.com/gabime/spdlog.git",
+      "git_tag": "v1.15.3",
+      "git_shallow": true
+    }
+  }
+}

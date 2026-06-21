@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/GroupingSet.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -140,9 +141,10 @@ std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<VectorHasher>>&& hashers,
     std::vector<column_index_t>&& preGroupedKeys,
+    std::vector<Accumulator> extraAccumulators,
     OperatorCtx* operatorCtx,
     tsan_atomic<bool>* nonReclaimableSection) {
-  return std::make_unique<GroupingSet>(
+  auto groupingSet = std::make_unique<GroupingSet>(
       inputType,
       std::move(hashers),
       std::move(preGroupedKeys),
@@ -158,7 +160,15 @@ std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
       &operatorCtx->driverCtx()->queryConfig(),
       operatorCtx->pool(),
       /*spillStats=*/nullptr);
-};
+
+  if (extraAccumulators.empty()) {
+    return groupingSet;
+  }
+
+  groupingSet->extraAccumulators_ = std::move(extraAccumulators);
+  groupingSet->createHashTable();
+  return groupingSet;
+}
 
 namespace {
 bool equalKeys(
@@ -178,6 +188,7 @@ bool equalKeys(
 } // namespace
 
 void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
+  drainedNewGroups_ = {};
   if (isGlobal_) {
     addGlobalAggregationInput(input, mayPushdown);
     return;
@@ -199,6 +210,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
         remainingInput_ = input;
         firstRemainingRow_ = numRows;
         remainingMayPushdown_ = mayPushdown;
+        mayPushdown = false;
         break;
       }
     }
@@ -211,6 +223,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
 }
 
 void GroupingSet::noMoreInput() {
+  drainedNewGroups_ = {};
   noMoreInput_ = true;
 
   if (remainingInput_) {
@@ -358,6 +371,23 @@ void GroupingSet::addRemainingInput() {
   activeRows_.updateBounds();
 
   addInputForActiveRows(remainingInput_, remainingMayPushdown_);
+
+  if (isDistinct() && !preGroupedKeyChannels_.empty()) {
+    // Pre-grouped distinct aggregation does not currently spill
+    // (AggregationNode::canSpill returns false when preGroupedKeys is
+    // non-empty; see velox#3264). The captured row pointers below
+    // reference table_->rows() and would dangle after table_->clear() in
+    // any spill path. If spill becomes enabled here, restore a
+    // materialize-before-clear path or otherwise preserve these rows.
+    VELOX_CHECK(!hasSpilled());
+    const auto& newGroups = lookup_->newGroups;
+    drainedNewGroups_.clear();
+    drainedNewGroups_.reserve(newGroups.size());
+    for (auto idx : newGroups) {
+      drainedNewGroups_.push_back(lookup_->hits[idx]);
+    }
+  }
+
   remainingInput_.reset();
 }
 
@@ -390,7 +420,7 @@ void initializeAggregates(
 
 std::vector<Accumulator> GroupingSet::accumulators(bool excludeToIntermediate) {
   std::vector<Accumulator> accumulators;
-  accumulators.reserve(aggregates_.size());
+  accumulators.reserve(aggregates_.size() + extraAccumulators_.size());
   for (auto& aggregate : aggregates_) {
     if (!excludeToIntermediate ||
         !aggregate.function->supportsToIntermediate()) {
@@ -407,6 +437,10 @@ std::vector<Accumulator> GroupingSet::accumulators(bool excludeToIntermediate) {
     if (aggregation != nullptr) {
       accumulators.push_back(aggregation->accumulator());
     }
+  }
+
+  for (const auto& extra : extraAccumulators_) {
+    accumulators.push_back(extra);
   }
   return accumulators;
 }
@@ -784,10 +818,6 @@ bool GroupingSet::getOutput(
     return getGlobalAggregationOutput(iterator, result);
   }
 
-  if (hasDefaultGlobalGroupingSetOutput()) {
-    return getDefaultGlobalGroupingSetOutput(iterator, result);
-  }
-
   if (hasSpilled()) {
     return getOutputWithSpill(maxOutputRows, maxOutputBytes, result);
   }
@@ -853,10 +883,44 @@ void GroupingSet::extractGroups(
   }
 }
 
+bool GroupingSet::hasDrainedNewGroups() const {
+  return !drainedNewGroups_.empty();
+}
+
+vector_size_t GroupingSet::drainedNewGroupsCount() const {
+  return static_cast<vector_size_t>(drainedNewGroups_.size());
+}
+
+void GroupingSet::extractDrainedNewGroups(const RowVectorPtr& result) {
+  VELOX_CHECK(isDistinct());
+  VELOX_DCHECK(!drainedNewGroups_.empty());
+  result->resize(drainedNewGroups_.size());
+  auto* rowContainer = table_->rows();
+  for (vector_size_t i = 0; i < result->childrenSize(); ++i) {
+    auto& keyVector = result->childAt(i);
+    rowContainer->extractColumn(
+        drainedNewGroups_.data(),
+        drainedNewGroups_.size(),
+        groupingKeyOutputProjections_[i],
+        keyVector);
+  }
+  drainedNewGroups_.clear();
+}
+
 void GroupingSet::resetTable(bool freeTable) {
   if (table_ != nullptr) {
     table_->clear(freeTable);
   }
+}
+
+void GroupingSet::resetGlobalAggregation() {
+  VELOX_CHECK(
+      isGlobal_,
+      "resetGlobalAggregation should only be called for global grouping sets");
+  destroyGlobalAggregations();
+  rows_.clear();
+  stringAllocator_.clear();
+  globalAggregationInitialized_ = false;
 }
 
 bool GroupingSet::isPartialFull(int64_t maxBytes) {

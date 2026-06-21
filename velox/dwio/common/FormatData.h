@@ -102,6 +102,13 @@ class FormatData {
   /// number is format-dependent. In ORC, these are row groups in the
   /// current stripe, in Parquet these are row group numbers in the
   /// file.
+  ///
+  /// 'result.filterResult' is treated as in/out: bits already set on entry
+  /// are honored as 'already excluded' and implementations may skip
+  /// evaluating column statistics for those row groups. This lets callers
+  /// pre-mark cheap exclusions (e.g. row groups outside the split range)
+  /// and lets multiple column readers short-circuit each other across the
+  /// tree walk.
   virtual void filterRowGroups(
       const velox::common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
@@ -127,12 +134,12 @@ class FormatData {
     return false;
   }
 
-  bool getStringBuffersFromDecoder() const {
-    return getStringBuffersFromDecoder_;
+  bool stringDecoderZeroCopy() const {
+    return stringDecoderZeroCopy_;
   }
 
  protected:
-  bool getStringBuffersFromDecoder_{false};
+  bool stringDecoderZeroCopy_{false};
 };
 
 /// Base class for format-specific reader initialization arguments.

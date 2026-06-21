@@ -18,16 +18,18 @@
 
 #include <cudf/detail/utilities/stream_pool.hpp>
 
-#include <rmm/mr/device_memory_resource.hpp>
 #include <rmm/resource_ref.hpp>
 
-#include <memory>
+#include <cuda/memory_resource>
+
+#include <optional>
 #include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
-extern std::shared_ptr<rmm::mr::device_memory_resource> mr_;
-extern std::shared_ptr<rmm::mr::device_memory_resource> output_mr_;
+extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> mr_;
+extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
+    output_mr_;
 
 /// Returns the memory resource designated for output vector allocations.
 rmm::device_async_resource_ref get_output_mr();
@@ -39,7 +41,7 @@ rmm::device_async_resource_ref get_output_mr();
  * @param percent The initial percent of GPU memory to allocate for memory
  * resource.
  */
-[[nodiscard]] std::shared_ptr<rmm::mr::device_memory_resource>
+[[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
 createMemoryResource(std::string_view mode, int percent);
 
 /**
