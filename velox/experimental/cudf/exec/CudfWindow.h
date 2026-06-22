@@ -18,13 +18,21 @@
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/type/Type.h"
 
+#include <cudf/groupby.hpp>
+#include <cudf/rolling.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
+
+#include <memory>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
 
@@ -55,14 +63,13 @@ class CudfWindow : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::WindowNode>& windowNode);
 
+  /// Returns true if every window function and frame in the plan node is
+  /// supported by CudfWindow. Optional @p reason is set on failure.
+  static bool canRunOnGPU(
+      const core::WindowNode& windowNode,
+      std::string* reason = nullptr);
+
   /// Returns true if the window function is supported by CudfWindow.
-  /// Supported functions:
-  /// - Ranking: row_number, rank, dense_rank
-  /// - Value: lag, lead (with up to 2 arguments), first_value, last_value
-  /// - Aggregate: sum, min, max, count, avg
-  /// Unsupported functions:
-  /// - nth_value, ntile, cume_dist, percent_rank
-  /// - lag/lead with default value (3rd argument)
   static bool isSupportedWindowFunction(
       const std::string& baseName,
       size_t numArgs) {
@@ -106,20 +113,23 @@ class CudfWindow : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   // Resolve the input column index for a window function's first argument.
   cudf::size_type resolveInputColumn(
       const core::WindowNode::Function& func) const;
 
-  // Compute row_number/rank/dense_rank via cudf::groupby::scan.
+  // Compute row_number/rank/dense_rank via cudf::groupby::scan or cudf::scan.
   std::unique_ptr<cudf::column> computeRankColumn(
-      cudf::table_view const& sortedInput,
+      const cudf::table_view& sortedInput,
       const std::string& baseName,
+      cudf::groupby::groupby* rankGrouper,
       rmm::cuda_stream_view stream) const;
 
   // Compute LAG or LEAD via cudf::grouped_rolling_window.
   std::unique_ptr<cudf::column> computeLeadLagColumn(
-      cudf::table_view const& partKeys,
+      const cudf::table_view& partKeys,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
@@ -127,8 +137,8 @@ class CudfWindow : public CudfOperatorBase {
 
   // Compute first_value or last_value via cudf rolling window APIs.
   std::unique_ptr<cudf::column> computeNthValueColumn(
-      cudf::table_view const& partKeys,
-      cudf::table_view const& sortedView,
+      const cudf::table_view& partKeys,
+      const cudf::table_view& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
@@ -136,10 +146,9 @@ class CudfWindow : public CudfOperatorBase {
 
   // Compute aggregate window functions (sum, min, max, count, avg)
   // with frame bounds from the WindowNode.
-  // isCountStar: true for count(*), false for count(col).
   std::unique_ptr<cudf::column> computeAggregateColumn(
-      cudf::table_view const& partKeys,
-      cudf::table_view const& sortedView,
+      const cudf::table_view& partKeys,
+      const cudf::table_view& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
@@ -149,11 +158,11 @@ class CudfWindow : public CudfOperatorBase {
   // Dispatch to grouped_rolling_window (ROWS) or grouped_range_rolling_window
   // (RANGE) based on the frame type.
   std::unique_ptr<cudf::column> invokeGroupedRollingWindow(
-      cudf::table_view const& partKeys,
-      cudf::table_view const& sortedView,
+      const cudf::table_view& partKeys,
+      const cudf::table_view& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
-      cudf::rolling_aggregation const& agg,
+      const cudf::rolling_aggregation& agg,
       bool isFullPartition,
       rmm::cuda_stream_view stream) const;
 
