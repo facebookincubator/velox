@@ -190,14 +190,7 @@ Timestamp truncateTimestamp(
       break;
 
     default: {
-      // Week, month, quarter, and year truncation are date-unit
-      // operations: convert to local days, truncate via the
-      // Date-domain helper (which avoids the std::tm round trip and
-      // goes directly through Neri-Schneider for in-range years),
-      // then materialize a local Timestamp at the start of the
-      // truncated unit. The toGMT below converts it back. Falls back
-      // to the std::tm path for the unreachable extreme inputs whose
-      // local day count overflows int32_t.
+      // Convert to local days, truncate, convert back to local midnight.
       const int64_t localSeconds = getSeconds(timestamp, timeZone);
       int64_t localDays = localSeconds / kSecondsInDay;
       if (localSeconds < 0 && localSeconds % kSecondsInDay) {
