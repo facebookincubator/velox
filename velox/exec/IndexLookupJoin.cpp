@@ -50,9 +50,9 @@ void IndexLookupJoin::IndexStatWriter::addRuntimeStat(
 }
 
 void IndexLookupJoin::IndexStatWriter::setRuntimeStat(
-    const std::string& name,
+    std::string_view name,
     const RuntimeMetric& metric) {
-  runtimeStats_.wlock()->insert_or_assign(name, metric);
+  runtimeStats_.wlock()->insert_or_assign(std::string(name), metric);
 }
 
 std::unordered_map<std::string, RuntimeMetric>
@@ -281,6 +281,14 @@ std::vector<OperatorStats> IndexLookupJoin::splitStats(
   joinStats.runtimeStats.erase(std::string(LazyVector::kCpuNanos));
   joinStats.runtimeStats.erase(std::string(LazyVector::kWallNanos));
 
+  // Remove index source stats from join stats. recordConnectorStats copies
+  // these into the operator's runtimeStats (prefixed with "indexSource.") so
+  // they flow through the task-level stats path, but they belong to the
+  // IndexSource node, not the join node.
+  for (const auto& [name, _] : indexSourceStatWriter.runtimeStats()) {
+    joinStats.runtimeStats.erase(fmt::format("indexSource.{}", name));
+  }
+
   return {std::move(joinStats), std::move(indexSourceStats)};
 }
 
@@ -294,13 +302,16 @@ IndexLookupJoin::IndexLookupJoin(
           operatorId,
           joinNode->id(),
           OperatorType::kIndexLookupJoin),
-      splitOutput_{driverCtx->queryConfig().indexLookupJoinSplitOutput()},
+      splitOutput_{
+          (joinNode->splitOutput().has_value() &&
+           joinNode->splitOutput().value()) ||
+          (!joinNode->splitOutput().has_value() &&
+           driverCtx->queryConfig().indexLookupJoinSplitOutput())},
       // TODO: support to update output batch size with output size stats during
       // the lookup processing.
       outputBatchSize_{
-          driverCtx->queryConfig().indexLookupJoinSplitOutput()
-              ? outputBatchRows()
-              : std::numeric_limits<vector_size_t>::max()},
+          splitOutput_ ? outputBatchRows()
+                       : std::numeric_limits<vector_size_t>::max()},
       joinType_{joinNode->joinType()},
       hasMarker_(joinNode->hasMarker()),
       probeType_{joinNode->sources()[0]->outputType()},
@@ -662,11 +673,22 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
 
     if (!split.hasConnectorSplit()) {
       noMoreIndexSplits_ = true;
-      VELOX_CHECK(!indexSplits_.empty());
-      // Publish splits to the bridge for followers before consuming locally.
+      VELOX_CHECK(!hasNoIndexSplits_);
       VELOX_CHECK_NOT_NULL(joinBridge_);
       joinBridge_->setIndexSplits(indexSplits_);
-      indexSource_->addSplits(std::move(indexSplits_));
+      {
+        auto lockedStats = stats_.wlock();
+        lockedStats->addRuntimeStat(
+            kNumIndexSplits,
+            RuntimeCounter(
+                static_cast<int64_t>(indexSplits_.size()),
+                RuntimeCounter::Unit::kNone));
+      }
+      if (indexSplits_.empty()) {
+        hasNoIndexSplits_ = true;
+      } else {
+        indexSource_->addSplits(std::move(indexSplits_));
+      }
       return true;
     }
 
@@ -681,11 +703,15 @@ bool IndexLookupJoin::waitForIndexSplits(ContinueFuture* future) {
   VELOX_CHECK(indexSplits_.empty());
 
   auto splits = joinBridge_->splitsOrFuture(future);
-  if (splits.empty()) {
+  if (future->valid()) {
     return false;
   }
   noMoreIndexSplits_ = true;
-  indexSource_->addSplits(std::move(splits));
+  if (splits.empty()) {
+    hasNoIndexSplits_ = true;
+  } else {
+    indexSource_->addSplits(std::move(splits));
+  }
   return true;
 }
 
@@ -699,6 +725,9 @@ bool IndexLookupJoin::needsInput() const {
   }
   // Don't accept input until we have collected all splits for index source.
   if (needsIndexSplits()) {
+    return false;
+  }
+  if (shouldSkipInput()) {
     return false;
   }
   if (numInputBatches() >= maxNumInputBatches_) {
@@ -766,6 +795,7 @@ void IndexLookupJoin::endLookupBlockWait() {
 
 void IndexLookupJoin::addInput(RowVectorPtr input) {
   VELOX_CHECK_GT(input->size(), 0);
+  VELOX_CHECK(!shouldSkipInput());
   auto& batch = nextInputBatch();
   VELOX_CHECK_LE(numInputBatches(), maxNumInputBatches_);
   batch.input = std::move(input);
@@ -997,8 +1027,7 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
   VELOX_CHECK_NULL(batch.lookupResult);
   VELOX_CHECK(!batch.lookupFuture.valid());
 
-  if (batch.lookupInput->size() == 0) {
-    // No need to start lookup for empty lookup input.
+  if (shouldSkipLookup(batch)) {
     return;
   }
 
@@ -1012,10 +1041,11 @@ void IndexLookupJoin::startLookup(InputBatchState& batch) {
 RowVectorPtr IndexLookupJoin::getOutputFromLookupResult(
     InputBatchState& batch) {
   VELOX_CHECK(!batch.empty());
+  VELOX_CHECK(!shouldSkipInput());
   VELOX_CHECK(!batch.lookupFuture.valid() || batch.lookupFuture.isReady());
   batch.lookupFuture = ContinueFuture::makeEmpty();
 
-  if (batch.lookupInput->size() == 0) {
+  if (shouldSkipLookup(batch)) {
     return produceRemainingOutput(batch);
   }
 
@@ -1177,8 +1207,8 @@ bool IndexLookupJoin::hasRemainingOutputForLeftJoin(
 
 void IndexLookupJoin::finishInput(InputBatchState& batch) {
   VELOX_CHECK_NOT_NULL(batch.input);
-  VELOX_CHECK_EQ(
-      batch.lookupInput->size() == 0, batch.lookupResultIter == nullptr);
+  VELOX_CHECK(!shouldSkipInput());
+  VELOX_CHECK_EQ(shouldSkipLookup(batch), batch.lookupResultIter == nullptr);
   VELOX_CHECK(!batch.lookupFuture.valid());
 
   batch.input = nullptr;
@@ -1196,7 +1226,7 @@ void IndexLookupJoin::finishInput(InputBatchState& batch) {
       VELOX_CHECK(!nextBatch.lookupFuture.valid());
     } else {
       VELOX_CHECK_EQ(
-          nextBatch.lookupInput->size() != 0, nextBatch.lookupFuture.valid());
+          !shouldSkipLookup(nextBatch), nextBatch.lookupFuture.valid());
     }
   }
 }
@@ -1649,8 +1679,9 @@ void IndexLookupJoin::recordConnectorStats() {
         RuntimeCounter(
             static_cast<int64_t>(lookupWallTime.sum),
             RuntimeCounter::Unit::kNanos));
-    // NOTE: this might not be accurate as it doesn't include the time
-    // spent inside the index storage client.
+    // NOTE: lookupCpuNanos may undercount CPU consumed on prefetch worker
+    // threads or async I/O completion handlers, since CpuWallTimer measures
+    // CPU on the calling thread only.
     indexStatWriter_->addRuntimeStat(
         "lookupCpuNanos",
         RuntimeCounter(
@@ -1659,6 +1690,15 @@ void IndexLookupJoin::recordConnectorStats() {
                 connectorStats[std::string(kClientRequestProcessTime)].sum +
                 connectorStats[std::string(kClientResultProcessTime)].sum),
             RuntimeCounter::Unit::kNanos));
+  }
+  // Copy index source stats into the operator's own runtimeStats so they are
+  // visible through the task-level runtime stats path.
+  const auto indexSourceStats = indexStatWriter_->runtimeStats();
+  {
+    auto lockedStats = stats_.wlock();
+    for (const auto& [name, value] : indexSourceStats) {
+      lockedStats->runtimeStats[fmt::format("indexSource.{}", name)] = value;
+    }
   }
 }
 } // namespace facebook::velox::exec

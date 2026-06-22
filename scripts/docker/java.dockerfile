@@ -16,6 +16,10 @@
 # Global arg default to share across stages
 ARG SPARK_VERSION=3.5.1
 ARG PRESTO_VERSION=0.295
+# tzdata version pin — see scripts/docker/centos-multi.dockerfile for the
+# rationale. Keep this string in sync with CENTOS_TZDATA_VERSION there so
+# the OS tzdata and JDK tzdata-java agree on timezone rules. Issue #17522.
+ARG CENTOS_TZDATA_VERSION=2026a-1.el9
 
 #########################
 # Stage: Spark Download #
@@ -49,7 +53,17 @@ RUN tar -xzf presto-server.tar.gz
 #########################
 FROM ghcr.io/facebookincubator/velox-dev:centos9 AS java-base
 
-RUN dnf install -y -q --setopt=install_weak_deps=False java-17-openjdk less procps tzdata
+ARG CENTOS_TZDATA_VERSION
+# Pin tzdata-java to the same version as the OS tzdata pinned in the
+# centos9 base. The base image already has tzdata pinned; we re-pin
+# here as a defensive `install || downgrade` so this stage builds
+# correctly even before the centos9 image has been rebuilt with the pin.
+RUN dnf install -y -q --setopt=install_weak_deps=False \
+      java-17-openjdk less procps tzdata && \
+    (dnf -y install "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch" || \
+     dnf -y downgrade "tzdata-java-${CENTOS_TZDATA_VERSION}.noarch") && \
+    (dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
+     dnf -y downgrade "tzdata-${CENTOS_TZDATA_VERSION}.noarch")
 
 # We set the timezone to America/Los_Angeles due to issue
 # detailed here : https://github.com/facebookincubator/velox/issues/8127

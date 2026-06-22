@@ -93,6 +93,7 @@ add_executable(
   MapKeysOverlapTest.cpp
   MapNormalizeTest.cpp
   MapValuesInRangeTest.cpp
+  MapSubsetKeyInRangeTest.cpp
   RemapKeysTest.cpp
   MapTopNTest.cpp
   MapTopNKeysTest.cpp
@@ -101,6 +102,7 @@ add_executable(
   MapKeysAndValuesTest.cpp
   MapKeysByTopNValuesTest.cpp
   MapMatchTest.cpp
+  MapValuesMatchTest.cpp
   MapAppendTest.cpp
   MapUpdateTest.cpp
   MapTest.cpp
@@ -109,6 +111,7 @@ add_executable(
   MultimapFromEntriesTest.cpp
   NotTest.cpp
   ParsePrestoDataSizeTest.cpp
+  PrestoQueryConfigTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp
   ReduceTest.cpp

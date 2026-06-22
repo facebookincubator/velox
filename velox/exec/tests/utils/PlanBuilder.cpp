@@ -942,8 +942,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->ignoreNullKeys(),
       partialAggNode->noGroupsSpanBatches(),
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   return aggregationNode;
 }
 
@@ -1153,8 +1152,7 @@ PlanBuilder& PlanBuilder::aggregation(
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1178,8 +1176,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       ignoreNullKeys,
       noGroupsSpanBatches,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -2206,7 +2203,8 @@ TypePtr resolveWindowType(
     bool nullOnFailure) {
   if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
     for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, inputTypes);
+      exec::SignatureBinder binder(
+          *signature, inputTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(signature->returnType());
       }
@@ -2530,13 +2528,33 @@ PlanBuilder& PlanBuilder::topNRowNumber(
 }
 
 PlanBuilder& PlanBuilder::markDistinct(
-    std::string markerKey,
+    std::string markerName,
     const std::vector<std::string>& distinctKeys) {
   VELOX_CHECK_NOT_NULL(planNode_, "MarkDistinct cannot be the source node");
   planNode_ = std::make_shared<core::MarkDistinctNode>(
       nextPlanNodeId(),
-      std::move(markerKey),
+      std::move(markerName),
       fields(planNode_->outputType(), distinctKeys),
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::markDistinct(
+    std::vector<std::string> markerNames,
+    const std::vector<std::string>& distinctKeys,
+    const std::vector<std::string>& maskNames) {
+  VELOX_CHECK_NOT_NULL(planNode_, "MarkDistinct cannot be the source node");
+  VELOX_CHECK_EQ(
+      markerNames.size(),
+      maskNames.size() + 1,
+      "Number of marker names must be one more than mask names");
+  auto inputType = planNode_->outputType();
+  planNode_ = std::make_shared<core::MarkDistinctNode>(
+      nextPlanNodeId(),
+      std::move(markerNames),
+      fields(inputType, distinctKeys),
+      fields(inputType, maskNames),
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
@@ -2727,6 +2745,7 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       std::move(joinConditionPtrs),
       filterExpr,
       hasMarker_,
+      splitOutput_,
       std::move(planBuilder_.planNode_),
       indexSource_,
       std::move(outputType));

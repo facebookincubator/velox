@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/parse/IExpr.h"
 #include "velox/type/Variant.h"
@@ -71,6 +71,10 @@ class FieldAccessExpr : public IExpr {
   bool isRootColumn() const {
     return input()->is(Kind::kInput);
   }
+
+  /// Returns 'expr' as a FieldAccessExpr if it refers directly to a
+  /// top-level input column; otherwise returns nullptr.
+  static const FieldAccessExpr* tryAsRootColumn(const ExprPtr& expr);
 
   std::string toString() const override;
 
@@ -346,14 +350,14 @@ class WindowCallExpr : public CallExpr {
 class ConstantExpr : public IExpr,
                      public std::enable_shared_from_this<ConstantExpr> {
  public:
-  ConstantExpr(TypePtr type, variant value, std::optional<std::string> alias)
+  ConstantExpr(TypePtr type, Variant value, std::optional<std::string> alias)
       : IExpr{IExpr::Kind::kConstant, {}, std::move(alias)},
         type_{std::move(type)},
         value_{std::move(value)} {}
 
   std::string toString() const override;
 
-  const variant& value() const {
+  const Variant& value() const {
     return value_;
   }
 
@@ -382,7 +386,7 @@ class ConstantExpr : public IExpr,
 
  private:
   const TypePtr type_;
-  const variant value_;
+  const Variant value_;
 };
 
 class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {

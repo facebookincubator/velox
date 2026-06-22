@@ -191,12 +191,17 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
     if (dispatchBatchSize_ > 0 &&
         function_->pendingBatchSize() >= dispatchBatchSize_) {
-      flushBatchRequests();
+      // Flush in chunks of dispatchBatchSize_ to avoid sending one
+      // giant batch_predict call that overwhelms the server.
+      while (function_->pendingBatchSize() >= dispatchBatchSize_ &&
+             !state_->isUnderBackpressure()) {
+        flushBatchRequests(dispatchBatchSize_);
+      }
     }
   }
 }
 
-void RPCOperator::flushBatchRequests() {
+void RPCOperator::flushBatchRequests(int32_t maxRows) {
   if (function_->pendingBatchSize() == 0) {
     VELOX_CHECK(
         batchRowLocations_.empty(),
@@ -207,13 +212,24 @@ void RPCOperator::flushBatchRequests() {
     return;
   }
 
-  RPC_OP_LOG(INFO) << "Flushing batch with " << function_->pendingBatchSize()
-                   << " accumulated rows";
+  // Determine how many rows to flush.
+  auto flushCount = maxRows > 0
+      ? std::min(static_cast<int32_t>(batchRowLocations_.size()), maxRows)
+      : static_cast<int32_t>(batchRowLocations_.size());
 
-  auto rowLocations = std::move(batchRowLocations_);
-  auto rowIds = std::move(batchRowIds_);
+  RPC_OP_LOG(INFO) << "Flushing batch with " << flushCount << " of "
+                   << function_->pendingBatchSize() << " accumulated rows";
 
-  auto future = function_->flushBatch();
+  // Split off the rows to flush.
+  std::vector<RPCState::RowLocation> rowLocations(
+      batchRowLocations_.begin(), batchRowLocations_.begin() + flushCount);
+  std::vector<int64_t> rowIds(
+      batchRowIds_.begin(), batchRowIds_.begin() + flushCount);
+  batchRowLocations_.erase(
+      batchRowLocations_.begin(), batchRowLocations_.begin() + flushCount);
+  batchRowIds_.erase(batchRowIds_.begin(), batchRowIds_.begin() + flushCount);
+
+  auto future = function_->flushBatch(maxRows);
 
   // Count each flushBatch() as 1 pending unit in the rate limiter.
   auto token = std::make_shared<RPCRateLimiter::Token>(
@@ -252,9 +268,9 @@ void RPCOperator::noMoreInput() {
                  << numRequestsDispatched_;
 
   if (state_->streamingMode() == RPCStreamingMode::kBatch) {
-    // Flush any remaining accumulated rows.
-    if (function_->pendingBatchSize() > 0) {
-      flushBatchRequests();
+    // Flush any remaining accumulated rows in chunks.
+    while (function_->pendingBatchSize() > 0) {
+      flushBatchRequests(dispatchBatchSize_ > 0 ? dispatchBatchSize_ : 0);
     }
   }
 
@@ -311,6 +327,16 @@ RowVectorPtr RPCOperator::getOutput() {
         numErrors_++;
       }
     }
+
+    // Delegate congestion evaluation to the function.
+    // The function knows its domain-specific error semantics.
+    auto signal = function_->evaluateCongestion(claimedBatch_->responses);
+    if (signal == AsyncRPCFunction::CongestionSignal::kError) {
+      state_->onBatchError();
+    } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
+      state_->onBatchSuccess(function_->congestionRecoveryIncrement());
+    }
+
     auto output = buildOutputFromReadyBatch(*claimedBatch_);
     numResponsesCollected_ += numRows;
     claimedBatch_.reset();

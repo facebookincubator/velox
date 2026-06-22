@@ -104,7 +104,8 @@ class FunctionRegistryTest : public testing::Test {
     VELOX_EXPECT_EQ_TYPES(type, expected);
 
     std::vector<TypePtr> coercions;
-    type = resolveFunctionWithCoercions(functionName, types, coercions);
+    type = resolveFunctionWithCoercions(
+        functionName, types, coercions, TypeCoercer::defaults());
     VELOX_EXPECT_EQ_TYPES(type, expected);
 
     if (expected != nullptr) {
@@ -128,7 +129,12 @@ class FunctionRegistryTest : public testing::Test {
     static ResolveFuncs function() {
       return {
           .resolveFunc = resolveFunction,
-          .resolveWithCoercionsFunc = resolveFunctionWithCoercions,
+          .resolveWithCoercionsFunc = [](const auto& name,
+                                         const auto& argTypes,
+                                         auto& coercions) -> TypePtr {
+            return resolveFunctionWithCoercions(
+                name, argTypes, coercions, TypeCoercer::defaults());
+          },
       };
     }
 
@@ -146,7 +152,7 @@ class FunctionRegistryTest : public testing::Test {
                                          auto& coercions) -> TypePtr {
             try {
               return resolveCallableSpecialFormWithCoercions(
-                  name, argTypes, coercions);
+                  name, argTypes, coercions, TypeCoercer::defaults());
             } catch (const VeloxException&) {
               return nullptr;
             }
@@ -291,7 +297,7 @@ class FunctionRegistryTest : public testing::Test {
       bool expectedDeterministic) {
     std::vector<TypePtr> coercions;
     auto result = resolveVectorFunctionWithMetadataWithCoercions(
-        name, argTypes, coercions);
+        name, argTypes, coercions, TypeCoercer::defaults());
     ASSERT_TRUE(result.has_value());
     VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
     EXPECT_EQ(result->second.deterministic, expectedDeterministic);
@@ -317,7 +323,7 @@ class FunctionRegistryTest : public testing::Test {
       bool expectedDeterministic) {
     std::vector<TypePtr> coercions;
     auto result = resolveVectorFunctionWithMetadataWithCoercions(
-        name, argTypes, coercions);
+        name, argTypes, coercions, TypeCoercer::defaults());
     ASSERT_TRUE(result.has_value());
     VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
     EXPECT_EQ(result->second.deterministic, expectedDeterministic);
@@ -333,7 +339,7 @@ class FunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes) {
     std::vector<TypePtr> coercions;
     auto result = resolveVectorFunctionWithMetadataWithCoercions(
-        name, argTypes, coercions);
+        name, argTypes, coercions, TypeCoercer::defaults());
     EXPECT_FALSE(result.has_value());
   }
 };

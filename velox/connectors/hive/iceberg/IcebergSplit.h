@@ -45,7 +45,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::shared_ptr<std::string>& extraFileInfo = {},
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<FileProperties> fileProperties = std::nullopt,
+      int64_t dataSequenceNumber = 0);
 
   // For tests only
   HiveIcebergSplit(

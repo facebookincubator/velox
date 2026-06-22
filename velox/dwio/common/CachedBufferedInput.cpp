@@ -18,7 +18,6 @@
 #include "folly/io/Cursor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 
@@ -94,7 +93,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
     numPages += memory::AllocationTraits::numPages(
         std::min<int32_t>(request.size, options_.loadQuantum()));
   }
-  const auto cachePages = cache_->incrementCachedPages(0);
+  const auto cachePages = cache_->cachedPages();
   auto* allocator = cache_->allocator();
   const auto maxPages =
       memory::AllocationTraits::numPages(allocator->capacity());
@@ -179,7 +178,8 @@ void CachedBufferedInput::preload() {
   cache::RawFileCacheKey key{fileNum_.id(), 0};
   folly::SemiFuture<bool> waitFuture(false);
   do {
-    preloadPin_ = cache_->findOrCreate(key, fileSize_, &waitFuture);
+    preloadPin_ =
+        cache_->findOrCreate(key, fileSize_, /*contiguous=*/false, &waitFuture);
     if (preloadPin_.empty()) {
       uint64_t waitUs{0};
       {
@@ -214,7 +214,7 @@ void CachedBufferedInput::preload() {
   ioStatistics_->incRawBytesRead(fileSize_);
   ioStatistics_->queryThreadIoLatencyUs().increment(storageReadUs);
   ioStatistics_->storageReadLatencyUs().increment(storageReadUs);
-  ioStatistics_->incTotalScanTime(storageReadUs * 1'000);
+  ioStatistics_->incTotalScanTimeNs(storageReadUs * 1'000);
   entry->setExclusiveToShared(options_.cacheable());
 }
 
@@ -301,32 +301,34 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
   std::vector<int32_t> ends;
   ends.reserve(requests.size());
   std::vector<char> ranges;
-  coalesceIo<CacheRequest*, char>(
-      requests,
-      maxDistance,
-      std::numeric_limits<int32_t>::max(),
-      [&](int32_t index) { return getOffset<kSsd>(*requests[index]); },
-      [&](int32_t index) {
-        const auto size = requests[index]->size;
-        coalescedBytes += size;
-        return size;
-      },
-      [&](int32_t index) {
-        if (coalescedBytes > options_.maxCoalesceBytes()) {
-          coalescedBytes = 0;
-          return kNoCoalesce;
-        }
-        return requests[index]->coalesces ? 1 : kNoCoalesce;
-      },
-      [&](CacheRequest* /*request*/, std::vector<char>& ranges) {
-        ranges.push_back(0);
-      },
-      [&](int32_t /*gap*/, std::vector<char> /*ranges*/) { /*no op*/ },
-      [&](const std::vector<CacheRequest*>& /*requests*/,
-          int32_t /*begin*/,
-          int32_t end,
-          uint64_t /*offset*/,
-          const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  const auto stats =
+      coalesceIo<CacheRequest*, char, /*coalesceDuplicateRanges=*/false>(
+          requests,
+          maxDistance,
+          std::numeric_limits<int32_t>::max(),
+          [&](int32_t index) { return getOffset<kSsd>(*requests[index]); },
+          [&](int32_t index) {
+            const auto size = requests[index]->size;
+            coalescedBytes += size;
+            return size;
+          },
+          [&](int32_t index) {
+            if (coalescedBytes > options_.maxCoalesceBytes()) {
+              coalescedBytes = 0;
+              return kNoCoalesce;
+            }
+            return requests[index]->coalesces ? 1 : kNoCoalesce;
+          },
+          [&](CacheRequest* /*request*/, std::vector<char>& ranges) {
+            ranges.push_back(0);
+          },
+          [&](int32_t /*gap*/, std::vector<char> /*ranges*/) { /*no op*/ },
+          [&](const std::vector<CacheRequest*>& /*requests*/,
+              int32_t /*begin*/,
+              int32_t end,
+              uint64_t /*offset*/,
+              const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  ioStatistics_->readGap().merge(stats.gaps);
   return ends;
 }
 
@@ -581,7 +583,6 @@ void CachedBufferedInput::readRegions(
       if (load->state() == CoalescedLoad::State::kPlanned) {
         executor_->add(
             [pendingLoad = load, ssdSavable = options_.cacheable()]() {
-              process::TraceContext trace("Read Ahead");
               pendingLoad->loadOrFuture(nullptr, ssdSavable);
             });
       }
@@ -681,8 +682,8 @@ void CachedBufferedInput::cacheRegion(
     uint64_t length,
     const folly::IOBuf& buffer,
     uint64_t bufferOffset) {
-  auto pin = cache_->findOrCreate(
-      RawFileCacheKey{fileNum_.id(), offset}, length, nullptr);
+  auto pin =
+      cache_->findOrCreate(RawFileCacheKey{fileNum_.id(), offset}, length);
   // Empty pin means the cache is at capacity and cannot accept new entries.
   // Non-exclusive means another thread already cached this region; skip the
   // duplicate write.
@@ -701,10 +702,10 @@ void CachedBufferedInput::cacheRegion(
       length);
 
   auto* entry = pin.checkedEntry();
-  if (entry->size() < cache::AsyncDataCacheEntry::kTinyDataSize) {
-    cursor.pull(entry->tinyData(), length);
+  if (entry->hasContiguousData()) {
+    cursor.pull(entry->contiguousData(), length);
   } else {
-    auto& allocation = entry->data();
+    auto& allocation = entry->nonContiguousData();
     uint64_t copyBytes = 0;
     for (int i = 0; i < allocation.numRuns() && copyBytes < length; ++i) {
       const auto run = allocation.runAt(i);

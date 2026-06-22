@@ -53,28 +53,26 @@ DEFINE_int32(
     100000,
     "Preferred output batch size in rows for cudf operators.");
 
-DEFINE_string(
-    cudf_memory_resource,
-    "async",
-    "Memory resource for cudf operators.");
-
-DEFINE_int32(
-    cudf_memory_percent,
-    50,
-    "Percentage of GPU memory to allocate for cudf operators.");
-
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
-DEFINE_bool(cudf_debug_enabled, false, "Enable debug printing");
+DEFINE_string(
+    cudf_properties,
+    "",
+    "Path to a properties file for CudfConfig. Each line should be key=value "
+    "(e.g. cudf.memory_resource=async). See CudfConfig for available keys.");
 
 void CudfTpchBenchmark::initialize() {
+  if (!FLAGS_cudf_properties.empty()) {
+    cudf_velox::CudfConfig::getInstance().initialize(
+        cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
+  }
+
   TpchBenchmark::initialize();
 
   if (FLAGS_velox_cudf_table_scan) {
     connector::ConnectorRegistry::global().erase(
         facebook::velox::exec::test::kHiveConnectorId);
 
-    // Add new values into the cudfHive configuration...
     auto cudfHiveConfigurationValues =
         std::unordered_map<std::string, std::string>();
     cudfHiveConfigurationValues
@@ -89,7 +87,6 @@ void CudfTpchBenchmark::initialize() {
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
         std::move(cudfHiveConfigurationValues));
 
-    // Create cudfHive connector with config...
     cudf_velox::connector::hive::CudfHiveConnectorFactory cudfHiveFactory;
     auto cudfHiveConnector = cudfHiveFactory.newConnector(
         facebook::velox::exec::test::kHiveConnectorId,
@@ -99,16 +96,8 @@ void CudfTpchBenchmark::initialize() {
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
-  cudf_velox::CudfConfig::getInstance().memoryResource =
-      FLAGS_cudf_memory_resource;
-  cudf_velox::CudfConfig::getInstance().memoryPercent =
-      FLAGS_cudf_memory_percent;
-
-  cudf_velox::CudfConfig::getInstance().debugEnabled = FLAGS_cudf_debug_enabled;
-  // Enable cuDF operators
   cudf_velox::registerCudf();
 
-  // Add custom configs
   queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
       std::to_string(FLAGS_cudf_gpu_batch_size_rows);
 }

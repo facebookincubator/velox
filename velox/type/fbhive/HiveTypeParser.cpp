@@ -59,6 +59,7 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::Long, TypeKind::BIGINT>("bigint");
   setupMetadata<TokenType::Date, TypeKind::INTEGER>("date");
   setupMetadata<TokenType::Time, TypeKind::BIGINT>("time");
+  setupMetadata<TokenType::TimeMicroUtc, TypeKind::BIGINT>("time_micro_utc");
   setupMetadata<TokenType::Float, TypeKind::REAL>({"float", "real"});
   setupMetadata<TokenType::Double, TypeKind::DOUBLE>("double");
   setupMetadata<TokenType::Decimal, TypeKind::BIGINT>("decimal");
@@ -124,6 +125,8 @@ Result HiveTypeParser::parseType() {
       return Result{DATE()};
     } else if (nt.metadata->tokenString[0] == "time") {
       return Result{TIME()};
+    } else if (nt.metadata->tokenString[0] == "time_micro_utc") {
+      return Result{TIME_MICRO_UTC()};
     }
     auto scalarType = createScalarType(nt.typeKind());
     VELOX_CHECK_NOT_NULL(
@@ -146,7 +149,13 @@ Result HiveTypeParser::parseType() {
 
     // TODO: `getTypeIdForOpaqueTypeAlias()` should take a std::string_view so
     // we don't need to needlessly construct a std::string.
-    auto typeIndex = getTypeIdForOpaqueTypeAlias(std::string(innerTypeName));
+    std::string aliasName(innerTypeName);
+    // If the alias is registered as a custom type (via
+    // OpaqueCustomTypeRegister), return it to respect the singleton semantics.
+    if (auto customType = getCustomType(aliasName, /*parameters=*/{})) {
+      return Result{customType};
+    }
+    auto typeIndex = getTypeIdForOpaqueTypeAlias(aliasName);
     auto instance = std::make_shared<const OpaqueType>(typeIndex);
     return Result{instance};
   } else {

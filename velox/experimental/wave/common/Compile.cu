@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <gflags/gflags.h>
 #include <nvrtc.h>
+#include <chrono>
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 #include "velox/experimental/wave/common/Exception.h"
@@ -54,8 +55,11 @@ void nvrtcCheck(nvrtcResult result) {
 
 class CompiledModuleImpl : public CompiledModule {
  public:
-  CompiledModuleImpl(CUmodule module, std::vector<CUfunction> kernels)
-      : module_(module), kernels_(std::move(kernels)) {}
+  CompiledModuleImpl(
+      CUmodule module,
+      std::vector<CUfunction> kernels,
+      int64_t compileMs)
+      : module_(module), kernels_(std::move(kernels)), compileMs_(compileMs) {}
 
   ~CompiledModuleImpl() {
     auto result = cuModuleUnload(module_);
@@ -72,11 +76,20 @@ class CompiledModuleImpl : public CompiledModule {
       Stream* stream,
       void** args) override;
 
+  void launchCooperative(
+      int32_t kernelIdx,
+      int32_t numBlocks,
+      int32_t numThreads,
+      int32_t shared,
+      Stream* stream,
+      void** args) override;
+
   KernelInfo info(int32_t kernelIdx) override;
 
  private:
   CUmodule module_;
   std::vector<CUfunction> kernels_;
+  int64_t compileMs_;
 };
 
 namespace {
@@ -291,7 +304,7 @@ void CompiledModule::initialize() {
   ensureInit();
 }
 
-std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
+std::shared_ptr<CompiledModule> CompiledModule::create(KernelSpec& spec) {
   ensureInit();
   const char** headers = waveHeaderTextString.data();
   const char** headerNames = waveHeaderNameString.data();
@@ -311,6 +324,14 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
     numHeaders += spec.numHeaders;
   }
   nvrtcProgram prog;
+  std::string entryNames;
+  for (auto& name : spec.entryPoints) {
+    if (!entryNames.empty()) {
+      entryNames += ", ";
+    }
+    entryNames += name;
+  }
+  auto nvrtcStart = std::chrono::steady_clock::now();
   nvrtcCreateProgram(
       &prog,
       spec.code.c_str(), // buffer
@@ -336,9 +357,15 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
 
   if (compileResult != NVRTC_SUCCESS) {
     nvrtcDestroyProgram(&prog);
-    waveError(std::string("Cuda compilation error: ") + log);
+    auto errorMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - nvrtcStart)
+                       .count();
+    waveError(fmt::format("Cuda compilation error ({}ms): {}", errorMs, log));
   }
-  // Obtain PTX from the program.
+  auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - nvrtcStart)
+                       .count();
+  // Obtain PTX or CUBIN from the program.
   size_t codeSize;
   std::string code;
   if (FLAGS_cuda_ptx) {
@@ -355,6 +382,25 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
     const char* temp;
     nvrtcCheck(nvrtcGetLoweredName(prog, entry.c_str(), &temp));
     loweredNames.push_back(std::string(temp));
+  }
+  spec.loweredNames = loweredNames;
+  if (!spec.cubinPath.empty()) {
+    std::string cubin;
+    if (FLAGS_cuda_ptx) {
+      size_t cubinSize;
+      nvrtcCheck(nvrtcGetCUBINSize(prog, &cubinSize));
+      cubin.resize(cubinSize);
+      nvrtcCheck(nvrtcGetCUBIN(prog, cubin.data()));
+    } else {
+      cubin = code;
+    }
+    std::ofstream out(spec.cubinPath, std::ios::binary);
+    out.write(cubin.data(), cubin.size());
+    // Write lowered names so fromCubin can resolve entry points.
+    std::ofstream namesOut(spec.cubinPath + ".names");
+    for (auto& name : loweredNames) {
+      namesOut << name << "\n";
+    }
   }
 
   nvrtcDestroyProgram(&prog);
@@ -381,7 +427,33 @@ std::shared_ptr<CompiledModule> CompiledModule::create(const KernelSpec& spec) {
     funcs.emplace_back();
     CU_CHECK(cuModuleGetFunction(&funcs.back(), module, name.c_str()));
   }
-  return std::make_shared<CompiledModuleImpl>(module, std::move(funcs));
+  return std::make_shared<CompiledModuleImpl>(
+      module, std::move(funcs), elapsedMs);
+}
+
+// static
+std::shared_ptr<CompiledModule> CompiledModule::fromCubin(
+    const std::string& cubinPath,
+    const KernelSpec& spec) {
+  auto loadStart = std::chrono::steady_clock::now();
+  CUmodule module;
+  auto loadResult = cuModuleLoad(&module, cubinPath.c_str());
+  if (loadResult != CUDA_SUCCESS) {
+    const char* errStr;
+    cuGetErrorString(loadResult, &errStr);
+    waveError(
+        fmt::format("Error loading CUBIN from {}: {}", cubinPath, errStr));
+  }
+  std::vector<CUfunction> funcs;
+  for (auto& name : spec.loweredNames) {
+    funcs.emplace_back();
+    CU_CHECK(cuModuleGetFunction(&funcs.back(), module, name.c_str()));
+  }
+  auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - loadStart)
+                       .count();
+  return std::make_shared<CompiledModuleImpl>(
+      module, std::move(funcs), elapsedMs);
 }
 
 void CompiledModuleImpl::launch(
@@ -406,6 +478,27 @@ void CompiledModuleImpl::launch(
   CU_CHECK(result);
 };
 
+void CompiledModuleImpl::launchCooperative(
+    int32_t kernelIdx,
+    int32_t numBlocks,
+    int32_t numThreads,
+    int32_t shared,
+    Stream* stream,
+    void** args) {
+  auto result = cuLaunchCooperativeKernel(
+      kernels_[kernelIdx],
+      numBlocks,
+      1,
+      1, // grid dim
+      numThreads,
+      1,
+      1, // block dim
+      shared,
+      reinterpret_cast<CUstream>(stream->stream()->stream),
+      args);
+  CU_CHECK(result);
+};
+
 KernelInfo CompiledModuleImpl::info(int32_t kernelIdx) {
   KernelInfo info;
   auto f = kernels_[kernelIdx];
@@ -420,6 +513,7 @@ KernelInfo CompiledModuleImpl::info(int32_t kernelIdx) {
   info.maxOccupancy0 = max;
   cuOccupancyMaxActiveBlocksPerMultiprocessor(&max, f, 256, 256 * 32);
   info.maxOccupancy32 = max;
+  info.compileMs = compileMs_;
   return info;
 }
 

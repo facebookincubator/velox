@@ -234,6 +234,14 @@ struct Varchar {
   Varchar() {}
 };
 
+struct TimestampUtcT {
+  using type = Timestamp;
+
+  static constexpr const char* typeName = "timestamp utc";
+};
+
+using TimestampUtc = CustomType<TimestampUtcT>;
+
 // Type to use for inputs and outputs of simple functions with BigintEnum types.
 // E.g. arg_type<BigintEnum<E1>> and out_type<BigintEnum<E1>>.
 template <typename E>
@@ -297,6 +305,13 @@ struct CppToType<Varbinary> : public CppToTypeBase<TypeKind::VARBINARY> {};
 
 template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::INTEGER> {};
+
+template <>
+struct CppToType<TimestampUtc> : public CppToTypeBase<TypeKind::TIMESTAMP> {
+  static auto create() {
+    return TimestampUtcType::get();
+  }
+};
 
 template <typename T>
 struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
@@ -412,7 +427,7 @@ struct SimpleTypeTrait<CustomType<T, providesCustomComparison>>
   static constexpr bool isFixedWidth = physical_t::isFixedWidth;
 
   // This is different than the physical type name.
-  static constexpr char* name = T::typeName;
+  static constexpr const char* name = T::typeName;
 };
 
 /// MaterializeType template.

@@ -41,15 +41,20 @@ void BufferedWriterSink::write(char value) {
 }
 
 void BufferedWriterSink::write(const char* data, uint64_t size) {
-  // TODO Add logic for when size is larger than flushCount_
-  VELOX_CHECK_GE(
-      flushBufferSize_,
-      size,
-      "write data size exceeds flush buffer size limit");
-
   if (buf_->size() + size > flushBufferSize_) {
     flush();
   }
+
+  if (size > flushBufferSize_) {
+    // Oversized payload: grow the (now-empty) buffer to fit, fill it, then
+    // flush directly to the sink. flush() resets the buffer back to
+    // flushBufferSize_ on the way out via reserveBuffer().
+    buf_->reserve(size);
+    buf_->append(0, data, size);
+    flush();
+    return;
+  }
+
   buf_->append(buf_->size(), data, size);
 }
 

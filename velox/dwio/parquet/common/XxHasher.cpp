@@ -18,8 +18,7 @@
 
 #include "XxHasher.h"
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 namespace facebook::velox::parquet {
 

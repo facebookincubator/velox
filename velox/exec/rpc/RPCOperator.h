@@ -108,7 +108,8 @@ class RPCOperator : public exec::Operator {
  private:
   /// Flush accumulated batch rows via function_->flushBatch().
   /// Called when threshold is reached or at noMoreInput/drain time.
-  void flushBatchRequests();
+  /// @param maxRows Maximum rows to flush. 0 means flush all.
+  void flushBatchRequests(int32_t maxRows = 0);
 
   /// Build output RowVector from ready rows (PER_ROW mode).
   /// Supports multiple rows via batched drain for pipeline efficiency.
@@ -174,7 +175,7 @@ class RPCOperator : public exec::Operator {
   // This is a ceiling — the operator returns as soon as results are ready.
   // Batch LLM inference can take many minutes due to MetaGen queuing
   // and GPU scheduling, so the timeout needs generous headroom.
-  static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(1'800'000);
+  static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats.
   std::optional<uint64_t> blockWaitStartNs_;

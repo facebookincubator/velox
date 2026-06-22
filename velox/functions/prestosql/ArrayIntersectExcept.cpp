@@ -32,6 +32,10 @@ struct SetWithNull {
     return set.insert(decodedElements->valueAt<T>(offset)).second;
   }
 
+  void reserve(vector_size_t size) {
+    set.reserve(size);
+  }
+
   size_t count(const DecodedVector* decodedElements, vector_size_t offset)
       const {
     return set.count(decodedElements->valueAt<T>(offset));
@@ -95,6 +99,10 @@ struct SetWithNull<WrappedVectorEntry> {
     return set.insert(WrappedVectorEntry{hash, vector, index}).second;
   }
 
+  void reserve(vector_size_t size) {
+    set.reserve(size);
+  }
+
   size_t count(const DecodedVector* decodedElements, vector_size_t offset)
       const {
     const auto vector = decodedElements->base();
@@ -125,6 +133,7 @@ void generateSet(
   auto size = arrayVector->sizeAt(idx);
   auto offset = arrayVector->offsetAt(idx);
   rightSet.reset();
+  rightSet.reserve(size);
 
   for (vector_size_t i = offset; i < (offset + size); ++i) {
     if (arrayElements->isNullAt(i)) {
@@ -236,6 +245,7 @@ class ArraysIntersectSingleParam : public exec::VectorFunction {
         auto innerIdx = decodedInnerArray->index(i);
         auto innerOffset = innerArray->offsetAt(innerIdx);
         auto innerSize = innerArray->sizeAt(innerIdx);
+        intermediateSet.reserve(innerSize);
 
         // 3. Regular array
         for (auto j = innerOffset; j < (innerOffset + innerSize); ++j) {
@@ -369,6 +379,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       auto offset = baseLeftArray->offsetAt(idx);
 
       outputSet.reset();
+      outputSet.reserve(size);
       rawNewOffsets[row] = indicesCursor;
       // Scans the array elements on the left-hand side.
       for (vector_size_t i = offset; i < (offset + size); ++i) {

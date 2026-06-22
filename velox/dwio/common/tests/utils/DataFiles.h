@@ -19,8 +19,9 @@
 
 namespace facebook::velox::test {
 
+/// Returns the path to a test data file used by Velox tests.
 std::string getDataFilePath(
     const std::string& baseDir,
     const std::string& filePath);
 
-}
+} // namespace facebook::velox::test

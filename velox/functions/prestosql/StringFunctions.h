@@ -15,8 +15,7 @@
  */
 #pragma once
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/string/StringCore.h"

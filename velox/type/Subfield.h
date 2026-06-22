@@ -19,7 +19,7 @@
 #include <folly/hash/Hash.h>
 #include <ostream>
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Macros.h"
 

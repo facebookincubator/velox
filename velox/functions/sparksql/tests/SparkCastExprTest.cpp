@@ -16,10 +16,13 @@
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
+
 namespace facebook::velox::test {
 namespace {
 
@@ -33,7 +36,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
 
   void setAnsiSupport(bool value) {
     queryCtx_->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kSparkAnsiEnabled, std::to_string(value)}});
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          std::to_string(value)}});
   }
 
   void testBoolToTimestamp() {
@@ -1146,7 +1150,7 @@ TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
 TEST_F(SparkCastExprTestAnsiOn, testInvalidDate) {
   auto expected = [](const std::string& v) {
     return fmt::format(
-        "Cannot cast VARCHAR '{}' to DATE.  Unable to parse date value: \"{}\". "
+        "Cannot cast VARCHAR '{}' to DATE. Unable to parse date value: \"{}\". "
         "Valid date string patterns include ([y]y*, [y]y*-[m]m*, "
         "[y]y*-[m]m*-[d]d*, [y]y*-[m]m*-[d]d* *, "
         "[y]y*-[m]m*-[d]d*T*), and any pattern prefixed with [+-]",
@@ -1194,8 +1198,56 @@ TEST_F(SparkCastExprTestAnsiOn, stringToBoolean) {
   testInvalidString("nan");
 }
 
-TEST_F(SparkCastExprTestAnsiOn, stringToTimestamp) {
+TEST_F(SparkCastExprTest, stringToTimestampAdditionalValidForms) {
+  for (auto ansiEnabled : {false, true}) {
+    setAnsiSupport(ansiEnabled);
+
+    auto input = makeRowVector({makeFlatVector<std::string>({
+        "2000-01-01 12:21:56",
+        "2000-01-01T12:21:56",
+        " 2000-01-01 12:21:56 ",
+    })});
+
+    auto result =
+        evaluate<SimpleVector<Timestamp>>("cast(c0 as timestamp)", input);
+
+    ASSERT_FALSE(result->isNullAt(0));
+    ASSERT_FALSE(result->isNullAt(1));
+    ASSERT_FALSE(result->isNullAt(2));
+    EXPECT_EQ(result->valueAt(0), result->valueAt(1));
+    EXPECT_EQ(result->valueAt(0), result->valueAt(2));
+  }
+}
+
+TEST_F(SparkCastExprTest, tryCastStringToTimestampInvalid) {
+  for (auto ansiEnabled : {false, true}) {
+    setAnsiSupport(ansiEnabled);
+
+    auto input = makeRowVector(
+        {makeFlatVector<std::string>({"INVALID", "2012-Oct-01"})});
+
+    auto result =
+        evaluate<SimpleVector<Timestamp>>("try_cast(c0 as timestamp)", input);
+
+    ASSERT_TRUE(result->isNullAt(0));
+    ASSERT_TRUE(result->isNullAt(1));
+  }
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampValid) {
   testStringToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampInvalidThrows) {
+  auto testInvalidTimestamp = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate<SimpleVector<Timestamp>>("cast(c0 as timestamp)", input)),
+        "Unable to parse timestamp value");
+  };
+
+  testInvalidTimestamp("INVALID");
+  testInvalidTimestamp("2012-Oct-01");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
@@ -1503,7 +1555,8 @@ TEST_F(SparkCastExprTestAnsiOff, stringToBoolean) {
 
 TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
   testStringToTimestamp();
-  testCast<std::string, Timestamp>("timestamp", {"INVALID"}, {std::nullopt});
+  testCast<std::string, Timestamp>(
+      "timestamp", {"INVALID", "2012-Oct-01"}, {std::nullopt, std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, stringToDate) {
@@ -1673,6 +1726,28 @@ TEST_F(SparkCastExprTestAnsiOff, overflow) {
 
 TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
   testRecursiveTryCast();
+}
+
+// Verify that casting DATE to TIMESTAMP in a timezone where midnight falls in
+// a gap (nonexistent local time) does not throw. Spark adjusts to the
+// post-transition time instead.
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampTimezoneGap) {
+  // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
+  // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
+  // 1941-12-24 15:30:00 UTC.
+  setTimezone("Asia/Hong_Kong");
+  auto input = makeFlatVector<int32_t>({-10234}, DATE());
+  auto expected =
+      makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
+  testCast(input, expected);
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampTimezoneGap) {
+  setTimezone("Asia/Hong_Kong");
+  auto input = makeFlatVector<int32_t>({-10234}, DATE());
+  auto expected =
+      makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
+  testCast(input, expected);
 }
 } // namespace
 } // namespace facebook::velox::test

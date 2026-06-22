@@ -16,13 +16,13 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 
 #include <folly/dynamic.h>
+#include "velox/common/base/IoCounter.h"
 
 namespace facebook::velox::io {
 
@@ -41,72 +41,6 @@ struct OperationCounters {
   void merge(const OperationCounters& other);
 };
 
-class IoCounter {
- public:
-  IoCounter& operator=(const IoCounter& other) noexcept {
-    if (this != &other) {
-      count_.store(
-          other.count_.load(std::memory_order_relaxed),
-          std::memory_order_relaxed);
-      sum_.store(
-          other.sum_.load(std::memory_order_relaxed),
-          std::memory_order_relaxed);
-      min_.store(
-          other.min_.load(std::memory_order_relaxed),
-          std::memory_order_relaxed);
-      max_.store(
-          other.max_.load(std::memory_order_relaxed),
-          std::memory_order_relaxed);
-    }
-    return *this;
-  }
-
-  uint64_t count() const {
-    return count_;
-  }
-
-  uint64_t sum() const {
-    return sum_;
-  }
-
-  uint64_t min() const {
-    return min_;
-  }
-
-  uint64_t max() const {
-    return max_;
-  }
-
-  void increment(uint64_t amount) {
-    ++count_;
-    sum_ += amount;
-    casLoop(min_, amount, std::greater());
-    casLoop(max_, amount, std::less());
-  }
-
-  void merge(const IoCounter& other) {
-    sum_ += other.sum_;
-    count_ += other.count_;
-    casLoop(min_, other.min_, std::greater());
-    casLoop(max_, other.max_, std::less());
-  }
-
- private:
-  template <typename Compare>
-  static void
-  casLoop(std::atomic<uint64_t>& value, uint64_t newValue, Compare compare) {
-    uint64_t old = value;
-    while (compare(old, newValue) &&
-           !value.compare_exchange_weak(old, newValue)) {
-    }
-  }
-
-  std::atomic<uint64_t> count_{0};
-  std::atomic<uint64_t> sum_{0};
-  std::atomic<uint64_t> min_{std::numeric_limits<uint64_t>::max()};
-  std::atomic<uint64_t> max_{0};
-};
-
 class IoStatistics {
  public:
   uint64_t rawBytesRead() const;
@@ -114,7 +48,7 @@ class IoStatistics {
   uint64_t rawBytesWritten() const;
   uint64_t inputBatchSize() const;
   uint64_t outputBatchSize() const;
-  uint64_t totalScanTime() const;
+  uint64_t totalScanTimeNs() const;
   uint64_t writeIOTimeUs() const;
 
   uint64_t incRawBytesRead(int64_t);
@@ -122,7 +56,7 @@ class IoStatistics {
   uint64_t incRawBytesWritten(int64_t);
   uint64_t incInputBatchSize(int64_t);
   uint64_t incOutputBatchSize(int64_t);
-  uint64_t incTotalScanTime(int64_t);
+  uint64_t incTotalScanTimeNs(int64_t);
   uint64_t incWriteIOTimeUs(int64_t);
 
   IoCounter& prefetch() {
@@ -165,6 +99,16 @@ class IoStatistics {
     return coalescedStorageLoadLatencyUs_;
   }
 
+  /// Distribution of gaps (in bytes) between consecutive read regions
+  /// before coalescing. Measures data locality on disk.
+  IoCounter& readGap() {
+    return readGap_;
+  }
+
+  const IoCounter& readGap() const {
+    return readGap_;
+  }
+
   void incOperationCounters(
       const std::string& operation,
       const uint64_t resourceThrottleCount,
@@ -189,7 +133,7 @@ class IoStatistics {
   std::atomic<uint64_t> inputBatchSize_{0};
   std::atomic<uint64_t> outputBatchSize_{0};
   std::atomic<uint64_t> rawOverreadBytes_{0};
-  std::atomic<uint64_t> totalScanTime_{0};
+  std::atomic<uint64_t> totalScanTimeNs_{0};
   std::atomic<uint64_t> writeIOTimeUs_{0};
 
   // Planned read from storage or SSD.
@@ -225,6 +169,9 @@ class IoStatistics {
 
   // Time spent waiting for coalesced loads from remote storage
   IoCounter coalescedStorageLoadLatencyUs_;
+
+  // Gap between consecutive read regions before coalescing.
+  IoCounter readGap_;
 
   std::unordered_map<std::string, OperationCounters> operationStats_;
   mutable std::mutex operationStatsMutex_;

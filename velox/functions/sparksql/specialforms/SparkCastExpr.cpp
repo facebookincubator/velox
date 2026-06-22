@@ -16,6 +16,8 @@
 
 #include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 
+#include "velox/functions/sparksql/SparkQueryConfig.h"
+
 namespace facebook::velox::functions::sparksql {
 namespace {
 
@@ -31,7 +33,7 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& toType) {
   // String to Boolean, Integer, or Date types support ANSI mode.
   if (fromType->isVarchar()) {
-    if (toType->isBoolean() || toType->isDate()) {
+    if (toType->isBoolean() || toType->isTimestamp() || toType->isDate()) {
       return true;
     }
     if (isIntegralType(toType)) {
@@ -65,12 +67,9 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   // In Spark SQL (with ANSI mode off), both CAST and TRY_CAST behave like
   // Velox's try_cast, so we set 'isTryCast' to true when ANSI is disabled or
   // the specific cast operation doesn't support ANSI mode.
-  const bool isTryCast =
-      !config.sparkAnsiEnabled() || !isAnsiSupported(fromType, type);
+  const bool isTryCast = !SparkQueryConfig{config}.ansiEnabled() ||
+      !isAnsiSupported(fromType, type);
 
-  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
-  // The distinction is controlled by the 'allowOverflow' flag in
-  // SparkCastHooks.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
@@ -90,7 +89,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       "TRY_CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
 
-  // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),

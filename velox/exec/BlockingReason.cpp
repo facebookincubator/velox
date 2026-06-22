@@ -16,6 +16,8 @@
 
 #include "velox/exec/BlockingReason.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::exec {
 
 namespace {

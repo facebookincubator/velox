@@ -14,6 +14,7 @@
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
+add_subdirectory(Lemire)
 add_subdirectory(wrap)
 
 if(${VELOX_BUILD_TESTING})
@@ -88,6 +89,7 @@ velox_add_library(
   DirectInputStream.h
   ErrorTolerance.h
   ExecutorBarrier.h
+  FileMetadata.h
   FileSink.h
   FilterNode.h
   FlatMapHelper.h
@@ -103,6 +105,7 @@ velox_add_library(
   OnDemandUnitLoader.h
   Options.h
   OutputStream.h
+  ParquetFieldId.h
   ParallelFor.h
   ParallelUnitLoader.h
   PositionProvider.h

@@ -36,6 +36,7 @@ HiveConnector::HiveConnector(
     folly::Executor* ioExecutor)
     : Connector(id, std::move(config)),
       hiveConfig_(std::make_shared<HiveConfig>(connectorConfig())),
+      configProvider_(id, connectorConfig().get()),
       fileHandleFactory_(
           hiveConfig_->isFileHandleCacheEnabled()
               ? std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
@@ -56,8 +57,7 @@ HiveConnector::HiveConnector(
 }
 
 const config::ConfigProvider* HiveConnector::configProvider() const {
-  static const HiveConfigProvider kProvider;
-  return &kProvider;
+  return &configProvider_;
 }
 
 std::unique_ptr<DataSource> HiveConnector::createDataSource(
