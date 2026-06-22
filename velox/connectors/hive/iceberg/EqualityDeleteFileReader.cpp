@@ -217,7 +217,8 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
           deleteSplit->partitionKeys,
           {},
           fileConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
+              connectorQueryCtx->sessionProperties()),
+          deleteSplit->fileFormat)) {
     runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
     return;
   }

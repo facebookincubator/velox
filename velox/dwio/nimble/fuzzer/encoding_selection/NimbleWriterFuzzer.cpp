@@ -1254,7 +1254,7 @@ struct ExpectedNodeStats {
       const {
     bool hasNull = nullCount > 0;
     if (integralMin.has_value()) {
-      return std::make_unique<velox::dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<velox::dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -1499,10 +1499,10 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
         options_.seed);
 
     auto* actualInt =
-        dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(
+        dynamic_cast<velox::dwio::common::IntegerColumnStatistics<>*>(
             actual.get());
     auto* expectedInt =
-        dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(
+        dynamic_cast<velox::dwio::common::IntegerColumnStatistics<>*>(
             expectedCommon.get());
     if (actualInt != nullptr && expectedInt != nullptr &&
         expectedInt->getMinimum().has_value()) {

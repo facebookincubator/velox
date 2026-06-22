@@ -34,7 +34,7 @@ std::unique_ptr<ColumnStatistics> buildColumnStatisticsFromProto(
   if (!stats.hasNumberOfValues() || stats.numberOfValues() > 0) {
     if (stats.hasIntStatistics()) {
       const auto& intStats = stats.intStatistics();
-      return std::make_unique<IntegerColumnStatistics>(
+      return std::make_unique<IntegerColumnStatistics<>>(
           colStats,
           intStats.hasMinimum() ? std::optional(intStats.minimum())
                                 : std::nullopt,

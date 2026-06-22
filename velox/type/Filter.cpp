@@ -932,6 +932,19 @@ bool HugeintValuesUsingHashTable::testInt128(const int128_t& value) const {
   return values_.contains(value);
 }
 
+bool HugeintValuesUsingHashTable::testInt128Range(
+    const int128_t& min,
+    const int128_t& max,
+    bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+  if (min == max) {
+    return testInt128(min);
+  }
+  return min <= max_ && max >= min_;
+}
+
 bool HugeintValuesUsingHashTable::testingEquals(const Filter& other) const {
   if (const auto* otherHugeintValues =
           Filter::testingBaseEquals<HugeintValuesUsingHashTable>(other)) {

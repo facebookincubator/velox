@@ -1204,6 +1204,9 @@ class HugeintValuesUsingHashTable final : public Filter {
 
   bool testInt128(const int128_t& value) const final;
 
+  bool testInt128Range(const int128_t& min, const int128_t& max, bool hasNull)
+      const final;
+
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
