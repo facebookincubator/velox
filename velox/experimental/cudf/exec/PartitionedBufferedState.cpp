@@ -23,7 +23,7 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 // Avoid spinning forever when a single partition key cannot be split.
-constexpr uint32_t kMaxSplitSeedAttempts = 64;
+constexpr uint32_t kMaxSplitSeedAttempts = 4;
 
 bool nodeEmpty(const PartitionedBufferedState::Node& node) {
   if (node.isLeaf()) {

@@ -557,8 +557,21 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
     }
 
     if (!owner_.isSingleStep_) {
-      // kFinal aggregation step can avoid one initial compaction because the
-      // input and buffered result type are the same but possibly permuted.
+      // kFinal aggregation step
+      // Here we can avoid one initial compaction because the input and buffered
+      // result type are the same but possibly permuted.
+      //
+      // Note: When the input batch has low cardinality, this can result in an
+      // InputChunk that doesn't split easily when needed in
+      // PartitionedBufferedState::splitLeafAndAddInput. But that's okay because
+      // it's rare that we get low cardinality data that is not sufficiently
+      // compacted in the partial aggregation step that always precedes a final
+      // aggregation operator. Avoiding an additional groupby here is more
+      // important for performance reasons
+
+      // TODO (dm): Investigate introspecting the batch data with lightweight
+      // functions like HLL to see if we can made a dynamic runtime decision on
+      // pre-compacting the input.
       return makeBorrowedChunk(
           std::move(rawInput), owner_.bufferedResultType_, permutedInputView);
     }
@@ -607,9 +620,6 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       return std::vector<InputChunk>(spec.numPartitions);
     }
 
-    std::vector<rmm::cuda_stream_view> inputStreams{input.stream};
-    cudf::detail::join_streams(inputStreams, input.stream);
-
     auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
         input.view,
         spec.keyIndices,
@@ -642,8 +652,6 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
       }
     }
 
-    CudaEvent event(cudaEventDisableTiming);
-    streamsWaitForStream(event, inputStreams, input.stream);
     return chunks;
   }
 
