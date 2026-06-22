@@ -79,7 +79,7 @@ Expected<Timestamp> SparkCastHooks::castNumberToTimestamp(
 }
 
 Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
-  return castNumberToTimestamp(seconds, !config_.sparkAnsiEnabled());
+  return castNumberToTimestamp(seconds, allowOverflow_);
 }
 
 Expected<int64_t> SparkCastHooks::castTimestampToInt(
@@ -94,7 +94,7 @@ Expected<int64_t> SparkCastHooks::castTimestampToInt(
 
 Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     double value) const {
-  if (!config_.sparkAnsiEnabled()) {
+  if (allowOverflow_) {
     if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
       return std::nullopt;
     }

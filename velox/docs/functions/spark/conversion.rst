@@ -336,37 +336,78 @@ Cast to Timestamp
 From integral types
 ^^^^^^^^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting integral value to timestamp type is allowed.
-The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
+The input value is treated as the number of seconds since the epoch
+(`1970-01-01 00:00:00 UTC`).
+
+When ANSI mode is disabled, overflow is allowed and the result is saturated
+to the minimum or maximum representable timestamp.
+
+When ANSI mode is enabled, overflow throws an error.
+
 Supported types are tinyint, smallint, integer and bigint.
 
 Valid example
 
 ::
 
-  SELECT cast(0 as timestamp); -- 1970-01-01 00:00:00
-  SELECT cast(1727181032 as timestamp); -- 2024-09-24 12:30:32
-  SELECT cast(9223372036855 as timestamp); -- 294247-01-10 04:00:54.775807
-  SELECT cast(-9223372036855 as timestamp); -- 290308-12-21 19:59:05.224192
+SELECT cast(0 as timestamp); -- 1970-01-01 00:00:00
+SELECT cast(1727181032 as timestamp); -- 2024-09-24 12:30:32
+SELECT cast(-1727181032 as timestamp); -- 1915-04-09 11:29:28
+
+Overflow examples
+
+::
+
+SELECT cast(9223372036855 as timestamp); -- 294247-01-10 04:00:54.775807 (ANSI OFF) / ERROR (ANSI ON)
+SELECT cast(-9223372036855 as timestamp); -- -290308-12-21 19:59:05.224192 (ANSI OFF) / ERROR (ANSI ON)
 
 From floating-point types
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting from floating-point input to timestamp type is allowed.
-The input value is treated as the number of seconds since the epoch (1970-01-01 00:00:00 UTC) and converted to microseconds by truncating the fractional part.
+The input value is treated as the number of seconds since the epoch
+(`1970-01-01 00:00:00 UTC`) and converted to microseconds by truncating
+the fractional part.
+
+When ANSI mode is disabled:
+
+* overflow is allowed and the result is saturated to the minimum or maximum
+  representable timestamp
+* `NaN` and `Infinity` return NULL
+
+When ANSI mode is enabled:
+
+* overflow throws an error
+* malformed floating-point values such as `NaN` and `Infinity` throw an
+  error
 
 Valid examples
 
 ::
 
-  SELECT cast(0.0 as timestamp); -- 1970-01-01 00:00:00
-  SELECT cast(1727181032.0 as timestamp); -- 2024-09-24 12:30:32
-  SELECT cast(-1727181032.0 as timestamp); -- 1915-04-09 11:29:28
-  SELECT cast(cast(9223372036855.999 as double) as timestamp); -- 294247-01-10 04:00:54.775807
-  SELECT cast(cast(-9223372036856.999 as double) as timestamp); -- -290308-12-21 19:59:05.224192
-  SELECT cast(cast(1.79769e+308 as double) as timestamp); -- 294247-01-10 04:00:54.775807
-  SELECT cast(cast('inf' as double) as timestamp); -- NULL
-  SELECT cast(cast('nan' as double) as timestamp); -- NULL
+SELECT cast(0.0 as timestamp); -- 1970-01-01 00:00:00
+SELECT cast(1727181032.0 as timestamp); -- 2024-09-24 12:30:32
+SELECT cast(-1727181032.0 as timestamp); -- 1915-04-09 11:29:28
+
+Overflow examples
+
+::
+
+SELECT cast(cast(9223372036855.999 as double) as timestamp); -- 294247-01-10 04:00:54.775807 (ANSI OFF) / ERROR (ANSI ON)
+SELECT cast(cast(-9223372036856.999 as double) as timestamp); -- -290308-12-21 19:59:05.224192 (ANSI OFF) / ERROR (ANSI ON)
+SELECT cast(cast(1.79769e+308 as double) as timestamp); -- 294247-01-10 04:00:54.775807 (ANSI OFF) / ERROR (ANSI ON)
+
+Malformed examples
+
+::
+
+SELECT cast(cast('inf' as double) as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+SELECT cast(cast('nan' as double) as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From boolean
 ^^^^^^^^^^^^
