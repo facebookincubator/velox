@@ -20,7 +20,7 @@
 #
 #   A  dram        DRAM pool capped, on-disk spill    (swept over DRAM_MB_LIST)
 #   B  interleave  pages striped across DRAM + CXL    (swept over WEIGHTS_LIST)
-#   C  cxl         CxlHashAggregation, relocate to CXL (swept over DRAM_MB_LIST)
+#   C  cxl         HashAggregation relocate to CXL    (swept over DRAM_MB_LIST)
 #
 # B's ratio sweep uses weighted interleave (MPOL_WEIGHTED_INTERLEAVE, Linux
 # 6.9+, numactl with --weighted-interleave); weights are written to

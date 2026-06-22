@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Provides the libnuma-backed allocator and resource that register the CXL
+# memory tier. The relocate path is compiled into core velox_exec under
+# VELOX_ENABLE_CXL and selected at runtime by a customPool("cxl") tier; the tag
+# constant (CxlResourceTag.h) is shared with core.
 velox_add_library(
   velox_experimental_cxl
   CxlMemoryAllocator.cpp
@@ -19,12 +23,13 @@ velox_add_library(
   HEADERS
   CxlMemoryAllocator.h
   CxlMemoryResource.h
+  CxlResourceTag.h
 )
 
 # libnuma backs CxlMemoryAllocator's page binding (numa_tonode_memory). The
-# parent CMakeLists only builds this subdirectory on Linux.
-# TODO: Promote this to CMake/FindNuma.cmake and add libnuma-dev / numactl-devel
-# to the setup scripts.
+# parent CMakeLists only builds this subdirectory on Linux, and the setup
+# scripts install libnuma-dev (Debian/Ubuntu) / numactl-devel (RHEL/CentOS).
+# TODO: Promote this to CMake/FindNuma.cmake.
 find_library(NUMA_LIBRARY numa)
 if(NOT NUMA_LIBRARY)
   message(
@@ -38,21 +43,6 @@ endif()
 # velox_experimental_cxl target is an alias to velox, on which a raw
 # target_link_libraries() is rejected.
 velox_link_libraries(velox_experimental_cxl velox_memory ${NUMA_LIBRARY})
-
-# CxlHashAggregation pulls in the exec layer (HashAggregation, DriverAdapter),
-# so it lives in its own target to keep the allocator/resource library free of
-# a velox_exec dependency.
-velox_add_library(
-  velox_experimental_cxl_exec
-  CxlHashTable.cpp
-  CxlHashAggregation.cpp
-  CxlDriverAdapter.cpp
-  HEADERS
-  CxlHashTable.h
-  CxlHashAggregation.h
-  CxlDriverAdapter.h
-)
-velox_link_libraries(velox_experimental_cxl_exec velox_experimental_cxl velox_exec)
 
 if(VELOX_BUILD_TESTING)
   add_subdirectory(tests)

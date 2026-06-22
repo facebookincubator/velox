@@ -82,12 +82,10 @@ if(VELOX_ENABLE_TORCHWAVE)
   add_subdirectory(experimental/torchwave)
 endif()
 
+# VELOX_ENABLE_CXL is forced off on non-Linux platforms by its
+# cmake_dependent_option declaration, so the Linux-only guard lives there.
 if(VELOX_ENABLE_CXL)
-  if(UNIX AND NOT APPLE)
-    add_subdirectory(experimental/cxl)
-  else()
-    message(WARNING "VELOX_ENABLE_CXL is only supported on Linux; skipping experimental/cxl.")
-  endif()
+  add_subdirectory(experimental/cxl)
 endif()
 
 if(${VELOX_BUILD_TESTING})

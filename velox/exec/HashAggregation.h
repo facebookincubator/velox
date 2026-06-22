@@ -64,7 +64,8 @@ class HashAggregation : public Operator {
   bool isFinished() override;
 
   /// HashAggregation can reclaim memory via lightweight compaction even when
-  /// spilling is not enabled.
+  /// spilling is not enabled. Relocation to a memory tier rides on the spill
+  /// reclaim path, so 'canSpill()' already covers it.
   bool canReclaim() const override {
     return (memoryCompactionEnabled_ && hasCompactableAggregates_) ||
         canSpill();
@@ -75,22 +76,13 @@ class HashAggregation : public Operator {
 
   void close() override;
 
- protected:
-  // For a subclass that replaces a HashAggregation in the same plan node:
-  // 'operatorType' sets a distinct stats/pool label so it does not collide with
-  // the replaced operator (the pool name is keyed by operator type).
-  HashAggregation(
-      int32_t operatorId,
-      DriverCtx* driverCtx,
-      const std::shared_ptr<const core::AggregationNode>& aggregationNode,
-      std::string_view operatorType);
-
-  // The GroupingSet, or null before initialize().
-  GroupingSet* groupingSet() const {
-    return groupingSet_.get();
-  }
-
  private:
+  // Returns the CXL tier pool to relocate the payload into, or nullptr when no
+  // tier is configured or the aggregation shape forbids a byte-copy relocation.
+  memory::MemoryPool* relocationPoolForAggregation(
+      const std::vector<std::unique_ptr<VectorHasher>>& hashers,
+      const std::vector<AggregateInfo>& aggregateInfos) const;
+
   void updateRuntimeStats();
 
   void prepareOutput(vector_size_t size);
@@ -145,6 +137,11 @@ class HashAggregation : public Operator {
   // Stored separately to allow safe access from the arbitration thread without
   // dereferencing groupingSet_.
   bool hasCompactableAggregates_{false};
+
+  // The CXL tier pool that reclaim() relocates the payload into instead of disk
+  // spilling, or nullptr when no tier is configured or the aggregation shape
+  // forbids a byte-copy relocation. Set during initialize().
+  memory::MemoryPool* relocationPool_{nullptr};
 
   // Size of a single output row estimated using
   // 'groupingSet_->estimateRowSize()'. If spilling, this value is set to max

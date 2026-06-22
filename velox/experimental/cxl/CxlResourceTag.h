@@ -13,13 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
+
+#include <string_view>
 
 namespace facebook::velox::cxl {
 
-/// Installs a DriverAdapter that, for a query carrying a CXL tier, swaps
-/// operators for their CXL variants. The adapter checks the CXL tier once, then
-/// tries each known per-operator replacement. Call once at startup.
-void registerCxlDriverAdapter();
+/// Tag identifying the CXL memory tier: used to register the resource with
+/// memory::CustomMemoryResourceRegistry, to build a per-query tier pool via
+/// MemoryManager::addCustomRootPool, and by HashAggregation to resolve that
+/// pool with customPool() and relocate its payload to it.
+inline constexpr std::string_view kCxlResourceTag{"cxl"};
 
 } // namespace facebook::velox::cxl

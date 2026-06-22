@@ -462,6 +462,15 @@ class BaseHashTable {
   /// join use.
   virtual std::vector<RowContainer*> allRows() const = 0;
 
+  /// Relocates the payload rows of 'rows()' into a container allocated from
+  /// 'pool', repointing the index in place (no rehash), and returns the
+  /// destination container. Repeated calls append into the same destination.
+  /// Only supported for fixed-width, no-duplicate, no-external-memory tables
+  /// (e.g. a group-by aggregation payload), where it lets a tiering layer keep
+  /// overflow in another memory pool while the index stays live; throws
+  /// otherwise.
+  virtual RowContainer* relocatePayload(memory::MemoryPool* pool);
+
   /// Static functions for processing internals. Public because used in
   /// structs that define probe and insert algorithms.
 
@@ -775,29 +784,7 @@ class HashTable : public BaseHashTable {
 
   std::vector<RowContainer*> allRows() const override;
 
-  /// Takes ownership of a payload row container to be indexed alongside
-  /// 'rows_'. rehash() reindexes it, and allRows(), numRowContainers(),
-  /// listRows() and clear() span it just as they do the sub-tables of a
-  /// parallel join build. 'container' must share this table's row layout.
-  /// Returns a borrowed pointer to the registered container. Lets a tiering
-  /// layer relocate rows out of 'rows_' into another memory pool (e.g. far
-  /// memory) and keep them in the index without a rehash.
-  RowContainer* addOtherRowContainer(std::unique_ptr<RowContainer> container);
-
-  /// The payload row containers registered via addOtherRowContainer().
-  const std::vector<std::unique_ptr<RowContainer>>& otherRowContainers() const {
-    return otherRowContainers_;
-  }
-
-  /// Rewrites every live row pointer in the index by passing it through 'map'
-  /// and storing the result, leaving tags and slot positions unchanged. 'map'
-  /// must return a valid row pointer for every input and the identity for rows
-  /// that did not move; in bucketed mode the result must fit in 48 bits. This
-  /// repoints the index after rows have been relocated to new addresses (e.g. a
-  /// far-memory tier or a compacted container) without the cost of a rehash.
-  /// Advanced: a 'map' that returns a wrong address silently corrupts the
-  /// table. Pair with addOtherRowContainer() to relocate rows without a rehash.
-  void remapRowPointers(folly::FunctionRef<char*(char*)> map);
+  RowContainer* relocatePayload(memory::MemoryPool* pool) override;
 
   std::string toString() override;
 
@@ -840,6 +827,21 @@ class HashTable : public BaseHashTable {
   }
 
  private:
+  // Takes ownership of a payload row container indexed alongside 'rows_'.
+  // rehash() reindexes it, and allRows(), numRowContainers(), listRows() and
+  // clear() span it just as they do the sub-tables of a parallel join build.
+  // 'container' must share this table's row layout. Returns a borrowed pointer
+  // to the registered container.
+  RowContainer* addOtherRowContainer(std::unique_ptr<RowContainer> container);
+
+  // Rewrites every live row pointer in the index by passing it through 'map'
+  // and storing the result, leaving tags and slot positions unchanged. 'map'
+  // must return a valid row pointer for every input and the identity for rows
+  // that did not move; in bucketed mode the result must fit in 48 bits.
+  // Repoints the index after rows are relocated to new addresses without a
+  // rehash. A 'map' that returns a wrong address silently corrupts the table.
+  void remapRowPointers(folly::FunctionRef<char*(char*)> map);
+
   // Enables debug stats for collisions for debug build.
 #ifdef NDEBUG
   static constexpr bool kTrackLoads = false;

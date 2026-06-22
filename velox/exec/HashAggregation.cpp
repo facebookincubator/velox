@@ -22,35 +22,36 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
+#ifdef VELOX_ENABLE_CXL
+#include "velox/experimental/cxl/CxlResourceTag.h"
+#endif
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
+
+namespace {
+std::string_view aggregationOperatorType(core::AggregationNode::Step step) {
+  return step == core::AggregationNode::Step::kPartial
+      ? OperatorType::kPartialAggregation
+      : OperatorType::kAggregation;
+}
+} // namespace
 
 HashAggregation::HashAggregation(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::AggregationNode>& aggregationNode)
-    : HashAggregation(
-          operatorId,
-          driverCtx,
-          aggregationNode,
-          aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? OperatorType::kPartialAggregation
-              : OperatorType::kAggregation) {}
-
-HashAggregation::HashAggregation(
-    int32_t operatorId,
-    DriverCtx* driverCtx,
-    const std::shared_ptr<const core::AggregationNode>& aggregationNode,
-    std::string_view operatorType)
     : Operator(
           driverCtx,
           aggregationNode->outputType(),
           operatorId,
           aggregationNode->id(),
-          operatorType,
+          aggregationOperatorType(aggregationNode->step()),
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId, operatorType)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    aggregationOperatorType(aggregationNode->step()))
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
@@ -66,6 +67,37 @@ HashAggregation::HashAggregation(
           driverCtx->queryConfig().abandonPartialAggregationMinPct()),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
+
+memory::MemoryPool* HashAggregation::relocationPoolForAggregation(
+    [[maybe_unused]] const std::vector<std::unique_ptr<VectorHasher>>& hashers,
+    [[maybe_unused]] const std::vector<AggregateInfo>& aggregateInfos) const {
+#ifdef VELOX_ENABLE_CXL
+  // Relocation reuses the spill reclaim machinery (reservation window and
+  // arbitration trigger), swapping disk for the tier as the destination, so it
+  // is only available when spill is enabled.
+  if (!canSpill()) {
+    return nullptr;
+  }
+  auto* tierPool = customPool(cxl::kCxlResourceTag);
+  if (tierPool == nullptr || isGlobal_ || isDistinct_ || isPartialOutput_ ||
+      aggregationNode_->ignoreNullKeys()) {
+    return nullptr;
+  }
+  for (const auto& hasher : hashers) {
+    if (!hasher->type()->isFixedWidth()) {
+      return nullptr;
+    }
+  }
+  for (const auto& info : aggregateInfos) {
+    if (info.function->accumulatorUsesExternalMemory()) {
+      return nullptr;
+    }
+  }
+  return tierPool;
+#else
+  return nullptr;
+#endif
+}
 
 void HashAggregation::initialize() {
   Operator::initialize();
@@ -115,6 +147,8 @@ void HashAggregation::initialize() {
         aggregationNode_->groupId().value()->name());
     VELOX_CHECK(groupIdChannel.has_value());
   }
+
+  relocationPool_ = relocationPoolForAggregation(hashers, aggregateInfos);
 
   groupingSet_ = std::make_unique<GroupingSet>(
       inputType,
@@ -527,6 +561,18 @@ void HashAggregation::reclaim(
         return;
       }
     }
+  }
+
+  if (relocationPool_ != nullptr) {
+    // Relocate to the memory tier instead of disk spilling; falling through to
+    // spill would see only the DRAM container and drop the relocated rows.
+    // Skip during output draining: moving rows would re-emit already-output
+    // groups.
+    if (!noMoreInput_) {
+      groupingSet_->relocate(relocationPool_);
+      pool()->release();
+    }
+    return;
   }
 
   if (!canSpill()) {

@@ -24,23 +24,24 @@
 //
 // The same input runs across memory-placement configurations to measure whether
 // building the table in DRAM and relocating to CXL under pressure (the
-// CxlHashAggregation operator) beats the alternatives:
+// HashAggregation relocate path) beats the alternatives:
 //
-//   --config=dram       Stock HashAggregation, DRAM pool capped at
-//                       --dram_limit_mb, on-disk spill enabled. The "no CXL"
-//                       competitor. Set a cap above the group table for the
-//                       no-pressure DRAM speed ceiling.
-//   --config=interleave Stock HashAggregation, uncapped; run the process under
+//   --config=dram       HashAggregation, DRAM pool capped at --dram_limit_mb,
+//                       on-disk spill enabled. The "no CXL" competitor. Set a
+//                       cap above the group table for the no-pressure DRAM
+//                       speed ceiling.
+//   --config=interleave HashAggregation, uncapped; run the process under
 //                       'numactl --interleave=0,<cxl_node>' so the OS stripes
 //                       pages across DRAM and CXL.
-//   --config=cxl        CxlHashAggregation with a real CXL pool; DRAM pool
-//                       capped (same as 'dram'), spill enabled. reclaim()
-//                       relocates to CXL first, spilling to disk only if the
-//                       CXL pool is exhausted.
+//   --config=cxl        HashAggregation with a real CXL tier pool registered on
+//                       the query (customPool "cxl"); DRAM pool capped (same as
+//                       'dram'). Under pressure reclaim() relocates the payload
+//                       to CXL instead of disk spilling (either/or); if the CXL
+//                       pool is exhausted the query fails rather than spilling.
 //
-// Each config is meant to run as a separate process (the DriverAdapter that
-// installs CxlHashAggregation is process-global and registered only for 'cxl',
-// and the numactl policy differs per config). See run_cxl_benchmark.sh.
+// Each config is meant to run as a separate process (the numactl policy differs
+// per config, and the 'cxl' config registers a per-query CXL tier pool). See
+// run_cxl_benchmark.sh.
 
 #include <algorithm>
 #include <cmath>
@@ -58,13 +59,13 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/GroupingSet.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/experimental/cxl/CxlDriverAdapter.h"
-#include "velox/experimental/cxl/CxlHashAggregation.h"
 #include "velox/experimental/cxl/CxlMemoryResource.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -119,6 +120,11 @@ using exec::test::PlanBuilder;
 
 namespace {
 
+// Counts GroupingSet::relocate() calls (DRAM -> CXL relocations) across a
+// trial, incremented by a TestValue hook registered in main(). Reset before
+// each trial.
+std::atomic<int64_t> gRelocations{0};
+
 // Per-trial measurements pulled from the finished task's stats.
 struct TrialMetrics {
   uint64_t elapsedMs{0};
@@ -171,8 +177,8 @@ core::PlanNodePtr buildPlan(const std::vector<RowVectorPtr>& input) {
   // Parallel plan: each disjoint input slice is read by its own (single-driver)
   // source pipeline, then 'localPartition' repartitions the rows by key so each
   // of the 'num_drivers' consumer drivers sees every row for the keys it owns
-  // and runs a complete aggregation. Equivalent result to the serial plan; the
-  // DriverAdapter still swaps the complete aggregation for CxlHashAggregation.
+  // and runs a complete aggregation. Equivalent result to the serial plan; each
+  // complete aggregation relocates to the CXL tier under pressure.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   const auto chunks = splitInput(input, FLAGS_num_drivers);
   std::vector<core::PlanNodePtr> sources;
@@ -396,7 +402,7 @@ TrialMetrics runTrial(
     params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
   }
 
-  cxl::resetCxlHashAggregationCounters();
+  gRelocations.store(0, std::memory_order_relaxed);
   auto [cursor, results] = exec::test::readCursor(
       params, [](exec::TaskCursor* cursor) { cursor->setNoMoreSplits(); });
   exec::test::waitForTaskCompletion(
@@ -404,7 +410,7 @@ TrialMetrics runTrial(
 
   TrialMetrics metrics;
   collectOperatorStats(cursor->task()->taskStats(), metrics);
-  metrics.migrations = cxl::numCxlPartitionsMigrated();
+  metrics.migrations = gRelocations.load(std::memory_order_relaxed);
   accumulateResult(results, metrics);
   return metrics;
 }
@@ -513,10 +519,15 @@ int main(int argc, char** argv) {
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
 
-  // Install the operator swap only for the CXL config; the other configs must
-  // run the stock HashAggregation.
+  // The CXL config relocates inside HashAggregation when a "cxl" tier pool is
+  // present on the query (configured per trial). Count relocations via a
+  // TestValue hook for reporting.
   if (isCxlConfig()) {
-    cxl::registerCxlDriverAdapter();
+    common::testutil::TestValue::enable();
+    common::testutil::TestValue::set<exec::GroupingSet>(
+        "facebook::velox::exec::GroupingSet::relocate", [](exec::GroupingSet*) {
+          gRelocations.fetch_add(1, std::memory_order_relaxed);
+        });
   }
 
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(

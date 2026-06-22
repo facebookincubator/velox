@@ -13,18 +13,17 @@
 # limitations under the License.
 
 # Aggregation microbenchmark: runs a grouping aggregation over a synthesized
-# Zipf key stream through the exec stack with the CXL operator, so it pulls in
-# the exec test harness and the prestosql aggregate functions on top of the CXL
-# operator library. External deps are listed explicitly (rather than left to
-# propagate through the velox mono library) so the link does not reference
-# bundled dependency archives by a path with no build rule. NUMA_LIBRARY is
-# resolved by the parent experimental/cxl CMakeLists.
+# Zipf key stream through the stock exec stack with a CXL tier pool configured,
+# exercising the core relocate path. It links velox_experimental_cxl for the
+# libnuma-backed CXL resource (the real tier). External deps are listed
+# explicitly (rather than left to propagate through the velox mono library) so
+# the link does not reference bundled dependency archives by a path with no
+# build rule. NUMA_LIBRARY is resolved by the parent experimental/cxl CMakeLists.
 add_executable(velox_cxl_aggregation_benchmark CxlAggregationBenchmark.cpp)
 
 target_link_libraries(
   velox_cxl_aggregation_benchmark
   PRIVATE
-    velox_experimental_cxl_exec
     velox_experimental_cxl
     velox_aggregates
     velox_exec

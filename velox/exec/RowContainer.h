@@ -751,12 +751,6 @@ class RowContainer {
     normalizedKeySize_ = 0;
   }
 
-  /// The size in bytes of the normalized-key prefix stored in the word below
-  /// each row, or 0 if normalized keys are disabled.
-  int normalizedKeySize() const {
-    return normalizedKeySize_;
-  }
-
   RowColumn columnAt(int32_t index) const {
     return rowColumns_[index];
   }
@@ -819,12 +813,6 @@ class RowContainer {
     return nextOffset_;
   }
 
-  /// True if rows reference variable-width or otherwise out-of-line data that a
-  /// plain byte copy of the fixed row would not move.
-  bool usesExternalMemory() const {
-    return usesExternalMemory_;
-  }
-
   /// Creates a next-row-vector if it doesn't exist. Appends the row address to
   /// the next-row-vector, and store the address of the next-row-vector in the
   /// 'nextOffset_' slot for all duplicate rows.
@@ -862,6 +850,25 @@ class RowContainer {
   /// Resets the state to be as after construction. Frees memory for payload.
   void clear();
 
+  /// Returns an empty container allocated from 'pool' with the identical row
+  /// layout as 'this' (keys, accumulators, dependent columns and flags). Used
+  /// to build a relocation destination in another memory pool without the
+  /// caller re-supplying the original construction arguments.
+  std::unique_ptr<RowContainer> cloneEmpty(memory::MemoryPool* pool) const;
+
+  /// Moves the payload of 'this' into the empty 'dest' by cloning the backing
+  /// allocation runs byte for byte (so every row shifts by a constant per-run
+  /// delta), carries the per-column stats and row bookkeeping over, empties
+  /// 'this', and returns the per-run relocations (sorted by source address) so
+  /// the caller can repoint references into the moved rows. Both containers
+  /// must share an identical fixed layout and hold no variable-width or
+  /// external data, no duplicate-row links and no free rows (e.g. a group-by
+  /// aggregation payload); throws otherwise. Lets a tiering layer relocate the
+  /// payload into another memory pool while a hash table repoints its index
+  /// without a rehash.
+  std::vector<memory::AllocationPool::Relocation> relocateRunsTo(
+      RowContainer& dest);
+
   int32_t compareRows(
       const char* left,
       const char* right,
@@ -894,13 +901,6 @@ class RowContainer {
   /// 'columnIndex'. nullopt will be returned if the column stats was previous
   /// invalidated. Any row erase operations will invalidate column stats.
   std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
-
-  /// Merges 'source' per-column stats into this container's, column by column.
-  /// Both containers must share the same column layout. A byte-copy migration
-  /// preserves each row's null flag but not the aggregated per-column stats
-  /// that columnHasNulls() and the null-aware extract path rely on; this
-  /// carries those over. A no-op if either container has invalidated stats.
-  void mergeColumnStats(const RowContainer& source);
 
   uint32_t columnNullCount(int32_t columnIndex) const {
     return rowColumnsStats_[columnIndex].nullCount();
@@ -987,6 +987,10 @@ class RowContainer {
  private:
   // Offset of the pointer to the next free row on a free row.
   static constexpr int32_t kNextFreeOffset = 0;
+
+  // Merges 'source' per-column stats into this container's. Both must share the
+  // column layout. A no-op if either side has invalidated stats.
+  void mergeColumnStats(const RowContainer& source);
 
   template <typename T>
   static inline T valueAt(const char* group, int32_t offset) {

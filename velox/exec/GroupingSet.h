@@ -31,15 +31,6 @@ class AggregationOutputSpiller;
 
 class GroupingSet {
  public:
-  /// Builds the group-by hash table. Defaults to
-  /// HashTable::createForAggregation; a caller can supply a custom
-  /// BaseHashTable, e.g. one backed by a tiered allocator.
-  using HashTableFactory = std::function<std::unique_ptr<BaseHashTable>(
-      bool ignoreNullKeys,
-      std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-      const std::vector<Accumulator>& accumulators,
-      memory::MemoryPool* pool)>;
-
   GroupingSet(
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
@@ -58,10 +49,6 @@ class GroupingSet {
       exec::SpillStats* spillStats);
 
   ~GroupingSet();
-
-  /// Overrides the factory that builds the group-by hash table. Must be called
-  /// before the table is created, i.e. before the first addInput().
-  void setHashTableFactory(HashTableFactory factory);
 
   /// Creates a GroupingSet for MarkDistinct and EnforceDistinct operators to
   /// identify rows with unique values for a set of keys. When
@@ -101,15 +88,6 @@ class GroupingSet {
       int32_t maxOutputBytes,
       RowContainerIterator& iterator,
       RowVectorPtr& result);
-
-  /// Copies the grouping keys and aggregates for 'groups', read from
-  /// 'container', into 'result'. Extracts the intermediate type for a partial
-  /// aggregation, the final result otherwise. 'container' supplies the row
-  /// layout; the group pointers may live in any container that shares it.
-  void extractGroups(
-      RowContainer* container,
-      folly::Range<char**> groups,
-      const RowVectorPtr& result);
 
   uint64_t allocatedBytes() const;
 
@@ -165,6 +143,11 @@ class GroupingSet {
   /// 'rowIterator'. This should be only called during output processing and
   /// when no spill has occurred previously.
   void spill(const RowContainerIterator& rowIterator);
+
+  /// Relocates the in-memory payload into the memory tier 'pool' instead of
+  /// spilling to disk, repointing the hash index without a rehash. Mutually
+  /// exclusive with disk spill; a no-op if the table is empty.
+  void relocate(memory::MemoryPool* pool);
 
   /// Returns the spiller stats including total bytes and rows spilled so far.
   std::optional<exec::SpillStats> spilledStats() const;
@@ -225,6 +208,15 @@ class GroupingSet {
   bool isDistinct() const {
     return aggregates_.empty();
   }
+
+  // Copies the grouping keys and aggregates for 'groups', read from
+  // 'container', into 'result'. Extracts the intermediate type for a partial
+  // aggregation, the final result otherwise. 'container' supplies the row
+  // layout; the group pointers may live in any container that shares it.
+  void extractGroups(
+      RowContainer* container,
+      folly::Range<char**> groups,
+      const RowVectorPtr& result);
 
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
 
@@ -399,9 +391,6 @@ class GroupingSet {
   // Place for the arguments of the aggregate being updated.
   std::vector<VectorPtr> tempVectors_;
 
-  // Builds 'table_'. Defaults to HashTable::createForAggregation;
-  // setHashTableFactory() overrides it before the table is created.
-  HashTableFactory tableFactory_;
   std::unique_ptr<BaseHashTable> table_;
   std::unique_ptr<HashLookup> lookup_;
   SelectivityVector activeRows_;
@@ -445,6 +434,10 @@ class GroupingSet {
   std::unique_ptr<AggregationInputSpiller> inputSpiller_;
 
   std::unique_ptr<AggregationOutputSpiller> outputSpiller_;
+
+  // Index into table_->allRows() of the row container getOutput() is currently
+  // draining (0 = DRAM 'rows_', then any relocated tier containers).
+  int32_t outputRowContainer_{0};
 
   // The current spill partition in producing spill output. If it is -1, then we
   // haven't started yet.

@@ -22,13 +22,9 @@
 #include <string_view>
 
 #include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/experimental/cxl/CxlResourceTag.h"
 
 namespace facebook::velox::cxl {
-
-/// Tag identifying the CXL memory tier. Used when registering the resource
-/// with memory::CustomMemoryResourceRegistry and when referencing it by tag
-/// while building per-query pools via MemoryManager::addCustomRootPool.
-inline constexpr std::string_view kCxlResourceTag{"cxl"};
 
 /// Builds a memory::CustomMemoryResource backed by CXL-attached memory.
 ///

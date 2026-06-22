@@ -8,7 +8,8 @@ SELECT k, sum(v) FROM <synthesized> GROUP BY k
 
 over a synthesized Zipf key stream, across three memory-placement strategies, to
 see whether building the table in DRAM and relocating it to CXL under pressure
-(`CxlHashAggregation`) beats the alternatives. Keys are drawn Zipf(`--zipf_skew`)
+(the `HashAggregation` relocate path, selected by a `cxl` tier pool on the query)
+beats the alternatives. Keys are drawn Zipf(`--zipf_skew`)
 over `--zipf_groups` ranks and scattered across the key space, so a few hot
 groups take most updates in random arrival order — the hot/cold split that
 DRAM-to-CXL tiering targets. A seed pass emits each of the `--zipf_groups` ranks

@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/HashTable.h"
+
+#include <algorithm>
+
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
@@ -42,6 +45,11 @@ std::string BaseHashTable::modeString(HashMode mode) {
       return fmt::format(
           "Unknown HashTable mode:{}", static_cast<int32_t>(mode));
   }
+}
+
+RowContainer* BaseHashTable::relocatePayload(memory::MemoryPool* /*pool*/) {
+  VELOX_UNSUPPORTED(
+      "relocatePayload is only supported for aggregation hash tables");
 }
 
 template <bool ignoreNullKeys>
@@ -1909,6 +1917,68 @@ void HashTable<ignoreNullKeys>::remapRowPointers(
       bucket->setPointer(slot, map(bucket->pointerAt(slot)));
     }
   }
+}
+
+namespace {
+// Translates a row address moved by RowContainer::relocateRunsTo() to its new
+// address, or returns it unchanged. Holds one affine piece per relocated
+// allocation run (sorted by source address), so the lookup is O(log runs) and
+// the storage O(runs), not O(rows).
+class RelocationMap {
+ public:
+  explicit RelocationMap(std::vector<memory::AllocationPool::Relocation> runs)
+      : runs_(std::move(runs)) {}
+
+  bool empty() const {
+    return runs_.empty();
+  }
+
+  char* translate(char* from) const {
+    auto it = std::upper_bound(
+        runs_.begin(),
+        runs_.end(),
+        from,
+        [](char* key, const memory::AllocationPool::Relocation& run) {
+          return key < run.sourceBegin;
+        });
+    if (it != runs_.begin()) {
+      --it;
+      if (from < it->sourceBegin + it->numBytes) {
+        return from + it->delta;
+      }
+    }
+    return from;
+  }
+
+ private:
+  std::vector<memory::AllocationPool::Relocation> runs_;
+};
+} // namespace
+
+template <bool ignoreNullKeys>
+RowContainer* HashTable<ignoreNullKeys>::relocatePayload(
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(pool);
+  // relocateRunsTo() clones whole runs and leaves 'dest' empty afterwards, so
+  // each relocation produces its own container rather than appending into a
+  // prior one. They are all indexed alongside 'rows_'.
+  auto dest = rows_->cloneEmpty(pool);
+  // In kHash mode 'rows_' has normalized keys disabled at runtime; match the
+  // destination so the equal-layout check passes and listRows reads the same
+  // prefixes back.
+  if (hashMode_ == HashMode::kHash) {
+    dest->disableNormalizedKeys();
+  }
+  const RelocationMap map(rows_->relocateRunsTo(*dest));
+  if (!map.empty()) {
+    remapRowPointers([&map](char* from) { return map.translate(from); });
+  }
+  // relocateRunsTo() cleared 'rows_', which restored its normalized-key size;
+  // re-disable so new groups in kHash mode land without a prefix.
+  if (hashMode_ == HashMode::kHash) {
+    rows_->disableNormalizedKeys();
+  }
+  return addOtherRowContainer(std::move(dest));
 }
 
 template <bool ignoreNullKeys>
