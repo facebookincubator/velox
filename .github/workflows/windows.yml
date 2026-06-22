@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Windows / MSVC build. Starts as an OPTIONAL (non-required) check; the matrix is
-# intentionally minimal (core engine + Parquet/Arrow + Presto functions) and grows
-# over time, the same way the macOS job started small.
+# Windows / MSVC build. Optional (non-required) check to start, like the macOS job.
+# Scope: core engine + Presto/Spark/Iceberg functions + Arrow. Parquet, Hive and the
+# other connectors are follow-ups (see issue #6274).
 name: Windows Build
 
 on:
@@ -54,9 +54,8 @@ jobs:
         type: [release]
     runs-on: windows-2022
     env:
-      # vcpkg binary caching via GitHub Actions cache -> deps build once, then restore.
+      # vcpkg binary caching via GitHub Actions cache: deps build once, then restore.
       VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-      VELOX_BUILD_TYPE: release
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -71,13 +70,17 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
+      # Provides FlexLexer.h (included by the pre-generated scanners). The parsers
+      # themselves are committed pre-generated, so bison/flex are not run.
       - name: Install WinFlexBison
         shell: pwsh
         run: |
           choco install winflexbison3 --no-progress -y
-          # Velox's parser generation needs BISON_PKGDATADIR (m4sugar).
-          $m4 = Get-ChildItem "$env:ChocolateyInstall" -Recurse -Filter m4sugar.m4 -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($m4) { "BISON_PKGDATADIR=$($m4.Directory.Parent.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          $h = Get-ChildItem "$env:ChocolateyInstall\lib\winflexbison3" -Recurse -Filter FlexLexer.h -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($h) {
+            "FLEX_INCLUDE_DIRS=$($h.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            $h.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          }
 
       - name: Configure
         shell: pwsh
@@ -89,20 +92,18 @@ jobs:
             -DVCPKG_OVERLAY_PORTS="$PWD/windows/vcpkg/ports" `
             -DVCPKG_MANIFEST_DIR="$PWD/windows/vcpkg" `
             -DCMAKE_CXX_STANDARD=20 `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" `
-            -DVELOX_BUILD_STATIC=ON -DVELOX_BUILD_SHARED=OFF -DVELOX_BUILD_TESTING=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
+            -DFLEX_INCLUDE_DIRS="$env:FLEX_INCLUDE_DIRS" `
+            -DCMAKE_DISABLE_FIND_PACKAGE_BISON=ON -DCMAKE_DISABLE_FIND_PACKAGE_FLEX=ON `
+            -DVELOX_BUILD_STATIC=ON -DVELOX_BUILD_SHARED=OFF -DVELOX_MONO_LIBRARY=OFF `
+            -DVELOX_BUILD_TESTING=OFF -DVELOX_BUILD_RUNNER=OFF `
             -DVELOX_ENABLE_BENCHMARKS=OFF -DVELOX_ENABLE_EXAMPLES=OFF `
-            -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF -DVELOX_ENABLE_HDFS=OFF -DVELOX_ENABLE_GEO=OFF `
-            -DVELOX_ENABLE_ABFS=OFF -DVELOX_ENABLE_HIVE_CONNECTOR=OFF -DVELOX_ENABLE_SPARK_FUNCTIONS=OFF `
-            -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PRESTO_FUNCTIONS=ON
+            -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF -DVELOX_ENABLE_HDFS=OFF -DVELOX_ENABLE_ABFS=OFF `
+            -DVELOX_ENABLE_GEO=OFF -DVELOX_ENABLE_HIVE_CONNECTOR=OFF `
+            -DVELOX_ENABLE_PARQUET=OFF -DVELOX_ENABLE_TPCDS_CONNECTOR=OFF `
+            -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PRESTO_FUNCTIONS=ON `
+            -DVELOX_ENABLE_SPARK_FUNCTIONS=ON -DVELOX_ENABLE_ICEBERG_FUNCTIONS=ON
 
       - name: Build
         shell: pwsh
-        run: cmake --build _build/release --config Release --target velox -- /m
-
-      # Tests are intentionally disabled at first (like macOS shipped). A curated
-      # ctest subset (seeded from the known-passing Windows suites) is enabled next.
-      - name: Run Tests
-        if: false
-        shell: pwsh
-        run: ctest --test-dir _build/release -C Release --output-on-failure --no-tests=error
+        run: cmake --build _build/release --config Release -- /m
