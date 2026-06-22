@@ -134,7 +134,9 @@ void registerAstEvaluator(int priority) {
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return ASTExpression::canEvaluate(expr);
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
+      [](std::shared_ptr<velox::exec::Expr> expr,
+         const RowTypePtr& row,
+         const CudfExpressionContext& /*context*/) {
         return std::make_shared<ASTExpression>(std::move(expr), row);
       },
       /*overwrite=*/false);

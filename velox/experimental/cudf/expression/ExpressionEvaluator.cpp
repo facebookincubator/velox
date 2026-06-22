@@ -18,6 +18,8 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/TimezoneConversion.h"
+#include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Memory.h"
@@ -227,8 +229,10 @@ static void ensureBuiltinExpressionEvaluatorsRegistered() {
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return FunctionExpression::canEvaluate(std::move(expr));
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
-        return FunctionExpression::create(std::move(expr), row);
+      [](std::shared_ptr<velox::exec::Expr> expr,
+         const RowTypePtr& row,
+         const CudfExpressionContext& context) {
+        return FunctionExpression::create(std::move(expr), row, context);
       },
       /*overwrite=*/false);
 
@@ -1258,6 +1262,35 @@ class CoalesceFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> literalScalar_;
 };
 
+// Returns true for timestamp types whose calendar fields depend on the session
+// timezone. DATE / TIMESTAMP_DAYS are timezone-naive on the CPU path and are
+// excluded.
+bool isSubDayTimestamp(cudf::data_type type) {
+  switch (type.id()) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Converts a timestamp column to the session-local wall clock when the context
+// requests it, so a following extraction reads local fields like the CPU path.
+// Returns nullptr when no conversion applies; callers then use the input view.
+std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
+    const cudf::column_view& input,
+    const CudfExpressionContext& context,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (!context.appliesSessionTimezone() || !isSubDayTimestamp(input.type())) {
+    return nullptr;
+  }
+  return toLocalTimestamp(input, context.sessionTimezone, stream, mr);
+}
+
 class ExtractComponentFunction : public CudfFunction {
  public:
   ExtractComponentFunction(
@@ -1273,8 +1306,17 @@ class ExtractComponentFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    // second and millisecond are sub-minute fields: every timezone offset is a
+    // whole number of minutes, so they are unaffected by the session timezone.
+    // The CPU path extracts them without applying the timezone, so skip the
+    // conversion here to match.
+    std::unique_ptr<cudf::column> local;
+    if (component_ != cudf::datetime::datetime_component::SECOND &&
+        component_ != cudf::datetime::datetime_component::MILLISECOND) {
+      local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    }
     return cudf::datetime::extract_datetime_component(
-        inputCol, component_, stream, mr);
+        local ? local->view() : inputCol, component_, stream, mr);
   }
 
  private:
@@ -1305,7 +1347,9 @@ class QuarterFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::extract_quarter(inputCol, stream, mr);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    return cudf::datetime::extract_quarter(
+        local ? local->view() : inputCol, stream, mr);
   }
 };
 
@@ -1321,7 +1365,9 @@ class DayOfYearFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::day_of_year(inputCol, stream, mr);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
+    return cudf::datetime::day_of_year(
+        local ? local->view() : inputCol, stream, mr);
   }
 };
 
@@ -1337,8 +1383,13 @@ class WeekFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
     auto weekStrings = cudf::strings::from_timestamps(
-        inputCol, "%V", cudf::strings_column_view{}, stream, mr);
+        local ? local->view() : inputCol,
+        "%V",
+        cudf::strings_column_view{},
+        stream,
+        mr);
     return cudf::strings::to_integers(
         cudf::strings_column_view(weekStrings->view()),
         cudf::data_type(cudf::type_id::INT32),
@@ -1361,8 +1412,13 @@ class YearOfWeekFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    auto local = maybeConvertToSessionLocal(inputCol, context_, stream, mr);
     auto yearStrings = cudf::strings::from_timestamps(
-        inputCol, "%G", cudf::strings_column_view{}, stream, mr);
+        local ? local->view() : inputCol,
+        "%G",
+        cudf::strings_column_view{},
+        stream,
+        mr);
     return cudf::strings::to_integers(
         cudf::strings_column_view(yearStrings->view()),
         cudf::data_type(cudf::type_id::INT32),
@@ -2032,7 +2088,8 @@ void registerCudfFunctions(
 
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const std::shared_ptr<velox::exec::Expr>& expr,
+    const CudfExpressionContext& context) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
   if (it == registry.end()) {
@@ -2045,7 +2102,11 @@ std::shared_ptr<CudfFunction> createCudfFunction(
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
       continue;
     }
-    return spec.factory(name, expr);
+    auto function = spec.factory(name, expr);
+    if (function) {
+      function->setContext(context);
+    }
+    return function;
   }
   return nullptr;
 }
@@ -2611,6 +2672,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("decimal(p,s)")
            .build()});
 
+  // TIMESTAMP WITH TIME ZONE function family (from_unixtime, to_unixtime,
+  // at_timezone, timezone_hour/minute, to_iso8601, format_datetime,
+  // parse_datetime, from_iso8601_timestamp, now/current_timestamp).
+  registerTimezoneFunctions(prefix);
+
   // Note: Spark and Presto functions are now registered separately via
   // registerSparkFunctions() and registerPrestoFunctions()
   return true;
@@ -2618,7 +2684,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const std::shared_ptr<velox::exec::Expr>& expr,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    const CudfExpressionContext& context) {
   using velox::exec::FieldReference;
 
   auto node = std::make_shared<FunctionExpression>();
@@ -2626,7 +2693,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   node->inputRowSchema_ = inputRowSchema;
 
   auto name = expr->name();
-  node->function_ = createCudfFunction(name, expr);
+  node->function_ = createCudfFunction(name, expr, context);
 
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
     if (!fieldExpr->inputs().empty()) {
@@ -2647,7 +2714,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
     for (const auto& input : expr->inputs()) {
       if (!std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema));
+            createCudfExpression(input, inputRowSchema, context));
       }
     }
   }
@@ -2730,6 +2797,13 @@ ColumnOrView FunctionExpression::eval(
 
     for (const auto& subexpr : subexpressions_) {
       subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+    }
+
+    // Zero-argument functions (e.g. now()) produce a constant column but still
+    // need the batch row count to size it. Hand them the first input column so
+    // they can read its size; its value is ignored.
+    if (subexprResults.empty() && !inputColumnViews.empty()) {
+      subexprResults.push_back(inputColumnViews.front());
     }
 
     auto result = function_->eval(subexprResults, stream, mr);
@@ -2816,7 +2890,8 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    const CudfExpressionContext& context) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
@@ -2830,10 +2905,10 @@ std::shared_ptr<CudfExpression> createCudfExpression(
   }
 
   if (best != nullptr) {
-    return best->create(expr, inputRowSchema);
+    return best->create(expr, inputRowSchema, context);
   }
 
-  return FunctionExpression::create(expr, inputRowSchema);
+  return FunctionExpression::create(expr, inputRowSchema, context);
 }
 
 void unregisterFunctions() {
