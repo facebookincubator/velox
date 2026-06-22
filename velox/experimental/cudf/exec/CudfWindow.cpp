@@ -119,15 +119,8 @@ struct RangeRollingBatch {
 bool rangeWindowTypesEqual(
     const cudf::range_window_type& left,
     const cudf::range_window_type& right) {
-  if (left.index() != right.index()) {
-    return false;
-  }
-  return std::visit(
-      [&right](const auto& lhs) {
-        using T = std::decay_t<decltype(lhs)>;
-        return std::holds_alternative<T>(right) && lhs == std::get<T>(right);
-      },
-      left);
+  // Batch gating only uses unbounded/current_row; index distinguishes kinds.
+  return left.index() == right.index();
 }
 
 RangeRollingBatch* findRangeRollingBatch(
@@ -152,10 +145,9 @@ void addRangeRollingRequest(
     batch->requests.push_back(std::move(pending));
     return;
   }
-  batches.push_back(RangeRollingBatch{
-      rangeTypes.first,
-      rangeTypes.second,
-      {std::move(pending)}});
+  RangeRollingBatch batch{rangeTypes.first, rangeTypes.second, {}};
+  batch.requests.push_back(std::move(pending));
+  batches.push_back(std::move(batch));
 }
 
 // Convert Velox frame bounds to cudf window bounds.
