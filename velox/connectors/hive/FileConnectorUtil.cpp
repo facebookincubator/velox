@@ -108,9 +108,11 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setCacheMetadata(fileConfig->cacheMetadata(sessionProperties));
+  readerOptions.setCacheMetadata(
+      fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
-  readerOptions.setCacheIndex(fileConfig->cacheIndex(sessionProperties));
+  readerOptions.setCacheIndex(
+      fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
@@ -195,7 +197,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
     rowReaderOptions.setLazyColumnIo(
-        fileConfig->lazyColumnIo(sessionProperties));
+        fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }

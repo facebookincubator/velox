@@ -137,6 +137,8 @@ void Optimizer::visitValue(const nativert::Value* value) {
       if (outputId >= 0) {
         ensureConstraint(outputId);
         types_.constraints[outputId].rank = maxRank;
+        // An elementwise op materializes a fresh, densely-laid-out output.
+        types_.constraints[outputId].contiguous = true;
       }
     }
   }

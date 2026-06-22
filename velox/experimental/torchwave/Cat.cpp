@@ -571,7 +571,8 @@ void registerCatMetadata() {
             if (elements.empty()) {
               return {};
             }
-            return {{.rank = types.rank(elements[0])}};
+            // cat materializes a fresh, densely-laid-out output.
+            return {{.rank = types.rank(elements[0]), .contiguous = true}};
           })
       .maybeReplace(catMaybeReplace)
       .setOutputs(catSetOutputs)
