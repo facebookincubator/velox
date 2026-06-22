@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "velox",
   "version-string": "0.5.0",
-  "builtin-baseline": "980c981a8ab8dcf9389c9d10c3e1bc20b6ee23f9",
+  "builtin-baseline": "d1ff36c6520ee43f1a656c03cd6425c2974a449e",
   "dependencies": [
     "abseil",
     { "name": "arrow", "features": ["compute", "parquet", "filesystem"] },
@@ -35,8 +35,5 @@
     "xsimd",
     "zlib",
     "zstd"
-  ],
-  "overrides": [
-    { "name": "abseil", "version": "20250127.1" }
   ]
 }

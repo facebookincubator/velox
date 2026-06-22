@@ -1,7 +1,0 @@
-msft.patch is created using the following script on the local repository
-https://msazure.visualstudio.com/One/_git/Data-ThirdParty-Apache-Arrow
-
-git remote add -f baseline https://github.com/apache/arrow
-git remote update
-git diff --binary --diff-filter=AMCR baseline/maint-19.0.1 msft-apache-arrow-19.0 --output=msft.patch
-git remote rm baseline

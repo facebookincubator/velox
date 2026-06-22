@@ -89,7 +89,6 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
             -DVCPKG_OVERLAY_TRIPLETS="$PWD/windows/oss-triplets" `
-            -DVCPKG_OVERLAY_PORTS="$PWD/windows/vcpkg/ports" `
             -DVCPKG_MANIFEST_DIR="$PWD/windows/vcpkg" `
             -DCMAKE_CXX_STANDARD=20 `
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `

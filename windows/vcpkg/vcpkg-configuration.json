@@ -3,13 +3,8 @@
   "default-registry": {
     "kind": "git",
     "repository": "https://github.com/microsoft/vcpkg",
-    "baseline": "980c981a8ab8dcf9389c9d10c3e1bc20b6ee23f9"
+    "baseline": "d1ff36c6520ee43f1a656c03cd6425c2974a449e"
   },
-  "overlay-ports": [
-    "./ports/arrow",
-    "./ports/folly",
-    "./ports/icu"
-  ],
   "overlay-triplets": [
     "../oss-triplets"
   ]
