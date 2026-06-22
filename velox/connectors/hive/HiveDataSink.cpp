@@ -156,10 +156,10 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
 
 std::string computeBucketedFileName(
     const std::string& queryId,
-    uint32_t maxBucketCount,
+    uint32_t maxNumBuckets,
     uint32_t bucket) {
   const uint32_t kMaxBucketCountPadding =
-      std::to_string(maxBucketCount - 1).size();
+      std::to_string(maxNumBuckets - 1).size();
   const std::string bucketValueStr = std::to_string(bucket);
   return fmt::format(
       "0{:0>{}}_0_{}", bucketValueStr, kMaxBucketCountPadding, queryId);
@@ -732,43 +732,19 @@ WriterParameters HiveDataSink::getWriterParameters(
 
 std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     std::optional<uint32_t> bucketId) const {
-  if (auto hiveInsertFileNameGenerator =
-          std::dynamic_pointer_cast<const HiveInsertFileNameGenerator>(
-              fileNameGenerator_)) {
-    return hiveInsertFileNameGenerator->gen(
-        bucketId,
-        insertTableHandle_,
-        *connectorQueryCtx_,
-        hiveConfig_,
-        isCommitRequired());
-  }
-
   return fileNameGenerator_->gen(
-      bucketId, insertTableHandle_, *connectorQueryCtx_, isCommitRequired());
-}
-
-std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
-    std::optional<uint32_t> bucketId,
-    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-    const ConnectorQueryCtx& connectorQueryCtx,
-    bool commitRequired) const {
-  auto defaultHiveConfig =
-      std::make_shared<const HiveConfig>(std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
-
-  return this->gen(
       bucketId,
-      insertTableHandle,
-      connectorQueryCtx,
-      defaultHiveConfig,
-      commitRequired);
+      insertTableHandle_,
+      *connectorQueryCtx_,
+      hiveConfig_->maxBucketCount(connectorQueryCtx_->sessionProperties()),
+      isCommitRequired());
 }
 
 std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    uint32_t maxNumBuckets,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   const bool generateFileName = targetFileName.empty();
@@ -776,9 +752,7 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     VELOX_CHECK(generateFileName);
     // TODO: add hive.file_renaming_enabled support.
     targetFileName = computeBucketedFileName(
-        connectorQueryCtx.queryId(),
-        hiveConfig->maxBucketCount(connectorQueryCtx.sessionProperties()),
-        bucketId.value());
+        connectorQueryCtx.queryId(), maxNumBuckets, bucketId.value());
     // queryId may contain unsafe characters.
     sanitizeFileName(targetFileName);
   } else if (generateFileName) {

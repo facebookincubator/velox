@@ -90,6 +90,7 @@ class IcebergFileNameGenerator : public FileNameGenerator {
       std::optional<uint32_t> bucketId,
       const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
+      uint32_t maxNumBuckets,
       bool commitRequired) const override;
 
   folly::dynamic serialize() const override;
@@ -105,6 +106,7 @@ std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
+    uint32_t /* maxNumBuckets */,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   if (targetFileName.empty()) {
