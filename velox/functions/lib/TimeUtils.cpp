@@ -235,12 +235,21 @@ int32_t truncateDate(int32_t days, DateTimeUnit unit) {
     // (0 = Sun, 1 = Mon, ..., 6 = Sat) is `(4 + d) mod 7`. To shift
     // back to Monday: Sun -> 6 days back, Mon -> 0, otherwise
     // weekday - 1.
-    int32_t weekday = (4 + days) % 7;
+    int32_t weekday = static_cast<int32_t>((4LL + days) % 7);
     if (weekday < 0) {
       weekday += 7;
     }
     const int32_t offsetBack = weekday == 0 ? 6 : weekday - 1;
-    return days - offsetBack;
+    // Subtract in 64-bit to avoid signed overflow when days == INT32_MIN, then
+    // reject the rare inputs whose Monday falls before the representable range
+    // rather than returning a wrapped value.
+    const int64_t weekStart = static_cast<int64_t>(days) - offsetBack;
+    VELOX_USER_CHECK_GE(
+        weekStart,
+        std::numeric_limits<int32_t>::min(),
+        "Date is out of range for truncation: {} days",
+        days);
+    return static_cast<int32_t>(weekStart);
   }
 
   // Month/quarter/year — pull (y, m, d) via the fast Neri-Schneider,
@@ -279,6 +288,15 @@ int32_t truncateDate(int32_t days, DateTimeUnit unit) {
       "Date is too large: {} days",
       days);
   adjustDateTime(dateTime, unit);
-  return Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+  // The truncated unit start can fall before the representable range for inputs
+  // near INT32_MIN; reject those rather than returning a wrapped value.
+  const int64_t truncatedDays =
+      Timestamp::calendarUtcToEpoch(dateTime) / kSecondsInDay;
+  VELOX_USER_CHECK_GE(
+      truncatedDays,
+      std::numeric_limits<int32_t>::min(),
+      "Date is out of range for truncation: {} days",
+      days);
+  return static_cast<int32_t>(truncatedDays);
 }
 } // namespace facebook::velox::functions
