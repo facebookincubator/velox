@@ -43,7 +43,6 @@
 #include <nvtx3/nvtx3.hpp>
 
 #include <limits>
-#include <map>
 #include <optional>
 #include <utility>
 
@@ -111,8 +110,53 @@ struct PendingRangeRolling {
   std::unique_ptr<cudf::rolling_aggregation> agg;
 };
 
-using RangeWindowBatchKey =
-    std::pair<cudf::range_window_type, cudf::range_window_type>;
+struct RangeRollingBatch {
+  cudf::range_window_type preceding;
+  cudf::range_window_type following;
+  std::vector<PendingRangeRolling> requests;
+};
+
+bool rangeWindowTypesEqual(
+    const cudf::range_window_type& left,
+    const cudf::range_window_type& right) {
+  if (left.index() != right.index()) {
+    return false;
+  }
+  return std::visit(
+      [&right](const auto& lhs) {
+        using T = std::decay_t<decltype(lhs)>;
+        return std::holds_alternative<T>(right) && lhs == std::get<T>(right);
+      },
+      left);
+}
+
+RangeRollingBatch* findRangeRollingBatch(
+    std::vector<RangeRollingBatch>& batches,
+    const std::pair<cudf::range_window_type, cudf::range_window_type>&
+        rangeTypes) {
+  for (auto& batch : batches) {
+    if (rangeWindowTypesEqual(batch.preceding, rangeTypes.first) &&
+        rangeWindowTypesEqual(batch.following, rangeTypes.second)) {
+      return &batch;
+    }
+  }
+  return nullptr;
+}
+
+void addRangeRollingRequest(
+    std::vector<RangeRollingBatch>& batches,
+    const std::pair<cudf::range_window_type, cudf::range_window_type>&
+        rangeTypes,
+    PendingRangeRolling pending) {
+  if (auto* batch = findRangeRollingBatch(batches, rangeTypes)) {
+    batch->requests.push_back(std::move(pending));
+    return;
+  }
+  batches.push_back(RangeRollingBatch{
+      rangeTypes.first,
+      rangeTypes.second,
+      {std::move(pending)}});
+}
 
 // Convert Velox frame bounds to cudf window bounds.
 cudf::window_bounds toWindowBound(
@@ -727,8 +771,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
   std::vector<std::unique_ptr<cudf::column>> windowResultCols(
       windowNode_->windowFunctions().size());
-  std::map<RangeWindowBatchKey, std::vector<PendingRangeRolling>>
-      rangeRollingBatches;
+  std::vector<RangeRollingBatch> rangeRollingBatches;
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
 
   for (size_t funcIndex = 0; funcIndex < windowNode_->windowFunctions().size();
@@ -762,7 +805,9 @@ RowVectorPtr CudfWindow::doGetOutput() {
           agg = cudf::make_nth_element_aggregation<cudf::rolling_aggregation>(
               -1, nullPolicy);
         }
-        rangeRollingBatches[rangeTypes.value()].push_back(
+        addRangeRollingRequest(
+            rangeRollingBatches,
+            rangeTypes.value(),
             PendingRangeRolling{funcIndex, inputCol, std::move(agg)});
       } else {
         windowResultCols[funcIndex] = computeNthValueColumn(
@@ -792,7 +837,9 @@ RowVectorPtr CudfWindow::doGetOutput() {
         } else {
           agg = cudf::make_mean_aggregation<cudf::rolling_aggregation>();
         }
-        rangeRollingBatches[rangeTypes.value()].push_back(
+        addRangeRollingRequest(
+            rangeRollingBatches,
+            rangeTypes.value(),
             PendingRangeRolling{funcIndex, inputCol, std::move(agg)});
       } else {
         windowResultCols[funcIndex] = computeAggregateColumn(
@@ -813,7 +860,8 @@ RowVectorPtr CudfWindow::doGetOutput() {
     auto orderbyCol = sortedView.column(sortKeyIndices_[0]);
     auto order = sortOrders_[0];
     auto nullOrder = nullOrders_[0];
-    for (auto& [rangeTypes, pendingRequests] : rangeRollingBatches) {
+    for (auto& batch : rangeRollingBatches) {
+      auto& pendingRequests = batch.requests;
       if (pendingRequests.size() >= 2) {
         std::vector<cudf::rolling_request> rollingRequests;
         rollingRequests.reserve(pendingRequests.size());
@@ -826,8 +874,8 @@ RowVectorPtr CudfWindow::doGetOutput() {
             orderbyCol,
             order,
             nullOrder,
-            rangeTypes.first,
-            rangeTypes.second,
+            batch.preceding,
+            batch.following,
             cudf::host_span<cudf::rolling_request const>(
                 rollingRequests.data(), rollingRequests.size()),
             stream_,
