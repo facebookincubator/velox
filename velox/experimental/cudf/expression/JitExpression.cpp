@@ -86,7 +86,9 @@ void registerJitEvaluator(int priority) {
       [](std::shared_ptr<velox::exec::Expr> expr) {
         return JitExpression::canEvaluate(expr);
       },
-      [](std::shared_ptr<velox::exec::Expr> expr, const RowTypePtr& row) {
+      [](std::shared_ptr<velox::exec::Expr> expr,
+         const RowTypePtr& row,
+         const CudfExpressionContext& /*context*/) {
         return std::make_shared<JitExpression>(std::move(expr), row);
       },
       /*overwrite=*/false);
