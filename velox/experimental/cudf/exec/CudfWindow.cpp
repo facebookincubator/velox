@@ -27,8 +27,10 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
+#include <cudf/join/hash_join.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/rolling.hpp>
 #include <cudf/rolling/range_window_bounds.hpp>
@@ -148,6 +150,89 @@ void addRangeRollingRequest(
   RangeRollingBatch batch{rangeTypes.first, rangeTypes.second, {}};
   batch.requests.push_back(std::move(pending));
   batches.push_back(std::move(batch));
+}
+
+std::unique_ptr<cudf::column> computeFullPartitionGroupAggregate(
+    const cudf::table_view& partKeys,
+    cudf::column_view inputCol,
+    const std::string& baseName,
+    bool isCountStar,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  cudf::groupby::aggregation_request request;
+  request.values = inputCol;
+  if (baseName == "sum") {
+    request.aggregations.push_back(
+        cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+  } else if (baseName == "min") {
+    request.aggregations.push_back(
+        cudf::make_min_aggregation<cudf::groupby_aggregation>());
+  } else if (baseName == "max") {
+    request.aggregations.push_back(
+        cudf::make_max_aggregation<cudf::groupby_aggregation>());
+  } else if (baseName == "count") {
+    const auto nullPolicy = isCountStar ? cudf::null_policy::INCLUDE
+                                        : cudf::null_policy::EXCLUDE;
+    request.aggregations.push_back(
+        cudf::make_count_aggregation<cudf::groupby_aggregation>(nullPolicy));
+  } else {
+    request.aggregations.push_back(
+        cudf::make_mean_aggregation<cudf::groupby_aggregation>());
+  }
+
+  std::unique_ptr<cudf::column> aggCol;
+  if (partKeys.num_columns() == 0) {
+    std::unique_ptr<cudf::scalar> resultScalar;
+    if (baseName == "sum") {
+      auto agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+      resultScalar = cudf::reduce(
+          inputCol, *agg, inputCol.type(), stream, mr);
+    } else if (baseName == "min") {
+      auto agg = cudf::make_min_aggregation<cudf::reduce_aggregation>();
+      resultScalar = cudf::reduce(
+          inputCol, *agg, inputCol.type(), stream, mr);
+    } else if (baseName == "max") {
+      auto agg = cudf::make_max_aggregation<cudf::reduce_aggregation>();
+      resultScalar = cudf::reduce(
+          inputCol, *agg, inputCol.type(), stream, mr);
+    } else if (baseName == "count") {
+      auto agg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
+          isCountStar ? cudf::null_policy::INCLUDE
+                      : cudf::null_policy::EXCLUDE);
+      resultScalar = cudf::reduce(
+          inputCol, *agg, cudf::data_type(cudf::type_id::INT64), stream, mr);
+    } else {
+      auto agg = cudf::make_mean_aggregation<cudf::reduce_aggregation>();
+      resultScalar = cudf::reduce(
+          inputCol, *agg, cudf::data_type(cudf::type_id::FLOAT64), stream, mr);
+    }
+    return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
+  }
+
+  cudf::groupby::groupby grouper(partKeys, cudf::null_policy::INCLUDE);
+  std::vector<cudf::groupby::aggregation_request> requests;
+  requests.push_back(std::move(request));
+  auto [groupKeys, results] = grouper.aggregate(
+      cudf::host_span<cudf::groupby::aggregation_request const>(
+          requests.data(), requests.size()),
+      stream,
+      mr);
+  aggCol = std::move(results[0].results[0]);
+
+  cudf::hash_join hj(*groupKeys, cudf::null_equality::EQUAL);
+  auto [leftJoinIndices, rightJoinIndices] =
+      hj.left_join(partKeys, std::nullopt, stream, mr);
+  auto rightIndicesSpan =
+      cudf::device_span<cudf::size_type const>{*rightJoinIndices};
+  auto rightIndicesCol = cudf::column_view{rightIndicesSpan};
+  auto gathered = cudf::gather(
+      cudf::table_view{{aggCol->view()}},
+      rightIndicesCol,
+      cudf::out_of_bounds_policy::DONT_CHECK,
+      stream,
+      mr);
+  return std::move(gathered->release()[0]);
 }
 
 // Convert Velox frame bounds to cudf window bounds.
@@ -658,6 +743,17 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
   const bool isFullPartition =
       isFullPartitionFrame(func, !sortKeyIndices_.empty());
 
+  if (isFullPartition && sortKeyIndices_.empty()) {
+    return computeFullPartitionGroupAggregate(
+        partKeys,
+        inputCol,
+        baseName,
+        isCountStar,
+        sortedView.num_rows(),
+        stream,
+        get_output_mr());
+  }
+
   return invokeGroupedRollingWindow(
       partKeys, sortedView, inputCol, func, *agg, isFullPartition, stream);
 }
@@ -814,7 +910,16 @@ RowVectorPtr CudfWindow::doGetOutput() {
       auto inputCol = sortedView.column(isCountStar ? 0 : inputColIdx);
       const bool isFullPartition =
           isFullPartitionFrame(func, !sortKeyIndices_.empty());
-      if (auto rangeTypes = toBatchRangeWindowTypes(func, isFullPartition)) {
+      if (isFullPartition && sortKeyIndices_.empty()) {
+        windowResultCols[funcIndex] = computeFullPartitionGroupAggregate(
+            partKeys,
+            inputCol,
+            baseName,
+            isCountStar,
+            sortedView.num_rows(),
+            stream_,
+            mr);
+      } else if (auto rangeTypes = toBatchRangeWindowTypes(func, isFullPartition)) {
         std::unique_ptr<cudf::rolling_aggregation> agg;
         if (baseName == "sum") {
           agg = cudf::make_sum_aggregation<cudf::rolling_aggregation>();
@@ -850,9 +955,20 @@ RowVectorPtr CudfWindow::doGetOutput() {
   }
 
   if (!rangeRollingBatches.empty()) {
-    auto orderbyCol = sortedView.column(sortKeyIndices_[0]);
-    auto order = sortOrders_[0];
-    auto nullOrder = nullOrders_[0];
+    ColumnOrView orderbyColHolder{cudf::column_view{}};
+    cudf::column_view orderbyCol;
+    cudf::order order = cudf::order::ASCENDING;
+    cudf::null_order nullOrder = cudf::null_order::BEFORE;
+    if (sortKeyIndices_.empty()) {
+      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream_, mr);
+      orderbyColHolder =
+          cudf::sequence(sortedView.num_rows(), oneScalar, oneScalar, stream_, mr);
+      orderbyCol = asView(orderbyColHolder);
+    } else {
+      orderbyCol = sortedView.column(sortKeyIndices_[0]);
+      order = sortOrders_[0];
+      nullOrder = nullOrders_[0];
+    }
     for (auto& batch : rangeRollingBatches) {
       auto& pendingRequests = batch.requests;
       if (pendingRequests.size() >= 2) {
