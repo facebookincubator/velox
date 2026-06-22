@@ -93,7 +93,7 @@ ColumnStatistics::toCommonStatistics() const {
       const auto* intStats = as<const IntegralStatistics>();
       NIMBLE_DCHECK(
           intStats != nullptr, "Failed to cast to IntegralStatistics");
-      return std::make_unique<velox::dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<velox::dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           rawSize,
