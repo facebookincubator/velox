@@ -61,7 +61,7 @@ class CudfWindowTest : public testing::Test,
     }
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
-    velox::window::prestosql::registerAllWindowFunctions();
+    facebook::velox::window::prestosql::registerAllWindowFunctions();
     parse::registerTypeResolver();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
