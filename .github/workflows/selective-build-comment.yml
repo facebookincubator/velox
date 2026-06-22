@@ -46,7 +46,7 @@ jobs:
       # is on disk for the Get-PR-number step. Sparse-checkout keeps
       # this fast and the BASE-context default ref ensures we trust the
       # helper from main rather than the PR head.
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts

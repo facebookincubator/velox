@@ -67,7 +67,7 @@ jobs:
       needs_slow_prepare: ${{ steps.final.outputs.needs_slow_prepare }}
       cmake_targets: ${{ steps.read-targets.outputs.cmake_targets }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts
@@ -353,7 +353,7 @@ jobs:
       # are non-empty (no override needed).
       mode_override: ${{ steps.read-targets.outputs.cmake_targets == '' && 'full' || '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
