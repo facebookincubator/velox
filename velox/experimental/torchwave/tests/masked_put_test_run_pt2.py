@@ -41,6 +41,7 @@ def main() -> None:
     input_f = (torch.arange(n, dtype=torch.float) % 13 + 50).float()
     scalar_val = torch.tensor([42.0])
     scalar_mask = torch.tensor([True])
+    scalar_flags = torch.tensor([True])
 
     # 2D [90, 130] tensor with int32/long indices, 500 scatter positions.
     dest2d = torch.zeros(90, 130, dtype=torch.float)
@@ -48,6 +49,17 @@ def main() -> None:
     idx2d_0 = torch.arange(num_scatter, dtype=torch.int32) % 90
     idx2d_1 = torch.arange(num_scatter, dtype=torch.long) * 7 % 130
     vals2d = (torch.arange(num_scatter, dtype=torch.float) + 1000).float()
+
+    # Functional index_put (out-of-place) inputs.
+    ip_n = 100
+    # Numeric indices: distinct positions get distinct values (compacted scatter).
+    ip_num_src = (torch.arange(ip_n, dtype=torch.float) % 17).float()
+    ip_num_idx = torch.tensor([0, 5, 10, 15, 20, 50, 99], dtype=torch.long)
+    ip_num_vals = (torch.arange(ip_num_idx.numel(), dtype=torch.float) + 300).float()
+    # Bool mask: a single scalar value is broadcast to every selected position.
+    ip_bool_src = (torch.arange(ip_n, dtype=torch.float) % 9 + 1).float()
+    ip_bool_mask = torch.arange(ip_n) % 7 == 0
+    ip_bool_vals = torch.tensor([777.0])
 
     inputs = (
         source_f,
@@ -59,14 +71,23 @@ def main() -> None:
         input_f,
         scalar_val,
         scalar_mask,
+        scalar_flags,
         dest2d,
         idx2d_0,
         idx2d_1,
         vals2d,
+        ip_num_src,
+        ip_num_idx,
+        ip_num_vals,
+        ip_bool_src,
+        ip_bool_mask,
+        ip_bool_vals,
     )
 
     module = MaskedPutTest()
-    results = module(*inputs)
+    # The module mutates scalar_val in place (c8), so run eager and export on
+    # fresh clones; the embedded example inputs must match the reference results.
+    results = module(*tuple(t.clone() for t in inputs))
     print(f"Eager results ({len(results)} outputs):")
     for i, r in enumerate(results):
         print(f"  [{i}] shape={r.shape}, dtype={r.dtype}")
@@ -84,7 +105,7 @@ def main() -> None:
     with torch.no_grad():
         exported_program = torch.export.export(
             module,
-            inputs,
+            tuple(t.clone() for t in inputs),
             strict=False,
         )
     print(f"Export successful, graph has {len(exported_program.graph.nodes)} nodes")

@@ -18,6 +18,7 @@
 
 #include <memory>
 
+#include "velox/common/config/Config.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
@@ -60,6 +61,14 @@ class ReaderFactory {
       std::unique_ptr<BufferedInput>,
       const ReaderOptions& options) = 0;
 
+  /// Translates connector and session configs into format-owned reader options.
+  /// Returns nullptr if the format has no format-specific options.
+  virtual std::shared_ptr<FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& /*connectorConfig*/,
+      const config::ConfigBase& /*session*/) const {
+    return nullptr;
+  }
+
  private:
   const FileFormat format_;
 };
@@ -78,6 +87,11 @@ bool registerReaderFactory(std::shared_ptr<ReaderFactory> factory);
  * missing factory for the specfified format.
  */
 bool unregisterReaderFactory(FileFormat format);
+
+/**
+ * Returns whether a reader factory is registered for a specified file format.
+ */
+bool hasReaderFactory(FileFormat format);
 
 /**
  * Get reader factory object for a specified file format. Results in

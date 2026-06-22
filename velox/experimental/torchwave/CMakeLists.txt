@@ -39,6 +39,7 @@ add_library(
   Project.cpp
   Pt2Load.cpp
   Registry.cpp
+  Standalones.cpp
   Utils.cpp
   WaveGraph.cpp
 )
