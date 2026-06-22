@@ -167,7 +167,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
          std::string("\x80\x00\x00\x00\x00\x00\x00\x00", 8)});
   }
 
-  void testFloatToTimestampValid() {
+    void testFloatToTimestamp() {
     testCast(
         makeFlatVector<float>({
             0.0,
@@ -181,9 +181,9 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             Timestamp(-1727181056, 0),
             Timestamp(0, 0),
         }));
-  }
+    }
 
-  void testDoubleToTimestampValid() {
+    void testDoubleToTimestamp() {
     testCast(
         makeFlatVector<double>({
             0.0,
@@ -197,7 +197,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             Timestamp(-1727181032, 0),
             Timestamp(0, 0),
         }));
-  }
+    }
 
   template <typename T>
   void testDecimalToIntegralCasts() {
@@ -1068,7 +1068,7 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
-  testFloatToTimestampValid();
+  testFloatToTimestamp();
 
   auto overflowInput = makeRowVector({makeFlatVector<float>({
       std::numeric_limits<float>::max(),
@@ -1100,7 +1100,7 @@ TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, doubleToTimestamp) {
-  testDoubleToTimestampValid();
+  testDoubleToTimestamp();
 
   auto overflowInput = makeRowVector({makeFlatVector<double>({
       9223372036855.999,

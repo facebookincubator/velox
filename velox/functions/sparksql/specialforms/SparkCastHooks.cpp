@@ -99,12 +99,22 @@ Expected<std::optional<Timestamp>> SparkCastHooks::castDoubleToTimestamp(
     if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
       return std::nullopt;
     }
-    auto result = castNumberToTimestamp(value, true);
-    if (result.hasError()) {
-      return folly::makeUnexpected(result.error());
-    }
+    auto result = castNumberToTimestamp(value, allowOverflow_);
+    VELOX_DCHECK(!result.hasError());
     return result.value();
   }
+
+  if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
+    return folly::makeUnexpected(Status::UserError(
+        "The value cannot be cast to TIMESTAMP because it is malformed."));
+  }
+
+  auto result = castNumberToTimestamp(value, allowOverflow_);
+  if (result.hasError()) {
+    return folly::makeUnexpected(result.error());
+  }
+  return result.value();
+}
 
   if (FOLLY_UNLIKELY(std::isnan(value) || std::isinf(value))) {
     return folly::makeUnexpected(Status::UserError(
