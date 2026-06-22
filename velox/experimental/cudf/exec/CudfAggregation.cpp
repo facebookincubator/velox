@@ -136,6 +136,8 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     const auto resultType = exec::isPartialOutput(companionStep)
         ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
         : outputType->childAt(numKeys + i);
+    const auto isDecimalAggregate = aggregate.rawInputTypes.size() == 1 &&
+        aggregate.rawInputTypes[0]->isDecimal();
 
     params.emplace_back(
         companionStep,
@@ -145,7 +147,8 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
         resultType,
         isCountFunctionName(aggregate.call->name())
             ? std::make_optional(getCountInputKind(aggregate, constants[i]))
-            : std::nullopt);
+            : std::nullopt,
+        isDecimalAggregate);
   }
   return params;
 }

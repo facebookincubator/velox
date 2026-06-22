@@ -56,6 +56,7 @@ TEST(FileConfigTest, defaultConfig) {
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
   EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
+  EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
@@ -79,6 +80,7 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
+      {FileConfig::kNimbleLazyColumnIo, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)), "hive.");
@@ -105,6 +107,7 @@ TEST(FileConfigTest, overrideConfig) {
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
+  EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
@@ -132,6 +135,7 @@ TEST(FileConfigTest, overrideSession) {
        std::to_string(2UL << 20)},
       {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
       {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
+      {FileConfig::kNimbleLazyColumnIoSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -153,6 +157,7 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
+  EXPECT_TRUE(config.nimbleLazyColumnIo(session.get()));
 }
 
 TEST(FileConfigTest, nullConfig) {

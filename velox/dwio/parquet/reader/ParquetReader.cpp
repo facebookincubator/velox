@@ -1453,16 +1453,19 @@ class ParquetRowReader::Impl {
     firstRowOfRowGroup_.reserve(rowGroups_.size());
 
     ParquetData::FilterRowGroupsResult res;
-    columnReader_->filterRowGroups(0, parquetStatsContext_, res);
-    if (auto& metadataFilter = options_.metadataFilter()) {
-      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
-    }
+    res.totalCount = rowGroups_.size();
+    res.filterResult.assign(bits::nwords(res.totalCount), 0);
 
-    uint64_t rowNumber = 0;
-    size_t freedThriftSize = 0;
-    for (auto i = 0; i < rowGroups_.size(); i++) {
+    // Pre-mark cheap exclusions (out-of-range, empty) so column-level
+    // statistics evaluation in ParquetData::filterRowGroups can skip them.
+    // The split's [offset, limit) typically covers a small subset of the
+    // file's row groups, so this avoids building stats and running testFilter
+    // on row groups owned by other splits. Cache rowGroupInRange separately
+    // because skippedStrides_ is only bumped for in-range exclusions.
+    std::vector<bool> rowGroupInRange(rowGroups_.size());
+    for (auto i = 0; i < rowGroups_.size(); ++i) {
       VELOX_CHECK_GT(rowGroups_[i].columns()->size(), 0);
-      auto fileOffset =
+      const auto fileOffset =
           (rowGroups_[i].file_offset() &&
            apache::thrift::can_throw(*rowGroups_[i].file_offset()) != 0)
           ? apache::thrift::can_throw(*rowGroups_[i].file_offset())
@@ -1478,16 +1481,25 @@ class ParquetRowReader::Impl {
                      rowGroups_[i].columns().value()[0].meta_data())
                      ->data_page_offset());
       VELOX_CHECK_GT(fileOffset, 0);
-      auto rowGroupInRange =
+      rowGroupInRange[i] =
           (fileOffset >= options_.offset() && fileOffset < options_.limit());
+      const bool isEmpty =
+          apache::thrift::can_throw(*rowGroups_[i].num_rows()) == 0;
+      if (!rowGroupInRange[i] || isEmpty) {
+        bits::setBit(res.filterResult.data(), i);
+      }
+    }
 
-      auto isExcluded =
-          (i < res.totalCount && bits::isBitSet(res.filterResult.data(), i));
-      auto isEmpty = apache::thrift::can_throw(*rowGroups_[i].num_rows()) == 0;
+    columnReader_->filterRowGroups(0, parquetStatsContext_, res);
+    if (auto& metadataFilter = options_.metadataFilter()) {
+      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
+    }
 
-      // Add a row group to read if it is within range and not empty and not in
-      // the excluded list.
-      if (rowGroupInRange && !isExcluded && !isEmpty) {
+    uint64_t rowNumber = 0;
+    size_t freedThriftSize = 0;
+    for (auto i = 0; i < rowGroups_.size(); i++) {
+      const bool isExcluded = bits::isBitSet(res.filterResult.data(), i);
+      if (!isExcluded) {
         rowGroupIds_.push_back(i);
         firstRowOfRowGroup_.push_back(rowNumber);
       } else {
@@ -1509,7 +1521,7 @@ class ParquetRowReader::Impl {
           // swap-with-empty idiom guarantees the allocation is released.
           std::vector<thrift::ColumnChunk>().swap(*rowGroups_[i].columns());
         }
-        if (rowGroupInRange) {
+        if (rowGroupInRange[i]) {
           skippedStrides_++;
         }
       }

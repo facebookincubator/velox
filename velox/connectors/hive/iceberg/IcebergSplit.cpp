@@ -92,4 +92,22 @@ HiveIcebergSplit::HiveIcebergSplit(
           std::nullopt),
       deleteFiles(std::move(deletes)),
       dataSequenceNumber(dataSequenceNumber) {}
+
+std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
+  return std::make_shared<HiveIcebergSplit>(
+      connectorId_,
+      filePath_,
+      fileFormat_,
+      start_,
+      length_,
+      partitionKeys_,
+      std::nullopt,
+      std::unordered_map<std::string, std::string>{},
+      nullptr,
+      /*cacheable=*/true,
+      deleteFiles_,
+      infoColumns_,
+      std::nullopt,
+      dataSequenceNumber_);
+}
 } // namespace facebook::velox::connector::hive::iceberg
