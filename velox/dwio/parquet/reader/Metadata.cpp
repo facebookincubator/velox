@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/parquet/reader/Metadata.h"
+#include "arrow/type.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 #include <thrift/lib/cpp2/FieldRef.h>
@@ -232,10 +233,62 @@ inline std::optional<std::string> getMax(
       : columnChunkStats.max().to_optional();
 }
 
+// Retrieves the minimum or maximum decimal value from column chunk statistics
+// based on the specified physical type and precision. Supports three physical
+// types to meet the requirements of Arrow: INT32, INT64, and
+// FIXED_LEN_BYTE_ARRAY.
+// https://github.com/apache/arrow/blob/apache-arrow-18.0.0/cpp/src/parquet/arrow/schema.cc#L363-L368
+// When min is true, it retrieves the minimum value; otherwise, it retrieves the
+// maximum value.
+template <typename T, bool min>
+inline std::optional<T> getDecimalMinMax(
+    const thrift::Statistics& columnChunkStats,
+    thrift::Type physicalType,
+    uint8_t precision) {
+  const char* data;
+  if constexpr (min) {
+    data = columnChunkStats.min_value()
+        ? columnChunkStats.min_value()->data()
+        : (columnChunkStats.min() ? columnChunkStats.min()->data() : nullptr);
+  } else {
+    data = columnChunkStats.max_value()
+        ? columnChunkStats.max_value()->data()
+        : (columnChunkStats.max() ? columnChunkStats.max()->data() : nullptr);
+  }
+
+  switch (physicalType) {
+    case thrift::Type::INT32:
+      return data ? std::optional<T>(load<int32_t>(data)) : std::nullopt;
+    case thrift::Type::INT64:
+      return data ? std::optional<T>(load<int64_t>(data)) : std::nullopt;
+    case thrift::Type::FIXED_LEN_BYTE_ARRAY: {
+      if (data == nullptr) {
+        return std::nullopt;
+      }
+      const auto size = arrow::DecimalType::DecimalSize(precision);
+      // Extracts min or max from big-endian string.
+      T value = 0;
+      for (auto i = 0; i < size; ++i) {
+        value = (value << 8) | (data[i] & 0xFF);
+      }
+
+      // If the value is negative, extend the sign bit.
+      const bool isNegative = (data[0] & 0x80) != 0;
+      if (isNegative) {
+        value -= (static_cast<T>(1) << (size * 8));
+      }
+      return std::optional<T>(value);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
     const thrift::Statistics& columnChunkStats,
     const velox::Type& type,
-    uint64_t numRowsInRowGroup) {
+    uint64_t numRowsInRowGroup,
+    thrift::Type physicalType) {
   std::optional<uint64_t> nullCount =
       columnChunkStats.null_count().to_optional();
   std::optional<uint64_t> valueCount = nullCount
@@ -250,7 +303,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
       return std::make_unique<dwio::common::BooleanColumnStatistics>(
           valueCount, hasNull, std::nullopt, std::nullopt, std::nullopt);
     case TypeKind::TINYINT:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -259,7 +312,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<int8_t>(columnChunkStats),
           std::nullopt);
     case TypeKind::SMALLINT:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -268,7 +321,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<int16_t>(columnChunkStats),
           std::nullopt);
     case TypeKind::INTEGER:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -276,15 +329,41 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMin<int32_t>(columnChunkStats),
           getMax<int32_t>(columnChunkStats),
           std::nullopt);
-    case TypeKind::BIGINT:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+    case TypeKind::BIGINT: {
+      std::optional<int64_t> min = type.isDecimal()
+          ? getDecimalMinMax<int64_t, true>(
+                columnChunkStats,
+                physicalType,
+                getDecimalPrecisionScale(type).first)
+          : getMin<int64_t>(columnChunkStats);
+      std::optional<int64_t> max = type.isDecimal()
+          ? getDecimalMinMax<int64_t, false>(
+                columnChunkStats,
+                physicalType,
+                getDecimalPrecisionScale(type).first)
+          : getMax<int64_t>(columnChunkStats);
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
           std::nullopt,
-          getMin<int64_t>(columnChunkStats),
-          getMax<int64_t>(columnChunkStats),
+          min,
+          max,
           std::nullopt);
+    }
+    case TypeKind::HUGEINT: {
+      const auto precision = getDecimalPrecisionScale(type).first;
+      return std::make_unique<dwio::common::IntegerColumnStatistics<int128_t>>(
+          valueCount,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          getDecimalMinMax<int128_t, true>(
+              columnChunkStats, physicalType, precision),
+          getDecimalMinMax<int128_t, false>(
+              columnChunkStats, physicalType, precision),
+          std::nullopt);
+    }
     case TypeKind::REAL:
       return std::make_unique<dwio::common::DoubleColumnStatistics>(
           valueCount,
@@ -384,12 +463,16 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
     const TypePtr type,
     int64_t numRows) {
   VELOX_CHECK(hasStatistics());
+  const auto physicalType = apache::thrift::can_throw(
+      *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+           ->type());
   return buildColumnStatisticsFromThrift(
       apache::thrift::can_throw(
           *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
                ->statistics()),
       *type,
-      numRows);
+      numRows,
+      physicalType);
 };
 
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
