@@ -48,10 +48,7 @@ StructColumnReader::StructColumnReader(
     if (!childSpecs[i]->readFromFile()) {
       continue;
     }
-    auto childFileType =
-        columnReaderOptions.columnMappingMode_ == dwio::common::ColumnMappingMode::kName
-        ? fileType_->childByName(childSpec->fieldName())
-        : fileType_->childAt(childSpec->channel());
+    auto childFileType = fileType_->childByName(childSpec->fieldName());
     auto childRequestedType =
         requestedType_->asRow().findChild(childSpec->fieldName());
     addChild(

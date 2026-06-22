@@ -1843,7 +1843,10 @@ TEST_F(ParquetReaderTest, readStructWithAllFieldsMissing) {
       [](vector_size_t row) { return row == 2; });
   auto expected = makeRowVector(readSchema->names(), {expectedStruct});
 
-  auto readerBundle = readerBuilder(*sink, readSchema).build();
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kName);
+  auto readerBundle =
+      readerBuilder(*sink, readSchema).options(readerOptions).build();
 
   assertReadWithReaderAndExpected(readSchema, *readerBundle.rowReader, expected, *leafPool_);
 }
