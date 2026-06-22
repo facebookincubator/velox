@@ -8,7 +8,7 @@
 # (installed VS2022 toolset, no internal NuGet toolset).
 param(
   [ValidateSet("Debug","Release")][string]$BuildType="Release",
-  [string]$VcpkgRoot=$(if($env:VCPKG_ROOT){$env:VCPKG_ROOT}elseif(Test-Path C:\vcpkg){"C:\vcpkg"}else{$null}),
+  [string]$VcpkgRoot=$(if($env:VCPKG_ROOT){$env:VCPKG_ROOT}elseif($env:VCPKG_INSTALLATION_ROOT){$env:VCPKG_INSTALLATION_ROOT}else{$null}),
   [string]$BuildDir="build-oss",
   [switch]$Configure  # configure only
 )

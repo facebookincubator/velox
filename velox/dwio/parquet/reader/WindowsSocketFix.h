@@ -18,7 +18,7 @@
 
 #ifdef _WIN32
 // Ensure target architecture is defined for Windows SDK headers
-// MSBuild normally sets this, but NuGet-based toolsets may not
+// MSBuild normally sets this, but some toolchains may not
 #if defined(_M_AMD64) && !defined(_AMD64_)
 #define _AMD64_
 #endif

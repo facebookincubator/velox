@@ -262,7 +262,7 @@ Write-Host "======================================================" -ForegroundC
 Write-Host ""
 
 if ($totalCount -eq 0) {
-    Write-Host "No test executables found. Build with: .\windows\build-windows.ps1 -WithTests" -ForegroundColor Yellow
+    Write-Host "No test executables found. Build with: .\windows\build-velox-oss.ps1 -WithTests" -ForegroundColor Yellow
     exit 1
 }
 

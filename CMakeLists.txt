@@ -907,8 +907,7 @@ endif()
 
 if(${VELOX_BUILD_TESTING})
   # Spark query runner depends on absl, gRPC, c-ares.
-  # These are not needed on Windows (Spark runner is Linux-only) and gRPC's
-  # FetchContent download fails in OneBranch network-isolated containers.
+  # These are not needed on Windows (the Spark query runner is Linux-only).
   if(NOT WIN32)
     velox_set_source(absl)
     velox_resolve_dependency(absl)
@@ -1248,27 +1247,6 @@ install(DIRECTORY velox/
         PATTERN "examples" EXCLUDE
         PATTERN "fuzzer" EXCLUDE
         PATTERN "tool" EXCLUDE)
-
-if(VELOX_MONO_LIBRARY)
-  # Generate and install CMake config files
-  include(CMakePackageConfigHelpers)
-
-  # Create velox-windows-config.cmake
-  configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/windows/vcpkg-port/velox-config.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/velox-windows-config.cmake"
-    INSTALL_DESTINATION lib/cmake/velox-windows
-  )
-
-  # Install the config file
-  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/velox-windows-config.cmake"
-          DESTINATION lib/cmake/velox-windows)
-
-  # Install the main library file
-  # The velox mono-library is built as a CMake object library, so we install the .lib file manually
-  install(FILES "${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE}/velox.lib"
-          DESTINATION lib)
-endif()
 
 # TODO: Include all other installation files. For now just making sure this
 # generates an installable makefile.
