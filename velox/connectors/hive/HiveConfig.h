@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <limits>
+
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/HiveConfigMacrosDefine.h"
 
@@ -87,6 +89,48 @@ class HiveConfig : public FileConfig {
       "Maximum nimble target file size. 0 means no limit.")
   static constexpr const char* kNimbleMaxTargetFileSize =
       "hive.nimble.writer.max-target-file-size";
+
+  // Backward-compatible names for Parquet reader options. The values are still
+  // translated by the Parquet reader factory using format-scoped configs.
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kParquetUseColumnNamesSession,
+      "parquet_use_column_names",
+      bool,
+      false,
+      "Map Parquet table field names to file field names using names, not indices.")
+  static constexpr const char* kParquetUseColumnNames =
+      "hive.parquet.use-column-names";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kParquetFooterSpeculativeIoSizeSession,
+      "parquet_footer_speculative_io_size",
+      uint64_t,
+      256UL << 10,
+      "Speculative tail-read size in bytes for Parquet files.")
+  static constexpr const char* kParquetFooterSpeculativeIoSize =
+      "hive.parquet.footer-speculative-io-size";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kAllowInt32NarrowingSession,
+      "parquet_allow_int32_narrowing",
+      bool,
+      false,
+      "Allow reading INT32 Parquet columns as a narrower integer type.")
+  static constexpr const char* kAllowInt32Narrowing =
+      "hive.parquet.allow-int32-narrowing";
+
+  static constexpr uint64_t kDefaultParquetFooterMemoryTrackingThreshold =
+      std::numeric_limits<uint64_t>::max();
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kParquetFooterMemoryTrackingThresholdSession,
+      "parquet_footer_memory_tracking_threshold",
+      uint64_t,
+      kDefaultParquetFooterMemoryTrackingThreshold,
+      "Serialized footer size in bytes beyond which the Parquet reader "
+      "estimates and reports the deserialized footer's heap footprint to "
+      "the memory pool. Defaults to disabled (max uint64).")
+  static constexpr const char* kParquetFooterMemoryTrackingThreshold =
+      "hive.parquet.footer-memory-tracking-threshold";
 
   // --- VELOX_HIVE_CONFIG properties ---
 
@@ -252,8 +296,13 @@ class HiveConfig : public FileConfig {
       dwio::common::FileFormat fileFormat,
       const config::ConfigBase* session) const;
 
+  /// Canonical connector name used to scope format-specific config keys.
+  static constexpr std::string_view kConnectorName = "hive";
+
   explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(std::move(config)) {}
+      : FileConfig(
+            std::move(config),
+            makeConnectorConfigPrefix(kConnectorName)) {}
 };
 
 } // namespace facebook::velox::connector::hive

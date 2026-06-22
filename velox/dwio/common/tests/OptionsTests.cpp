@@ -29,7 +29,13 @@ TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
 
 TEST(OptionsTests, fluxFileFormatRoundTrip) {
   ASSERT_EQ(FileFormat::FLUX, toFileFormat("flux"));
-  ASSERT_EQ("flux", toString(FileFormat::FLUX));
+  ASSERT_EQ("flux", FileFormatName::toName(FileFormat::FLUX));
+}
+
+TEST(OptionsTests, formatConfigPrefix) {
+  EXPECT_EQ("parquet.", formatConfigPrefix(FileFormat::PARQUET, "."));
+  EXPECT_EQ("parquet_", formatConfigPrefix(FileFormat::PARQUET, "_"));
+  EXPECT_EQ("", formatConfigPrefix(FileFormat::UNKNOWN, "."));
 }
 
 TEST(OptionsTests, setRowNumberColumnInfoTest) {

@@ -157,11 +157,12 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
       cache->incrementCachedPages(memory::AllocationTraits::numPages(size_));
       return;
     }
+    const auto failedSize = size_;
     release();
     VELOX_CACHE_ERROR(
         fmt::format(
             "Failed to allocate {} for contiguous cache: {}",
-            succinctBytes(size_),
+            succinctBytes(failedSize),
             cache->allocator()->getAndClearFailureMessage()));
   }
 
@@ -171,11 +172,12 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
     cache->incrementCachedPages(nonContiguousData().numPages());
     return;
   }
+  const auto failedPages = sizePages;
   release();
   VELOX_CACHE_ERROR(
       fmt::format(
           "Failed to allocate {} pages for cache: {}",
-          sizePages,
+          failedPages,
           cache->allocator()->getAndClearFailureMessage()));
 }
 
@@ -1203,10 +1205,7 @@ CoalesceIoStats readPins(
         int32_t end,
         uint64_t offset,
         const std::vector<folly::Range<char*>>& buffers)> readFunc) {
-  return coalesceIo<
-      CachePin,
-      folly::Range<char*>,
-      /*coalesceDuplicateRanges=*/false>(
+  return coalesceIo<CachePin, folly::Range<char*>>(
       pins,
       maxGap,
       rangesPerIo,

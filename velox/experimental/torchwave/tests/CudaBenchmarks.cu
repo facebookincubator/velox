@@ -30,6 +30,12 @@ DEFINE_int32(
     "0: simple kernel, 1: complex kernel with contiguous inputs, "
     "2: complex kernel with non-contiguous inputs");
 
+DEFINE_bool(
+    in_place,
+    false,
+    "If set, the kernel writes its result over one of the inputs instead of a "
+    "separate output tensor");
+
 namespace torch::wave {
 constexpr int32_t kBlockSize = 256;
 } // namespace torch::wave
@@ -280,17 +286,19 @@ int main(int argc, char** argv) {
   std::vector<Trial> trials;
 
   printf(
-      "Mode: complex_path=%d (%s kernel, %s inputs)\n",
+      "Mode: complex_path=%d (%s kernel, %s inputs)%s\n",
       FLAGS_complex_path,
       useComplexKernel ? "complex" : "simple",
-      nonContiguous ? "non-contiguous" : "contiguous");
+      nonContiguous ? "non-contiguous" : "contiguous",
+      FLAGS_in_place ? " [in-place]" : "");
 
   // Warmup: one kernel launch to initialize CUDA runtime.
   {
     int32_t warmupSize = kBlockSize;
     auto v0 = b0.slice(0, 0, warmupSize);
     auto v1 = b1.slice(0, 0, warmupSize);
-    auto v2 = b2.slice(0, 0, warmupSize);
+    // When in_place, the output aliases input b0 instead of a separate tensor.
+    auto v2 = FLAGS_in_place ? v0 : b2.slice(0, 0, warmupSize);
 
     if (useComplexKernel) {
       fillTensorParamComplex(
@@ -341,7 +349,8 @@ int main(int argc, char** argv) {
   for (int32_t dataSize = 256; dataSize <= kMaxSize; dataSize *= 2) {
     auto v0 = b0.slice(0, 0, dataSize);
     auto v1 = b1.slice(0, 0, dataSize);
-    auto v2 = b2.slice(0, 0, dataSize);
+    // When in_place, the output aliases input b0 instead of a separate tensor.
+    auto v2 = FLAGS_in_place ? v0 : b2.slice(0, 0, dataSize);
 
     if (useComplexKernel) {
       fillTensorParamComplex(
