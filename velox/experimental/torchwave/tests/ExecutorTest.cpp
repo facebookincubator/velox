@@ -30,6 +30,7 @@ DEFINE_string(
     "",
     "Custom test model base name (without .pt2/.pt extension)");
 DECLARE_string(reference_frame);
+DECLARE_string(save_reference_frame);
 
 namespace torch::wave {
 namespace {
@@ -162,6 +163,64 @@ TEST_F(ExecutorTest, cumsumTest) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/cumsum_test.pt2", "data/cumsum_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+// Repro for the cumsum-reads-stale-input race that the materializeInput fix
+// addresses: many concurrent cumsums each read a select-view of a wave-produced
+// cast ((x+off).to(int32)[:, 0, 1]).  Without materializeInput the cast
+// producer is fused into the cumsum kernel and the scan reads its per-block
+// border cross-block before it is written (a race that needs scale -- 64 chains
+// -- to lose reliably; fewer chains pass even when broken).  With the fix the
+// producer is a separate prior launch, so all modes pass deterministically.
+// Reproduces the bug without the 24GB ads reference frame.
+TEST_F(ExecutorTest, cumsumFusedProducerTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/cumsum_fused_producer_test.pt2",
+      "data/cumsum_fused_producer_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cumsum_fused_producer_test.pt2",
+      "data/cumsum_fused_producer_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/cumsum_fused_producer_test.pt2",
+      "data/cumsum_fused_producer_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+// Repro candidate for the ads cross-composite cumsum bug (value %3187): the
+// cumsum reads a select-view of a MULTI-CONSUMER wave-produced cast (so the
+// cast materializes as a standalone placed after the scan, unlike a fused
+// single-consumer cast), feeds an exclusive-prefix cat([zeros[1],
+// cumsum[:-1]]), alongside a co-located cumsum(new_ones) range-gen -- the three
+// structural ingredients prior synthetics lacked.
+TEST_F(ExecutorTest, cumsumOffsetsReproTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/cumsum_offsets_repro_test.pt2",
+      "data/cumsum_offsets_repro_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cumsum_offsets_repro_test.pt2",
+      "data/cumsum_offsets_repro_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/cumsum_offsets_repro_test.pt2",
+      "data/cumsum_offsets_repro_test_results.pt",
+      "cg");
   WaveConfig::get().isCg = std::nullopt;
 }
 
@@ -448,6 +507,50 @@ TEST_F(ExecutorTest, referenceFrame) {
   std::remove(refPath.c_str());
 }
 
+// Reference-verify round trip on a graph that produces a shape-only meta
+// output. index_get with arithmetic on the indices (clamp(idx * 3 + 2, ...))
+// yields an index that a gather consumes only as a register argument, so wave
+// never materializes it into a real frame tensor -- it allocates a meta
+// placeholder for shape inference only.  The authoritative reference is saved
+// from the serial CPU run (real tensors), so the wave-side meta is not
+// serialized (that would crash in serializeReferenceFrame).  The wave run then
+// verifies its intermediates against the reference: without the CompiledOp
+// meta-skip in verifyAgainstReference the meta output is compared element-wise
+// and aborts in firstDifference ("Cannot copy out of meta tensor; no data!").
+// The fix skips an intentional shape-only meta, whose correctness is covered by
+// verifying its data-consumer's output.
+TEST_F(ExecutorTest, shapeOnlyMetaReferenceFrame) {
+  auto pt2Path = getDataFilePath(dataDir(), "data/index_get_test.pt2");
+  auto resultsPath =
+      getDataFilePath(dataDir(), "data/index_get_test_results.pt");
+  auto expected = loadReferenceValues(resultsPath);
+
+  auto refPath = fmt::format(
+      "/tmp/torchwave_shape_only_meta_ref_{}.pt", static_cast<int>(getpid()));
+
+  // Save the authoritative reference from the serial CPU run (real tensors).
+  auto fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  FLAGS_save_reference_frame = refPath;
+  runSerial(*fixture, expected);
+  FLAGS_save_reference_frame = "";
+
+  // Verify the wave run (which holds the shape-only meta) against the
+  // reference. Reload the fixture since makeModelContext moves the graph.
+  fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+  FLAGS_reference_frame = refPath;
+  runWave(*fixture, expected);
+  FLAGS_reference_frame = "";
+
+  LOG(INFO) << "Reference frame: " << lastRefTensorsChecked_ << " tensors, "
+            << lastRefNodesChecked_ << " nodes checked";
+  EXPECT_GT(lastRefTensorsChecked_, 0);
+
+  std::remove(refPath.c_str());
+}
+
 TEST_F(ExecutorTest, custom) {
   if (FLAGS_custom.empty()) {
     return;
@@ -475,6 +578,65 @@ TEST_F(ExecutorTest, cloneContiguousTest) {
 TEST_F(ExecutorTest, broadcastEmptyTest) {
   runTest(
       "data/broadcast_empty_test.pt2", "data/broadcast_empty_test_results.pt");
+}
+
+// clamp(x, min=None, max=5): a None min is an absent optional carried as a
+// None-typed input value.  It must select __clamp<false, true> (no lower
+// bound) rather than __clamp<true, true> with a None->0 min, otherwise negative
+// inputs are wrongly clamped up to 0.
+TEST_F(ExecutorTest, clampNoneMinTest) {
+  runTest(
+      "data/clamp_none_min_test.pt2", "data/clamp_none_min_test_results.pt");
+}
+
+// cumsum(x[:, 1], dim=0): the input is a non-contiguous column view (select
+// dim=1, stride = ncols).  The scan must honor the stride rather than reading
+// the backing storage contiguously.
+TEST_F(ExecutorTest, cumsumSelectTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/cumsum_select_test.pt2",
+      "data/cumsum_select_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cumsum_select_test.pt2",
+      "data/cumsum_select_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/cumsum_select_test.pt2",
+      "data/cumsum_select_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+// cumsum over a doubly-strided view (x[:, 0, 1] via two chained selects on a 3D
+// tensor), matching the ads-preproc range pattern.  The view must not be
+// mistaken for contiguous; otherwise the scan reads x's row-major storage.
+TEST_F(ExecutorTest, cumsumSelect3dTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/cumsum_select3d_test.pt2",
+      "data/cumsum_select3d_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cumsum_select3d_test.pt2",
+      "data/cumsum_select3d_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/cumsum_select3d_test.pt2",
+      "data/cumsum_select3d_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
 }
 
 } // namespace

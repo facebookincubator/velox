@@ -63,6 +63,26 @@ __device__ void __copy(Tensor* source, T* dest, BlockInfo& block) {
   }
 }
 
+// Like __copy, but value-converts each element from SrcT to DstT (e.g. a cat of
+// mixed dtypes, where torch promotes an int64 element into a float output).
+template <typename SrcT, typename DstT>
+__device__ void __copyConvert(Tensor* source, DstT* dest, BlockInfo& block) {
+  auto n = source->numEl;
+  uint32_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  uint32_t stride = block.numBlocksInOp * blockDim.x;
+  if (source->contiguous) {
+    auto* src = storage<SrcT>(source);
+    for (uint32_t i = start; i < n; i += stride) {
+      dest[i] = static_cast<DstT>(src[i]);
+    }
+  } else {
+    for (uint32_t i = start; i < n; i += stride) {
+      dest[i] =
+          static_cast<DstT>(storage<SrcT>(source)[source->indexToOffset(i)]);
+    }
+  }
+}
+
 __device__ inline void copyTensorHead(const Tensor* in, Tensor* out) {
   out->storage = in->storage;
   out->rank = in->rank;

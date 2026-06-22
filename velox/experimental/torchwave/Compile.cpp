@@ -103,13 +103,22 @@ void extractSubgraphInputs(
     CompileCtx::NodeSet& placed,
     std::unordered_set<ValueCP>& seen,
     std::vector<ValueCP>& result) {
-  for (auto& input : node->inputs()) {
-    auto* value = input.value;
+  const auto* meta = Registry::metadata(node->target());
+  const auto& nodeInputs = node->inputs();
+  for (size_t i = 0; i < nodeInputs.size(); ++i) {
+    auto* value = nodeInputs[i].value;
     auto* producer = value->producer();
     if (producer && producer->target() == "prim.Input") {
       placed.insert(producer);
     }
-    if (!producer || inputs.count(producer) || placed.count(producer)) {
+    // A materializeInput argument (e.g. a scan reading the whole tensor
+    // cross-block) requires its producer in a separate prior kernel; treat it
+    // as a subgraph boundary so the producer is not fused into this kernel,
+    // where its per-block writes would race with this op's cross-block reads.
+    bool boundary = meta && i < meta->argumentMeta.size() &&
+        meta->argumentMeta[i].materializeInput;
+    if (boundary || !producer || inputs.count(producer) ||
+        placed.count(producer)) {
       if (seen.insert(value).second) {
         result.push_back(value);
       }
@@ -172,7 +181,11 @@ bool tensorMetaCompatible(
 bool isParamPresent(NodeCP node, std::string_view name) {
   for (const auto& input : node->inputs()) {
     if (input.name == name) {
-      return true;
+      // A None-typed input slot represents an absent optional argument (e.g.
+      // clamp(self, min=None, max=5)).  It must NOT count as present, otherwise
+      // the op selects the wrong presence template (e.g. __clamp<true, true>
+      // reading a None->0 min) and dedup merges it with present-arg ops.
+      return input.value->type().kind() != nativert::Type::Kind::None;
     }
   }
   const auto* attr = node->tryGetAttribute(std::string(name));
@@ -811,6 +824,77 @@ LaunchGrid CompileCtx::makeGrid(NodeCP node) {
   if (result == Context::kFused) {
     pushdownFused(node);
   }
+
+  // Topological relevel.  placeKernelLaunch orders a consumer after producers
+  // already in grid_, but a producer processed AFTER its consumer (e.g. a
+  // materialized scan input reached via a view chain) lands at the same or an
+  // earlier level, co-scheduling them in one composite step.  Bump every launch
+  // to a level strictly greater than each launch producing its inputs.  This is
+  // monotonic (levels only increase), so it preserves all existing ordering and
+  // only adds the missing producer-before-consumer edges.
+  {
+    struct GItem {
+      Launch launch;
+      int32_t level;
+    };
+    std::vector<GItem> items;
+    for (int32_t lvl = 0; lvl < static_cast<int32_t>(grid_.size()); ++lvl) {
+      for (auto& l : grid_[lvl]) {
+        items.push_back({std::move(l), lvl});
+      }
+    }
+    std::unordered_map<nativert::ValueId, size_t> producerOf;
+    for (size_t i = 0; i < items.size(); ++i) {
+      const auto& l = items[i].launch;
+      if (l.standalone) {
+        for (auto* o : l.standalone->outputs()) {
+          producerOf[o->id()] = i;
+        }
+      } else if (l.op) {
+        for (auto oid : l.op->orderingOutputs()) {
+          producerOf[oid] = i;
+        }
+      }
+    }
+    auto forEachInput = [](const Launch& l, const auto& fn) {
+      if (l.standalone) {
+        for (const auto& in : l.standalone->inputs()) {
+          fn(in.value->id());
+        }
+      } else if (l.op) {
+        for (auto id : l.op->orderingInputs()) {
+          fn(id);
+        }
+      }
+    };
+    bool changed = true;
+    size_t guard = 0;
+    while (changed && guard++ <= items.size() + 1) {
+      changed = false;
+      for (size_t i = 0; i < items.size(); ++i) {
+        int32_t need = items[i].level;
+        forEachInput(items[i].launch, [&](nativert::ValueId id) {
+          auto it = producerOf.find(id);
+          if (it != producerOf.end() && it->second != i) {
+            need = std::max(need, items[it->second].level + 1);
+          }
+        });
+        if (need > items[i].level) {
+          items[i].level = need;
+          changed = true;
+        }
+      }
+    }
+    int32_t maxLevel = 0;
+    for (const auto& it : items) {
+      maxLevel = std::max(maxLevel, it.level);
+    }
+    grid_.assign(static_cast<size_t>(maxLevel) + 1, {});
+    for (auto& it : items) {
+      grid_[it.level].push_back(std::move(it.launch));
+    }
+  }
+
   return std::move(grid_);
 }
 
@@ -885,14 +969,22 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
-    if (isPrevKernel) {
-      // The producer of an inputFromPreviousKernel argument is always its own
-      // kernel stage: there is a kernel break between it and this op.  Place
-      // its own inputs, then push it directly.  Otherwise, when the producer's
-      // isKernelBreak is false (e.g. a single-block scan head) it returns
-      // kFused and is collected into this op's fusedInputs -- which the
-      // kFusedBreak path below discards, leaving this op reading a buffer its
-      // producer never wrote (an orphaned scan stage).
+    bool isMaterialize = meta &&
+        i < static_cast<int>(meta->argumentMeta.size()) &&
+        meta->argumentMeta[i].materializeInput;
+    if (isPrevKernel || isMaterialize) {
+      // The producer of an inputFromPreviousKernel OR a materializeInput
+      // argument is its own kernel stage: there is a kernel break between it
+      // and this op (the extractSubgraphInputs/codegen boundary already treats
+      // a materializeInput producer as external; placement must match so the
+      // producer is a separate launch that MATERIALIZES the value the consumer
+      // reads -- otherwise it is fused in and the consumer reads an
+      // unmaterialized buffer).  Place its own inputs, then push it directly.
+      // Otherwise, when the producer's isKernelBreak is false (e.g. an
+      // elementwise add/_to_copy feeding a scan) it returns kFused and is
+      // collected into this op's fusedInputs -- which the kFusedBreak path
+      // below discards, leaving this op reading a buffer its producer never
+      // wrote.
       if (producer && !placed_.count(producer) &&
           !(inputs_ && inputs_->count(producer))) {
         placeKernels(producer, Context::kFused);
@@ -1311,8 +1403,16 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   // generatingOp_).
   auto memOutputs = generatingOp_->memOutputs();
 
-  for (const auto& input : node->inputs()) {
+  for (size_t i = 0; i < node->inputs().size(); ++i) {
+    const auto& input = node->inputs()[i];
     auto* value = input.value;
+    // A materializeInput argument is a subgraph boundary (see
+    // extractSubgraphInputs): its producer is a separate prior kernel, so do
+    // not regenerate it as a border in this kernel.
+    if (meta && i < meta->argumentMeta.size() &&
+        meta->argumentMeta[i].materializeInput) {
+      continue;
+    }
     if (memOutputs.count(value)) {
       auto* producer = value->producer();
       if (producer && !placed_.count(producer)) {
@@ -1560,7 +1660,6 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     return result;
   }
   const auto& schemaArgs = meta.functionSchema->arguments();
-  const auto& nodeInputs = node->inputs();
   for (size_t i = 0; i < schemaArgs.size(); ++i) {
     if (i >= meta.argumentMeta.size() ||
         !meta.argumentMeta[i].hasPresentTemplateParam) {
@@ -1569,21 +1668,9 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     if (!result.empty()) {
       result += ", ";
     }
-    bool present = false;
-    const auto& argName = schemaArgs[i].name();
-    for (const auto& input : nodeInputs) {
-      if (input.name == argName) {
-        present = true;
-        break;
-      }
-    }
-    if (!present) {
-      const auto* attr = node->tryGetAttribute(argName);
-      if (attr && !std::holds_alternative<nativert::None>(attr->value)) {
-        present = true;
-      }
-    }
-    result += present ? "true" : "false";
+    // Use the same presence rule as dedup (isParamPresent), which treats a
+    // None-typed input slot as absent.
+    result += isParamPresent(node, schemaArgs[i].name()) ? "true" : "false";
   }
   return result;
 }
@@ -1848,8 +1935,18 @@ void CompileCtx::emitCopy(
     const std::string& destOffsetExpr,
     const std::string& cudaTypeName) {
   auto& op = *generatingOp_;
-  code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
-        << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  auto srcTypeName = cudaType(source);
+  if (srcTypeName != cudaTypeName) {
+    // Mixed-dtype cat element (e.g. an int64 cumsum slice copied into a float
+    // cat output, where torch type-promotes the element): value-convert rather
+    // than bit-copy, which would reinterpret the source bytes.
+    code_ << "  __copyConvert<" << srcTypeName << ", " << cudaTypeName << ">("
+          << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  } else {
+    code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  }
   if (!destOffsetExpr.empty()) {
     code_ << " + " << destOffsetExpr;
   }

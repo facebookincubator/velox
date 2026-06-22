@@ -477,10 +477,21 @@ void catSpecialForm(
     auto* producer = elem->producer();
     auto* producerMeta =
         producer ? Registry::metadata(producer->target()) : nullptr;
-    bool isCopyInput = !producer || ctx->generatingOp()->isInput(elem) ||
-        (producerMeta && producerMeta->isView());
+    bool isSubgraphInput = !producer || ctx->generatingOp()->isInput(elem);
+    bool producerIsView = producerMeta && producerMeta->isView();
+    bool isCopyInput = isSubgraphInput || producerIsView;
     if (isCopyInput) {
       auto& op = *ctx->generatingOp();
+      // A view element (e.g. slice(cumsum(...)) in an exclusive-prefix
+      // cat([zeros, cumsum[:-1]])) is metadata-only, but its producer chain
+      // holds interior fused compute that must still run -- otherwise the copy
+      // below reads the buffer the view aliases before anything wrote it.
+      // fusedCode recurses through the view into that producer (the cumsum) and
+      // is idempotent on already-placed nodes.
+      if (producerIsView && !isSubgraphInput && !ctx->isPlaced(producer)) {
+        auto viewSpecs = outputSpecs(producer);
+        ctx->fusedCode(producer, viewSpecs);
+      }
       std::string incrExpr;
       for (size_t j = lastAccumulated + 1; j < i; ++j) {
         auto p = ctx->param(elements[j], op);

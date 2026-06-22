@@ -143,6 +143,14 @@ struct ArgumentMeta {
   /// a barrier.
   bool randomAccess{false};
 
+  /// If true, this input's producer must NOT be fused into this op's kernel: it
+  /// must be materialized by a separate (prior) kernel.  Used by ops that read
+  /// the whole input cross-block (e.g. scans), where a fused producer's
+  /// per-block writes would race with this op's cross-block reads.  Unlike
+  /// randomAccess (an in-kernel barrier), this forces a kernel boundary at
+  /// subgraph extraction time.
+  bool materializeInput{false};
+
   /// If true, emits a bool template parameter indicating whether this argument
   /// is present with a non-None value. Absent arguments and None-valued
   /// attributes both produce false.
