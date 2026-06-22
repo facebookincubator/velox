@@ -257,7 +257,8 @@ bool CudfWindow::canRunOnGPU(
   for (const auto& func : windowNode.windowFunctions()) {
     const auto baseName =
         stripFunctionPrefix(func.functionCall->name(), prefix);
-    if (!isSupportedWindowFunction(baseName, func.functionCall->inputs().size())) {
+    if (!isSupportedWindowFunction(
+            baseName, func.functionCall->inputs().size())) {
       if (reason) {
         *reason = fmt::format(
             "Unsupported window function: {}", func.functionCall->name());
@@ -270,16 +271,16 @@ bool CudfWindow::canRunOnGPU(
       if (!std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
               func.functionCall->inputs()[1])) {
         if (reason) {
-          *reason = fmt::format(
-              "Non-constant offset for {} not supported", baseName);
+          *reason =
+              fmt::format("Non-constant offset for {} not supported", baseName);
         }
         return false;
       }
     }
 
-    const bool usesFrame = baseName == "first_value" || baseName == "last_value" ||
-        baseName == "sum" || baseName == "min" || baseName == "max" ||
-        baseName == "count" || baseName == "avg";
+    const bool usesFrame = baseName == "first_value" ||
+        baseName == "last_value" || baseName == "sum" || baseName == "min" ||
+        baseName == "max" || baseName == "count" || baseName == "avg";
 
     if (usesFrame) {
       if (auto channel = resolveInputChannel(func, inputType)) {
@@ -311,8 +312,8 @@ bool CudfWindow::canRunOnGPU(
         if (type == core::WindowNode::BoundType::kPreceding ||
             type == core::WindowNode::BoundType::kFollowing) {
           return !value ||
-              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
-                  value) != nullptr;
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(value) !=
+              nullptr;
         }
         return true;
       };
@@ -774,13 +775,13 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
     if (baseName == "row_number" || baseName == "rank" ||
         baseName == "dense_rank") {
-      windowResultCols[funcIndex] = computeRankColumn(
-          sortedView, baseName, rankGrouper.get(), stream_);
+      windowResultCols[funcIndex] =
+          computeRankColumn(sortedView, baseName, rankGrouper.get(), stream_);
     } else if (baseName == "lag" || baseName == "lead") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
-      windowResultCols[funcIndex] = computeLeadLagColumn(
-          partKeys, inputCol, func, baseName, stream_);
+      windowResultCols[funcIndex] =
+          computeLeadLagColumn(partKeys, inputCol, func, baseName, stream_);
     } else if (baseName == "first_value" || baseName == "last_value") {
       auto inputColIdx = resolveInputColumn(func);
       auto inputCol = sortedView.column(inputColIdx);
@@ -858,8 +859,9 @@ RowVectorPtr CudfWindow::doGetOutput() {
         std::vector<cudf::rolling_request> rollingRequests;
         rollingRequests.reserve(pendingRequests.size());
         for (auto& pending : pendingRequests) {
-          rollingRequests.push_back(cudf::rolling_request{
-              pending.inputCol, 1, std::move(pending.agg)});
+          rollingRequests.push_back(
+              cudf::rolling_request{
+                  pending.inputCol, 1, std::move(pending.agg)});
         }
         auto batchResult = cudf::grouped_range_rolling_window(
             partKeys,

@@ -272,7 +272,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_window_test
   SOURCES Main.cpp WindowTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window
 )
 
 add_subdirectory(iceberg)
