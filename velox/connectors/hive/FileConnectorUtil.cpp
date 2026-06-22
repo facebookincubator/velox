@@ -277,12 +277,14 @@ bool testFilterOnConstantVector(
 bool testFilters(
     const common::ScanSpec* scanSpec,
     const dwio::common::Reader* reader,
+    const RowTypePtr& requestedType,
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
     const std::unordered_map<std::string, FileColumnHandlePtr>&
         partitionKeysHandle,
-    bool asLocalTime) {
+    bool asLocalTime,
+    dwio::common::FileFormat fileFormat) {
   const auto totalRows = reader->numberOfRows();
   const auto& fileTypeWithId = reader->typeWithId();
   const auto& rowType = reader->rowType();
@@ -340,13 +342,24 @@ bool testFilters(
         }
       } else {
         const auto& typeWithId = fileTypeWithId->childByName(name);
+        // Parquet statistics are in the file scale, so a filter on values read
+        // with a different decimal scale is rejected before they are compared.
+        const auto requestedIndex = requestedType->getChildIdxIfExists(name);
+        if (fileFormat == dwio::common::FileFormat::PARQUET &&
+            requestedIndex.has_value()) {
+          common::checkFilterOnRescaledDecimal(
+              *child->filter(),
+              *typeWithId->type(),
+              *requestedType->childAt(requestedIndex.value()));
+        }
         const auto columnStats = reader->columnStatistics(typeWithId->id());
         if (columnStats != nullptr &&
             !testFilter(
                 child->filter(),
                 columnStats.get(),
                 totalRows.value(),
-                typeWithId->type())) {
+                typeWithId->type(),
+                fileFormat)) {
           VLOG(1) << "Skipping " << filePath
                   << " based on stats and filter for column "
                   << child->fieldName();

@@ -1262,6 +1262,30 @@ TEST_F(
           {"col"}, {makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(12, 2))}));
 }
 
+// Statistics are in the file scale, so a filter on the values of a column read
+// with a different decimal scale is rejected when row groups are filtered, even
+// if the statistics of another column exclude every row group.
+TEST_F(ParquetReaderWideningTest, intToDecimalWithScaleRejectsFilter) {
+  auto writeData = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int32_t>({-100, 0, 50, 100}),
+       makeFlatVector<int32_t>({1, 2, 3, 4})});
+  auto readSchema = ROW({"a", "b"}, {DECIMAL(12, 2), INTEGER()});
+  auto* sink = write(writeData);
+  auto reader =
+      createReaderInMemory(*sink, makeWideningReaderOptions(readSchema));
+  auto scanSpec = makeScanSpec(readSchema);
+  scanSpec->getOrCreateChild(common::Subfield("a"))
+      ->setFilter(exec::greaterThanOrEqual(5'000));
+  scanSpec->getOrCreateChild(common::Subfield("b"))
+      ->setFilter(exec::greaterThanOrEqual(5));
+  auto rowReaderOpts = makeRowReaderOpts(readSchema);
+  rowReaderOpts.setScanSpec(scanSpec);
+  VELOX_ASSERT_USER_THROW(
+      reader->createRowReader(rowReaderOpts),
+      "Filter pushdown is not accepted. Requested type: DECIMAL(12, 2), file type: INTEGER.");
+}
+
 // HugeintRange filter not yet supported for widened columns. See #16895.
 TEST_F(ParquetReaderWideningTest, DISABLED_bigintToDecimalWideningWithFilter) {
   auto writeData =

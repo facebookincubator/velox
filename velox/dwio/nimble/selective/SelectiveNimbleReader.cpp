@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/index/IndexLookup.h"
 
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
@@ -123,7 +124,7 @@ uint64_t sumProjectedLogicalSize(
 
 // Converts exact-width bounds to Velox's integer statistics representation.
 template <typename T>
-std::unique_ptr<dwio::common::IntegerColumnStatistics>
+std::unique_ptr<dwio::common::IntegerColumnStatistics<>>
 makeIntegerColumnStatistics(
     const std::optional<std::pair<ChunkStatValue, ChunkStatValue>>& bounds,
     const std::optional<uint64_t>& numValues,
@@ -139,7 +140,7 @@ makeIntegerColumnStatistics(
     min = static_cast<int64_t>(*typedMin);
     max = static_cast<int64_t>(*typedMax);
   }
-  return std::make_unique<dwio::common::IntegerColumnStatistics>(
+  return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
       numValues, hasNull, std::nullopt, std::nullopt, min, max, std::nullopt);
 }
 
@@ -307,7 +308,11 @@ void filterStreamByChunkStats(
         streamIndex, chunkIndex, endRow - startRow, columnType->kind());
     if (stats != nullptr &&
         !common::testFilter(
-            filter, stats.get(), endRow - startRow, columnType)) {
+            filter,
+            stats.get(),
+            endRow - startRow,
+            columnType,
+            dwio::common::FileFormat::NIMBLE)) {
       ranges.emplace_back(startRow, endRow);
     }
     startRow = endRow;

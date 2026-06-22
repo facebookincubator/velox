@@ -230,11 +230,13 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   if (!testFilters(
           scanSpec.get(),
           deleteReader.get(),
+          deleteFileSchema,
           deleteSplit->filePath,
           deleteSplit->partitionKeys,
           {},
           fileConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
+              connectorQueryCtx->sessionProperties()),
+          deleteSplit->fileFormat)) {
     runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
     return;
   }

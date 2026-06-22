@@ -31,7 +31,8 @@
 namespace facebook::velox {
 namespace dwio::common {
 class ColumnStatistics;
-}
+enum class FileFormat;
+} // namespace dwio::common
 namespace common {
 
 /// Describes the filtering and value extraction for a
@@ -637,7 +638,18 @@ bool testFilter(
     const common::Filter* filter,
     dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
-    const TypePtr& type);
+    const TypePtr& type,
+    dwio::common::FileFormat fileFormat);
+
+/// Throws a user error if 'filter' tests the values of a column stored as
+/// 'fileType' and read as the decimal 'requestedType' with a different scale.
+/// The file values and their statistics are in the file scale, while the
+/// filter is in the requested scale. Filters that do not test values, such as
+/// IS NULL, are accepted. An integer 'fileType' has scale 0.
+void checkFilterOnRescaledDecimal(
+    const Filter& filter,
+    const Type& fileType,
+    const Type& requestedType);
 
 } // namespace common
 } // namespace facebook::velox
