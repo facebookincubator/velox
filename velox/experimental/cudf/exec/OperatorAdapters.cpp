@@ -1269,8 +1269,10 @@ void registerAllOperatorAdapters() {
   if (CudfConfig::getInstance().exchange) {
     exec::OutputBufferManagerRegistry::global().insert(
         std::string{core::TransportKind::kUcx},
-        ucx_exchange::UcxOutputQueueManager::getInstanceRef(),
-        true);
+        std::make_shared<exec::OutputBufferManagerEntry>(
+            exec::OutputBufferManagerEntry{
+                ucx_exchange::UcxOutputQueueManager::getInstanceRef(), {}}),
+        /*overwrite=*/true);
   }
 
   // Register all adapters
