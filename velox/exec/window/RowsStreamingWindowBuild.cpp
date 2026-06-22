@@ -16,11 +16,14 @@
 
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/VectorWindowPartition.h"
+
+#include <algorithm>
 
 namespace facebook::velox::exec::window {
 
 namespace {
+
 bool hasRangeFrame(const std::shared_ptr<const core::WindowNode>& windowNode) {
   for (const auto& function : windowNode->windowFunctions()) {
     if (function.frame.type == core::WindowNode::WindowType::kRange) {
@@ -28,6 +31,45 @@ bool hasRangeFrame(const std::shared_ptr<const core::WindowNode>& windowNode) {
     }
   }
   return false;
+}
+
+void appendUnique(
+    std::vector<column_index_t>& channels,
+    column_index_t channel) {
+  if (std::find(channels.begin(), channels.end(), channel) == channels.end()) {
+    channels.push_back(channel);
+  }
+}
+
+// Returns the deduplicated input channels referenced by 'keyInfo', in
+// first-seen order.
+std::vector<column_index_t> keyChannels(
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo,
+    const std::vector<column_index_t>& inputChannels) {
+  std::vector<column_index_t> channels;
+  channels.reserve(keyInfo.size());
+  for (const auto& key : keyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  return channels;
+}
+
+// Returns the deduplicated input channels referenced by the partition and sort
+// keys, in first-seen order.
+std::vector<column_index_t> keyChannels(
+    const std::vector<std::pair<column_index_t, core::SortOrder>>&
+        partitionKeyInfo,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    const std::vector<column_index_t>& inputChannels) {
+  std::vector<column_index_t> channels;
+  channels.reserve(partitionKeyInfo.size() + sortKeyInfo.size());
+  for (const auto& key : partitionKeyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  for (const auto& key : sortKeyInfo) {
+    appendUnique(channels, inputChannels[key.first]);
+  }
+  return channels;
 }
 } // namespace
 
@@ -37,9 +79,13 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     const common::SpillConfig* spillConfig,
     tsan_atomic<bool>* nonReclaimableSection)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection),
-      hasRangeFrame_(hasRangeFrame(windowNode)) {
-  initializeRowContainer(pool);
-  initializeDecodedInputVectors();
+      hasRangeFrame_(hasRangeFrame(windowNode)),
+      partitionKeyValues_(keyChannels(partitionKeyInfo_, inputChannels_), pool),
+      peerKeyValues_(keyChannels(sortKeyInfo_, inputChannels_), pool),
+      boundaryKeyChannels_(
+          keyChannels(partitionKeyInfo_, sortKeyInfo_, inputChannels_)),
+      pool_(pool) {
+  VELOX_CHECK_NOT_NULL(pool_);
   velox::common::testutil::TestValue::adjust(
       "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
       this);
@@ -53,62 +99,75 @@ bool RowsStreamingWindowBuild::needsInput() {
 void RowsStreamingWindowBuild::ensureInputPartition() {
   if (windowPartitions_.empty() || windowPartitions_.back()->complete()) {
     windowPartitions_.emplace_back(
-        std::make_shared<WindowPartition>(
-            data_.get(), inversedInputChannels_, sortKeyInfo_));
+        std::make_shared<VectorWindowPartition>(
+            inputChannels_, inversedInputChannels_, sortKeyInfo_, pool_));
   }
 }
 
 void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
-  if (inputRows_.empty()) {
+  if (currentRanges_.empty()) {
+    if (finished && !windowPartitions_.empty() &&
+        !windowPartitions_.back()->complete()) {
+      windowPartitions_.back()->setComplete();
+    }
     return;
   }
 
   ensureInputPartition();
-  windowPartitions_.back()->addRows(inputRows_);
+  auto partition =
+      std::static_pointer_cast<VectorWindowPartition>(windowPartitions_.back());
+  for (const auto& range : currentRanges_) {
+    partition->addRows(range.input, range.startRow, range.endRow);
+  }
 
   if (finished) {
     windowPartitions_.back()->setComplete();
   }
 
-  inputRows_.clear();
-  inputRows_.shrink_to_fit();
+  currentRanges_.clear();
+  pendingRowCount_ = 0;
 }
 
 void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
-  for (auto i = 0; i < inputChannels_.size(); ++i) {
-    decodedInputVectors_[i].decode(*input->childAt(inputChannels_[i]));
-  }
+  loadBoundaryColumns(input);
 
+  vector_size_t rangeStart = 0;
   for (auto row = 0; row < input->size(); ++row) {
-    char* newRow = data_->newRow();
-
-    for (auto col = 0; col < input->childrenSize(); ++col) {
-      data_->store(decodedInputVectors_[col], row, newRow, col);
-    }
-
-    if (previousRow_ != nullptr &&
-        compareRowsWithKeys(previousRow_, newRow, partitionKeyInfo_)) {
+    const bool hasPreviousRow = row > 0 || partitionKeyValues_.hasValue();
+    if (isNewPartition(input, row)) {
+      flushRange(input, rangeStart, row);
       addPartitionInputs(true);
+      rangeStart = row;
     }
-
-    if (previousRow_ != nullptr && inputRows_.size() >= numRowsPerOutput_) {
+    if (hasPreviousRow && pendingRowCount_ >= numRowsPerOutput_) {
       // Needs to wait the peer group ready for range frame.
       if (hasRangeFrame_) {
-        if (compareRowsWithKeys(previousRow_, newRow, sortKeyInfo_)) {
+        if (isNewPeerGroup(input, row)) {
+          flushRange(input, rangeStart, row);
           addPartitionInputs(false);
+          rangeStart = row;
         }
       } else {
+        flushRange(input, rangeStart, row);
         addPartitionInputs(false);
+        rangeStart = row;
       }
     }
 
-    inputRows_.push_back(newRow);
-    previousRow_ = newRow;
+    ++pendingRowCount_;
+  }
+
+  flushRange(input, rangeStart, input->size());
+  if (input->size() > 0) {
+    partitionKeyValues_.capture(input, input->size() - 1);
+    peerKeyValues_.capture(input, input->size() - 1);
   }
 }
 
 void RowsStreamingWindowBuild::noMoreInput() {
   addPartitionInputs(true);
+  partitionKeyValues_.reset();
+  peerKeyValues_.reset();
 }
 
 std::shared_ptr<WindowPartition> RowsStreamingWindowBuild::nextPartition() {
@@ -137,6 +196,60 @@ bool RowsStreamingWindowBuild::hasNextPartition() {
   }
 
   return false;
+}
+
+void RowsStreamingWindowBuild::flushRange(
+    const RowVectorPtr& input,
+    vector_size_t start,
+    vector_size_t end) {
+  if (start >= end) {
+    return;
+  }
+  currentRanges_.emplace_back(input, start, end);
+}
+
+bool RowsStreamingWindowBuild::isNewPartition(
+    const RowVectorPtr& input,
+    vector_size_t row) const {
+  if (row == 0 && !partitionKeyValues_.hasValue()) {
+    return false;
+  }
+  return !compareRowsEqual(input, row, partitionKeyInfo_, partitionKeyValues_);
+}
+
+bool RowsStreamingWindowBuild::isNewPeerGroup(
+    const RowVectorPtr& input,
+    vector_size_t row) const {
+  if (row == 0 && !peerKeyValues_.hasValue()) {
+    return false;
+  }
+  return !compareRowsEqual(input, row, sortKeyInfo_, peerKeyValues_);
+}
+
+bool RowsStreamingWindowBuild::compareRowsEqual(
+    const RowVectorPtr& input,
+    vector_size_t row,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo,
+    const SingleRowValues& previousValues) const {
+  if (row == 0) {
+    return previousValues.equals(input, row);
+  }
+
+  for (const auto& key : keyInfo) {
+    const auto inputColumn = inputChannels_[key.first];
+    if (!input->childAt(inputColumn)
+             ->equalValueAt(input->childAt(inputColumn).get(), row - 1, row)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void RowsStreamingWindowBuild::loadBoundaryColumns(
+    const RowVectorPtr& input) const {
+  for (const auto channel : boundaryKeyChannels_) {
+    input->childAt(channel)->loadedVector();
+  }
 }
 
 } // namespace facebook::velox::exec::window
