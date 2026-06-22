@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
@@ -53,8 +54,7 @@ class IcebergDwrfInsertTest : public test::IcebergTestBase {
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
     auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
+                    .startTableScan(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -233,8 +233,7 @@ TEST_F(IcebergDwrfInsertTest, partitioned) {
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
   auto plan = exec::test::PlanBuilder()
-                  .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
+                  .startTableScan(test::kIcebergConnectorId)
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();
@@ -262,6 +261,173 @@ TEST_F(IcebergDwrfInsertTest, ensureWriterNonPartitioned) {
   auto taskJson = folly::parseJson(commitTasks[0]);
   // Unpartitioned tables must not emit partitionDataJson.
   EXPECT_EQ(taskJson.count("partitionDataJson"), 0);
+}
+
+// Builds an Iceberg column handle with an explicit field-id tree, used to drive
+// reads whose requested schema differs from the written schema.
+std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
+    const std::string& name,
+    const TypePtr& type,
+    const parquet::ParquetFieldId& field) {
+  return std::make_shared<const IcebergColumnHandle>(
+      name, FileColumnHandle::ColumnType::kRegular, type, field);
+}
+
+// Schema evolution: a top-level column is renamed (c -> c2, id 3) and
+// reordered, another is dropped from the projection (b, id 2), and a new column
+// is added (d, id 9) that is absent from the file. Field-id resolution must
+// read c2/a from the file by id and null-fill d.
+TEST_F(IcebergDwrfInsertTest, fieldIdRenameReorderDropAdd) {
+  auto writeSchema = ROW({"a", "b", "c"}, {BIGINT(), INTEGER(), VARCHAR()});
+  auto writeVector = makeRowVector(
+      {"a", "b", "c"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({10, 20, 30}),
+       makeFlatVector<std::string>({"x", "y", "z"})});
+
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  createDataSinkAndAppendData({writeVector}, path)->close();
+  auto splits = createSplitsForDirectory(path);
+
+  // Written field ids (assigned depth-first from 1): a=1, b=2, c=3.
+  auto readSchema = ROW({"c2", "a", "d"}, {VARCHAR(), BIGINT(), INTEGER()});
+  std::
+      unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
+          assignments{
+              {"c2", makeIcebergColumnHandle("c2", VARCHAR(), {3, {}})},
+              {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
+              {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(readSchema)
+                  .dataColumns(readSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"c2", "a", "d"},
+      {makeFlatVector<std::string>({"x", "y", "z"}),
+       makeFlatVector<int64_t>({1, 2, 3}),
+       makeNullConstant(TypeKind::INTEGER, 3)});
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+// Schema evolution: column c (id 1) is dropped and a new column with the same
+// name c (id 9) is added. The stale file column must NOT bind to the new c by
+// name; the new c must read as null.
+TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
+  auto writeVector = makeRowVector({"c"}, {makeFlatVector<int32_t>({1, 2, 3})});
+
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  createDataSinkAndAppendData({writeVector}, path)->close();
+  auto splits = createSplitsForDirectory(path);
+
+  // Written field id: c=1. The re-added c has id 9.
+  auto readSchema = ROW({"c"}, {INTEGER()});
+  std::
+      unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
+          assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(readSchema)
+                  .dataColumns(readSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"c"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+// Schema evolution inside a struct: a nested field is dropped (y) and the
+// remaining nested fields are reordered (z before x). Field-id resolution must
+// match nested columns by id, not position.
+TEST_F(IcebergDwrfInsertTest, fieldIdNestedStructReorderDrop) {
+  auto writeVector = makeRowVector(
+      {"s"},
+      {makeRowVector(
+          {"x", "y", "z"},
+          {makeFlatVector<int32_t>({1, 2, 3}),
+           makeFlatVector<int32_t>({4, 5, 6}),
+           makeFlatVector<int32_t>({7, 8, 9})})});
+
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  createDataSinkAndAppendData({writeVector}, path)->close();
+  auto splits = createSplitsForDirectory(path);
+
+  // Written field ids (depth-first): s=1, x=2, y=3, z=4.
+  auto readSchema = ROW({"s"}, {ROW({"z", "x"}, {INTEGER(), INTEGER()})});
+  std::
+      unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
+          assignments{
+              {"s",
+               makeIcebergColumnHandle(
+                   "s",
+                   ROW({"z", "x"}, {INTEGER(), INTEGER()}),
+                   {1, {{4, {}}, {2, {}}}})}};
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(readSchema)
+                  .dataColumns(readSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"s"},
+      {makeRowVector(
+          {"z", "x"},
+          {makeFlatVector<int32_t>({7, 8, 9}),
+           makeFlatVector<int32_t>({1, 2, 3})})});
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+// Allowable type promotion under field-id resolution: a column written as
+// INTEGER is read as BIGINT, and one written as REAL is read as DOUBLE.
+TEST_F(IcebergDwrfInsertTest, fieldIdTypePromotion) {
+  auto writeVector = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<float>({1.5, 2.5, 3.5})});
+
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  createDataSinkAndAppendData({writeVector}, path)->close();
+  auto splits = createSplitsForDirectory(path);
+
+  // Written field ids: a=1, b=2.
+  auto readSchema = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
+  std::
+      unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
+          assignments{
+              {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
+              {"b", makeIcebergColumnHandle("b", DOUBLE(), {2, {}})}};
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(readSchema)
+                  .dataColumns(readSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<double>({1.5, 2.5, 3.5})});
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
 }
 
 } // namespace

@@ -49,6 +49,13 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
   int64_t result = 0;
   for (auto valueId : values) {
     auto& ivalue = frame->getIValue(valueId);
+    // A size operand must be a tensor (sized by numel) or a scalar int.
+    // Anything else (a list / float / None that slipped into the size
+    // expression, e.g. from a list-producing op's subgraph) does not drive the
+    // grid, so treat it as 0 rather than asserting in IValue::toInt().
+    if (!ivalue.isTensor() && !ivalue.isInt()) {
+      continue;
+    }
     int64_t n;
     if (ivalue.isTensor()) {
       n = ivalue.toTensor().numel();
@@ -539,6 +546,22 @@ KernelOperation::KernelOperation(
   for (size_t oi = 0; oi < outputValues.size(); ++oi) {
     auto* value = outputValues[oi];
     if (paramOffsets_.find(value) != paramOffsets_.end()) {
+      // The value already has a param slot because it is also a (leaf) input of
+      // this kernel. If it is produced by a view node (e.g. a slice fed into a
+      // prim.ListPack), the kernel emits no device code to compute it, so it
+      // must be materialized on the host before the kernel reads it. Keep the
+      // output desc, set its viewNode, and reuse the existing input offset (do
+      // not re-assign) so allocateLaunchOutputs executes the view before
+      // launch. Without this the value stays None in the frame.
+      auto* producer = value->producer();
+      auto* producerMeta =
+          producer ? Registry::metadata(producer->target()) : nullptr;
+      if (producerMeta && producerMeta->isView() &&
+          !outputDescs_[oi].viewNode) {
+        outputDescs_[oi].viewNode = compileCtx_.originalFromVariant(producer);
+        orderedInputs_.push_back(value);
+        continue;
+      }
       outputDescs_.erase(outputDescs_.begin() + static_cast<ptrdiff_t>(oi));
       outputValues.erase(outputValues.begin() + static_cast<ptrdiff_t>(oi));
       --oi;
@@ -684,6 +707,29 @@ void KernelOperation::setCode(std::stringstream& code) {
     }
     for (auto* output : node->outputs()) {
       orderingOutputs_.insert(output->id());
+    }
+  }
+
+  // A view that is run on the host before launch (a viewNode output desc, e.g.
+  // a leaf-input slice) has computed shape/offset operands such as a slice end
+  // = item(...). Those operands are produced by other launches but are not
+  // inputs of any fused node here, so they are missing from orderingInputs_.
+  // Add them, otherwise this launch can be scheduled into a step before the
+  // producer of the operand and the host view reads a stale (None) bound.
+  for (const auto& desc : outputDescs_) {
+    if (!desc.viewNode) {
+      continue;
+    }
+    auto* viewMeta = Registry::metadata(desc.viewNode->target());
+    int32_t baseOrdinal = (viewMeta && viewMeta->viewOfArg.has_value())
+        ? *viewMeta->viewOfArg
+        : -1;
+    const auto& viewInputs = desc.viewNode->inputs();
+    for (size_t k = 0; k < viewInputs.size(); ++k) {
+      if (static_cast<int32_t>(k) == baseOrdinal) {
+        continue;
+      }
+      orderingInputs_.insert(viewInputs[k].value->id());
     }
   }
 
@@ -874,14 +920,23 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       return expr;
     }
   }
+  // kMax over the kernel's inputs. Skip inputs that are neither a tensor, a
+  // tensor list, nor a scalar int -- SizeExpr::numElements can only size by
+  // those, and a list / float / None input does not drive the grid (and would
+  // assert in IValue::toInt(); this is what an orphaned list-producing op such
+  // as group_length_guard_final, generated with a SymIntList-bearing subgraph,
+  // would otherwise hit).
   std::vector<nativert::ValueId> leafIds;
   for (int32_t i = 0; i < numInputs_; ++i) {
     auto* value = orderedInputs_[i];
-    if (value->type().kind() == nativert::Type::Kind::TensorList) {
+    auto kind = value->type().kind();
+    if (kind == nativert::Type::Kind::TensorList) {
       for (auto* elem : value->getListElements()) {
         leafIds.push_back(elem->id());
       }
-    } else {
+    } else if (
+        kind == nativert::Type::Kind::Tensor ||
+        kind == nativert::Type::Kind::SymInt) {
       leafIds.push_back(value->id());
     }
   }

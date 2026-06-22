@@ -93,4 +93,20 @@ target_compile_definitions(
   PRIVATE VELOX_TEST_DYNAMIC_LIBRARY_PATH_SUFFIX="${CMAKE_SHARED_LIBRARY_SUFFIX}"
 )
 
+# The test loads these libraries at runtime via dlopen(), so there is no
+# link-time edge for CMake to follow. Declare them as explicit build
+# dependencies so any build that targets only the test (e.g. CI selective
+# builds) still produces the .so files; otherwise the test fails at runtime
+# with "cannot open shared object file".
+add_dependencies(
+  velox_function_dynamic_link_test
+  velox_function_dynamic
+  velox_overwrite_int_function_dynamic
+  velox_overwrite_varchar_function_dynamic
+  velox_function_err_dynamic
+  velox_overload_int_function_dynamic
+  velox_overload_varchar_function_dynamic
+  velox_function_non_default_dynamic
+)
+
 add_test(NAME velox_function_dynamic_link_test COMMAND velox_function_dynamic_link_test)

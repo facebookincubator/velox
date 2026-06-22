@@ -133,8 +133,7 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
       const RowTypePtr& outputType,
       const RowTypePtr& dataColumns) {
     return PlanBuilder()
-        .startTableScan()
-        .connectorId(kIcebergConnectorId)
+        .startTableScan(kIcebergConnectorId)
         .outputType(outputType)
         .dataColumns(dataColumns)
         .endTableScan()
@@ -604,8 +603,7 @@ TEST_F(EqualityDeleteFileReaderTest, equalityFilterOnlyColumnNotInProjection) {
   // delete then removes id=4 and id=8, leaving values {d->skipped} no, we
   // expect surviving values for ids {3,5,6,7,9}, projected as 'value' only.
   auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(kIcebergConnectorId)
+                  .startTableScan(kIcebergConnectorId)
                   .outputType(outputType)
                   .dataColumns(tableType)
                   .subfieldFilter("id >= 3")

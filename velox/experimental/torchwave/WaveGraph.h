@@ -45,9 +45,17 @@ class CompileCtx;
 class Optimizer;
 struct ExecutionState;
 
-/// Rank constraint for a graph value, used during optimization.
+/// Rank and layout constraints for a graph value, used during optimization.
 struct ValueConstraint {
   int8_t rank{-1};
+  /// True when the value is known at compile time to be row-major contiguous
+  /// (dense, standard strides). Defaults to false: a wrong `true` could let a
+  /// kernel read a strided tensor as dense and corrupt results, whereas a
+  /// conservative `false` only costs an unnecessary copy. Set true for ops that
+  /// always materialize a fresh dense output (elementwise, cumsum, masked
+  /// select, cat, clone, contiguous, factory ops, ...) and propagated by view
+  /// and reshape; computed per PyTorch semantics for slice/select.
+  bool contiguous{false};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.
@@ -63,6 +71,16 @@ struct ValueTypes {
         "Value id out of range: ",
         id);
     return constraints[id].rank;
+  }
+
+  /// Whether 'value' is known to be contiguous. Returns false (conservative)
+  /// for values with no tracked constraint.
+  bool contiguous(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].contiguous;
   }
 };
 
@@ -187,6 +205,11 @@ class WaveGraph {
       nativert::Node* node,
       std::string_view name,
       c10::ScalarType dtype);
+
+  /// Adds a TensorList output to 'node' with the given name and registers it in
+  /// idToValue_. No TensorMeta is created (a list has no element-level meta);
+  /// element values are obtained via Value::getListElements().
+  nativert::Value* newListValue(nativert::Node* node, std::string_view name);
 
   /// Registers a TensorMeta entry for 'value' in types_ with the given dtype.
   void registerTensorMeta(ValueCP value, c10::ScalarType dtype);
