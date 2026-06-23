@@ -65,6 +65,8 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+#include <limits>
+
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
 
@@ -124,6 +126,16 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
   // projection's row type.
   void assertMatchesCpu(const std::string& expr, const RowVectorPtr& input) {
     assertExpressionMatchesCpu(expr, input, asRowType(input->type()));
+  }
+
+  // Sets the session timezone for subsequent evaluate() calls, mirroring
+  // DateTimeFunctionsTest::setQueryTimeZone, so a test can exercise the
+  // session-timezone path the harness otherwise runs with an empty session.
+  void setSessionTimezone(const std::string& zone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, zone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
   }
 };
 
@@ -257,6 +269,29 @@ TEST_F(TimezoneFunctionTest, formatDatetimeZoneNameTokenUnsupportedOnGpu) {
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
+// Reproducers for the Joda fractional-second run length. CPU
+// (formatFractionOfSecond) renders exactly <run length> digits: a single 'S'
+// is 1 digit, 'SSSSSS' is 6. The GPU's jodaToStrftime maps any 'S' run to
+// "%3f" (3 digits), so single-'S' and 6-'S' diverge while 'SSS' happens to
+// match. Red until the run length feeds the "%<n>f" width. The 123 ms
+// sub-second instant makes the fractional digits observable.
+TEST_F(TimezoneFunctionTest, formatDatetimeFractionSingleDigit) {
+  auto input = timestampWithTimeZoneInput(1'609'466'400'123, "Asia/Kolkata");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss.S')", input);
+}
+
+// 'SSS' -> 3 digits; matches the GPU's current %3f (control case, stays green).
+TEST_F(TimezoneFunctionTest, formatDatetimeFractionMillis) {
+  auto input = timestampWithTimeZoneInput(1'609'466'400'123, "Asia/Kolkata");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss.SSS')", input);
+}
+
+// 'SSSSSS' -> 6 digits; the millisecond value is right-padded with zeros.
+TEST_F(TimezoneFunctionTest, formatDatetimeFractionMicros) {
+  auto input = timestampWithTimeZoneInput(1'609'466'400'123, "Asia/Kolkata");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss.SSSSSS')", input);
+}
+
 // Functions that produce a TIMESTAMP WITH TIME ZONE from plain inputs. The
 // inputs convert to cuDF fine; the function is the work the GPU must learn.
 
@@ -281,6 +316,46 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeOverflowRejectedLikeCpu) {
   auto exprSet =
       compileExpression("from_unixtime(c0, 'GMT')", asRowType(input->type()));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Reproducer: from_unixtime(NaN) must map to the epoch like CPU, which returns
+// pack(0, zone) for a NaN unixtime, rather than reading a meaningless value out
+// of a float->int cast of NaN. Red until NaN is mapped to 0 before packing.
+TEST_F(TimezoneFunctionTest, fromUnixtimeNanMapsToEpochLikeCpu) {
+  auto input = doubleInput(std::numeric_limits<double>::quiet_NaN());
+  assertMatchesCpu("from_unixtime(c0, 'GMT')", input);
+}
+
+// Reproducer: from_unixtime(+/-Inf) must throw to match CPU. CPU saturates the
+// millis to int64 min/max, which pack()'s range check then rejects as overflow.
+// The GPU must throw too rather than rely on float->int cast behavior for Inf.
+TEST_F(TimezoneFunctionTest, fromUnixtimeInfinityRejectedLikeCpu) {
+  auto input = doubleInput(std::numeric_limits<double>::infinity());
+  auto exprSet =
+      compileExpression("from_unixtime(c0, 'GMT')", asRowType(input->type()));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Reproducer for the two-overload rounding split. The (double, hours, minutes)
+// overload rounds via floor-seconds + a separate fractional llround (CPU's
+// no-zone fromUnixtime), differing from the varchar overload's llround(x*1000)
+// by up to 1 ms on negative-fractional input. For -0.0005 s the hours/minutes
+// overload yields 0 ms while the varchar overload yields -1 ms. The GPU uses
+// the varchar rounding for both, so the hours/minutes case is red.
+TEST_F(
+    TimezoneFunctionTest,
+    fromUnixtimeHoursMinutesNegativeFractionalRounding) {
+  auto input = doubleInput(-0.0005);
+  assertMatchesCpu("from_unixtime(c0, 0, 0)", input);
+}
+
+// Control: the varchar overload's llround(x*1000) already matches CPU for the
+// same negative-fractional input (-0.0005 -> -1 ms), so this stays green.
+TEST_F(TimezoneFunctionTest, fromUnixtimeVarcharNegativeFractionalRounding) {
+  auto input = doubleInput(-0.0005);
+  assertMatchesCpu("from_unixtime(c0, 'GMT')", input);
 }
 
 TEST_F(TimezoneFunctionTest, parseDatetime) {
@@ -350,6 +425,36 @@ TEST_F(TimezoneFunctionTest, fromIso8601OffsetOutOfRangeRejectedLikeCpu) {
   EXPECT_ANY_THROW(
       functions::test::FunctionBaseTest::evaluate(*exprSet, input));
   EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Reproducer: an offset-less ISO string is interpreted in the session timezone
+// on CPU (the wall clock is that zone's local time, and the packed zone key is
+// the session zone), not GMT. Asia/Kolkata has a fixed +05:30 offset (no DST),
+// so the conversion is exact. The GPU treats offset-less input as GMT
+// regardless of the session, so it produces both a wrong instant and a wrong
+// zone key. Red until the session offset is applied.
+TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessUsesSessionZone) {
+  setSessionTimezone("Asia/Kolkata");
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00"));
+}
+
+// Control: an explicit numeric offset wins over the session zone on both paths,
+// so this stays green and guards that the session change does not hijack rows
+// that carry their own offset.
+TEST_F(TimezoneFunctionTest, fromIso8601ExplicitOffsetIgnoresSessionZone) {
+  setSessionTimezone("Asia/Kolkata");
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00+09:00"));
+}
+
+// Control: an explicit "Z" designator is GMT on both paths (distinct from an
+// absent zone), so this stays green and guards that "Z" is not mistaken for an
+// offset-less input and rerouted through the session zone.
+TEST_F(TimezoneFunctionTest, fromIso8601ZuluIgnoresSessionZone) {
+  setSessionTimezone("Asia/Kolkata");
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00Z"));
 }
 
 // now()/current_timestamp -> timestamp with time zone. now() is

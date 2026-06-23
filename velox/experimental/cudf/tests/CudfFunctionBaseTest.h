@@ -48,8 +48,17 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
     auto stream = cudf::get_default_stream();
     auto cudfTable = velox::cudf_velox::with_arrow::toCudfTable(
         input, pool_.get(), stream, cudf::get_current_device_resource_ref());
-    auto filterEvaluator =
-        createCudfExpression({exprSet.exprs()[0]}, input->rowType());
+    // Build the evaluation context from the query config exactly as
+    // CudfFilterProject does, so a test can exercise timezone-aware functions
+    // under a session timezone via queryCtx_->testingOverrideConfigUnsafe.
+    const auto& queryConfig = execCtx_.queryCtx()->queryConfig();
+    const CudfExpressionContext exprContext{
+        queryConfig.sessionTimezone(),
+        queryConfig.adjustTimestampToTimezone(),
+        queryConfig.sessionStartTimeMs(),
+    };
+    auto filterEvaluator = createCudfExpression(
+        {exprSet.exprs()[0]}, input->rowType(), exprContext);
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());
