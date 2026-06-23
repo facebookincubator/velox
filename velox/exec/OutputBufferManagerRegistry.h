@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -31,6 +32,28 @@ class QueryCtx;
 
 namespace facebook::velox::exec {
 
+/// Registry value pairing an output buffer manager with an optional
+/// availability predicate.
+///
+/// The predicate decouples registration from selection: a manager is registered
+/// once, typically based on process-level capability, while 'isAvailable'
+/// determines per query whether it may be used. A registered manager is
+/// therefore visible only to the queries whose configuration selects it. The
+/// predicate gates visibility, not lifetime, so a shared (e.g. process-wide)
+/// manager instance can be wrapped without additional cost.
+///
+/// A null 'isAvailable' marks the manager as unconditionally available, as used
+/// by the default HTTP manager.
+struct OutputBufferManagerEntry {
+  std::shared_ptr<IOutputBufferManager> manager;
+  std::function<bool(const core::QueryCtx&)> isAvailable;
+
+  explicit OutputBufferManagerEntry(
+      std::shared_ptr<IOutputBufferManager> manager,
+      std::function<bool(const core::QueryCtx&)> isAvailable = nullptr)
+      : manager{std::move(manager)}, isAvailable{std::move(isAvailable)} {}
+};
+
 /// Manages output buffer manager registration and lookup. All methods are
 /// thread-safe.
 ///
@@ -45,7 +68,7 @@ namespace facebook::velox::exec {
 ///   process-wide lookups.
 class OutputBufferManagerRegistry {
  public:
-  using Registry = ScopedRegistry<std::string, IOutputBufferManager>;
+  using Registry = ScopedRegistry<std::string, OutputBufferManagerEntry>;
 
   /// Registry key for per-query output buffer manager overrides on QueryCtx.
   static constexpr std::string_view kRegistryKey = "outputBufferManagers";
@@ -57,16 +80,24 @@ class OutputBufferManagerRegistry {
   /// to it. Pass nullptr for isolation mode (no fallback).
   static std::shared_ptr<Registry> create(const Registry* parent = nullptr);
 
-  /// Return the output buffer manager with the specified ID, or nullptr if not
-  /// registered. Checks per-query override on QueryCtx first, falls back to the
-  /// global registry if no override is set.
+  /// Return the manager registered under 'id' that is available for 'queryCtx',
+  /// or nullptr. Resolution checks the per-query override on 'queryCtx' before
+  /// falling back to the global registry, and a resolved entry is returned only
+  /// if its availability predicate holds for 'queryCtx'. Callers should treat
+  /// this as the authoritative per-query availability check.
   static std::shared_ptr<IOutputBufferManager> tryGet(
       const core::QueryCtx& queryCtx,
       const std::string& id);
 
-  /// Return the output buffer manager with the specified ID from the global
-  /// registry, or nullptr if not registered.
+  /// Return the manager registered under 'id' in the global registry, or
+  /// nullptr. This overload does not evaluate any availability predicate; use
+  /// the QueryCtx overload for per-query availability.
   static std::shared_ptr<IOutputBufferManager> tryGet(const std::string& id);
+
+  /// Return whether a manager is registered under 'id' in the global registry,
+  /// independent of any availability predicate. Intended as a process-level
+  /// capability check.
+  static bool contains(const std::string& id);
 
   /// Return all registered output buffer managers visible to the given query.
   /// Checks per-query override on QueryCtx first, falls back to the global

@@ -27,8 +27,8 @@
 
 namespace facebook::velox::exec {
 
-ScopedRegistry<std::string, IOutputBufferManager>& outputBufferManagers() {
-  static ScopedRegistry<std::string, IOutputBufferManager> instance;
+ScopedRegistry<std::string, OutputBufferManagerEntry>& outputBufferManagers() {
+  static ScopedRegistry<std::string, OutputBufferManagerEntry> instance;
   return instance;
 }
 
@@ -58,13 +58,27 @@ OutputBufferManagerRegistry::create(const Registry* parent) {
 std::shared_ptr<IOutputBufferManager> OutputBufferManagerRegistry::tryGet(
     const core::QueryCtx& queryCtx,
     const std::string& id) {
-  return registryFor(queryCtx).find(id);
+  const auto entry = registryFor(queryCtx).find(id);
+  if (entry == nullptr) {
+    return nullptr;
+  }
+  // A null predicate means the manager is unconditionally available.
+  if (entry->isAvailable && !entry->isAvailable(queryCtx)) {
+    return nullptr;
+  }
+  return entry->manager;
 }
 
 // static
 std::shared_ptr<IOutputBufferManager> OutputBufferManagerRegistry::tryGet(
     const std::string& id) {
-  return global().find(id);
+  const auto entry = global().find(id);
+  return entry != nullptr ? entry->manager : nullptr;
+}
+
+// static
+bool OutputBufferManagerRegistry::contains(const std::string& id) {
+  return global().find(id) != nullptr;
 }
 
 // static
@@ -76,7 +90,14 @@ OutputBufferManagerRegistry::getAll(const core::QueryCtx& queryCtx) {
 // static
 std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
 OutputBufferManagerRegistry::getAll() {
-  return global().snapshot();
+  std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
+      result;
+  for (auto& [id, entry] : global().snapshot()) {
+    if (entry != nullptr) {
+      result.emplace_back(id, entry->manager);
+    }
+  }
+  return result;
 }
 
 // static
@@ -97,7 +118,17 @@ void OutputBufferManagerRegistry::unregisterAll() {
 // static
 std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
 OutputBufferManagerRegistry::snapshot(const core::QueryCtx& queryCtx) {
-  return registryFor(queryCtx).snapshot();
+  // Returns only managers that exist and are available for 'queryCtx', so this
+  // stays consistent with tryGet(queryCtx, ...).
+  std::vector<std::pair<std::string, std::shared_ptr<IOutputBufferManager>>>
+      result;
+  for (auto& [id, entry] : registryFor(queryCtx).snapshot()) {
+    if (entry != nullptr &&
+        (!entry->isAvailable || entry->isAvailable(queryCtx))) {
+      result.emplace_back(id, entry->manager);
+    }
+  }
+  return result;
 }
 
 } // namespace facebook::velox::exec
