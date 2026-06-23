@@ -100,11 +100,13 @@ cudf::column_view bitcastColumn(
       view.offset()};
 }
 
-cudf::numeric_scalar<int64_t> i64(int64_t value, rmm::cuda_stream_view stream) {
+cudf::numeric_scalar<int64_t> int64Scalar(
+    int64_t value,
+    rmm::cuda_stream_view stream) {
   return cudf::numeric_scalar<int64_t>(value, true, stream);
 }
 
-std::unique_ptr<cudf::column> binOp(
+std::unique_ptr<cudf::column> binaryOp(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::binary_operator op,
@@ -120,9 +122,9 @@ std::unique_ptr<cudf::column> unpackMillis(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  return binOp(
+  return binaryOp(
       packed,
-      i64(kMillisShift, stream),
+      int64Scalar(kMillisShift, stream),
       cudf::binary_operator::SHIFT_RIGHT,
       int64Type(),
       stream,
@@ -145,9 +147,9 @@ int16_t uniformZoneKey(
   if (packed.null_count() == packed.size()) {
     return 0;
   }
-  auto keys = binOp(
+  auto keys = binaryOp(
       packed,
-      i64(kTimezoneMask, stream),
+      int64Scalar(kTimezoneMask, stream),
       cudf::binary_operator::BITWISE_AND,
       int64Type(),
       stream,
@@ -199,16 +201,16 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
     const std::optional<std::string>& zeroOffsetText,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto isNegative = binOp(
+  auto isNegative = binaryOp(
       offsetSeconds,
-      i64(0, stream),
+      int64Scalar(0, stream),
       cudf::binary_operator::LESS,
       cudf::data_type{kBool8},
       stream,
       mr);
   // abs(offset) = isNegative ? -offset : offset.
   auto negated = cudf::binary_operation(
-      i64(0, stream),
+      int64Scalar(0, stream),
       offsetSeconds,
       cudf::binary_operator::SUB,
       int64Type(),
@@ -216,23 +218,23 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
       mr);
   auto absolute = cudf::copy_if_else(
       negated->view(), offsetSeconds, isNegative->view(), stream, mr);
-  auto hours = binOp(
+  auto hours = binaryOp(
       absolute->view(),
-      i64(3600, stream),
+      int64Scalar(3'600, stream),
       cudf::binary_operator::DIV,
       int64Type(),
       stream,
       mr);
-  auto totalMinutes = binOp(
+  auto totalMinutes = binaryOp(
       absolute->view(),
-      i64(60, stream),
+      int64Scalar(60, stream),
       cudf::binary_operator::DIV,
       int64Type(),
       stream,
       mr);
-  auto minutes = binOp(
+  auto minutes = binaryOp(
       totalMinutes->view(),
-      i64(60, stream),
+      int64Scalar(60, stream),
       cudf::binary_operator::MOD,
       int64Type(),
       stream,
@@ -256,14 +258,14 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
   auto signHour = cudf::strings::concatenate(
       cudf::table_view{{sign->view(), hoursPadded->view()}},
       cudf::string_scalar("", true, stream),
-      cudf::string_scalar("", false),
+      cudf::string_scalar("", false, stream),
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
   auto offsetStr = cudf::strings::concatenate(
       cudf::table_view{{signHour->view(), minutesPadded->view()}},
       cudf::string_scalar(includeColon ? ":" : "", true, stream),
-      cudf::string_scalar("", false),
+      cudf::string_scalar("", false, stream),
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
@@ -271,9 +273,9 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
     return offsetStr;
   }
   // Render the zero-offset rows as the supplied text (e.g. "Z").
-  auto isZero = binOp(
+  auto isZero = binaryOp(
       offsetSeconds,
-      i64(0, stream),
+      int64Scalar(0, stream),
       cudf::binary_operator::EQUAL,
       cudf::data_type{kBool8},
       stream,
@@ -473,16 +475,16 @@ class AtTimezoneFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     // Keep the UTC millis bits, replace the low 12 zone bits with the new key.
-    auto cleared = binOp(
+    auto cleared = binaryOp(
         packed,
-        i64(~static_cast<int64_t>(kTimezoneMask), stream),
+        int64Scalar(~static_cast<int64_t>(kTimezoneMask), stream),
         cudf::binary_operator::BITWISE_AND,
         int64Type(),
         stream,
         mr);
-    return binOp(
+    return binaryOp(
         cleared->view(),
-        i64(targetZoneId_ & kTimezoneMask, stream),
+        int64Scalar(targetZoneId_ & kTimezoneMask, stream),
         cudf::binary_operator::BITWISE_OR,
         int64Type(),
         stream,
@@ -500,7 +502,10 @@ class TimezoneFieldFunction : public CudfFunction {
       const std::shared_ptr<velox::exec::Expr>& expr,
       bool minuteField)
       : minuteField_(minuteField) {
-    VELOX_CHECK_EQ(expr->inputs().size(), 1, "expects exactly 1 input");
+    VELOX_CHECK_EQ(
+        expr->inputs().size(),
+        1,
+        "timezone_hour/timezone_minute expects exactly 1 input");
   }
 
   ColumnOrView eval(
@@ -511,24 +516,24 @@ class TimezoneFieldFunction : public CudfFunction {
     auto packed = asView(inputColumns[0]);
     auto offsetSeconds = offsetSecondsForPacked(packed, stream, mr);
     if (minuteField_) {
-      auto perMinute = binOp(
+      auto perMinute = binaryOp(
           offsetSeconds->view(),
-          i64(60, stream),
+          int64Scalar(60, stream),
           cudf::binary_operator::DIV,
           int64Type(),
           stream,
           mr);
-      return binOp(
+      return binaryOp(
           perMinute->view(),
-          i64(60, stream),
+          int64Scalar(60, stream),
           cudf::binary_operator::MOD,
           int64Type(),
           stream,
           mr);
     }
-    return binOp(
+    return binaryOp(
         offsetSeconds->view(),
-        i64(3600, stream),
+        int64Scalar(3'600, stream),
         cudf::binary_operator::DIV,
         int64Type(),
         stream,
@@ -570,7 +575,7 @@ class ToIso8601Function : public CudfFunction {
     return cudf::strings::concatenate(
         cudf::table_view{{dateStr->view(), offsetStr->view()}},
         cudf::string_scalar("", true, stream),
-        cudf::string_scalar("", false),
+        cudf::string_scalar("", false, stream),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -644,7 +649,7 @@ class FormatDatetimeFunction : public CudfFunction {
     return cudf::strings::concatenate(
         cudf::table_view{{dateStr->view(), zoneStr->view()}},
         cudf::string_scalar("", true, stream),
-        cudf::string_scalar("", false),
+        cudf::string_scalar("", false, stream),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -801,9 +806,9 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
       auto fractionMillis = llroundEmu(fractionMillisDouble->view());
       auto secondsInt =
           cudf::cast(secondsFloor->view(), int64Type(), stream, mr);
-      auto secondsMillis = binOp(
+      auto secondsMillis = binaryOp(
           secondsInt->view(),
-          i64(1000, stream),
+          int64Scalar(1000, stream),
           cudf::binary_operator::MUL,
           int64Type(),
           stream,
@@ -852,25 +857,25 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
         stream,
         mr);
     millis = cudf::copy_if_else(
-        i64(0, stream), millis->view(), isNan->view(), stream, mr);
+        int64Scalar(0, stream), millis->view(), isNan->view(), stream, mr);
     millis = cudf::copy_if_else(
-        i64(kMaxMillisUtc + 1, stream),
+        int64Scalar(kMaxMillisUtc + 1, stream),
         millis->view(),
         isInf->view(),
         stream,
         mr);
 
     checkMillisInRange(millis->view(), stream, mr);
-    auto shifted = binOp(
+    auto shifted = binaryOp(
         millis->view(),
-        i64(kMillisShift, stream),
+        int64Scalar(kMillisShift, stream),
         cudf::binary_operator::SHIFT_LEFT,
         int64Type(),
         stream,
         mr);
-    return binOp(
+    return binaryOp(
         shifted->view(),
-        i64(zoneId_ & kTimezoneMask, stream),
+        int64Scalar(zoneId_ & kTimezoneMask, stream),
         cudf::binary_operator::BITWISE_OR,
         int64Type(),
         stream,
@@ -897,7 +902,7 @@ class NowFunction : public CudfFunction {
         : tz::getTimeZoneID(context_.sessionTimezone);
     const int64_t packed = (context_.sessionStartTimeMs << kMillisShift) |
         (zoneId & kTimezoneMask);
-    auto scalar = i64(packed, stream);
+    auto scalar = int64Scalar(packed, stream);
     return cudf::make_column_from_scalar(scalar, numRows, stream, mr);
   }
 };
@@ -928,10 +933,11 @@ class ParseDatetimeFunction : public CudfFunction {
     // cuDF parses the wall clock as UTC. With no embedded zone the result is
     // interpreted in the session timezone (GMT when unset), so the parsed
     // value equals the UTC instant in the GMT case the tests exercise.
-    VELOX_CHECK(
-        context_.sessionTimezone.empty(),
-        "parse_datetime on GPU with a non-UTC session timezone is not yet "
-        "supported");
+    if (!context_.sessionTimezone.empty()) {
+      VELOX_NYI(
+          "parse_datetime on GPU with a non-UTC session timezone is not yet "
+          "supported");
+    }
     auto parsed = cudf::strings::to_timestamps(
         cudf::strings_column_view(input),
         cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
@@ -940,9 +946,9 @@ class ParseDatetimeFunction : public CudfFunction {
         mr);
     auto millis = bitcastColumn(parsed->view(), kInt64);
     // pack(millis, GMT) == millis << 12.
-    return binOp(
+    return binaryOp(
         millis,
-        i64(kMillisShift, stream),
+        int64Scalar(kMillisShift, stream),
         cudf::binary_operator::SHIFT_LEFT,
         int64Type(),
         stream,
@@ -1006,21 +1012,21 @@ class FromIso8601Function : public CudfFunction {
     auto ymd = cudf::strings::concatenate(
         cudf::table_view{{g.column(0), month->view(), day->view()}},
         cudf::string_scalar("-", true, stream),
-        cudf::string_scalar("", false),
+        cudf::string_scalar("", false, stream),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
     auto hms = cudf::strings::concatenate(
         cudf::table_view{{hour->view(), minute->view(), second->view()}},
         cudf::string_scalar(":", true, stream),
-        cudf::string_scalar("", false),
+        cudf::string_scalar("", false, stream),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
     auto canonical = cudf::strings::concatenate(
         cudf::table_view{{ymd->view(), hms->view()}},
         cudf::string_scalar("T", true, stream),
-        cudf::string_scalar("", false),
+        cudf::string_scalar("", false, stream),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -1050,8 +1056,8 @@ class FromIso8601Function : public CudfFunction {
         mr);
     auto fracInts = cudf::strings::to_integers(
         cudf::strings_column_view(fracPadded->view()), int64Type(), stream, mr);
-    auto fracMillis =
-        cudf::replace_nulls(fracInts->view(), i64(0, stream), stream, mr);
+    auto fracMillis = cudf::replace_nulls(
+        fracInts->view(), int64Scalar(0, stream), stream, mr);
     auto wallMillis = cudf::binary_operation(
         wallMillisBase,
         fracMillis->view(),
@@ -1067,14 +1073,14 @@ class FromIso8601Function : public CudfFunction {
         cudf::strings::to_integers(
             cudf::strings_column_view(g.column(9)), int64Type(), stream, mr)
             ->view(),
-        i64(0, stream),
+        int64Scalar(0, stream),
         stream,
         mr);
     auto offsetMins = cudf::replace_nulls(
         cudf::strings::to_integers(
             cudf::strings_column_view(g.column(10)), int64Type(), stream, mr)
             ->view(),
-        i64(0, stream),
+        int64Scalar(0, stream),
         stream,
         mr);
     auto signStr = cudf::replace_nulls(
@@ -1084,9 +1090,9 @@ class FromIso8601Function : public CudfFunction {
         cudf::string_scalar("-", true, stream),
         stream,
         mr);
-    auto hourMinutes = binOp(
+    auto hourMinutes = binaryOp(
         offsetHours->view(),
-        i64(60, stream),
+        int64Scalar(60, stream),
         cudf::binary_operator::MUL,
         int64Type(),
         stream,
@@ -1102,7 +1108,7 @@ class FromIso8601Function : public CudfFunction {
     // overflows the 12-bit zone field, matching CPU's tz::getTimeZoneID bound.
     checkOffsetMagnitudeInRange(magnitude->view(), stream, mr);
     auto negativeMagnitude = cudf::binary_operation(
-        i64(0, stream),
+        int64Scalar(0, stream),
         magnitude->view(),
         cudf::binary_operator::SUB,
         int64Type(),
@@ -1115,10 +1121,10 @@ class FromIso8601Function : public CudfFunction {
         stream,
         mr);
 
-    // utcMillis = wallMillis - offsetMinutes * 60000.
-    auto offsetMillis = binOp(
+    // utcMillis = wallMillis - offsetMinutes * 60'000.
+    auto offsetMillis = binaryOp(
         offsetMinutes->view(),
-        i64(60000, stream),
+        int64Scalar(60'000, stream),
         cudf::binary_operator::MUL,
         int64Type(),
         stream,
@@ -1132,23 +1138,23 @@ class FromIso8601Function : public CudfFunction {
         mr);
 
     // zoneId from offset minutes: 0 -> 0; <0 -> off+841; >0 -> off+840.
-    auto idPositive = binOp(
+    auto idPositive = binaryOp(
         offsetMinutes->view(),
-        i64(840, stream),
+        int64Scalar(840, stream),
         cudf::binary_operator::ADD,
         int64Type(),
         stream,
         mr);
-    auto idNegative = binOp(
+    auto idNegative = binaryOp(
         offsetMinutes->view(),
-        i64(841, stream),
+        int64Scalar(841, stream),
         cudf::binary_operator::ADD,
         int64Type(),
         stream,
         mr);
-    auto isNegativeOffset = binOp(
+    auto isNegativeOffset = binaryOp(
         offsetMinutes->view(),
-        i64(0, stream),
+        int64Scalar(0, stream),
         cudf::binary_operator::LESS,
         cudf::data_type{kBool8},
         stream,
@@ -1159,15 +1165,19 @@ class FromIso8601Function : public CudfFunction {
         isNegativeOffset->view(),
         stream,
         mr);
-    auto isZeroOffset = binOp(
+    auto isZeroOffset = binaryOp(
         offsetMinutes->view(),
-        i64(0, stream),
+        int64Scalar(0, stream),
         cudf::binary_operator::EQUAL,
         cudf::data_type{kBool8},
         stream,
         mr);
     auto zoneId = cudf::copy_if_else(
-        i64(0, stream), idNonZero->view(), isZeroOffset->view(), stream, mr);
+        int64Scalar(0, stream),
+        idNonZero->view(),
+        isZeroOffset->view(),
+        stream,
+        mr);
 
     // An offset-less input is interpreted in the session timezone, not GMT,
     // when one is set -- matching CPU's FromIso8601Timestamp (the wall clock is
@@ -1198,9 +1208,9 @@ class FromIso8601Function : public CudfFunction {
           wallMillis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
       auto sessionOffsetDuration =
           utcOffsetSeconds(wallTimestamp, context_.sessionTimezone, stream, mr);
-      auto sessionOffsetMillis = binOp(
+      auto sessionOffsetMillis = binaryOp(
           bitcastColumn(sessionOffsetDuration->view(), kInt64),
-          i64(1000, stream),
+          int64Scalar(1000, stream),
           cudf::binary_operator::MUL,
           int64Type(),
           stream,
@@ -1221,7 +1231,7 @@ class FromIso8601Function : public CudfFunction {
           mr);
       selectedZone = cudf::copy_if_else(
           zoneId->view(),
-          i64(sessionZoneKey & kTimezoneMask, stream),
+          int64Scalar(sessionZoneKey & kTimezoneMask, stream),
           hasExplicitZone->view(),
           stream,
           mr);
@@ -1230,9 +1240,9 @@ class FromIso8601Function : public CudfFunction {
     }
 
     // pack(finalMillis, finalZone).
-    auto shifted = binOp(
+    auto shifted = binaryOp(
         finalMillis,
-        i64(kMillisShift, stream),
+        int64Scalar(kMillisShift, stream),
         cudf::binary_operator::SHIFT_LEFT,
         int64Type(),
         stream,
