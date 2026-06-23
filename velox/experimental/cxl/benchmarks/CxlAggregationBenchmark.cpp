@@ -58,12 +58,11 @@
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/GroupingSet.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/experimental/cxl/CxlMemoryResource.h"
@@ -120,11 +119,6 @@ using exec::test::PlanBuilder;
 
 namespace {
 
-// Counts GroupingSet::relocate() calls (DRAM -> CXL relocations) across a
-// trial, incremented by a TestValue hook registered in main(). Reset before
-// each trial.
-std::atomic<int64_t> gRelocations{0};
-
 // Per-trial measurements pulled from the finished task's stats.
 struct TrialMetrics {
   uint64_t elapsedMs{0};
@@ -138,7 +132,11 @@ struct TrialMetrics {
   uint64_t spilledRows{0};
   uint64_t spillWriteNanos{0};
   uint64_t spillReadNanos{0};
-  int64_t migrations{0};
+  // Bytes the aggregation moved from DRAM to the CXL tier during reclaim,
+  // summed from the relocatedMemoryBytes runtime stat. This is the
+  // build-independent relocation signal; the earlier TestValue counter was a
+  // no-op in release builds.
+  uint64_t relocatedBytes{0};
   int64_t resultRows{0};
   uint64_t checksum{0};
 };
@@ -242,6 +240,8 @@ void collectOperatorStats(const exec::TaskStats& stats, TrialMetrics& metrics) {
             runtimeSum(op.runtimeStats, "spillWriteWallNanos");
         metrics.spillReadNanos +=
             runtimeSum(op.runtimeStats, "spillReadWallNanos");
+        metrics.relocatedBytes +=
+            runtimeSum(op.runtimeStats, memory::kRelocatedMemoryBytes);
       }
     }
   }
@@ -402,7 +402,6 @@ TrialMetrics runTrial(
     params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
   }
 
-  gRelocations.store(0, std::memory_order_relaxed);
   auto [cursor, results] = exec::test::readCursor(
       params, [](exec::TaskCursor* cursor) { cursor->setNoMoreSplits(); });
   exec::test::waitForTaskCompletion(
@@ -410,7 +409,6 @@ TrialMetrics runTrial(
 
   TrialMetrics metrics;
   collectOperatorStats(cursor->task()->taskStats(), metrics);
-  metrics.migrations = gRelocations.load(std::memory_order_relaxed);
   accumulateResult(results, metrics);
   return metrics;
 }
@@ -466,8 +464,10 @@ void report(const std::vector<TrialMetrics>& trials) {
         last.spillReadNanos / 1e6);
   }
   if (isCxlConfig()) {
-    std::cout << fmt::format("cxl relocations: {}\n", last.migrations);
-    if (last.migrations == 0) {
+    std::cout << fmt::format(
+        "cxl relocated: {:.1f} MB\n",
+        last.relocatedBytes / static_cast<double>(1 << 20));
+    if (last.relocatedBytes == 0) {
       std::cout << "WARNING: no relocation fired; the DRAM cap did not trigger "
                    "the arbitrator. Lower --dram_limit_mb or verify the CXL "
                    "pool is set.\n";
@@ -520,16 +520,8 @@ int main(int argc, char** argv) {
   parse::registerTypeResolver();
 
   // The CXL config relocates inside HashAggregation when a "cxl" tier pool is
-  // present on the query (configured per trial). Count relocations via a
-  // TestValue hook for reporting.
-  if (isCxlConfig()) {
-    common::testutil::TestValue::enable();
-    common::testutil::TestValue::set<exec::GroupingSet>(
-        "facebook::velox::exec::GroupingSet::relocate", [](exec::GroupingSet*) {
-          gRelocations.fetch_add(1, std::memory_order_relaxed);
-        });
-  }
-
+  // present on the query (configured per trial). Relocation is observed via the
+  // relocatedMemoryBytes runtime stat collected in collectOperatorStats().
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(
       std::thread::hardware_concurrency());
 
