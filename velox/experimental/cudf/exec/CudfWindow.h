@@ -162,7 +162,7 @@ class CudfWindow : public CudfOperatorBase {
       const cudf::table_view& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
-      const cudf::rolling_aggregation& agg,
+      std::unique_ptr<cudf::rolling_aggregation> agg,
       bool isFullPartition,
       rmm::cuda_stream_view stream) const;
 

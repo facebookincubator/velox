@@ -125,6 +125,77 @@ bool rangeWindowTypesEqual(
   return left.index() == right.index();
 }
 
+struct RangeOrderBy {
+  std::vector<cudf::column_view> columnViews;
+  ColumnOrView syntheticHolder;
+  cudf::table_view table;
+  std::vector<cudf::order> orders;
+  std::vector<cudf::null_order> nullOrders;
+
+  static RangeOrderBy fromSortedView(
+      const cudf::table_view& sortedView,
+      const std::vector<cudf::size_type>& sortKeyIndices,
+      const std::vector<cudf::order>& sortOrders,
+      const std::vector<cudf::null_order>& nullOrders,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) {
+    RangeOrderBy result;
+    if (sortKeyIndices.empty()) {
+      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+      result.syntheticHolder =
+          cudf::sequence(sortedView.num_rows(), oneScalar, oneScalar, stream, mr);
+      result.columnViews.push_back(asView(result.syntheticHolder));
+      result.orders.push_back(cudf::order::ASCENDING);
+      result.nullOrders.push_back(cudf::null_order::BEFORE);
+    } else {
+      result.columnViews.reserve(sortKeyIndices.size());
+      for (auto idx : sortKeyIndices) {
+        result.columnViews.push_back(sortedView.column(idx));
+      }
+      result.orders = sortOrders;
+      result.nullOrders = nullOrders;
+    }
+    result.table = cudf::table_view(result.columnViews);
+    return result;
+  }
+};
+
+std::unique_ptr<cudf::table> invokeGroupedRangeRollingBatch(
+    const cudf::table_view& partKeys,
+    const RangeOrderBy& orderby,
+    cudf::range_window_type preceding,
+    cudf::range_window_type following,
+    std::vector<cudf::rolling_request>& requests,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  const auto requestSpan = cudf::host_span<cudf::rolling_request const>(
+      requests.data(), requests.size());
+  if (orderby.columnViews.size() == 1) {
+    return cudf::grouped_range_rolling_window(
+        partKeys,
+        orderby.columnViews[0],
+        orderby.orders[0],
+        orderby.nullOrders[0],
+        preceding,
+        following,
+        requestSpan,
+        stream,
+        mr);
+  }
+  return cudf::grouped_range_rolling_window(
+      partKeys,
+      orderby.table,
+      cudf::host_span<cudf::order const>(
+          orderby.orders.data(), orderby.orders.size()),
+      cudf::host_span<cudf::null_order const>(
+          orderby.nullOrders.data(), orderby.nullOrders.size()),
+      preceding,
+      following,
+      requestSpan,
+      stream,
+      mr);
+}
+
 RangeRollingBatch* findRangeRollingBatch(
     std::vector<RangeRollingBatch>& batches,
     const std::pair<cudf::range_window_type, cudf::range_window_type>&
@@ -410,6 +481,47 @@ bool CudfWindow::canRunOnGPU(
         return false;
       }
     }
+
+    const auto isNonNegativeConstantBound =
+        [](core::WindowNode::BoundType type,
+           const core::TypedExprPtr& value) -> std::optional<int64_t> {
+      if (type != core::WindowNode::BoundType::kPreceding &&
+          type != core::WindowNode::BoundType::kFollowing) {
+        return std::nullopt;
+      }
+      if (!value) {
+        return std::nullopt;
+      }
+      auto constExpr =
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(value);
+      if (!constExpr) {
+        return std::nullopt;
+      }
+      if (constExpr->hasValueVector()) {
+        auto vec = constExpr->valueVector();
+        if (vec->type()->kind() == TypeKind::INTEGER) {
+          return vec->as<SimpleVector<int32_t>>()->valueAt(0);
+        }
+        return vec->as<SimpleVector<int64_t>>()->valueAt(0);
+      }
+      if (constExpr->type()->kind() == TypeKind::INTEGER) {
+        return constExpr->value().value<int32_t>();
+      }
+      return constExpr->value().value<int64_t>();
+    };
+    for (const auto& bound :
+         {std::make_pair(func.frame.startType, func.frame.startValue),
+          std::make_pair(func.frame.endType, func.frame.endValue)}) {
+      if (auto constant = isNonNegativeConstantBound(bound.first, bound.second)) {
+        if (*constant < 0) {
+          if (reason) {
+            *reason = fmt::format(
+                "Window frame {} offset must not be negative", *constant);
+          }
+          return false;
+        }
+      }
+    }
   }
   return true;
 }
@@ -629,7 +741,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     const cudf::table_view& sortedView,
     cudf::column_view inputCol,
     const core::WindowNode::Function& func,
-    const cudf::rolling_aggregation& agg,
+    std::unique_ptr<cudf::rolling_aggregation> agg,
     bool isFullPartition,
     rmm::cuda_stream_view stream) const {
   auto mr = get_output_mr();
@@ -638,6 +750,38 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     VELOX_USER_CHECK(
         !sortKeyIndices_.empty(),
         "RANGE window frame requires ORDER BY clause");
+
+    if (sortKeyIndices_.size() > 1) {
+      auto windowTypes = toBatchRangeWindowTypes(func, isFullPartition);
+      VELOX_CHECK(
+          windowTypes.has_value(),
+          "Multi-column RANGE window requires peer-frame bounds");
+      std::vector<cudf::column_view> orderbyCols;
+      orderbyCols.reserve(sortKeyIndices_.size());
+      for (auto idx : sortKeyIndices_) {
+        orderbyCols.push_back(sortedView.column(idx));
+      }
+      cudf::table_view orderbyTable(orderbyCols);
+      std::vector<cudf::rolling_request> requests;
+      requests.push_back(
+          cudf::rolling_request{inputCol, 1, std::move(agg)});
+      auto result = cudf::grouped_range_rolling_window(
+          partKeys,
+          orderbyTable,
+          cudf::host_span<cudf::order const>(
+              sortOrders_.data(), sortOrders_.size()),
+          cudf::host_span<cudf::null_order const>(
+              nullOrders_.data(), nullOrders_.size()),
+          windowTypes->first,
+          windowTypes->second,
+          cudf::host_span<cudf::rolling_request const>(
+              requests.data(), requests.size()),
+          stream,
+          mr);
+      auto resultCols = result->release();
+      return std::move(resultCols[0]);
+    }
+
     auto orderbyCol = sortedView.column(sortKeyIndices_[0]);
     auto order = sortOrders_[0];
     auto orderbyType = orderbyCol.type();
@@ -651,7 +795,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
           cudf::range_window_bounds::unbounded(orderbyType, stream),
           cudf::range_window_bounds::unbounded(orderbyType, stream),
           1,
-          agg,
+          *agg,
           stream,
           mr);
     }
@@ -668,7 +812,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
         preceding,
         following,
         1,
-        agg,
+        *agg,
         stream,
         mr);
   }
@@ -680,7 +824,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
         cudf::window_bounds::unbounded(),
         cudf::window_bounds::unbounded(),
         1,
-        agg,
+        *agg,
         stream,
         mr);
   }
@@ -688,7 +832,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
   auto preceding = toWindowBound(func.frame.startType, func.frame.startValue);
   auto following = toWindowBound(func.frame.endType, func.frame.endValue);
   return cudf::grouped_rolling_window(
-      partKeys, inputCol, preceding, following, 1, agg, stream, mr);
+      partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
@@ -707,13 +851,25 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
     auto agg = cudf::make_nth_element_aggregation<cudf::rolling_aggregation>(
         0, nullPolicy);
     return invokeGroupedRollingWindow(
-        partKeys, sortedView, inputCol, func, *agg, isFullPartition, stream);
+        partKeys,
+        sortedView,
+        inputCol,
+        func,
+        std::move(agg),
+        isFullPartition,
+        stream);
   }
   // last_value: use -1 to get the last element in the frame.
   auto agg = cudf::make_nth_element_aggregation<cudf::rolling_aggregation>(
       -1, nullPolicy);
   return invokeGroupedRollingWindow(
-      partKeys, sortedView, inputCol, func, *agg, isFullPartition, stream);
+      partKeys,
+      sortedView,
+      inputCol,
+      func,
+      std::move(agg),
+      isFullPartition,
+      stream);
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
@@ -755,7 +911,13 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
   }
 
   return invokeGroupedRollingWindow(
-      partKeys, sortedView, inputCol, func, *agg, isFullPartition, stream);
+      partKeys,
+      sortedView,
+      inputCol,
+      func,
+      std::move(agg),
+      isFullPartition,
+      stream);
 }
 
 void CudfWindow::doNoMoreInput() {
@@ -955,20 +1117,13 @@ RowVectorPtr CudfWindow::doGetOutput() {
   }
 
   if (!rangeRollingBatches.empty()) {
-    ColumnOrView orderbyColHolder{cudf::column_view{}};
-    cudf::column_view orderbyCol;
-    cudf::order order = cudf::order::ASCENDING;
-    cudf::null_order nullOrder = cudf::null_order::BEFORE;
-    if (sortKeyIndices_.empty()) {
-      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream_, mr);
-      orderbyColHolder =
-          cudf::sequence(sortedView.num_rows(), oneScalar, oneScalar, stream_, mr);
-      orderbyCol = asView(orderbyColHolder);
-    } else {
-      orderbyCol = sortedView.column(sortKeyIndices_[0]);
-      order = sortOrders_[0];
-      nullOrder = nullOrders_[0];
-    }
+    auto rangeOrderBy = RangeOrderBy::fromSortedView(
+        sortedView,
+        sortKeyIndices_,
+        sortOrders_,
+        nullOrders_,
+        stream_,
+        mr);
     for (auto& batch : rangeRollingBatches) {
       auto& pendingRequests = batch.requests;
       if (pendingRequests.size() >= 2) {
@@ -979,15 +1134,12 @@ RowVectorPtr CudfWindow::doGetOutput() {
               cudf::rolling_request{
                   pending.inputCol, 1, std::move(pending.agg)});
         }
-        auto batchResult = cudf::grouped_range_rolling_window(
+        auto batchResult = invokeGroupedRangeRollingBatch(
             partKeys,
-            orderbyCol,
-            order,
-            nullOrder,
+            rangeOrderBy,
             batch.preceding,
             batch.following,
-            cudf::host_span<cudf::rolling_request const>(
-                rollingRequests.data(), rollingRequests.size()),
+            rollingRequests,
             stream_,
             mr);
         auto resultCols = batchResult->release();
@@ -1006,7 +1158,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
             sortedView,
             pending.inputCol,
             func,
-            *pending.agg,
+            std::move(pending.agg),
             isFullPartition,
             stream_);
       }
