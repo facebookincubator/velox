@@ -162,6 +162,23 @@ TEST_F(TimezoneFunctionTest, toUnixtimeFromTimestampWithTimeZone) {
   assertMatchesCpu("to_unixtime(c0)", input);
 }
 
+// Coverage: a pre-1970 (negative-millis) instant exercises the arithmetic right
+// shift in unpackMillis, which differs from a logical shift only for negative
+// packed values -- every other test here uses a positive 2021 instant.
+// to_unixtime recovers the seconds and to_iso8601 unpacks then renders, so both
+// must match CPU for the negative instant 1938-04-24T17:33:20 UTC.
+TEST_F(TimezoneFunctionTest, toUnixtimePre1970Instant) {
+  auto input =
+      timestampWithTimeZoneInput(-1'000'000'000'000, "America/Los_Angeles");
+  assertMatchesCpu("to_unixtime(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, toIso8601Pre1970Instant) {
+  auto input =
+      timestampWithTimeZoneInput(-1'000'000'000'000, "America/Los_Angeles");
+  assertMatchesCpu("to_iso8601(c0)", input);
+}
+
 TEST_F(TimezoneFunctionTest, atTimezone) {
   // at_timezone(timestamp with time zone, varchar) -> timestamp with time zone.
   auto input =
