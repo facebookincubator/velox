@@ -32,6 +32,7 @@
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/strings/attributes.hpp>
 #include <cudf/strings/combine.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
 #include <cudf/strings/convert/convert_integers.hpp>
@@ -47,6 +48,7 @@
 #include <cudf/wrappers/durations.hpp>
 
 #include <cctype>
+#include <limits>
 #include <optional>
 
 namespace facebook::velox::cudf_velox {
@@ -379,7 +381,17 @@ std::string jodaToStrftime(const std::string& joda, TrailingZone& trailing) {
           out += "%S";
           break;
         case 'S':
-          out += "%3f";
+          // The 'S' run length is the fractional-second digit count ('S' -> 1
+          // digit, 'SSSSSS' -> 6), matching CPU's formatFractionOfSecond. cuDF
+          // renders "%<n>f" for n in 1..9; nothing finer than nanoseconds is
+          // representable.
+          if (runLength > 9) {
+            VELOX_NYI(
+                "format_datetime supports at most 9 fractional-second digits "
+                "on GPU, got {}",
+                runLength);
+          }
+          out += "%" + std::to_string(runLength) + "f";
           break;
         case 'a':
           out += "%p";
@@ -427,6 +439,7 @@ class ToUnixtimeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
@@ -455,6 +468,7 @@ class AtTimezoneFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
@@ -491,6 +505,7 @@ class TimezoneFieldFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
@@ -534,6 +549,7 @@ class ToIso8601Function : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
@@ -573,6 +589,7 @@ class FormatDatetimeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
@@ -698,45 +715,151 @@ void checkOffsetMagnitudeInRange(
       hi, 840, "Invalid timezone offset in from_iso8601_timestamp (minutes)");
 }
 
+// Selects the millisecond rounding for from_unixtime, which differs between the
+// two CPU overloads. from_unixtime(double, varchar) rounds the whole value with
+// llround(x*1000); from_unixtime(double, hours, minutes) floors the seconds and
+// rounds the fractional millisecond separately. The two agree except on
+// negative-fractional input, where they can differ by 1 ms (e.g. -0.0005 s ->
+// -1 ms for kWhole, 0 ms for kFloorThenFraction).
+enum class FromUnixtimeRounding {
+  kWhole,
+  kFloorThenFraction,
+};
+
 // from_unixtime(double, ...) -> timestamp with time zone. The zone id is fixed
 // at construction (from a zone name or an hour/minute offset).
 class FromUnixtimeWithZoneFunction : public CudfFunction {
  public:
-  explicit FromUnixtimeWithZoneFunction(int16_t zoneId) : zoneId_(zoneId) {}
+  FromUnixtimeWithZoneFunction(int16_t zoneId, FromUnixtimeRounding rounding)
+      : zoneId_(zoneId), rounding_(rounding) {}
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto seconds = asView(inputColumns[0]);
     const auto doubleType = cudf::data_type{cudf::type_id::FLOAT64};
-    auto thousand = cudf::numeric_scalar<double>(1000.0, true, stream);
-    auto millisDouble = cudf::binary_operation(
-        seconds, thousand, cudf::binary_operator::MUL, doubleType, stream, mr);
-    // Round half away from zero (matching std::llround on the CPU path) by
-    // adding +/-0.5 and truncating: a FLOAT64->INT64 cast truncates toward
-    // zero.
-    auto isNegative = cudf::binary_operation(
-        millisDouble->view(),
-        cudf::numeric_scalar<double>(0.0, true, stream),
-        cudf::binary_operator::LESS,
+
+    // Emulate std::llround on a FLOAT64 column: add +/-0.5 then truncate toward
+    // zero via the FLOAT64->INT64 cast.
+    auto llroundEmu = [&](const cudf::column_view& value) {
+      auto isNegative = cudf::binary_operation(
+          value,
+          cudf::numeric_scalar<double>(0.0, true, stream),
+          cudf::binary_operator::LESS,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto half = cudf::copy_if_else(
+          cudf::numeric_scalar<double>(-0.5, true, stream),
+          cudf::numeric_scalar<double>(0.5, true, stream),
+          isNegative->view(),
+          stream,
+          mr);
+      auto adjusted = cudf::binary_operation(
+          value,
+          half->view(),
+          cudf::binary_operator::ADD,
+          doubleType,
+          stream,
+          mr);
+      return cudf::cast(adjusted->view(), int64Type(), stream, mr);
+    };
+
+    std::unique_ptr<cudf::column> millis;
+    if (rounding_ == FromUnixtimeRounding::kWhole) {
+      auto millisDouble = cudf::binary_operation(
+          seconds,
+          cudf::numeric_scalar<double>(1000.0, true, stream),
+          cudf::binary_operator::MUL,
+          doubleType,
+          stream,
+          mr);
+      millis = llroundEmu(millisDouble->view());
+    } else {
+      // floor(x) whole seconds, plus the fractional second rounded on its own
+      // (matching CPU's no-zone fromUnixtime). The fraction is in [0, 1), so
+      // its round is the non-negative case; a fraction that rounds up to 1000
+      // ms carries naturally through the addition.
+      auto secondsFloor = cudf::unary_operation(
+          seconds, cudf::unary_operator::FLOOR, stream, mr);
+      auto fraction = cudf::binary_operation(
+          seconds,
+          secondsFloor->view(),
+          cudf::binary_operator::SUB,
+          doubleType,
+          stream,
+          mr);
+      auto fractionMillisDouble = cudf::binary_operation(
+          fraction->view(),
+          cudf::numeric_scalar<double>(1000.0, true, stream),
+          cudf::binary_operator::MUL,
+          doubleType,
+          stream,
+          mr);
+      auto fractionMillis = llroundEmu(fractionMillisDouble->view());
+      auto secondsInt =
+          cudf::cast(secondsFloor->view(), int64Type(), stream, mr);
+      auto secondsMillis = binOp(
+          secondsInt->view(),
+          i64(1000, stream),
+          cudf::binary_operator::MUL,
+          int64Type(),
+          stream,
+          mr);
+      millis = cudf::binary_operation(
+          secondsMillis->view(),
+          fractionMillis->view(),
+          cudf::binary_operator::ADD,
+          int64Type(),
+          stream,
+          mr);
+    }
+
+    // Match CPU's non-finite handling, which a FLOAT64->INT64 cast does not
+    // give on its own: NaN maps to pack(0), and +/-Inf saturates out of range
+    // so pack (here checkMillisInRange) rejects it. A null input stays null
+    // because a null comparison yields a null mask element, which copy_if_else
+    // treats as false and so keeps the (null) computed millis.
+    const auto infinity = std::numeric_limits<double>::infinity();
+    auto isNan = cudf::binary_operation(
+        seconds,
+        seconds,
+        cudf::binary_operator::NOT_EQUAL,
         cudf::data_type{kBool8},
         stream,
         mr);
-    auto half = cudf::copy_if_else(
-        cudf::numeric_scalar<double>(-0.5, true, stream),
-        cudf::numeric_scalar<double>(0.5, true, stream),
-        isNegative->view(),
+    auto isPositiveInf = cudf::binary_operation(
+        seconds,
+        cudf::numeric_scalar<double>(infinity, true, stream),
+        cudf::binary_operator::EQUAL,
+        cudf::data_type{kBool8},
         stream,
         mr);
-    auto adjusted = cudf::binary_operation(
-        millisDouble->view(),
-        half->view(),
-        cudf::binary_operator::ADD,
-        doubleType,
+    auto isNegativeInf = cudf::binary_operation(
+        seconds,
+        cudf::numeric_scalar<double>(-infinity, true, stream),
+        cudf::binary_operator::EQUAL,
+        cudf::data_type{kBool8},
         stream,
         mr);
-    auto millis = cudf::cast(adjusted->view(), int64Type(), stream, mr);
+    auto isInf = cudf::binary_operation(
+        isPositiveInf->view(),
+        isNegativeInf->view(),
+        cudf::binary_operator::LOGICAL_OR,
+        cudf::data_type{kBool8},
+        stream,
+        mr);
+    millis = cudf::copy_if_else(
+        i64(0, stream), millis->view(), isNan->view(), stream, mr);
+    millis = cudf::copy_if_else(
+        i64(kMaxMillisUtc + 1, stream),
+        millis->view(),
+        isInf->view(),
+        stream,
+        mr);
+
     checkMillisInRange(millis->view(), stream, mr);
     auto shifted = binOp(
         millis->view(),
@@ -756,6 +879,7 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
 
  private:
   int16_t zoneId_;
+  FromUnixtimeRounding rounding_;
 };
 
 // now() / current_timestamp -> timestamp with time zone. Emits a constant
@@ -764,19 +888,17 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
 class NowFunction : public CudfFunction {
  public:
   ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] std::vector<ColumnOrView>& inputColumns,
+      cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    VELOX_CHECK(
-        !inputColumns.empty(), "now() needs an input column for sizing");
-    const auto size = asView(inputColumns[0]).size();
     const int16_t zoneId = context_.sessionTimezone.empty()
         ? 0
         : tz::getTimeZoneID(context_.sessionTimezone);
     const int64_t packed = (context_.sessionStartTimeMs << kMillisShift) |
         (zoneId & kTimezoneMask);
     auto scalar = i64(packed, stream);
-    return cudf::make_column_from_scalar(scalar, size, stream, mr);
+    return cudf::make_column_from_scalar(scalar, numRows, stream, mr);
   }
 };
 
@@ -799,6 +921,7 @@ class ParseDatetimeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
@@ -842,24 +965,28 @@ class FromIso8601Function : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
     // Permissive ISO8601: the year is required; month, day, the time fields,
     // the fractional seconds and the zone suffix are all optional. Missing
-    // date/time components default to the start of the period (matching CPU); a
-    // missing or "Z" suffix is GMT. The offset sign is captured on its own so a
-    // sub-hour negative offset like "-00:30" keeps its sign.
+    // date/time components default to the start of the period (matching CPU).
+    // An explicit "Z" or "+/-HH:MM" suffix sets the zone; an absent suffix is
+    // GMT, or the session timezone when one is set (handled below). The whole
+    // suffix is captured (group 7) to tell an absent suffix from an explicit
+    // "Z"; the sign is captured on its own so a sub-hour offset like "-00:30"
+    // keeps it.
     auto prog = cudf::strings::regex_program::create(
         "^([0-9]{4})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
         "(?:[T ]([0-9]{2}))?(?::([0-9]{2}))?(?::([0-9]{2}))?"
         "(?:[.,]([0-9]+))?"
-        "(?:Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
+        "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
     auto groups = cudf::strings::extract(
         cudf::strings_column_view(input), *prog, stream, mr);
     auto g = groups->view();
-    // Columns: 0 year, 1 month, 2 day, 3 hour, 4 minute, 5 second,
-    //          6 fraction, 7 sign, 8 offset hours, 9 offset minutes.
+    // Columns: 0 year, 1 month, 2 day, 3 hour, 4 minute, 5 second, 6 fraction,
+    //          7 zone suffix, 8 sign, 9 offset hours, 10 offset minutes.
 
     auto orDefault = [&](int index, const char* value) {
       return cudf::replace_nulls(
@@ -938,20 +1065,20 @@ class FromIso8601Function : public CudfFunction {
     // so "-00:30" stays negative.
     auto offsetHours = cudf::replace_nulls(
         cudf::strings::to_integers(
-            cudf::strings_column_view(g.column(8)), int64Type(), stream, mr)
+            cudf::strings_column_view(g.column(9)), int64Type(), stream, mr)
             ->view(),
         i64(0, stream),
         stream,
         mr);
     auto offsetMins = cudf::replace_nulls(
         cudf::strings::to_integers(
-            cudf::strings_column_view(g.column(9)), int64Type(), stream, mr)
+            cudf::strings_column_view(g.column(10)), int64Type(), stream, mr)
             ->view(),
         i64(0, stream),
         stream,
         mr);
     auto signStr = cudf::replace_nulls(
-        g.column(7), cudf::string_scalar("+", true, stream), stream, mr);
+        g.column(8), cudf::string_scalar("+", true, stream), stream, mr);
     auto isNegativeSign = cudf::strings::starts_with(
         cudf::strings_column_view(signStr->view()),
         cudf::string_scalar("-", true, stream),
@@ -1042,9 +1169,69 @@ class FromIso8601Function : public CudfFunction {
     auto zoneId = cudf::copy_if_else(
         i64(0, stream), idNonZero->view(), isZeroOffset->view(), stream, mr);
 
-    // pack(utcMillis, zoneId).
+    // An offset-less input is interpreted in the session timezone, not GMT,
+    // when one is set -- matching CPU's FromIso8601Timestamp (the wall clock is
+    // that zone's local time and the packed key is the session zone). Rows
+    // carrying an explicit "Z" or numeric offset keep the result computed
+    // above; the captured zone suffix (group 7) distinguishes them from an
+    // absent suffix. utcOffsetSeconds(wall-treated-as-UTC) is the standard
+    // local->UTC approximation: exact for fixed-offset zones and away from DST
+    // transitions, but inside a transition window it can differ from CPU by the
+    // DST delta and does not reproduce CPU's throw on a nonexistent local time.
+    std::unique_ptr<cudf::column> selectedMillis;
+    std::unique_ptr<cudf::column> selectedZone;
+    cudf::column_view finalMillis = utcMillis->view();
+    cudf::column_view finalZone = zoneId->view();
+    if (!context_.sessionTimezone.empty()) {
+      auto zoneSuffix = cudf::replace_nulls(
+          g.column(7), cudf::string_scalar("", true, stream), stream, mr);
+      auto suffixLength = cudf::strings::count_characters(
+          cudf::strings_column_view(zoneSuffix->view()), stream, mr);
+      auto hasExplicitZone = cudf::binary_operation(
+          suffixLength->view(),
+          cudf::numeric_scalar<cudf::size_type>(0, true, stream),
+          cudf::binary_operator::GREATER,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto wallTimestamp = bitcastColumn(
+          wallMillis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
+      auto sessionOffsetDuration =
+          utcOffsetSeconds(wallTimestamp, context_.sessionTimezone, stream, mr);
+      auto sessionOffsetMillis = binOp(
+          bitcastColumn(sessionOffsetDuration->view(), kInt64),
+          i64(1000, stream),
+          cudf::binary_operator::MUL,
+          int64Type(),
+          stream,
+          mr);
+      auto sessionUtcMillis = cudf::binary_operation(
+          wallMillis->view(),
+          sessionOffsetMillis->view(),
+          cudf::binary_operator::SUB,
+          int64Type(),
+          stream,
+          mr);
+      const auto sessionZoneKey = tz::getTimeZoneID(context_.sessionTimezone);
+      selectedMillis = cudf::copy_if_else(
+          utcMillis->view(),
+          sessionUtcMillis->view(),
+          hasExplicitZone->view(),
+          stream,
+          mr);
+      selectedZone = cudf::copy_if_else(
+          zoneId->view(),
+          i64(sessionZoneKey & kTimezoneMask, stream),
+          hasExplicitZone->view(),
+          stream,
+          mr);
+      finalMillis = selectedMillis->view();
+      finalZone = selectedZone->view();
+    }
+
+    // pack(finalMillis, finalZone).
     auto shifted = binOp(
-        utcMillis->view(),
+        finalMillis,
         i64(kMillisShift, stream),
         cudf::binary_operator::SHIFT_LEFT,
         int64Type(),
@@ -1052,7 +1239,7 @@ class FromIso8601Function : public CudfFunction {
         mr);
     return cudf::binary_operation(
         shifted->view(),
-        zoneId->view(),
+        finalZone,
         cudf::binary_operator::BITWISE_OR,
         int64Type(),
         stream,
@@ -1132,7 +1319,8 @@ void registerTimezoneFunctions(const std::string& prefix) {
       prefix + "from_unixtime",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
         return std::make_shared<FromUnixtimeWithZoneFunction>(
-            tz::getTimeZoneID(constStringArg(expr, 1)));
+            tz::getTimeZoneID(constStringArg(expr, 1)),
+            FromUnixtimeRounding::kWhole);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")
@@ -1146,7 +1334,8 @@ void registerTimezoneFunctions(const std::string& prefix) {
         const auto offsetMinutes = static_cast<int32_t>(
             constIntArg(expr, 1) * 60 + constIntArg(expr, 2));
         return std::make_shared<FromUnixtimeWithZoneFunction>(
-            tz::getTimeZoneID(offsetMinutes));
+            tz::getTimeZoneID(offsetMinutes),
+            FromUnixtimeRounding::kFloorThenFraction);
       },
       {FunctionSignatureBuilder()
            .returnType("timestamp with time zone")

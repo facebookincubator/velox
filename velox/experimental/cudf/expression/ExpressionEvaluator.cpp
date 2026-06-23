@@ -345,6 +345,7 @@ class SplitFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -375,6 +376,7 @@ class CastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -396,6 +398,7 @@ class CardinalityFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -459,6 +462,7 @@ class RoundFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -565,6 +569,7 @@ class BinaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto isComparisonOp = [](cudf::binary_operator op) {
@@ -879,6 +884,7 @@ class LogicalFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // If there are no input columns, the result is a scalar.
@@ -990,6 +996,7 @@ class UnaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::unary_operation(asView(inputColumns[0]), op_, stream, mr);
@@ -1028,6 +1035,7 @@ class BetweenFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // return (value >= min) && (value <= max)
@@ -1135,6 +1143,7 @@ class GreatestLeastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // All inputs were constant -- return the pre-folded scalar as a column.
@@ -1196,6 +1205,7 @@ class SwitchFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     if (left_ == nullptr && right_ == nullptr) {
@@ -1261,6 +1271,7 @@ class CoalesceFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
@@ -1340,6 +1351,7 @@ class ExtractComponentFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1381,6 +1393,7 @@ class QuarterFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1399,6 +1412,7 @@ class DayOfYearFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1417,6 +1431,7 @@ class WeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1446,6 +1461,7 @@ class YearOfWeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1473,6 +1489,7 @@ class LengthFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1489,6 +1506,7 @@ class LowerFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1505,6 +1523,7 @@ class UpperFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
@@ -1568,6 +1587,7 @@ class LikeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
@@ -1823,6 +1843,7 @@ class StringPatternPredicateFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
@@ -1968,6 +1989,7 @@ class ConcatFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     // Validate sizes.
@@ -2047,6 +2069,7 @@ class RowConstructorFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK(
@@ -2871,14 +2894,16 @@ ColumnOrView FunctionExpression::eval(
       subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
     }
 
-    // Zero-argument functions (e.g. now()) produce a constant column but still
-    // need the batch row count to size it. Hand them the first input column so
-    // they can read its size; its value is ignored.
-    if (subexprResults.empty() && !inputColumnViews.empty()) {
-      subexprResults.push_back(inputColumnViews.front());
-    }
+    // The batch row count, threaded to eval so a zero-argument function (e.g.
+    // now()) can size its constant output. Every argument and input column
+    // carries it; the GPU path always has at least one input column
+    // (zero-column projections fall back to CPU and empty batches short-circuit
+    // upstream).
+    const auto numRows = !subexprResults.empty()
+        ? asView(subexprResults.front()).size()
+        : (inputColumnViews.empty() ? 0 : inputColumnViews.front().size());
 
-    auto result = function_->eval(subexprResults, stream, mr);
+    auto result = function_->eval(subexprResults, numRows, stream, mr);
     if (finalize) {
       const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
