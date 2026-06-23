@@ -199,6 +199,8 @@ TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
       table->view(),
       allocationStream.view(),
       rmm::to_device_async_resource_ref_checked(&resource));
+  // CudfVector does not join producer streams. Synchronize the packing stream
+  // before handing the packed table to CudfVector.
   allocationStream.view().synchronize();
   auto tableView = cudf::unpack(packedColumns);
   auto packedTable = std::make_unique<cudf::packed_table>(
@@ -235,6 +237,8 @@ TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
       table->view(),
       allocationStream.view(),
       rmm::to_device_async_resource_ref_checked(&resource));
+  // CudfVector does not join producer streams. Synchronize the packing stream
+  // before handing the packed table to CudfVector.
   allocationStream.view().synchronize();
   auto tableView = cudf::unpack(packedColumns);
   auto packedTable = std::make_unique<cudf::packed_table>(
