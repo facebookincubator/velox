@@ -62,6 +62,7 @@ adapters | dep-graph)
     -DVELOX_ENABLE_S3=ON
     -DVELOX_ENABLE_GCS=ON
     -DVELOX_ENABLE_ABFS=ON
+    -DVELOX_ENABLE_CXL=ON
   )
   if [[ ${USE_CLANG:-false} != "true" ]]; then
     # Faiss has a link issue under Clang; the remote function service
@@ -91,6 +92,7 @@ ubuntu-debug | ubuntu-bundled-deps)
     -DVELOX_ENABLE_ARROW=ON
     -DVELOX_ENABLE_GEO=ON
     -DVELOX_ENABLE_PARQUET=ON
+    -DVELOX_ENABLE_CXL=ON
     -DVELOX_MONO_LIBRARY=ON
   )
   if [[ ${USE_CLANG:-false} != "true" ]]; then
@@ -111,6 +113,7 @@ fedora-debug)
     -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_ENABLE_EXAMPLES=ON
     -DVELOX_ENABLE_FAISS=ON
+    -DVELOX_ENABLE_CXL=ON
   )
   ;;
 

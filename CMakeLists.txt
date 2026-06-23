@@ -174,19 +174,12 @@ option(
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
 option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
-# Built by default on Linux (the only platform libnuma's numa_tonode_memory page
-# binding is available on); forced off elsewhere. Override with -DVELOX_ENABLE_CXL=OFF.
-cmake_dependent_option(
-  VELOX_ENABLE_CXL
-  "Build CXL experimental memory subsystem (Linux only)."
-  ON
-  "UNIX;NOT APPLE"
-  OFF
-)
+# Linux only: libnuma's numa_tonode_memory page binding is unavailable elsewhere.
+option(VELOX_ENABLE_CXL "Build CXL experimental memory subsystem (Linux only)." OFF)
+if(NOT (UNIX AND NOT APPLE))
+  set(VELOX_ENABLE_CXL OFF)
+endif()
 if(VELOX_ENABLE_CXL)
-  # Compile the CXL-tier relocate path into core velox_exec; it is selected at
-  # runtime by a customPool("cxl") tier. Gates the experimental tag-header
-  # include in HashAggregation, like -DVELOX_ENABLE_S3 et al.
   add_compile_definitions(VELOX_ENABLE_CXL)
 endif()
 
