@@ -36,10 +36,10 @@ Conversion Functions
 Expression-level cast modes
 ---------------------------
 
-Integrations can register ``spark_ansi_cast`` and ``spark_legacy_cast`` as
-internal special form names to preserve Spark's per-expression cast mode. These
-are not Spark SQL functions. ``spark_ansi_cast`` applies ANSI behavior for
-supported cast pairs regardless of the session ANSI setting.
+``spark_ansi_cast`` and ``spark_legacy_cast`` are internal special form names
+registered with Spark SQL functions to preserve Spark's per-expression cast
+mode. These are not Spark SQL functions. ``spark_ansi_cast`` applies ANSI
+behavior for supported cast pairs regardless of the session ANSI setting.
 ``spark_legacy_cast`` applies non-ANSI Spark cast behavior regardless of the
 session ANSI setting.
 

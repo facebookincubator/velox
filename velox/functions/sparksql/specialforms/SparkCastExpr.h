@@ -65,10 +65,9 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
 };
 
 /// Registers private Spark cast special forms for integrations that translate
-/// Spark plans with per-expression cast modes. For example, Gluten can register
-/// internal names for ANSI and legacy casts, then emit those names while
-/// converting Spark Cast expressions whose mode is already fixed in the Spark
-/// plan.
+/// Spark plans with per-expression cast modes. Spark SQL registration wires
+/// `spark_ansi_cast` and `spark_legacy_cast` by default for this purpose;
+/// integrations can call this helper to register alternative internal names.
 ///
 /// These forms are not the default Spark SQL cast forms because regular
 /// `cast` and `try_cast` must continue to derive behavior from

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/specialforms/SparkCastExpr.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
@@ -36,8 +35,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   static void SetUpTestCase() {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
-    functions::sparksql::registerSparkCastModeSpecialForms(
-        kSparkAnsiCast, kSparkLegacyCast);
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 

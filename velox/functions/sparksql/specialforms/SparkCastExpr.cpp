@@ -49,10 +49,6 @@ exec::ExprPtr makeSparkCastExpr(
 /// - `try_cast` returns NULL on cast failures and disables overflow truncation.
 /// - This form forces ANSI behavior for supported cast pairs regardless of the
 ///   session ANSI setting. Unsupported cast pairs fall back to legacy behavior.
-/// - SparkLegacyCastCallToSpecialForm forces legacy behavior regardless of the
-///   session ANSI setting.
-/// Legacy behavior means cast failures return NULL and overflow truncation is
-/// allowed where Spark permits it.
 class SparkAnsiCastCallToSpecialForm : public exec::CastCallToSpecialForm {
  public:
   exec::ExprPtr constructSpecialForm(
@@ -79,6 +75,10 @@ class SparkAnsiCastCallToSpecialForm : public exec::CastCallToSpecialForm {
   }
 };
 
+/// SparkLegacyCastCallToSpecialForm forces legacy behavior regardless of the
+/// session ANSI setting.
+/// Legacy behavior means cast failures return NULL and overflow truncation is
+/// allowed where Spark permits it.
 class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
  public:
   exec::ExprPtr constructSpecialForm(
