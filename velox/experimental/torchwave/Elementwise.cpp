@@ -146,6 +146,26 @@ void CompileCtx::generateElementwise(
     bool fullBlockResult) {
   auto& op = *generatingOp_;
 
+  // Scalar-elementwise ops (isScalarElementwise, e.g. _operator.* / sym_size /
+  // sym_numel) produce a naked scalar, not a tensor: the loop runs a single
+  // element (the kernel has no whole-tensor operand, so the size head computes
+  // size == 1) and the result is written to a scalar parameter. Verify the
+  // result Value really is a scalar so a misregistration is caught at compile
+  // time rather than corrupting memory.
+  for (const auto& sg : subgraphs) {
+    auto* rootMeta = nodeMeta(sg.root);
+    if (rootMeta && rootMeta->isScalarElementwise &&
+        !sg.root->outputs().empty()) {
+      auto kind = sg.root->outputs()[0]->type().kind();
+      TORCH_CHECK(
+          kind != nativert::Type::Kind::Tensor &&
+              kind != nativert::Type::Kind::TensorList,
+          "isScalarElementwise op ",
+          sg.root->target(),
+          " must produce a scalar result, not a tensor");
+    }
+  }
+
   // Get unique leaf inputs by walking subgraph roots.
   auto leafInputs = subgraphInputs(subgraphs);
 
@@ -333,6 +353,13 @@ void CompileCtx::generateElementwise(
   // Generate shared declarations for size and fast path flags.
   op.addSharedDeclaration("  __shared__ uint32_t size;\n");
   auto numFastPathVars = (tensorCount + kBitsPerWord - 1) / kBitsPerWord;
+  // Always declare at least isFastPath0: an elementwise kernel whose only
+  // tensor operand is a whole tensor (e.g. sym_numel/sym_size fused into a
+  // kernel) has tensorCount == 0 but still emits `isFastPath0 = 1` in the
+  // size-1 branch below.
+  if (numFastPathVars < 1) {
+    numFastPathVars = 1;
+  }
   for (size_t i = 0; i < numFastPathVars; ++i) {
     op.addSharedDeclaration(
         "  __shared__ uint32_t isFastPath" + std::to_string(i) + ";\n");
@@ -391,6 +418,31 @@ void CompileCtx::generateElementwise(
   if (firstTensor) {
     code_ << "    size = 1;\n"
           << "    isFastPath0 = 1;\n";
+  }
+  // The elementwise loop must cover the full output.  For an outer-product
+  // broadcast ([N,1] + [1,M] -> [N,M]) the output exceeds every input, so the
+  // max-input size computed above is too small.  Fold each memory-backed
+  // tensor output's element count into `size`; if an output is larger, clear
+  // input fast-path bits so every operand uses broadcast index translation.
+  for (size_t s = 0; s < resultSpecs.size(); ++s) {
+    auto* outVal = resultSpecs[s].value;
+    if (!outVal || outVal->type().kind() != nativert::Type::Kind::Tensor ||
+        sizeExcludedValues.count(outVal) || wholeTensorValues.count(outVal)) {
+      continue;
+    }
+    if (!declaredSize2) {
+      code_ << "    uint32_t size2;\n";
+      declaredSize2 = true;
+    }
+    code_ << "    size2 = " << param(outVal, op) << "->numEl;\n"
+          << "    if (size2 == 0) {\n"
+          << "      size = 0;\n"
+          << "    } else if (size2 > size) {\n";
+    for (size_t W = 0; W < numFastPathVars; ++W) {
+      code_ << "      isFastPath" << W << " = 0;\n";
+    }
+    code_ << "      size = size2;\n"
+          << "    }\n";
   }
   code_ << "  }\n"
         << "  __syncthreads();\n";
@@ -969,42 +1021,45 @@ void CompileCtx::elementwiseExprImpl(
     firstValue = false;
   };
 
+  // Gather call args via forArguments for BOTH the generateCall and the default
+  // path, so register args that arrive as constant ATTRIBUTES (not graph edges)
+  // are emitted too.  The base's scalar support folds e.g. scalar_tensor's
+  // scalar into a constant attribute; iterating node->inputs() alone would miss
+  // it and hand generateCall empty args (the scalar_tensor/__to ops set
+  // numArgs to bound this to their single register arg).
+  int32_t emittedArgs = 0;
+  int32_t numArgs = meta->elementwise->numArgs;
+  forArguments(
+      *meta,
+      node,
+      [&](size_t schemaIdx, ValueCP v, const nativert::Attribute* attr) {
+        if (emittedArgs >= numArgs) {
+          return;
+        }
+        if (v) {
+          ++emittedArgs;
+          bool isWhole = schemaIdx < meta->argumentMeta.size() &&
+              meta->argumentMeta[schemaIdx].wholeTensor;
+          bool isReg = schemaIdx < meta->argumentMeta.size() &&
+              meta->argumentMeta[schemaIdx].isRegister;
+          processValue(v, isWhole, isReg);
+        } else if (attr) {
+          ++emittedArgs;
+          if (std::holds_alternative<nativert::None>(attr->value)) {
+            argTexts.emplace_back("0");
+          } else {
+            auto off = op.attrOffset(node, attr->name);
+            auto tp = cudaAttrType(attr->value);
+            argTexts.push_back(
+                fmt::format("*param<{}>(blockInfo, {})", tp, off));
+          }
+        }
+      });
   if (meta->generateCall) {
-    for (const auto& input : node->inputs()) {
-      processValue(input.value, false, true);
-    }
     std::stringstream callSs;
     meta->generateCall(callSs, node, std::move(argTexts));
     code_ << "      " << resultName << " = " << callSs.str() << ";\n";
   } else {
-    int32_t emittedArgs = 0;
-    int32_t numArgs = meta->elementwise->numArgs;
-    forArguments(
-        *meta,
-        node,
-        [&](size_t schemaIdx, ValueCP v, const nativert::Attribute* attr) {
-          if (emittedArgs >= numArgs) {
-            return;
-          }
-          if (v) {
-            ++emittedArgs;
-            bool isWhole = schemaIdx < meta->argumentMeta.size() &&
-                meta->argumentMeta[schemaIdx].wholeTensor;
-            bool isReg = schemaIdx < meta->argumentMeta.size() &&
-                meta->argumentMeta[schemaIdx].isRegister;
-            processValue(v, isWhole, isReg);
-          } else if (attr) {
-            ++emittedArgs;
-            if (std::holds_alternative<nativert::None>(attr->value)) {
-              argTexts.emplace_back("0");
-            } else {
-              auto off = op.attrOffset(node, attr->name);
-              auto tp = cudaAttrType(attr->value);
-              argTexts.push_back(
-                  fmt::format("*param<{}>(blockInfo, {})", tp, off));
-            }
-          }
-        });
     code_ << "      " << resultName << " = "
           << buildElementwiseCall(*meta, node, op, argTexts) << ";\n";
   }

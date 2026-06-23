@@ -25,6 +25,7 @@ velox_add_library(
   LevelComparison.h
   LevelConversion.h
   LevelConversionUtil.h
+  ParquetConfig.h
   RleEncodingInternal.h
   XxHasher.h
 )
@@ -39,6 +40,5 @@ velox_link_libraries(
   fmt::fmt
   Folly::folly
   Snappy::snappy
-  thrift
   zstd::zstd
 )

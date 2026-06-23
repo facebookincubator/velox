@@ -539,6 +539,35 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         });
   }
 
+  void testTimestampUtcToString() {
+    // Basic formatting: output reflects the stored UTC time directly.
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(946'684'800, 0),
+             Timestamp(946'729'316, 0),
+             Timestamp(1'426'680'197, 0),
+             Timestamp(1'426'680'197, 123'000'000),
+             Timestamp(1'426'680'197, 123'456'000)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00",
+             "2000-01-01 00:00:00",
+             "2000-01-01 12:21:56",
+             "2015-03-18 12:03:17",
+             "2015-03-18 12:03:17.123",
+             "2015-03-18 12:03:17.123456"},
+            VARCHAR()));
+
+    // Session timezone does not affect TIMESTAMP_UTC output.
+    setTimezone("Asia/Shanghai");
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0), Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()),
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00", "2000-01-01 12:21:56"}, VARCHAR()));
+  }
+
   void testInvalidDate() {
     testInvalidCast<int8_t>(
         "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
@@ -1095,6 +1124,10 @@ TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
   testTimestampToString();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToString) {
+  testTimestampUtcToString();
+}
+
 TEST_F(SparkCastExprTestAnsiOn, testInvalidDate) {
   auto expected = [](const std::string& v) {
     return fmt::format(
@@ -1374,6 +1407,10 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToInt) {
 
 TEST_F(SparkCastExprTestAnsiOff, timestampToString) {
   testTimestampToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToString) {
+  testTimestampUtcToString();
 }
 
 TEST_F(SparkCastExprTestAnsiOff, testInvalidDate) {

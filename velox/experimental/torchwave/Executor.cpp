@@ -18,11 +18,15 @@
 
 #include <ATen/ATen.h>
 #include <folly/ScopeGuard.h>
+#include <folly/chrono/Hardware.h>
 #include <gflags/gflags.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include "velox/experimental/torchwave/NodePrinter.h"
+#include "velox/experimental/torchwave/Standalones.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
@@ -32,11 +36,44 @@
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 
+// Forward declaration of the CUDA runtime call used to synchronize the default
+// stream. This translation unit is built in a CPU-configured target without the
+// CUDA headers; the symbol resolves from the CUDA runtime linked into the final
+// binary. PyTorch dispatches eager standalone ops to the default stream.
+extern "C" int cudaStreamSynchronize(void* stream);
+
 namespace torch::wave {
 
 namespace {
 
 thread_local WaveThreadInfo threadInfo;
+
+// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
+// ops are dispatched, so they are complete before executeWave returns.
+void syncTorchDefaultStream() {
+  cudaStreamSynchronize(nullptr);
+}
+
+// TSC ticks per microsecond, calibrated once. folly::hardware_timestamp()
+// (rdtsc) costs ~ns, whereas std::chrono here is backed by kvm-clock at ~tens
+// of us/call -- too expensive for per-standalone timing of many cheap ops.
+double tscTicksPerMicro() {
+  static const double ticksPerMicro = [] {
+    auto t0 = std::chrono::steady_clock::now();
+    auto c0 = folly::hardware_timestamp();
+    while (std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - t0)
+               .count() < 2000) {
+    }
+    auto c1 = folly::hardware_timestamp();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - t0)
+                  .count();
+    return static_cast<double>(c1 - c0) /
+        static_cast<double>(std::max<int64_t>(1, us));
+  }();
+  return ticksPerMicro;
+}
 
 struct GlobalResources {
   std::unique_ptr<facebook::velox::wave::GpuArena> deviceArena;
@@ -86,6 +123,14 @@ void initialize() {
     return;
   }
   facebook::velox::wave::setDevice(device);
+  // Run the one-time NVRTC/system-header initialization here, on the
+  // (main) thread that sets up the executor, unless it was already done
+  // elsewhere. ensureInit() touches the filesystem and publishes the shared
+  // /tmp/wavesystemheaders.txt; doing it lazily on a Wave compile-pool thread
+  // inside a heavyweight host (NCCL/Thrift/folly) is what hangs warmup()
+  // (T275179010). initialize() is idempotent, so this is a cheap no-op if the
+  // header init has already happened.
+  facebook::velox::wave::CompiledKernel::initialize();
   auto* g = globals();
   // Unit allocation size for host-device communication buffers. Tensors are
   // allocated separately from the PyTorch caching allocator.
@@ -111,12 +156,15 @@ void tensorsToDevice(
   auto device =
       c10::Device(c10::kCUDA, static_cast<c10::DeviceIndex>(deviceId));
 
-  // Compute total storage bytes needed. For non-contiguous tensors, the storage
-  // extent (first to last element) can exceed numel * element_size.
+  // Contiguify and force standard CPU allocation.  Pickle-deserialized
+  // tensors may sit on CUDA managed memory pages that SIGSEGV on memcpy
+  // into pinned memory.
+  std::vector<at::Tensor> contig(in.size());
   int64_t totalBytes = 0;
   std::vector<int64_t> sizes(in.size());
   for (size_t i = 0; i < in.size(); ++i) {
-    sizes[i] = storageExtentBytes(in[i]);
+    contig[i] = in[i].contiguous().cpu().clone();
+    sizes[i] = static_cast<int64_t>(contig[i].nbytes());
     totalBytes += sizes[i];
   }
 
@@ -126,21 +174,19 @@ void tensorsToDevice(
   auto* pinnedBase = pinned.data_ptr<uint8_t>();
   int64_t offset = 0;
   for (size_t i = 0; i < in.size(); ++i) {
-    TORCH_CHECK(i < sizes.size());
-    memcpy(pinnedBase + offset, in.at(i).data_ptr(), sizes.at(i));
+    memcpy(pinnedBase + offset, contig[i].data_ptr(), sizes[i]);
     offset += sizes[i];
   }
 
-  // Allocate device storage and async copy, preserving original strides.
+  // Allocate device storage and async copy.
   out.resize(in.size());
   offset = 0;
   for (size_t i = 0; i < in.size(); ++i) {
-    TORCH_CHECK(i < sizes.size());
-    int64_t numElements = sizes.at(i) / in.at(i).element_size();
-    auto deviceFlat = at::empty({numElements}, in[i].options().device(device));
+    auto deviceFlat =
+        at::empty({contig[i].numel()}, contig[i].options().device(device));
     stream.hostToDeviceAsync(
         deviceFlat.data_ptr(), pinnedBase + offset, sizes[i]);
-    out[i] = deviceFlat.as_strided(in[i].sizes(), in[i].strides());
+    out[i] = deviceFlat.reshape(contig[i].sizes());
     offset += sizes[i];
   }
 
@@ -292,29 +338,84 @@ void runStandalones(
     ExecutionState& state,
     const folly::F14FastMap<NodeCP, nativert::OpKernel*>& kernelMap,
     const folly::F14FastMap<NodeCP, int32_t>& standaloneIndices,
-    std::vector<StandaloneStats>& standaloneStats) {
-  using Clock = std::chrono::high_resolution_clock;
+    std::vector<StandaloneStats>& standaloneStats,
+    bool timing) {
   for (const auto& data : standalones) {
     auto* actualNode = data.standalone;
+    const bool isShortcut = data.launch != nullptr &&
+        data.launch->standaloneShortcut != StandaloneShortcut::kNone;
+    // Metadata-only ops (shortcut or generic, e.g. unsqueeze / a SymInt-list
+    // prim.ListPack) do no device work, so they need no timing sync below.
+    const bool metadataOnly =
+        data.launch != nullptr && data.launch->metadataOnly;
 
-    auto kernelIt = kernelMap.find(actualNode);
-    TORCH_CHECK(
-        kernelIt != kernelMap.end(),
-        "No kernel for node ",
-        actualNode->target());
+    // Skip if this node's output is already materialized (e.g. it was computed
+    // by runReadyGraphNodes after the producing composite).  See
+    // nodeOutputsComputed: re-executing would re-read recycled input buffers.
+    if (nodeOutputsComputed(actualNode, *state.frame)) {
+      continue;
+    }
+
+    // Skip standalone ops with None inputs — they depend on values
+    // from later PNs.  runDeferredStandalones will retry them.
+    bool hasNoneInput = false;
+    for (const auto& input : actualNode->inputs()) {
+      if (isUnreadyNoneDependency(input.value, *state.frame)) {
+        hasNoneInput = true;
+        break;
+      }
+    }
+    if (hasNoneInput) {
+      if (state.deferredStandalones) {
+        state.deferredStandalones->push_back(actualNode);
+      }
+      continue;
+    }
 
     SavedValues savedDeviceValues;
-    if (data.launch && !data.launch->argOnCpu.empty()) {
+    if (!isShortcut && data.launch && !data.launch->argOnCpu.empty()) {
       savedDeviceValues = replaceCpuOnlyArgs(*data.launch, *state.frame);
     }
     traceFrameValues(
         "input", data.actualInputs, *state.frame, state.traceState);
-    auto start = Clock::now();
-    executeNode(actualNode, kernelIt->second, *state.frame);
-    restoreCpuOnlyArgs(savedDeviceValues, *state.frame);
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-                  Clock::now() - start)
-                  .count();
+
+    // Per-op timing uses the TSC (folly::hardware_timestamp, ~ns) rather than
+    // std::chrono, which is backed by a slow kvm-clock here (~tens of us/call)
+    // and would dwarf the metadata-only ops it is meant to measure.
+    uint64_t startTicks = timing ? folly::hardware_timestamp() : 0;
+    if (isShortcut) {
+      // Metadata-only op: call the typed ATen primitive directly, bypassing the
+      // boxed nativert dispatch.
+      runStandaloneShortcut(data, *state.frame);
+    } else {
+      auto kernelIt = kernelMap.find(actualNode);
+      TORCH_CHECK(
+          kernelIt != kernelMap.end(),
+          "No kernel for node ",
+          actualNode->target());
+      executeNode(actualNode, kernelIt->second, *state.frame);
+      restoreCpuOnlyArgs(savedDeviceValues, *state.frame);
+    }
+    if (timing) {
+      // A metadata-only op only manipulates host-side tensor metadata and
+      // enqueues nothing on the device, so it needs no sync. Syncing here
+      // would, via the legacy default stream, drain the wave stream and
+      // massively over-attribute its time. Only real eager ops need a sync to
+      // capture their GPU time.
+      if (!metadataOnly) {
+        syncTorchDefaultStream();
+      }
+      auto us = static_cast<int64_t>(
+          (folly::hardware_timestamp() - startTicks) / tscTicksPerMicro());
+      auto idxIt = standaloneIndices.find(actualNode);
+      if (idxIt != standaloneIndices.end()) {
+        TORCH_CHECK(
+            idxIt->second >= 0 &&
+            static_cast<size_t>(idxIt->second) < standaloneStats.size());
+        standaloneStats.at(idxIt->second).micros += us;
+      }
+    }
+
     if (WaveConfig::get().trace & WaveConfig::kFrame) {
       for (auto outputId : data.actualOutputs) {
         const auto& iv = state.frame->getIValue(outputId);
@@ -324,14 +425,42 @@ void runStandalones(
     }
     traceFrameValues(
         "output", data.actualOutputs, *state.frame, state.traceState);
+  }
+}
 
-    auto idxIt = standaloneIndices.find(actualNode);
-    if (idxIt != standaloneIndices.end()) {
-      TORCH_CHECK(
-          idxIt->second >= 0 &&
-          static_cast<size_t>(idxIt->second) < standaloneStats.size());
-      standaloneStats.at(idxIt->second).micros += us;
+void runShortcutStandalones(
+    const std::vector<LaunchData>& shortcuts,
+    ExecutionState& state,
+    bool timing,
+    int64_t& outUs) {
+  // These ops only build host-side tensor metadata; they enqueue nothing on the
+  // device and read no wave-stream data, so no per-op timing and no stream
+  // sync. Time the whole batch once with the TSC (~ns) rather than the per-op
+  // microsecond clock, which on kvm-clock would dwarf the work it measures.
+  uint64_t startTicks = timing ? folly::hardware_timestamp() : 0;
+  const bool tracing = !state.traceState.empty() ||
+      (WaveConfig::get().trace & WaveConfig::kFrame);
+  for (const auto& data : shortcuts) {
+    if (tracing) {
+      traceFrameValues(
+          "input", data.actualInputs, *state.frame, state.traceState);
     }
+    runStandaloneShortcut(data, *state.frame);
+    if (WaveConfig::get().trace & WaveConfig::kFrame) {
+      for (auto outputId : data.actualOutputs) {
+        const auto& iv = state.frame->getIValue(outputId);
+        std::cout << "    %" << outputId << " = " << traceIValue(iv)
+                  << std::endl;
+      }
+    }
+    if (tracing) {
+      traceFrameValues(
+          "output", data.actualOutputs, *state.frame, state.traceState);
+    }
+  }
+  if (timing) {
+    outUs = static_cast<int64_t>(
+        (folly::hardware_timestamp() - startTicks) / tscTicksPerMicro());
   }
 }
 
@@ -350,6 +479,21 @@ WaveGraphExecutor::WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext)
       kernel = nativert::PrimKernelRegistry()->Create(target, node);
     } else if (c10::starts_with(target, "torch.ops")) {
       kernel = std::make_unique<nativert::C10Kernel>(node);
+    } else {
+      bool hasSymIntOutput = false;
+      bool hasSymBoolOutput = false;
+      for (auto* output : node->outputs()) {
+        if (output->type().kind() == nativert::Type::Kind::SymInt) {
+          hasSymIntOutput = true;
+        } else if (output->type().kind() == nativert::Type::Kind::SymBool) {
+          hasSymBoolOutput = true;
+        }
+      }
+      if (hasSymIntOutput) {
+        kernel = std::make_unique<nativert::SymIntOpKernel>(node);
+      } else if (hasSymBoolOutput) {
+        kernel = std::make_unique<nativert::SymBoolOpKernel>(node);
+      }
     }
     if (kernel) {
       kernelMap_[node] = kernel.get();
@@ -377,6 +521,8 @@ std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::makeDeviceFrame() {
     if (iv.isTensor()) {
       tensorIds.push_back(id);
       hostTensors.push_back(iv.toTensor());
+    } else if (!iv.isNone()) {
+      frame->setIValue(id, iv);
     }
   }
 
@@ -538,6 +684,14 @@ void WaveGraphExecutor::executeWave(
   }
   state.frame = &frame;
   state.valueTypes = &waveGraph.types();
+
+  // Make the graph's value types available to node printers (e.g. the
+  // execution-trace prints via standaloneToString) for the duration of this
+  // wave execution. The guard restores the previous thread-local print options
+  // on exit.
+  PrintOptions printOptions = NodePrinter::defaults();
+  printOptions.valueTypes = &waveGraph.types();
+  WithPrintOptions printOptionsGuard(printOptions);
   state.deviceArena = g->deviceArena.get();
   state.pinnedArena = g->pinnedArena.get();
   state.streamPool = g->streamPool.get();
@@ -556,10 +710,147 @@ void WaveGraphExecutor::executeWave(
   state.verifiedIds.clear();
 
   auto wallStart = std::chrono::high_resolution_clock::now();
+
+  std::vector<NodeCP> deferredStandalones;
+  state.deferredStandalones = &deferredStandalones;
+  // After each PN execution, run any graph nodes whose outputs are
+  // None but inputs are now ready.  This populates SymInt metadata
+  // (strides, sizes) from _assert_tensor_metadata and other standalone
+  // ops that the serial nativert executor would compute.
+  // Ad-hoc C10 kernels for graph nodes not in kernelMap (e.g.,
+  // sym_size, sym_storage_offset, _local_scalar_dense).
+  std::vector<std::unique_ptr<nativert::OpKernel>> adhocKernels;
+  folly::F14FastMap<NodeCP, nativert::OpKernel*> adhocKernelMap;
+
+  auto runReadyGraphNodes = [&]() {
+    auto& graph = *waveGraph.graph();
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (auto& gnode : graph.nodes()) {
+        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
+          continue;
+        }
+        bool hasNoneOutput = false;
+        for (auto* output : gnode.outputs()) {
+          if (frame.getIValue(output->id()).isNone()) {
+            hasNoneOutput = true;
+            break;
+          }
+        }
+        if (!hasNoneOutput) {
+          continue;
+        }
+        // Look up in both the main kernelMap and ad-hoc map.
+        nativert::OpKernel* kernel = nullptr;
+        auto kernelIt = state.kernelMap->find(&gnode);
+        if (kernelIt != state.kernelMap->end()) {
+          kernel = kernelIt->second;
+        } else {
+          auto adhocIt = adhocKernelMap.find(&gnode);
+          if (adhocIt != adhocKernelMap.end()) {
+            kernel = adhocIt->second;
+          } else {
+            std::string target(gnode.target());
+            std::unique_ptr<nativert::OpKernel> newKernel;
+            if (nativert::PrimKernelRegistry()->Has(target)) {
+              newKernel =
+                  nativert::PrimKernelRegistry()->Create(target, &gnode);
+            } else if (c10::starts_with(target, "torch.ops")) {
+              // Synthetic wave ops (e.g. exclusive_sum) have no real C10
+              // schema and are produced by wave's own lowered kernels, not by
+              // a standalone C10Kernel.  Skip them if no schema exists.
+              try {
+                newKernel = std::make_unique<nativert::C10Kernel>(&gnode);
+              } catch (const std::exception&) {
+                newKernel = nullptr;
+              }
+            } else {
+              bool hasSymIntOutput = false;
+              bool hasSymBoolOutput = false;
+              for (auto* output : gnode.outputs()) {
+                if (output->type().kind() == nativert::Type::Kind::SymInt) {
+                  hasSymIntOutput = true;
+                } else if (
+                    output->type().kind() == nativert::Type::Kind::SymBool) {
+                  hasSymBoolOutput = true;
+                }
+              }
+              if (hasSymIntOutput) {
+                newKernel = std::make_unique<nativert::SymIntOpKernel>(&gnode);
+              } else if (hasSymBoolOutput) {
+                newKernel = std::make_unique<nativert::SymBoolOpKernel>(&gnode);
+              }
+            }
+            if (newKernel) {
+              kernel = newKernel.get();
+              adhocKernelMap[&gnode] = kernel;
+              adhocKernels.push_back(std::move(newKernel));
+            }
+          }
+        }
+        if (!kernel) {
+          continue;
+        }
+        bool inputsReady = true;
+        for (const auto& input : gnode.inputs()) {
+          if (isUnreadyNoneDependency(input.value, frame)) {
+            inputsReady = false;
+            break;
+          }
+        }
+        if (inputsReady) {
+          executeNode(&gnode, kernel, frame);
+          progress = true;
+        }
+      }
+    }
+  };
+
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
+    runReadyGraphNodes();
   }
+  // Run deferred standalones whose inputs were produced by later PNs.
+  for (const auto& node : waveGraph.nodes()) {
+    node->runDeferredStandalones(state);
+  }
+
+  // Run grid standalones that were skipped due to None inputs.
+  {
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (auto* deferredNode : deferredStandalones) {
+        auto& output = frame.getIValue(deferredNode->outputs()[0]->id());
+        if (!output.isNone()) {
+          continue;
+        }
+        auto kernelIt = state.kernelMap->find(deferredNode);
+        if (kernelIt == state.kernelMap->end()) {
+          continue;
+        }
+        bool allReady = true;
+        for (const auto& input : deferredNode->inputs()) {
+          if (isUnreadyNoneDependency(input.value, frame)) {
+            allReady = false;
+            break;
+          }
+        }
+        if (allReady) {
+          executeNode(deferredNode, kernelIt->second, frame);
+          progress = true;
+        }
+      }
+    }
+  }
+  state.deferredStandalones = nullptr;
+  // Sync the wave stream and the PyTorch default stream: eager standalone ops
+  // run on the default stream while fused kernels run on the wave stream, and
+  // the two are otherwise unordered. Both must complete before executeWave
+  // returns so all results this invocation produced are visible to the caller.
   state.stream->wait();
+  syncTorchDefaultStream();
   auto wallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - wallStart)
                     .count();
@@ -624,10 +915,12 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.fillUs = sv.fillUs;
         meta.kernelUs = sv.kernelUs;
         meta.standaloneUs = sv.standaloneUs;
+        meta.shortcutUs = sv.shortcutUs;
         meta.standaloneBound = sv.standaloneBound;
         meta.noDtoH = sv.noDtoH;
         meta.inputBytes = sv.inputBytes;
         meta.outputBytes = sv.outputBytes;
+        meta.refCheckUs = sv.refCheckUs;
       }
     }
     threadInfo.launchMeta.push_back(std::move(meta));
@@ -637,13 +930,14 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   if (WaveConfig::get().trace & WaveConfig::kTiming) {
     threadInfo.standaloneTimes.clear();
     threadInfo.standaloneLabels.clear();
+    threadInfo.standaloneTargets.clear();
     if (state.standaloneStats && state.standaloneIndices) {
       // Build index→node map by inverting node→index.
       std::unordered_map<int32_t, NodeCP> idxToNode;
       for (auto& [node, idx] : *state.standaloneIndices) {
         idxToNode[idx] = node;
       }
-      std::vector<std::pair<int64_t, std::string>> sorted;
+      std::vector<std::tuple<int64_t, std::string, std::string>> sorted;
       for (size_t i = 0; i < state.standaloneStats->size(); ++i) {
         auto us = (*state.standaloneStats)[i].micros;
         if (us > 0) {
@@ -651,15 +945,19 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
           std::string label = it != idxToNode.end()
               ? standaloneToString(it->second)
               : "standalone[" + std::to_string(i) + "]";
-          sorted.emplace_back(us, std::move(label));
+          std::string target = it != idxToNode.end()
+              ? std::string(it->second->target())
+              : "standalone[" + std::to_string(i) + "]";
+          sorted.emplace_back(us, std::move(label), std::move(target));
         }
       }
       std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
-        return a.first > b.first;
+        return std::get<0>(a) > std::get<0>(b);
       });
-      for (auto& [us, label] : sorted) {
+      for (auto& [us, label, target] : sorted) {
         threadInfo.standaloneTimes.push_back(us);
         threadInfo.standaloneLabels.push_back(std::move(label));
+        threadInfo.standaloneTargets.push_back(std::move(target));
       }
     }
   }
@@ -778,14 +1076,21 @@ std::string WaveGraphExecutor::makePerfReport(
     int64_t wallUs) const {
   const auto& info = waveThreadInfo();
   std::stringstream ss;
-  double wallSec = wallUs / 1e6;
 
   // Compute total input size from user inputs.
   int64_t totalInputBytes = 0;
   int64_t totalDataBytes = 0;
+  // Total reference-frame checking time (device-to-host copy + comparison).
+  // This is debug-only overhead included in the measured wall time, so subtract
+  // it to report the real e2e time.
+  int64_t totalRefCheckUs = 0;
   for (const auto& meta : info.launchMeta) {
     totalDataBytes += meta.inputBytes + meta.outputBytes;
+    totalRefCheckUs += meta.refCheckUs;
   }
+  bool refChecking = WaveConfig::get().referenceFrame != nullptr;
+  wallUs -= totalRefCheckUs;
+  double wallSec = static_cast<double>(wallUs) / 1e6;
   // User input size from frame inputs.
   auto& frame = *state.frame;
   auto numValues = static_cast<int32_t>(graph().numValues());
@@ -810,6 +1115,9 @@ std::string WaveGraphExecutor::makePerfReport(
   }
 
   ss << "=== Performance Report ===\n";
+  if (refChecking) {
+    ss << "WARNING reference frame checking is on.\n";
+  }
   ss << fmt::format("E2E wall time: {} us ({:.3f} s)\n", wallUs, wallSec);
   if (wallUs > 0 && totalInputBytes > 0) {
     double inputGBs = totalInputBytes / (wallSec * 1e9);
@@ -826,6 +1134,39 @@ std::string WaveGraphExecutor::makePerfReport(
         totalDataBytes / 1e6);
   }
 
+  // Time split across all steps: kernel (GPU), standalone (eager ATen on the
+  // default stream), and interpretation (gather + grid + alloc + fill = the
+  // host-side scheduling overhead). For a standalone-bound step the measured
+  // kernelUs reflects waiting on the standalone work rather than the GPU
+  // kernel, so estimate the kernel time from that step's max thread-block
+  // clocks (1 clock ~= 0.7 ns).
+  {
+    double kernelUs = 0.0;
+    int64_t standaloneUs = 0;
+    int64_t interpUs = 0;
+    for (size_t i = 0; i < info.launchMeta.size(); ++i) {
+      const auto& m = info.launchMeta[i];
+      interpUs += m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
+      standaloneUs += m.standaloneUs + m.shortcutUs;
+      if (m.standaloneBound) {
+        int64_t maxClocks = 0;
+        if (i < info.debugInfo.size()) {
+          for (const auto& b : info.debugInfo[i]) {
+            maxClocks = std::max(maxClocks, b.clocks);
+          }
+        }
+        kernelUs += static_cast<double>(maxClocks) * 0.7 / 1000.0;
+      } else {
+        kernelUs += static_cast<double>(m.kernelUs);
+      }
+    }
+    ss << fmt::format(
+        "Kernel time: {:.0f} us  Standalone time: {} us  Interpretation time: {} us\n",
+        kernelUs,
+        standaloneUs,
+        interpUs);
+  }
+
   // Per-node, per-step report.
   // Group launches by sequenceNumber.
   std::map<int32_t, std::vector<size_t>> nodeToLaunches;
@@ -833,7 +1174,9 @@ std::string WaveGraphExecutor::makePerfReport(
     nodeToLaunches[info.launchMeta[i].sequenceNumber].push_back(i);
   }
 
-  // Compute per-node wall times including standalone time.
+  // Compute per-node wall times. Within a step the fused kernel (wave stream)
+  // and the eager standalones (default stream) run concurrently, so the step's
+  // wall is interpretation plus the larger of the two, not their sum.
   std::vector<std::pair<int32_t, int64_t>> nodeWallTimes;
   // Track which sequence numbers have kernel launches.
   std::set<int32_t> nodesWithLaunches;
@@ -842,8 +1185,9 @@ std::string WaveGraphExecutor::makePerfReport(
     int64_t nodeUs = 0;
     for (auto idx : indices) {
       const auto& m = info.launchMeta[idx];
-      nodeUs += m.gatherUs + m.gridUs + m.allocUs + m.fillUs + m.kernelUs +
-          m.standaloneUs;
+      int64_t interp = m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
+      int64_t hostStandalone = m.standaloneUs + m.shortcutUs;
+      nodeUs += interp + std::max(m.kernelUs, hostStandalone);
     }
     nodeWallTimes.emplace_back(seq, nodeUs);
   }
@@ -856,6 +1200,40 @@ std::string WaveGraphExecutor::makePerfReport(
 
   // Collect all referenced op codes for the legend.
   std::set<int32_t> referencedOps;
+  // Total GPU thread-block clocks spent in each op across all blocks/steps.
+  std::map<int32_t, int64_t> opTotalClocks;
+
+  // Distinct standalone targets and their counts for a step, as
+  // " [target xN, target xM, ...]" (empty if the step has no standalones).
+  auto standaloneBreakdown = [&](int32_t seq, int32_t step) -> std::string {
+    if (seq >= static_cast<int32_t>(state.stepVectors.size()) ||
+        step >= static_cast<int32_t>(state.stepVectors[seq].size())) {
+      return "";
+    }
+    std::map<std::string, int32_t> counts;
+    const auto& sv = state.stepVectors[seq][step];
+    for (const auto* list : {&sv.standalones, &sv.shortcutStandalones}) {
+      for (const auto& data : *list) {
+        if (data.launch && data.launch->standalone) {
+          counts[std::string(data.launch->standalone->target())]++;
+        }
+      }
+    }
+    if (counts.empty()) {
+      return "";
+    }
+    std::string s = " [";
+    bool first = true;
+    for (const auto& [name, c] : counts) {
+      if (!first) {
+        s += ", ";
+      }
+      s += name + " x" + std::to_string(c);
+      first = false;
+    }
+    s += "]";
+    return s;
+  };
 
   for (auto& [seq, nodeUs] : nodeWallTimes) {
     ss << fmt::format("\nNode {}: {} us\n", seq, nodeUs);
@@ -873,13 +1251,15 @@ std::string WaveGraphExecutor::makePerfReport(
         if (seq < static_cast<int32_t>(state.stepVectors.size()) &&
             step < static_cast<int32_t>(state.stepVectors[seq].size())) {
           numStandalones = static_cast<int32_t>(
-              state.stepVectors[seq][step].standalones.size());
+              state.stepVectors[seq][step].standalones.size() +
+              state.stepVectors[seq][step].shortcutStandalones.size());
         }
         ss << fmt::format(
-            "  step {}: {} standalones  {} us\n",
+            "  step {}: {} standalones  {} us",
             m.stepIdx,
             numStandalones,
             m.standaloneUs);
+        ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx) << "\n";
         continue;
       }
       auto stepUs = m.gatherUs + m.gridUs + m.allocUs + m.fillUs + m.kernelUs;
@@ -900,12 +1280,23 @@ std::string WaveGraphExecutor::makePerfReport(
           m.allocUs,
           m.fillUs,
           m.kernelUs);
+      if (m.shortcutUs > 0) {
+        ss << fmt::format(" shortcut={}", m.shortcutUs);
+      }
       if (m.standaloneUs > 0) {
         ss << fmt::format(
             " standalone={}{}", m.standaloneUs, m.standaloneBound ? "*" : "");
       }
+      // Op-target breakdown covers both standalone and shortcut lists; print it
+      // whenever either ran.
+      if (m.standaloneUs > 0 || m.shortcutUs > 0) {
+        ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx);
+      }
       if (m.noDtoH) {
         ss << " noDtoH";
+      }
+      if (m.refCheckUs > 0) {
+        ss << fmt::format(" refcheck={}", m.refCheckUs);
       }
       ss << "\n";
 
@@ -952,6 +1343,7 @@ std::string WaveGraphExecutor::makePerfReport(
           s.opBarrier += b.barrierClocks;
           s.count++;
           referencedOps.insert(b.op);
+          opTotalClocks[b.op] += b.clocks;
         }
         // Get per-op element counts from step vectors.
         auto seq = m.sequenceNumber;
@@ -1013,21 +1405,38 @@ std::string WaveGraphExecutor::makePerfReport(
     ss << fmt::format("  Node {}: {} us ({:.1f}%)\n", seq, us, pct);
   }
 
-  // Top standalones.
+  // Standalones grouped by op target: total time and occurrence count, sorted
+  // by total time descending (all targets, no cutoff).
   if (!info.standaloneTimes.empty()) {
-    ss << "\nTop standalones (% wall time):\n";
-    for (size_t i = 0; i < std::min(info.standaloneTimes.size(), size_t(10));
-         ++i) {
-      double pct = wallUs > 0 ? 100.0 * info.standaloneTimes[i] / wallUs : 0.0;
+    ss << "\nStandalones by target (% wall time):\n";
+    std::unordered_map<std::string, std::pair<int64_t, int32_t>> byTarget;
+    static const std::string kUnknownTarget = "?";
+    for (size_t i = 0; i < info.standaloneTimes.size(); ++i) {
+      // Both branches are lvalues so the const ref binds without copying the
+      // label (a temporary in the false branch would force a copy).
+      const std::string& target = i < info.standaloneTargets.size()
+          ? info.standaloneTargets[i]
+          : kUnknownTarget;
+      auto& entry = byTarget[target];
+      entry.first += info.standaloneTimes[i];
+      entry.second += 1;
+    }
+    std::vector<std::pair<std::string, std::pair<int64_t, int32_t>>> sorted(
+        byTarget.begin(), byTarget.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+      return a.second.first > b.second.first;
+    });
+    for (const auto& [target, agg] : sorted) {
+      double pct = wallUs > 0
+          ? 100.0 * static_cast<double>(agg.first) / static_cast<double>(wallUs)
+          : 0.0;
       ss << fmt::format(
-          "  {} us ({:.1f}%): {}\n",
-          info.standaloneTimes[i],
-          pct,
-          i < info.standaloneLabels.size() ? info.standaloneLabels[i] : "?");
+          "  {} us ({:.1f}%) x{}: {}\n", agg.first, pct, agg.second, target);
     }
   }
 
-  // Op legend: map op codes to their kernel operation expressions.
+  // Op legend: map op codes to their kernel operation expressions, annotated
+  // with each op's share of total GPU thread-block clocks.
   if (!referencedOps.empty() && waveGraph_) {
     ss << "\n=== Op Legend ===\n";
     struct OpLegendEntry {
@@ -1047,9 +1456,47 @@ std::string WaveGraphExecutor::makePerfReport(
         }
       }
     }
+
+    // Grand total thread-block clocks over all kernel ops.
+    int64_t grandTotalClocks = 0;
+    for (const auto& [op, clk] : opTotalClocks) {
+      grandTotalClocks += clk;
+    }
+    auto pctOf = [&](int64_t clk) -> double {
+      return grandTotalClocks > 0 ? 100.0 * static_cast<double>(clk) /
+              static_cast<double>(grandTotalClocks)
+                                  : 0.0;
+    };
+
+    // Top 10 ops by thread-block clocks, on one line at the head.
+    std::vector<std::pair<int32_t, int64_t>> byClocks(
+        opTotalClocks.begin(), opTotalClocks.end());
+    std::sort(byClocks.begin(), byClocks.end(), [](auto& a, auto& b) {
+      return a.second > b.second;
+    });
+    ss << "  Top ops by clocks: ";
+    int32_t shown = 0;
+    for (const auto& [op, clk] : byClocks) {
+      if (shown >= 10) {
+        break;
+      }
+      if (shown > 0) {
+        ss << ", ";
+      }
+      ss << fmt::format("op {} {:.1f}%", op, pctOf(clk));
+      ++shown;
+    }
+    ss << "\n";
+
     for (auto& [opCode, entry] : opLabels) {
+      auto clk = opTotalClocks.count(opCode) ? opTotalClocks[opCode] : 0;
       ss << fmt::format(
-          "  Op {} cost={:.1f} {}\n", opCode, entry.cost, entry.label);
+          "  Op {} cost={:.1f} clocks={} ({:.1f}%) {}\n",
+          opCode,
+          entry.cost,
+          clk,
+          pctOf(clk),
+          entry.label);
     }
   }
 

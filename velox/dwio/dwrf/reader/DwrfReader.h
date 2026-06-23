@@ -358,6 +358,12 @@ class DwrfReader : public dwio::common::Reader {
   // column indices.
   void updateColumnNamesFromTableSchema();
 
+  // Renames the file schema's columns to the requested (table) schema names
+  // that share their Iceberg field id ("iceberg.id" attribute), recursively.
+  // Used for ColumnMappingMode::kFieldId so a downstream name-based read
+  // resolves renames, reorders, deletions, and drop/re-add-with-same-name.
+  void updateColumnNamesFromFieldIds();
+
  private:
   std::shared_ptr<ReaderBase> readerBase_;
 };
