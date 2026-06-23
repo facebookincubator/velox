@@ -257,6 +257,23 @@ When the year exceeds 9999, a positive sign is added.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-timestamp-utc">
+<h3>From TIMESTAMP_UTC<a class="headerlink" href="#from-timestamp-utc" title="Link to this heading">¶</a></h3>
+<p>Casting a timestamp_utc to a string uses the same ISO 8601 format as TIMESTAMP,
+but is not subject to session timezone adjustment.
+The conversion precision is microsecond, and trailing zeros are not appended.
+When the year exceeds 9999, a positive sign is added.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01 12:21:56.129&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2000-01-01 12:21:56.100000&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01 12:21:56.1&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2000-01-01 12:21:56.129900&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;2000-01-01 12:21:56.1299&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;10000-02-01 16:00:00.000&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;+10000-02-01 16:00:00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;0384-01-01 08:00:00.000&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0384-01-01 08:00:00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;-0010-02-01 10:00:00.000&#39;</span> <span class="k">as</span> <span class="n">string</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-0010-02-01 10:00:00&#39;</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Link to this heading">¶</a></h2>
@@ -411,6 +428,7 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 <li><a class="reference internal" href="#cast-to-string">Cast to String</a><ul>
 <li><a class="reference internal" href="#id1">From DECIMAL</a></li>
 <li><a class="reference internal" href="#id2">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#from-timestamp-utc">From TIMESTAMP_UTC</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
