@@ -104,46 +104,29 @@ class TimezoneExtractionTest : public OperatorTestBase {
   RowVectorPtr project(
       const RowVectorPtr& input,
       const std::string& projection,
-      const std::string& timezone) {
+      std::string_view timezone) {
     auto plan = PlanBuilder().values({input}).project({projection}).planNode();
     return AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kSessionTimezone, timezone)
+        .config(core::QueryConfig::kSessionTimezone, std::string(timezone))
         .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
         .copyResults(pool());
   }
 
-  // Returns true if the single output column matches row-for-row.
-  static bool resultsEqual(const RowVectorPtr& a, const RowVectorPtr& b) {
-    if (a->size() != b->size()) {
-      return false;
-    }
-    auto left = a->childAt(0);
-    auto right = b->childAt(0);
-    for (vector_size_t i = 0; i < a->size(); ++i) {
-      if (!left->equalValueAt(right.get(), i, i)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   // Runs the projection on GPU (cuDF registered) and CPU (cuDF unregistered)
-  // under the same session timezone and asserts the results match. This is the
-  // target behavior for every extraction function: the GPU result must equal
-  // the CPU result regardless of the session timezone. On failure the message
-  // reports both concrete values so the local-vs-UTC mismatch is visible.
+  // under the same session timezone and asserts the single output columns are
+  // equal. This is the target behavior for every extraction function: the GPU
+  // result must equal the CPU result regardless of the session timezone.
   void assertGpuMatchesCpu(
       const RowVectorPtr& input,
       const std::string& projection,
-      const std::string& timezone) {
+      std::string_view timezone) {
     auto gpu = project(input, projection, timezone);
     cudf_velox::unregisterCudf();
     auto cpu = project(input, projection, timezone);
     cudf_velox::registerCudf();
-    EXPECT_TRUE(resultsEqual(gpu, cpu))
-        << projection << " did not honor the session timezone " << timezone
-        << " on GPU: CPU=" << cpu->childAt(0)->toString(0)
-        << " GPU=" << gpu->childAt(0)->toString(0);
+    SCOPED_TRACE(
+        projection + " under session timezone " + std::string(timezone));
+    facebook::velox::test::assertEqualVectors(cpu->childAt(0), gpu->childAt(0));
   }
 };
 
@@ -151,7 +134,7 @@ class TimezoneExtractionTest : public OperatorTestBase {
 // UTC, which is 2020-12-31 18:00:00 local, so the local year/month/day/quarter/
 // hour/day_of_week/day_of_year all land in the previous day, month, quarter and
 // year.
-constexpr int64_t kJan2021_0200Utc = 1'609'466'400;
+constexpr int64_t kJan2021At0200Utc = 1'609'466'400;
 
 // 2021-01-04 02:00:00 UTC is a Monday (ISO week 1 of 2021); 2021-01-03 18:00:00
 // America/Los_Angeles is the preceding Sunday, which still belongs to ISO week
@@ -163,60 +146,63 @@ constexpr int64_t kJan2021MondayUtc = 1'609'725'600;
 // whole-hour offset zone like America/Los_Angeles cannot exercise.
 constexpr int64_t kJan2021MidnightUtc = 1'609'459'200;
 
-constexpr const char* kLosAngeles = "America/Los_Angeles";
-constexpr const char* kKolkata = "Asia/Kolkata";
+constexpr std::string_view kLosAngeles = "America/Los_Angeles";
+constexpr std::string_view kKolkata = "Asia/Kolkata";
 
 TEST_F(TimezoneExtractionTest, yearHonorsSessionTimezone) {
   // Expect local year 2020; GPU currently returns UTC year 2021.
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc), "year(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc), "year(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, monthHonorsSessionTimezone) {
   // Expect local month 12; GPU currently returns UTC month 1.
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc), "month(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc), "month(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, dayHonorsSessionTimezone) {
   // Expect local day 31; GPU currently returns UTC day 1.
-  assertGpuMatchesCpu(timestampInput(kJan2021_0200Utc), "day(ts)", kLosAngeles);
+  assertGpuMatchesCpu(
+      timestampInput(kJan2021At0200Utc), "day(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, quarterHonorsSessionTimezone) {
   // Expect local quarter 4; GPU currently returns UTC quarter 1.
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc), "quarter(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc), "quarter(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, hourHonorsSessionTimezone) {
   // Expect local hour 18; GPU currently returns UTC hour 2.
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc), "hour(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc), "hour(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, dayOfWeekHonorsSessionTimezone) {
   // Expect local 2020-12-31 (Thursday); GPU currently returns UTC 2021-01-01
   // (Friday).
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc), "day_of_week(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc), "day_of_week(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, dowHonorsSessionTimezone) {
   // dow is an alias of day_of_week.
-  assertGpuMatchesCpu(timestampInput(kJan2021_0200Utc), "dow(ts)", kLosAngeles);
+  assertGpuMatchesCpu(
+      timestampInput(kJan2021At0200Utc), "dow(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, dayOfYearHonorsSessionTimezone) {
   // Expect local 2020-12-31 (day 366 of leap year 2020); GPU currently returns
   // UTC 2021-01-01 (day 1).
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc), "day_of_year(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc), "day_of_year(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, doyHonorsSessionTimezone) {
   // doy is an alias of day_of_year.
-  assertGpuMatchesCpu(timestampInput(kJan2021_0200Utc), "doy(ts)", kLosAngeles);
+  assertGpuMatchesCpu(
+      timestampInput(kJan2021At0200Utc), "doy(ts)", kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, weekHonorsSessionTimezone) {
@@ -260,12 +246,14 @@ TEST_F(TimezoneExtractionTest, minuteHonorsHalfHourOffsetZone) {
 // document the boundary of the gap.
 TEST_F(TimezoneExtractionTest, secondUnaffectedByTimezone) {
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc, 123'000'000), "second(ts)", kLosAngeles);
+      timestampInput(kJan2021At0200Utc, 123'000'000),
+      "second(ts)",
+      kLosAngeles);
 }
 
 TEST_F(TimezoneExtractionTest, millisecondUnaffectedByTimezone) {
   assertGpuMatchesCpu(
-      timestampInput(kJan2021_0200Utc, 123'000'000),
+      timestampInput(kJan2021At0200Utc, 123'000'000),
       "millisecond(ts)",
       kLosAngeles);
 }
@@ -275,7 +263,7 @@ TEST_F(TimezoneExtractionTest, millisecondUnaffectedByTimezone) {
 // a failure here would point to an extraction bug unrelated to the session
 // timezone, isolating it from the timezone-driven failures above.
 TEST_F(TimezoneExtractionTest, allComponentsMatchUnderUtc) {
-  auto boundary = timestampInput(kJan2021_0200Utc, 123'000'000);
+  auto boundary = timestampInput(kJan2021At0200Utc, 123'000'000);
   auto monday = timestampInput(kJan2021MondayUtc);
 
   for (const auto& projection :
