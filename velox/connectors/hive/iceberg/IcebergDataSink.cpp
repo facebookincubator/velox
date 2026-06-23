@@ -417,8 +417,28 @@ void IcebergDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
   VELOX_CHECK(isPartitioned());
   VELOX_CHECK_NOT_NULL(transformEvaluator_);
   VELOX_CHECK_NOT_NULL(partitionIdGenerator_);
+  std::vector<VectorPtr> children;
+  children.reserve(input->childrenSize());
+
+  for (column_index_t i = 0; i < input->childrenSize(); ++i) {
+    VELOX_CHECK(
+        input->childAt(i)->type()->equivalent(*inputType_->childAt(i)),
+        "Iceberg write input type mismatch at column {}. Expected {}, got {}.",
+        i,
+        inputType_->childAt(i)->toString(),
+        input->childAt(i)->type()->toString());
+
+    children.push_back(input->childAt(i));
+  }
+
+  auto inputForTransforms = std::make_shared<RowVector>(
+      input->pool(),
+      inputType_,
+      input->nulls(),
+      input->size(),
+      std::move(children));
   // Step 1: Apply transforms to input partition columns.
-  auto transformedColumns = transformEvaluator_->evaluate(input);
+  auto transformedColumns = transformEvaluator_->evaluate(inputForTransforms);
 
   // Step 2: Create RowVector based on transformed columns.
   const auto& transformedRowVector = std::make_shared<RowVector>(

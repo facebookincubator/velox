@@ -263,6 +263,33 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 }
 
+TEST_F(IcebergInsertTest, partitionTransformUsesExpectedInputFieldNames) {
+  auto tableRowType = ROW({
+      {"name", VARCHAR()},
+      {"id", INTEGER()},
+  });
+  const auto outputPath = TempDirectoryPath::create()->getPath();
+  const std::vector<test::PartitionField> partitionFields = {
+      {0, TransformType::kIdentity, std::nullopt}};
+
+  auto sink = createDataSink(tableRowType, outputPath, partitionFields);
+
+  auto actualInputType = ROW({
+      {"generated1", VARCHAR()},
+      {"generated2", INTEGER()},
+  });
+
+  std::vector<VectorPtr> children{
+      makeFlatVector<std::string>({"name1", "name2"}),
+      makeFlatVector<int32_t>({1, 2}),
+  };
+
+  auto input = std::make_shared<RowVector>(
+      pool(), actualInputType, nullptr, 2, std::move(children));
+
+  EXPECT_NO_THROW({ sink->appendData(input); });
+}
+
 #endif
 
 } // namespace
