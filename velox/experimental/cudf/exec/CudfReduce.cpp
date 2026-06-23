@@ -38,6 +38,7 @@
 #include <cudf/reduction/approx_distinct_count.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 
@@ -127,11 +128,12 @@ struct ReduceCountAggregator : ReduceAggregator {
           break;
         case CountInputKind::kCountAll:
           if (maskIndex.has_value()) {
-            // count(*) FILTER(WHERE m): count mask-true rows via a
-            // validity-only column.
-            auto injectedMask = cudf_velox::maskToValidityColumn(
-                input.column(*maskIndex), stream, get_temp_mr());
-            count = injectedMask->size() - injectedMask->null_count();
+            // count(*) FILTER(WHERE m): mask-true rows = total minus the
+            // false/null rows that bools_to_mask reports as the null count.
+            auto const maskCol = input.column(*maskIndex);
+            auto const nullCount =
+                cudf::bools_to_mask(maskCol, stream, get_temp_mr()).second;
+            count = maskCol.size() - nullCount;
           } else {
             count = input.num_columns() > 0 ? input.num_rows() : inputRowCount;
           }
@@ -846,17 +848,9 @@ bool canReduceBeEvaluatedByCudf(
           aggregate.mask->kind() != core::ExprKind::kFieldAccess) {
         return false;
       }
-      // Only sum/count/min/max honor masks; every other aggregate (avg,
-      // stddev, approx_distinct, ...) ignores maskIndex and would silently
-      // produce an unmasked result, so fall back to CPU.
-      // TODO: Support masked avg/stddev (needs partial-struct null handling).
-      const auto originalName = getOriginalName(aggregate.call->name());
-      const auto prefix = CudfConfig::getInstance().functionNamePrefix;
-      const bool maskSupported = originalName.rfind(prefix + "sum", 0) == 0 ||
-          originalName.rfind(prefix + "count", 0) == 0 ||
-          originalName.rfind(prefix + "min", 0) == 0 ||
-          originalName.rfind(prefix + "max", 0) == 0;
-      if (!maskSupported) {
+      // Aggregates that ignore the mask must fall back to CPU rather than
+      // silently produce an unmasked result.
+      if (!aggregationSupportsMask(aggregate.call->name())) {
         return false;
       }
     }

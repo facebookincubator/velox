@@ -1719,7 +1719,7 @@ TEST_F(AggregationTest, maskedCountAndSumGrouped) {
           "SELECT k, count(v) FILTER (WHERE m), sum(v) FROM tmp GROUP BY k");
 }
 
-// Multi-stage masked count (partial + final) exercises partialAggregators_.
+// Multi-stage masked count (partial + final).
 TEST_F(AggregationTest, maskedCountMultiStage) {
   auto data = makeRowVector(
       {"k", "v", "m"},

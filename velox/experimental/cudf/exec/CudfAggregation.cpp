@@ -28,6 +28,7 @@
 #include <cudf/copying.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/transform.hpp>
 
 #include <algorithm>
 #include <numeric>
@@ -96,6 +97,16 @@ std::string getOriginalName(const std::string& kind) {
   return kind;
 }
 
+bool aggregationSupportsMask(const std::string& aggregateName) {
+  // TODO: Support masked avg/stddev (needs partial-struct null handling).
+  const auto originalName = getOriginalName(aggregateName);
+  const auto prefix = CudfConfig::getInstance().functionNamePrefix;
+  return originalName.rfind(prefix + "sum", 0) == 0 ||
+      originalName.rfind(prefix + "count", 0) == 0 ||
+      originalName.rfind(prefix + "min", 0) == 0 ||
+      originalName.rfind(prefix + "max", 0) == 0;
+}
+
 namespace {
 bool isCompanionAggregateName(std::string const& kind) {
   return kind.ends_with("_merge") || kind.ends_with("_partial") ||
@@ -144,14 +155,17 @@ std::unique_ptr<cudf::column> maskToValidityColumn(
     cudf::column_view mask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  // copy_if_else(trueScalar, nullScalar, mask): out valid iff mask.valid(i) &&
-  // mask[i]. Explicit true/null scalars make the intent clear (validity, not
-  // value), and COUNT_VALID over the result counts the mask-true rows.
-  auto trueScalar = cudf::numeric_scalar<bool>(true, true, stream, mr);
-  auto nullScalar = cudf::make_default_constructed_scalar(
-      cudf::data_type{cudf::type_id::BOOL8}, stream, mr);
-  nullScalar->set_valid_async(false, stream);
-  return cudf::copy_if_else(trueScalar, *nullScalar, mask, stream, mr);
+  // bools_to_mask sets bit i iff mask[i] is true; a false or null entry clears
+  // it. Using that bitmask as the column's validity makes COUNT_VALID over the
+  // result count the mask-true rows. The data buffer is never read by
+  // COUNT_VALID, so it is left uninitialized.
+  auto [validity, nullCount] = cudf::bools_to_mask(mask, stream, mr);
+  return std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::BOOL8},
+      mask.size(),
+      rmm::device_buffer{static_cast<std::size_t>(mask.size()), stream, mr},
+      std::move(*validity),
+      nullCount);
 }
 
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
