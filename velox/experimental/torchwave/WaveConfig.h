@@ -115,6 +115,10 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{false};
 
+  // If true, reuse a value's buffer in place when an op is its unique last use
+  // (turning copying ops into in-place ops). Off by default.
+  bool enableReuse{false};
+
   /// Not thread-safe. All mutations must happen before concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
     static WaveConfig instance;
