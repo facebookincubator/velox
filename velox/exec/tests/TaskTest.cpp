@@ -1517,7 +1517,9 @@ TEST_F(TaskTest, partitionedOutputErrorsOnTransportMismatch) {
   auto queryRegistry = OutputBufferManagerRegistry::create(
       &OutputBufferManagerRegistry::global());
   queryRegistry->insert(
-      transportType, std::make_shared<NonHttpOutputBufferManager>());
+      transportType,
+      std::make_shared<OutputBufferManagerEntry>(
+          std::make_shared<NonHttpOutputBufferManager>()));
   auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
   queryCtx->setRegistry(
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
@@ -1537,6 +1539,51 @@ TEST_F(TaskTest, partitionedOutputErrorsOnTransportMismatch) {
           "PartitionedOutput requires the default OutputBufferManager") !=
       std::string::npos)
       << task->errorMessage();
+}
+
+TEST_F(TaskTest, partitionedOutputFallsBackToHttpWhenTransportUnavailable) {
+  OutputBufferManagerRegistry::unregisterAll();
+  // A non-HTTP manager is registered (capability present) but gated OFF for
+  // every query via its availability predicate.
+  const std::string transportType{"ucx-unavailable"};
+  OutputBufferManagerRegistry::global().insert(
+      transportType,
+      std::make_shared<OutputBufferManagerEntry>(
+          std::make_shared<NonHttpOutputBufferManager>(),
+          [](const core::QueryCtx&) { return false; }));
+
+  core::PlanNodeId outputNodeId;
+  auto plan = PlanBuilder()
+                  .tableScan(ROW({"c0"}, {BIGINT()}))
+                  .project({"c0 % 10"})
+                  .partitionedOutputBroadcast({})
+                  .capturePlanNodeId(outputNodeId)
+                  .planFragment();
+  plan.outputTransportTypes[outputNodeId] = transportType;
+
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  // The capability is present, but the transport is unavailable for this query,
+  // so resolution must fall back to HTTP rather than selecting the non-HTTP
+  // manager (which would abort in PartitionedOutput::initialize).
+  EXPECT_TRUE(OutputBufferManagerRegistry::contains(transportType));
+  EXPECT_EQ(
+      OutputBufferManagerRegistry::tryGet(*queryCtx, transportType), nullptr);
+
+  auto task = Task::create(
+      "task-transport-unavailable-fallback",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  task->start(1, 1);
+
+  // The task runs on HTTP instead of failing on the gated-off transport.
+  EXPECT_TRUE(task->updateOutputBuffers(10, true /*noMoreBuffers*/));
+
+  task->requestCancel();
+  waitForTaskCompletion(task.get());
+  OutputBufferManagerRegistry::unregisterAll();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {

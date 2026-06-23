@@ -1322,14 +1322,24 @@ void Task::initializePartitionOutput() {
     const std::string transportType = it != outputTransportTypes.end()
         ? it->second
         : std::string{core::TransportKind::kHttp};
+    // Resolve the output buffer manager for the node's transport. The registry
+    // applies its per-query availability predicate, returning a manager only
+    // when one is registered and enabled for this query. If the requested
+    // transport is unavailable, fall back to the default HTTP manager so the
+    // query proceeds over HTTP rather than failing.
     auto manager =
         OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
-    if (!manager && transportType == core::TransportKind::kHttp) {
+    if (!manager) {
+      manager = OutputBufferManagerRegistry::tryGet(
+          *queryCtx_, std::string{core::TransportKind::kHttp});
+    }
+    if (!manager) {
       manager = OutputBufferManager::getInstanceRef();
     }
     VELOX_CHECK_NOT_NULL(
         manager,
-        "OutputBufferManager not registered for transport type: {}",
+        "No output buffer manager available for transport type '{}' and no "
+        "default HTTP manager is registered",
         transportType);
     setOutputBufferManager(manager);
     manager->initializeTask(

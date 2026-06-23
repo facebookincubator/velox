@@ -18,14 +18,13 @@
 
 #include <string>
 
-#include "velox/common/ScopedRegistry.h"
-#include "velox/exec/IOutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 
 namespace facebook::velox::exec {
 
 // Internal helper shared by OutputBufferManager.cpp and
 // OutputBufferManagerRegistry.cpp.
 // Not part of the public API. Do not include from outside velox/exec/.
-ScopedRegistry<std::string, IOutputBufferManager>& outputBufferManagers();
+ScopedRegistry<std::string, OutputBufferManagerEntry>& outputBufferManagers();
 
 } // namespace facebook::velox::exec
