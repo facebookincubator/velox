@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/F14Set.h>
+#include <folly/container/Reserve.h>
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/Strings.h"
@@ -82,6 +83,7 @@ struct SetAccumulator {
     const auto size = arrayVector.sizeAt(index);
     const auto offset = arrayVector.offsetAt(index);
 
+    folly::grow_capacity_by(uniqueValues, size);
     for (auto i = 0; i < size; ++i) {
       addValue(values, offset + i, allocator);
     }
@@ -109,6 +111,7 @@ struct SetAccumulator {
     const auto size = arrayVector.sizeAt(index);
     const auto offset = arrayVector.offsetAt(index);
 
+    folly::grow_capacity_by(uniqueValues, size);
     for (auto i = 0; i < size; ++i) {
       addNonNullValue(values, offset + i, allocator);
     }
