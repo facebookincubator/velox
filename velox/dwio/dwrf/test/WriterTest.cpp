@@ -33,7 +33,7 @@ namespace facebook::velox::dwrf {
 
 class WriterTest : public Test {
  public:
-  static void SetUpTestCase() {
+  static void SetUpTestSuite() {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
   }
 
@@ -203,6 +203,41 @@ TEST_P(AllWriterCompressionTest, compression) {
       compressionKind_ == CompressionKind::CompressionKind_MAX
           ? config->get(Config::COMPRESSION)
           : compressionKind_);
+}
+
+TEST_F(WriterTest, SchemaAttributesStamped) {
+  // Attributes set on the writer must be stamped into the footer per node id
+  // and survive a write/read round-trip. Node ids: 0=root, 1=a, 2=b, 3=c.
+  auto config = std::make_shared<Config>();
+  config->set(Config::COMPRESSION, CompressionKind::CompressionKind_NONE);
+  auto& writer = createWriter(config);
+  writer.setSchemaAttributes(
+      {{1, {{"iceberg.id", "10"}}},
+       {2, {{"iceberg.id", "20"}}},
+       {3, {{"iceberg.id", "30"}}}});
+
+  HiveTypeParser parser;
+  auto schema = parser.parse("struct<a:int,b:float,c:string>");
+  // writeFooter requires one statistics entry per type node.
+  for (size_t i = 0; i < 4; ++i) {
+    getFooter()->addStatistics();
+  }
+  writeFooter(*schema);
+  writer.close();
+
+  auto reader = createReader();
+  auto& footer = reader->footer();
+  ASSERT_EQ(footer.typesSize(), 4);
+  EXPECT_EQ(footer.types(0).attributesSize(), 0);
+  EXPECT_EQ(
+      footer.types(1).attribute(0),
+      std::make_pair(std::string("iceberg.id"), std::string("10")));
+  EXPECT_EQ(
+      footer.types(2).attribute(0),
+      std::make_pair(std::string("iceberg.id"), std::string("20")));
+  EXPECT_EQ(
+      footer.types(3).attribute(0),
+      std::make_pair(std::string("iceberg.id"), std::string("30")));
 }
 
 TEST_P(SupportedCompressionTest, WriteFooter) {

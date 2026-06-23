@@ -264,6 +264,16 @@ void forEachSortedAttribute(NodeCP node, Func&& func) {
         std::holds_alternative<c10::Device>(attr.value)) {
       continue;
     }
+    // SymIntList (vector<int64_t>) constants (e.g. aten.view's "size") are not
+    // scalar constants: a fused op materializes them inline via
+    // emitScalarListSetup (literal values placed in an allocAltParam region),
+    // so they must not occupy a slot in the scalar constant area / attribute
+    // declarations / constant indices. Every consumer of this iteration treats
+    // attributes as 8-byte scalars, so excluding lists here keeps all of those
+    // offsets aligned.
+    if (std::holds_alternative<std::vector<int64_t>>(attr.value)) {
+      continue;
+    }
     if (isSkippedAttribute(attr.name, meta)) {
       continue;
     }
@@ -372,6 +382,24 @@ bool baseMutatedAfter(
     const nativert::Graph& graph,
     NodeCP afterNode,
     ValueCP value);
+/// Returns true if 'value' is None in 'frame' AND is statically expected to
+/// hold a real value (its type is not None), i.e. an unready dependency that a
+/// not-yet-executed producer will fill.  A statically-None value -- an `asNone`
+/// optional argument such as bincount's `weights=None` -- is always None and is
+/// NOT an unready dependency; treating it as one defers its consumer forever
+/// (the optional never becomes non-None), leaving the consumer's output
+/// unproduced.  Use this in place of a bare `getIValue(...).isNone()` check
+/// when deciding whether to run or defer an op based on input readiness.
+bool isUnreadyNoneDependency(ValueCP value, nativert::ExecutionFrame& frame);
+
+/// Returns true if all of 'node's outputs are already materialized (non-None)
+/// in 'frame', i.e. the node has already been executed.  Use this to avoid
+/// re-running a standalone op that another execution path (e.g.
+/// runReadyGraphNodes, or an earlier composite) already computed: re-executing
+/// would re-read inputs whose intermediate buffers may have been recycled after
+/// their last legitimate use, overwriting a correct result with garbage.
+/// Returns false for a node with no outputs (nothing to skip on).
+bool nodeOutputsComputed(NodeCP node, nativert::ExecutionFrame& frame);
 
 /// Returns a debug string showing up to 'maxElements' elements of a tensor
 /// after flattening to 1-D, plus the shape and dtype. 0 means no limit.

@@ -47,6 +47,7 @@ const auto& columnMappingModeNames() {
       {ColumnMappingMode::kPosition, "POSITION"},
       {ColumnMappingMode::kName, "NAME"},
       {ColumnMappingMode::kParquetFieldId, "PARQUET_FIELD_ID"},
+      {ColumnMappingMode::kFieldId, "FIELD_ID"},
   };
   return kNames;
 }

@@ -159,6 +159,14 @@ __device__ void add_sizes(
   }
   __syncthreads();
   T* in = storage<T>(input);
+  if (in == nullptr) {
+    // Empty/unproduced input (e.g. an isolated stage under --debug_single_ops,
+    // or a degenerate empty scan): the running total is zero.
+    if (threadIdx.x == 0 && output) {
+      *output = T2(0);
+    }
+    return;
+  }
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
     T val = (idx < size) ? in[idx] : T(0);
     if (threadIdx.x == 0) {
@@ -324,11 +332,15 @@ __device__ void cumsum_final(
   TIn* in = storage<TIn>(input);
   TOut* cnt = storage<TOut>(counts);
   TOut* out = storage<TOut>(output);
+  if (in == nullptr || out == nullptr) {
+    // Degenerate/isolated stage with no real input or output buffer.
+    return;
+  }
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
     TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
-    TOut base = blockIdx == 0 ? TOut(0) : cnt[blockIdx - 1];
+    TOut base = (blockIdx == 0 || cnt == nullptr) ? TOut(0) : cnt[blockIdx - 1];
     if (threadIdx.x == 0) {
       val += base;
     }
@@ -411,11 +423,15 @@ __device__ void exclusive_sum_final(
   TIn* in = storage<TIn>(input);
   TOut* cnt = storage<TOut>(counts);
   TOut* out = storage<TOut>(output);
+  if (in == nullptr || out == nullptr) {
+    // Degenerate/isolated stage with no real input or output buffer.
+    return;
+  }
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
     TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
-    TOut base = blockIdx == 0 ? TOut(0) : cnt[blockIdx - 1];
+    TOut base = (blockIdx == 0 || cnt == nullptr) ? TOut(0) : cnt[blockIdx - 1];
     if (threadIdx.x == 0) {
       val += base;
       out[idx] = base;
