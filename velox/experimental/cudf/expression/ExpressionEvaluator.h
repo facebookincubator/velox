@@ -90,6 +90,7 @@ class CudfFunction {
   virtual ~CudfFunction() = default;
   virtual ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
+      [[maybe_unused]] cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const = 0;
 
