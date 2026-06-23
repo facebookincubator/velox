@@ -93,6 +93,22 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         {pack(millisUtc, zoneId)}, TIMESTAMP_WITH_TIME_ZONE())});
   }
 
+  // Builds a two-row TIMESTAMP WITH TIME ZONE column [value, NULL] in the given
+  // zone, to check that a NULL row propagates as NULL through the GPU path.
+  RowVectorPtr timestampWithTimeZoneAndNullInput(
+      int64_t millisUtc,
+      const char* zone) {
+    auto zoneId = tz::getTimeZoneID(zone);
+    return makeRowVector({makeNullableFlatVector<int64_t>(
+        {pack(millisUtc, zoneId), std::nullopt}, TIMESTAMP_WITH_TIME_ZONE())});
+  }
+
+  // Builds a two-row, entirely-NULL TIMESTAMP WITH TIME ZONE column.
+  RowVectorPtr allNullTimestampWithTimeZoneInput() {
+    return makeRowVector({makeNullableFlatVector<int64_t>(
+        {std::nullopt, std::nullopt}, TIMESTAMP_WITH_TIME_ZONE())});
+  }
+
   // Builds a single-row double input column named c0.
   RowVectorPtr doubleInput(double value) {
     return makeRowVector({makeFlatVector<double>({value})});
@@ -154,6 +170,26 @@ TEST_F(TimezoneFunctionTest, timezoneMinute) {
   assertMatchesCpu("timezone_minute(c0)", input);
 }
 
+// Reproducers: timezone_hour/timezone_minute must return NULL for a NULL row,
+// matching CPU (a plain call() -> NULL for NULL). The GPU offset primitive
+// (utcOffsetSeconds) builds an all-valid column via make_column_from_scalar /
+// gather and never re-applies the input mask (TimezoneConversion.h documents
+// the all-valid contract), so the field functions' scalar DIV/MOD yield 0
+// instead of NULL. Red until the input validity is carried onto the offset
+// column. The single-row tests above use non-null inputs and so never exercise
+// this.
+TEST_F(TimezoneFunctionTest, timezoneHourPropagatesNull) {
+  auto input =
+      timestampWithTimeZoneAndNullInput(1'609'466'400'000, "Asia/Kolkata");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, timezoneMinutePropagatesNull) {
+  auto input =
+      timestampWithTimeZoneAndNullInput(1'609'466'400'000, "Asia/Kolkata");
+  assertMatchesCpu("timezone_minute(c0)", input);
+}
+
 TEST_F(TimezoneFunctionTest, toIso8601FromTimestampWithTimeZone) {
   // to_iso8601(timestamp with time zone) -> varchar.
   auto input =
@@ -169,6 +205,19 @@ TEST_F(TimezoneFunctionTest, toIso8601FromTimestampWithTimeZone) {
 TEST_F(TimezoneFunctionTest, toIso8601RendersZForZeroOffset) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "UTC");
   assertMatchesCpu("to_iso8601(c0)", input);
+}
+
+// Contract/regression test: an entirely-NULL TIMESTAMP WITH TIME ZONE column
+// must yield an all-NULL result like CPU. uniformZoneKey reduces min/max over
+// the (all-null) zone-key column; reduce excludes nulls, so its scalars come
+// back invalid and value() would be a meaningless device read (UB) before
+// VELOX_USER_CHECK_EQ(lo, hi). uniformZoneKey guards null_count() == size() and
+// defaults to GMT (key 0), as the empty-column path does. This is not a
+// differential RED for the UB -- the bad read happens to yield 0/GMT in this
+// environment, so the output is already correct -- so it instead pins the
+// all-null -> all-null contract and guards against the guard's removal.
+TEST_F(TimezoneFunctionTest, toIso8601AllNullColumn) {
+  assertMatchesCpu("to_iso8601(c0)", allNullTimestampWithTimeZoneInput());
 }
 
 TEST_F(TimezoneFunctionTest, formatDatetimeOfTimestampWithTimeZone) {
@@ -284,6 +333,23 @@ TEST_F(TimezoneFunctionTest, fromIso8601HoursOnlyOffset) {
 TEST_F(TimezoneFunctionTest, fromIso8601NegativeHalfHourOffset) {
   assertMatchesCpu(
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00-00:30"));
+}
+
+// Reproducer: an offset outside +/-14h must be rejected like CPU rather than
+// silently corrupt the packed value. CPU normalizes "+99:00" to an unknown zone
+// name and throws ("Unknown timezone value"); the +/-840-minute bound is the
+// same one tz::getTimeZoneID enforces. The GPU parser has no bound -- +99:00 ->
+// 5940 minutes -> zone key 6780, which overflows the 12-bit zone field and
+// corrupts the packed millis (the key is not masked with kTimezoneMask). Red
+// until the parsed offset magnitude is bounded with a user error.
+TEST_F(TimezoneFunctionTest, fromIso8601OffsetOutOfRangeRejectedLikeCpu) {
+  auto input = varcharInput("2021-01-01T02:00:00+99:00");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  // CPU rejects the out-of-range offset; confirm parity is "both throw".
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
 }
 
 // now()/current_timestamp -> timestamp with time zone. now() is
