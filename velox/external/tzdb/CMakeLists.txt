@@ -10,12 +10,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+velox_add_library(velox_external_tzdb chrono_exception.cpp time_zone.cpp tzdb_list.cpp tzdb.cpp)
 
-velox_add_library(velox_external_tzdb chrono_exception.cpp time_zone.cpp
-tzdb_list.cpp tzdb.cpp)
-
-velox_link_libraries(
-  velox_external_tzdb
-  velox_external_date
-  Folly::folly
-  fmt::fmt)
+velox_link_libraries(velox_external_tzdb velox_external_date Folly::folly fmt::fmt)
