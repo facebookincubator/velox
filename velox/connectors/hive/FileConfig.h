@@ -116,6 +116,16 @@ class FileConfig {
       false,
       "Preserve dictionary encoding for Nimble string column reads.")
 
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleLazyColumnIoSession,
+      kNimbleLazyColumnIo,
+      nimbleLazyColumnIo,
+      "nimble_lazy_column_io",
+      "nimble.lazy-column-io",
+      bool,
+      false,
+      "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
+
   // --- VELOX_HIVE_CONFIG properties ---
 
   VELOX_HIVE_CONFIG(
@@ -176,14 +186,6 @@ class FileConfig {
       false,
       "Use cluster index for filter-based row pruning.")
   static constexpr const char* kIndexEnabled = "index-enabled";
-
-  VELOX_HIVE_CONFIG(
-      kLazyColumnIoSession,
-      lazyColumnIo,
-      "nimble.lazy_column_io",
-      bool,
-      false,
-      "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
 
   VELOX_HIVE_CONFIG(
       kCacheMetadataSession,

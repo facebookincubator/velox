@@ -163,6 +163,17 @@ class ExecutorTestBase : public ::testing::Test {
       const std::function<void(nativert::ExecutionFrame&)>& alterInputs =
           nullptr);
 
+  /// Runs only the wave path on 'fixture' (no serial run, no output
+  /// verification) for testing device-side error conditions. 'alterInputs' is
+  /// called after the frame is filled and before execution, so it can corrupt
+  /// an input (e.g. an out-of-range index) to trigger a device-side check.
+  /// Returns the formatted device error string (waveThreadInfo().errors), which
+  /// is empty if no block reported an error. throwOnError is forced off for the
+  /// run and restored afterwards.
+  std::string runWaveExpectError(
+      ModelFixture& fixture,
+      const std::function<void(nativert::ExecutionFrame&)>& alterInputs);
+
   /// Loads a .pt2 model and reference results, runs serial on CPU, serial on
   /// device and wave, and logs the run times for each.
   void runTest(

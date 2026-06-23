@@ -264,6 +264,16 @@ void forEachSortedAttribute(NodeCP node, Func&& func) {
         std::holds_alternative<c10::Device>(attr.value)) {
       continue;
     }
+    // SymIntList (vector<int64_t>) constants (e.g. aten.view's "size") are not
+    // scalar constants: a fused op materializes them inline via
+    // emitScalarListSetup (literal values placed in an allocAltParam region),
+    // so they must not occupy a slot in the scalar constant area / attribute
+    // declarations / constant indices. Every consumer of this iteration treats
+    // attributes as 8-byte scalars, so excluding lists here keeps all of those
+    // offsets aligned.
+    if (std::holds_alternative<std::vector<int64_t>>(attr.value)) {
+      continue;
+    }
     if (isSkippedAttribute(attr.name, meta)) {
       continue;
     }
