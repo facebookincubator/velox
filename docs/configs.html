@@ -1387,51 +1387,54 @@ sorted writes.</p></td>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>hive.parquet.writer.enable-dictionary</p></td>
-<td><p>hive.parquet.writer.enable_dictionary</p></td>
+<td><p>parquet_writer_enable_dictionary</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.</p></td>
 </tr>
 <tr class="row-odd"><td><p>hive.parquet.writer.dictionary-page-size-limit</p></td>
-<td><p>hive.parquet.writer.dictionary_page_size_limit</p></td>
+<td><p>parquet_writer_dictionary_page_size_limit</p></td>
 <td><p>string</p></td>
 <td><p>1MB</p></td>
 <td><p>Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.</p></td>
 </tr>
 <tr class="row-even"><td><p>hive.parquet.writer.timestamp-unit</p></td>
-<td><p>hive.parquet.writer.timestamp_unit</p></td>
+<td><p>parquet_writer_timestamp_unit</p></td>
 <td><p>tinyint</p></td>
 <td><p>9</p></td>
 <td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
 Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).</p></td>
 </tr>
 <tr class="row-odd"><td><p>hive.parquet.writer.datapage-version</p></td>
-<td><p>hive.parquet.writer.datapage_version</p></td>
+<td><p>parquet_writer_datapage_version</p></td>
 <td><p>string</p></td>
 <td><p>V1</p></td>
 <td><p>Data Page version used when writing into Parquet through Arrow bridge.
 Valid values are “V1” and “V2”.</p></td>
 </tr>
 <tr class="row-even"><td><p>hive.parquet.writer.page-size</p></td>
-<td><p>hive.parquet.writer.page_size</p></td>
+<td><p>parquet_writer_page_size</p></td>
 <td><p>string</p></td>
 <td><p>1MB</p></td>
 <td><p>Data Page size used when writing into Parquet through Arrow bridge.</p></td>
 </tr>
 <tr class="row-odd"><td><p>hive.parquet.writer.batch-size</p></td>
-<td><p>hive.parquet.writer.batch_size</p></td>
+<td><p>parquet_writer_batch_size</p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Batch size used when writing into Parquet through Arrow bridge.</p></td>
 </tr>
 <tr class="row-even"><td><p>hive.parquet.writer.created-by</p></td>
-<td><p>hive.parquet.writer.created_by</p></td>
+<td><ul class="simple">
+<li></li>
+</ul>
+</td>
 <td><p>string</p></td>
 <td><p>parquet-cpp-velox version 0.0.0</p></td>
 <td><p>Created-by value used when writing to Parquet.</p></td>
 </tr>
 <tr class="row-odd"><td><p>hive.parquet.writer.enable-store-decimal-as-integer</p></td>
-<td><p>hive.parquet.writer.enable_store_decimal_as_integer</p></td>
+<td><p>parquet_writer_enable_store_decimal_as_integer</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
