@@ -75,10 +75,16 @@ struct LaunchMeta {
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
+  // Wall time of the metadata-only shortcut-standalone batch (one
+  // hardware_timestamp pair around the tight loop).
+  int64_t shortcutUs{0};
   bool standaloneBound{false};
   bool noDtoH{false};
   int64_t inputBytes{0};
   int64_t outputBytes{0};
+  // Time spent on reference-frame device-to-host copy and comparison for this
+  // step (debug-only; excluded from the reported e2e time).
+  int64_t refCheckUs{0};
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -87,9 +93,13 @@ struct WaveThreadInfo {
   std::vector<std::vector<DebugInfo>> debugInfo;
   std::vector<LaunchMeta> launchMeta;
   std::string errors;
-  /// Standalone execution times, sorted descending. Paired with labels.
+  /// Standalone execution times, sorted descending. Indices line up with
+  /// standaloneLabels and standaloneTargets.
   std::vector<int64_t> standaloneTimes;
+  /// Human-readable label for each standalone, parallel to standaloneTimes.
   std::vector<std::string> standaloneLabels;
+  /// Operator target string for each standalone, parallel to standaloneTimes.
+  std::vector<std::string> standaloneTargets;
   /// Performance report, filled when trace kTiming is on.
   std::string perfReport;
 };
@@ -104,6 +114,10 @@ struct StepVectors {
   /// Used by CompositeInvocation::execute / gatherLaunches.
   std::vector<LaunchData> kernels;
   std::vector<LaunchData> standalones;
+  /// Metadata-only standalones with a StandaloneShortcut, split out from
+  /// 'standalones' so they run in a tight switch loop (no per-op timing, no
+  /// stream sync) and are timed as one batch.
+  std::vector<LaunchData> shortcutStandalones;
   std::vector<int64_t> paramOffsets;
 
   /// Used by makeGrid (output).
@@ -145,6 +159,12 @@ struct StepVectors {
   /// (multi-block synchronization). Causes cooperative launch.
   bool isCgGrid{false};
 
+  /// Set by gatherLaunches when this step has at least one standalone that does
+  /// device-side work (a non-shortcut op). Shortcut standalones only manipulate
+  /// host-side tensor metadata and never read wave-stream buffers, so when this
+  /// is false the wave stream need not be synced before running them.
+  bool hasGpuStandalones{false};
+
   // Timing fields, populated when kTiming trace bit or printTiming is on.
   int64_t gatherUs{0};
   int64_t gridUs{0};
@@ -152,10 +172,16 @@ struct StepVectors {
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
+  // Wall time of the metadata-only shortcut-standalone batch (one
+  // hardware_timestamp pair around the tight loop).
+  int64_t shortcutUs{0};
   bool standaloneBound{false};
   bool noDtoH{false};
   int64_t inputBytes{0};
   int64_t outputBytes{0};
+  // Time spent on reference-frame device-to-host copy and comparison for this
+  // step (debug-only; excluded from the reported e2e time).
+  int64_t refCheckUs{0};
 };
 
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
@@ -175,6 +201,9 @@ struct ExecutionState {
   const folly::F14FastMap<NodeCP, nativert::OpKernel*>* kernelMap{nullptr};
   const folly::F14FastMap<NodeCP, int32_t>* standaloneIndices{nullptr};
   std::vector<StandaloneStats>* standaloneStats{nullptr};
+
+  // Standalone nodes skipped during step execution due to None inputs.
+  std::vector<NodeCP>* deferredStandalones{nullptr};
 
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
@@ -214,14 +243,27 @@ void executeNode(
     nativert::ExecutionFrame& frame);
 
 /// Runs standalone launches by mapping each formal node to the actual node
-/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel,
-/// and recording timing in standaloneStats.
+/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel.
+/// When 'timing' is true, syncs the PyTorch default stream after each op and
+/// records its elapsed time in standaloneStats; when false, no clock is read
+/// and standaloneStats is left untouched.
 void runStandalones(
     const std::vector<LaunchData>& standalones,
     ExecutionState& state,
     const folly::F14FastMap<NodeCP, nativert::OpKernel*>& kernelMap,
     const folly::F14FastMap<NodeCP, int32_t>& standaloneIndices,
-    std::vector<StandaloneStats>& standaloneStats);
+    std::vector<StandaloneStats>& standaloneStats,
+    bool timing);
+
+/// Runs the metadata-only shortcut standalones in a tight loop (just the
+/// per-op switch in runStandaloneShortcut), with no per-op timing or stream
+/// sync. When 'timing' is true, records the whole batch's wall time (via
+/// folly::hardware_timestamp) into 'outUs'.
+void runShortcutStandalones(
+    const std::vector<LaunchData>& shortcuts,
+    ExecutionState& state,
+    bool timing,
+    int64_t& outUs);
 
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,

@@ -57,6 +57,11 @@ class PrestoCastHooks : public CastHooks {
   // Returns cast options following 'isLegacyCast' and session timezone.
   const TimestampToStringOptions& timestampToStringOptions() const override;
 
+  // Presto does not support TIMESTAMP_UTC casts.
+  TimestampToStringOptions timestampUtcToStringOptions() const override {
+    VELOX_UNSUPPORTED("Cast from TIMESTAMP_UTC to VARCHAR is not supported");
+  }
+
   bool truncate() const override {
     return false;
   }
@@ -66,6 +71,11 @@ class PrestoCastHooks : public CastHooks {
   }
 
   PolicyType getPolicy() const override;
+
+  // Presto does not support TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return false;
+  }
 
   bool isScientific() const override {
     return false;

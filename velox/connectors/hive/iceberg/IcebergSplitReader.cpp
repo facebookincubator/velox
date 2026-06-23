@@ -133,6 +133,57 @@ IcebergSplitReader::IcebergSplitReader(
       deleteBitmap_(nullptr),
       columnHandles_(std::move(columnHandles)) {}
 
+void IcebergSplitReader::configureBaseReaderOptions() {
+  FileSplitReader::configureBaseReaderOptions();
+  const auto fileFormat = fileSplit_->fileFormat;
+  if (fileFormat != dwio::common::FileFormat::DWRF &&
+      fileFormat != dwio::common::FileFormat::ORC) {
+    // Parquet resolves field ids from physical metadata, not from the
+    // attribute-based kFieldId path.
+    return;
+  }
+  auto fieldIds = buildFieldIds();
+  if (fieldIds.empty()) {
+    return;
+  }
+  baseReaderOpts_.setColumnMappingMode(
+      dwio::common::ColumnMappingMode::kFieldId);
+  baseReaderOpts_.setFieldIds(std::move(fieldIds));
+}
+
+std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
+    const {
+  std::vector<dwio::common::ParquetFieldId> fieldIds;
+  const auto& dataColumns = tableHandle_->dataColumns();
+  if (dataColumns == nullptr || columnHandles_ == nullptr) {
+    return fieldIds;
+  }
+  // Column handles are keyed by output alias; index them by the underlying
+  // data-column name so we can align to dataColumns() order.
+  std::unordered_map<std::string, const IcebergColumnHandle*> handleByName;
+  for (const auto& [outputName, handle] : *columnHandles_) {
+    if (auto* icebergHandle =
+            dynamic_cast<const IcebergColumnHandle*>(handle.get())) {
+      handleByName.emplace(icebergHandle->name(), icebergHandle);
+    }
+  }
+  if (handleByName.empty()) {
+    return fieldIds;
+  }
+
+  fieldIds.reserve(dataColumns->size());
+  int32_t sentinelFieldId = -1;
+  for (size_t i = 0; i < dataColumns->size(); ++i) {
+    auto it = handleByName.find(dataColumns->nameOf(static_cast<uint32_t>(i)));
+    if (it != handleByName.end()) {
+      fieldIds.push_back(it->second->field());
+    } else {
+      fieldIds.push_back(dwio::common::ParquetFieldId{sentinelFieldId--, {}});
+    }
+  }
+  return fieldIds;
+}
+
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStatistics& runtimeStats,

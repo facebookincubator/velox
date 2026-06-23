@@ -28,6 +28,10 @@ class MaskedPutTest(nn.Module):
     6. In-place bool-mask index_put_ on scalar_val (an input that is also read
        by c5 before the mutation and returned as c7 after it), plus a functional
        index_put with the negated mask.
+    7. Functional (out-of-place) index_put with numeric indices and, separately,
+       with a bool mask: each returns the unmodified source alongside the
+       result, so the clone-based index_put rewrite is verified to leave the
+       original input untouched.
     """
 
     def forward(
@@ -46,7 +50,26 @@ class MaskedPutTest(nn.Module):
         idx2d_0: Tensor,
         idx2d_1: Tensor,
         vals2d: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        ip_num_src: Tensor,
+        ip_num_idx: Tensor,
+        ip_num_vals: Tensor,
+        ip_bool_src: Tensor,
+        ip_bool_mask: Tensor,
+        ip_bool_vals: Tensor,
+    ) -> tuple[
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+    ]:
         c1 = torch.where(flags1, values_f, source_f)
         c2 = torch.where(flags2, values_l, source_l)
         c3 = torch.where(flags1, values_f, source_f) + input_f
@@ -60,4 +83,9 @@ class MaskedPutTest(nn.Module):
         c8 = scalar_val.index_put_([scalar_flags], scalar_val + 1)
         c9 = scalar_val.index_put([torch.bitwise_not(scalar_flags)], scalar_val + 10)
 
-        return c1, c2, c4, c5, c6, c7, c8, c9
+        # Functional index_put: assign elements and return the original source
+        # plus the result, with numeric indices and with a bool mask.
+        c10 = ip_num_src.index_put([ip_num_idx], ip_num_vals)
+        c11 = ip_bool_src.index_put([ip_bool_mask], ip_bool_vals)
+
+        return c1, c2, c4, c5, c6, c7, c8, c9, ip_num_src, c10, ip_bool_src, c11

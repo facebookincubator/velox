@@ -368,4 +368,16 @@ void getRegisteredHeaders(
     std::vector<const char*>& names,
     std::vector<const char*>& text);
 
+/// Returns a salt that namespaces the kernel cache key. It captures everything
+/// that affects the compiled CUBIN but is NOT part of the generated kernel
+/// source: the resolved header contents (system + registered headers), the
+/// target GPU architecture, and the NVRTC compile flags (e.g. -G). Without it,
+/// editing an included header's body leaves the generated source
+/// byte-identical, so a stale CUBIN would be served from the on-disk cache.
+///
+/// The header + arch component is computed once (on first use, after NVRTC
+/// init) and memoized; the flag component is mixed in on each call so flag
+/// changes (e.g. toggling -G) are reflected. Requires a current device.
+size_t kernelCacheSalt();
+
 } // namespace facebook::velox::wave
