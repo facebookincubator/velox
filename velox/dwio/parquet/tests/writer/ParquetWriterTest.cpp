@@ -107,6 +107,23 @@ class ParquetWriterTest : public ParquetTestBase {
     return pageReader->readPageHeader();
   }
 
+  MemorySink* writeBatches(
+      const std::vector<RowVectorPtr>& batches,
+      const facebook::velox::parquet::WriterOptions& writerOptions) {
+    VELOX_CHECK(!batches.empty());
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+        std::move(sink), writerOptions, batches[0]->rowType());
+    for (const auto& batch : batches) {
+      writer->write(batch);
+    }
+    writer->close();
+    writers_.push_back(std::move(writer));
+    return sinkPtr;
+  }
+
   inline static const std::string kHiveConnectorId = "test-hive";
   dwio::common::ColumnReaderStatistics stats;
 };
@@ -742,6 +759,89 @@ TEST_F(ParquetWriterTest, writerMagic) {
 
   EXPECT_EQ("PAR1", std::string(fileData.data(), 4));
   EXPECT_EQ("PAR1", std::string(fileData.data() + fileData.size() - 4, 4));
+}
+
+TEST_F(ParquetWriterTest, flushByAccumulatedBytes) {
+  constexpr int64_t kNumRows = 200;
+
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.enableDictionary = false;
+  writerOptions.flushPolicyFactory =
+      []() -> std::unique_ptr<dwio::common::FlushPolicy> {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1,
+        /*bytesInRowGroup=*/4 * 1024);
+  };
+
+  const auto schema = ROW({"c0"}, {BIGINT()});
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), writerOptions, schema);
+  const auto data = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+
+  writer->write(data);
+
+  // Data should be flushed into the FileSink by acculumated closed row groups.
+  EXPECT_GT(sinkPtr->size(), 0);
+
+  writer->close();
+
+  const auto reader = createReaderInMemory(*sinkPtr);
+  EXPECT_EQ(kNumRows, reader->numberOfRows());
+  EXPECT_EQ(kNumRows, reader->fileMetaData().numRowGroups());
+}
+
+TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/10'000,
+        /*bytesInRowGroup=*/200);
+  };
+
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto testBatches =
+      [&](int numBatches, int expectedNumRowGroups, int expectedNumRows) {
+        std::vector<RowVectorPtr> batches;
+        for (int i = 0; i < numBatches; ++i) {
+          batches.push_back(
+              makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+        }
+
+        const auto* sinkPtr = write(batches, writerOptions, false);
+        const auto reader = createReaderInMemory(*sinkPtr);
+        EXPECT_EQ(expectedNumRowGroups, reader->fileMetaData().numRowGroups());
+        EXPECT_EQ(expectedNumRows, reader->numberOfRows());
+      };
+
+  testBatches(10, 1, 50);
+  testBatches(20, 2, 100);
+}
+
+TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
+  parquet::WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/50,
+        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
+  };
+
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 10; ++i) {
+    batches.push_back(
+        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+  }
+
+  const auto* sinkPtr = write(batches, writerOptions, false);
+  const auto reader = createReaderInMemory(*sinkPtr);
+  EXPECT_EQ(1, reader->fileMetaData().numRowGroups());
+  EXPECT_EQ(50, reader->numberOfRows());
 }
 
 TEST_F(ParquetWriterTest, largeMetadata) {

@@ -70,8 +70,7 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
-        stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+    return stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
   }
 
   void onClose() override {
