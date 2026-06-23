@@ -216,12 +216,15 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
       1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto sinkPtr = sink.get();
 
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
+  ParquetWriterOptions writerOptions;
   writerOptions.enableDictionary = spec.enableDictionary;
+  dwio::common::WriterOptions options;
+  options.memoryPool = leafPool_.get();
+  options.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(writerOptions);
 
   auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, writeSchema);
+      std::move(sink), options, rootPool_, writeSchema);
   writer->write(writeData);
   writer->close();
 

@@ -466,9 +466,6 @@ IcebergDataSink::createWriterOptions(size_t writerIndex) const {
     statsCollector_->configureWriterOptions(*options);
   }
 
-  options->processConfigs(
-      *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
-
   if (adapter != nullptr) {
     adapter->applyPostConfigs(*options);
   }
