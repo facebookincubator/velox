@@ -565,15 +565,20 @@ void HashAggregation::reclaim(
   }
 
   if (relocationPool_ != nullptr) {
-    // Relocate to the memory tier instead of disk spilling; falling through to
-    // spill would see only the DRAM container and drop the relocated rows.
-    // Skip during output draining: moving rows would re-emit already-output
-    // groups.
+    // Relocate to the memory tier instead of disk spilling. Skip during output
+    // draining: moving rows would re-emit already-output groups.
     if (!noMoreInput_) {
+      // Disk-spill fallback on tier exhaustion is not implemented.
+      if (!relocationPool_->maybeReserve(targetBytes)) {
+        VELOX_NYI(
+            "Disk-spill fallback on memory-tier exhaustion is not implemented; "
+            "size the tier and DRAM so the relocated rows fit");
+      }
       memory::recordRelocatedBytes(pool(), [&] {
         groupingSet_->relocate(relocationPool_);
         pool()->release();
       });
+      relocationPool_->release();
     }
     return;
   }
