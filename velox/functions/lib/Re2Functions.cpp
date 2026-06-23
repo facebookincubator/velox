@@ -1870,7 +1870,11 @@ std::vector<std::string> PatternMetadata::parseSubstrings(
   if (RE2::FullMatch(full, fullPattern)) {
     while (RE2::PartialMatch(full, subPattern, &cur)) {
       substrings.push_back(std::string(cur));
-      full = re2::StringPiece(cur.end(), full.end() - cur.end());
+      // Advance `full` to start just past `cur`. Use data()/size() pointer
+      // arithmetic rather than iterators: newer re2 aliases StringPiece to
+      // std::string_view, whose iterators are not raw pointers under MSVC.
+      const char* curEnd = cur.data() + cur.size();
+      full = re2::StringPiece(curEnd, full.data() + full.size() - curEnd);
     }
   }
   return substrings;

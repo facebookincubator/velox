@@ -77,8 +77,10 @@ std::optional<StringView> extractParameter(
         }
       }
 
-      // Move past this match to continue searching
-      pos = matches[0].end() - input.data();
+      // Move past this match to continue searching. Use data()/size() pointer
+      // arithmetic rather than iterators: newer re2 aliases StringPiece to
+      // std::string_view, whose iterators are not raw pointers under MSVC.
+      pos = matches[0].data() + matches[0].size() - input.data();
       if (pos == matches[0].data() - input.data()) {
         // Avoid infinite loop on zero-width matches
         ++pos;
