@@ -21,6 +21,7 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/search.hpp>
@@ -54,6 +55,23 @@ cudf::type_id durationTypeIdForTimestamp(cudf::type_id timestampType) {
   }
 }
 
+// Re-applies the input's null mask onto an offset column. The offset primitives
+// (make_column_from_scalar for fixed-offset zones, gather for DST zones) always
+// produce a fully-valid column regardless of the input's validity, so this is
+// the single place that restores it -- a null instant must yield a null offset
+// so callers (timezone_hour/minute, to_iso8601, format_datetime) propagate it.
+std::unique_ptr<cudf::column> withInputNullMask(
+    std::unique_ptr<cudf::column> offset,
+    const cudf::column_view& input,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (input.null_count() > 0) {
+    offset->set_null_mask(
+        cudf::copy_bitmask(input, stream, mr), input.null_count());
+  }
+  return offset;
+}
+
 } // namespace
 
 std::unique_ptr<cudf::column> utcOffsetSeconds(
@@ -71,8 +89,11 @@ std::unique_ptr<cudf::column> utcOffsetSeconds(
   if (numEntries == 0) {
     auto zero = cudf::duration_scalar<cudf::duration_s>(
         cudf::duration_s{0}, true, stream);
-    return cudf::make_column_from_scalar(
-        zero, utcTimestamps.size(), stream, mr);
+    return withInputNullMask(
+        cudf::make_column_from_scalar(zero, utcTimestamps.size(), stream, mr),
+        utcTimestamps,
+        stream,
+        mr);
   }
   auto tzView = tzTable->view();
 
@@ -134,7 +155,7 @@ std::unique_ptr<cudf::column> utcOffsetSeconds(
       stream,
       mr);
   auto columns = gathered->release();
-  return std::move(columns[0]);
+  return withInputNullMask(std::move(columns[0]), utcTimestamps, stream, mr);
 }
 
 std::unique_ptr<cudf::column> toLocalTimestamp(

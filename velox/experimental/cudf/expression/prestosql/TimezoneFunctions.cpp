@@ -137,6 +137,12 @@ int16_t uniformZoneKey(
   if (packed.size() == 0) {
     return 0;
   }
+  // An all-null column has no zone to read; cudf::reduce excludes nulls, so its
+  // min/max scalars come back invalid and value() would be a meaningless device
+  // read. Default to GMT (key 0), as the empty-column path above does.
+  if (packed.null_count() == packed.size()) {
+    return 0;
+  }
   auto keys = binOp(
       packed,
       i64(kTimezoneMask, stream),
@@ -666,6 +672,32 @@ void checkMillisInRange(
       hi);
 }
 
+// Mirrors the CPU offset bound: from_iso8601_timestamp normalizes its parsed
+// offset through tz::getTimeZoneID, which rejects magnitudes beyond +/-14h (840
+// minutes). magnitudeMinutes holds the absolute offset minutes (always
+// non-negative), so an upper bound covers both signs. Without this, an offset
+// like "+99:00" (5940 minutes) maps to a zone key that overflows the 12-bit
+// zone field and corrupts the packed millis.
+void checkOffsetMagnitudeInRange(
+    const cudf::column_view& magnitudeMinutes,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (magnitudeMinutes.size() == 0 ||
+      magnitudeMinutes.null_count() == magnitudeMinutes.size()) {
+    return;
+  }
+  auto maxScalar = cudf::reduce(
+      magnitudeMinutes,
+      *cudf::make_max_aggregation<cudf::reduce_aggregation>(),
+      int64Type(),
+      stream,
+      mr);
+  const auto hi = static_cast<cudf::numeric_scalar<int64_t>*>(maxScalar.get())
+                      ->value(stream);
+  VELOX_USER_CHECK_LE(
+      hi, 840, "Invalid timezone offset in from_iso8601_timestamp (minutes)");
+}
+
 // from_unixtime(double, ...) -> timestamp with time zone. The zone id is fixed
 // at construction (from a zone name or an hour/minute offset).
 class FromUnixtimeWithZoneFunction : public CudfFunction {
@@ -939,6 +971,9 @@ class FromIso8601Function : public CudfFunction {
         int64Type(),
         stream,
         mr);
+    // Reject offsets beyond +/-14h before they pack into a zone key that
+    // overflows the 12-bit zone field, matching CPU's tz::getTimeZoneID bound.
+    checkOffsetMagnitudeInRange(magnitude->view(), stream, mr);
     auto negativeMagnitude = cudf::binary_operation(
         i64(0, stream),
         magnitude->view(),
