@@ -16,6 +16,7 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
@@ -569,8 +570,10 @@ void HashAggregation::reclaim(
     // Skip during output draining: moving rows would re-emit already-output
     // groups.
     if (!noMoreInput_) {
-      groupingSet_->relocate(relocationPool_);
-      pool()->release();
+      memory::recordRelocatedBytes(pool(), [&] {
+        groupingSet_->relocate(relocationPool_);
+        pool()->release();
+      });
     }
     return;
   }

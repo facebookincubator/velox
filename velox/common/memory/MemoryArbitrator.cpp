@@ -555,4 +555,17 @@ ScopedReclaimedBytesRecorder::~ScopedReclaimedBytesRecorder() {
   }
   *reclaimedBytes_ = reservedBytesBeforeReclaim_ - reservedBytesAfterReclaim;
 }
+
+void recordRelocatedBytes(
+    MemoryPool* pool,
+    const std::function<void()>& relocate) {
+  int64_t relocatedBytes{0};
+  {
+    ScopedReclaimedBytesRecorder recorder(pool, &relocatedBytes);
+    relocate();
+  }
+  addThreadLocalRuntimeStat(
+      kRelocatedMemoryBytes,
+      RuntimeCounter(relocatedBytes, RuntimeCounter::Unit::kBytes));
+}
 } // namespace facebook::velox::memory

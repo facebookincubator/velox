@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <functional>
+#include <string_view>
 #include <vector>
 
 #include "velox/common/base/AsyncSource.h"
@@ -418,6 +420,19 @@ class ScopedReclaimedBytesRecorder {
   int64_t* const reclaimedBytes_;
   const int64_t reservedBytesBeforeReclaim_;
 };
+
+/// Runtime stat name for the bytes an operator relocated to a memory tier in
+/// place of disk spill during reclaim.
+inline constexpr std::string_view kRelocatedMemoryBytes{"relocatedMemoryBytes"};
+
+/// Runs 'relocate', measures the bytes it frees from 'pool', and reports them
+/// as the kRelocatedMemoryBytes runtime stat on the operator currently under
+/// reclaim. Call from an operator's reclaim() relocate branch; relies on the
+/// thread-local stat writer the operator reclaimer installs, so it is a no-op
+/// (other than running 'relocate') outside a reclaim.
+void recordRelocatedBytes(
+    MemoryPool* pool,
+    const std::function<void()>& relocate);
 
 /// The object is used to set/clear non-reclaimable section of an operation in
 /// the middle of its execution. It allows the memory arbitrator to reclaim

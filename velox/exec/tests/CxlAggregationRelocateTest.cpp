@@ -24,10 +24,8 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/GroupingSet.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -37,7 +35,6 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
-using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::cxl {
 namespace {
@@ -61,7 +58,6 @@ class CxlAggregationRelocateTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
-    TestValue::enable();
   }
 
   // Builds a QueryCtx carrying a per-query "cxl" custom root pool plus an
@@ -89,16 +85,19 @@ class CxlAggregationRelocateTest : public OperatorTestBase {
     return queryCtx;
   }
 
-  // Counts GroupingSet::relocate() calls for the duration of a query.
-  template <typename F>
-  int countRelocations(F&& runQuery) {
-    std::atomic<int> relocations{0};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::GroupingSet::relocate",
-        std::function<void(exec::GroupingSet*)>(
-            [&](exec::GroupingSet*) { ++relocations; }));
-    runQuery();
-    return relocations.load();
+  // Sums the relocatedMemoryBytes runtime stat across the task's operators.
+  // Unlike the GroupingSet::relocate TestValue injection point, this stat is
+  // recorded in release builds too, so the assertions hold in every build mode.
+  static int64_t relocatedBytes(const std::shared_ptr<exec::Task>& task) {
+    int64_t total{0};
+    for (const auto& [_, nodeStats] : exec::toPlanStats(task->taskStats())) {
+      const auto it =
+          nodeStats.customStats.find(std::string(memory::kRelocatedMemoryBytes));
+      if (it != nodeStats.customStats.end()) {
+        total += it->second.sum;
+      }
+    }
+    return total;
   }
 };
 
@@ -106,52 +105,54 @@ class CxlAggregationRelocateTest : public OperatorTestBase {
 // relocating its groups to the configured tier rather than spilling to disk.
 // Relocation rides on the spill reclaim path, so aggregation spill is enabled
 // and a spill directory is provided; the tier intercepts reclaim before any
-// disk write, so the spill machinery is armed but never used. Spill injection
-// drives the reclaim path deterministically. The data carries a null grouping
-// key whose group must survive the relocation byte copy -- that requires the
-// destination container's column stats to be carried over, else the null group
-// reads back as a non-null garbage key. Results must match the reference query,
-// relocation must fire, and no disk spill must occur (either/or with spill).
+// disk write, so the spill machinery is armed but never used. A single injected
+// reclaim drives the path deterministically: the large first batch fills the
+// hash table, then the tiny second batch's addInput triggers the injected
+// reclaim while the table is full and input is still flowing, so relocation
+// moves real bytes to the tier. The data carries a null grouping key whose
+// group must survive the relocation byte copy -- that requires the destination
+// container's column stats to be carried over, else the null group reads back
+// as a non-null garbage key. Results must match the reference query, relocation
+// must move bytes, and no disk spill must occur (either/or with spill).
 TEST_F(CxlAggregationRelocateTest, relocatesToTierUnderArbitration) {
-  constexpr int32_t kNumBatches = 8;
-  constexpr int32_t kRowsPerBatch = 4'096;
-  std::vector<RowVectorPtr> batches;
-  for (auto batch = 0; batch < kNumBatches; ++batch) {
-    batches.push_back(makeRowVector({
-        // Distinct keys per batch, plus a null key every 1000th row.
-        makeFlatVector<int64_t>(
-            kRowsPerBatch,
-            [batch](auto row) {
-              return static_cast<int64_t>(batch) * kRowsPerBatch + row;
-            },
-            [](auto row) { return row % 1'000 == 0; }),
-        makeFlatVector<int64_t>(
-            kRowsPerBatch, [batch](auto row) { return row + batch; }),
-    }));
-  }
+  // Front-load the table: the large first batch populates the groups, the tiny
+  // second batch only exists to trigger the second addInput where the injected
+  // reclaim fires against a full table.
+  constexpr int32_t kFirstBatchRows = 200'000;
+  auto firstBatch = makeRowVector({
+      // Distinct keys, plus a null key every 1000th row.
+      makeFlatVector<int64_t>(
+          kFirstBatchRows,
+          [](auto row) { return static_cast<int64_t>(row); },
+          [](auto row) { return row % 1'000 == 0; }),
+      makeFlatVector<int64_t>(kFirstBatchRows, [](auto row) { return row; }),
+  });
+  auto secondBatch = makeRowVector({
+      makeFlatVector<int64_t>(8, [](auto row) { return kFirstBatchRows + row; }),
+      makeFlatVector<int64_t>(8, [](auto row) { return row; }),
+  });
+  std::vector<RowVectorPtr> batches{firstBatch, secondBatch};
   createDuckDbTable(batches);
 
-  // Force the reclaim path once; reclaim() relocates to the tier instead of
-  // spilling to disk.
+  // Fire the reclaim path exactly once; reclaim() relocates to the tier instead
+  // of spilling to disk. testingTriggerSpill drives a real arbitration (not a
+  // TestValue no-op), so it is observed in release builds too.
   exec::TestScopedSpillInjection injectSpill(
       /*spillPct=*/100, /*poolRegExp=*/".*", /*maxInjections=*/1);
 
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  std::shared_ptr<exec::Task> task;
-  const int relocations = countRelocations([&] {
-    exec::CursorParameters params;
-    params.planNode = PlanBuilder()
-                          .values(batches)
-                          .singleAggregation({"c0"}, {"sum(c1)"})
-                          .planNode();
-    params.queryCtx = makeQueryCtxWithTier("cxl-agg-arbitrator");
-    params.spillDirectory = spillDirectory->getPath();
-    params.queryConfigs[core::QueryConfig::kSpillEnabled] = "true";
-    params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
-    task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
-  });
+  exec::CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .values(batches)
+                        .singleAggregation({"c0"}, {"sum(c1)"})
+                        .planNode();
+  params.queryCtx = makeQueryCtxWithTier("cxl-agg-arbitrator");
+  params.spillDirectory = spillDirectory->getPath();
+  params.queryConfigs[core::QueryConfig::kSpillEnabled] = "true";
+  params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
+  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
-  EXPECT_GT(relocations, 0);
+  EXPECT_GT(relocatedBytes(task), 0);
   // Either/or: relocation replaced disk spill, so nothing reached disk.
   for (const auto& [_, nodeStats] : exec::toPlanStats(task->taskStats())) {
     EXPECT_EQ(nodeStats.spilledBytes, 0);
@@ -174,20 +175,18 @@ TEST_F(CxlAggregationRelocateTest, varcharKeyDoesNotRelocate) {
       /*spillPct=*/100, /*poolRegExp=*/".*", /*maxInjections=*/1);
 
   auto spillDirectory = exec::test::TempDirectoryPath::create();
-  const int relocations = countRelocations([&] {
-    exec::CursorParameters params;
-    params.planNode = PlanBuilder()
-                          .values({data})
-                          .singleAggregation({"c0"}, {"sum(c1)"})
-                          .planNode();
-    params.queryCtx = makeQueryCtxWithTier("cxl-agg-varchar");
-    params.spillDirectory = spillDirectory->getPath();
-    params.queryConfigs[core::QueryConfig::kSpillEnabled] = "true";
-    params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
-    assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
-  });
+  exec::CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .values({data})
+                        .singleAggregation({"c0"}, {"sum(c1)"})
+                        .planNode();
+  params.queryCtx = makeQueryCtxWithTier("cxl-agg-varchar");
+  params.spillDirectory = spillDirectory->getPath();
+  params.queryConfigs[core::QueryConfig::kSpillEnabled] = "true";
+  params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
+  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
-  EXPECT_EQ(relocations, 0);
+  EXPECT_EQ(relocatedBytes(task), 0);
 }
 
 // A partial aggregation is not a complete reclaim point, so the gate excludes
@@ -199,20 +198,18 @@ TEST_F(CxlAggregationRelocateTest, partialAggregationDoesNotRelocate) {
   });
   createDuckDbTable({data});
 
-  const int relocations = countRelocations([&] {
-    exec::CursorParameters params;
-    params.planNode = PlanBuilder()
-                          .values({data})
-                          .partialAggregation({"c0"}, {"sum(c1)"})
-                          .finalAggregation()
-                          .planNode();
-    params.queryCtx = makeQueryCtxWithTier("cxl-agg-partial");
-    assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
-  });
+  exec::CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .values({data})
+                        .partialAggregation({"c0"}, {"sum(c1)"})
+                        .finalAggregation()
+                        .planNode();
+  params.queryCtx = makeQueryCtxWithTier("cxl-agg-partial");
+  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 
   // The partial stage never relocates; the final stage relocates only under
   // pressure, which this unpressured run does not create.
-  EXPECT_EQ(relocations, 0);
+  EXPECT_EQ(relocatedBytes(task), 0);
 }
 
 } // namespace
