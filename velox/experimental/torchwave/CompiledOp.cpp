@@ -202,7 +202,10 @@ std::string dumpOpParams(const KernelOperation& op, uint8_t* paramBase) {
   return ss.str();
 }
 
-void fillScalarParam(const c10::IValue& ivalue, void* dest) {
+void fillScalarParam(
+    const c10::IValue& ivalue,
+    void* dest,
+    nativert::ValueId valueId) {
   if (ivalue.isInt()) {
     *reinterpret_cast<int64_t*>(dest) = ivalue.toInt();
   } else if (ivalue.isDouble()) {
@@ -212,8 +215,15 @@ void fillScalarParam(const c10::IValue& ivalue, void* dest) {
   } else if (ivalue.isNone()) {
     *reinterpret_cast<int64_t*>(dest) = 0;
   } else {
+    // A None here usually means the value's producer (e.g. a view/slice fed
+    // into a prim.ListPack) was never executed, so its scalar (e.g. sym_size)
+    // was never set in the frame. Report the value id to trace the producer.
     TORCH_CHECK(
-        false, "Unsupported IValue type for kernel param: ", ivalue.tagKind());
+        false,
+        "Unsupported IValue type for kernel param: ",
+        ivalue.tagKind(),
+        " for value %",
+        valueId);
   }
 }
 
@@ -357,8 +367,36 @@ std::vector<std::vector<Dim>> elementwiseInputShape(
   return {std::vector<Dim>(bestShape.begin(), bestShape.end())};
 }
 
-// Launching a block for fewer elements per thread is counter-productive.
-constexpr int32_t kMinElementsPerThread = 4;
+// Elements processed per thread for a cheap op: a block covers
+// kMaxElementsPerThread * blockSize inputs, which caps the number of blocks so
+// cheap ops do not pay launch overhead for tiny per-block work. Expensive ops
+// drop toward one element per thread (more blocks, more parallelism) -- see
+// elementsPerThreadForCost.
+constexpr int32_t kMaxElementsPerThread = 4;
+
+// Adjusted per-input cost (unitCost * costAdjustFactor) at and below which a
+// block covers kMaxElementsPerThread elements per thread, and at and above
+// which it covers exactly one. Between the two it interpolates linearly.
+constexpr float kLowCostPerInput = 100.0f;
+constexpr float kHighCostPerInput = 500.0f;
+
+// Elements per thread for an op with the given adjusted per-input cost. Falls
+// from kMaxElementsPerThread (cheap) to 1 (expensive) as the cost rises from
+// kLowCostPerInput to kHighCostPerInput, then stays at 1. A higher cost thus
+// allows more blocks (up to numElements / blockSize) for more parallelism.
+int32_t elementsPerThreadForCost(float costPerInput) {
+  if (costPerInput <= kLowCostPerInput) {
+    return kMaxElementsPerThread;
+  }
+  if (costPerInput >= kHighCostPerInput) {
+    return 1;
+  }
+  float frac = (costPerInput - kLowCostPerInput) /
+      (kHighCostPerInput - kLowCostPerInput);
+  int32_t ept = kMaxElementsPerThread -
+      static_cast<int32_t>(frac * (kMaxElementsPerThread - 1) + 0.5f);
+  return ept < 1 ? 1 : ept;
+}
 
 // Default SM count when device info is unavailable.
 constexpr int32_t kDefaultNumSMs = 100;
@@ -383,9 +421,11 @@ int32_t makeGrid(
     totalCost += sv.costs[i];
   }
 
-  // Max blocks each launch could use.
+  // Max blocks each launch could use. The block's elements-per-thread shrinks
+  // from kMaxElementsPerThread to 1 as the op's per-input cost rises, so an
+  // expensive op may use up to numElements / blockSize blocks while a cheap one
+  // is capped at numElements / (kMaxElementsPerThread * blockSize).
   sv.maxBlocks.resize(launches.size());
-  const int32_t elementsPerBlock = blockSize * kMinElementsPerThread;
   for (size_t i = 0; i < launches.size(); ++i) {
     // alwaysSingleBlock ops fold their cross-block barriers into __syncthreads
     // and are only correct when run as a single block. Cap maxBlocks at 1 so
@@ -395,6 +435,11 @@ int32_t makeGrid(
       sv.maxBlocks[i] = 1;
       continue;
     }
+    float adjust =
+        launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
+    float costPerInput = launches[i].launch->op->unitCost() * adjust;
+    int32_t elementsPerBlock =
+        blockSize * elementsPerThreadForCost(costPerInput);
     sv.maxBlocks[i] = static_cast<int32_t>(
         (launches[i].numElements + elementsPerBlock - 1) / elementsPerBlock);
     if (sv.maxBlocks[i] < 1) {
@@ -439,7 +484,8 @@ int32_t makeGrid(
     // elements.
     if (assigned > 1) {
       auto elemsPerBlock = (launches[i].numElements + assigned - 1) / assigned;
-      auto alignedElems = roundUp(elemsPerBlock, elementsPerBlock);
+      auto alignedElems =
+          roundUp(elemsPerBlock, static_cast<int64_t>(blockSize));
       assigned = std::max(
           1,
           static_cast<int32_t>(
@@ -560,12 +606,54 @@ int32_t makeGrid(
 
 // --- Launch ---
 
+namespace {
+// Maps a metadata-only standalone op's target to its host-side shortcut.
+StandaloneShortcut standaloneShortcutForTarget(std::string_view target) {
+  if (target == "prim.ListPack") {
+    return StandaloneShortcut::kListPack;
+  }
+  if (target == "torch.ops.aten.view.default") {
+    return StandaloneShortcut::kView;
+  }
+  if (target == "torch.ops.aten.slice.Tensor") {
+    return StandaloneShortcut::kSlice;
+  }
+  if (target == "torch.ops.aten.select.int") {
+    return StandaloneShortcut::kSelectInt;
+  }
+  if (target == "torch.ops.aten.unsqueeze.default") {
+    return StandaloneShortcut::kUnsqueeze;
+  }
+  if (target == "torch.ops.aten.transpose.int") {
+    return StandaloneShortcut::kTranspose;
+  }
+  if (target == "torch.ops.aten.narrow.default") {
+    return StandaloneShortcut::kNarrow;
+  }
+  return StandaloneShortcut::kNone;
+}
+} // namespace
+
 Launch::Launch(
     NodeCP standaloneNode,
     const ValueTypes& types,
     WaveGraph& waveGraph)
     : standalone(standaloneNode) {
+  standaloneShortcut = standaloneShortcutForTarget(standaloneNode->target());
+  // prim.ListPack is metadata-only only when it builds a TensorList; a SymInt /
+  // int list packs scalars, which the kListPack shortcut cannot handle, so
+  // leave those on the generic path.
+  if (standaloneShortcut == StandaloneShortcut::kListPack &&
+      (standaloneNode->outputs().empty() ||
+       standaloneNode->outputs()[0]->type().kind() !=
+           nativert::Type::Kind::TensorList)) {
+    standaloneShortcut = StandaloneShortcut::kNone;
+  }
   auto* meta = Registry::metadata(standaloneNode->target());
+  // prim.ListPack has no registry entry but is metadata-only by definition;
+  // every other op's metadata-only status comes from its Metadata.
+  metadataOnly =
+      meta ? meta->metadataOnly : (standaloneNode->target() == "prim.ListPack");
   if (!meta || meta->argumentMeta.empty()) {
     return;
   }
@@ -830,6 +918,48 @@ LaunchData::LaunchData(
     }
     for (auto* output : launch.standalone->outputs()) {
       actualOutputs.push_back(translateId(output));
+    }
+    // For a metadata-only shortcut op, collect its operands from the actual
+    // node in c10 schema order (first-to-last for prim.ListPack, which has no
+    // schema). A value operand goes in args; an integer constant goes in
+    // intArgs at the same position with a nullptr in args; an all-integer list
+    // operand (e.g. aten.view size) goes in intList for direct pass-through.
+    if (launch.standaloneShortcut != StandaloneShortcut::kNone) {
+      auto pushValue = [&](ValueCP v) {
+        args.push_back(v);
+        intArgs.push_back(0);
+      };
+      auto pushInt = [&](int64_t c) {
+        args.push_back(nullptr);
+        intArgs.push_back(c);
+      };
+      const auto* meta = Registry::metadata(standalone->target());
+      if (meta != nullptr && meta->functionSchema != nullptr) {
+        for (const auto& arg : meta->functionSchema->arguments()) {
+          if (const auto* in = standalone->tryGetInput(arg.name())) {
+            pushValue(in->value);
+          } else if (
+              const auto* attr = standalone->tryGetAttribute(arg.name())) {
+            if (std::holds_alternative<int64_t>(attr->value)) {
+              pushInt(std::get<int64_t>(attr->value));
+            } else if (std::holds_alternative<std::vector<int64_t>>(
+                           attr->value)) {
+              const auto& vec = std::get<std::vector<int64_t>>(attr->value);
+              intList.assign(vec.begin(), vec.end());
+              pushValue(nullptr);
+            } else {
+              pushValue(nullptr);
+            }
+          } else {
+            pushValue(nullptr);
+          }
+        }
+      } else {
+        // prim.ListPack and other schemaless ops: every input is a value.
+        for (auto& input : standalone->inputs()) {
+          pushValue(input.value);
+        }
+      }
     }
   } else {
     // Kernel op: translate sizeExpr, inputs, outputs, and output descs.
@@ -1102,7 +1232,12 @@ CompositeKernel::CompositeKernel(
     }
   }
 
-  // Only compile the kernel if a GPU is available.
+  // Only compile the kernel if a GPU is available. The one-time
+  // NVRTC/system-header initialization (CompiledKernel::initialize()) is run
+  // eagerly on the main thread by torch::wave::initialize() before any kernel
+  // is compiled, so the async compile enqueued below never triggers it lazily
+  // on a Wave compile-pool thread (which deadlocks warmup() in heavyweight
+  // NCCL/Thrift/folly hosts -- T275179010).
   if (facebook::velox::wave::currentDevice()) {
     auto genFunc = [code = std::move(code),
                     entryPoint,
@@ -1289,7 +1424,8 @@ void fillLaunchParams(
     for (size_t i = 0; i < launch.scalarsInFrame.size(); ++i) {
       fillScalarParam(
           frame.getIValue(launch.scalarsInFrame[i]),
-          paramBase + launch.scalarOffsets[i]);
+          paramBase + launch.scalarOffsets[i],
+          launch.scalarsInFrame[i]);
     }
     for (auto offset : launch.scalarOutputOffsets) {
       *reinterpret_cast<int64_t*>(paramBase + offset) = 0;
@@ -1348,7 +1484,7 @@ void fillLaunchParams(
       fillEmptyTensorParam(dest);
       launch.numElements = 0;
     } else {
-      fillScalarParam(ivalue, dest);
+      fillScalarParam(ivalue, dest, actualId);
       launch.scalarsInFrame.push_back(actualId);
       launch.scalarOffsets.push_back(offset);
     }
@@ -1447,7 +1583,8 @@ void fillLaunchParams(
   const auto& opConstants = launch.invocation->constants();
   for (auto idx : launch.launch->constantIndices) {
     auto* dest = paramBase + constantOffset;
-    fillScalarParam(*opConstants[idx], dest);
+    // Constants carry no Value id; pass -1.
+    fillScalarParam(*opConstants[idx], dest, -1);
     constantOffset += 8;
   }
 
@@ -1760,8 +1897,10 @@ void CompositeInvocation::gatherLaunches(
   const auto& idToValue = state.waveGraph->idToValue();
   int32_t kernelIdx = 0;
   int32_t standaloneIdx = 0;
+  int32_t shortcutIdx = 0;
   sv.gridChanged = false;
   sv.isCgGrid = false;
+  sv.hasGpuStandalones = false;
   for (size_t i = 0; i < ops_.size(); ++i) {
     auto* grid = grids.at(i).grid;
     if (stepIdx >= static_cast<int32_t>(grid->size())) {
@@ -1869,9 +2008,22 @@ void CompositeInvocation::gatherLaunches(
           sv.isCgGrid = true;
         }
         ++kernelIdx;
+      } else if (launch.standaloneShortcut != StandaloneShortcut::kNone) {
+        // Metadata-only shortcut op: separate list, tight switch loop, no sync.
+        if (shortcutIdx >=
+            static_cast<int32_t>(sv.shortcutStandalones.size())) {
+          sv.shortcutStandalones.emplace_back(launch, ops_[i], idToValue);
+        }
+        ++shortcutIdx;
       } else {
         if (standaloneIdx >= static_cast<int32_t>(sv.standalones.size())) {
           sv.standalones.emplace_back(launch, ops_[i], idToValue);
+        }
+        // A standalone that does real device work needs the wave stream synced
+        // before it (and before this step's fused kernel). Metadata-only ops
+        // (host-only, e.g. a SymInt-list prim.ListPack) need no sync.
+        if (!launch.metadataOnly) {
+          sv.hasGpuStandalones = true;
         }
         ++standaloneIdx;
       }
@@ -2237,14 +2389,8 @@ void CompositeInvocation::execute(ExecutionState& state) {
   // Track eager standalone execution so the default CUDA stream can be
   // synchronized before this invocation returns. Eager standalone ops run on
   // the default stream while wave kernels run on the wave stream, and the two
-  // are otherwise unordered. 'standaloneStart' is the launch time of the first
-  // standalone step; 'standaloneStepIdx' is the step to attribute the sync wait
-  // to. A step index (rather than a StepVectors*) is held because later
-  // getStepVectors() calls resize state.stepVectors and would invalidate any
-  // pointer into it.
+  // are otherwise unordered, so a final default-stream sync is needed.
   bool ranStandalones = false;
-  Clock::time_point standaloneStart;
-  int32_t standaloneStepIdx = -1;
 
   int32_t blockSize;
   for (int32_t stepIdx = 0;; ++stepIdx) {
@@ -2271,7 +2417,8 @@ void CompositeInvocation::execute(ExecutionState& state) {
           sequenceNumber_,
           stepIdx);
     }
-    if (sv.kernels.empty() && sv.standalones.empty()) {
+    if (sv.kernels.empty() && sv.standalones.empty() &&
+        sv.shortcutStandalones.empty()) {
       break;
     }
 
@@ -2280,25 +2427,30 @@ void CompositeInvocation::execute(ExecutionState& state) {
           (WaveConfig::kNodes | WaveConfig::kLaunches)) {
         traceStep(stepIdx, sv, currentGridChoices);
       }
-      // Wait for the wave stream before running eager standalone ops. The
-      // standalones run on the default stream and read inputs produced by wave
-      // kernels; without this wait the eager op can read a wave-stream buffer
-      // whose producing kernel (or a pending arena recycle) has not completed,
-      // since the two streams are otherwise unordered.
-      state.stream->wait();
-      auto tStandalone = Clock::now();
+      // Metadata-only shortcut standalones are host-only and need no
+      // wave-stream sync; run them first in their tight, batch-timed loop.
+      runShortcutStandalones(
+          sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
+      // Wait for the wave stream before running eager standalone ops only when
+      // a standalone does device-side work. Such ops run on the default stream
+      // and read inputs produced by wave kernels; without this wait the eager
+      // op can read a wave-stream buffer whose producing kernel (or a pending
+      // arena recycle) has not completed, since the two streams are otherwise
+      // unordered. Shortcut ops only touch host-side tensor metadata, so they
+      // need no sync.
+      if (sv.hasGpuStandalones) {
+        state.stream->wait();
+      }
+      auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
       runStandalones(
           sv.standalones,
           state,
           *state.kernelMap,
           *state.standaloneIndices,
-          *state.standaloneStats);
+          *state.standaloneStats,
+          doTiming);
       if (doTiming) {
         sv.standaloneUs = elapsed(tStandalone);
-      }
-      if (!ranStandalones) {
-        standaloneStart = tStandalone;
-        standaloneStepIdx = stepIdx;
       }
       ranStandalones = true;
       state.launchDebugInfos.push_back(
@@ -2312,6 +2464,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
           syncTorchDefaultStream();
         }
         auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
+        verifyAgainstReference(sv.shortcutStandalones, frame, state);
         verifyAgainstReference(sv.standalones, frame, state);
         if (timeRefCheck) {
           sv.refCheckUs += elapsed(tRefCheck);
@@ -2465,30 +2618,34 @@ void CompositeInvocation::execute(ExecutionState& state) {
 
     int64_t standaloneElapsed = 0;
     auto runStepStandalones = [&]() {
+      // Metadata-only shortcut ops: host-only, tight batch-timed loop, no sync.
+      if (!sv.shortcutStandalones.empty()) {
+        runShortcutStandalones(
+            sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
+      }
       if (!sv.standalones.empty()) {
-        auto tStandalone = Clock::now();
+        auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
         runStandalones(
             sv.standalones,
             state,
             *state.kernelMap,
             *state.standaloneIndices,
-            *state.standaloneStats);
+            *state.standaloneStats,
+            doTiming);
         if (doTiming) {
           standaloneElapsed = elapsed(tStandalone);
-        }
-        if (!ranStandalones) {
-          standaloneStart = tStandalone;
-          standaloneStepIdx = stepIdx;
         }
         ranStandalones = true;
       }
     };
 
-    // If this step has eager standalones, wait for the wave stream before the
-    // fused kernel launch. The standalones run on the default stream and may
-    // read results of prior wave fused kernels; without this wait those results
-    // may not be complete, since the two streams are otherwise unordered.
-    if (!sv.standalones.empty()) {
+    // If this step has device-side standalones, wait for the wave stream before
+    // the fused kernel launch. Such standalones run on the default stream and
+    // may read results of prior wave fused kernels; without this wait those
+    // results may not be complete, since the two streams are otherwise
+    // unordered. Shortcut standalones only touch host-side tensor metadata, so
+    // they need no sync.
+    if (sv.hasGpuStandalones) {
       state.stream->wait();
     }
 
@@ -2543,6 +2700,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
         syncTorchDefaultStream();
       }
       auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
+      verifyAgainstReference(sv.shortcutStandalones, frame, state);
       verifyAgainstReference(sv.standalones, frame, state);
       verifyAgainstReference(sv.kernels, frame, state);
       if (timeRefCheck) {
@@ -2581,22 +2739,13 @@ void CompositeInvocation::execute(ExecutionState& state) {
   // recycle arena buffers an eager op still reads. This sync follows any
   // wave-stream sync already done above (e.g. a device-to-host transfer).
   if (ranStandalones) {
-    auto tSync = Clock::now();
+    // Each step's standaloneUs already covers its eager ops (the per-op
+    // default- stream sync in runStandalones drains them at their own step), so
+    // this final sync is only for correctness -- it must not be folded back
+    // into any step's standalone time, which previously charged the whole-graph
+    // async tail to the first standalone step and over-reported standalone time
+    // past e2e.
     syncTorchDefaultStream();
-    if (doTiming && standaloneStepIdx >= 0) {
-      auto syncUs = elapsed(tSync);
-      if (syncUs > 0) {
-        // The eager standalone work only completes at this sync. Charge the
-        // span from the first standalone launch to the sync return and mark the
-        // step standalone-bound. Re-fetch the StepVectors by index: the step
-        // loop's getStepVectors() calls may have resized state.stepVectors and
-        // invalidated any earlier pointer into it.
-        auto& standaloneSv = getStepVectors(
-            state.stepVectors, sequenceNumber_, standaloneStepIdx);
-        standaloneSv.standaloneUs = elapsed(standaloneStart);
-        standaloneSv.standaloneBound = true;
-      }
-    }
   }
 }
 
@@ -2803,6 +2952,12 @@ void CompositeInvocation::traceStep(
   for (const auto& launch : sv.standalones) {
     auto opIdx = opInvocationIndex[launch.invocation];
     std::cout << sequenceNumber_ << "." << opIdx << " standalone "
+              << standaloneToString(launch.standalone);
+  }
+
+  for (const auto& launch : sv.shortcutStandalones) {
+    auto opIdx = opInvocationIndex[launch.invocation];
+    std::cout << sequenceNumber_ << "." << opIdx << " shortcut "
               << standaloneToString(launch.standalone);
   }
 

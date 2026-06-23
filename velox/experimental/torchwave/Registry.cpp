@@ -328,6 +328,11 @@ MetadataBuilder& MetadataBuilder::only1d(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::metadataOnly(bool val) {
+  md_.metadataOnly = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::isStandaloneFunc(
     std::function<bool(NodeCP, const ValueTypes&)> func) {
   md_.isStandaloneFunc = std::move(func);

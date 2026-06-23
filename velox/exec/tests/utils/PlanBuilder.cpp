@@ -1111,6 +1111,22 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
   return {aggs, names};
 }
 
+namespace {
+// Returns the GroupIdNode at 'planNode', or under a single-source local
+// partition, or nullptr.
+const core::GroupIdNode* findGroupIdNode(const core::PlanNode* planNode) {
+  if (auto* groupId = dynamic_cast<const core::GroupIdNode*>(planNode)) {
+    return groupId;
+  }
+  if (auto* partition =
+          dynamic_cast<const core::LocalPartitionNode*>(planNode)) {
+    return dynamic_cast<const core::GroupIdNode*>(
+        partition->sources()[0].get());
+  }
+  return nullptr;
+}
+} // namespace
+
 PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& preGroupedKeys,
@@ -1126,8 +1142,7 @@ PlanBuilder& PlanBuilder::aggregation(
   // need to be populated.
   std::vector<vector_size_t> globalGroupingSets;
   std::optional<core::FieldAccessTypedExprPtr> groupId;
-  if (auto groupIdNode =
-          dynamic_cast<const core::GroupIdNode*>(planNode_.get())) {
+  if (auto* groupIdNode = findGroupIdNode(planNode_.get())) {
     for (auto i = 0; i < groupIdNode->groupingSets().size(); i++) {
       if (groupIdNode->groupingSets().at(i).empty()) {
         globalGroupingSets.push_back(i);

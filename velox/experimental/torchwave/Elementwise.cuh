@@ -461,6 +461,32 @@ __device__ inline double __sigmoid(double a1) {
   return 1.0 / (1.0 + exp(-a1));
 }
 
+// logit (inverse sigmoid): log(z / (1 - z)). The optional aten eps clamps z to
+// [eps, 1 - eps]; a negative eps (set by resolveLogitDefault when eps is None)
+// means no clamp. Non-floating inputs are not meaningful for logit; the
+// template fallback is only there so codegen compiles for any T.
+template <typename T>
+__device__ inline T __logit(T a1, double /*eps*/) {
+  return a1;
+}
+
+__device__ inline float __logit(float a1, double eps) {
+  float z = a1;
+  if (eps >= 0.0) {
+    float e = static_cast<float>(eps);
+    z = fminf(fmaxf(a1, e), 1.0f - e);
+  }
+  return logf(z / (1.0f - z));
+}
+
+__device__ inline double __logit(double a1, double eps) {
+  double z = a1;
+  if (eps >= 0.0) {
+    z = fmin(fmax(a1, eps), 1.0 - eps);
+  }
+  return log(z / (1.0 - z));
+}
+
 template <
     bool kHasMin = true,
     bool kHasMax = true,
@@ -714,6 +740,71 @@ __device__ inline T __index_put_elt_three(
     SET_MSG(block.debugInfo, "Bad idx\0");
   }
   return T();
+}
+
+// Fused slice_scatter along 'dim' (functional/out-of-place). The elementwise
+// loop iterates every element of the output (which has self's shape), so 'idx'
+// is the row-major offset of one output element and the device function returns
+// that element's value. Positions inside the slice [start, start + len*step)
+// along 'dim' (stride 'step') come from 'src'; all other positions pass through
+// 'self' unchanged. 'len' (the slice length) is taken from src, which is
+// authoritative. Both 'self' and 'src' are read at computed offsets through
+// their own strides, so non-contiguous operands (e.g. a column-slice view) are
+// handled; both are whole tensors and must be materialized before this op (the
+// randomAccess argument flag enforces that, as for the index-gather source).
+// The output is contiguous, so 'idx' decomposes directly into per-dim
+// coordinates via self's dims. A slice that does not fit in 'self' along 'dim'
+// (an out-of-range start/end, possibly injected) is reported like
+// __index_put_elt_*.
+template <typename T>
+__device__ inline T __slice_scatter(
+    uint32_t idx,
+    Tensor* self,
+    Tensor* src,
+    int32_t dim,
+    int32_t start,
+    int32_t /*end*/,
+    int32_t step,
+    BlockInfo& block) {
+  int64_t dimSize = self->dims[dim];
+  int64_t len = src->dims[dim];
+  int64_t st = static_cast<int64_t>(step) > 0 ? static_cast<int64_t>(step) : 1;
+  // The whole slice must fit in 'self' along 'dim'; otherwise report and pass
+  // self through unchanged. An empty slice is a no-op (all positions pass
+  // through).
+  int64_t lastPos = static_cast<int64_t>(start) + (len - 1) * st;
+  if (len >= 1 && (start < 0 || lastPos >= dimSize) && block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = dim;
+    block.debugInfo->extra[1] = start;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  // Decompose the contiguous output offset 'idx' into per-dim coordinates using
+  // the output dims (== self dims), innermost dim first.
+  int64_t coord[kMaxDims];
+  int64_t rem = static_cast<int64_t>(idx);
+  for (int d = self->rank - 1; d >= 0; --d) {
+    coord[d] = rem % self->dims[d];
+    rem /= self->dims[d];
+  }
+  int64_t pos = coord[dim];
+  int64_t rel = pos - static_cast<int64_t>(start);
+  bool inSlice = len >= 1 && start >= 0 && lastPos < dimSize && rel >= 0 &&
+      rel < len * st && rel % st == 0;
+  if (inSlice) {
+    int64_t sliceJ = rel / st;
+    int64_t srcOff = 0;
+    for (int d = 0; d < src->rank; ++d) {
+      int64_t c = d == dim ? sliceJ : coord[d];
+      srcOff += c * src->strides[d];
+    }
+    return storage<T>(src)[srcOff];
+  }
+  int64_t selfOff = 0;
+  for (int d = 0; d < self->rank; ++d) {
+    selfOff += coord[d] * self->strides[d];
+  }
+  return storage<T>(self)[selfOff];
 }
 
 // Elementwise index gather variants with scalar indices in registers.

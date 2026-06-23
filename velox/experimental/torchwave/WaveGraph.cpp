@@ -415,6 +415,16 @@ nativert::Value* WaveGraph::newScalarValue(
   return value;
 }
 
+nativert::Value* WaveGraph::newListValue(
+    nativert::Node* node,
+    std::string_view name) {
+  auto uname = uniqueName(name);
+  auto* value =
+      node->addOutput(uname, nativert::Type(nativert::Type::Kind::TensorList));
+  idToValue_[value->id()] = value;
+  return value;
+}
+
 bool WaveGraph::isCreatedValue(ValueCP value) const {
   return createdValueDtypes_.count(value->id()) > 0;
 }
