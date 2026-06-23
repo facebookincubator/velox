@@ -795,8 +795,8 @@ Common Options
    * - ``immutable-partitions``
      - bool
      - false
-     - True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
-       support appending to existing partitions.
+     - If true, disallow appending data to an existing unpartitioned table. Velox currently does not support appending
+       to existing partitions. If false, allow appending data to an existing unpartitioned table.
    * - ``file-column-names-read-as-lower-case``
      - bool
      - false
