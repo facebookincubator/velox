@@ -142,7 +142,13 @@ class AsyncRPCFunction {
   /// accumulated state and dispatches it.
   ///
   /// @param maxRows Maximum number of rows to flush. 0 means flush all.
-  /// Returns responses for the flushed rows. Null rows get
+  ///
+  /// Returns exactly maxRows responses (or all remaining if maxRows is
+  /// 0). Each response's rowId MUST be set to its 0-based index within
+  /// the flushed batch — the operator uses this to scatter responses
+  /// into the correct positions before stamping global row IDs. The
+  /// responses may appear in any order in the vector; the operator
+  /// reorders them by rowId. Null rows get
   /// RPCResponse{.error = "null_input"}. This keeps the operator
   /// completely agnostic to null handling in batch mode.
   virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch(

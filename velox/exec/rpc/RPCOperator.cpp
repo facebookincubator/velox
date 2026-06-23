@@ -235,7 +235,13 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
   auto token = std::make_shared<RPCRateLimiter::Token>(
       RPCRateLimiter::acquire(tierKey_));
 
-  // Stamp rowIds onto responses.
+  // Scatter responses into batch-position order using each response's
+  // function-assigned rowId (its position within the batch), then stamp
+  // the global rowIds. Functions may return results out of order (e.g.,
+  // MetaGen's batchDialogCompletion streams results in arbitrary order).
+  // Without this, responses[i] would be paired with rowLocations[i] in
+  // buildOutputFromReadyBatch, silently mis-mapping results to wrong
+  // passthrough rows.
   auto wrapped =
       std::move(future)
           .within(kBatchRpcTimeout)
@@ -247,10 +253,26 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
                 "RPC batch response count ({}) does not match row count ({})",
                 resps.size(),
                 rowIds.size());
-            for (size_t i = 0; i < resps.size(); ++i) {
-              resps[i].rowId = rowIds[i];
+            std::vector<RPCResponse> sorted(resps.size());
+            std::vector<bool> seen(resps.size(), false);
+            for (auto& resp : resps) {
+              auto batchIdx = resp.rowId;
+              VELOX_CHECK_GE(batchIdx, 0);
+              VELOX_CHECK_LT(
+                  static_cast<size_t>(batchIdx),
+                  rowIds.size(),
+                  "RPC batch response rowId ({}) out of range (0-{})",
+                  batchIdx,
+                  rowIds.size() - 1);
+              VELOX_CHECK(
+                  !seen[static_cast<size_t>(batchIdx)],
+                  "Duplicate batch response rowId ({})",
+                  batchIdx);
+              seen[static_cast<size_t>(batchIdx)] = true;
+              resp.rowId = rowIds[static_cast<size_t>(batchIdx)];
+              sorted[static_cast<size_t>(batchIdx)] = std::move(resp);
             }
-            return resps;
+            return sorted;
           })
           .deferError([token](folly::exception_wrapper ew) {
             RPC_OP_LOG(ERROR) << "RPC batch failed: " << ew.what();
