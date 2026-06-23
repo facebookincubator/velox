@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <string>
-
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 
@@ -66,8 +64,7 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
 
 /// Registers private Spark cast special forms for integrations that translate
 /// Spark plans with per-expression cast modes. Spark SQL registration wires
-/// `spark_ansi_cast` and `spark_legacy_cast` by default for this purpose;
-/// integrations can call this helper to register alternative internal names.
+/// `spark_ansi_cast` and `spark_legacy_cast` by default for this purpose.
 ///
 /// These forms are not the default Spark SQL cast forms because regular
 /// `cast` and `try_cast` must continue to derive behavior from
@@ -76,7 +73,5 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
 /// SparkCastCallToSpecialForm::isAnsiSupported() and uses legacy behavior for
 /// cast pairs whose ANSI behavior is not supported yet. The legacy form applies
 /// Spark legacy cast behavior regardless of the session ANSI setting.
-void registerSparkCastModeSpecialForms(
-    const std::string& ansiCastName,
-    const std::string& legacyCastName);
+void registerSparkCastModeSpecialForms();
 } // namespace facebook::velox::functions::sparksql
