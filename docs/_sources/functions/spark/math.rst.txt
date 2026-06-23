@@ -370,10 +370,12 @@ Mathematical Functions
 
     An alias for ``rand(seed)``.
 
-.. spark:function:: remainder(n, m) -> [same as n]
+.. spark:function:: remainder(n, m) -> [same as n] (ANSI compliant)
 
     Returns the modulus (remainder) of ``n`` divided by ``m``. Corresponds to Spark's operator ``%``.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    When ``m`` is zero, returns NULL following the behavior when Spark ANSI mode
+    is disabled, and throws an exception when Spark ANSI mode is enabled.
 
 .. spark:function:: rint(x) -> double
 
