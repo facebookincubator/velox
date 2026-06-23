@@ -91,8 +91,8 @@ class CxlAggregationRelocateTest : public OperatorTestBase {
   static int64_t relocatedBytes(const std::shared_ptr<exec::Task>& task) {
     int64_t total{0};
     for (const auto& [_, nodeStats] : exec::toPlanStats(task->taskStats())) {
-      const auto it =
-          nodeStats.customStats.find(std::string(memory::kRelocatedMemoryBytes));
+      const auto it = nodeStats.customStats.find(
+          std::string(memory::kRelocatedMemoryBytes));
       if (it != nodeStats.customStats.end()) {
         total += it->second.sum;
       }
@@ -128,7 +128,8 @@ TEST_F(CxlAggregationRelocateTest, relocatesToTierUnderArbitration) {
       makeFlatVector<int64_t>(kFirstBatchRows, [](auto row) { return row; }),
   });
   auto secondBatch = makeRowVector({
-      makeFlatVector<int64_t>(8, [](auto row) { return kFirstBatchRows + row; }),
+      makeFlatVector<int64_t>(
+          8, [](auto row) { return kFirstBatchRows + row; }),
       makeFlatVector<int64_t>(8, [](auto row) { return row; }),
   });
   std::vector<RowVectorPtr> batches{firstBatch, secondBatch};
