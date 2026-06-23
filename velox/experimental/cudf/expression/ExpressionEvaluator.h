@@ -101,6 +101,8 @@ class CudfFunction {
   }
 
  protected:
+  // Query-scoped evaluation context (session timezone and start time), attached
+  // via setContext. Timezone-aware functions read it; others ignore it.
   CudfExpressionContext context_;
 };
 
