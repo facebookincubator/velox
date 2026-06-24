@@ -43,6 +43,7 @@ velox_add_library(
   HiveDataSink.cpp
   HiveDataSource.cpp
   HiveIndexSource.cpp
+  HiveIndexSourceUtils.cpp
   HivePartitionName.cpp
   HiveSplitReader.cpp
   PartitionIdGenerator.cpp
@@ -70,6 +71,7 @@ velox_add_library(
   HiveDataSink.h
   HiveDataSource.h
   HiveIndexSource.h
+  HiveIndexSourceUtils.h
   HivePartitionFunction.h
   HivePartitionName.h
   HiveSplitReader.h
