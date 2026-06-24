@@ -421,4 +421,36 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   }
 }
 
+/// PER_ROW congestion path: responses classified as overload drive the
+/// operator's evaluateCongestion() -> onUnitError() wiring. Verifies the
+/// query still completes correctly through that path. The window adjustment
+/// itself is unit-tested in RPCStateTest / CongestionControllerTest; here we
+/// guard the operator-level materialization + signal plumbing against
+/// crashes/regressions.
+TEST_F(RPCOperatorTest, perRowCongestionPath) {
+  // DemoAsyncRPCFunction::evaluateCongestion returns kError when a response
+  // result contains "OVERLOAD" (the mock echoes the prompt into the result).
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"OVERLOAD one", "OVERLOAD two", "normal three"})});
+
+  auto plan = makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+
+  std::map<std::string, std::string> rows;
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
+  }
+
+  EXPECT_EQ(rows["OVERLOAD one"], "Response for: OVERLOAD one");
+  EXPECT_EQ(rows["OVERLOAD two"], "Response for: OVERLOAD two");
+  EXPECT_EQ(rows["normal three"], "Response for: normal three");
+}
+
 } // namespace facebook::velox::exec::rpc

@@ -94,6 +94,30 @@ struct RPCRequest {
   std::map<std::string, std::string> options;
 };
 
+/// Typed cause of an RPC failure, carried alongside the human-readable error
+/// string so consumers can classify failures without parsing message text.
+///
+/// The transports flatten backend-specific exceptions (rate-limit, timeout)
+/// into the opaque 'error' string before a response reaches the framework,
+/// which loses the signal a congestion controller needs. This enum preserves
+/// it: the transport tags each failed response with why it failed, and a
+/// congestion policy can then treat overload (kRateLimited / kTimeout)
+/// differently from a user error (kNullInput) or a benign empty result.
+enum class RPCErrorKind {
+  /// Not an error, or cause not classified.
+  kNone,
+  /// Null primary input; a user error, not a backend problem.
+  kNullInput,
+  /// Backend rejected the call for rate limiting / quota (e.g. HTTP 429).
+  kRateLimited,
+  /// The call exceeded its deadline.
+  kTimeout,
+  /// Backend returned a non-overload error after retries.
+  kBackendError,
+  /// Backend returned successfully but with no usable result.
+  kEmptyResponse,
+};
+
 /// Generic response structure from RPC calls.
 /// This is a minimal, domain-agnostic structure that works for any backend.
 struct RPCResponse {
@@ -116,6 +140,10 @@ struct RPCResponse {
 
   /// Error message if the request failed.
   std::optional<std::string> error;
+
+  /// Typed cause of the failure, set by the transport when 'error' is set.
+  /// Defaults to kNone so existing aggregate initializers need not list it.
+  RPCErrorKind errorKind{RPCErrorKind::kNone};
 
   /// Returns true if this response represents an error.
   bool hasError() const {
