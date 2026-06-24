@@ -69,7 +69,10 @@ class VectorFuzzerTest : public testing::Test {
 
     std::unordered_map<uint64_t, vector_size_t> map;
 
-    for (size_t i = 0; i < mapVector->size(); ++i) {
+    for (vector_size_t i = 0; i < mapVector->size(); ++i) {
+      if (mapVector->isNullAt(i)) {
+        continue;
+      }
       vector_size_t offset = mapVector->offsetAt(i);
       map.clear();
 
@@ -446,6 +449,107 @@ TEST_F(VectorFuzzerTest, array) {
   checkElementSize(kElementMaxSize);
   checkElementSize(kElementMaxSize - 70);
   checkElementSize(kElementMaxSize + 50);
+}
+
+TEST_F(VectorFuzzerTest, fuzzDataBehindNulls) {
+  // Null rows of arrays/maps/dictionaries carry out-of-range "garbage"
+  // offsets/sizes/indices, while the vector still passes validate() (which
+  // skips null rows).
+  constexpr vector_size_t kSize = 200;
+
+  auto arrayRowInRange = [](const ArrayVectorBase* arrayVector,
+                            vector_size_t i,
+                            int64_t elementsSize) {
+    const int64_t offset = arrayVector->offsetAt(i);
+    const int64_t size = arrayVector->sizeAt(i);
+    return offset >= 0 && size >= 0 && offset + size <= elementsSize;
+  };
+
+  // Arrays: every null row must carry out-of-range offsets/sizes.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.5;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto vector = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    ASSERT_NO_THROW(vector->validate({}));
+
+    auto* arrayVector = vector->as<ArrayVector>();
+    const int64_t elementsSize = arrayVector->elements()->size();
+    bool sawNull = false;
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      if (arrayVector->isNullAt(i)) {
+        sawNull = true;
+        EXPECT_FALSE(arrayRowInRange(arrayVector, i, elementsSize))
+            << "null row " << i << " should have out-of-range offset/size";
+      } else {
+        EXPECT_TRUE(arrayRowInRange(arrayVector, i, elementsSize));
+      }
+    }
+    EXPECT_TRUE(sawNull);
+  }
+
+  // Maps (also exercises normalizeMapKeys skipping null rows with garbage
+  // offsets/sizes): every null row must carry out-of-range offsets/sizes.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.5;
+    opts.normalizeMapKeys = true;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto vector = fuzzer.fuzzMap(
+        fuzzer.fuzzFlatNotNull(BIGINT(), kSize),
+        fuzzer.fuzzFlat(BIGINT(), kSize),
+        kSize);
+    ASSERT_NO_THROW(vector->validate({}));
+
+    auto* mapVector = vector->as<MapVector>();
+    const int64_t elementsSize =
+        std::min(mapVector->mapKeys()->size(), mapVector->mapValues()->size());
+    bool sawNull = false;
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      if (mapVector->isNullAt(i)) {
+        sawNull = true;
+        EXPECT_FALSE(arrayRowInRange(mapVector, i, elementsSize))
+            << "null row " << i << " should have out-of-range offset/size";
+      }
+    }
+    EXPECT_TRUE(sawNull);
+  }
+
+  // Dictionaries: every row that is null in the dictionary's own (wrapper)
+  // nulls buffer must carry an out-of-range index. We check the wrapper nulls
+  // directly rather than isNullAt(), because isNullAt() also reports rows whose
+  // valid in-range index points at a null base element -- a different,
+  // legitimate kind of null that carries no garbage index.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.5;
+    opts.dictionaryHasNulls = true;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto vector =
+        fuzzer.fuzzDictionary(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    ASSERT_NO_THROW(vector->validate({}));
+
+    auto* dictionary = vector->as<DictionaryVector<int64_t>>();
+    ASSERT_TRUE(dictionary != nullptr);
+    const auto* rawIndices = dictionary->indices()->as<vector_size_t>();
+    const uint64_t* rawNulls = dictionary->rawNulls();
+    ASSERT_TRUE(rawNulls != nullptr);
+    bool sawNull = false;
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      if (bits::isBitNull(rawNulls, i)) {
+        sawNull = true;
+        EXPECT_GE(rawIndices[i], kSize)
+            << "null row " << i << " should have an out-of-range index";
+      } else {
+        EXPECT_GE(rawIndices[i], 0);
+        EXPECT_LT(rawIndices[i], kSize);
+      }
+    }
+    EXPECT_TRUE(sawNull);
+  }
 }
 
 TEST_F(VectorFuzzerTest, map) {
