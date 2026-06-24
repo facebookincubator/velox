@@ -75,6 +75,7 @@ target_link_libraries(
   velox_rpc_rate_limiter
   GTest::gtest
   GTest::gtest_main
+  Folly::folly
 )
 
 add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)
@@ -83,6 +84,7 @@ add_executable(velox_rpc_operator_test RPCOperatorTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_operator_test
+  velox_demo_batch_rpc_function
   velox_demo_rpc_function
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry

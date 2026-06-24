@@ -114,6 +114,13 @@ class HashBuild final : public Operator {
   bool isRunning() const;
   void checkRunning() const;
 
+  // Returns true if this task is the builder task for the hash table cache
+  // entry (i.e. the task that builds the table, as opposed to a waiter task
+  // that reuses a cached table built by another task).
+  bool hashTableCacheBuilderTask() const {
+    return cacheEntry_->builderTaskId == taskId();
+  }
+
   // Invoked to set up hash table to build.
   void setupTable();
 
@@ -299,9 +306,10 @@ class HashBuild final : public Operator {
 
   State state_{State::kRunning};
 
-  // For hash table caching: the cache key passed in at construction.
+  // For hash table caching: the resolved cache key from HashJoinNode.
   // If set, this operator coordinates via HashTableCache.
-  // Key format: "queryId:planNodeId"
+  // If HashJoinNode.cacheKey is not set, falls back to the legacy
+  // "queryId:planNodeId" format.
   std::string cacheKey_;
 
   // For hash table caching: cached entry containing the shared table and pool.

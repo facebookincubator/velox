@@ -50,6 +50,34 @@ TEST(DuckParserTest, constants) {
   // Nulls
   EXPECT_EQ("null", parseExpr("NULL")->toString());
   EXPECT_EQ("null", parseExpr("NULL::double")->toString());
+  EXPECT_EQ("null", parseExpr("NULL::bigint")->toString());
+  EXPECT_EQ("null", parseExpr("NULL::integer")->toString());
+  EXPECT_EQ("null", parseExpr("NULL::varchar")->toString());
+  EXPECT_EQ("null", parseExpr("CAST(NULL AS bigint)")->toString());
+
+  // Typed NULL inside an IN list (folded to an array constant). Without the
+  // null handling in the cast branch, DefaultCastAs + GetValue would throw on
+  // the null.
+  EXPECT_EQ(
+      "in(\"a\",{1, 2, null})",
+      parseExpr("a in (1, 2, NULL::bigint)")->toString());
+  EXPECT_EQ(
+      "in(\"a\",{1, 2, null})",
+      parseExpr("a in (1, 2, NULL::integer)")->toString());
+  EXPECT_EQ(
+      "in(\"a\",{x, null})",
+      parseExpr("a in ('x', NULL::varchar)")->toString());
+
+  // The same IN list in varargs form (parseInListAsArray = false) keeps the
+  // typed NULL's type rather than collapsing it to an untyped UNKNOWN, so it
+  // can still resolve against the (T, T...) signature.
+  {
+    ParseOptions varargs;
+    varargs.parseInListAsArray = false;
+    EXPECT_EQ(
+        "in(\"a\",1,2,null)",
+        parseExpr("a in (1, 2, NULL::bigint)", varargs)->toString());
+  }
 
   // Booleans
   EXPECT_EQ("true", parseExpr("TRUE")->toString());
@@ -454,8 +482,9 @@ TEST(DuckParserTest, switchCase) {
       "switch(gt(\"a\",0),1,lt(\"a\",0),-1)",
       parseExpr("case when a > 0 then 1 when a < 0 then -1end")->toString());
 
+  // Simple CASE emits "case" (subject evaluated once).
   EXPECT_EQ(
-      "switch(eq(\"a\",1),x,eq(\"a\",5),y,z)",
+      "case(\"a\",1,x,5,y,z)",
       parseExpr("case a when 1 then 'x' when 5 then 'y' else 'z' end")
           ->toString());
 }

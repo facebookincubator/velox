@@ -15,6 +15,7 @@
  */
 #include "velox/common/config/ConfigProperty.h"
 
+#include <fmt/format.h>
 #include "velox/common/EnumDefine.h"
 
 namespace facebook::velox::config {
@@ -35,5 +36,13 @@ const auto& configPropertyTypeNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(ConfigPropertyType, configPropertyTypeNames);
+
+namespace detail {
+
+std::string toStringValue(double value) {
+  return fmt::format("{}", value);
+}
+
+} // namespace detail
 
 } // namespace facebook::velox::config

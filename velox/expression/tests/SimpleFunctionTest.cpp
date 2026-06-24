@@ -98,6 +98,19 @@ class SimpleFunctionTest : public functions::test::FunctionBaseTest {
               .supportsFlatNoNullsFastPath());
     }
   }
+
+  std::vector<Timestamp> stringToTimestamp(
+      std::vector<std::string_view> views) {
+    std::vector<Timestamp> values;
+    values.reserve(views.size());
+    for (auto view : views) {
+      values.emplace_back(
+          util::fromTimestampString(
+              view.data(), view.size(), util::TimestampParseMode::kPrestoCast)
+              .value());
+    }
+    return values;
+  }
 };
 
 template <typename T>
@@ -1749,6 +1762,156 @@ TEST_F(SimpleFunctionTest, timeMicroUtcTypeTest) {
     auto expected =
         makeArrayVector<int64_t>({{2, 3, 4}, {5, 6, 7}}, TIME_MICRO_UTC());
     assertEqualVectors(expected, result);
+  }
+}
+
+template <typename T, typename TTimestamp>
+struct TimestampPlusOneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(out_type<Timestamp>& out, const arg_type<Timestamp>& input) {
+    if constexpr (std::is_same_v<TTimestamp, Timestamp>) {
+      out = Timestamp::fromMillis(input.toMillis() + 1);
+    } else if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      out = Timestamp::fromMicros(input.toMicros() + 1);
+    }
+  }
+};
+
+template <typename T>
+struct ArrayTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<Array<Timestamp>>& out,
+      const arg_type<Array<Timestamp>>& input) {
+    for (int i = 0; i < input.size(); i++) {
+      if (input[i].has_value()) {
+        out.push_back(Timestamp::fromMillis(input[i].value().toMillis() + 1));
+      }
+    }
+  }
+
+  void call(
+      out_type<Array<TimestampUtc>>& out,
+      const arg_type<Array<TimestampUtc>>& input) {
+    for (int i = 0; i < input.size(); i++) {
+      if (input[i].has_value()) {
+        out.push_back(Timestamp::fromMicros(input[i].value().toMicros() + 1));
+      }
+    }
+  }
+};
+
+TEST_F(SimpleFunctionTest, timestampTypeTest) {
+  std::vector<Timestamp> input = stringToTimestamp({
+      "2015-06-01 19:34:56.007",
+      "2015-06-02 19:34:56.12306",
+      "2001-02-03 03:34:06.056",
+      "1998-03-01 08:01:06.996669",
+      "2022-12-23 03:56:01",
+      "1980-01-24 00:23:07",
+      "1999-12-08 13:39:26.123456",
+      "2023-04-21 09:09:34.5",
+      "2000-09-12 22:36:29",
+      "2007-12-12 04:27:56.999",
+  });
+  std::vector<Timestamp> expected = stringToTimestamp({
+      "2015-06-01 19:34:56.008",
+      "2015-06-02 19:34:56.124",
+      "2001-02-03 03:34:06.057",
+      "1998-03-01 08:01:06.997",
+      "2022-12-23 03:56:01.001",
+      "1980-01-24 00:23:07.001",
+      "1999-12-08 13:39:26.124",
+      "2023-04-21 09:09:34.501",
+      "2000-09-12 22:36:29.001",
+      "2007-12-12 04:27:57.000",
+  });
+
+  {
+    registerFunction<
+        ParameterBinder<TimestampPlusOneFunction, Timestamp>,
+        Timestamp,
+        Timestamp>({"timestamp_plus_one"});
+    auto result = evaluate(
+        "timestamp_plus_one(c0)",
+        makeRowVector({
+            makeFlatVector<Timestamp>(input),
+        }));
+    assertEqualVectors(makeFlatVector<Timestamp>(expected), result);
+  }
+
+  // Test out Timestamp in complex type.
+  {
+    registerFunction<
+        ArrayTimestampFunction,
+        Array<Timestamp>,
+        Array<Timestamp>>({"array_timestamp"});
+
+    auto data = makeRowVector({
+        makeArrayVector<Timestamp>({{input}}),
+    });
+
+    auto result = evaluate("array_timestamp(c0)", data);
+    assertEqualVectors(makeArrayVector<Timestamp>({{expected}}), result);
+  }
+}
+
+TEST_F(SimpleFunctionTest, timestampUtcTypeTest) {
+  std::vector<Timestamp> input = stringToTimestamp({
+      "2015-06-01 19:34:56.007",
+      "2015-06-02 19:34:56.12306",
+      "2001-02-03 03:34:06.056",
+      "1998-03-01 08:01:06.996669",
+      "2022-12-23 03:56:01",
+      "1980-01-24 00:23:07",
+      "1999-12-08 13:39:26.123456",
+      "2023-04-21 09:09:34.5",
+      "2000-09-12 22:36:29",
+      "2007-12-12 04:27:56.999",
+  });
+  std::vector<Timestamp> expected = stringToTimestamp({
+      "2015-06-01 19:34:56.007001",
+      "2015-06-02 19:34:56.123061",
+      "2001-02-03 03:34:06.056001",
+      "1998-03-01 08:01:06.996670",
+      "2022-12-23 03:56:01.000001",
+      "1980-01-24 00:23:07.000001",
+      "1999-12-08 13:39:26.123457",
+      "2023-04-21 09:09:34.500001",
+      "2000-09-12 22:36:29.000001",
+      "2007-12-12 04:27:56.999001",
+  });
+
+  {
+    registerFunction<
+        ParameterBinder<TimestampPlusOneFunction, TimestampUtc>,
+        TimestampUtc,
+        TimestampUtc>({"timestamp_utc_plus_one"});
+    auto result = evaluate(
+        "timestamp_utc_plus_one(c0)",
+        makeRowVector({
+            makeFlatVector<Timestamp>(input, TIMESTAMP_UTC()),
+        }));
+    assertEqualVectors(
+        makeFlatVector<Timestamp>(expected, TIMESTAMP_UTC()), result);
+  }
+
+  // Test out TimestampUtc in complex type.
+  {
+    registerFunction<
+        ArrayTimestampFunction,
+        Array<TimestampUtc>,
+        Array<TimestampUtc>>({"array_timestamp_utc"});
+
+    auto data = makeRowVector({
+        makeArrayVector<Timestamp>({{input}}, TIMESTAMP_UTC()),
+    });
+
+    auto result = evaluate("array_timestamp_utc(c0)", data);
+    assertEqualVectors(
+        makeArrayVector<Timestamp>({{expected}}, TIMESTAMP_UTC()), result);
   }
 }
 

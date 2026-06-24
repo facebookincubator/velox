@@ -27,7 +27,7 @@
 
 namespace facebook::velox::dwio::common {
 
-struct ColumnMetrics;
+struct DecodingStats;
 
 using ScanSpec = velox::common::ScanSpec;
 
@@ -500,7 +500,7 @@ class SelectiveColumnReader {
 
   StringView copyStringValueIfNeed(std::string_view value) {
     if (value.size() <= StringView::kInlineSize ||
-        formatData().getStringBuffersFromDecoder()) {
+        formatData().stringDecoderZeroCopy()) {
       return StringView(value);
     }
 
@@ -546,7 +546,8 @@ class SelectiveColumnReader {
     }
     formatData_->readNulls(
         numRows, incomingNulls, nullsInReadRange_, readsNullsOnly);
-    if (isFlatMapValue_ && nullsInReadRange_) {
+    if (isFlatMapValue_ && nullsInReadRange_ &&
+        flatMapValueNullsInReadRange_.get() != nullsInReadRange_.get()) {
       flatMapValueNullsInReadRange_ = nullsInReadRange_;
     }
   }
@@ -659,9 +660,8 @@ class SelectiveColumnReader {
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* const scanSpec_;
 
-  // Per-column metrics for timing stats. May be nullptr if collection is
-  // disabled.
-  ColumnMetrics* columnMetrics_{nullptr};
+  // Per-column decoding statistics. May be nullptr if collection is disabled.
+  DecodingStats* decodingStats_{nullptr};
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.
@@ -761,8 +761,7 @@ class SelectiveColumnReader {
 template <>
 inline void SelectiveColumnReader::addValue(const std::string_view value) {
   const uint64_t size = value.size();
-  if (formatData().getStringBuffersFromDecoder() ||
-      size <= StringView::kInlineSize) {
+  if (formatData().stringDecoderZeroCopy() || size <= StringView::kInlineSize) {
     reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
         StringView(value.data(), size);
     return;

@@ -36,6 +36,7 @@ bool containsMap(const TypePtr& type) {
 bool isSupportedType(const TypePtr& type) {
   // DuckDB doesn't support nanosecond precision for timestamps.
   if (type->kind() == TypeKind::TIMESTAMP) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
     return false;
   }
   for (auto i = 0; i < type->size(); ++i) {

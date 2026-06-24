@@ -23,12 +23,15 @@
 #include <folly/FBString.h>
 #include <folly/Format.h>
 #include <folly/Range.h>
-#include <folly/dynamic.h>
 
 #include <fmt/format.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+
+namespace folly {
+struct dynamic;
+}
 
 namespace facebook::velox {
 
@@ -269,9 +272,7 @@ struct StringView {
   /// folly::dynamic.
   ///
   /// > folly::dynamic str(StringView()); // ok
-  /* implicit */ operator folly::dynamic() const {
-    return folly::dynamic(folly::StringPiece(data(), size()));
-  }
+  /* implicit */ operator folly::dynamic() const;
 
   const char* begin() const&& = delete;
   const char* begin() const& {

@@ -195,6 +195,74 @@ TEST_P(RawVectorTest, toStdVector) {
   }
 }
 
+TEST_P(RawVectorTest, shrinkToFit) {
+  raw_vector<int> data =
+      makeRawVector(0, GetParam().useMemoryPool ? pool_.get() : nullptr);
+
+  // Empty vector — shrink should be a no-op.
+  data.shrink_to_fit();
+  EXPECT_EQ(0, data.size());
+  EXPECT_EQ(0, data.capacity());
+  EXPECT_EQ(nullptr, data.data());
+
+  // Shrink after clear should free all memory.
+  for (int i = 0; i < 100; ++i) {
+    data.push_back(i);
+  }
+  EXPECT_EQ(100, data.size());
+  EXPECT_GE(data.capacity(), 100);
+  data.clear();
+  data.shrink_to_fit();
+  EXPECT_EQ(0, data.size());
+  EXPECT_EQ(0, data.capacity());
+  EXPECT_EQ(nullptr, data.data());
+
+  // Size equals capacity — shrink should be a no-op preserving data.
+  for (int i = 0; i < 10; ++i) {
+    data.push_back(i * 10);
+  }
+  const auto exactCapacity = data.capacity();
+  data.shrink_to_fit();
+  EXPECT_EQ(10, data.size());
+  EXPECT_EQ(exactCapacity, data.capacity());
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(i * 10, data[i]);
+  }
+
+  // Capacity larger than size — shrink should reduce capacity.
+  data.reserve(10'000);
+  const auto largeCapacity = data.capacity();
+  EXPECT_GT(largeCapacity, exactCapacity);
+  data.shrink_to_fit();
+  EXPECT_EQ(10, data.size());
+  EXPECT_LT(data.capacity(), largeCapacity);
+  EXPECT_LE(data.capacity(), exactCapacity);
+  for (int i = 0; i < 10; ++i) {
+    EXPECT_EQ(i * 10, data[i]);
+  }
+
+  // Push back after shrink should work correctly.
+  for (int i = 10; i < 20; ++i) {
+    data.push_back(i * 10);
+  }
+  EXPECT_EQ(20, data.size());
+  for (int i = 0; i < 20; ++i) {
+    EXPECT_EQ(i * 10, data[i]);
+  }
+
+  // Push back after shrink from empty should work correctly.
+  data.clear();
+  data.shrink_to_fit();
+  EXPECT_EQ(nullptr, data.data());
+  for (int i = 0; i < 5; ++i) {
+    data.push_back(i * 100);
+  }
+  EXPECT_EQ(5, data.size());
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(i * 100, data[i]);
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     RawVectorTest,
     RawVectorTest,

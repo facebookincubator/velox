@@ -49,6 +49,10 @@ bool isValidPartitionType(const TypePtr& type) {
 }
 
 bool canTransform(TransformType transformType, const TypePtr& type) {
+  if (type->isTimestamp()) {
+    VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
+  }
+
   switch (transformType) {
     case TransformType::kIdentity:
       return type->isTinyint() || type->isSmallint() || type->isInteger() ||

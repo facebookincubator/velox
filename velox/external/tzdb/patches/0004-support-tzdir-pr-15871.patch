@@ -1,0 +1,18 @@
+diff --git a/velox/external/tzdb/tzdb.cpp b/velox/external/tzdb/tzdb.cpp
+index c4e16b139..63a6d3458 100644
+--- a/velox/external/tzdb/tzdb.cpp
++++ b/velox/external/tzdb/tzdb.cpp
+@@ -57,6 +57,13 @@ using namespace std::chrono_literals;
+ std::string __libcpp_tzdb_directory() {
+   struct stat sb;
+   using namespace std;
++  // First, check for the TZDIR environment variable.
++  // If set, it takes precedence over standard system paths.
++  if (auto tzdir = getenv("TZDIR")) {
++    if (stat(tzdir, &sb) == 0 && S_ISDIR(sb.st_mode)) {
++        return tzdir;
++    }
++  }
+ #if !defined(__APPLE__)
+   CONSTDATA auto tz_dir_default = "/usr/share/zoneinfo";
+   CONSTDATA auto tz_dir_buildroot = "/usr/share/zoneinfo/uclibc";

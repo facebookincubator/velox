@@ -16,68 +16,64 @@
 
 #include "velox/dwio/common/Options.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::dwio::common {
 
-FileFormat toFileFormat(std::string_view s) {
-  if (s == "dwrf") {
-    return FileFormat::DWRF;
-  } else if (s == "rc") {
-    return FileFormat::RC;
-  } else if (s == "rc:text") {
-    return FileFormat::RC_TEXT;
-  } else if (s == "rc:binary") {
-    return FileFormat::RC_BINARY;
-  } else if (s == "text") {
-    return FileFormat::TEXT;
-  } else if (s == "json") {
-    return FileFormat::JSON;
-  } else if (s == "parquet") {
-    return FileFormat::PARQUET;
-  } else if (s == "nimble" || s == "alpha") {
-    return FileFormat::NIMBLE;
-  } else if (s == "orc") {
-    return FileFormat::ORC;
-  } else if (s == "sst") {
-    return FileFormat::SST;
-  } else if (s == "avro") {
-    return FileFormat::AVRO;
-  }
-  return FileFormat::UNKNOWN;
+namespace {
+
+const auto& fileFormatNames() {
+  static const folly::F14FastMap<FileFormat, std::string_view> kNames = {
+      {FileFormat::UNKNOWN, "unknown"},
+      {FileFormat::DWRF, "dwrf"},
+      {FileFormat::RC, "rc"},
+      {FileFormat::RC_TEXT, "rc:text"},
+      {FileFormat::RC_BINARY, "rc:binary"},
+      {FileFormat::TEXT, "text"},
+      {FileFormat::JSON, "json"},
+      {FileFormat::PARQUET, "parquet"},
+      {FileFormat::NIMBLE, "nimble"},
+      {FileFormat::ORC, "orc"},
+      {FileFormat::SST, "sst"},
+      {FileFormat::FLUX, "flux"},
+      {FileFormat::AVRO, "avro"},
+      {FileFormat::PUFFIN, "puffin"},
+  };
+  return kNames;
 }
 
-std::string_view toString(FileFormat fmt) {
-  switch (fmt) {
-    case FileFormat::DWRF:
-      return "dwrf";
-    case FileFormat::RC:
-      return "rc";
-    case FileFormat::RC_TEXT:
-      return "rc:text";
-    case FileFormat::RC_BINARY:
-      return "rc:binary";
-    case FileFormat::TEXT:
-      return "text";
-    case FileFormat::JSON:
-      return "json";
-    case FileFormat::PARQUET:
-      return "parquet";
-    case FileFormat::NIMBLE:
-      return "nimble";
-    case FileFormat::ORC:
-      return "orc";
-    case FileFormat::SST:
-      return "sst";
-    case FileFormat::AVRO:
-      return "avro";
-    default:
-      return "unknown";
+const auto& columnMappingModeNames() {
+  static const folly::F14FastMap<ColumnMappingMode, std::string_view> kNames = {
+      {ColumnMappingMode::kPosition, "POSITION"},
+      {ColumnMappingMode::kName, "NAME"},
+      {ColumnMappingMode::kParquetFieldId, "PARQUET_FIELD_ID"},
+      {ColumnMappingMode::kFieldId, "FIELD_ID"},
+  };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(FileFormat, fileFormatNames);
+VELOX_DEFINE_ENUM_NAME(ColumnMappingMode, columnMappingModeNames);
+
+FileFormat toFileFormat(std::string_view s) {
+  if (s == "alpha") {
+    return FileFormat::NIMBLE;
   }
+  return FileFormatName::tryToFileFormat(s).value_or(FileFormat::UNKNOWN);
+}
+
+std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
+  if (fmt == FileFormat::UNKNOWN) {
+    return "";
+  }
+  return std::string(FileFormatName::toName(fmt)) + std::string(separator);
 }
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
-  columnReaderOptions.useColumnNamesForColumnMapping_ =
-      options.useColumnNamesForColumnMapping();
+  columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
   return columnReaderOptions;
 }
 

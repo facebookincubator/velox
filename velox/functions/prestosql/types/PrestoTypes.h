@@ -53,6 +53,11 @@ class PrestoTypes {
       const TypePtr& type);
 
  private:
+  // Formats a Timestamp in Presto format: space separator, millisecond
+  // precision, zero-padded year. Consistent with PrestoCastHooks (non-legacy)
+  // options for CAST(timestamp AS varchar).
+  static std::string timestampToPrestoString(Timestamp value);
+
   // Formats binary data as space-separated hex bytes (e.g., "02 0c 01 00").
   static std::string toHex(StringView value);
 };
@@ -82,6 +87,8 @@ std::string PrestoTypes::valueToString(T value, const TypePtr& type) {
           BingTileType::bingTileY(value),
           BingTileType::bingTileZoom(value));
     }
+  } else if constexpr (std::is_same_v<T, Timestamp>) {
+    return timestampToPrestoString(value);
   } else if constexpr (std::is_same_v<T, StringView>) {
     if (type->isVarbinary()) {
       return toHex(value);

@@ -17,12 +17,13 @@
 #include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 
 #include <algorithm>
-#include <fstream>
 
 #include <folly/json.h>
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/FileSink.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -30,7 +31,6 @@ namespace {
 
 // Roaring Bitmap portable format constants.
 constexpr uint32_t kSerialCookieNoRun = 12'346;
-constexpr uint32_t kNoOffsetThreshold = 4;
 constexpr uint32_t kMaxArrayContainerCardinality = 4'096;
 // Full bitmap container: 2^16 bits = 1024 uint64 words = 8192 bytes.
 constexpr size_t kBitmapContainerBytes = 8'192;
@@ -159,9 +159,7 @@ std::string DeletionVectorWriter::serialize32(
   writeLittleEndian(data, kSerialCookieNoRun);
   writeLittleEndian(data, numContainers);
   serializeKeyCardinality(data, containers);
-  if (numContainers >= kNoOffsetThreshold) {
-    serializeOffsets(data, containers);
-  }
+  serializeOffsets(data, containers);
   serializeContainerData(data, containers);
   return data;
 }
@@ -205,7 +203,8 @@ void DeletionVectorWriter::clear() {
 }
 
 std::pair<uint64_t, uint64_t> writePuffinFile(
-    const std::string& filePath,
+    dwio::common::FileSink& sink,
+    memory::MemoryPool& pool,
     const std::string& blobData,
     const std::string& referencedDataFile) {
   uint64_t blobOffset = kPuffinMagicSize;
@@ -245,13 +244,15 @@ std::pair<uint64_t, uint64_t> writePuffinFile(
       sizeof(littleEndianFlags));
   fileContent.append(kPuffinMagic, kPuffinMagicSize);
 
-  std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
-  VELOX_CHECK(
-      out.good(), "Failed to open Puffin file for writing: {}", filePath);
-  out.write(
-      fileContent.data(), static_cast<std::streamsize>(fileContent.size()));
-  out.close();
-  VELOX_CHECK(!out.fail(), "Failed to write Puffin file: {}", filePath);
+  // Stage the serialized puffin bytes into a DataBuffer<char> and write
+  // them through the registered FileSink. Going through the sink lets the
+  // bytes land on whatever filesystem (local, warm storage, S3, ...) has a
+  // FileSink factory registered for the destination URI scheme.
+  // DataBuffer::append reserves and copies the bytes internally, so the
+  // staging copy stays inside the bounds-checked buffer API.
+  dwio::common::DataBuffer<char> buffer(pool);
+  buffer.append(0, fileContent.data(), fileContent.size());
+  sink.write(std::move(buffer));
 
   return {blobOffset, blobLength};
 }

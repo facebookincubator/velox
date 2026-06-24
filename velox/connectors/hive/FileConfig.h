@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <limits>
 #include <string>
+#include <string_view>
+#include <utility>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/config/ConfigProperty.h"
@@ -42,26 +45,6 @@ class FileConfig {
       bool,
       false,
       "Map ORC table field names to file field names using names, not indices.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kParquetUseColumnNamesSession,
-      kParquetUseColumnNames,
-      isParquetUseColumnNames,
-      "parquet_use_column_names",
-      "parquet.use-column-names",
-      bool,
-      false,
-      "Map Parquet table field names to file field names using names, not indices.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kAllowInt32NarrowingSession,
-      kAllowInt32Narrowing,
-      allowInt32Narrowing,
-      "allow_int32_narrowing",
-      "parquet.allow-int32-narrowing",
-      bool,
-      false,
-      "Allow reading INT32 Parquet columns as a narrower integer type.")
 
   VELOX_HIVE_CONFIG_LEGACY(
       kReadTimestampPartitionValueAsLocalTimeSession,
@@ -104,16 +87,6 @@ class FileConfig {
       "Speculative tail-read size in bytes for ORC files.")
 
   VELOX_HIVE_CONFIG_LEGACY(
-      kParquetFooterSpeculativeIoSizeSession,
-      kParquetFooterSpeculativeIoSize,
-      parquetFooterSpeculativeIoSize,
-      "parquet_footer_speculative_io_size",
-      "parquet.footer-speculative-io-size",
-      uint64_t,
-      256UL << 10,
-      "Speculative tail-read size in bytes for Parquet files.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
       kNimbleFooterSpeculativeIoSizeSession,
       kNimbleFooterSpeculativeIoSize,
       nimbleFooterSpeculativeIoSize,
@@ -122,6 +95,36 @@ class FileConfig {
       uint64_t,
       8UL << 20,
       "Speculative tail-read size in bytes for Nimble files.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleStringDecoderZeroCopySession,
+      kNimbleStringDecoderZeroCopy,
+      nimbleStringDecoderZeroCopy,
+      "nimble_string_decoder_zero_copy",
+      "nimble.string-decoder-zero-copy",
+      bool,
+      false,
+      "Enable zero-copy string decoding in Nimble selective reader.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimblePreserveDictionaryEncodingSession,
+      kNimblePreserveDictionaryEncoding,
+      nimblePreserveDictionaryEncoding,
+      "nimble_preserve_dictionary_encoding",
+      "nimble.preserve-dictionary-encoding",
+      bool,
+      false,
+      "Preserve dictionary encoding for Nimble string column reads.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleLazyColumnIoSession,
+      kNimbleLazyColumnIo,
+      nimbleLazyColumnIo,
+      "nimble_lazy_column_io",
+      "nimble.lazy-column-io",
+      bool,
+      false,
+      "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
 
   // --- VELOX_HIVE_CONFIG properties ---
 
@@ -185,23 +188,48 @@ class FileConfig {
   static constexpr const char* kIndexEnabled = "index-enabled";
 
   VELOX_HIVE_CONFIG(
-      kFileMetadataCacheEnabledSession,
-      fileMetadataCacheEnabled,
-      "file_metadata_cache_enabled",
+      kCacheMetadataSession,
+      cacheMetadata,
+      "cache_metadata",
       bool,
       false,
       "Cache file metadata in AsyncDataCache.")
-  static constexpr const char* kFileMetadataCacheEnabled =
-      "file-metadata-cache-enabled";
+  static constexpr const char* kCacheMetadata = "cache-metadata";
 
   VELOX_HIVE_CONFIG(
-      kPinFileMetadataSession,
-      pinFileMetadata,
-      "pin_file_metadata",
+      kPinMetadataSession,
+      pinMetadata,
+      "pin_metadata",
       bool,
       false,
       "Pin parsed metadata objects in reader cache.")
-  static constexpr const char* kPinFileMetadata = "pin-file-metadata";
+  static constexpr const char* kPinMetadata = "pin-metadata";
+
+  VELOX_HIVE_CONFIG(
+      kCacheIndexSession,
+      cacheIndex,
+      "cache_index",
+      bool,
+      false,
+      "Cache index data in AsyncDataCache.")
+  static constexpr const char* kCacheIndex = "cache-index";
+
+  VELOX_HIVE_CONFIG(
+      kPinIndexSession,
+      pinIndex,
+      "pin_index",
+      bool,
+      false,
+      "Pin parsed index objects in reader cache.")
+  static constexpr const char* kPinIndex = "pin-index";
+
+  VELOX_HIVE_CONFIG(
+      kSelectiveNimbleReaderEnabledSession,
+      selectiveNimbleReaderEnabled,
+      "selective_nimble_reader_enabled",
+      bool,
+      true,
+      "Enable selective Nimble reader.")
 
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
@@ -239,13 +267,22 @@ class FileConfig {
   /// meta data together. Optimization to decrease the small IO requests.
   static constexpr const char* kFilePreloadThreshold = "file-preload-threshold";
 
-  explicit FileConfig(std::shared_ptr<const config::ConfigBase> config) {
+  explicit FileConfig(
+      std::shared_ptr<const config::ConfigBase> config,
+      std::string connectorConfigPrefix)
+      : connectorConfigPrefix_(std::move(connectorConfigPrefix)) {
     VELOX_CHECK_NOT_NULL(
         config, "Config is null for FileConfig initialization");
     config_ = std::move(config);
   }
 
   virtual ~FileConfig() = default;
+
+  /// Returns the connector-owned config prefix. For example, "hive" returns
+  /// "hive.".
+  static std::string makeConnectorConfigPrefix(std::string_view connectorName) {
+    return std::string(connectorName) + ".";
+  }
 
   int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
@@ -260,6 +297,10 @@ class FileConfig {
 
   const std::shared_ptr<const config::ConfigBase>& config() const {
     return config_;
+  }
+
+  std::string_view connectorConfigPrefix() const {
+    return connectorConfigPrefix_;
   }
 
  protected:
@@ -296,6 +337,8 @@ class FileConfig {
   }
 
   std::shared_ptr<const config::ConfigBase> config_;
+  // Prefix used to extract connector-scoped format configs, e.g. "hive.".
+  const std::string connectorConfigPrefix_;
 };
 
 } // namespace facebook::velox::connector::hive

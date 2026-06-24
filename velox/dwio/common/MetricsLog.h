@@ -39,7 +39,8 @@ class MetricsLog {
     GROUP,
     GROUP_INDEX,
     BLOCK,
-    TEST
+    TEST,
+    METADATA
   };
 
   virtual ~MetricsLog() = default;

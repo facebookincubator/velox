@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 
 #include <gtest/gtest.h>
+#include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -114,7 +115,11 @@ namespace facebook::velox::dwrf {
       std::string(sinkPtr->data(), sinkPtr->size()));
   auto input = std::make_unique<BufferedInput>(readFile, pool);
 
-  dwio::common::ReaderOptions readerOpts{&pool};
+  auto dataIoStats = std::make_shared<io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<io::IoStatistics>();
+  dwio::common::ReaderOptions readerOpts(&pool);
+  readerOpts.setDataIoStats(dataIoStats);
+  readerOpts.setMetadataIoStats(metadataIoStats);
   RowReaderOptions rowReaderOpts;
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());

@@ -22,6 +22,9 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/fuzzer/TopNRowNumberFuzzer.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/parse/TypeResolver.h"
 
 /// TopNRowNumberFuzzerRunner leverages TopNRowNumberFuzzer and VectorFuzzer to
 /// automatically generate and execute tests. It works as follows:
@@ -85,6 +88,9 @@ int main(int argc, char** argv) {
   // singletons, installing proper signal handlers for better debugging
   // experience, and initialize glog and gflags.
   folly::Init init(&argc, &argv);
+  functions::prestosql::registerAllScalarFunctions();
+  parse::registerTypeResolver();
+  window::prestosql::registerAllWindowFunctions();
   exec::test::setupMemory(FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
   std::shared_ptr<memory::MemoryPool> rootPool{
       memory::memoryManager()->addRootPool()};

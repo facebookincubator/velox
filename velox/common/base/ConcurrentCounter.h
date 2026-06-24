@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <new>
+#include <thread>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
