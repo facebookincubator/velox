@@ -552,6 +552,40 @@ TEST_F(VectorFuzzerTest, fuzzDataBehindNulls) {
   }
 }
 
+TEST_F(VectorFuzzerTest, verifyEmptyContainersGenerated) {
+  // Variable-length containers (the default) must be able to naturally produce
+  // empty arrays/maps so that empty-container edge cases get fuzzed (e.g. a UDF
+  // reading element[0] of an empty array).
+  constexpr vector_size_t kSize = 1000;
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.0;
+  ASSERT_TRUE(opts.containerVariableLength);
+  VectorFuzzer fuzzer(opts, pool(), /*seed=*/12345);
+
+  auto array = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+  auto* arrayVector = array->as<ArrayVector>();
+  vector_size_t emptyArrays = 0;
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    if (arrayVector->sizeAt(i) == 0) {
+      ++emptyArrays;
+    }
+  }
+  EXPECT_GT(emptyArrays, 0);
+
+  auto map = fuzzer.fuzzMap(
+      fuzzer.fuzzFlatNotNull(BIGINT(), kSize),
+      fuzzer.fuzzFlat(BIGINT(), kSize),
+      kSize);
+  auto* mapVector = map->as<MapVector>();
+  vector_size_t emptyMaps = 0;
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    if (mapVector->sizeAt(i) == 0) {
+      ++emptyMaps;
+    }
+  }
+  EXPECT_GT(emptyMaps, 0);
+}
+
 TEST_F(VectorFuzzerTest, map) {
   VectorFuzzer::Options opts;
   opts.containerVariableLength = false;
