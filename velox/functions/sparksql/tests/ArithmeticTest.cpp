@@ -177,6 +177,31 @@ TEST_F(RemainderTest, float) {
   EXPECT_TRUE(std::isnan(remainderValue<float>(kInf, kInf)));
 }
 
+TEST_F(RemainderTest, divisionByZeroAnsi) {
+  // Test remainder with ANSI off (default behavior): division by zero
+  // returns NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+
+  EXPECT_EQ(std::nullopt, remainder<int8_t>(1, 0));
+  EXPECT_EQ(std::nullopt, remainder<int16_t>(1, 0));
+  EXPECT_EQ(std::nullopt, remainder<int32_t>(1, 0));
+  EXPECT_EQ(std::nullopt, remainder<int64_t>(10, 0));
+  EXPECT_EQ(std::nullopt, remainder<float>(1.0f, 0.0f));
+  EXPECT_EQ(std::nullopt, remainder<double>(1.0, 0.0));
+
+  // Test remainder with ANSI on: division by zero throws.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+
+  VELOX_ASSERT_THROW(remainder<int8_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<int16_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<int32_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<int64_t>(10, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<float>(1.0f, 0.0f), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<double>(1.0, 0.0), "Division by zero");
+}
+
 class ArithmeticTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>

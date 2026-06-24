@@ -80,6 +80,92 @@ class MultiThreadedHashJoinTest
   }
 };
 
+core::PlanNodePtr countStarOverZeroColumnHashJoinPlan(
+    const RowVectorPtr& probe,
+    const RowVectorPtr& build,
+    core::JoinType joinType,
+    const std::string& filter = "") {
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  return PlanBuilder(planNodeIdGenerator)
+      .values({probe})
+      .hashJoin(
+          {"k"},
+          {"u_k"},
+          PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+          filter,
+          {},
+          joinType)
+      .partialAggregation({}, {"count(*)"})
+      .finalAggregation()
+      .planNode();
+}
+
+TEST_F(HashJoinTest, countStarOverInnerJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
+  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 4})});
+
+  auto plan =
+      countStarOverZeroColumnHashJoinPlan(probe, build, core::JoinType::kInner);
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({4})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, countStarOverRightSemiFilterJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
+
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe, build, core::JoinType::kRightSemiFilter);
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({3})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, countStarOverAstFilteredJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
+  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
+
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe, build, core::JoinType::kInner, "k + u_k > 4");
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({1})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3}),
+       makeFlatVector<double>({1.0, 6.0, 10.0, -1.0})});
+  auto build = makeRowVector(
+      {"u_k", "u_val"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<double>({2.0, 5.0, 1.0, 1.0})});
+
+  // The cross-side CASE expression is not AST-supported, so this exercises
+  // filteredOutput() instead of the filteredOutputIndices() path.
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "CASE WHEN t_val > 0.0 THEN t_val / u_val ELSE 0.0 END > 2.0");
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({2})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
+  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
+  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
+
+  auto plan =
+      countStarOverZeroColumnHashJoinPlan(probe, build, core::JoinType::kFull);
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({7})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)

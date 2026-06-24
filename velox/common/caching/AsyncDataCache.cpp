@@ -992,7 +992,7 @@ bool AsyncDataCache::makeSpace(
     }
   }
   memory::setCacheFailureMessage(
-      fmt::format("Failed to evict from cache state: {}", toString(false)));
+      fmt::format("Failed to evict from cache state: {}", toString(true)));
   return false;
 }
 
