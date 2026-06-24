@@ -164,8 +164,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverride) {
 
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "obm"), queryMgr);
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet("obm"), globalMgr);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedFallbackToGlobal) {
@@ -179,8 +177,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedFallbackToGlobal) {
       OutputBufferManagerRegistry::kRegistryKey, queryRegistry);
 
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "obm"), globalMgr);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, noQueryRegistryFallsBackToGlobal) {
@@ -189,8 +185,6 @@ TEST_F(OutputBufferManagerRegistryFixture, noQueryRegistryFallsBackToGlobal) {
 
   auto queryCtx = core::QueryCtx::create();
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "obm"), globalMgr);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedUnregisterAll) {
@@ -209,8 +203,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedUnregisterAll) {
 
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "obm"), globalMgr);
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet("obm"), globalMgr);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, unregisterAllNoQueryRegistry) {
@@ -221,8 +213,6 @@ TEST_F(OutputBufferManagerRegistryFixture, unregisterAllNoQueryRegistry) {
   OutputBufferManagerRegistry::unregisterAll(*queryCtx);
 
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet("obm"), globalMgr);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedGetAll) {
@@ -242,8 +232,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedGetAll) {
 
   auto globalOnly = OutputBufferManagerRegistry::getAll();
   EXPECT_EQ(globalOnly.size(), 1);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
@@ -269,8 +257,6 @@ TEST_F(OutputBufferManagerRegistryFixture, queryScopedOverrideWithGetAll) {
     }
   }
   EXPECT_TRUE(foundOverride);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(OutputBufferManagerRegistryFixture, createWithNullParentIsolation) {
@@ -288,8 +274,6 @@ TEST_F(OutputBufferManagerRegistryFixture, createWithNullParentIsolation) {
   auto snap = isolated->snapshot();
   EXPECT_EQ(snap.size(), 1);
   EXPECT_EQ(snap[0].first, "local-obm");
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 TEST_F(
@@ -318,8 +302,6 @@ TEST_F(
   available = true;
   EXPECT_EQ(OutputBufferManagerRegistry::tryGet(*queryCtx, "ucx"), mgr);
   EXPECT_EQ(OutputBufferManagerRegistry::getAll(*queryCtx).size(), 1);
-
-  OutputBufferManagerRegistry::unregisterAll();
 }
 
 } // namespace
