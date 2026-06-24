@@ -1481,6 +1481,10 @@ class Task : public std::enable_shared_from_this<Task> {
   // type.
   // Stored as weak_ptr to break the reference cycle through OutputBuffer::task_
   // which holds a shared_ptr<Task>.
+  // Guarded by mutex_: code already holding mutex_ may read this directly;
+  // other callers must use outputBufferManager()/setOutputBufferManager(),
+  // which acquire mutex_. mutex_ is non-recursive, so those accessors must not
+  // be called while holding it.
   std::weak_ptr<IOutputBufferManager> bufferManager_;
 
   // Boolean indicating that we have already received no-more-output-buffers
