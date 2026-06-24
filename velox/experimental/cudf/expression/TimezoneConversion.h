@@ -35,19 +35,36 @@ namespace facebook::velox::cudf_velox {
 /// the Velox CPU path, which converts the instant to the session timezone
 /// before extracting.
 ///
-/// Implemented entirely with public libcudf APIs:
-/// cudf::make_timezone_transition_table builds the [transition instants, UT
-/// offsets] table, a sorted search (cudf::upper_bound) + cudf::gather selects
-/// each row's offset, and cudf::binary_operation adds it. The search is
-/// restricted to the table's explicit-transition range, which is correct for
-/// all instants up to the last codified transition and for fixed-offset zones;
-/// far-future instants in a DST zone reuse the last explicit offset (the tests
-/// do not exercise that range).
+/// The offset comes from a per-zone transition table built from Velox's own
+/// time zone database (the same source the CPU path uses) and cached for the
+/// process lifetime; a sorted search (cudf::upper_bound) + cudf::gather selects
+/// each row's offset and cudf::binary_operation adds it. Instants after the last
+/// codified transition reuse its offset.
 ///
-/// Null rows propagate. UTC (or any zone with no transitions and a zero offset)
-/// returns a copy of the input unchanged.
+/// Null rows propagate. This is the inverse of toUtcTimestamp.
 std::unique_ptr<cudf::column> toLocalTimestamp(
     const cudf::column_view& utcTimestamps,
+    std::string_view timezoneName,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/// Converts a column of wall-clock local timestamps in `timezoneName` to the
+/// UTC instants they denote, DST-aware and matching the Velox CPU path
+/// (Timestamp::toGMT). A local time that falls in a spring-forward gap does not
+/// exist, so the conversion raises a user error; a local time in a fall-back
+/// overlap is ambiguous and resolves to the earliest instant. The returned
+/// column keeps the input's timestamp resolution and null mask. Null rows are
+/// never treated as gaps, so a caller that converts only some rows can null out
+/// the rest to exclude them from the gap check.
+///
+/// This is the inverse of toLocalTimestamp and reads the same cached,
+/// tzdb-sourced transition table, in its local-keyed form with a gap flag per
+/// breakpoint. Building the table from Velox's own time zone database -- the
+/// source the CPU path uses -- makes the gap and overlap boundaries match
+/// exactly. The conversion is a sorted search (cudf::upper_bound) plus an offset
+/// subtract.
+std::unique_ptr<cudf::column> toUtcTimestamp(
+    const cudf::column_view& localTimestamps,
     std::string_view timezoneName,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
@@ -55,9 +72,9 @@ std::unique_ptr<cudf::column> toLocalTimestamp(
 /// Returns the per-row UT offset (DURATION_SECONDS), DST-aware, for the given
 /// timezone at each UTC instant -- i.e. local = utc + offset. This is the
 /// primitive behind toLocalTimestamp; it is also used directly to render
-/// timezone offsets (timezone_hour/minute, to_iso8601, format_datetime). See
-/// the search-range caveat above. Null rows in the input propagate to the
-/// result.
+/// timezone offsets (timezone_hour/minute, to_iso8601, format_datetime). Reads
+/// the same cached, tzdb-sourced transition table as toLocalTimestamp. Null
+/// rows in the input propagate to the result.
 std::unique_ptr<cudf::column> utcOffsetSeconds(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,

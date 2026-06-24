@@ -32,6 +32,7 @@
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/combine.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
@@ -1180,14 +1181,15 @@ class FromIso8601Function : public CudfFunction {
         mr);
 
     // An offset-less input is interpreted in the session timezone, not GMT,
-    // when one is set -- matching CPU's FromIso8601Timestamp (the wall clock is
-    // that zone's local time and the packed key is the session zone). Rows
-    // carrying an explicit "Z" or numeric offset keep the result computed
-    // above; the captured zone suffix (group 7) distinguishes them from an
-    // absent suffix. utcOffsetSeconds(wall-treated-as-UTC) is the standard
-    // local->UTC approximation: exact for fixed-offset zones and away from DST
-    // transitions, but inside a transition window it can differ from CPU by the
-    // DST delta and does not reproduce CPU's throw on a nonexistent local time.
+    // when one is set -- matching CPU's FromIso8601Timestamp, which reads the
+    // wall clock as that zone's local time (via Timestamp::toGMT) and packs the
+    // session zone key. Rows carrying an explicit "Z" or numeric offset keep the
+    // result computed above; the captured zone suffix (group 7) distinguishes
+    // them from an absent suffix. toUtcTimestamp does the exact DST-aware
+    // local->UTC conversion: it fails on a nonexistent local time (spring-
+    // forward gap) and resolves an ambiguous one (fall-back overlap) to the
+    // earliest instant, like CPU. Only the offset-less rows are converted; the
+    // rest are nulled out so their wall clock is never flagged as a gap.
     std::unique_ptr<cudf::column> selectedMillis;
     std::unique_ptr<cudf::column> selectedZone;
     cudf::column_view finalMillis = utcMillis->view();
@@ -1204,28 +1206,28 @@ class FromIso8601Function : public CudfFunction {
           cudf::data_type{kBool8},
           stream,
           mr);
+      auto offsetless = cudf::binary_operation(
+          suffixLength->view(),
+          cudf::numeric_scalar<cudf::size_type>(0, true, stream),
+          cudf::binary_operator::EQUAL,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
       auto wallTimestamp = bitcastColumn(
           wallMillis->view(), cudf::type_id::TIMESTAMP_MILLISECONDS);
-      auto sessionOffsetDuration =
-          utcOffsetSeconds(wallTimestamp, context_.sessionTimezone, stream, mr);
-      auto sessionOffsetMillis = binaryOp(
-          bitcastColumn(sessionOffsetDuration->view(), kInt64),
-          int64Scalar(1000, stream),
-          cudf::binary_operator::MUL,
-          int64Type(),
-          stream,
-          mr);
-      auto sessionUtcMillis = cudf::binary_operation(
-          wallMillis->view(),
-          sessionOffsetMillis->view(),
-          cudf::binary_operator::SUB,
-          int64Type(),
-          stream,
-          mr);
+      // Null the explicit-zone rows so only the offset-less rows reach the gap
+      // check inside toUtcTimestamp; their result is discarded below anyway.
+      auto nullWall = cudf::make_default_constructed_scalar(
+          cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS}, stream, mr);
+      auto sessionWall = cudf::copy_if_else(
+          wallTimestamp, *nullWall, offsetless->view(), stream, mr);
+      auto sessionUtcTimestamp = toUtcTimestamp(
+          sessionWall->view(), context_.sessionTimezone, stream, mr);
+      auto sessionUtcMillis = bitcastColumn(sessionUtcTimestamp->view(), kInt64);
       const auto sessionZoneKey = tz::getTimeZoneID(context_.sessionTimezone);
       selectedMillis = cudf::copy_if_else(
           utcMillis->view(),
-          sessionUtcMillis->view(),
+          sessionUtcMillis,
           hasExplicitZone->view(),
           stream,
           mr);
