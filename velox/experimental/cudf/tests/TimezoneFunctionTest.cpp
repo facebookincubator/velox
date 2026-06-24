@@ -456,6 +456,60 @@ TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessUsesSessionZone) {
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00"));
 }
 
+// Reproducer: the offset-less session-zone conversion must match CPU even for a
+// DST zone whose offset depends on the instant. America/Los_Angeles springs
+// forward on 2021-03-14 at 02:00 PST (-08:00) to 03:00 PDT (-07:00), i.e. at
+// 10:00:00 UTC. The wall clock 2021-03-14T03:30:00 is a valid post-gap local
+// time (PDT), so CPU resolves it to 2021-03-14T10:30:00 UTC (to_unixtime
+// 1615717800). The GPU uses the local->UTC approximation, which keys the wall
+// clock as if it were UTC: 03:30 UTC precedes the 10:00 UTC transition, so it
+// reads the pre-gap offset (-08:00) and yields 2021-03-14T11:30:00 UTC
+// (to_unixtime 1615721400) -- one hour late. Red until an inverse (local-keyed)
+// transition lookup replaces the approximation. The fixed-offset Kolkata case
+// above stays green because its offset does not vary with the instant.
+TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessSessionZoneDstTransition) {
+  setSessionTimezone("America/Los_Angeles");
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("2021-03-14T03:30:00"));
+}
+
+// Reproducer: a wall clock inside the spring-forward gap is a nonexistent local
+// time, so CPU's toGMT throws and from_iso8601_timestamp fails. America/
+// Los_Angeles springs forward on 2021-03-14 from 02:00 PST to 03:00 PDT, so
+// local times in [02:00, 03:00) never occur; 02:30:00 is one of them. The GPU
+// local->UTC approximation does plain arithmetic and never throws, so it
+// silently returns an instant. Asserting both paths throw is red until the
+// inverse (local-keyed) transition lookup flags the gap and fails like CPU.
+TEST_F(TimezoneFunctionTest, fromIso8601OffsetlessSessionZoneGapThrows) {
+  setSessionTimezone("America/Los_Angeles");
+  auto input = varcharInput("2021-03-14T02:30:00");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Reproducer: a wall clock in a fall-back overlap is ambiguous, and CPU's toGMT
+// resolves it to the earliest instant (TChoose::kEarliest). Australia/Sydney
+// falls back on 2021-04-04 from 03:00 AEDT (+11:00) to 02:00 AEST (+10:00), so
+// local times in [02:00, 03:00) occur twice; 02:30:00 is one. CPU keeps the
+// earlier AEDT reading -- 2021-04-03T15:30:00 UTC. The GPU approximation keys
+// the wall clock as UTC, which lands after the 2021-04-03T16:00 UTC transition
+// and reads the later AEST offset, yielding 2021-04-03T16:30:00 UTC -- one hour
+// late. Red until the inverse transition lookup keeps the pre-transition offset
+// over the overlap, matching kEarliest. A western-hemisphere zone like
+// Los_Angeles cannot exercise this: its negative offsets place the overlap
+// window before the UTC transition, where the approximation already reads the
+// earlier offset.
+TEST_F(
+    TimezoneFunctionTest,
+    fromIso8601OffsetlessSessionZoneAmbiguousPicksEarliest) {
+  setSessionTimezone("Australia/Sydney");
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("2021-04-04T02:30:00"));
+}
+
 // Control: an explicit numeric offset wins over the session zone on both paths,
 // so this stays green and guards that the session change does not hijack rows
 // that carry their own offset.
