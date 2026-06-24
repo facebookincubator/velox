@@ -96,7 +96,6 @@ void CudfTpchBenchmark::initialize() {
         cudfHiveConnector->connectorId(), cudfHiveConnector);
   }
 
-  // Enable cuDF operators
   cudf_velox::registerCudf();
 
   queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
@@ -146,10 +145,6 @@ CudfTpchBenchmark::listSplits(
 void CudfTpchBenchmark::shutdown() {
   cudf_velox::unregisterCudf();
   TpchBenchmark::shutdown();
-}
-
-BENCHMARK(q23) {
-  benchmark->runQuery(23);
 }
 
 int main(int argc, char** argv) {
