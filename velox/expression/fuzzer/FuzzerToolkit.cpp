@@ -178,6 +178,9 @@ void InputRowMetadata::saveToFile(const char* filePath) const {
   std::ofstream outputFile(filePath, std::ofstream::binary);
   saveStdVector(columnsToWrapInLazy, outputFile);
   saveStdVector(columnsToWrapInCommonDictionary, outputFile);
+  outputFile.write(
+      reinterpret_cast<const char*>(&verifyLayoutInvariance),
+      sizeof(verifyLayoutInvariance));
   outputFile.close();
 }
 
@@ -190,6 +193,12 @@ InputRowMetadata InputRowMetadata::restoreFromFile(
   if (in.peek() != EOF) {
     // this check allows reading old files that only saved columnsToWrapInLazy.
     ret.columnsToWrapInCommonDictionary = restoreStdVector<int>(in);
+  }
+  if (in.peek() != EOF) {
+    // this check allows reading files saved before verifyLayoutInvariance.
+    in.read(
+        reinterpret_cast<char*>(&ret.verifyLayoutInvariance),
+        sizeof(ret.verifyLayoutInvariance));
   }
   in.close();
   return ret;

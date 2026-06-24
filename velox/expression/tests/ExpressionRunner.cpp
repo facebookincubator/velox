@@ -287,8 +287,12 @@ void ExpressionRunner::run(
   LOG(INFO) << "Evaluating SQL expression(s): " << sql;
 
   if (mode == "verify") {
-    auto verifier =
-        test::ExpressionVerifier(&execCtx, {false, ""}, referenceQueryRunner);
+    // Replay through the same eval cycle as the run that produced the repro:
+    // honor verifyLayoutInvariance restored from the input row metadata.
+    test::ExpressionVerifierOptions verifierOptions{
+        false, "", false, inputRowMetadata.verifyLayoutInvariance};
+    auto verifier = test::ExpressionVerifier(
+        &execCtx, verifierOptions, referenceQueryRunner);
     try {
       verifier.verify(
           typedExprs,
@@ -319,12 +323,21 @@ void ExpressionRunner::run(
     std::shared_ptr<exec::ExprSet> exprSet = mode == "common"
         ? std::make_shared<exec::ExprSet>(typedExprs, &execCtx)
         : std::make_shared<exec::ExprSetSimplified>(typedExprs, &execCtx);
+    // The verifier runs the simplified path on a compacted copy of the input
+    // when verifying layout invariance. Mirror that here so "simplified" mode
+    // reproduces the same evaluation.
+    const bool compactInput =
+        mode == "simplified" && inputRowMetadata.verifyLayoutInvariance;
     for (int i = 0; i < inputTestCases.size(); ++i) {
       auto& testCase = inputTestCases[i];
       SelectivityVector rows = adjustRows(numRows, testCase.activeRows);
       std::cout << "Executing Input " << i << std::endl;
-      auto results = evaluateAndPrintResults(
-          *exprSet, testCase.inputVector, rows, execCtx);
+      const RowVectorPtr inputVector = compactInput
+          ? std::static_pointer_cast<RowVector>(
+                BaseVector::copy(*testCase.inputVector))
+          : testCase.inputVector;
+      auto results =
+          evaluateAndPrintResults(*exprSet, inputVector, rows, execCtx);
       if (!storeResultPath.empty()) {
         auto fileName = fmt::format("resultVector_{}", i);
         saveResults(results, storeResultPath, fileName);

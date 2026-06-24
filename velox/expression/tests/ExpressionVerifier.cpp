@@ -499,10 +499,18 @@ ExpressionVerifier::verify(
     } else {
       VLOG(1) << "Execute with simplified expression eval path.";
       try {
+        // When verifying layout invariance, run the simplified path on a
+        // normalized copy of the input — flat (encodings decoded), contiguous
+        // array/map elements, no garbage behind nulls — while the common path
+        // keeps the raw layout, so the comparison below flags any result that
+        // depends on physical layout. (flattenVector wouldn't drop gaps.)
+        RowVectorPtr simplifiedInput = options_.verifyLayoutInvariance
+            ? std::static_pointer_cast<RowVector>(BaseVector::copy(*rowVector))
+            : rowVector;
         exec::EvalCtx evalCtxSimplified(
-            execCtx_, &exprSetSimplified, rowVector.get());
+            execCtx_, &exprSetSimplified, simplifiedInput.get());
 
-        auto copy = BaseVector::copy(*rowVector);
+        auto copy = BaseVector::copy(*simplifiedInput);
         exprSetSimplified.eval(
             0,
             exprSetSimplified.size(),
@@ -515,7 +523,7 @@ ExpressionVerifier::verify(
         // nested.
         fuzzer::compareVectors(
             copy,
-            BaseVector::copy(*rowVector),
+            BaseVector::copy(*simplifiedInput),
             "Copy of original input",
             "Input after simplified",
             rows);

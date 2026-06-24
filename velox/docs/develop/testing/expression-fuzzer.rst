@@ -17,6 +17,14 @@ expression fuzzer evaluates each expression twice and asserts the results to be
 the same: using regular evaluation path and using simplified evaluation that
 flattens all input vectors before evaluating an expression.
 
+When ``--velox_fuzzer_verify_layout_invariance`` is set, the simplified path
+instead evaluates on a fully normalized copy of the input -- flat, with
+contiguous array/map elements and no garbage behind nulls -- so the comparison
+also verifies that an expression's result depends only on its logical input
+values, not on their physical layout. This catches UDFs that read the raw
+elements buffer or otherwise ignore offsets/sizes, and is most effective paired
+with ``--velox_fuzzer_non_contiguous_elements``.
+
 How to integrate
 ---------------------------------------
 
@@ -150,7 +158,9 @@ Expression Fuzzer supports a number of powerful command line arguments.
 
 * ``--null_ratio``: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.
 
-* ``--velox_fuzzer_non_contiguous_elements``: Lay out array/map elements non-contiguously, leaving random gaps of unreferenced elements between containers, so that expressions/UDFs which ignore offsets/sizes and read the raw elements buffer are caught. Default is false.
+* ``--velox_fuzzer_non_contiguous_elements``: Lay out array/map elements non-contiguously, leaving random gaps of unreferenced elements between containers, so that expressions/UDFs which ignore offsets/sizes and read the raw elements buffer are caught. Pair with ``--velox_fuzzer_verify_layout_invariance`` to surface the resulting mismatches. Default is false.
+
+* ``--velox_fuzzer_verify_layout_invariance``: Run the simplified eval path on a normalized copy of the input (flat, with contiguous array/map elements and no garbage behind nulls) so the common-vs-simplified comparison also flags results that depend on the physical layout of the input. Pair with ``--velox_fuzzer_non_contiguous_elements`` to surface layout-sensitive UDFs. Default is false.
 
 * ``--max_num_varargs``: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.
 

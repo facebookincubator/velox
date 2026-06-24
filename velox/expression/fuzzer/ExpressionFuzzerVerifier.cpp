@@ -71,7 +71,8 @@ ExpressionFuzzerVerifier::ExpressionFuzzerVerifier(
           &execCtx_,
           {options_.disableConstantFolding,
            options_.reproPersistPath,
-           options_.persistAndRunOnce},
+           options_.persistAndRunOnce,
+           options_.verifyLayoutInvariance},
           options_.expressionFuzzerOptions.referenceQueryRunner),
       vectorFuzzer_(
           std::make_shared<VectorFuzzer>(
@@ -113,6 +114,7 @@ ExpressionFuzzerVerifier::generateInput(
   int numInputs = vectorFuzzer.coinToss(0.5) ? 1 : 2;
   // Generate the metadata for the input row.
   InputRowMetadata metadata;
+  metadata.verifyLayoutInvariance = options_.verifyLayoutInvariance;
   for (int idx = 0; idx < rowType->size(); ++idx) {
     if (options_.commonDictionaryWrapRatio > 0 &&
         vectorFuzzer.coinToss(options_.commonDictionaryWrapRatio)) {
