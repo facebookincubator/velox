@@ -314,7 +314,7 @@ OperatorStats Operator::stats(bool clear) {
     stats = *stats_.rlock();
   } else {
     auto lockedStats = stats_.wlock();
-    stats = *lockedStats;
+    stats = std::move(*lockedStats);
     lockedStats->clear();
   }
 
