@@ -968,6 +968,19 @@ class FromIso8601Function : public CudfFunction {
         expr->inputs().size(),
         1,
         "from_iso8601_timestamp expects exactly 1 input");
+    // Permissive ISO8601: the year is required; month, day, the time fields,
+    // the fractional seconds and the zone suffix are all optional. Missing
+    // date/time components default to the start of the period (matching CPU).
+    // An explicit "Z" or "+/-HH:MM" suffix sets the zone; an absent suffix is
+    // GMT, or the session timezone when one is set (handled in eval). The whole
+    // suffix is captured (group 7) to tell an absent suffix from an explicit
+    // "Z"; the sign is captured on its own so a sub-hour offset like "-00:30"
+    // keeps it. The program is batch-independent, so build it once here.
+    isoProgram_ = cudf::strings::regex_program::create(
+        "^([0-9]{4})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
+        "(?:[T ]([0-9]{2}))?(?::([0-9]{2}))?(?::([0-9]{2}))?"
+        "(?:[.,]([0-9]+))?"
+        "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
   }
 
   ColumnOrView eval(
@@ -976,21 +989,10 @@ class FromIso8601Function : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
-    // Permissive ISO8601: the year is required; month, day, the time fields,
-    // the fractional seconds and the zone suffix are all optional. Missing
-    // date/time components default to the start of the period (matching CPU).
-    // An explicit "Z" or "+/-HH:MM" suffix sets the zone; an absent suffix is
-    // GMT, or the session timezone when one is set (handled below). The whole
-    // suffix is captured (group 7) to tell an absent suffix from an explicit
-    // "Z"; the sign is captured on its own so a sub-hour offset like "-00:30"
-    // keeps it.
-    auto prog = cudf::strings::regex_program::create(
-        "^([0-9]{4})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
-        "(?:[T ]([0-9]{2}))?(?::([0-9]{2}))?(?::([0-9]{2}))?"
-        "(?:[.,]([0-9]+))?"
-        "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
+    // Extract the ISO8601 fields with the program built in the constructor; see
+    // there for the field layout, and the group-column map just below.
     auto groups = cudf::strings::extract(
-        cudf::strings_column_view(input), *prog, stream, mr);
+        cudf::strings_column_view(input), *isoProgram_, stream, mr);
     auto g = groups->view();
     // Columns: 0 year, 1 month, 2 day, 3 hour, 4 minute, 5 second, 6 fraction,
     //          7 zone suffix, 8 sign, 9 offset hours, 10 offset minutes.
@@ -1183,13 +1185,14 @@ class FromIso8601Function : public CudfFunction {
     // An offset-less input is interpreted in the session timezone, not GMT,
     // when one is set -- matching CPU's FromIso8601Timestamp, which reads the
     // wall clock as that zone's local time (via Timestamp::toGMT) and packs the
-    // session zone key. Rows carrying an explicit "Z" or numeric offset keep the
-    // result computed above; the captured zone suffix (group 7) distinguishes
-    // them from an absent suffix. toUtcTimestamp does the exact DST-aware
-    // local->UTC conversion: it fails on a nonexistent local time (spring-
-    // forward gap) and resolves an ambiguous one (fall-back overlap) to the
-    // earliest instant, like CPU. Only the offset-less rows are converted; the
-    // rest are nulled out so their wall clock is never flagged as a gap.
+    // session zone key. Rows carrying an explicit "Z" or numeric offset keep
+    // the result computed above; the captured zone suffix (group 7)
+    // distinguishes them from an absent suffix. toUtcTimestamp does the exact
+    // DST-aware local->UTC conversion: it fails on a nonexistent local time
+    // (spring-forward gap) and resolves an ambiguous one (fall-back overlap)
+    // to the earliest instant, like CPU. Only the offset-less rows are
+    // converted; the rest are nulled out so their wall clock is never flagged
+    // as a gap.
     std::unique_ptr<cudf::column> selectedMillis;
     std::unique_ptr<cudf::column> selectedZone;
     cudf::column_view finalMillis = utcMillis->view();
@@ -1223,7 +1226,8 @@ class FromIso8601Function : public CudfFunction {
           wallTimestamp, *nullWall, offsetless->view(), stream, mr);
       auto sessionUtcTimestamp = toUtcTimestamp(
           sessionWall->view(), context_.sessionTimezone, stream, mr);
-      auto sessionUtcMillis = bitcastColumn(sessionUtcTimestamp->view(), kInt64);
+      auto sessionUtcMillis =
+          bitcastColumn(sessionUtcTimestamp->view(), kInt64);
       const auto sessionZoneKey = tz::getTimeZoneID(context_.sessionTimezone);
       selectedMillis = cudf::copy_if_else(
           utcMillis->view(),
@@ -1257,6 +1261,11 @@ class FromIso8601Function : public CudfFunction {
         stream,
         mr);
   }
+
+ private:
+  // Compiled ISO8601 field-extraction program. Batch-independent, so it is
+  // built once in the constructor and reused across eval calls.
+  std::unique_ptr<cudf::strings::regex_program> isoProgram_;
 };
 
 exec::FunctionSignaturePtr twtzArgSignature(const std::string& returnType) {
