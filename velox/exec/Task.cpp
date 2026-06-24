@@ -1336,11 +1336,6 @@ void Task::initializePartitionOutput() {
     if (!manager) {
       manager = OutputBufferManager::getInstanceRef();
     }
-    VELOX_CHECK_NOT_NULL(
-        manager,
-        "No output buffer manager available for transport type '{}' and no "
-        "default HTTP manager is registered",
-        transportType);
     setOutputBufferManager(manager);
     manager->initializeTask(
         shared_from_this(),
