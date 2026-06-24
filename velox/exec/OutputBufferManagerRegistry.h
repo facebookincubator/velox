@@ -45,7 +45,11 @@ namespace facebook::velox::exec {
 /// A null 'isAvailable' marks the manager as unconditionally available, as used
 /// by the default HTTP manager.
 struct OutputBufferManagerEntry {
+  /// The registered output buffer manager.
   std::shared_ptr<IOutputBufferManager> manager;
+
+  /// Predicate deciding whether 'manager' may be used by a given query.
+  /// A null predicate means the manager is unconditionally available.
   std::function<bool(const core::QueryCtx&)> isAvailable;
 
   explicit OutputBufferManagerEntry(
