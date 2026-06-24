@@ -19,6 +19,7 @@
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -64,6 +65,10 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
 
 #undef VELOX_HIVE_CONFIG_REGISTER
 
+    parquet::ParquetConfig::registerProperties(
+        properties,
+        dwio::common::formatConfigPrefix(
+            dwio::common::FileFormat::PARQUET, "_"));
     return properties;
   }();
   return kProperties;

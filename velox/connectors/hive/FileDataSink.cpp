@@ -453,7 +453,9 @@ uint32_t FileDataSink::appendWriter(const WriterId& id) {
   setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
   writers_.emplace_back(createWriterForIndex(writerInfo_.size() - 1));
   addThreadLocalRuntimeStat(
-      fmt::format("{}WriterCount", dwio::common::toString(storageFormat_)),
+      fmt::format(
+          "{}WriterCount",
+          dwio::common::FileFormatName::toName(storageFormat_)),
       RuntimeCounter(1));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);

@@ -762,6 +762,11 @@ must be specified as raw byte counts.
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
+   * - hive.orc.use-column-names
+     - orc_use_column_names
+     - bool
+     - false
+     - Map ORC table field names to file field names using names, not indices.
    * - hive.parquet.use-column-names
      - parquet_use_column_names
      - bool
@@ -800,6 +805,16 @@ must be specified as raw byte counts.
      - capacity
      - 512KB
      - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
+   * - prefetch-rowgroups
+     -
+     - integer
+     - 1
+     - Number of row groups to prefetch.
+   * - parallel-unit-load-count
+     - parallel_unit_load_count
+     - integer
+     - 0
+     - Number of units, such as stripes, to load in parallel. 0 disables parallel unit loading.
    * - load-quantum
      - load-quantum
      - integer
@@ -817,6 +832,17 @@ must be specified as raw byte counts.
      - true
      - Enables caching of file handles if true. Disables caching if false. File handle cache should be
        disabled if files are not immutable, i.e. file content may change while file path stays the same.
+   * - file-handle-expiration-duration-ms
+     -
+     - integer
+     - 0
+     - Expiration time in milliseconds for file handle cache entries. 0 disables time-based expiration.
+   * - write-file-create-config
+     -
+     - string
+     - ""
+     - Free-form configuration passed to the underlying file system when creating write files. The legacy
+       key ``hive.write_file_create_config`` is also accepted.
    * - sort-writer-max-output-rows
      - sort_writer_max_output_rows
      - integer
@@ -827,6 +853,11 @@ must be specified as raw byte counts.
      - capacity
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+   * - sort-writer-finish-time-slice-limit-ms
+     - sort_writer_finish_time_slice_limit_ms
+     - integer
+     - 5000
+     - Time slice limit in milliseconds for sort writer finish. 0 means no limit.
    * - hive.parquet.writer.max-target-file-size
      - parquet_writer_max_target_file_size
      - capacity
@@ -857,6 +888,18 @@ must be specified as raw byte counts.
        filter execution order is totally determined by the filter type. Otherwise, the file
        reader will dynamically adjust the filter execution order based on the past filter
        execution stats.
+   * - index-enabled
+     - index_enabled
+     - bool
+     - false
+     - Use the cluster index for filter-based row pruning.
+   * - reader.timestamp-unit
+     - reader.timestamp_unit
+     - integer
+     - 3
+     - Unit for reading timestamps from files. Supported values are ``3`` for milliseconds,
+       ``6`` for microseconds, and ``9`` for nanoseconds. The legacy key
+       ``hive.reader.timestamp-unit`` is also accepted.
    * - reader.timestamp-partition-value-as-local-time
      - reader.timestamp_partition_value_as_local_time
      - bool
@@ -963,7 +1006,7 @@ must be specified as raw byte counts.
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
    * - nimble.lazy-column-io
-     - nimble.lazy_column_io
+     - nimble_lazy_column_io
      - boolean
      - false
      - Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
@@ -1047,44 +1090,44 @@ must be specified as raw byte counts.
      - Default Value
      - Description
    * - hive.parquet.writer.enable-dictionary
-     - hive.parquet.writer.enable_dictionary
+     - parquet_writer_enable_dictionary
      - bool
      - true
      - Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
    * - hive.parquet.writer.dictionary-page-size-limit
-     - hive.parquet.writer.dictionary_page_size_limit
+     - parquet_writer_dictionary_page_size_limit
      - string
      - 1MB
      - Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
    * - hive.parquet.writer.timestamp-unit
-     - hive.parquet.writer.timestamp_unit
+     - parquet_writer_timestamp_unit
      - tinyint
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
    * - hive.parquet.writer.datapage-version
-     - hive.parquet.writer.datapage_version
+     - parquet_writer_datapage_version
      - string
      - V1
      - Data Page version used when writing into Parquet through Arrow bridge.
        Valid values are "V1" and "V2".
    * - hive.parquet.writer.page-size
-     - hive.parquet.writer.page_size
+     - parquet_writer_page_size
      - string
      - 1MB
      - Data Page size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.batch-size
-     - hive.parquet.writer.batch_size
+     - parquet_writer_batch_size
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.created-by
-     - hive.parquet.writer.created_by
+     - -
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
    * - hive.parquet.writer.enable-store-decimal-as-integer
-     - hive.parquet.writer.enable_store_decimal_as_integer
+     - parquet_writer_enable_store_decimal_as_integer
      - bool
      - true
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.

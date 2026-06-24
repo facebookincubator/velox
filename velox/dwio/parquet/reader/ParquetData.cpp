@@ -53,6 +53,14 @@ void ParquetData::filterRowGroups(
   }
   if (scanSpec.filter() || scanSpec.numMetadataFilters() > 0) {
     for (auto i = 0; i < fileMetaDataPtr_.numRowGroups(); ++i) {
+      // Already excluded by another column or by the caller (e.g. row group
+      // outside the split range, empty row group). Skip statistics build and
+      // testFilter. The MetadataFilter::eval call ORs into filterResult, so
+      // leaving the per-leaf metadata bits at 0 here is harmless: filterResult
+      // already has the bit set.
+      if (bits::isBitSet(result.filterResult.data(), i)) {
+        continue;
+      }
       if (scanSpec.filter() && !rowGroupMatches(i, scanSpec.filter())) {
         bits::setBit(result.filterResult.data(), i);
         continue;

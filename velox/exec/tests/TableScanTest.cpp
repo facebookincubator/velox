@@ -2714,9 +2714,14 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   writeToFile(filePaths[0]->getPath(), rowVector);
   createDuckDbTable({rowVector});
 
+  // Keep integer literals as INTEGER so an IN over an INTEGER column (c1) stays
+  // a subfield filter rather than getting a column cast that blocks skipping.
+  parse::ParseOptions parseOptions;
+  parseOptions.parseIntegerAsBigint = false;
   auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
         PlanBuilder(pool_.get())
+            .setParseOptions(parseOptions)
             .tableScan(asRowType(rowVector->type()), {filter})
             .planNode(),
         filePaths,
