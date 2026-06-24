@@ -56,7 +56,6 @@
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/replace.hpp>
-#include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
@@ -1100,62 +1099,6 @@ class SwitchFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> right_;
 };
 
-class SubstrFunction : public CudfFunction {
- public:
-  SubstrFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-
-    VELOX_CHECK_GE(
-        expr->inputs().size(), 2, "substr expects at least 2 inputs");
-    VELOX_CHECK_LE(expr->inputs().size(), 3, "substr expects at most 3 inputs");
-
-    auto startExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(startExpr, "substr start must be a constant");
-
-    auto startValue =
-        startExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
-    start_ = static_cast<cudf::size_type>(startValue);
-    if (startValue >= 1) {
-      // cuDF indexing starts at 0.
-      // Presto indexing starts at 1.
-      // Positive indices need to substract 1.
-      start_ = static_cast<cudf::size_type>(startValue - 1);
-    }
-
-    if (expr->inputs().size() > 2) {
-      auto lengthExpr =
-          std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-      VELOX_CHECK_NOT_NULL(lengthExpr, "substr length must be a constant");
-
-      auto lengthValue =
-          lengthExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
-      // cuDF uses indices [begin, end).
-      // Presto uses length as the length of the substring.
-      // We compute the end as start + length.
-      end_ = start_ + static_cast<cudf::size_type>(lengthValue);
-      hasEnd_ = true;
-    }
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    cudf::numeric_scalar<cudf::size_type> startScalar(start_, true, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> endScalar(
-        hasEnd_ ? end_ : 0, hasEnd_, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
-    return cudf::strings::slice_strings(
-        inputCol, startScalar, endScalar, stepScalar, stream, mr);
-  }
-
- private:
-  cudf::size_type start_{0};
-  cudf::size_type end_{0};
-  bool hasEnd_{false};
-};
-
 class CoalesceFunction : public CudfFunction {
  public:
   CoalesceFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1991,20 +1934,6 @@ bool registerCudfFunction(
   return true;
 }
 
-bool registerCudfFunctionWithPrecedence(
-    const std::string& name,
-    CudfFunctionFactory factory,
-    const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
-  auto& registry = getCudfFunctionRegistry();
-  auto& specs = registry[name];
-  if (!overwrite && !specs.empty()) {
-    return false;
-  }
-  specs.insert(specs.begin(), CudfFunctionSpec{std::move(factory), signatures});
-  return true;
-}
-
 void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
@@ -2067,23 +1996,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {FunctionSignatureBuilder()
            .returnType("integer")
            .argumentType("array(any)")
-           .build()});
-
-  registerCudfFunctions(
-      {prefix + "substr", prefix + "substring"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SubstrFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("varchar")
-           .argumentType("varchar")
-           .constantArgumentType("bigint")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("varchar")
-           .argumentType("varchar")
-           .constantArgumentType("bigint")
-           .constantArgumentType("bigint")
            .build()});
 
   // Coalesce is special form and doesn't have a prefix in its name.

@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace facebook::velox::cudf_velox::sparksql {
 namespace {
@@ -146,15 +147,15 @@ class SubStringFunction : public CudfFunction {
     bool mergeLengthNulls = false;
     std::unique_ptr<cudf::column> result;
     {
-      std::unique_ptr<cudf::column> inputLengthColumn;
+      std::unique_ptr<cudf::column> inputLengthColumn64;
       if (inputIsConstant_) {
-        inputLengthColumn =
-            makeInputLengthColumn(inputLength_, rowCount, stream, mr);
+        inputLengthColumn64 =
+            makeInputLengthColumn64(inputLength_, rowCount, stream, mr);
       } else {
         auto inputCharacterCounts =
             cudf::strings::count_characters(inputColumn, stream, mr);
-        inputLengthColumn =
-            makeIndexColumn(inputCharacterCounts->view(), stream, mr);
+        inputLengthColumn64 =
+            makeWideIndexColumn(inputCharacterCounts->view(), stream, mr);
       }
       std::unique_ptr<cudf::column> startColumn;
       std::unique_ptr<cudf::column> preLengthStartColumn;
@@ -163,14 +164,14 @@ class SubStringFunction : public CudfFunction {
         // to zero. `preLengthStartColumn` preserves Spark's negative-start
         // value before clamping so that stop = start + length matches Spark.
         startColumn = makeAdjustedConstantStartColumn(
-            inputLengthColumn->view(), rawStartValue_, rowCount, stream, mr);
+            inputLengthColumn64->view(), rawStartValue_, rowCount, stream, mr);
         preLengthStartColumn = makePreLengthConstantStartColumn(
-            inputLengthColumn->view(), rawStartValue_, rowCount, stream, mr);
+            inputLengthColumn64->view(), rawStartValue_, rowCount, stream, mr);
       } else {
         originalStartColumn = asView(inputColumns[nextInput++]);
         mergeStartNulls = originalStartColumn.has_nulls();
         auto startColumns = makeStartColumns(
-            originalStartColumn, inputLengthColumn->view(), stream, mr);
+            originalStartColumn, inputLengthColumn64->view(), stream, mr);
         startColumn = std::move(startColumns.start);
         preLengthStartColumn = std::move(startColumns.preLengthStart);
       }
@@ -182,29 +183,29 @@ class SubStringFunction : public CudfFunction {
         stopColumn = makeStopColumn(
             preLengthStartColumn->view(),
             std::numeric_limits<int32_t>::max(),
-            inputLengthColumn->view(),
+            inputLengthColumn64->view(),
             stream,
             mr);
       } else if (lengthIsConstant_) {
         stopColumn = makeStopColumn(
             preLengthStartColumn->view(),
             std::max<cudf::size_type>(0, length_),
-            inputLengthColumn->view(),
+            inputLengthColumn64->view(),
             stream,
             mr);
       } else {
         originalLengthColumn = asView(inputColumns[nextInput++]);
         mergeLengthNulls = originalLengthColumn.has_nulls();
-        auto lengthColumn = makeIndexColumn(originalLengthColumn, stream, mr);
-        cudf::numeric_scalar<cudf::size_type> zero(0, true, stream, mr);
-        cudf::numeric_scalar<cudf::size_type> noUpperBound(
-            0, false, stream, mr);
+        auto lengthColumn64 =
+            makeWideIndexColumn(originalLengthColumn, stream, mr);
+        cudf::numeric_scalar<int64_t> zero(0, true, stream, mr);
+        cudf::numeric_scalar<int64_t> noUpperBound(0, false, stream, mr);
         auto nonNegativeLengthColumn =
-            cudf::clamp(lengthColumn->view(), zero, noUpperBound, stream, mr);
+            cudf::clamp(lengthColumn64->view(), zero, noUpperBound, stream, mr);
         stopColumn = makeStopColumn(
             preLengthStartColumn->view(),
             nonNegativeLengthColumn->view(),
-            inputLengthColumn->view(),
+            inputLengthColumn64->view(),
             stream,
             mr);
       }
@@ -214,14 +215,18 @@ class SubStringFunction : public CudfFunction {
     }
 
     inputColumnHolder.reset();
+    std::vector<cudf::column_view> nullSourceColumns;
     if (mergeStartNulls) {
+      nullSourceColumns.push_back(originalStartColumn);
+    }
+    if (mergeLengthNulls) {
+      nullSourceColumns.push_back(originalLengthColumn);
+    }
+    if (!nullSourceColumns.empty()) {
       // Null start and length values are replaced with zero while computing
       // numeric slice bounds. Merge the original null masks back after slicing
       // to restore Spark null propagation.
-      mergeNullSourceNullsIntoResult(*result, originalStartColumn, stream, mr);
-    }
-    if (mergeLengthNulls) {
-      mergeNullSourceNullsIntoResult(*result, originalLengthColumn, stream, mr);
+      mergeNullSourceNullsIntoResult(*result, nullSourceColumns, stream, mr);
     }
     return result;
   }
@@ -294,12 +299,12 @@ class SubStringFunction : public CudfFunction {
     return filled;
   }
 
-  static std::unique_ptr<cudf::column> makeInputLengthColumn(
+  static std::unique_ptr<cudf::column> makeInputLengthColumn64(
       cudf::size_type inputLength,
       cudf::size_type rowCount,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
-    cudf::numeric_scalar<cudf::size_type> inputLengthScalar(
+    cudf::numeric_scalar<int64_t> inputLengthScalar(
         inputLength, true, stream, mr);
     return cudf::make_column_from_scalar(
         inputLengthScalar, rowCount, stream, mr);
@@ -307,34 +312,28 @@ class SubStringFunction : public CudfFunction {
 
   static std::unique_ptr<cudf::column> clampStopColumn(
       cudf::column_view stopColumn,
-      cudf::column_view inputLengthColumn,
+      cudf::column_view inputLengthColumn64,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
-    auto inputLengthColumn64 = cudf::cast(
-        inputLengthColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
     cudf::numeric_scalar<int64_t> zero(0, true, stream, mr);
     cudf::numeric_scalar<int64_t> noUpperBound(0, false, stream, mr);
     auto nonNegativeStop =
         cudf::clamp(stopColumn, zero, noUpperBound, stream, mr);
     auto stopPastEnd = cudf::binary_operation(
         nonNegativeStop->view(),
-        inputLengthColumn64->view(),
+        inputLengthColumn64,
         cudf::binary_operator::GREATER,
         cudf::data_type{cudf::type_id::BOOL8},
         stream,
         mr);
     auto clampedStop64 = cudf::copy_if_else(
-        inputLengthColumn64->view(),
+        inputLengthColumn64,
         nonNegativeStop->view(),
         stopPastEnd->view(),
         stream,
         mr);
     nonNegativeStop.reset();
     stopPastEnd.reset();
-    inputLengthColumn64.reset();
     return cudf::cast(
         clampedStop64->view(),
         cudf::data_type{cudf::type_to_id<cudf::size_type>()},
@@ -346,7 +345,7 @@ class SubStringFunction : public CudfFunction {
   static std::unique_ptr<cudf::column> makeStopColumnFromWideInputs(
       cudf::column_view preLengthStartColumn64,
       WideLength const& length64,
-      cudf::column_view inputLengthColumn,
+      cudf::column_view inputLengthColumn64,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
     auto unclampedStop = cudf::binary_operation(
@@ -357,61 +356,40 @@ class SubStringFunction : public CudfFunction {
         stream,
         mr);
     return clampStopColumn(
-        unclampedStop->view(), inputLengthColumn, stream, mr);
+        unclampedStop->view(), inputLengthColumn64, stream, mr);
   }
 
   static std::unique_ptr<cudf::column> makeStopColumn(
-      cudf::column_view preLengthStartColumn,
+      cudf::column_view preLengthStartColumn64,
       cudf::size_type length,
-      cudf::column_view inputLengthColumn,
+      cudf::column_view inputLengthColumn64,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
-    auto preLengthStartColumn64 = cudf::cast(
-        preLengthStartColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
     cudf::numeric_scalar<int64_t> length64(length, true, stream, mr);
     return makeStopColumnFromWideInputs(
-        preLengthStartColumn64->view(),
-        length64,
-        inputLengthColumn,
-        stream,
-        mr);
+        preLengthStartColumn64, length64, inputLengthColumn64, stream, mr);
   }
 
   static std::unique_ptr<cudf::column> makeStopColumn(
-      cudf::column_view preLengthStartColumn,
-      cudf::column_view lengthColumn,
-      cudf::column_view inputLengthColumn,
+      cudf::column_view preLengthStartColumn64,
+      cudf::column_view lengthColumn64,
+      cudf::column_view inputLengthColumn64,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
-    auto preLengthStartColumn64 = cudf::cast(
-        preLengthStartColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
-    auto lengthColumn64 = cudf::cast(
-        lengthColumn, cudf::data_type{cudf::type_to_id<int64_t>()}, stream, mr);
     return makeStopColumnFromWideInputs(
-        preLengthStartColumn64->view(),
-        lengthColumn64->view(),
-        inputLengthColumn,
+        preLengthStartColumn64,
+        lengthColumn64,
+        inputLengthColumn64,
         stream,
         mr);
   }
 
   static StartColumns makeStartColumns(
       cudf::column_view startColumn,
-      cudf::column_view inputLengthColumn,
+      cudf::column_view inputLengthColumn64,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
     auto startValues = makeWideIndexColumn(startColumn, stream, mr);
-    auto inputLengthColumn64 = cudf::cast(
-        inputLengthColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
     cudf::numeric_scalar<int64_t> zero(0, true, stream, mr);
     cudf::numeric_scalar<int64_t> one(1, true, stream, mr);
     auto positiveStarts = cudf::binary_operation(
@@ -436,14 +414,14 @@ class SubStringFunction : public CudfFunction {
         stream,
         mr);
     auto adjustedNegativeStarts = cudf::binary_operation(
-        inputLengthColumn64->view(),
+        inputLengthColumn64,
         startValues->view(),
         cudf::binary_operator::ADD,
         cudf::data_type{cudf::type_to_id<int64_t>()},
         stream,
         mr);
     auto zeroColumn = cudf::make_column_from_scalar(
-        zero, inputLengthColumn.size(), stream, mr);
+        zero, inputLengthColumn64.size(), stream, mr);
     auto nonPositivePreLengthStart = cudf::copy_if_else(
         zeroColumn->view(),
         adjustedNegativeStarts->view(),
@@ -483,7 +461,7 @@ class SubStringFunction : public CudfFunction {
   }
 
   static std::unique_ptr<cudf::column> makePreLengthConstantStartColumn(
-      cudf::column_view inputLengthColumn,
+      cudf::column_view inputLengthColumn64,
       int32_t rawStartValue,
       cudf::size_type rowCount,
       rmm::cuda_stream_view stream,
@@ -498,14 +476,9 @@ class SubStringFunction : public CudfFunction {
       return cudf::make_column_from_scalar(zero, rowCount, stream, mr);
     }
 
-    auto inputLengthColumn64 = cudf::cast(
-        inputLengthColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
     cudf::numeric_scalar<int64_t> rawStart(rawStartValue, true, stream, mr);
     return cudf::binary_operation(
-        inputLengthColumn64->view(),
+        inputLengthColumn64,
         rawStart,
         cudf::binary_operator::ADD,
         cudf::data_type{cudf::type_to_id<int64_t>()},
@@ -514,7 +487,7 @@ class SubStringFunction : public CudfFunction {
   }
 
   static std::unique_ptr<cudf::column> makeAdjustedConstantStartColumn(
-      cudf::column_view inputLengthColumn,
+      cudf::column_view inputLengthColumn64,
       int32_t rawStartValue,
       cudf::size_type rowCount,
       rmm::cuda_stream_view stream,
@@ -530,14 +503,9 @@ class SubStringFunction : public CudfFunction {
       return cudf::make_column_from_scalar(zero, rowCount, stream, mr);
     }
 
-    auto inputLengthColumn64 = cudf::cast(
-        inputLengthColumn,
-        cudf::data_type{cudf::type_to_id<int64_t>()},
-        stream,
-        mr);
     cudf::numeric_scalar<int64_t> rawStart(rawStartValue, true, stream, mr);
     auto adjustedNegativeStart = cudf::binary_operation(
-        inputLengthColumn64->view(),
+        inputLengthColumn64,
         rawStart,
         cudf::binary_operator::ADD,
         cudf::data_type{cudf::type_to_id<int64_t>()},

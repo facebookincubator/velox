@@ -176,4 +176,19 @@ TEST_F(NullMaskTest, mergesExistingAndSourceNullMasks) {
   assertValidity(result->view(), expectedValid, stream_);
 }
 
+TEST_F(NullMaskTest, mergesMultipleSourceNullMasks) {
+  std::vector<bool> resultValid{true, true, false, true, true};
+  std::vector<bool> firstSourceValid{true, false, true, true, true};
+  std::vector<bool> secondSourceValid{true, true, true, false, true};
+  std::vector<bool> expectedValid{true, false, false, false, true};
+  auto result = makeNullableIntColumn(resultValid, stream_, mr_);
+  auto firstSource = makeNullableIntColumn(firstSourceValid, stream_, mr_);
+  auto secondSource = makeNullableIntColumn(secondSourceValid, stream_, mr_);
+
+  mergeNullSourceNullsIntoResult(
+      *result, {firstSource->view(), secondSource->view()}, stream_, mr_);
+
+  assertValidity(result->view(), expectedValid, stream_);
+}
+
 } // namespace

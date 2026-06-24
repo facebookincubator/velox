@@ -58,11 +58,10 @@ void registerSparkFunctions(const std::string& prefix) {
           .argumentType("integer")
           .build()};
   for (const auto& name : {prefix + "substr", prefix + "substring"}) {
-    // Route both spellings to the Spark implementation in cuDF. The default
-    // cuDF registry already has a Presto-compatible `substr` candidate, so the
-    // Spark registration must be inserted before it whenever Spark functions
-    // are registered for the current query context.
-    registerCudfFunctionWithPrecedence(
+    // Route both spellings to the Spark implementation in cuDF. Presto
+    // substring is registered only when Presto functions are registered, so
+    // Spark runtimes do not need to override an existing candidate.
+    registerCudfFunction(
         name,
         [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
           return sparksql::makeSubStringFunction(expr);

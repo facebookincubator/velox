@@ -85,15 +85,6 @@ bool registerCudfFunction(
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite = true);
 
-/// Registers a CUDF function before existing candidates with the same name.
-/// Use this for dialect-specific implementations that must take precedence
-/// over previously registered default candidates.
-bool registerCudfFunctionWithPrecedence(
-    const std::string& name,
-    CudfFunctionFactory factory,
-    const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
-
 void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,

@@ -21,12 +21,22 @@
 
 #include <rmm/cuda_stream_view.hpp>
 
+#include <vector>
+
 namespace facebook::velox::cudf_velox {
 
 /// Merges nulls from a secondary input into an already materialized result.
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     cudf::column_view nullSourceColumn,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/// Merges nulls from multiple secondary inputs into an already materialized
+/// result.
+void mergeNullSourceNullsIntoResult(
+    cudf::column& result,
+    const std::vector<cudf::column_view>& nullSourceColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
