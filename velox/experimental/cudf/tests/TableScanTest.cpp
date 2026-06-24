@@ -895,7 +895,6 @@ TEST_F(TableScanTest, arrayDecimalScan) {
   auto rowType = ROW({"a"}, {ARRAY(DECIMAL(7, 2))});
   auto elements = makeNullableFlatVector<int64_t>(
       {100, 200, std::nullopt, 300}, DECIMAL(7, 2));
-  auto vector = makeRowVector(
-      {"a"}, {makeArrayVector({0, 2}, elements)});
+  auto vector = makeRowVector({"a"}, {makeArrayVector({0, 2}, elements)});
   assertDecimalScanRoundTrip(vector, rowType);
 }
