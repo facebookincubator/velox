@@ -94,6 +94,12 @@ class ExpressionFuzzerVerifier {
     // crash failure. Only effective if repro_persist_path is set.
     bool persistAndRunOnce = false;
 
+    // Run the simplified path on a normalized copy of the input (flat,
+    // contiguous array/map elements, no garbage behind nulls) so
+    // common-vs-simplified also flags layout-dependent results. Pairs with
+    // --velox_fuzzer_non_contiguous_elements.
+    bool verifyLayoutInvariance = false;
+
     // Specifies the probability with which columns in the input row vector will
     // be selected to be wrapped in lazy encoding (expressed as double from 0 to
     // 1).

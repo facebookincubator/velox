@@ -135,9 +135,14 @@ struct InputRowMetadata {
   // increasing order)
   std::vector<int> columnsToWrapInCommonDictionary;
 
+  // Whether the run verified layout invariance (the simplified path ran on a
+  // compacted copy of the input). Persisted so repro replays reproduce
+  // layout-sensitivity mismatches.
+  bool verifyLayoutInvariance{false};
+
   bool empty() const {
     return columnsToWrapInLazy.empty() &&
-        columnsToWrapInCommonDictionary.empty();
+        columnsToWrapInCommonDictionary.empty() && !verifyLayoutInvariance;
   }
 
   void saveToFile(const char* filePath) const;

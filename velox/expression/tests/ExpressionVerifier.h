@@ -36,6 +36,12 @@ struct ExpressionVerifierOptions {
   bool disableConstantFolding{false};
   std::string reproPersistPath;
   bool persistAndRunOnce{false};
+  // Run the simplified path on a normalized copy of the input (flat, contiguous
+  // array/map elements, no garbage behind nulls) so the common-vs-simplified
+  // comparison also flags results that depend on the input's physical layout.
+  // Catches UDFs that read the raw elements buffer, ignore offsets/sizes, or
+  // read behind nulls. Pairs with --velox_fuzzer_non_contiguous_elements.
+  bool verifyLayoutInvariance{false};
 };
 
 class ExpressionVerifier {

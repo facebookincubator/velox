@@ -74,6 +74,15 @@ DEFINE_double(
     "(expressed as double from 0 to 1). Only columns not already encoded "
     "will be considered.");
 
+DEFINE_bool(
+    velox_fuzzer_non_contiguous_elements,
+    false,
+    "If true, the vector fuzzer lays out array/map elements non-contiguously, "
+    "leaving random gaps of unreferenced elements between containers, so that "
+    "expressions which ignore offsets/sizes and read the raw elements buffer "
+    "are caught. Pair with --velox_fuzzer_verify_layout_invariance to surface "
+    "the resulting mismatches.");
+
 DEFINE_int32(
     max_expression_trees_per_step,
     1,
@@ -147,6 +156,14 @@ DEFINE_bool(
     "Enable generation of expressions that re-uses already generated "
     "subexpressions.");
 
+DEFINE_bool(
+    velox_fuzzer_verify_layout_invariance,
+    false,
+    "Run the simplified eval path on a normalized copy of the input (flat, "
+    "contiguous array/map elements, no garbage behind nulls) so the "
+    "common-vs-simplified comparison also flags results that depend on the "
+    "input's physical layout. Pairs with --velox_fuzzer_non_contiguous_elements.");
+
 DEFINE_string(
     assign_function_tickets,
     "",
@@ -172,6 +189,7 @@ VectorFuzzer::Options getVectorFuzzerOptions() {
   opts.stringLength = 100;
   opts.nullRatio = FLAGS_null_ratio;
   opts.useRandomNullPattern = true;
+  opts.fuzzNonContiguousElements = FLAGS_velox_fuzzer_non_contiguous_elements;
   opts.timestampPrecision =
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return opts;
@@ -216,6 +234,7 @@ ExpressionFuzzerVerifier::Options getExpressionFuzzerVerifierOptions(
   opts.disableConstantFolding = FLAGS_disable_constant_folding;
   opts.reproPersistPath = FLAGS_repro_persist_path;
   opts.persistAndRunOnce = FLAGS_persist_and_run_once;
+  opts.verifyLayoutInvariance = FLAGS_velox_fuzzer_verify_layout_invariance;
   opts.lazyVectorGenerationRatio = FLAGS_lazy_vector_generation_ratio;
   opts.commonDictionaryWrapRatio =
       FLAGS_common_dictionary_wraps_generation_ratio;
