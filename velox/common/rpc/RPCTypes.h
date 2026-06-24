@@ -98,6 +98,14 @@ struct RPCRequest {
 /// This is a minimal, domain-agnostic structure that works for any backend.
 struct RPCResponse {
   /// Row ID for correlating response with the original request.
+  ///
+  /// Two meanings depending on context:
+  ///   - In flushBatch() return values: the 0-based index of this response
+  ///     within the flushed batch (set by the function). The operator uses
+  ///     this to scatter responses into the correct positions before
+  ///     stamping the global row ID.
+  ///   - After operator processing: a globally unique ID assigned by the
+  ///     operator for downstream result tracking.
   int64_t rowId{0};
 
   /// The response result (opaque to the framework).

@@ -45,6 +45,10 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc", []() {
       return std::make_shared<DemoBatchRPCFunction>();
     });
+    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_reversed", []() {
+      return std::make_shared<DemoBatchRPCFunction>(
+          DemoBatchRPCFunction::ResponseOrder::kReversed);
+    });
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc_partial_fail", []() {
           return std::make_shared<DemoBatchRPCFunction>(
@@ -260,6 +264,44 @@ TEST_F(RPCOperatorTest, batchBasic) {
   EXPECT_EQ(rows["hello"], "Batch response for: hello");
   EXPECT_EQ(rows["world"], "Batch response for: world");
   EXPECT_EQ(rows["batch"], "Batch response for: batch");
+}
+
+// Reversed responses: the mock returns results in reverse order.
+// Before the fix in RPCOperator::flushBatchRequests (scatter by rowId instead
+// of positional stamping), this test would fail — each row would receive
+// another row's result because the operator stamped rowIds positionally
+// onto the reversed response vector.
+TEST_F(RPCOperatorTest, batchReversedResponseOrder) {
+  auto input = makeRowVector(
+      {"id", "prompt"},
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<StringView>(
+           {"alpha", "bravo", "charlie", "delta", "echo"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_reversed");
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 5);
+
+  auto* ids = result->childAt(0)->asFlatVector<int64_t>();
+  auto* prompts = result->childAt(1)->asFlatVector<StringView>();
+  auto* results = result->childAt(2)->asFlatVector<StringView>();
+
+  std::map<int64_t, std::pair<std::string, std::string>> rowMap;
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    rowMap[ids->valueAt(i)] = {
+        prompts->valueAt(i).str(), results->valueAt(i).str()};
+  }
+
+  EXPECT_EQ(rowMap[1].second, "Batch response for: alpha");
+  EXPECT_EQ(rowMap[2].second, "Batch response for: bravo");
+  EXPECT_EQ(rowMap[3].second, "Batch response for: charlie");
+  EXPECT_EQ(rowMap[4].second, "Batch response for: delta");
+  EXPECT_EQ(rowMap[5].second, "Batch response for: echo");
 }
 
 // Partial batch failure: rows at indices 1 and 3 fail, others succeed.
