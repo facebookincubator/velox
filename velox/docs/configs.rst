@@ -538,7 +538,7 @@ Spilling
      - integer
      - 3
      - The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
-       value is 3, meaning we only support up to 8-way spill partitioning.ing.
+       value is 3, meaning we only support up to 8-way spill partitioning.
    * - testing.spill_pct
      - integer
      - 0
@@ -709,8 +709,13 @@ Hive Connector
 Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
 Each query can override the config by setting corresponding query session properties such as in Prestissimo.
 
-Configuration property names use kebab-case (e.g., ``max-bucket-count``).
-Session property names use snake_case (e.g., ``max_bucket_count``).
+Configuration property names use kebab-case (e.g., ``max-bucket-count``)
+and session property names use snake_case (e.g., ``max_bucket_count``).
+Format-specific Hive connector configuration properties use prefixes such as
+``hive.parquet.``, ``hive.orc.``, and ``hive.nimble.``. Format-specific session
+properties do not include a connector prefix because they are scoped by catalog
+or connector ID by the engine.
+Configuration keys use dashes and session keys use underscores.
 Properties without a session property name in the table below are fixed for the lifetime of the process
 and cannot be modified per query.
 
@@ -757,6 +762,21 @@ must be specified as raw byte counts.
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
        the input column name and filter is also lower case to achive case-insensitive read.
+   * - hive.orc.use-column-names
+     - orc_use_column_names
+     - bool
+     - false
+     - Map ORC table field names to file field names using names, not indices.
+   * - hive.parquet.use-column-names
+     - parquet_use_column_names
+     - bool
+     - false
+     - Map Parquet table field names to file field names using names, not indices.
+   * - hive.parquet.allow-int32-narrowing
+     - parquet_allow_int32_narrowing
+     - bool
+     - false
+     - Allow reading INT32 Parquet columns as a narrower integer type.
    * - partition_path_as_lower_case
      -
      - bool
@@ -785,6 +805,16 @@ must be specified as raw byte counts.
      - capacity
      - 512KB
      - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
+   * - prefetch-rowgroups
+     -
+     - integer
+     - 1
+     - Number of row groups to prefetch.
+   * - parallel-unit-load-count
+     - parallel_unit_load_count
+     - integer
+     - 0
+     - Number of units, such as stripes, to load in parallel. 0 disables parallel unit loading.
    * - load-quantum
      - load-quantum
      - integer
@@ -802,6 +832,17 @@ must be specified as raw byte counts.
      - true
      - Enables caching of file handles if true. Disables caching if false. File handle cache should be
        disabled if files are not immutable, i.e. file content may change while file path stays the same.
+   * - file-handle-expiration-duration-ms
+     -
+     - integer
+     - 0
+     - Expiration time in milliseconds for file handle cache entries. 0 disables time-based expiration.
+   * - write-file-create-config
+     -
+     - string
+     - ""
+     - Free-form configuration passed to the underlying file system when creating write files. The legacy
+       key ``hive.write_file_create_config`` is also accepted.
    * - sort-writer-max-output-rows
      - sort_writer_max_output_rows
      - integer
@@ -812,11 +853,16 @@ must be specified as raw byte counts.
      - capacity
      - 10MB
      - Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
-   * - max-target-file-size
-     - max_target_file_size
+   * - sort-writer-finish-time-slice-limit-ms
+     - sort_writer_finish_time_slice_limit_ms
+     - integer
+     - 5000
+     - Time slice limit in milliseconds for sort writer finish. 0 means no limit.
+   * - hive.parquet.writer.max-target-file-size
+     - parquet_writer_max_target_file_size
      - capacity
      - 0B
-     - Maximum target file size for writers. When a file exceeds this size during writing, the writer
+     - Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
        sorted writes.
@@ -842,11 +888,25 @@ must be specified as raw byte counts.
        filter execution order is totally determined by the filter type. Otherwise, the file
        reader will dynamically adjust the filter execution order based on the past filter
        execution stats.
+   * - index-enabled
+     - index_enabled
+     - bool
+     - false
+     - Use the cluster index for filter-based row pruning.
+   * - reader.timestamp-unit
+     - reader.timestamp_unit
+     - integer
+     - 3
+     - Unit for reading timestamps from files. Supported values are ``3`` for milliseconds,
+       ``6`` for microseconds, and ``9`` for nanoseconds. The legacy key
+       ``hive.reader.timestamp-unit`` is also accepted.
    * - reader.timestamp-partition-value-as-local-time
      - reader.timestamp_partition_value_as_local_time
      - bool
      - true
-     - Reads timestamp partition value as local time if true. Otherwise, reads as UTC.
+     - Reads TIMESTAMP partition value as local time if true. Otherwise, reads
+       as UTC. This setting does not apply to TIMESTAMP_UTC partition values,
+       which are always read as UTC.
    * - preserve-flat-maps-in-memory
      - preserve_flat_maps_in_memory
      - bool
@@ -858,21 +918,34 @@ must be specified as raw byte counts.
      - 0
      - Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
        after filtering. 0 means no limit (default).
-   * - file-metadata-cache-enabled
-     - file_metadata_cache_enabled
+   * - cache-metadata
+     - cache_metadata
      - bool
      - false
      - Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
        the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
        serve metadata from cache with zero file IO. Currently only supported by Nimble format.
-   * - pin-file-metadata
-     - pin_file_metadata
+   * - pin-metadata
+     - pin_metadata
      - bool
      - false
      - Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup) in the reader's metadata cache with
        strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
        access when weak-pointer cache entries would otherwise expire. Can be used independently of
-       file-metadata-cache-enabled. Currently only supported by Nimble format.
+       cache-metadata. Currently only supported by Nimble format.
+   * - cache-index
+     - cache_index
+     - bool
+     - false
+     - Whether to cache index data (e.g., cluster index key stream) in the async data cache.
+       Currently only supported by Nimble format.
+   * - pin-index
+     - pin_index
+     - bool
+     - false
+     - Whether to pin parsed index objects (e.g., HashIndex, SortedIndex) in the reader's index cache with
+       strong references so they are never evicted. Can be used independently of
+       cache-index. Currently only supported by Nimble format.
    * - reader.collect-column-cpu-metrics
      - reader.collect_column_cpu_metrics
      - bool
@@ -888,13 +961,43 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
-   * - parquet.footer-speculative-io-size
+   * - hive.parquet.footer-speculative-io-size
      - parquet_footer_speculative_io_size
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
+   * - hive.parquet.footer-memory-tracking-threshold
+     - parquet_footer_memory_tracking_threshold
+     - integer
+     - disabled (max uint64)
+     - Serialized footer byte size above which the Parquet reader engages
+       memory tracking for the deserialized footer. Disabled by default
+       because the tracking path adds per-file CPU (walking the inline
+       struct tree to estimate heap usage) and the estimate is approximate;
+       enable it on workloads where large Parquet footers (millions of
+       columns or row groups) can dominate worker memory and cause silent
+       OOMs.
+
+       The threshold is compared against the serialized footer length
+       reported in the file trailer. The reported reservation is the
+       estimated heap footprint of the deserialized footer, which can be
+       several times the serialized length (in observed cases ~7-8x for
+       wide schemas). Pick the threshold based on the serialized size you
+       are willing to silently absorb; e.g. setting it to 16MB will start
+       tracking once the deserialized estimate is likely to exceed ~100MB.
+
+       Tracking is approximate: the estimate walks the thrift struct tree
+       at file-open time and is never re-measured against the allocator.
+       It cannot prevent the initial deserialization allocation — that
+       memory is already on the heap — but it makes the footprint visible
+       to the pool so the next allocation check fails fast instead of
+       silently over-consuming. The reservation shrinks as row groups are
+       skipped by filterRowGroups and is released in full when the reader
+       is destroyed. When tracking engages, the estimate is also surfaced
+       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       operators can compare it against actual pool usage.
    * - nimble.footer-speculative-io-size
      - nimble_footer_speculative_io_size
      - integer
@@ -902,6 +1005,15 @@ must be specified as raw byte counts.
      - Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode.
+   * - nimble.lazy-column-io
+     - nimble_lazy_column_io
+     - boolean
+     - false
+     - Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
+       Lazy IO columns are loaded through a separate buffered input other than the one used by early
+       materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
+       not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
+       allow lazy IO across stripes.
 
 ``ORC File Format Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -939,6 +1051,22 @@ must be specified as raw byte counts.
      - bool
      - true
      - Enables historical based stripe size estimation after compression.
+   * - hive.orc.writer.max-target-file-size
+     - orc_writer_max_target_file_size
+     - capacity
+     - 0B
+     - Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
+   * - hive.nimble.writer.max-target-file-size
+     - nimble_writer_max_target_file_size
+     - capacity
+     - 0B
+     - Maximum target file size for Nimble writers. When a file exceeds this size during writing, the writer
+       closes the current file and starts writing to a new file. Accepts human-readable values like
+       "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
+       sorted writes.
    * - hive.orc.writer.min-compression-size
      - orc_writer_min_compression_size
      - integer
@@ -962,42 +1090,48 @@ must be specified as raw byte counts.
      - Default Value
      - Description
    * - hive.parquet.writer.enable-dictionary
-     - hive.parquet.writer.enable_dictionary
+     - parquet_writer_enable_dictionary
      - bool
      - true
      - Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
    * - hive.parquet.writer.dictionary-page-size-limit
-     - hive.parquet.writer.dictionary_page_size_limit
+     - parquet_writer_dictionary_page_size_limit
      - string
      - 1MB
      - Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
    * - hive.parquet.writer.timestamp-unit
-     - hive.parquet.writer.timestamp_unit
+     - parquet_writer_timestamp_unit
      - tinyint
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
    * - hive.parquet.writer.datapage-version
-     - hive.parquet.writer.datapage_version
+     - parquet_writer_datapage_version
      - string
      - V1
      - Data Page version used when writing into Parquet through Arrow bridge.
        Valid values are "V1" and "V2".
    * - hive.parquet.writer.page-size
-     - hive.parquet.writer.page_size
+     - parquet_writer_page_size
      - string
      - 1MB
      - Data Page size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.batch-size
-     - hive.parquet.writer.batch_size
+     - parquet_writer_batch_size
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.created-by
-     - hive.parquet.writer.created_by
+     - -
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
+   * - hive.parquet.writer.enable-store-decimal-as-integer
+     - parquet_writer_enable_store_decimal_as_integer
+     - bool
+     - true
+     - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
+       When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1239,10 +1373,6 @@ Spark-specific Configuration
        Note: This feature is still under development to achieve full ANSI compliance. Users can
        refer to the Spark function documentation to verify the current support status of a specific
        function.
-   * - spark.legacy_size_of_null
-     - bool
-     - true
-     - If false, ``size`` function returns null for null input.
    * - spark.bloom_filter.expected_num_items
      - integer
      - 1000000
@@ -1279,6 +1409,10 @@ Spark-specific Configuration
      - bool
      - true
      - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
+   * - spark.collect_list.ignore_nulls
+     - bool
+     - true
+     - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
 
 Tracing
 --------

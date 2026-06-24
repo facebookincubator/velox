@@ -50,14 +50,20 @@ class GroupingSet {
 
   ~GroupingSet();
 
-  /// Used by MarkDistinct and EnforceDistinct operators to identify rows with
-  /// unique values for a set of keys.
+  /// Creates a GroupingSet for MarkDistinct and EnforceDistinct operators to
+  /// identify rows with unique values for a set of keys. When
+  /// 'extraAccumulators' is non-empty, appends them to the row layout and
+  /// eagerly creates the hash table so callers can read column offsets via
+  /// table().
   /// @param preGroupedKeys Subset of grouping keys that input is already
   /// clustered on.
+  /// @param extraAccumulators Caller-provided accumulators appended to the
+  ///   row layout (e.g. MarkDistinct's per-group bitmask). Can be empty.
   static std::unique_ptr<GroupingSet> createForDistinct(
       const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       std::vector<column_index_t>&& preGroupedKeys,
+      std::vector<Accumulator> extraAccumulators,
       OperatorCtx* operatorCtx,
       tsan_atomic<bool>* nonReclaimableSection);
 
@@ -91,6 +97,10 @@ class GroupingSet {
   /// freed but only table content.
   void resetTable(bool freeTable);
 
+  /// Resets reusable state for global aggregation so it can be initialized
+  /// again for a new processing cycle.
+  void resetGlobalAggregation();
+
   /// Returns true if 'this' should start producing partial
   /// aggregation results. Checks the memory consumption against
   /// 'maxBytes'. If exceeding 'maxBytes', sees if changing hash mode
@@ -104,12 +114,14 @@ class GroupingSet {
     return table_ ? table_->numDistinct() : 0;
   }
 
-  /// Returns number of global grouping sets rows if there is default output.
-  std::optional<vector_size_t> numDefaultGlobalGroupingSetRows() const {
-    if (hasDefaultGlobalGroupingSetOutput()) {
-      return globalGroupingSets_.size();
-    }
-    return std::nullopt;
+  /// Returns the number of raw input rows received.
+  uint64_t numInputRows() const {
+    return numInputRows_;
+  }
+
+  /// Returns the number of global grouping sets.
+  vector_size_t numGlobalGroupingSets() const {
+    return static_cast<vector_size_t>(globalGroupingSets_.size());
   }
 
   const HashLookup& hashLookup() const;
@@ -353,6 +365,10 @@ class GroupingSet {
   AggregationMasks masks_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;
   std::vector<std::unique_ptr<DistinctAggregations>> distinctAggregations_;
+
+  // Caller-provided accumulators appended to the row layout by
+  // createForDistinct(). Used by MarkDistinct for per-group bitmask storage.
+  std::vector<Accumulator> extraAccumulators_;
 
   // Boolean indicating whether any aggregate supports compact().
   bool hasCompactableAggregates_{false};

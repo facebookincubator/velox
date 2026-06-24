@@ -14,24 +14,27 @@
 
 add_library(
   velox_cudf_expression
+  ArrayAccessFunctions.cpp
   AstExpression.cpp
+  CommonFunctions.cpp
   DateTruncFunction.cpp
+  DecimalExpressionKernels.cpp
   DecimalExpressionKernels.cu
   ExpressionEvaluator.cpp
   JitExpression.cpp
+  PrestoFunctions.cpp
   prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
-  PrestoFunctions.cpp
+  SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/HashFunction.cpp
-  SparkFunctions.cpp
   SubfieldFiltersToAst.cpp
 )
 
 target_link_libraries(
   velox_cudf_expression
   PUBLIC cudf::cudf
-  PRIVATE arrow velox_exception velox_common_base velox_cudf_vector
+  PRIVATE arrow velox_common_base velox_cudf_vector velox_exception
 )
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)

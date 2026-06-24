@@ -50,6 +50,8 @@ HashAggregation::HashAggregation(
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      isRawInput_(isRawInput(aggregationNode->step())),
+      hasGlobalGroupingSets_(!aggregationNode->globalGroupingSets().empty()),
       memoryCompactionEnabled_(
           driverCtx->queryConfig().aggregationMemoryCompactionReclaimEnabled()),
       maxExtendedPartialAggregationMemoryUsage_(
@@ -118,7 +120,7 @@ void HashAggregation::initialize() {
       std::move(aggregateInfos),
       aggregationNode_->ignoreNullKeys(),
       isPartialOutput_,
-      isRawInput(aggregationNode_->step()),
+      isRawInput_,
       aggregationNode_->globalGroupingSets(),
       groupIdChannel,
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
@@ -228,6 +230,27 @@ void HashAggregation::addInput(RowVectorPtr input) {
   }
 }
 
+bool HashAggregation::startDrain() {
+  VELOX_CHECK(isDraining());
+  VELOX_CHECK(!noMoreInput_);
+  VELOX_CHECK(
+      !groupingSet_->hasSpilled(),
+      "Barrier drain is not supported for spilled hash aggregation");
+
+  return true;
+}
+
+void HashAggregation::finishDrain() {
+  if (!isDraining()) {
+    return;
+  }
+  groupingSet_->resetTable(/*freeTable=*/false);
+  if (isGlobal_) {
+    groupingSet_->resetGlobalAggregation();
+  }
+  Operator::finishDrain();
+}
+
 void HashAggregation::updateRuntimeStats() {
   // Report range sizes and number of distinct values for the group-by keys.
   const auto& hashers = groupingSet_->hashLookup().hashers;
@@ -302,9 +325,6 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat(
-        std::string(HashAggregation::kAbandonedPartialAggregation),
-        RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
@@ -339,10 +359,14 @@ RowVectorPtr HashAggregation::getOutput() {
       finished_ = true;
     }
     if (!input_) {
+      finishDrain();
       return nullptr;
     }
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregationRows),
+        RuntimeCounter(input_->size()));
     numOutputRows_ += input_->size();
     input_ = nullptr;
     return output_;
@@ -353,14 +377,18 @@ RowVectorPtr HashAggregation::getOutput() {
   // - partial aggregation reached memory limit;
   // - distinct aggregation has new keys;
   // - running in partial streaming mode and have some output ready.
-  if (!noMoreInput_ && !partialFull_ && !newDistincts_ &&
+  if (!noMoreInput_ && !isDraining() && !partialFull_ && !newDistincts_ &&
       !groupingSet_->hasDrainedNewGroups() && !groupingSet_->hasOutput()) {
     input_ = nullptr;
     return nullptr;
   }
 
   if (isDistinct_) {
-    return getDistinctOutput();
+    auto distinctOutput = getDistinctOutput();
+    if (distinctOutput == nullptr) {
+      finishDrain();
+    }
+    return distinctOutput;
   }
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
@@ -376,10 +404,14 @@ RowVectorPtr HashAggregation::getOutput() {
       output_);
   if (!hasData) {
     resultIterator_.reset();
+    resetPartialOutputIfNeed();
+    finishDrain();
     if (noMoreInput_) {
       finished_ = true;
+      if (emitDefaultGlobalGroupingSetRows_) {
+        return getDefaultGlobalGroupingSetOutput();
+      }
     }
-    resetPartialOutputIfNeed();
     return nullptr;
   }
   numOutputRows_ += output_->size();
@@ -423,13 +455,9 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
   if (!groupingSet_->hasSpilled()) {
     if (noMoreInput_) {
       finished_ = true;
-      if (auto numRows = groupingSet_->numDefaultGlobalGroupingSetRows()) {
-        prepareOutput(numRows.value());
-        if (groupingSet_->getDefaultGlobalGroupingSetOutput(
-                resultIterator_, output_)) {
-          numOutputRows_ += output_->size();
-          return output_;
-        }
+      resultIterator_.reset();
+      if (emitDefaultGlobalGroupingSetRows_) {
+        return getDefaultGlobalGroupingSetOutput();
       }
     }
     return nullptr;
@@ -454,12 +482,72 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
   return output_;
 }
 
+bool HashAggregation::shouldEmitDefaultGlobalGroupingSetRows() {
+  if (!hasGlobalGroupingSets_ || !isRawInput_) {
+    return false;
+  }
+  // Single driver has no peers; emit based on its own input.
+  if (operatorCtx_->task()->numDrivers(operatorCtx_->driver()) <= 1) {
+    return groupingSet_->numInputRows() == 0;
+  }
+  return electDefaultGlobalGroupingSetDriver();
+}
+
+bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<Driver>> peers;
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    VELOX_CHECK(future_.valid());
+    return false;
+  }
+
+  SCOPE_EXIT {
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  // allPeersFinished returned true, so every peer has finished noMoreInput()
+  // and its input count is final.
+  uint64_t totalInputRows = groupingSet_->numInputRows();
+  for (auto& peer : peers) {
+    auto* aggregation =
+        dynamic_cast<HashAggregation*>(peer->findOperator(planNodeId()));
+    VELOX_CHECK_NOT_NULL(aggregation);
+    totalInputRows += aggregation->groupingSet_->numInputRows();
+  }
+  return totalInputRows == 0;
+}
+
+RowVectorPtr HashAggregation::getDefaultGlobalGroupingSetOutput() {
+  prepareOutput(groupingSet_->numGlobalGroupingSets());
+  VELOX_CHECK(groupingSet_->getDefaultGlobalGroupingSetOutput(
+      resultIterator_, output_));
+  numOutputRows_ += output_->size();
+  return output_;
+}
+
 void HashAggregation::noMoreInput() {
   updateEstimatedOutputRowSize();
   groupingSet_->noMoreInput();
   Operator::noMoreInput();
+
+  // May park this driver on 'future_' for the peer election, surfaced by
+  // isBlocked() as kWaitForAggregationPeers.
+  emitDefaultGlobalGroupingSetRows_ = shouldEmitDefaultGlobalGroupingSetRows();
+
   // Release the extra reserved memory right after processing all the inputs.
   pool()->release();
+}
+
+BlockingReason HashAggregation::isBlocked(ContinueFuture* future) {
+  if (future_.valid()) {
+    *future = std::move(future_);
+    return BlockingReason::kWaitForAggregationPeers;
+  }
+  return BlockingReason::kNotBlocked;
 }
 
 bool HashAggregation::isFinished() {

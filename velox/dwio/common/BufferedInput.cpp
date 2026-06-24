@@ -34,10 +34,11 @@ CachedRegion::CachedRegion(cache::CachePin pin) : pin_(std::move(pin)) {
       !entry->isExclusive(),
       "CachedRegion requires a shared (non-exclusive) cache pin");
   size_ = entry->size();
-  if (entry->tinyData() != nullptr) {
-    ranges_.push_back(folly::Range<const char*>(entry->tinyData(), size_));
+  if (entry->hasContiguousData()) {
+    ranges_.push_back(
+        folly::Range<const char*>(entry->contiguousData(), size_));
   } else {
-    auto& allocation = entry->data();
+    auto& allocation = entry->nonContiguousData();
     ranges_.reserve(allocation.numRuns());
     uint64_t offset{0};
     for (int i = 0; i < allocation.numRuns() && offset < size_; ++i) {
@@ -236,12 +237,15 @@ void BufferedInput::mergeRegions() {
 bool BufferedInput::tryMerge(Region& first, const Region& second) {
   VELOX_CHECK_GE(second.offset, first.offset, "regions should be sorted.");
   const int64_t gap = second.offset - first.offset - first.length;
-
   // Duplicate regions (extension==0) is the only case allowed to merge for
   // useVRead()
   const int64_t extension = gap + second.length;
   if (useVRead()) {
     return extension == 0;
+  }
+
+  if (gap > 0 && input_->getStats() != nullptr) {
+    input_->getStats()->readGap().increment(gap);
   }
 
   // compare with 0 since it's comparison in different types

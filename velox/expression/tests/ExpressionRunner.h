@@ -16,7 +16,6 @@
 
 #include <string>
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
-#include "velox/parse/Expressions.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::test {

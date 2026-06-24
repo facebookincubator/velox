@@ -1077,6 +1077,20 @@ TEST_F(Re2FunctionsTest, likeSubstringPattern) {
       true);
 }
 
+// Verifies the substrings fast path is taken when an escape character is
+// supplied but does not appear in the pattern. Without this case, callers
+// that always pass an escape argument (e.g. SQL `LIKE ... ESCAPE 'x'` where
+// 'x' is not used in the pattern) would unnecessarily fall back to the RE2
+// engine on patterns like '%foo%bar%'.
+TEST_F(Re2FunctionsTest, likeSubstringPatternWithInertEscape) {
+  testLike("hello special requests today", "%special%requests%", '\\', true);
+  testLike("requests special hello", "%special%requests%", '\\', false);
+  testLike("aXbYcZ", "%a%b%c%", '\\', true);
+  testLike("aXbY", "%a%b%c%", '\\', false);
+  // Custom escape character that does not appear in the pattern.
+  testLike("aXbYcZ", "%a%b%c%", '!', true);
+}
+
 TEST_F(Re2FunctionsTest, nullConstantPatternOrEscape) {
   // Test null pattern.
   ASSERT_TRUE(

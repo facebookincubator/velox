@@ -50,10 +50,11 @@ int main(int argc, char** argv) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   std::string filePath{argv[1]};
-  io::IoStatistics dataIoStats;
-  io::IoStatistics metadataIoStats;
-  dwio::common::ReaderOptions readerOpts{
-      pool.get(), &dataIoStats, &metadataIoStats};
+  auto dataIoStats = std::make_shared<io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<io::IoStatistics>();
+  dwio::common::ReaderOptions readerOpts(pool.get());
+  readerOpts.setDataIoStats(dataIoStats);
+  readerOpts.setMetadataIoStats(metadataIoStats);
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(FileFormat::ORC);
   auto reader = dwio::common::getReaderFactory(FileFormat::ORC)

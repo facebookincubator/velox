@@ -408,6 +408,70 @@ class ColumnVisitor {
   inline void addNull();
   inline void addOutputRow(vector_size_t row);
 
+  /// Bulk variant of process() with SIMD paths for AlwaysTrue and
+  /// deterministic integer filters; otherwise per-row fallback.
+  template <bool hasFilter, bool hasHook, bool scatter>
+  FOLLY_ALWAYS_INLINE void processRun(
+      const T* input,
+      int32_t numInput,
+      const int32_t* scatterRows,
+      int32_t* filterHits,
+      T* values,
+      int32_t& numValues) {
+    DCHECK_EQ(input, values + numValues);
+    if constexpr (
+        !hasFilter && !hasHook && !scatter && isDense &&
+        std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
+      rowIndex_ += numInput;
+      numValues += numInput;
+      return;
+    }
+    if constexpr (
+        hasFilter && !hasHook && !scatter && isDense &&
+        TFilter::deterministic &&
+        (std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+         std::is_same_v<T, int16_t>)) {
+      const int32_t firstRow = currentRow();
+      constexpr int32_t kWidth = xsimd::batch<T>::size;
+      int32_t i = 0;
+      while (i + kWidth <= numInput) {
+        auto batch = xsimd::load_unaligned(input + i);
+        processFixedFilter<
+            T,
+            /*filterOnly=*/false,
+            /*scatter=*/false,
+            /*dense=*/true>(
+            batch,
+            kWidth,
+            firstRow + i,
+            filter_,
+            [&](int32_t /*offset*/) {
+              return simd::loadGatherIndices<T>(rows_ + rowIndex_ + i);
+            },
+            values,
+            filterHits,
+            numValues);
+        i += kWidth;
+      }
+      for (; i < numInput; ++i) {
+        if (velox::common::applyFilter(filter_, input[i])) {
+          values[numValues] = input[i];
+          filterHits[numValues] = firstRow + i;
+          ++numValues;
+        }
+      }
+      rowIndex_ += numInput;
+      return;
+    }
+    bool atEnd = false;
+    for (int32_t i = 0; i < numInput; ++i) {
+      process(input[i], atEnd);
+      if (atEnd) {
+        return;
+      }
+    }
+  }
+
   const TFilter& filter() {
     return filter_;
   }
@@ -762,6 +826,15 @@ class DictionaryColumnVisitor
                 : reader->fileType().type()->kind() == TypeKind::INTEGER ? 4
                                                                          : 2),
         state_(reader->scanState().rawState) {}
+
+  // Re-reads the cached scan-state snapshot from the reader. Nimble rebuilds
+  // the per-chunk filter dictionary at each chunk boundary during a multi-chunk
+  // dictionary read; the visitor must re-snapshot so valueInDictionary() sees
+  // the current chunk's dictionary rather than the stale copy captured at
+  // construction.
+  void refreshScanState() {
+    state_ = this->reader().scanState().rawState;
+  }
 
   FOLLY_ALWAYS_INLINE bool isInDict() {
     if (inDict()) {

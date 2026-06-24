@@ -1094,6 +1094,29 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalNullHandling) {
   assertQuery(plan, expected);
 }
 
+// Regression test for the literal-null interval path. Constructing
+// DatePlusIntervalFunction with a constant-null interval used to silently
+// treat it as +0 days (the validity bit was unconditionally set to true), so
+// the row-wise output came back as the input dates instead of NULL.
+TEST_F(CudfFilterProjectTest, datePlusIntervalNullLiteral) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project(
+              {"plus(event_date, CAST(NULL AS INTERVAL DAY TO SECOND)) AS result"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE())});
+  assertQuery(plan, expected);
+}
+
 TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
   auto data = makeRowVector(
       {"event_date", "interval_val"},
@@ -1222,6 +1245,53 @@ TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
       "date_add value is out of range");
 }
 
+TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('second', event_ts) AS second",
+      "date_trunc('minute', event_ts) AS minute",
+      "date_trunc('hour', event_ts) AS hour",
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('week', event_ts) AS week",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('quarter', event_ts) AS quarter",
+      "date_trunc('year', event_ts) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncDateUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_date) AS day",
+      "date_trunc('week', event_date) AS week",
+      "date_trunc('month', event_date) AS month",
+      "date_trunc('quarter', event_date) AS quarter",
+      "date_trunc('year', event_date) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('year', event_ts) AS year"};
+  const std::vector<std::string> groupingKeys{"year", "month", "day"};
+  const std::vector<std::string> orderByKeys{
+      "year ASC NULLS LAST", "month ASC NULLS LAST", "day ASC NULLS LAST"};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
+}
+
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
   auto vectors = makeTimestampExtractVectors();
   const std::vector<std::string> projections{
@@ -1303,53 +1373,6 @@ TEST_F(CudfFilterProjectTest, extractGroupByOrderBy) {
   for (const auto& key : groupingKeys) {
     orderByKeys.push_back(key + " ASC NULLS LAST");
   }
-
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project(projections)
-                  .singleAggregation(groupingKeys, {"count(1) AS events"})
-                  .orderBy(orderByKeys, false)
-                  .planNode();
-
-  assertPlanMatchesVelox(plan);
-}
-
-TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
-  auto vectors = makeTimestampExtractVectors();
-  const std::vector<std::string> projections{
-      "date_trunc('second', event_ts) AS second",
-      "date_trunc('minute', event_ts) AS minute",
-      "date_trunc('hour', event_ts) AS hour",
-      "date_trunc('day', event_ts) AS day",
-      "date_trunc('week', event_ts) AS week",
-      "date_trunc('month', event_ts) AS month",
-      "date_trunc('quarter', event_ts) AS quarter",
-      "date_trunc('year', event_ts) AS year"};
-
-  assertProjectMatchesVelox(vectors, projections);
-}
-
-TEST_F(CudfFilterProjectTest, dateTruncDateUnits) {
-  auto vectors = makeTimestampExtractVectors();
-  const std::vector<std::string> projections{
-      "date_trunc('day', event_date) AS day",
-      "date_trunc('week', event_date) AS week",
-      "date_trunc('month', event_date) AS month",
-      "date_trunc('quarter', event_date) AS quarter",
-      "date_trunc('year', event_date) AS year"};
-
-  assertProjectMatchesVelox(vectors, projections);
-}
-
-TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
-  auto vectors = makeTimestampExtractVectors();
-  const std::vector<std::string> projections{
-      "date_trunc('day', event_ts) AS day",
-      "date_trunc('month', event_ts) AS month",
-      "date_trunc('year', event_ts) AS year"};
-  const std::vector<std::string> groupingKeys{"year", "month", "day"};
-  const std::vector<std::string> orderByKeys{
-      "year ASC NULLS LAST", "month ASC NULLS LAST", "day ASC NULLS LAST"};
 
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -1774,13 +1797,7 @@ TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   testMixedLiteralProjection(vectors);
 }
 
-// This test checks for CudfExpression's ability to handle nested field
-// references. However, to test this, we need to disable CPU fallback, otherwise
-// the test could pass by using CPU, having not exercised the CudfExpression at
-// all. But this test relies on row_constructor to construct the nested fields,
-// which CudfExpression doesn't support. Disabling this until we have a better
-// test
-TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
+TEST_F(CudfFilterProjectTest, dereference) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
   auto vectors = makeVectors(rowType, 10, 100);
@@ -1800,6 +1817,21 @@ TEST_F(CudfFilterProjectTest, DISABLED_dereference) {
              .project({"c1_c2.c1", "c1_c2.c2"})
              .planNode();
   assertQuery(plan, "SELECT c1, c2 FROM tmp WHERE c1 % 10 = 5");
+}
+
+TEST_F(CudfFilterProjectTest, dereferenceWithLiteralAndNullFields) {
+  vector_size_t batchSize = 128;
+  auto vectors = makeVectors(rowType_, 2, batchSize);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project({"row_constructor(c0, cast(null as integer), 'x') AS r"})
+          .project({"r.c1", "r.c2", "r.c3"})
+          .planNode();
+
+  assertQuery(plan, "SELECT c0, CAST(NULL AS INTEGER), 'x' FROM tmp");
 }
 
 TEST_F(CudfFilterProjectTest, cardinality) {
@@ -2003,7 +2035,9 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
             toDateDays("2025-02-28"),
             toDateDays("2024-02-29")},
            DATE()),
-       makeConstant<int64_t>(kMillisInDay, 3, INTERVAL_DAY_TIME())});
+       makeFlatVector<int64_t>(
+           {1 * kMillisInDay, 5 * kMillisInDay, 30 * kMillisInDay},
+           INTERVAL_DAY_TIME())});
   std::vector<RowVectorPtr> vectors{data};
 
   auto plan = PlanBuilder()
@@ -2013,8 +2047,8 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalColumn) {
 
   auto expected = makeRowVector({makeFlatVector<int32_t>(
       {toDateDays("2025-01-02"),
-       toDateDays("2025-03-01"),
-       toDateDays("2024-03-01")},
+       toDateDays("2025-03-05"),
+       toDateDays("2024-03-30")},
       DATE())});
   assertQuery(plan, expected);
 }
@@ -2182,6 +2216,95 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
+  auto rowType = ROW({{"c0", INTEGER()}, {"c1", VARCHAR()}});
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c1", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 1).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(c0, cast(null as varchar)).c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c1", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(cast(null as integer), c1).c2", input, rowType);
+  assertExpressionMatchesCpu("row_constructor(c0, 'z').c2", input, rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c1",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, c1), cast(null as integer)).c1.c2",
+      input,
+      rowType);
+  assertExpressionMatchesCpu(
+      "row_constructor(row_constructor(c0, cast(null as varchar)), 1).c1.c2",
+      input,
+      rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
+  auto rowType = ROW({{"r", ROW({{"a", INTEGER()}, {"b", VARCHAR()}})}});
+  auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
+  auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
+  auto nullableStruct = makeRowVector({a, b}, nullEvery(2));
+  auto input = makeRowVector({"r"}, {nullableStruct});
+
+  assertExpressionMatchesCpu("r.a", input, rowType);
+  assertExpressionMatchesCpu("r.b", input, rowType);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByIndex) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto unnamedRowType = ROW({{"", INTEGER()}, {"", VARCHAR()}});
+  auto typed = std::make_shared<core::DereferenceTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          unnamedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      1);
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByName) {
+  auto c0 = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  auto c1 = makeNullableFlatVector<std::string>({"x", "y", std::nullopt});
+  auto input = makeRowVector({c0, c1});
+
+  auto namedRowType = ROW({{"left", INTEGER()}, {"right", VARCHAR()}});
+  auto typed = std::make_shared<core::FieldAccessTypedExpr>(
+      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(
+          namedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0"),
+              std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c1"),
+          },
+          "row_constructor"),
+      "right");
+  exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
+
+  auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+  auto actual = evaluate(exprSet, input);
+  facebook::velox::test::assertEqualVectors(expected, actual);
 }
 
 // Test unary math functions

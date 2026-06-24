@@ -214,12 +214,17 @@ void RPCState::addPendingBatch(
     std::shared_ptr<RPCState> selfPtr,
     folly::SemiFuture<std::vector<RPCResponse>> future,
     std::vector<RowLocation> rowLocations) {
-  std::lock_guard<std::mutex> l(mutex_);
-
-  int64_t batchId = nextBatchId_++;
-
-  // Attach a completion callback that notifies waiters when the batch
-  // completes. We use .via().thenValue() to run the callback eagerly.
+  // Build the callback chain OUTSIDE the lock. The .via(InlineExecutor)
+  // may drive the chain synchronously if the future is already resolved,
+  // and the thenValue/thenError callbacks acquire mutex_ to notify
+  // waiters. Holding mutex_ here would deadlock.
+  //
+  // If the chain completes inline, notifyWaitersLocked() fires before
+  // the batch is inserted into pendingBatches_ below. This is safe:
+  // RPCState is per-driver (owned by RPCOperator, never shared), so no
+  // other thread can be blocked in tryPollBatchOrWait during addInput —
+  // promises_ is empty and the notification is a no-op. The batch is
+  // found as already-ready by tryPollBatchOrWait on the next isBlocked.
   auto callbackFuture =
       std::move(future)
           .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
@@ -243,14 +248,18 @@ void RPCState::addPendingBatch(
           })
           .semi();
 
-  pendingBatches_.push_back(
-      PendingBatch{
-          .batchId = batchId,
-          .future = std::move(callbackFuture),
-          .rowLocations = std::move(rowLocations)});
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto batchId = nextBatchId_++;
+    pendingBatches_.push_back(
+        PendingBatch{
+            .batchId = batchId,
+            .future = std::move(callbackFuture),
+            .rowLocations = std::move(rowLocations)});
 
-  RPC_STATE_VLOG(1) << "addPendingBatch: batchId=" << batchId
-                    << ", totalPending=" << pendingBatches_.size();
+    RPC_STATE_VLOG(1) << "addPendingBatch: batchId=" << batchId
+                      << ", totalPending=" << pendingBatches_.size();
+  }
 }
 
 RPCState::BatchPollResult RPCState::tryPollBatchOrWait(

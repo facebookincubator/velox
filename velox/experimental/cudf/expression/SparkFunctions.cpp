@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
@@ -23,6 +24,23 @@
 #include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+void registerSparkArrayAccessFunctions(const std::string& prefix) {
+  // Spark get is 0 based and returns NULL for negative or out-of-bounds
+  // indices.
+  registerArrayAccessFunction(
+      prefix + "get",
+      ArrayAccessPolicy{
+          .allowNegativeIndices = true,
+          .nullOnNegativeIndices = true,
+          .allowOutOfBound = true,
+          .indexStartsAtOne = false,
+      },
+      arrayAccessSignatures({"tinyint", "smallint", "integer", "bigint"}));
+}
+
+} // namespace
 
 void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
@@ -71,6 +89,8 @@ void registerSparkFunctions(const std::string& prefix) {
            .build()},
       true,
       DateTruncFunction::canEvaluate);
+
+  registerSparkArrayAccessFunctions(prefix);
 }
 
 } // namespace facebook::velox::cudf_velox

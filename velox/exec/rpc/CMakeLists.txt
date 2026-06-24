@@ -64,5 +64,18 @@ if(${VELOX_BUILD_TESTING})
     velox_async_rpc_function
   )
 
+  velox_add_library(
+    velox_demo_batch_rpc_function
+    tests/DemoBatchRPCFunction.cpp
+    HEADERS
+    tests/DemoBatchRPCFunction.h
+  )
+
+  velox_link_libraries(
+    velox_demo_batch_rpc_function
+    velox_expression_functions
+    velox_async_rpc_function
+  )
+
   add_subdirectory(tests)
 endif()

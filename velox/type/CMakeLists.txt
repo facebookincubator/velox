@@ -38,12 +38,14 @@ velox_add_library(
   TypeEncodingUtil.cpp
   TypeUtil.cpp
   Variant.cpp
+  WideRangeDateConversion.cpp
   HEADERS
   CastRegistry.h
   CastRule.h
   Conversions.h
   CppToType.h
   DecimalUtil.h
+  FastDate.h
   Filter.h
   FloatingPointUtil.h
   HugeInt.h
@@ -58,8 +60,10 @@ velox_add_library(
   Type.h
   TypeCoercer.h
   TypeEncodingUtil.h
+  TypeSerde.h
   TypeUtil.h
   Variant.h
+  WideRangeDateConversion.h
 )
 
 velox_link_libraries(

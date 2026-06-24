@@ -18,6 +18,8 @@
 
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <numeric>
 
@@ -27,6 +29,14 @@
 DECLARE_bool(velox_memory_use_hugepages);
 
 namespace facebook::velox::memory {
+
+void AcquiredMemory::free(MemoryAllocator* allocator) {
+  allocator->freeNonContiguous(nonContiguousAllocs);
+  for (auto& [ptr, size] : byteAllocations) {
+    allocator->freeBytes(ptr, size);
+  }
+  byteAllocations.clear();
+}
 
 // static
 std::vector<MachinePageCount> MemoryAllocator::makeSizeClassSizes(
@@ -138,8 +148,7 @@ bool MemoryAllocator::isAlignmentValid(
   // alignmentBytes must be a power of two, so we can replace the expensive
   // modulo operation with bitwise and.
   return (alignmentBytes == kMinAlignment) ||
-      (alignmentBytes >= kMinAlignment && alignmentBytes <= kMaxAlignment &&
-       bits::isPowerOfTwo(alignmentBytes) &&
+      (alignmentBytes >= kMinAlignment && bits::isPowerOfTwo(alignmentBytes) &&
        (allocateBytes & (alignmentBytes - 1)) == 0);
 }
 
@@ -217,8 +226,9 @@ bool MemoryAllocator::allocateNonContiguous(
     success = allocateNonContiguousWithoutRetry(mix, out);
   } else {
     success = cache()->makeSpace(
-        pagesToAcquire(numPages, out.numPages()), [&](Allocation& acquired) {
-          freeNonContiguous(acquired);
+        pagesToAcquire(numPages, out.numPages()),
+        [&](AcquiredMemory& acquired) {
+          acquired.free(this);
           return allocateNonContiguousWithoutRetry(mix, out);
         });
   }
@@ -285,8 +295,8 @@ bool MemoryAllocator::allocateContiguous(
   } else {
     success = cache()->makeSpace(
         pagesToAcquire(numPages, numCollateralPages),
-        [&](Allocation& acquired) {
-          freeNonContiguous(acquired);
+        [&](AcquiredMemory& acquired) {
+          acquired.free(this);
           return allocateContiguousWithoutRetry(
               numPages, collateral, allocation, maxPages);
         });
@@ -319,8 +329,8 @@ bool MemoryAllocator::growContiguous(
   if (cache() == nullptr) {
     success = growContiguousWithoutRetry(increment, allocation);
   } else {
-    success = cache()->makeSpace(increment, [&](Allocation& acquired) {
-      freeNonContiguous(acquired);
+    success = cache()->makeSpace(increment, [&](AcquiredMemory& acquired) {
+      acquired.free(this);
       return growContiguousWithoutRetry(increment, allocation);
     });
   }
@@ -336,8 +346,8 @@ void* MemoryAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
   }
   void* result = nullptr;
   cache()->makeSpace(
-      AllocationTraits::numPages(bytes), [&](Allocation& acquired) {
-        freeNonContiguous(acquired);
+      AllocationTraits::numPages(bytes), [&](AcquiredMemory& acquired) {
+        acquired.free(this);
         result = allocateBytesWithoutRetry(bytes, alignment);
         return result != nullptr;
       });
@@ -350,8 +360,8 @@ void* MemoryAllocator::allocateZeroFilled(uint64_t bytes) {
   }
   void* result = nullptr;
   cache()->makeSpace(
-      AllocationTraits::numPages(bytes), [&](Allocation& acquired) {
-        freeNonContiguous(acquired);
+      AllocationTraits::numPages(bytes), [&](AcquiredMemory& acquired) {
+        acquired.free(this);
         result = allocateZeroFilledWithoutRetry(bytes);
         return result != nullptr;
       });
@@ -364,6 +374,40 @@ void* MemoryAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
     ::memset(result, 0, bytes);
   }
   return result;
+}
+
+void* MemoryAllocator::reallocateBytes(
+    void* p,
+    uint64_t oldSize,
+    uint64_t newSize,
+    uint16_t alignment) {
+  // Try in-place reallocation first (supported by MallocAllocator via
+  // ::realloc(), which jemalloc can often service without moving data).
+  void* result = reallocateBytesWithoutRetry(p, oldSize, newSize, alignment);
+  if (result != nullptr) {
+    return result;
+  }
+  // Fallback: allocate new + memcpy + free old. This path also handles
+  // cache eviction via allocateBytes.
+  void* newP = allocateBytes(newSize, alignment);
+  if (newP == nullptr) {
+    return nullptr;
+  }
+  if (p != nullptr) {
+    ::memcpy(newP, p, std::min(oldSize, newSize));
+    freeBytes(p, oldSize);
+  }
+  return newP;
+}
+
+void* MemoryAllocator::reallocateBytesWithoutRetry(
+    void* /*p*/,
+    uint64_t /*oldSize*/,
+    uint64_t /*newSize*/,
+    uint16_t /*alignment*/) {
+  // Default: in-place reallocation not supported. Caller will fall back to
+  // allocateBytes + memcpy + freeBytes.
+  return nullptr;
 }
 
 Stats Stats::operator-(const Stats& other) const {

@@ -138,6 +138,14 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
   ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
+// Test stddev_samp is supported
+TEST_F(CudfAggregationSelectionTest, stddevSampSupported) {
+  auto aggregationNode =
+      createAggregationNode({"c0"}, {"stddev_samp(c1)", "stddev_samp(c5)"});
+
+  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+}
+
 // Test unsupported aggregation functions
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
   auto aggregationNode =
@@ -150,7 +158,7 @@ TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
 // function is unsupported
 TEST_F(CudfAggregationSelectionTest, mixedSupportedUnsupportedFunctions) {
   auto aggregationNode =
-      createAggregationNode({"c0"}, {"sum(c1)", "stddev(c2)"});
+      createAggregationNode({"c0"}, {"sum(c1)", "variance(c2)"});
 
   ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
@@ -162,10 +170,10 @@ TEST_F(CudfAggregationSelectionTest, supportedGroupingKeyExpressions) {
   ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
 
-// Test unsupported aggregation functions (using stddev as example)
+// Test unsupported aggregation functions (using variance as example)
 TEST_F(CudfAggregationSelectionTest, unsupportedGroupingKeyExpressions) {
   auto aggregationNode =
-      createAggregationNode({"c0"}, {"sum(c1)", "stddev(c2)"});
+      createAggregationNode({"c0"}, {"sum(c1)", "variance(c2)"});
 
   ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
 }
@@ -362,19 +370,12 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationNotAllowedToNotAllowed) {
 
 // Test unsupported aggregation function signatures
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctionSignatures) {
-  auto stddevExpr = std::make_shared<core::CallTypedExpr>(
-      DOUBLE(),
-      std::vector<core::TypedExprPtr>{
-          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
-      "stddev");
-
   auto varianceExpr = std::make_shared<core::CallTypedExpr>(
       DOUBLE(),
       std::vector<core::TypedExprPtr>{
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
       "variance");
 
-  ASSERT_FALSE(canAggregationBeEvaluatedByCudf(*stddevExpr, queryCtx_.get()));
   ASSERT_FALSE(canAggregationBeEvaluatedByCudf(*varianceExpr, queryCtx_.get()));
 }
 

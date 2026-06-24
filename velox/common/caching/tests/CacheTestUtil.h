@@ -147,6 +147,14 @@ class AsyncDataCacheEntryTestHelper {
     return asyncDataCacheEntry_->isFirstUse_;
   }
 
+  bool isTinyData() const {
+    return !asyncDataCacheEntry_->tinyData_.empty();
+  }
+
+  bool isContiguousData() const {
+    return asyncDataCacheEntry_->contiguousData_ != nullptr;
+  }
+
  private:
   AsyncDataCacheEntry* const asyncDataCacheEntry_;
 };
