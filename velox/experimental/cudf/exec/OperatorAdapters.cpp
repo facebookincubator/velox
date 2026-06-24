@@ -38,6 +38,7 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
@@ -195,7 +196,7 @@ class FilterProjectAdapter : public OperatorAdapter {
     // Check filter separately
     if (filterNode) {
       if (!canBeEvaluatedByCudf(
-              {filterNode->filter()}, ctx->task->queryCtx().get())) {
+              filterNode->filter(), ctx->task->queryCtx().get())) {
         LOG_FALLBACK(
             "FilterProject filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -205,12 +206,13 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     // Check projects separately
     if (projectPlanNode) {
-      if (!canBeEvaluatedByCudf(
-              projectPlanNode->projections(), ctx->task->queryCtx().get())) {
-        LOG_FALLBACK(
-            "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
-            planNode->id());
-        return false;
+      for (const auto& projection : projectPlanNode->projections()) {
+        if (!canBeEvaluatedByCudf(projection, ctx->task->queryCtx().get())) {
+          LOG_FALLBACK(
+              "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
+              planNode->id());
+          return false;
+        }
       }
     }
     return true;
@@ -362,7 +364,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
 
     if (joinPlanNode->filter()) {
       if (!canBeEvaluatedByCudf(
-              {joinPlanNode->filter()}, ctx->task->queryCtx().get())) {
+              joinPlanNode->filter(), ctx->task->queryCtx().get())) {
         LOG_FALLBACK(
             "HashJoin join filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());
@@ -470,7 +472,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
       if (!canBeEvaluatedByCudf(
-              {joinPlanNode->joinCondition()}, ctx->task->queryCtx().get())) {
+              joinPlanNode->joinCondition(), ctx->task->queryCtx().get())) {
         LOG_FALLBACK(
             "NestedLoopJoin filter cannot be evaluated by cuDF, PlanNode id: {}",
             planNode->id());

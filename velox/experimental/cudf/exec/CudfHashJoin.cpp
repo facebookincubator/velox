@@ -22,11 +22,13 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
+#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
+#include "velox/expression/ExprOptimizer.h"
 #include "velox/type/TypeUtil.h"
 
 #include <cudf/aggregation.hpp>
@@ -468,14 +470,17 @@ void CudfHashJoinProbe::initialize() {
     return;
   }
 
-  // simplify expression
-  exec::ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
-  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+  auto* const pool = operatorCtx_->pool();
+
+  // Optimize once so the filter evaluator and the two-table AST tree see the
+  // same constant-folded form.
+  const auto optimizedFilter = expression::optimize(
+      joinNode_->filter(), operatorCtx_->execCtx()->queryCtx(), pool);
 
   // Disable AST-based filtering (and force precomputation) if the filter
   // expression contains a type the AST/JIT evaluator can't handle, using the
   // same shallow check applied during regular expression evaluation.
-  if (containsAstUnsupportedType(exprs.exprs()[0])) {
+  if (containsAstUnsupportedType(optimizedFilter)) {
     useAstFilter_ = false;
   }
 
@@ -491,14 +496,16 @@ void CudfHashJoinProbe::initialize() {
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
   std::vector<velox::RowTypePtr> filterRowTypes{probeType_, buildType_};
-  filterEvaluator_ = createCudfExpression(
-      exprs.exprs()[0], facebook::velox::type::concatRowTypes(filterRowTypes));
+  filterEvaluator_ = compile(
+      optimizedFilter,
+      facebook::velox::type::concatRowTypes(filterRowTypes),
+      pool);
 
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
   // cannot use AST-based filtering and must fall back to filterEvaluator_.
   if (hasNonAstSubexprSpanningBothSides(
-          exprs.exprs()[0], probeType_, buildType_)) {
+          optimizedFilter, probeType_, buildType_)) {
     VLOG(1) << "Filter expression spans both join sides, using "
                "filterEvaluator_ instead of AST";
     useAstFilter_ = false;
@@ -515,22 +522,24 @@ void CudfHashJoinProbe::initialize() {
     // create ast tree
     if (joinNode_->isRightJoin() || joinNode_->isRightSemiFilterJoin()) {
       createAstTree(
-          exprs.exprs()[0],
+          optimizedFilter,
           tree_,
           scalars_,
           buildType_,
           probeType_,
           rightPrecomputeInstructions_,
-          leftPrecomputeInstructions_);
+          leftPrecomputeInstructions_,
+          pool);
     } else {
       createAstTree(
-          exprs.exprs()[0],
+          optimizedFilter,
           tree_,
           scalars_,
           probeType_,
           buildType_,
           leftPrecomputeInstructions_,
-          rightPrecomputeInstructions_);
+          rightPrecomputeInstructions_,
+          pool);
     }
   }
 }

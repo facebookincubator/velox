@@ -26,6 +26,7 @@
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 
 #include "velox/exec/Task.h"
+#include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/binaryop.hpp>
@@ -291,20 +292,27 @@ void CudfNestedLoopJoinProbe::initialize() {
     return;
   }
 
-  exec::ExprSet exprs({joinNode_->joinCondition()}, operatorCtx_->execCtx());
-  VELOX_CHECK_EQ(exprs.exprs().size(), 1);
+  auto* const pool = operatorCtx_->pool();
 
-  // Convert Velox expression to cuDF AST expression tree.
+  // Optimize (rewrites + constant folding) the join condition before building
+  // the AST so CudfFunctions never see scalar-only operand sets. This carries
+  // over the constant folding the exec::ExprSet used to perform.
+  const auto optimizedCondition = expression::optimize(
+      joinNode_->joinCondition(), operatorCtx_->execCtx()->queryCtx(), pool);
+  VELOX_CHECK_NOT_NULL(optimizedCondition);
+
+  // Convert Velox typed expression to cuDF AST expression tree.
   // The AST will be passed to cudf::conditional_inner_join() for GPU
   // evaluation.
   createAstTree(
-      exprs.exprs()[0],
+      optimizedCondition,
       tree_,
       scalars_,
       probeType_,
       buildType_,
       leftPrecomputeInstructions_,
-      rightPrecomputeInstructions_);
+      rightPrecomputeInstructions_,
+      pool);
 
   // Set hasFilter_ only after the AST has been fully built so that a throw
   // from createAstTree() does not leave the operator marked as having a filter

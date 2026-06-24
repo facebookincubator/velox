@@ -19,17 +19,18 @@
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/CudfExpressionCompiler.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
-#include "velox/expression/Expr.h"
-#include "velox/expression/FieldReference.h"
+#include "velox/core/Expressions.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <unordered_map>
 
@@ -38,13 +39,13 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 void debugPrintTree(
-    const std::shared_ptr<velox::exec::Expr>& expr,
+    const core::TypedExprPtr& expr,
     int indent = 0,
     std::ostream& os = std::cout) {
   if (indent == 0)
     os << "=== Expression Tree ===" << std::endl;
-  os << std::string(indent, ' ') << expr->name() << "("
-     << expr->type()->toString() << ")" << std::endl;
+  os << std::string(indent, ' ') << core::ExprKindName::toName(expr->kind())
+     << "(" << expr->type()->toString() << ")" << std::endl;
   for (auto& input : expr->inputs()) {
     debugPrintTree(input, indent + 2, os);
   }
@@ -103,30 +104,6 @@ std::vector<exec::OperatorStats> splitStats(
 }
 
 } // namespace
-
-bool canBeEvaluatedByCudf(
-    const std::vector<core::TypedExprPtr>& exprs,
-    core::QueryCtx* queryCtx) {
-  if (exprs.empty()) {
-    return true;
-  }
-
-  auto precompilePool =
-      memory::memoryManager()->addLeafPool("", /*threadSafe*/ false);
-  core::ExecCtx precompileCtx(precompilePool.get(), queryCtx);
-
-  bool lazyDereference = false;
-  std::vector<core::TypedExprPtr> exprsCopy = exprs;
-  std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
-      std::move(exprsCopy), &precompileCtx, lazyDereference);
-
-  for (const auto& e : exprSet->exprs()) {
-    if (!canBeEvaluatedByCudf(e)) {
-      return false;
-    }
-  }
-  return true;
-}
 
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,
@@ -190,8 +167,6 @@ void CudfFilterProject::initialize() {
       (dynamic_cast<const core::LazyDereferenceNode*>(project_.get()) !=
        nullptr);
   VELOX_CHECK(!(lazyDereference && filter_));
-  auto expr = exec::makeExprSetFromFlag(
-      std::move(allExprs), operatorCtx_->execCtx(), lazyDereference);
 
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
@@ -199,28 +174,34 @@ void CudfFilterProject::initialize() {
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
-    for (const auto& expr : expr->exprs()) {
+    for (const auto& expr : allExprs) {
       LOG(INFO) << "expr[" << i++ << "] " << expr->toString();
       debugPrintTree(expr, 0, LOG(INFO));
     }
   }
+  // Optimize (rewrites + constant folding) each expression before evaluator
+  // selection so CudfFunctions never see scalar-only operand sets, then
+  // compile.
+  auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
+  auto* const pool = operatorCtx_->pool();
   if (hasFilter_) {
-    // First expr is Filter, rest are Project
-    filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
+    // First expr is Filter, rest are Project.
+    filterEvaluator_ =
+        optimizeAndCompile(allExprs.front(), inputType, queryCtx, pool);
     std::transform(
-        expr->exprs().begin() + 1,
-        expr->exprs().end(),
+        allExprs.begin() + 1,
+        allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [inputType, queryCtx, pool](const auto& expr) {
+          return optimizeAndCompile(expr, inputType, queryCtx, pool);
         });
   } else {
     std::transform(
-        expr->exprs().begin(),
-        expr->exprs().end(),
+        allExprs.begin(),
+        allExprs.end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [inputType, queryCtx, pool](const auto& expr) {
+          return optimizeAndCompile(expr, inputType, queryCtx, pool);
         });
   }
 

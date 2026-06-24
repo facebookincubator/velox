@@ -22,18 +22,28 @@ namespace facebook::velox::expression {
 
 namespace {
 
-// Tries constant folding input `expr` with `tryEvaluateConstantExpression` API
-// and returns the evaluated expression if constant folding succeeds. If
-// `tryEvaluateConstantExpression` throws a `VeloxUserError`, returns the
-// result of applying `makeFailExpr` to `expr`, otherwise returns `expr`.
+// Folds an all-constant expression to a single-row vector. Returns nullptr if
+// the expression cannot be folded. The two public optimize() overloads supply
+// an evaluator backed by a QueryCtx or an ExpressionEvaluator.
+using ConstantEvaluator = std::function<
+    VectorPtr(const core::TypedExprPtr& expr, bool suppressEvaluationFailures)>;
+
+core::TypedExprPtr optimize(
+    const core::TypedExprPtr& expr,
+    const ConstantEvaluator& constantEvaluator,
+    const MakeFailExpr& makeFailExpr);
+
+// Tries constant folding input `expr` with `constantEvaluator` and returns
+// the evaluated expression if constant folding succeeds. If
+// `constantEvaluator` throws a `VeloxUserError`, returns the result of
+// applying `makeFailExpr` to `expr`, otherwise returns `expr`.
 core::TypedExprPtr tryConstantFold(
     const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
+    const ConstantEvaluator& constantEvaluator,
     const MakeFailExpr& makeFailExpr) {
   try {
     if (auto results =
-            exec::tryEvaluateConstantExpression(expr, pool, queryCtx, false)) {
+            constantEvaluator(expr, /*suppressEvaluationFailures=*/false)) {
       return std::make_shared<core::ConstantTypedExpr>(results);
     }
   } catch (VeloxUserError& e) {
@@ -57,14 +67,14 @@ core::TypedExprPtr tryConstantFold(
 // kind as expr but with optimized inputs.
 core::TypedExprPtr optimizeInputs(
     const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
+    const ConstantEvaluator& constantEvaluator,
     const MakeFailExpr& makeFailExpr) {
   if (expr->isCallKind() || expr->isNullIfKind()) {
     std::vector<core::TypedExprPtr> optimizedInputs;
     optimizedInputs.reserve(expr->inputs().size());
     for (const auto& input : expr->inputs()) {
-      optimizedInputs.push_back(optimize(input, queryCtx, pool, makeFailExpr));
+      optimizedInputs.push_back(
+          optimize(input, constantEvaluator, makeFailExpr));
     }
 
     if (expr->isCallKind()) {
@@ -80,7 +90,7 @@ core::TypedExprPtr optimizeInputs(
 
   if (expr->isCastKind()) {
     const auto optimizedInput =
-        optimize(expr->inputs().at(0), queryCtx, pool, makeFailExpr);
+        optimize(expr->inputs().at(0), constantEvaluator, makeFailExpr);
     const auto* castExpr = expr->asUnchecked<core::CastTypedExpr>();
     return std::make_shared<core::CastTypedExpr>(
         expr->type(), optimizedInput, castExpr->isTryCast());
@@ -89,19 +99,16 @@ core::TypedExprPtr optimizeInputs(
   if (expr->isLambdaKind()) {
     const auto* lambdaExpr = expr->asUnchecked<core::LambdaTypedExpr>();
     const auto foldedBody =
-        optimize(lambdaExpr->body(), queryCtx, pool, makeFailExpr);
+        optimize(lambdaExpr->body(), constantEvaluator, makeFailExpr);
     return std::make_shared<core::LambdaTypedExpr>(
         lambdaExpr->signature(), foldedBody);
   }
 
   return expr;
 }
-} // namespace
-
 core::TypedExprPtr optimize(
     const core::TypedExprPtr& expr,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
+    const ConstantEvaluator& constantEvaluator,
     const MakeFailExpr& makeFailExpr) {
   auto result = expr;
   // cast(1 AS BIGINT) -> 1.
@@ -117,7 +124,7 @@ core::TypedExprPtr optimize(
     return result;
   }
 
-  result = optimizeInputs(result, queryCtx, pool, makeFailExpr);
+  result = optimizeInputs(result, constantEvaluator, makeFailExpr);
   bool allInputsConstant = true;
   for (const auto& input : result->inputs()) {
     if (!input->isConstantKind()) {
@@ -127,9 +134,40 @@ core::TypedExprPtr optimize(
   }
 
   if (allInputsConstant) {
-    return tryConstantFold(result, queryCtx, pool, makeFailExpr);
+    return tryConstantFold(result, constantEvaluator, makeFailExpr);
   }
   return ExprRewriteRegistry::instance().rewrite(result);
+}
+
+} // namespace
+
+core::TypedExprPtr optimize(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    const MakeFailExpr& makeFailExpr) {
+  return optimize(
+      expr,
+      [queryCtx, pool](
+          const core::TypedExprPtr& foldExpr, bool suppressEvaluationFailures) {
+        return exec::tryEvaluateConstantExpression(
+            foldExpr, pool, queryCtx, suppressEvaluationFailures);
+      },
+      makeFailExpr);
+}
+
+core::TypedExprPtr optimize(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    const MakeFailExpr& makeFailExpr) {
+  return optimize(
+      expr,
+      [evaluator](
+          const core::TypedExprPtr& foldExpr, bool suppressEvaluationFailures) {
+        return exec::tryEvaluateConstantExpression(
+            foldExpr, evaluator, suppressEvaluationFailures);
+      },
+      makeFailExpr);
 }
 
 } // namespace facebook::velox::expression

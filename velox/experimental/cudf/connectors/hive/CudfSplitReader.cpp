@@ -208,7 +208,6 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
         readerOptions_,
         stream_,
         output_mr);
-    // TODO: check remainingFilterExprSet_ flag here to choose mr
   });
 
   if (!exptSplitReader_->has_next_table_chunk()) {

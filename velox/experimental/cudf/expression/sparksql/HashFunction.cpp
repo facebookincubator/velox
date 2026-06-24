@@ -15,8 +15,10 @@
  */
 #include "velox/experimental/cudf/expression/sparksql/HashFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/hashing.hpp>
 #include <cudf/table/table.hpp>
@@ -35,13 +37,18 @@ cudf::table_view convertToTableView(std::vector<ColumnOrView>& inputColumns) {
 
 } // namespace
 
-HashFunction::HashFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-  using velox::exec::ConstantExpr;
+HashFunction::HashFunction(
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK_GE(expr->inputs().size(), 2, "hash expects at least 2 inputs");
-  auto seedExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[0]);
-  VELOX_CHECK_NOT_NULL(seedExpr, "hash seed must be a constant");
-  int32_t seedValue =
-      seedExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
+  VELOX_CHECK(
+      expr->inputs()[0]->isConstantKind(), "hash seed must be a constant");
+  const auto* seedExpr =
+      expr->inputs()[0]->asUnchecked<core::ConstantTypedExpr>();
+  const auto vec = seedExpr->hasValueVector()
+      ? seedExpr->valueVector()
+      : seedExpr->toConstantVector(pool);
+  int32_t seedValue = vec->as<SimpleVector<int32_t>>()->valueAt(0);
   VELOX_CHECK_GE(seedValue, 0);
   seedValue_ = seedValue;
 }

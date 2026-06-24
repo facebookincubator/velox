@@ -710,7 +710,7 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
 
 // Verify that extractFiltersFromRemainingFilter extracts simple single-column
 // filters from the remaining filter into subfield filters for pushdown.
-// When a filter like "c0 = 1" is fully extracted, remainingFilterExprSet_ is
+// When a filter like "c0 = 1" is fully extracted, cudfExpressionEvaluator_ is
 // null and totalRemainingFilterWallNanos is 0. Without extraction, the filter
 // runs post-read on the GPU and the stat is > 0.
 TEST_F(TableScanTest, remainingFilterExtraction) {
