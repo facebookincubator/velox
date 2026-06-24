@@ -59,6 +59,24 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
       outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
 }
 
+void checkDecimalDivideTypes(
+    cudf::type_id inType,
+    cudf::type_id outType) {
+  VELOX_CHECK(
+      inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
+      "Unsupported input type for decimal divide");
+  if (inType == cudf::type_id::DECIMAL64) {
+    VELOX_CHECK(
+        outType == cudf::type_id::DECIMAL64 ||
+            outType == cudf::type_id::DECIMAL128,
+        "Unexpected output type for decimal divide");
+  } else {
+    VELOX_CHECK(
+        outType == cudf::type_id::DECIMAL128,
+        "Unexpected output type for decimal divide");
+  }
+}
+
 } // namespace
 
 // Scatters null values to positions where the divisor is zero.
@@ -112,7 +130,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     int32_t aRescale,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  VELOX_CHECK(lhs.size() == rhs.size(), "Decimal divide requires equal sizes");
+  VELOX_CHECK_EQ(lhs.size(), rhs.size(), "Decimal divide requires equal sizes");
   // Use VELOX_CHECK (not _EQ) so failed checks do not pass cudf::type_id into
   // fmt, which has no formatter for that enum.
   VELOX_CHECK(
@@ -127,19 +145,7 @@ std::unique_ptr<cudf::column> decimalDivide(
 
   const auto inType = lhs.type().id();
   const auto outType = outputType.id();
-  VELOX_CHECK(
-      inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
-      "Unsupported input type for decimal divide");
-  if (inType == cudf::type_id::DECIMAL64) {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL64 ||
-            outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  } else {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  }
+  checkDecimalDivideTypes(inType, outType);
 
   // Combine input null masks (lhs and rhs nulls).
   auto [nullMask, nullCount] =
@@ -192,19 +198,7 @@ std::unique_ptr<cudf::column> decimalDivide(
 
   const auto inType = lhs.type().id();
   const auto outType = outputType.id();
-  VELOX_CHECK(
-      inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
-      "Unsupported input type for decimal divide");
-  if (inType == cudf::type_id::DECIMAL64) {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL64 ||
-            outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  } else {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  }
+  checkDecimalDivideTypes(inType, outType);
 
   VELOX_USER_CHECK(
       detail::decimalDivideColumnScalar(
@@ -250,19 +244,7 @@ std::unique_ptr<cudf::column> decimalDivide(
 
   const auto inType = rhs.type().id();
   const auto outType = outputType.id();
-  VELOX_CHECK(
-      inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
-      "Unsupported input type for decimal divide");
-  if (inType == cudf::type_id::DECIMAL64) {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL64 ||
-            outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  } else {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  }
+  checkDecimalDivideTypes(inType, outType);
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
   VELOX_USER_CHECK(
