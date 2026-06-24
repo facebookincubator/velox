@@ -1090,44 +1090,44 @@ must be specified as raw byte counts.
      - Default Value
      - Description
    * - hive.parquet.writer.enable-dictionary
-     - hive.parquet.writer.enable_dictionary
+     - parquet_writer_enable_dictionary
      - bool
      - true
      - Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
    * - hive.parquet.writer.dictionary-page-size-limit
-     - hive.parquet.writer.dictionary_page_size_limit
+     - parquet_writer_dictionary_page_size_limit
      - string
      - 1MB
      - Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
    * - hive.parquet.writer.timestamp-unit
-     - hive.parquet.writer.timestamp_unit
+     - parquet_writer_timestamp_unit
      - tinyint
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
    * - hive.parquet.writer.datapage-version
-     - hive.parquet.writer.datapage_version
+     - parquet_writer_datapage_version
      - string
      - V1
      - Data Page version used when writing into Parquet through Arrow bridge.
        Valid values are "V1" and "V2".
    * - hive.parquet.writer.page-size
-     - hive.parquet.writer.page_size
+     - parquet_writer_page_size
      - string
      - 1MB
      - Data Page size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.batch-size
-     - hive.parquet.writer.batch_size
+     - parquet_writer_batch_size
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.created-by
-     - hive.parquet.writer.created_by
+     - -
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
    * - hive.parquet.writer.enable-store-decimal-as-integer
-     - hive.parquet.writer.enable_store_decimal_as_integer
+     - parquet_writer_enable_store_decimal_as_integer
      - bool
      - true
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.

@@ -19,6 +19,10 @@
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
 
+#ifdef VELOX_ENABLE_PARQUET
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+#endif
+
 #include <algorithm>
 
 using namespace facebook::velox;
@@ -256,6 +260,7 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
       56UL << 20);
 }
 
+#ifdef VELOX_ENABLE_PARQUET
 TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
 
@@ -266,6 +271,15 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
         });
   };
 
+  const auto parquetSessionPrefix =
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_");
   EXPECT_TRUE(hasProperty(HiveConfig::kParquetUseColumnNamesSession));
+  EXPECT_TRUE(hasProperty(
+      parquetSessionPrefix +
+      std::string(parquet::ParquetConfig::kWriterEnableDictionarySession)));
+  EXPECT_TRUE(hasProperty(
+      parquetSessionPrefix +
+      std::string(parquet::ParquetConfig::kWriterPageSizeSession)));
   EXPECT_FALSE(hasProperty(HiveConfig::kParquetUseColumnNames));
 }
+#endif
