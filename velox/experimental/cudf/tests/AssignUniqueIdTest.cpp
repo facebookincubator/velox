@@ -172,14 +172,15 @@ TEST_F(AssignUniqueIdTest, maxRowIdLimit) {
 
   auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
-  // Increase the counter to kMaxRowId.
-  std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(plan)
-      ->uniqueIdCounter()
-      ->fetch_add(1L << 40);
+  CursorParameters params;
+  params.planNode = plan;
+  auto cursor = TaskCursor::create(params);
+
+  // Seed the pool to kMaxRowId to force overflow on the next request.
+  cursor->task()->uniqueRowIdPool()->fetch_add(1L << 40);
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "Ran out of unique IDs at 1099511627776");
+      cursor->moveNext(), "Ran out of unique IDs at 1099511627776");
 }
 
 TEST_F(AssignUniqueIdTest, taskUniqueIdLimit) {

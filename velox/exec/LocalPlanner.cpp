@@ -697,7 +697,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
               ctx.get(),
               assignUniqueIdNode,
               assignUniqueIdNode->taskUniqueId(),
-              assignUniqueIdNode->uniqueIdCounter()));
+              ctx->task->uniqueRowIdPool()));
     } else if (
         const auto traceScanNode =
             std::dynamic_pointer_cast<const core::TraceScanNode>(planNode)) {
