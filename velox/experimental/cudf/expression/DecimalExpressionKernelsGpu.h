@@ -24,13 +24,24 @@
 
 namespace facebook::velox::cudf_velox::detail {
 
-// Dispatches a per-row device loop: fixed-point divide (lhs * rescaleFactor) /
-// rhs with half-away-from-zero rounding on the remainder, writing into out.
-// rescaleFactor is DecimalUtil::kPowersOfTen[aRescale] from the caller.
-// Zero divisors produce a numeric zero in out (callers patch nulls). Returns
-// false if any row overflowed (caller should VELOX_USER_FAIL). inType / outType
-// select DECIMAL64 vs DECIMAL128 storage widths via
-// cudf::double_type_dispatcher<cudf::dispatch_storage_type>.
+/**
+ * @brief Dispatches a per-row device loop for fixed-point decimal division.
+ *
+ * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
+ * remainder, writing into out. Zero divisors produce a numeric zero in out
+ * (callers patch nulls).
+ *
+ * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
+ * @param outType DECIMAL64 or DECIMAL128 output storage width selector.
+ * @param lhs Left-hand decimal operand column.
+ * @param rhs Right-hand decimal operand column.
+ * @param out Mutable output column to write divided values into.
+ * @param rescaleFactor Fixed-point scale factor, typically
+ * DecimalUtil::kPowersOfTen[aRescale] from the caller.
+ * @param stream CUDA stream for kernel execution.
+ * @return True on success; false if any row overflowed (caller should
+ * VELOX_USER_FAIL).
+ */
 bool decimalDivideColumnColumn(
     cudf::type_id inType,
     cudf::type_id outType,
@@ -40,8 +51,23 @@ bool decimalDivideColumnColumn(
     __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
-// Same kernel math as decimalDivideColumnColumn, but rhs is a single
-// __int128_t decimal payload (already decoded from a cuDF scalar).
+/**
+ * @brief Fixed-point decimal division with a column lhs and scalar rhs.
+ *
+ * Same kernel math as decimalDivideColumnColumn, but rhs is a single
+ * __int128_t decimal payload (already decoded from a cuDF scalar).
+ *
+ * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
+ * @param outType DECIMAL64 or DECIMAL128 output storage width selector.
+ * @param lhs Left-hand decimal operand column.
+ * @param rhsValue Right-hand decimal operand as a decoded __int128_t payload.
+ * @param out Mutable output column to write divided values into.
+ * @param rescaleFactor Fixed-point scale factor, typically
+ * DecimalUtil::kPowersOfTen[aRescale] from the caller.
+ * @param stream CUDA stream for kernel execution.
+ * @return True on success; false if any row overflowed (caller should
+ * VELOX_USER_FAIL).
+ */
 bool decimalDivideColumnScalar(
     cudf::type_id inType,
     cudf::type_id outType,
@@ -51,8 +77,23 @@ bool decimalDivideColumnScalar(
     __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
-// Same kernel math as decimalDivideColumnColumn, but lhs is a single
-// __int128_t decimal payload and rhs is per-row.
+/**
+ * @brief Fixed-point decimal division with a scalar lhs and column rhs.
+ *
+ * Same kernel math as decimalDivideColumnColumn, but lhs is a single
+ * __int128_t decimal payload and rhs is per-row.
+ *
+ * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
+ * @param outType DECIMAL64 or DECIMAL128 output storage width selector.
+ * @param lhsValue Left-hand decimal operand as a decoded __int128_t payload.
+ * @param rhs Right-hand decimal operand column.
+ * @param out Mutable output column to write divided values into.
+ * @param rescaleFactor Fixed-point scale factor, typically
+ * DecimalUtil::kPowersOfTen[aRescale] from the caller.
+ * @param stream CUDA stream for kernel execution.
+ * @return True on success; false if any row overflowed (caller should
+ * VELOX_USER_FAIL).
+ */
 bool decimalDivideScalarColumn(
     cudf::type_id inType,
     cudf::type_id outType,
