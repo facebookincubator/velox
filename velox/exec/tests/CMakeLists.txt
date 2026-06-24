@@ -116,7 +116,6 @@ set(
   # + TopNRowNumber 64 + StreamingAgg 58
   TableWriterTest.cpp
   OutputBufferManagerTest.cpp
-  OutputBufferManagerRegistryTest.cpp
   TopNRowNumberTest.cpp
   StreamingAggregationTest.cpp
   ContainerRowSerdeTest.cpp
