@@ -4999,19 +4999,33 @@ using EnforceSingleRowNodePtr = std::shared_ptr<const EnforceSingleRowNode>;
 /// with unique int64_t value per input row.
 ///
 /// 64-bit unique id is built in following way:
-///  - first 24 bits - task unique id
-///  - next 40 bits - operator counter value
+///  - high 24 bits - task unique id
+///  - low 40 bits - operator counter value
 ///
-/// The task unique id is added to ensure the generated id is unique
-/// across all the nodes executing the same query stage in a distributed
-/// query execution.
+/// The task unique id ensures the generated id is unique across all the tasks
+/// executing the same query stage in a distributed query. It is supplied by the
+/// executing Task via PlanFragment::taskUniqueId.
 class AssignUniqueIdNode : public PlanNode {
  public:
   AssignUniqueIdNode(
       const PlanNodeId& id,
       const std::string& idName,
-      const int32_t taskUniqueId,
       PlanNodePtr source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  // Legacy constructor for read-only synced consumers that still pass
+  // taskUniqueId on the node. The value is not serialized; it is consumed at
+  // execution as the fallback for an unset PlanFragment::taskUniqueId.
+  AssignUniqueIdNode(
+      const PlanNodeId& id,
+      const std::string& idName,
+      int32_t taskUniqueId,
+      PlanNodePtr source)
+      : PlanNode(id),
+        taskUniqueId_(taskUniqueId),
+        sources_{std::move(source)},
+        outputType_(makeOutputType(sources_[0], idName)) {}
+#endif
 
   bool supportsBarrier() const override {
     return true;
@@ -5024,7 +5038,6 @@ class AssignUniqueIdNode : public PlanNode {
     explicit Builder(const AssignUniqueIdNode& other) {
       id_ = other.id();
       idName_ = other.outputType()->names().back();
-      taskUniqueId_ = other.taskUniqueId();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -5039,11 +5052,6 @@ class AssignUniqueIdNode : public PlanNode {
       return *this;
     }
 
-    Builder& taskUniqueId(int32_t taskUniqueId) {
-      taskUniqueId_ = taskUniqueId;
-      return *this;
-    }
-
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -5054,18 +5062,15 @@ class AssignUniqueIdNode : public PlanNode {
       VELOX_USER_CHECK(
           idName_.has_value(), "AssignUniqueIdNode idName not set");
       VELOX_USER_CHECK(
-          taskUniqueId_.has_value(), "AssignUniqueIdNode taskUniqueId not set");
-      VELOX_USER_CHECK(
           source_.has_value(), "AssignUniqueIdNode source is not set");
 
       return std::make_shared<AssignUniqueIdNode>(
-          id_.value(), idName_.value(), taskUniqueId_.value(), source_.value());
+          id_.value(), idName_.value(), source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<std::string> idName_;
-    std::optional<int32_t> taskUniqueId_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -5093,6 +5098,12 @@ class AssignUniqueIdNode : public PlanNode {
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  // Builds the output row type: the source columns followed by the BIGINT id
+  // column named 'idName'.
+  static RowTypePtr makeOutputType(
+      const PlanNodePtr& source,
+      const std::string& idName);
+
   void addDetails(std::stringstream& stream) const override;
 
   const int32_t taskUniqueId_;

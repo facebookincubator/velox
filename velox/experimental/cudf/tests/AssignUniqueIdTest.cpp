@@ -172,26 +172,25 @@ TEST_F(AssignUniqueIdTest, maxRowIdLimit) {
 
   auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  auto cursor = TaskCursor::create(params);
-
-  // Seed the pool to kMaxRowId to force overflow on the next request.
-  cursor->task()->uniqueRowIdPool()->fetch_add(1L << 40);
-
   VELOX_ASSERT_THROW(
-      cursor->moveNext(), "Ran out of unique IDs at 1099511627776");
+      AssertQueryBuilder(plan)
+          .beforeTaskStart([](Task& task) {
+            // Advance the pool to the end of the 40-bit row id space so the
+            // next request overflows.
+            task.uniqueRowIdPool()->fetch_add(1L << 40);
+          })
+          .copyResults(pool()),
+      "Ran out of unique IDs at 1099511627776");
 }
 
 TEST_F(AssignUniqueIdTest, taskUniqueIdLimit) {
   auto input = {makeRowVector({makeFlatVector<int32_t>({1, 2, 3})})};
 
-  auto plan =
-      PlanBuilder().values(input).assignUniqueId("unique", 1L << 24).planNode();
+  auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "(16777216 vs. 16777216) Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
+      AssertQueryBuilder(plan).taskUniqueId(1L << 24).copyResults(pool()),
+      "Unique 24-bit ID specified for AssignUniqueId exceeds the limit");
 }
 
 // TODO: Add test for barrier execution, other operators does not support
