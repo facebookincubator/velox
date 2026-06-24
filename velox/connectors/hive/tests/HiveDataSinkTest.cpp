@@ -692,7 +692,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, writerFlushThreshold: {}, expectedWriterReclaimEnabled: {}, expectedWriterReclaimed: {}",
-          dwio::common::toString(format),
+          dwio::common::FileFormatName::toName(format),
           sortWriter,
           writerSpillEnabled,
           succinctBytes(writerFlushThreshold),
@@ -842,7 +842,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, close: {}, expectedWriterReclaimEnabled: {}",
-          dwio::common::toString(format),
+          dwio::common::FileFormatName::toName(format),
           sortWriter,
           writerSpillEnabled,
           close,
@@ -1158,7 +1158,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   auto flushPolicyFactory = []() {
     return std::make_unique<parquet::DefaultFlushPolicy>(1234, 0);
   };
-  auto writeOptions = std::make_shared<parquet::WriterOptions>();
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
   writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,

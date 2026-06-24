@@ -60,7 +60,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
 
   void getValues(const RowSet& rows, VectorPtr* result) override {
     auto& fileType = static_cast<const ParquetTypeWithId&>(*fileType_);
-    auto logicalType = fileType.logicalType_;
+    const auto& logicalType = fileType.logicalType_;
     if (logicalType &&
         logicalType->getType() == thrift::LogicalType::Type::INTEGER &&
         !*logicalType->get_INTEGER().isSigned()) {

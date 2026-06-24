@@ -827,6 +827,15 @@ class DictionaryColumnVisitor
                                                                          : 2),
         state_(reader->scanState().rawState) {}
 
+  // Re-reads the cached scan-state snapshot from the reader. Nimble rebuilds
+  // the per-chunk filter dictionary at each chunk boundary during a multi-chunk
+  // dictionary read; the visitor must re-snapshot so valueInDictionary() sees
+  // the current chunk's dictionary rather than the stale copy captured at
+  // construction.
+  void refreshScanState() {
+    state_ = this->reader().scanState().rawState;
+  }
+
   FOLLY_ALWAYS_INLINE bool isInDict() {
     if (inDict()) {
       return bits::isBitSet(inDict(), super::currentRow());

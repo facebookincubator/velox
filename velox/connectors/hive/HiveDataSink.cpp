@@ -19,10 +19,11 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/common/config/Config.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SortingWriter.h"
 #include "velox/exec/SortBuffer.h"
 
@@ -639,6 +640,15 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();
   options->maxTargetFileSizeBytes = maxTargetFileBytes_;
+  if (options->formatSpecificOptions == nullptr) {
+    auto formatScopedConfigs = makeFormatScopedConfigs(
+        *hiveConfig_,
+        *connectorSessionProperties,
+        writerFactory_->fileFormat());
+    options->formatSpecificOptions = writerFactory_->createFormatOptions(
+        formatScopedConfigs.connectorConfig,
+        formatScopedConfigs.sessionProperties);
+  }
   options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
   return options;
 }
@@ -892,7 +902,8 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
 
   obj["inputColumns"] = arr;
   obj["locationHandle"] = locationHandle_->serialize();
-  obj["tableStorageFormat"] = dwio::common::toString(storageFormat_);
+  obj["tableStorageFormat"] =
+      dwio::common::FileFormatName::toName(storageFormat_);
 
   if (bucketProperty_) {
     obj["bucketProperty"] = bucketProperty_->serialize();
@@ -976,7 +987,8 @@ void HiveInsertTableHandle::registerSerDe() {
 
 std::string HiveInsertTableHandle::toString() const {
   std::ostringstream out;
-  out << "HiveInsertTableHandle [" << dwio::common::toString(storageFormat_);
+  out << "HiveInsertTableHandle ["
+      << dwio::common::FileFormatName::toName(storageFormat_);
   if (compressionKind_.has_value()) {
     out << " " << common::compressionKindToString(compressionKind_.value());
   } else {

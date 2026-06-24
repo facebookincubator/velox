@@ -13,17 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/expression/Expr.h"
+#include <torch/nativert/executor/ExecutionFrame.h>
 
-namespace facebook::velox::cudf_velox {
+#include "velox/experimental/torchwave/CompiledOp.h"
 
-/// Returns true if \p expr or any of its inputs is of decimal type. When \p
-/// deep is true the entire subtree is inspected; when false only \p expr and
-/// its immediate inputs are checked.
-bool containsDecimalType(
-    const std::shared_ptr<velox::exec::Expr>& expr,
-    const bool deep);
+namespace torch::wave {
 
-} // namespace facebook::velox::cudf_velox
+/// Executes a metadata-only standalone op (data.launch->standaloneShortcut !=
+/// kNone) by calling the typed ATen primitive directly, bypassing nativert's
+/// boxed dispatch. Reads operands from 'frame' via data.args / data.intArgs /
+/// data.intList and writes the result to data.actualOutputs[0].
+void runStandaloneShortcut(
+    const LaunchData& data,
+    nativert::ExecutionFrame& frame);
+
+} // namespace torch::wave

@@ -40,6 +40,7 @@ class ParallelNodes {
       ProjectNode* input,
       const NodeSet& topExprs,
       std::vector<NodeCP> orderedExprs = {});
+
   std::vector<std::unique_ptr<ProjectNode>> projectNodes_;
   int32_t nextId_{0};
 };

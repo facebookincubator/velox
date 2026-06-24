@@ -38,7 +38,17 @@ using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 class ParquetTestBase;
 
-/// Builder for creating ParquetReader + RowReader pairs in unit tests.
+/// Owns a ParquetReader and RowReader created for a single read test.
+/// Declares reader before rowReader so C++ destroys rowReader first.
+struct ParquetReaderBundle {
+  /// Owns file metadata and input state required by rowReader.
+  std::unique_ptr<ParquetReader> reader;
+
+  /// Reads rows from reader.
+  std::unique_ptr<dwio::common::RowReader> rowReader;
+};
+
+/// Builder for creating ParquetReader + RowReader bundles in unit tests.
 ///
 /// Construct via ParquetTestBase::readerBuilder with a data source (example
 /// file or in-memory buffer) and output projection, then apply optional
@@ -79,11 +89,8 @@ class ParquetReaderBuilder {
   ParquetReaderBuilder& options(
       const dwio::common::ReaderOptions& readerOptions);
 
-  /// Creates a ParquetReader and RowReader from the configured inputs.
-  std::pair<
-      std::unique_ptr<ParquetReader>,
-      std::unique_ptr<dwio::common::RowReader>>
-  build();
+  /// Creates reader handles from the configured inputs.
+  ParquetReaderBundle build();
 
  private:
   memory::MemoryPool* pool_;
@@ -109,7 +116,6 @@ class ParquetTestBase : public testing::Test,
     rootPool_ = memory::memoryManager()->addRootPool("ParquetTests");
     leafPool_ = rootPool_->addLeafChild("ParquetTests");
     tempPath_ = TempDirectoryPath::create();
-    readerStore_.clear();
   }
 
   static RowTypePtr sampleSchema() {
@@ -138,9 +144,8 @@ class ParquetTestBase : public testing::Test,
   }
 
   // Creates a ReaderOptions pre-populated with the test's shared IoStatistics
-  // and the leaf memory pool. Callers needing extra settings (e.g.
-  // setFileSchema, setAllowInt32Narrowing) should obtain a copy via this
-  // method and then apply their overrides.
+  // and the leaf memory pool. Callers needing extra settings should obtain a
+  // copy via this method and then apply their overrides.
   dwio::common::ReaderOptions makeDefaultReaderOptions() const;
 
   // Returns RowReaderOptions with a ColumnSelector for the given schema.
@@ -208,16 +213,22 @@ class ParquetTestBase : public testing::Test,
 
   dwio::common::MemorySink* write(
       const RowVectorPtr& data,
-      const WriterOptions& writerOptions,
+      const ParquetWriterOptions& writerOptions,
+      const RowTypePtr& rowType = nullptr);
+
+  dwio::common::MemorySink* write(
+      const RowVectorPtr& data,
+      const dwio::common::WriterOptions& options,
+      const ParquetWriterOptions& writerOptions,
       const RowTypePtr& rowType = nullptr);
 
   /// Writes each batch as a separate Parquet row group by flushing between
   /// batches. Uses batches[0]->rowType() as the file schema. Configure
-  /// WriterOptions (e.g. flushPolicyFactory) so batch sizes are not split
+  /// `options` (e.g. flushPolicyFactory) so batch sizes are not split
   /// further by the writer.
   dwio::common::MemorySink* write(
       const std::vector<RowVectorPtr>& batches,
-      const WriterOptions& writerOptions);
+      const ParquetWriterOptions& writerOptions);
 
   dwio::common::MemorySink* write(
       const RowVectorPtr& data,
@@ -272,7 +283,5 @@ class ParquetTestBase : public testing::Test,
   std::shared_ptr<TempDirectoryPath> tempPath_;
   // Stores writers created by write() helper to keep sinks alive for reading.
   std::vector<std::unique_ptr<Writer>> writers_;
-  // Stores readers whose lifetime must extend beyond the current call frame.
-  std::vector<std::unique_ptr<dwio::common::Reader>> readerStore_;
 };
 } // namespace facebook::velox::parquet
