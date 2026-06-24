@@ -2405,6 +2405,11 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .hasBarrier()
       .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      // A scan reads the whole input cross-block, so its producer must be
+      // materialized by a prior kernel rather than fused into this one (a fused
+      // producer's per-block writes would race with the scan's cross-block
+      // reads).
+      .argumentMeta({{.isRegister = false, .materializeInput = true}})
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_head")
       .sharedDecls(
@@ -2459,7 +2464,9 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .argumentMeta(
-          {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
+          {{.isRegister = false, .materializeInput = true},
+           {.isRegister = false},
+           {.linkOnly = true}})
       .returnMeta({{.isRegister = false, .reserveShape = inputShape}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
@@ -2649,6 +2656,9 @@ void registerBuiltins() {
           {{.isRegister = false, .reserveShape = inputShape},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .normalize(resolveDtypeFromInput)
+      // Materialize the producer in a prior kernel (see cumsum_head) so its
+      // per-block writes do not race with this scan's cross-block reads.
+      .argumentMeta({{.isRegister = false, .materializeInput = true}})
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_cg")
       .sharedDecls(

@@ -264,7 +264,11 @@ __device__ void cumsum(
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
   for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
-    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    // Honor the input's stride: a non-contiguous input (e.g. a select column
+    // view) must be read through indexToOffset, not as flat storage.
+    TOut val = (idx < size)
+        ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
+        : TOut(0);
     if (threadIdx.x == 0) {
       val += counter;
     }
@@ -300,7 +304,10 @@ __device__ void cumsum_head(
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
-    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    // Honor the input's stride (non-contiguous select-column views).
+    TOut val = (idx < size)
+        ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
+        : TOut(0);
     auto sum = reduce<kBlockSize, TOut>(
         val, [](TOut a, TOut b) { return a + b; }, temp);
     if (threadIdx.x == 0) {
@@ -339,7 +346,10 @@ __device__ void cumsum_final(
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
-    TOut val = (idx < size) ? static_cast<TOut>(in[idx]) : TOut(0);
+    // Honor the input's stride (non-contiguous select-column views).
+    TOut val = (idx < size)
+        ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
+        : TOut(0);
     TOut base = (blockIdx == 0 || cnt == nullptr) ? TOut(0) : cnt[blockIdx - 1];
     if (threadIdx.x == 0) {
       val += base;

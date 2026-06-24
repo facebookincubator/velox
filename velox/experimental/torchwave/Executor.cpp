@@ -386,6 +386,7 @@ void runStandalones(
     if (isShortcut) {
       // Metadata-only op: call the typed ATen primitive directly, bypassing the
       // boxed nativert dispatch.
+      ++state.numShortcutsRun;
       runStandaloneShortcut(data, *state.frame);
     } else {
       auto kernelIt = kernelMap.find(actualNode);
@@ -393,6 +394,7 @@ void runStandalones(
           kernelIt != kernelMap.end(),
           "No kernel for node ",
           actualNode->target());
+      ++state.numStandalonesRun;
       executeNode(actualNode, kernelIt->second, *state.frame);
       restoreCpuOnlyArgs(savedDeviceValues, *state.frame);
     }
@@ -445,6 +447,7 @@ void runShortcutStandalones(
       traceFrameValues(
           "input", data.actualInputs, *state.frame, state.traceState);
     }
+    ++state.numShortcutsRun;
     runStandaloneShortcut(data, *state.frame);
     if (WaveConfig::get().trace & WaveConfig::kFrame) {
       for (auto outputId : data.actualOutputs) {
@@ -713,103 +716,10 @@ void WaveGraphExecutor::executeWave(
 
   std::vector<NodeCP> deferredStandalones;
   state.deferredStandalones = &deferredStandalones;
-  // After each PN execution, run any graph nodes whose outputs are
-  // None but inputs are now ready.  This populates SymInt metadata
-  // (strides, sizes) from _assert_tensor_metadata and other standalone
-  // ops that the serial nativert executor would compute.
-  // Ad-hoc C10 kernels for graph nodes not in kernelMap (e.g.,
-  // sym_size, sym_storage_offset, _local_scalar_dense).
-  std::vector<std::unique_ptr<nativert::OpKernel>> adhocKernels;
-  folly::F14FastMap<NodeCP, nativert::OpKernel*> adhocKernelMap;
-
-  auto runReadyGraphNodes = [&]() {
-    auto& graph = *waveGraph.graph();
-    bool progress = true;
-    while (progress) {
-      progress = false;
-      for (auto& gnode : graph.nodes()) {
-        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
-          continue;
-        }
-        bool hasNoneOutput = false;
-        for (auto* output : gnode.outputs()) {
-          if (frame.getIValue(output->id()).isNone()) {
-            hasNoneOutput = true;
-            break;
-          }
-        }
-        if (!hasNoneOutput) {
-          continue;
-        }
-        // Look up in both the main kernelMap and ad-hoc map.
-        nativert::OpKernel* kernel = nullptr;
-        auto kernelIt = state.kernelMap->find(&gnode);
-        if (kernelIt != state.kernelMap->end()) {
-          kernel = kernelIt->second;
-        } else {
-          auto adhocIt = adhocKernelMap.find(&gnode);
-          if (adhocIt != adhocKernelMap.end()) {
-            kernel = adhocIt->second;
-          } else {
-            std::string target(gnode.target());
-            std::unique_ptr<nativert::OpKernel> newKernel;
-            if (nativert::PrimKernelRegistry()->Has(target)) {
-              newKernel =
-                  nativert::PrimKernelRegistry()->Create(target, &gnode);
-            } else if (c10::starts_with(target, "torch.ops")) {
-              // Synthetic wave ops (e.g. exclusive_sum) have no real C10
-              // schema and are produced by wave's own lowered kernels, not by
-              // a standalone C10Kernel.  Skip them if no schema exists.
-              try {
-                newKernel = std::make_unique<nativert::C10Kernel>(&gnode);
-              } catch (const std::exception&) {
-                newKernel = nullptr;
-              }
-            } else {
-              bool hasSymIntOutput = false;
-              bool hasSymBoolOutput = false;
-              for (auto* output : gnode.outputs()) {
-                if (output->type().kind() == nativert::Type::Kind::SymInt) {
-                  hasSymIntOutput = true;
-                } else if (
-                    output->type().kind() == nativert::Type::Kind::SymBool) {
-                  hasSymBoolOutput = true;
-                }
-              }
-              if (hasSymIntOutput) {
-                newKernel = std::make_unique<nativert::SymIntOpKernel>(&gnode);
-              } else if (hasSymBoolOutput) {
-                newKernel = std::make_unique<nativert::SymBoolOpKernel>(&gnode);
-              }
-            }
-            if (newKernel) {
-              kernel = newKernel.get();
-              adhocKernelMap[&gnode] = kernel;
-              adhocKernels.push_back(std::move(newKernel));
-            }
-          }
-        }
-        if (!kernel) {
-          continue;
-        }
-        bool inputsReady = true;
-        for (const auto& input : gnode.inputs()) {
-          if (isUnreadyNoneDependency(input.value, frame)) {
-            inputsReady = false;
-            break;
-          }
-        }
-        if (inputsReady) {
-          executeNode(&gnode, kernel, frame);
-          progress = true;
-        }
-      }
-    }
-  };
-
+  state.numStandalonesRun = 0;
+  state.numShortcutsRun = 0;
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
-    runReadyGraphNodes();
   }
   // Run deferred standalones whose inputs were produced by later PNs.
   for (const auto& node : waveGraph.nodes()) {
@@ -838,6 +748,7 @@ void WaveGraphExecutor::executeWave(
           }
         }
         if (allReady) {
+          ++state.numStandalonesRun;
           executeNode(deferredNode, kernelIt->second, frame);
           progress = true;
         }
@@ -845,10 +756,51 @@ void WaveGraphExecutor::executeWave(
     }
   }
   state.deferredStandalones = nullptr;
+  // Fusion-coverage summary: how much of the graph wave covered as composite
+  // (fused) / standalone / shortcut, vs. left uncovered.  The eager C10
+  // fallback has been removed, so an uncovered node (output still None after
+  // execution) is a real coverage gap to fix at the source, not a
+  // silently-absorbed leftover.  Logged once, under any --trace bit.  Placed
+  // after all deferred/grid standalones have run so the standalone and shortcut
+  // counts (incremented at their execution sites) are complete.
+  if (WaveConfig::get().trace != 0) {
+    static std::atomic<bool> fusionLogged{false};
+    if (!fusionLogged.exchange(true)) {
+      auto& graph = *waveGraph.graph();
+      int64_t uncovered = 0;
+      for (auto& gnode : graph.nodes()) {
+        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
+          continue;
+        }
+        for (auto* output : gnode.outputs()) {
+          if (frame.getIValue(output->id()).isNone()) {
+            ++uncovered;
+            break;
+          }
+        }
+      }
+      auto totalNodes = static_cast<int64_t>(graph.nodes().size());
+      auto numComposites = waveGraph.nodes().size();
+      int64_t numStandalones = state.numStandalonesRun;
+      int64_t numShortcuts = state.numShortcutsRun;
+      int64_t fusedNodes =
+          totalNodes - uncovered - numStandalones - numShortcuts;
+      std::cout << "FUSION: nativert_graph_nodes=" << totalNodes
+                << " wave_composite_kernels=" << numComposites
+                << " fused_nodes=" << fusedNodes
+                << " standalone_ops=" << numStandalones
+                << " shortcut_ops=" << numShortcuts
+                << " uncovered_ops=" << uncovered << " (~"
+                << (100.0 * fusedNodes / totalNodes) << "% fused, ~"
+                << (100.0 * uncovered / totalNodes) << "% uncovered)"
+                << std::endl;
+    }
+  }
   // Sync the wave stream and the PyTorch default stream: eager standalone ops
   // run on the default stream while fused kernels run on the wave stream, and
   // the two are otherwise unordered. Both must complete before executeWave
-  // returns so all results this invocation produced are visible to the caller.
+  // returns so all results this invocation produced are visible to the
+  // caller.
   state.stream->wait();
   syncTorchDefaultStream();
   auto wallUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1081,8 +1033,8 @@ std::string WaveGraphExecutor::makePerfReport(
   int64_t totalInputBytes = 0;
   int64_t totalDataBytes = 0;
   // Total reference-frame checking time (device-to-host copy + comparison).
-  // This is debug-only overhead included in the measured wall time, so subtract
-  // it to report the real e2e time.
+  // This is debug-only overhead included in the measured wall time, so
+  // subtract it to report the real e2e time.
   int64_t totalRefCheckUs = 0;
   for (const auto& meta : info.launchMeta) {
     totalDataBytes += meta.inputBytes + meta.outputBytes;
@@ -1175,8 +1127,8 @@ std::string WaveGraphExecutor::makePerfReport(
   }
 
   // Compute per-node wall times. Within a step the fused kernel (wave stream)
-  // and the eager standalones (default stream) run concurrently, so the step's
-  // wall is interpretation plus the larger of the two, not their sum.
+  // and the eager standalones (default stream) run concurrently, so the
+  // step's wall is interpretation plus the larger of the two, not their sum.
   std::vector<std::pair<int32_t, int64_t>> nodeWallTimes;
   // Track which sequence numbers have kernel launches.
   std::set<int32_t> nodesWithLaunches;
@@ -1287,8 +1239,8 @@ std::string WaveGraphExecutor::makePerfReport(
         ss << fmt::format(
             " standalone={}{}", m.standaloneUs, m.standaloneBound ? "*" : "");
       }
-      // Op-target breakdown covers both standalone and shortcut lists; print it
-      // whenever either ran.
+      // Op-target breakdown covers both standalone and shortcut lists; print
+      // it whenever either ran.
       if (m.standaloneUs > 0 || m.shortcutUs > 0) {
         ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx);
       }

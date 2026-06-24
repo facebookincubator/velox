@@ -2004,6 +2004,34 @@ void CompositeInvocation::gatherLaunches(
             }
           }
         }
+        // Under a cooperative grid the whole step launches as ONE kernel, so an
+        // op cannot be skipped -- numElements only sets its block share. A
+        // view-rooted op (e.g. slice->clamp) fused into the step reads an input
+        // that is a step-internal intermediate: None/unallocated at host sizing
+        // time, so the guards above zero its numElements and it is starved to
+        // ~1 block even though it runs correctly once the cooperative kernel
+        // materializes that input mid-launch (op 138: 6 of 480 blocks, ~85ms).
+        // Recover a grid size from the kernel's concrete static input shapes
+        // (TensorMeta is available without materialization). numElements only
+        // drives the grid; the kernel loops to the true size on device, so an
+        // over-estimate is safe (surplus blocks early-out).
+        if (data.numElements == 0 && WaveConfig::get().isCg.value_or(false)) {
+          int64_t staticNumElements = 0;
+          for (const auto* tensorMeta : launch.op->inputTypes()) {
+            if (tensorMeta != nullptr && !tensorMeta->hasSymbolicShape()) {
+              int64_t numElements = 1;
+              for (auto extent : tensorMeta->sizes()) {
+                numElements *= extent;
+              }
+              if (numElements > staticNumElements) {
+                staticNumElements = numElements;
+              }
+            }
+          }
+          if (staticNumElements > 0) {
+            data.numElements = staticNumElements;
+          }
+        }
         if (!launch.op->barrierCounters().empty()) {
           sv.isCgGrid = true;
         }
@@ -2090,12 +2118,26 @@ void verifyAgainstReference(
   int32_t numPassed = 0;
   for (const auto& data : launches) {
     bool nodeChecked = false;
-    for (auto actualId : data.actualOutputs) {
+    for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
+      auto actualId = data.actualOutputs[oi];
       auto refIt = ref->find(actualId);
       if (refIt == ref->end()) {
         continue;
       }
       if (!refIt->second.isTensor()) {
+        continue;
+      }
+      // Skip scalar/symint outputs.  The reference stores SymInt/SymFloat/
+      // SymBool as 1-D tensors, but wave computes them as register scalars --
+      // frequently consumed internally for shapes/bounds (e.g. sym_numel used
+      // as a clamp max) and not materialized into a frame tensor.  Their
+      // correctness is covered indirectly: a metadata scalar (sym_numel/
+      // sym_size) derives from a tensor that IS verified, and any wrong symint
+      // produces a wrong downstream tensor shape that surfaces as a mismatch on
+      // that tensor.
+      if (oi < data.actualOutputTypes.size() &&
+          data.actualOutputTypes[oi] != nativert::Type::Kind::Tensor &&
+          data.actualOutputTypes[oi] != nativert::Type::Kind::TensorList) {
         continue;
       }
       auto actualOpt = asTensor(frame.getIValue(actualId));
@@ -2105,6 +2147,24 @@ void verifyAgainstReference(
       const at::Tensor& actualTensor = *actualOpt;
       const auto& refTensor = refIt->second.toTensor();
       if (actualTensor.numel() == 0) {
+        continue;
+      }
+      // A meta tensor carries no data. An intentional shape-only output (e.g.
+      // an index a composite consumes internally and exposes only for
+      // downstream shape inference, like a gather index) has nothing to compare
+      // -- its correctness is covered by verifying its data-consumer's output.
+      // A meta output that is NOT shape-only is unexpected (a materialization
+      // bug): surface it as a mismatch rather than silently skipping, so we do
+      // not lose a correctness signal.
+      if (actualTensor.is_meta()) {
+        bool isShapeOnly = oi < data.actualOutputDescs.size() &&
+            data.actualOutputDescs[oi].shapeOnly;
+        if (!isShapeOnly) {
+          ++numMismatches;
+          LOG(ERROR) << "Value %" << actualId
+                     << " is a meta tensor (no data) but is not a shape-only "
+                        "output; cannot verify (unexpected materialization).";
+        }
         continue;
       }
       if (state.numRefTensorsChecked) {
@@ -2776,6 +2836,7 @@ void CompositeInvocation::runDeferredStandalones(ExecutionState& state) {
         }
       }
       if (allInputsReady) {
+        ++state.numStandalonesRun;
         executeNode(launch.standalone, kernelIt->second, frame);
         progress = true;
       }
