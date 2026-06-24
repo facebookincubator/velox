@@ -976,7 +976,7 @@ class CallbackSinkAdapter : public OperatorAdapter {
   }
 };
 
-/// LocalMergeAdapter - Keeps original operator
+/// LocalMergeAdapter - Replaces CPU LocalMerge with GPU CudfLocalMerge
 class LocalMergeAdapter : public OperatorAdapter {
  public:
   LocalMergeAdapter() : OperatorAdapter("LocalMerge") {}

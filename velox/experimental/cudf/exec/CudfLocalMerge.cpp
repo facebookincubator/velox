@@ -144,7 +144,7 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
 
   // All sources drained. Collect non-empty per-source tables and merge.
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
 
   auto numNonEmptySources =
       std::count_if(sourceData_.begin(), sourceData_.end(), [](const auto& v) {
@@ -184,7 +184,10 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
   cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
-  streamsWaitForStream(*cudaEvent_, inputStreams, stream);
+  (*cudaEvent_, inputStreams, stream);
+  // Free source tables now (ordered after the merge by streamsWaitForStream
+  // above) to cap peak GPU memory;
+  // doClose() handles the early-termination path.
   sourceData_.clear();
 
   auto numRows = mergedTable->num_rows();
