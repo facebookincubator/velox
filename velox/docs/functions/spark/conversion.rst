@@ -244,6 +244,26 @@ Valid examples
   SELECT cast(cast('0384-01-01 08:00:00.000' as timestamp) as string); -- '0384-01-01 08:00:00'
   SELECT cast(cast('-0010-02-01 10:00:00.000' as timestamp) as string); -- '-0010-02-01 10:00:00'
 
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a timestamp_utc to a string uses the same ISO 8601 format as TIMESTAMP,
+but is not subject to session timezone adjustment.
+The conversion precision is microsecond, and trailing zeros are not appended.
+When the year exceeds 9999, a positive sign is added.
+
+Valid examples
+
+::
+
+  SELECT cast(TIMESTAMP_NTZ '1970-01-01 00:00:00' as string); -- '1970-01-01 00:00:00'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.129' as string); -- '2000-01-01 12:21:56.129'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.100000' as string); -- '2000-01-01 12:21:56.1'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.129900' as string); -- '2000-01-01 12:21:56.1299'
+  SELECT cast(TIMESTAMP_NTZ '10000-02-01 16:00:00.000' as string); -- '+10000-02-01 16:00:00'
+  SELECT cast(TIMESTAMP_NTZ '0384-01-01 08:00:00.000' as string); -- '0384-01-01 08:00:00'
+  SELECT cast(TIMESTAMP_NTZ '-0010-02-01 10:00:00.000' as string); -- '-0010-02-01 10:00:00'
+
 Cast to Date
 ------------
 
