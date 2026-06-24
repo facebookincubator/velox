@@ -158,14 +158,41 @@ TEST_F(AssignUniqueIdTest, maxRowIdLimit) {
 
   auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
-  // Increase the counter to kMaxRowId.
-  std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(plan)
-      ->uniqueIdCounter()
-      ->fetch_add(1L << 40);
+  CursorParameters params;
+  params.planNode = plan;
+  auto cursor = TaskCursor::create(params);
+
+  // Seed the pool to kMaxRowId to force overflow on the next request.
+  cursor->task()->uniqueRowIdPool()->fetch_add(1L << 40);
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()),
-      "Ran out of unique IDs at 1099511627776");
+      cursor->moveNext(), "Ran out of unique IDs at 1099511627776");
+}
+
+TEST_F(AssignUniqueIdTest, sharedRowIdPool) {
+  const vector_size_t size = 100;
+  auto input = {
+      makeRowVector({makeFlatVector<int32_t>(size, folly::identity)})};
+
+  // The two nodes' generated ids are disjoint.
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .assignUniqueId("a")
+                  .assignUniqueId("b")
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), size);
+
+  auto* a = result->childAt(1)->asFlatVector<int64_t>();
+  auto* b = result->childAt(2)->asFlatVector<int64_t>();
+
+  std::set<int64_t> ids;
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_TRUE(ids.insert(a->valueAt(i)).second);
+    ASSERT_TRUE(ids.insert(b->valueAt(i)).second);
+  }
+  ASSERT_EQ(ids.size(), 2 * size);
 }
 
 TEST_F(AssignUniqueIdTest, taskUniqueIdLimit) {

@@ -5088,10 +5088,6 @@ class AssignUniqueIdNode : public PlanNode {
     return taskUniqueId_;
   }
 
-  const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
-    return uniqueIdCounter_;
-  }
-
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -5102,7 +5098,6 @@ class AssignUniqueIdNode : public PlanNode {
   const int32_t taskUniqueId_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
-  std::shared_ptr<std::atomic_int64_t> uniqueIdCounter_;
 };
 
 using AssignUniqueIdNodePtr = std::shared_ptr<const AssignUniqueIdNode>;

@@ -801,7 +801,7 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
             ctx,
             assignUniqueIdPlanNode,
             assignUniqueIdPlanNode->taskUniqueId(),
-            assignUniqueIdPlanNode->uniqueIdCounter()));
+            ctx->task->uniqueRowIdPool()));
     return result;
   }
 };

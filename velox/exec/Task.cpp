@@ -546,7 +546,11 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
 
   taskStats_.executionStartTimeMs = getCurrentTimeMs();
   LocalPlanner::plan(
-      planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
+      planFragment_,
+      /*consumerSupplier=*/nullptr,
+      &driverFactories_,
+      queryCtx_->queryConfig(),
+      /*maxDrivers=*/1);
   exchangeClients_.resize(driverFactories_.size());
 
   // In Task::next() we always assume ungrouped execution.
@@ -976,7 +980,11 @@ bool Task::supportSerialExecutionMode() const {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories;
   LocalPlanner::plan(
-      planFragment_, nullptr, &driverFactories, queryCtx_->queryConfig(), 1);
+      planFragment_,
+      /*consumerSupplier=*/nullptr,
+      &driverFactories,
+      queryCtx_->queryConfig(),
+      /*maxDrivers=*/1);
 
   for (const auto& factory : driverFactories) {
     if (!factory->supportsSerialExecution()) {
