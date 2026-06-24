@@ -43,7 +43,7 @@ constexpr __int128_t kInt128Min = static_cast<__int128_t>(kInt128MinMagnitude);
 // Match DecimalUtil::kLongDecimal{Min,Max} (10^38 bounds); duplicated here
 // because Velox headers cannot be included in this translation unit (nvcc).
 constexpr __int128_t kLongDecimalPowerOfTen38 =
-    1'000'000'000'000'000'000LL * (__int128_t)1'000'000'000'000'000'000LL * 100;
+    1'000'000'000'000'000'000LL * static_cast<__int128_t>(1'000'000'000'000'000'000LL) * 100;
 constexpr __int128_t kLongDecimalMax = kLongDecimalPowerOfTen38 - 1;
 constexpr __int128_t kLongDecimalMin = -kLongDecimalPowerOfTen38 + 1;
 
