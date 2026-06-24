@@ -796,7 +796,7 @@ Common Options
      - bool
      - false
      - If true, disallow appending data to an existing unpartitioned table. Velox currently does not support appending
-       to existing partitions. If false, allow appending data to an existing unpartitioned table.
+       to existing partitions.
    * - ``file-column-names-read-as-lower-case``
      - bool
      - false
@@ -855,8 +855,8 @@ Common Options
    * - ``write-file-create-config``
      - string
      - ""
-     - Free-form configuration passed to the underlying file system when creating write files. The legacy
-       key ``hive.write_file_create_config`` is also accepted.
+     - Free-form configuration passed to the underlying file system when creating write files. Key
+       ``hive.write_file_create_config`` is also accepted.
    * - ``sort-writer-max-output-rows``
      - integer
      - 1024
@@ -895,7 +895,7 @@ Common Options
      - integer
      - 3
      - Unit for reading timestamps from files. Supported values are ``3`` for milliseconds,
-       ``6`` for microseconds, and ``9`` for nanoseconds. The legacy key
+       ``6`` for microseconds, and ``9`` for nanoseconds. Key
        ``hive.reader.timestamp-unit`` is also accepted. Session: ``reader.timestamp_unit``.
    * - ``reader.timestamp-partition-value-as-local-time``
      - bool
@@ -960,7 +960,7 @@ ORC Options (prefix ``hive.orc.``)
    * - ``use-column-names``
      - bool
      - false
-     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``. The legacy key ``hive.orc.use-column-names`` is also accepted. Session: ``orc_use_column_names``.
+     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``. Key ``hive.orc.use-column-names`` is also accepted. Session: ``orc_use_column_names``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
