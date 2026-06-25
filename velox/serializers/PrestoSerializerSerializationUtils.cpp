@@ -406,12 +406,8 @@ void serializeArrayVectorRanges(
   auto arrayVector = vector->as<ArrayVector>();
   auto rawSizes = arrayVector->rawSizes();
   auto rawOffsets = arrayVector->rawOffsets();
-  size_t totalOffsets = 0;
-  for (const auto& range : ranges) {
-    totalOffsets += range.size;
-  }
   std::vector<IndexRange> childRanges;
-  childRanges.reserve(totalOffsets);
+  childRanges.reserve(ranges.size());
   for (int32_t i = 0; i < ranges.size(); ++i) {
     int32_t begin = ranges[i].begin;
     int32_t end = begin + ranges[i].size;
