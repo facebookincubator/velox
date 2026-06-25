@@ -124,7 +124,6 @@ class E2EFilterTest : public E2EFilterTestBase,
   int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
 };
 
-
 TEST_F(E2EFilterTest, unknownType) {
   rowType_ = ROW({"bigint_val", "unknown_val"}, {BIGINT(), UNKNOWN()});
   filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
