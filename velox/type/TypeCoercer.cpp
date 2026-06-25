@@ -30,6 +30,22 @@ int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
   return cost;
 }
 
+bool Coercion::isUnknownOnlyCoercion(
+    const std::vector<Coercion>& coercions,
+    const std::vector<TypePtr>& argTypes) {
+  VELOX_DCHECK_EQ(coercions.size(), argTypes.size());
+  bool hasCoercion{false};
+  for (auto i = 0; i < coercions.size(); ++i) {
+    if (coercions[i].type != nullptr) {
+      if (!argTypes[i]->isUnknown()) {
+        return false;
+      }
+      hasCoercion = true;
+    }
+  }
+  return hasCoercion;
+}
+
 namespace {
 
 std::vector<CoercionEntry> defaultRules() {
@@ -69,6 +85,9 @@ std::vector<CoercionEntry> defaultRules() {
 TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
   // Tracks costs already used for a given source type to enforce uniqueness.
   std::unordered_map<std::string, std::unordered_set<int32_t>> costsByFrom;
+
+  // Highest UNKNOWN->scalar cost in this rule set.
+  int32_t maxUnknownCost{0};
 
   for (const auto& entry : rules) {
     VELOX_CHECK_NOT_NULL(entry.from, "CoercionEntry.from must not be null");
@@ -129,6 +148,10 @@ TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
         entry.cost,
         entry.from->name());
 
+    if (entry.from->isUnknown() && entry.cost > maxUnknownCost) {
+      maxUnknownCost = entry.cost;
+    }
+
     // Reject duplicate (fromName, toName) pairs. This guards in particular
     // against the common DECIMAL footgun: all decimals share the same name,
     // so multiple {SOURCE, DECIMAL(p, s), cost} entries with different
@@ -143,12 +166,23 @@ TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
         entry.from->name(),
         entry.to->name());
   }
+
+  unknownToComplexCost_ = maxUnknownCost + 1;
 }
 
 // static
 const TypeCoercer& TypeCoercer::defaults() {
   static const TypeCoercer instance{defaultRules()};
   return instance;
+}
+
+std::optional<Coercion> TypeCoercer::coerce(
+    const TypePtr& fromType,
+    const TypePtr& toType) const {
+  if (fromType->isUnknown() && toType->size() > 0) {
+    return Coercion{.type = toType, .cost = unknownToComplexCost_};
+  }
+  return coerceTypeBase(fromType, toType);
 }
 
 std::optional<Coercion> TypeCoercer::coerceTypeBase(

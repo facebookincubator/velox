@@ -206,7 +206,7 @@ void CacheInputStream::loadSync(const Region& region) {
       VELOX_CHECK(cacheLoadWait.valid());
       uint64_t waitUs{0};
       {
-        MicrosecondTimer timer(&waitUs);
+        MicrosecondWallTimer timer(&waitUs);
         std::move(cacheLoadWait)
             .via(&folly::QueuedImmediateExecutor::instance())
             .wait();
@@ -235,7 +235,7 @@ void CacheInputStream::loadSync(const Region& region) {
     const auto ranges = entry->dataRanges(region.length);
     uint64_t storageReadUs{0};
     {
-      MicrosecondTimer timer(&storageReadUs);
+      MicrosecondWallTimer timer(&storageReadUs);
       input_->read(ranges, region.offset, LogType::FILE);
     }
     ioStats_->read().increment(region.length);
@@ -286,7 +286,7 @@ bool CacheInputStream::loadFromSsd(
   std::vector<cache::CachePin> pins;
   pins.push_back(std::move(pin_));
   try {
-    MicrosecondTimer timer(&ssdLoadUs);
+    MicrosecondWallTimer timer(&ssdLoadUs);
     file.load(ssdPins, pins);
   } catch (const std::exception& e) {
     LOG(ERROR) << "IOERR: Failed SSD loadSync " << entry.toString() << ' '
@@ -331,7 +331,7 @@ void CacheInputStream::loadPosition() {
       folly::SemiFuture<bool> waitFuture(false);
       uint64_t loadUs{0};
       {
-        MicrosecondTimer timer(&loadUs);
+        MicrosecondWallTimer timer(&loadUs);
         try {
           if (!load->loadOrFuture(&waitFuture, cacheable_)) {
             waitFuture.wait();

@@ -233,6 +233,8 @@ class TaskCursorBase : public TaskCursor {
         params.executionStrategy,
         params.numSplitGroups,
         params.groupedExecutionLeafNodeIds};
+    planFragment_.taskUniqueId = params.taskUniqueId;
+    beforeTaskStart_ = params.beforeTaskStart;
 
     if (!params.spillDirectory.empty()) {
       taskSpillDirectory_ = params.spillDirectory + "/" + taskId_;
@@ -264,6 +266,7 @@ class TaskCursorBase : public TaskCursor {
   core::PlanFragment planFragment_;
   std::string taskSpillDirectory_;
   std::function<std::string()> taskSpillDirectoryCb_;
+  std::function<void(Task&)> beforeTaskStart_;
 
  private:
   std::shared_ptr<folly::Executor> executor_;
@@ -336,6 +339,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           }
           queue->close();
         });
+
+    if (beforeTaskStart_) {
+      beforeTaskStart_(*task_);
+    }
   }
 
   ~MultiThreadedTaskCursor() override {
@@ -484,6 +491,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     VELOX_CHECK(
         task_->supportSerialExecutionMode(),
         "Plan doesn't support serial execution mode");
+
+    if (beforeTaskStart_) {
+      beforeTaskStart_(*task_);
+    }
   }
 
   ~SingleThreadedTaskCursor() override {
