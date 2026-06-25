@@ -1013,13 +1013,20 @@ void SsdFile::disableFileCow() {
 #ifdef linux
   const std::unordered_map<std::string, std::string> attributes = {
       {std::string(LocalWriteFile::Attributes::kNoCow), "true"}};
-  writeFile_->setAttributes(attributes);
-  if (evictLogWriteFile_ != nullptr) {
-    evictLogWriteFile_->setAttributes(attributes);
-  }
-  if (checkpointWriteFile_ != nullptr) {
-    checkpointWriteFile_->setAttributes(attributes);
-  }
+  auto trySetNoCow = [&](WriteFile* file, std::string_view filePath) {
+    if (file == nullptr) {
+      return;
+    }
+    try {
+      file->setAttributes(attributes);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(WARNING) << "Failed to disable copy-on-write for "
+                                   << filePath << ": " << e.what();
+    }
+  };
+  trySetNoCow(writeFile_.get(), fileName_);
+  trySetNoCow(evictLogWriteFile_.get(), evictLogFilePath());
+  trySetNoCow(checkpointWriteFile_.get(), checkpointFilePath());
 #endif // linux
 }
 
