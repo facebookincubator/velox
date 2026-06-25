@@ -158,25 +158,28 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
         std::find_if(sourceData_.begin(), sourceData_.end(), [](const auto& v) {
           return !v.empty();
         });
-    if (it != sourceData_.end()) {
-      if (it->size() == 1) {
-        return std::move(it->front());
-      }
-      auto concatenated =
-          getConcatenatedTable(std::move(*it), outputType_, stream, mr);
-      auto numRows = concatenated->num_rows();
-      return std::make_shared<CudfVector>(
-          pool(), outputType_, numRows, std::move(concatenated), stream);
+    VELOX_CHECK(it != sourceData_.end());
+    if (it->size() == 1) {
+      return std::move(it->front());
     }
-    return nullptr;
+    auto concatenated =
+        getConcatenatedTable(std::move(*it), outputType_, stream, mr);
+    auto numRows = concatenated->num_rows();
+    return std::make_shared<CudfVector>(
+        pool(), outputType_, numRows, std::move(concatenated), stream);
+  }
+
+  size_t numBatches = 0;
+  for (const auto& batches : sourceData_) {
+    numBatches += batches.size();
   }
 
   std::vector<cudf::table_view> tableViews;
   std::vector<rmm::cuda_stream_view> inputStreams;
   std::vector<CudfVectorPtr> inputs;
-  tableViews.reserve(numNonEmptySources);
-  inputStreams.reserve(numNonEmptySources);
-  inputs.reserve(numNonEmptySources);
+  tableViews.reserve(numBatches);
+  inputStreams.reserve(numBatches);
+  inputs.reserve(numBatches);
   for (auto& batches : sourceData_) {
     for (auto& tbl : batches) {
       tableViews.push_back(tbl->getTableView());
