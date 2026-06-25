@@ -1736,20 +1736,23 @@ TEST(SignatureBinderTest, unknownDoesNotBindWithoutCoercion) {
                               .build();
 
   assertCannotBind(decimalSignature, {UNKNOWN()}, /*allowCoercion=*/true);
+}
 
-  // Shared (p, s) resolves the UNKNOWN arg to a decimal scalar; no coercion.
-  auto boundDecimalSignature = exec::FunctionSignatureBuilder()
-                                   .integerVariable("p")
-                                   .integerVariable("s")
-                                   .returnType("decimal(p, s)")
-                                   .argumentType("decimal(p, s)")
-                                   .argumentType("decimal(p, s)")
-                                   .build();
+TEST(SignatureBinderTest, unknownCoercesToBoundDecimal) {
+  // Shared (p, s): the concrete arg pins p=10, s=2.
+  auto signature = exec::FunctionSignatureBuilder()
+                       .integerVariable("p")
+                       .integerVariable("s")
+                       .returnType("decimal(p, s)")
+                       .argumentType("decimal(p, s)")
+                       .argumentType("decimal(p, s)")
+                       .build();
 
-  assertCannotBind(
-      boundDecimalSignature,
+  testCoercions(
+      signature,
       {DECIMAL(10, 2), UNKNOWN()},
-      /*allowCoercion=*/true);
+      {nullptr, DECIMAL(10, 2)},
+      DECIMAL(10, 2));
 }
 
 TEST(SignatureBinderTest, unknownArgUnifiesWithConcreteArg) {
