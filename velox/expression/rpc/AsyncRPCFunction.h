@@ -195,29 +195,25 @@ class AsyncRPCFunction {
 
   /// Signal returned by evaluateCongestion() to indicate batch health.
   enum class CongestionSignal {
-    /// Batch completed successfully — increase concurrency window.
+    /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Batch had errors — decrease concurrency window.
+    /// Unit showed backend overload — shrink the window.
     kError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
   };
 
-  /// Evaluate batch congestion from completed responses.
-  /// Called by RPCOperator after a BATCH-mode batch completes.
-  /// The function inspects responses and returns a signal that the
-  /// operator maps to window adjustments (additive increase on
-  /// kSuccess, multiplicative decrease on kError).
-  /// Default: kNone (no congestion control).
+  /// Evaluate congestion from completed responses. Called by RPCOperator after
+  /// a unit (a drained set of PER_ROW rows, or one BATCH) completes. The
+  /// function inspects responses and returns a signal the operator maps to the
+  /// latency-gradient window: kSuccess feeds the unit's round-trip latency as a
+  /// gradient sample, kError applies a multiplicative decrease. User-data
+  /// errors (bad handle, null input) must classify as kNone so they never move
+  /// the window — only true backend overload should back off. Default: kNone
+  /// (no congestion control).
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;
-  }
-
-  /// How much to increase the concurrency window on kSuccess.
-  /// Override to tune recovery speed per client. Default: 2.
-  virtual int64_t congestionRecoveryIncrement() const {
-    return 2;
   }
 };
 
