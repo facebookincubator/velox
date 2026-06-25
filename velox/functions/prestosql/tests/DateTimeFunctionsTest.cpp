@@ -259,10 +259,14 @@ TEST_F(DateTimeFunctionsTest, toUnixtime) {
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtimeRountTrip) {
+  // Tolerance of 1ms due to double precision loss in to_unixtime round-trip.
   const auto testRoundTrip = [&](std::optional<Timestamp> t) {
-    auto r = evaluateOnce<Timestamp>("from_unixtime(to_unixtime(c0))", t);
-    EXPECT_EQ(r->getSeconds(), t->getSeconds()) << "at " << t->toString();
-    EXPECT_NEAR(r->getNanos(), t->getNanos(), 1'000) << "at " << t->toString();
+    auto r = evaluateOnce<int64_t>("from_unixtime(to_unixtime(c0))", t);
+    auto expectedMillis = t->toMillis();
+    auto actualMillis = unpackMillisUtc(*r);
+    EXPECT_NEAR(actualMillis, expectedMillis, 1) << "at " << t->toString();
+    // Verify timezone is UTC (ID 0) when no session timezone is set.
+    EXPECT_EQ(0, unpackZoneKeyId(*r)) << "at " << t->toString();
     return r;
   };
 
@@ -372,23 +376,36 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeTzOffset) {
 
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   const auto fromUnixtime = [&](std::optional<double> t) {
-    return evaluateOnce<Timestamp>("from_unixtime(c0)", t);
+    return TimestampWithTimezone::unpack(
+        evaluateOnce<int64_t>("from_unixtime(c0)", t));
   };
 
-  static const double kInf = std::numeric_limits<double>::infinity();
   static const double kNan = std::numeric_limits<double>::quiet_NaN();
+  static const double kInf = std::numeric_limits<double>::infinity();
 
-  EXPECT_EQ(Timestamp(0, 0), fromUnixtime(0));
-  EXPECT_EQ(Timestamp(-1, 9000000), fromUnixtime(-0.991));
-  EXPECT_EQ(Timestamp(1, 0), fromUnixtime(1 - 1e-10));
-  EXPECT_EQ(Timestamp(4000000000, 0), fromUnixtime(4000000000));
+  EXPECT_EQ(TimestampWithTimezone(0, "UTC"), fromUnixtime(0));
+  EXPECT_EQ(TimestampWithTimezone(-991, "UTC"), fromUnixtime(-0.991));
   EXPECT_EQ(
-      Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(3.87111e+37));
-  EXPECT_EQ(Timestamp(4000000000, 123000000), fromUnixtime(4000000000.123));
-  EXPECT_EQ(Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(kInf));
+      TimestampWithTimezone(4000000000000, "UTC"), fromUnixtime(4000000000));
   EXPECT_EQ(
-      Timestamp(-9'223'372'036'854'776, 192'000'000), fromUnixtime(-kInf));
-  EXPECT_EQ(Timestamp(0, 0), fromUnixtime(kNan));
+      TimestampWithTimezone(4000000000123, "UTC"),
+      fromUnixtime(4000000000.123));
+  EXPECT_EQ(TimestampWithTimezone(0, "UTC"), fromUnixtime(kNan));
+
+  // Near-integer rounding: 1 - 1e-10 rounds to 1000 millis.
+  EXPECT_EQ(TimestampWithTimezone(1000, "UTC"), fromUnixtime(1 - 1e-10));
+
+  // Infinity and large values overflow the 51-bit millis range of
+  // TimestampWithTimezone packing.
+  EXPECT_THROW(fromUnixtime(kInf), VeloxUserError);
+  EXPECT_THROW(fromUnixtime(-kInf), VeloxUserError);
+  EXPECT_THROW(fromUnixtime(3.87111e+37), VeloxUserError);
+
+  setQueryTimeZone("America/Los_Angeles");
+  EXPECT_EQ(TimestampWithTimezone(0, "America/Los_Angeles"), fromUnixtime(0));
+  EXPECT_EQ(
+      TimestampWithTimezone(1722841200000, "America/Los_Angeles"),
+      fromUnixtime(1722841200));
 }
 
 TEST_F(DateTimeFunctionsTest, year) {
@@ -6158,18 +6175,18 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeDouble) {
   auto actual =
       evaluate("cast(from_unixtime(c0) as varchar)", makeRowVector({input}));
   auto expected = makeFlatVector<StringView>({
-      "2021-06-15 09:11:42.000",
-      "2021-06-15 09:11:42.000",
-      "2021-06-15 09:11:42.020",
-      "2021-06-15 09:11:42.023",
-      "2021-06-15 09:11:43.123",
-      "2021-06-15 09:11:44.009",
-      "2021-06-15 09:11:44.001",
-      "2021-06-15 09:11:44.999",
-      "2021-06-15 09:11:44.001",
-      "2021-06-15 09:11:44.002",
-      "2021-06-15 09:11:44.999",
-      "2021-06-15 09:11:45.000",
+      "2021-06-15 09:11:42.000 UTC",
+      "2021-06-15 09:11:42.000 UTC",
+      "2021-06-15 09:11:42.020 UTC",
+      "2021-06-15 09:11:42.023 UTC",
+      "2021-06-15 09:11:43.123 UTC",
+      "2021-06-15 09:11:44.009 UTC",
+      "2021-06-15 09:11:44.001 UTC",
+      "2021-06-15 09:11:44.999 UTC",
+      "2021-06-15 09:11:44.001 UTC",
+      "2021-06-15 09:11:44.002 UTC",
+      "2021-06-15 09:11:44.999 UTC",
+      "2021-06-15 09:11:45.000 UTC",
   });
   assertEqualVectors(expected, actual);
 }

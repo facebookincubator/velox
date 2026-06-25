@@ -57,11 +57,24 @@ template <typename T>
 struct FromUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // (double) -> timestamp
+  // (double) -> timestamp with time zone (using session timezone)
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<double>* /*unixtime*/) {
+    const auto sessionTzName = config.sessionTimezone();
+    if (!sessionTzName.empty()) {
+      tzID_ = tz::getTimeZoneID(sessionTzName);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
-      Timestamp& result,
+      out_type<TimestampWithTimezone>& result,
       const arg_type<double>& unixtime) {
-    result = fromUnixtime(unixtime);
+    // Timezone ID 0 is UTC — the default when no session timezone is
+    // configured.
+    int16_t timeZoneId = tzID_.value_or(0);
+    result = fromUnixtime(unixtime, timeZoneId);
   }
 
   // (double, varchar) -> timestamp with time zone
