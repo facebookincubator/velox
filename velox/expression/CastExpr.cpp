@@ -869,6 +869,24 @@ void CastExpr::applyPeeled(
             toType);
     }
   } else if (
+      fromType->equivalent(*TIMESTAMP()) &&
+      toType->equivalent(*TIMESTAMP_UTC())) {
+    VELOX_USER_CHECK(
+        hooks_->supportsTimestampUtc(),
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
+    result = applyTimestampToTimestampUtcCast(rows, context, input);
+  } else if (
+      fromType->equivalent(*TIMESTAMP_UTC()) &&
+      toType->equivalent(*TIMESTAMP())) {
+    VELOX_USER_CHECK(
+        hooks_->supportsTimestampUtc(),
+        "Cast from {} to {} is not supported",
+        fromType->toString(),
+        toType->toString());
+    result = applyTimestampUtcToTimestampCast(rows, context, input);
+  } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&
       (toType->kind() == TypeKind::VARCHAR ||
        toType->kind() == TypeKind::VARBINARY)) {
@@ -971,6 +989,52 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
 
   // Update the exact buffer size.
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
+VectorPtr CastExpr::applyTimestampToTimestampUtcCast(
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  VELOX_DCHECK(hooks_->supportsTimestampUtc());
+  VectorPtr result;
+  context.ensureWritable(rows, TIMESTAMP_UTC(), result);
+  (*result).clearNulls(rows);
+  auto* resultVector = result->asFlatVector<Timestamp>();
+  const auto& inputVector = *input.as<SimpleVector<Timestamp>>();
+  const auto* sessionTimeZone =
+      getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    Timestamp ts = inputVector.valueAt(row);
+    if (sessionTimeZone) {
+      ts.toTimezone(*sessionTimeZone);
+    }
+    resultVector->set(row, ts);
+  });
+  return result;
+}
+
+VectorPtr CastExpr::applyTimestampUtcToTimestampCast(
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  VELOX_DCHECK(hooks_->supportsTimestampUtc());
+  VectorPtr result;
+  context.ensureWritable(rows, TIMESTAMP(), result);
+  (*result).clearNulls(rows);
+  auto* resultVector = result->asFlatVector<Timestamp>();
+  const auto& inputVector = *input.as<SimpleVector<Timestamp>>();
+  const auto* sessionTimeZone =
+      getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    Timestamp ts = inputVector.valueAt(row);
+    if (sessionTimeZone) {
+      // Convert from local date-time representation to UTC, applying DST gap
+      // correction for spring-forward transitions.
+      hooks_->castDateTimestampToGMT(ts, *sessionTimeZone);
+    }
+    resultVector->set(row, ts);
+  });
   return result;
 }
 

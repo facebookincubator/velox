@@ -78,6 +78,11 @@ class SparkCastHooks : public exec::CastHooks {
 
   exec::PolicyType getPolicy() const override;
 
+  // Spark supports TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return true;
+  }
+
   void castDateTimestampToGMT(
       Timestamp& timestamp,
       const tz::TimeZone& timeZone) const override;

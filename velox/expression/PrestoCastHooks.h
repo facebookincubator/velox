@@ -67,6 +67,11 @@ class PrestoCastHooks : public CastHooks {
 
   PolicyType getPolicy() const override;
 
+  // Presto does not support TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return false;
+  }
+
   bool isScientific() const override {
     return false;
   }
