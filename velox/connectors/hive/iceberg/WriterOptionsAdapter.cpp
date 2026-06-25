@@ -63,9 +63,10 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
     // DWRF stores microsecond-precision timestamps natively, so no
     // precision conversion is required; only timezone adjustment must be
     // disabled per the Iceberg spec. Unlike Parquet, DWRF exposes
-    // timestamp configuration as direct fields on dwrf::WriterOptions
+    // timestamp configuration as direct fields on dwrf::DwrfWriterOptions
     // rather than serdeParameters.
-    auto* dwrfOptions = dynamic_cast<dwrf::WriterOptions*>(&options);
+    auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfWriterOptions>(
+        options.formatSpecificOptions);
     if (dwrfOptions == nullptr) {
       return;
     }

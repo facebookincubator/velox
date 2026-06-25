@@ -264,3 +264,24 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   EXPECT_FALSE(hasProperty(HiveConfig::kParquetUseColumnNames));
 }
 #endif
+
+TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
+  const auto& properties = HiveConfig::registeredProperties();
+
+  auto hasProperty = [&](const std::string& name) {
+    return std::any_of(
+        properties.begin(), properties.end(), [&](const auto& property) {
+          return property.name == name;
+        });
+  };
+
+  const auto orcSessionPrefix =
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_");
+  EXPECT_TRUE(hasProperty(
+      orcSessionPrefix + std::string(dwrf::Config::kOrcUseColumnNamesSession)));
+  EXPECT_TRUE(hasProperty(
+      orcSessionPrefix +
+      std::string(dwrf::Config::kOrcWriterMaxStripeSizeSession)));
+  EXPECT_FALSE(hasProperty(dwrf::Config::kOrcUseColumnNamesSession));
+  EXPECT_FALSE(hasProperty(dwrf::Config::kOrcUseColumnNames));
+}
