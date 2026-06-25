@@ -49,7 +49,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
   uint64_t elapsedTimeUs{0};
   std::unique_ptr<FileHandle> fileHandle;
   {
-    MicrosecondTimer timer(&elapsedTimeUs);
+    MicrosecondWallTimer timer(&elapsedTimeUs);
     fileHandle = std::make_unique<FileHandle>();
     filesystems::FileOptions options;
     options.stats = stats;

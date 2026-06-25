@@ -1081,6 +1081,7 @@ struct ArrayUnionFunction {
   template <typename Out, typename In>
   void call(Out& out, const In& inputArray1, const In& inputArray2) {
     util::floating_point::HashSetNaNAware<typename In::element_t> elementSet;
+    elementSet.reserve(inputArray1.size() + inputArray2.size());
     bool nullAdded = false;
     auto addItems = [&](auto& inputArray) {
       for (const auto& item : inputArray) {

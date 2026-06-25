@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <utility>
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/common/time/Timer.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/UnitLoader.h"
@@ -548,15 +549,18 @@ class Statistics {
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
-/// Runs 'func' and records decompression stats if 'counter' is non-null.
+/// Runs 'func' and records decompression CPU time if 'counter' is non-null.
 template <typename F>
 auto withDecompressStats(io::IoCounter* counter, F&& func)
     -> std::enable_if_t<!std::is_void_v<decltype(func())>, decltype(func())> {
   if (counter) {
-    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
-      counter->increment(timing.cpuNanos);
-    });
-    return func();
+    uint64_t cpuNanos = 0;
+    auto result = [&] {
+      NanosecondCPUTimer timer{&cpuNanos};
+      return func();
+    }();
+    counter->increment(cpuNanos);
+    return result;
   }
   return func();
 }
@@ -565,10 +569,12 @@ template <typename F>
 auto withDecompressStats(io::IoCounter* counter, F&& func)
     -> std::enable_if_t<std::is_void_v<decltype(func())>> {
   if (counter) {
-    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
-      counter->increment(timing.cpuNanos);
-    });
-    func();
+    uint64_t cpuNanos = 0;
+    {
+      NanosecondCPUTimer timer{&cpuNanos};
+      func();
+    }
+    counter->increment(cpuNanos);
     return;
   }
   func();
