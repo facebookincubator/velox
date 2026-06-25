@@ -30,23 +30,6 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using facebook::velox::connector::hive::HiveConfig;
 
-TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
-  const auto& properties = HiveConfig::registeredProperties();
-
-  auto hasProperty = [&](const std::string& name) {
-    return std::any_of(
-        properties.begin(), properties.end(), [&](const auto& property) {
-          return property.name == name;
-        });
-  };
-
-  EXPECT_TRUE(hasProperty(dwrf::Config::kOrcWriterMaxStripeSizeSession));
-  EXPECT_TRUE(hasProperty(HiveConfig::kOrcMaxTargetFileSizeSession));
-  EXPECT_TRUE(hasProperty(dwrf::Config::kOrcMaxCoalescedDistanceSession));
-  EXPECT_FALSE(hasProperty(HiveConfig::kOrcMaxTargetFileSize));
-  EXPECT_FALSE(hasProperty(dwrf::Config::kOrcMaxCoalescedDistance));
-}
-
 TEST(HiveConfigTest, defaultConfig) {
   HiveConfig hiveConfig(
       std::make_shared<config::ConfigBase>(

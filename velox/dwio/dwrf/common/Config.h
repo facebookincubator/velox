@@ -18,6 +18,7 @@
 
 #include <functional>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -46,29 +47,28 @@ namespace facebook::velox::dwrf {
   static constexpr const char* configConstName = configKeyStr; \
   static constexpr const char* sessionConstName = sessionKeyStr;
 
-#define VELOX_ORC_CONFIG(                                               \
-    sessionConstName,                                                   \
-    configConstName,                                                    \
-    accessorName,                                                       \
-    sessionKeyStr,                                                      \
-    configKeyStr,                                                       \
-    lookupKey,                                                          \
-    CppType,                                                            \
-    defaultVal,                                                         \
-    desc)                                                               \
-  VELOX_ORC_CONFIG_PROPERTY(                                            \
-      sessionConstName,                                                 \
-      configConstName,                                                  \
-      sessionKeyStr,                                                    \
-      configKeyStr,                                                     \
-      CppType,                                                          \
-      defaultVal,                                                       \
-      desc)                                                             \
-  static CppType accessorName(                                          \
-      const config::ConfigBase& connectorConfig,                        \
-      const config::ConfigBase& session) {                              \
-    return session.getWithFallback<CppType>(lookupKey, connectorConfig) \
-        .value_or(sessionConstName##Property::defaultValue);            \
+#define VELOX_ORC_CONFIG(                                                      \
+    sessionConstName,                                                          \
+    configConstName,                                                           \
+    accessorName,                                                              \
+    sessionKeyStr,                                                             \
+    configKeyStr,                                                              \
+    CppType,                                                                   \
+    defaultVal,                                                                \
+    desc)                                                                      \
+  VELOX_ORC_CONFIG_PROPERTY(                                                   \
+      sessionConstName,                                                        \
+      configConstName,                                                         \
+      sessionKeyStr,                                                           \
+      configKeyStr,                                                            \
+      CppType,                                                                 \
+      defaultVal,                                                              \
+      desc)                                                                    \
+  static CppType accessorName(                                                 \
+      const config::ConfigBase& connectorConfig,                               \
+      const config::ConfigBase& session) {                                     \
+    return session.getWithFallback<CppType>(sessionConstName, connectorConfig) \
+        .value_or(sessionConstName##Property::defaultValue);                   \
   }
 
 class Config : public config::ConfigBase {
@@ -129,9 +129,8 @@ class Config : public config::ConfigBase {
       kOrcUseColumnNamesSession,
       kOrcUseColumnNames,
       useColumnNames,
-      "orc_use_column_names",
-      "hive.orc.use-column-names",
       "use_column_names",
+      "use-column-names",
       bool,
       false,
       "Map ORC table field names to file field names using names, not "
@@ -141,9 +140,8 @@ class Config : public config::ConfigBase {
       kOrcFooterSpeculativeIoSizeSession,
       kOrcFooterSpeculativeIoSize,
       footerSpeculativeIoSize,
-      "orc_footer_speculative_io_size",
-      "hive.orc.footer-speculative-io-size",
       "footer_speculative_io_size",
+      "footer-speculative-io-size",
       uint64_t,
       256UL << 10,
       "Speculative tail-read size in bytes for ORC files.")
@@ -151,8 +149,8 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcMaxCoalescedDistanceSession,
       kOrcMaxCoalescedDistance,
-      "orc_max_coalesced_distance",
-      "hive.orc.max-coalesced-distance",
+      "max_coalesced_distance",
+      "max-coalesced-distance",
       std::string_view,
       "512kB",
       "Maximum merge distance to combine ORC read requests.")
@@ -160,8 +158,8 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcWriterMaxStripeSizeSession,
       kOrcWriterMaxStripeSize,
-      "orc_optimized_writer_max_stripe_size",
-      "hive.orc.writer.stripe-max-size",
+      "optimized_writer_max_stripe_size",
+      "writer.stripe-max-size",
       std::string_view,
       "64MB",
       "Maximum stripe size in orc writer.")
@@ -169,8 +167,8 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcWriterMaxDictionaryMemorySession,
       kOrcWriterMaxDictionaryMemory,
-      "orc_optimized_writer_max_dictionary_memory",
-      "hive.orc.writer.dictionary-max-memory",
+      "optimized_writer_max_dictionary_memory",
+      "writer.dictionary-max-memory",
       std::string_view,
       "16MB",
       "Maximum dictionary memory that can be used in orc writer.")
@@ -178,8 +176,8 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcWriterIntegerDictionaryEncodingEnabledSession,
       kOrcWriterIntegerDictionaryEncodingEnabled,
-      "orc_optimized_writer_integer_dictionary_encoding_enabled",
-      "hive.orc.writer.integer-dictionary-encoding-enabled",
+      "optimized_writer_integer_dictionary_encoding_enabled",
+      "writer.integer-dictionary-encoding-enabled",
       bool,
       true,
       "Whether or not dictionary encoding of integer types should be used "
@@ -188,8 +186,8 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcWriterStringDictionaryEncodingEnabledSession,
       kOrcWriterStringDictionaryEncodingEnabled,
-      "orc_optimized_writer_string_dictionary_encoding_enabled",
-      "hive.orc.writer.string-dictionary-encoding-enabled",
+      "optimized_writer_string_dictionary_encoding_enabled",
+      "writer.string-dictionary-encoding-enabled",
       bool,
       true,
       "Whether or not dictionary encoding of string types should be used "
@@ -198,8 +196,8 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcWriterLinearStripeSizeHeuristicsSession,
       kOrcWriterLinearStripeSizeHeuristics,
-      "orc_writer_linear_stripe_size_heuristics",
-      "hive.orc.writer.linear-stripe-size-heuristics",
+      "writer_linear_stripe_size_heuristics",
+      "writer.linear-stripe-size-heuristics",
       bool,
       true,
       "Enables historical based stripe size estimation after compression.")
@@ -207,17 +205,17 @@ class Config : public config::ConfigBase {
   VELOX_ORC_CONFIG_PROPERTY(
       kOrcWriterMinCompressionSizeSession,
       kOrcWriterMinCompressionSize,
-      "orc_writer_min_compression_size",
-      "hive.orc.writer.min-compression-size",
+      "writer_min_compression_size",
+      "writer.min-compression-size",
       uint64_t,
       1024,
       "Minimal number of items in an encoded stream.")
 
   /// The compression level to use with ZLIB and ZSTD.
   static constexpr const char* kOrcWriterCompressionLevel =
-      "hive.orc.writer.compression-level";
+      "writer.compression-level";
   static constexpr const char* kOrcWriterCompressionLevelSession =
-      "orc_optimized_writer_compression_level";
+      "optimized_writer_compression_level";
 
   static int32_t maxCoalescedDistance(
       const config::ConfigBase& connectorConfig,
@@ -225,9 +223,9 @@ class Config : public config::ConfigBase {
     const auto distance = config::toCapacity(
         session
             .getLegacyWithFallback<std::string>(
-                "max_coalesced_distance",
+                kOrcMaxCoalescedDistanceSession,
                 connectorConfig,
-                "max-coalesced-distance")
+                kOrcMaxCoalescedDistance)
             .value_or(kOrcMaxCoalescedDistanceSessionProperty::defaultValue),
         config::CapacityUnit::BYTE);
     VELOX_USER_CHECK_LE(
@@ -240,27 +238,28 @@ class Config : public config::ConfigBase {
   }
 
   static void registerProperties(
-      std::vector<config::ConfigProperty>& properties) {
-    config::registerConfigProperty<kOrcUseColumnNamesSessionProperty>(
-        properties);
-    config::registerConfigProperty<kOrcFooterSpeculativeIoSizeSessionProperty>(
-        properties);
-    config::registerConfigProperty<kOrcMaxCoalescedDistanceSessionProperty>(
-        properties);
-    config::registerConfigProperty<kOrcWriterMaxStripeSizeSessionProperty>(
-        properties);
-    config::registerConfigProperty<
-        kOrcWriterMaxDictionaryMemorySessionProperty>(properties);
-    config::registerConfigProperty<
-        kOrcWriterIntegerDictionaryEncodingEnabledSessionProperty>(properties);
-    config::registerConfigProperty<
-        kOrcWriterStringDictionaryEncodingEnabledSessionProperty>(properties);
-    config::registerConfigProperty<
-        kOrcWriterLinearStripeSizeHeuristicsSessionProperty>(properties);
-    config::registerConfigProperty<kOrcWriterMinCompressionSizeSessionProperty>(
-        properties);
+      std::vector<config::ConfigProperty>& properties,
+      std::string_view sessionPrefix) {
+    registerProperty<kOrcUseColumnNamesSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcFooterSpeculativeIoSizeSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcMaxCoalescedDistanceSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcWriterMaxStripeSizeSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcWriterMaxDictionaryMemorySessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcWriterIntegerDictionaryEncodingEnabledSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcWriterStringDictionaryEncodingEnabledSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcWriterLinearStripeSizeHeuristicsSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kOrcWriterMinCompressionSizeSessionProperty>(
+        properties, sessionPrefix);
     properties.push_back({
-        kOrcWriterCompressionLevelSession,
+        std::string(sessionPrefix) + kOrcWriterCompressionLevelSession,
         config::ConfigPropertyType::kInteger,
         std::nullopt,
         "The compression level to use with ZLIB and ZSTD.",
@@ -280,6 +279,20 @@ class Config : public config::ConfigBase {
 
   std::map<std::string, std::string> toSerdeParams() {
     return std::map{configs_.cbegin(), configs_.cend()};
+  }
+
+ private:
+  template <typename Property>
+  static void registerProperty(
+      std::vector<config::ConfigProperty>& properties,
+      std::string_view sessionPrefix) {
+    properties.push_back({
+        std::string(sessionPrefix) + Property::key,
+        config::detail::configPropertyTypeOf<typename Property::type>(),
+        config::detail::configPropertyDefaultToString<typename Property::type>(
+            Property::defaultValue),
+        Property::description,
+    });
   }
 };
 

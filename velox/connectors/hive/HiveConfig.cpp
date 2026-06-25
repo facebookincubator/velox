@@ -70,7 +70,9 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
         properties,
         dwio::common::formatConfigPrefix(
             dwio::common::FileFormat::PARQUET, "_"));
-    dwrf::Config::registerProperties(properties);
+    dwrf::Config::registerProperties(
+        properties,
+        dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_"));
     return properties;
   }();
   return kProperties;
