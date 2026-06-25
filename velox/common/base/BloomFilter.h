@@ -29,9 +29,35 @@ namespace facebook::velox {
 /// filter.
 class BloomFilterBase {
  protected:
-  static bool test(const uint64_t* bloom, int32_t bloomSize, uint64_t hashCode);
-  static void set(uint64_t* bloom, int32_t bloomSize, uint64_t hashCode);
+  inline static bool
+  test(const uint64_t* bloom, int32_t bloomSize, uint64_t hashCode) {
+    auto mask = bloomMask(hashCode);
+    auto index = bloomIndex(bloomSize, hashCode);
+    return mask == (bloom[index] & mask);
+  }
+
+  inline static void
+  set(uint64_t* bloom, int32_t bloomSize, uint64_t hashCode) {
+    auto mask = bloomMask(hashCode);
+    auto index = bloomIndex(bloomSize, hashCode);
+    bloom[index] |= mask;
+  }
+
   static constexpr int8_t kBloomFilterV1 = 1;
+
+ private:
+  // Extracts 4 groups of 6 bits from the lower 24 bits of the hash code to
+  // produce a 64-bit mask with up to 4 bits set.
+  inline static uint64_t bloomMask(uint64_t hashCode) {
+    return (1L << (hashCode & 63)) | (1L << ((hashCode >> 6) & 63)) |
+        (1L << ((hashCode >> 12) & 63)) | (1L << ((hashCode >> 18) & 63));
+  }
+
+  // Uses bits 24 and above of the hash code to select a word index within
+  // the filter. bloomSize must be a power of 2.
+  inline static uint32_t bloomIndex(uint32_t bloomSize, uint64_t hashCode) {
+    return ((hashCode >> 24) & (bloomSize - 1));
+  }
 };
 
 /// BloomFilterView is a non-owning view of a serialized Bloom filter.
@@ -40,7 +66,19 @@ class BloomFilterView : BloomFilterBase {
  public:
   /// Constructs a view from serialized Bloom filter data.
   /// Does not take ownership of the data.
-  explicit BloomFilterView(const char* serializedBloom);
+  explicit BloomFilterView(const char* serializedBloom) {
+    common::InputByteStream stream(serializedBloom);
+    version_ = stream.read<int8_t>();
+    VELOX_CHECK_EQ(
+        kBloomFilterV1,
+        version_,
+        "Unsupported BloomFilter version: {}",
+        version_);
+    size_ = stream.read<int32_t>();
+    VELOX_CHECK_GT(size_, 0, "Invalid BloomFilter size: {}", size_);
+    bitsData_ =
+        reinterpret_cast<const uint64_t*>(serializedBloom + stream.offset());
+  }
 
   /// Tests if a value may be contained in the Bloom filter.
   /// Input is hashed uint64_t value, optional hash function is
