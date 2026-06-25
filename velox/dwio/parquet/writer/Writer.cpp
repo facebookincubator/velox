@@ -132,6 +132,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(useParquetDataPageV2, parquetOverrides->useParquetDataPageV2);
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(rowGroupSizeBytes, parquetOverrides->rowGroupSizeBytes);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
 }
 
@@ -441,7 +442,11 @@ Writer::Writer(
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   } else {
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
+    const auto bytesInRowGroup =
+        parquetWriterOptions.rowGroupSizeBytes.value_or(
+            DefaultFlushPolicy::kDefaultBytesInRowGroup);
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
+        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
   }
   options_.timestampUnit = static_cast<TimestampUnit>(
       parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
@@ -670,6 +675,8 @@ ParquetWriterFactory::createFormatOptions(
       ParquetConfig::writerDataPageVersion(connectorConfig, session));
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->rowGroupSizeBytes = toParquetPageSize(
+      ParquetConfig::writerRowGroupSize(connectorConfig, session));
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
