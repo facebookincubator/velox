@@ -31,7 +31,7 @@ struct BloomFilterMightContainFunction {
       const arg_type<Varbinary>* serialized,
       const arg_type<int64_t>*) {
     if (serialized != nullptr) {
-      bloomFilter_.merge(serialized->str().c_str());
+      bloomFilter_.merge(serialized->data());
     }
   }
 
