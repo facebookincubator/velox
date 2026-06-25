@@ -173,7 +173,9 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
 
 void IcebergParquetStatsCollector::configureWriterOptions(
     dwio::common::WriterOptions& options) const {
-  auto* parquetOptions = dynamic_cast<parquet::WriterOptions*>(&options);
+  auto parquetOptions =
+      std::dynamic_pointer_cast<parquet::ParquetWriterOptions>(
+          options.formatSpecificOptions);
   if (parquetOptions == nullptr) {
     return;
   }

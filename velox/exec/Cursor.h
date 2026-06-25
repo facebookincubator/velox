@@ -80,6 +80,14 @@ struct CursorParameters {
 
   bool barrierExecution = false;
 
+  /// Per-task unique id used by AssignUniqueId operators. See
+  /// core::PlanFragment::taskUniqueId.
+  std::optional<int32_t> taskUniqueId{};
+
+  /// Callback invoked with the Task after it is created but before it is
+  /// started, allowing tests to tweak runtime task state.
+  std::function<void(Task&)> beforeTaskStart{};
+
   /// If both 'queryConfigs' and 'queryCtx' are specified, the configurations
   /// in 'queryCtx' will be overridden by 'queryConfig'.
   std::unordered_map<std::string, std::string> queryConfigs = {};

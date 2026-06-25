@@ -929,6 +929,13 @@ DwrfWriterFactory::createWriterOptions() {
   return std::make_unique<dwrf::WriterOptions>();
 }
 
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfWriterFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  return nullptr;
+}
+
 void WriterOptions::processConfigs(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) {

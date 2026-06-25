@@ -252,6 +252,18 @@ Generic Configuration
        are not special forms and return them as part of their operator stats. Tracking these stats can
        be expensive (especially if operator stats are retrieved frequently) and this allows the user to
        explicitly enable it.
+   * - rpc.congestion.min_window
+     - integer
+     - 1
+     - Floor the RPC flow\-control congestion window may shrink to under overload in the RPC operator.
+       Default 1, which never fully stalls dispatch. The controller clamps this to the range
+       [1, maxWindow].
+   * - rpc.congestion.step_coef
+     - double
+     - 1.0
+     - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
+       is the plain sqrt headroom; lower values converge tighter at small windows. The controller
+       clamps this to be non\-negative.
 
 
 Expression Evaluation Configuration
@@ -1090,44 +1102,44 @@ must be specified as raw byte counts.
      - Default Value
      - Description
    * - hive.parquet.writer.enable-dictionary
-     - hive.parquet.writer.enable_dictionary
+     - parquet_writer_enable_dictionary
      - bool
      - true
      - Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
    * - hive.parquet.writer.dictionary-page-size-limit
-     - hive.parquet.writer.dictionary_page_size_limit
+     - parquet_writer_dictionary_page_size_limit
      - string
      - 1MB
      - Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
    * - hive.parquet.writer.timestamp-unit
-     - hive.parquet.writer.timestamp_unit
+     - parquet_writer_timestamp_unit
      - tinyint
      - 9
      - Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
        Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
    * - hive.parquet.writer.datapage-version
-     - hive.parquet.writer.datapage_version
+     - parquet_writer_datapage_version
      - string
      - V1
      - Data Page version used when writing into Parquet through Arrow bridge.
        Valid values are "V1" and "V2".
    * - hive.parquet.writer.page-size
-     - hive.parquet.writer.page_size
+     - parquet_writer_page_size
      - string
      - 1MB
      - Data Page size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.batch-size
-     - hive.parquet.writer.batch_size
+     - parquet_writer_batch_size
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge.
    * - hive.parquet.writer.created-by
-     - hive.parquet.writer.created_by
+     - -
      - string
      - parquet-cpp-velox version 0.0.0
      - Created-by value used when writing to Parquet.
    * - hive.parquet.writer.enable-store-decimal-as-integer
-     - hive.parquet.writer.enable_store_decimal_as_integer
+     - parquet_writer_enable_store_decimal_as_integer
      - bool
      - true
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
