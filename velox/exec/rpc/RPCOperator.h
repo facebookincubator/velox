@@ -111,11 +111,6 @@ class RPCOperator : public exec::Operator {
   /// @param maxRows Maximum rows to flush. 0 means flush all.
   void flushBatchRequests(int32_t maxRows = 0);
 
-  /// Build output RowVector from ready rows (PER_ROW mode).
-  /// Supports multiple rows via batched drain for pipeline efficiency.
-  RowVectorPtr buildOutputFromReadyRows(
-      std::vector<RPCState::ReadyRow>& readyRows);
-
   /// Build output RowVector from a ready batch (BATCH mode).
   RowVectorPtr buildOutputFromReadyBatch(RPCState::ReadyBatch& readyBatch);
 
@@ -152,7 +147,7 @@ class RPCOperator : public exec::Operator {
   std::vector<int64_t> batchRowIds_;
 
   int64_t numRequestsDispatched_{0};
-  int64_t numResponsesCollected_{0};
+  int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
 
   // Global row ID counter for unique IDs across all input batches.

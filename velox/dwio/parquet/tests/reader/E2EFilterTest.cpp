@@ -64,9 +64,9 @@ class E2EFilterTest : public E2EFilterTestBase,
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
-    options_.memoryPool = E2EFilterTestBase::rootPool_.get();
+    commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
     int32_t flushCounter = 0;
-    options_.flushPolicyFactory = [&]() {
+    commonOptions_.flushPolicyFactory = [&]() {
       return std::make_unique<LambdaFlushPolicy>(
           rowsInRowGroup_, bytesInRowGroup_, [&]() {
             return forRowGroupSkip
@@ -75,8 +75,10 @@ class E2EFilterTest : public E2EFilterTestBase,
           });
     };
 
+    commonOptions_.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options_);
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), options_, asRowType(type));
+        std::move(sink), commonOptions_, asRowType(type));
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -119,7 +121,8 @@ class E2EFilterTest : public E2EFilterTestBase,
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
-  facebook::velox::parquet::WriterOptions options_;
+  dwio::common::WriterOptions commonOptions_;
+  ParquetWriterOptions options_;
   uint64_t rowsInRowGroup_ = 10'000;
   int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
 };
@@ -200,7 +203,7 @@ TEST_F(E2EFilterTest, compression) {
     }
 
     options_.dataPageSize = 4 * 1024;
-    options_.compressionKind = compression;
+    commonOptions_.compressionKind = compression;
 
     testWithTypes(
         "tinyint_val:tinyint,"
@@ -879,10 +882,10 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
 
   auto writeAndGetStats = [&](const std::string& createdBy,
                               RuntimeStatistics& stats) {
-    options_.memoryPool = E2EFilterTestBase::rootPool_.get();
+    commonOptions_.memoryPool = E2EFilterTestBase::rootPool_.get();
     options_.createdBy = createdBy;
     // Flush after every 5 rows to create separate row groups.
-    options_.flushPolicyFactory = []() {
+    commonOptions_.flushPolicyFactory = []() {
       return std::make_unique<LambdaFlushPolicy>(
           /*rowsInRowGroup=*/5,
           /*bytesInRowGroup=*/1'024 * 1'024,
@@ -892,8 +895,10 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
-    auto writer =
-        std::make_unique<parquet::Writer>(std::move(sink), options_, rowType);
+    commonOptions_.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(options_);
+    auto writer = std::make_unique<parquet::Writer>(
+        std::move(sink), commonOptions_, rowType);
     // Row group 1: contains the value we will filter for ("360手机助手").
     writer->write(makeRowVector(
         {"s"},

@@ -1463,7 +1463,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-
   }
 
   void filterRowGroups() {

@@ -27,7 +27,7 @@
 
 namespace facebook::velox::dwio::common {
 
-struct ColumnMetrics;
+struct DecodingStats;
 
 using ScanSpec = velox::common::ScanSpec;
 
@@ -660,9 +660,8 @@ class SelectiveColumnReader {
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* const scanSpec_;
 
-  // Per-column metrics for timing stats. May be nullptr if collection is
-  // disabled.
-  ColumnMetrics* columnMetrics_{nullptr};
+  // Per-column decoding statistics. May be nullptr if collection is disabled.
+  DecodingStats* decodingStats_{nullptr};
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.

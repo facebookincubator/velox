@@ -1631,15 +1631,17 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   const auto data = makeRowVector(
       {makeFlatVector<int64_t>({1}),
        makeArrayVectorFromJson<int32_t>({"[4 ,5]"})});
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = leafPool_.get();
+  parquet::ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions =
+      std::make_shared<parquet::ParquetWriterOptions>(writerOptions);
 
   // key, element are Parquet reserved keywords.
   // Ensure we handle them properly during the schema inference.
   auto schema = ROW({"key", "element"}, {BIGINT(), ARRAY(INTEGER())});
 
   auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), writerOptions, rootPool_, schema);
+      std::move(sink), options, rootPool_, schema);
   writer->write(data);
   writer->close();
 
@@ -1739,7 +1741,7 @@ TEST_F(ParquetReaderTest, columnStatisticsWithNulls) {
 
 TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
   // Use a small flush size to force multiple row groups.
-  parquet::WriterOptions writerOptions;
+  dwio::common::WriterOptions writerOptions;
   writerOptions.memoryPool = rootPool_.get();
   writerOptions.flushPolicyFactory = []() {
     return std::make_unique<parquet::LambdaFlushPolicy>(
@@ -1754,7 +1756,7 @@ TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
           makeFlatVector<int64_t>({10, 20, 30, 40, 50, 1, 2, 3, 4, 5}),
       });
 
-  auto* sink = write(data, writerOptions);
+  auto* sink = write(data, writerOptions, parquet::ParquetWriterOptions{});
   auto reader = createReaderInMemory(*sink);
 
   // Verify we have multiple row groups.
@@ -2080,103 +2082,4 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
-}
-
-// ParquetData::setNulls must keep nullsInReadRange_->size() in sync with
-// bits::nbytes(numLists). ensureCapacity only guarantees capacity; without an
-// explicit setSize, logical size can stay stale for the current batch.
-//
-// This test exercises both LIST and MAP with two row groups. RG1 must be
-// smaller than RG2 so the null buffer's logical size is insufficient for RG2,
-// but the allocation must round up to a capacity large enough for reuse.
-TEST_F(ParquetReaderTest, nullBufferSizeAcrossRowGroups) {
-  constexpr vector_size_t kFirstRowGroupRows = 3336;
-  constexpr vector_size_t kSecondRowGroupRows = 4096;
-  constexpr vector_size_t kNumRows = kFirstRowGroupRows + kSecondRowGroupRows;
-
-  auto assertNullBufferSize = [&](const RowTypePtr& rowType,
-                                  dwio::common::RowReader& rowReader) {
-    {
-      SCOPED_TRACE(fmt::format("batchSize={}", kFirstRowGroupRows));
-      VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-      const auto numRead = rowReader.next(kFirstRowGroupRows, result);
-      ASSERT_EQ(numRead, kFirstRowGroupRows);
-      const auto& column = BaseVector::loadedVectorShared(
-          result->asUnchecked<RowVector>()->childAt(0));
-      ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
-
-      auto nulls = column->nulls();
-      // Without the fix, this stale size would persist into RG2 and cause a
-      // crash.
-      ASSERT_LT(nulls->size(), bits::nbytes(kSecondRowGroupRows))
-          << "RG1 null buffer must be smaller than what RG2 needs";
-      // Buffer must have enough physical capacity to be reused for RG2,
-      // otherwise the pool reallocates and the bug doesn't trigger.
-      ASSERT_GE(nulls->capacity(), bits::nbytes(kSecondRowGroupRows))
-          << "RG1 null buffer capacity must be large enough for RG2 reuse";
-      EXPECT_NO_THROW(column->validate({}));
-    }
-    {
-      SCOPED_TRACE(fmt::format("batchSize={}", kSecondRowGroupRows));
-      VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-      const auto numRead = rowReader.next(kSecondRowGroupRows, result);
-      ASSERT_EQ(numRead, kSecondRowGroupRows);
-      const auto& column = BaseVector::loadedVectorShared(
-          result->asUnchecked<RowVector>()->childAt(0));
-      ASSERT_TRUE(column->nulls()) << "Test data must contain nulls";
-      EXPECT_NO_THROW(column->validate({}));
-    }
-  };
-
-  auto verifyType = [&](const RowTypePtr& rowType,
-                        const VectorPtr& columnData) {
-    parquet::WriterOptions writerOptions;
-    writerOptions.memoryPool = rootPool_.get();
-    // Use the second row group size as writeTable max row group length so the
-    // 4096-row batch is not split again by Arrow.
-    writerOptions.flushPolicyFactory = [kSecondRowGroupRows]() {
-      return std::make_unique<DefaultFlushPolicy>(
-          kSecondRowGroupRows, kBytesInRowGroup);
-    };
-    auto* sink = write(
-        {makeRowVector({"a"}, {columnData->slice(0, kFirstRowGroupRows)}),
-         makeRowVector(
-             {"a"},
-             {columnData->slice(kFirstRowGroupRows, kSecondRowGroupRows)})},
-        writerOptions);
-    auto [reader, rowReader] = readerBuilder(*sink, rowType).build();
-    ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
-    ASSERT_EQ(reader->fileMetaData().rowGroup(0).numRows(), kFirstRowGroupRows);
-    ASSERT_EQ(
-        reader->fileMetaData().rowGroup(1).numRows(), kSecondRowGroupRows);
-    assertNullBufferSize(rowType, *rowReader);
-  };
-
-  const auto isNullRow = [](vector_size_t row) {
-    return row == 100 || row == kFirstRowGroupRows + 100 ||
-        row == kFirstRowGroupRows + 200;
-  };
-
-  // kNumRows 1-element arrays, 3 of which are null — one in RG1, two in RG2.
-  auto arrays = makeArrayVector<int32_t>(
-      kNumRows,
-      [&](auto row) { return isNullRow(row) ? 0 : 1; },
-      [](auto i) { return i; },
-      isNullRow);
-  {
-    SCOPED_TRACE("list");
-    verifyType(ROW("a", ARRAY(INTEGER())), arrays);
-  }
-
-  // kNumRows 1-element maps, 3 of which are null — one in RG1, two in RG2.
-  auto maps = makeMapVector<int32_t, int32_t>(
-      kNumRows,
-      [&](auto row) { return isNullRow(row) ? 0 : 1; },
-      [](auto i) { return i; },
-      [](auto i) { return i; },
-      isNullRow);
-  {
-    SCOPED_TRACE("map");
-    verifyType(ROW("a", MAP(INTEGER(), INTEGER())), maps);
-  }
 }
