@@ -34,8 +34,7 @@ CudfLocalMerge::CudfLocalMerge(
           localMergeNode->outputType(),
           localMergeNode->id(),
           "CudfLocalMerge",
-          nvtx3::rgb{0, 206, 209}), // Dark Turquoise
-      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
+          nvtx3::rgb{0, 206, 209}) { // Dark Turquoise
   VELOX_CHECK_EQ(
       operatorCtx_->driverCtx()->driverId,
       0,
@@ -174,21 +173,26 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
 
   std::vector<cudf::table_view> tableViews;
   std::vector<rmm::cuda_stream_view> inputStreams;
+  std::vector<CudfVectorPtr> inputs;
   tableViews.reserve(numNonEmptySources);
-  for (size_t i = 0; i < sourceData_.size(); ++i) {
-    for (const auto& tbl : sourceData_[i]) {
+  inputStreams.reserve(numNonEmptySources);
+  inputs.reserve(numNonEmptySources);
+  for (auto& batches : sourceData_) {
+    for (auto& tbl : batches) {
       tableViews.push_back(tbl->getTableView());
       inputStreams.push_back(tbl->stream());
+      inputs.push_back(std::move(tbl));
     }
   }
+  sourceData_.clear();
+
   cudf::detail::join_streams(inputStreams, stream);
   auto mergedTable =
       cudf::merge(tableViews, sortKeys_, columnOrder_, nullOrder_, stream, mr);
-  (*cudaEvent_, inputStreams, stream);
-  // Free source tables now (ordered after the merge by streamsWaitForStream
-  // above) to cap peak GPU memory;
-  // doClose() handles the early-termination path.
-  sourceData_.clear();
+  // Order the source deallocations after the merge by rebinding their buffers
+  // to `stream` (with an event-wait fallback). This frees the inputs promptly
+  // without forcing the pooled producer streams to wait on the merge.
+  orderCudfVectorDeallocationsAfterStream(inputs, inputStreams, stream);
 
   auto numRows = mergedTable->num_rows();
 

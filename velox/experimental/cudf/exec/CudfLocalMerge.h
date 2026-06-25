@@ -60,7 +60,6 @@ class CudfLocalMerge : public CudfSourceOperatorBase {
   std::vector<cudf::order> columnOrder_;
   std::vector<cudf::null_order> nullOrder_;
 
-  std::unique_ptr<CudaEvent> cudaEvent_;
   /// Per-source accumulated batches. sourceData_[i] holds all CudfVectors
   /// received from sources_[i].
   std::vector<std::vector<CudfVectorPtr>> sourceData_;
