@@ -57,4 +57,16 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
     fmt::fmt
   )
+
+  add_executable(velox_hive_paimon_data_sink_test PaimonDataSinkTest.cpp)
+  add_test(velox_hive_paimon_data_sink_test velox_hive_paimon_data_sink_test)
+
+  target_link_libraries(
+    velox_hive_paimon_data_sink_test
+    velox_hive_paimon_connector
+    velox_hive_paimon_split
+    velox_exec_test_util
+    GTest::gtest
+    GTest::gtest_main
+  )
 endif()

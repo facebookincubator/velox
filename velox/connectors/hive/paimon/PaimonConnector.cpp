@@ -15,6 +15,8 @@
  */
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
+#include "velox/common/Casts.h"
+#include "velox/connectors/hive/paimon/PaimonDataSink.h"
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 
 namespace facebook::velox::connector::hive::paimon {
@@ -38,6 +40,21 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
       &fileHandleFactory_,
       ioExecutor_,
       connectorQueryCtx,
+      paimonConfig_);
+}
+
+std::unique_ptr<DataSink> PaimonConnector::createDataSink(
+    RowTypePtr inputType,
+    ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+    ConnectorQueryCtx* connectorQueryCtx,
+    CommitStrategy commitStrategy) {
+  auto paimonInsertHandle = checkedPointerCast<const HiveInsertTableHandle>(
+      connectorInsertTableHandle);
+  return std::make_unique<PaimonDataSink>(
+      inputType,
+      paimonInsertHandle,
+      connectorQueryCtx,
+      commitStrategy,
       paimonConfig_);
 }
 
