@@ -415,7 +415,7 @@ RowVectorPtr LocalPartition::wrapChildren(
     }
   }
 
-  result->updateContainsLazyNotLoaded();
+  result->invalidateContainsLazyNotLoaded();
   return result;
 }
 

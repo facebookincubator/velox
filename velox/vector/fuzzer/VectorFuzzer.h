@@ -421,8 +421,12 @@ class VectorFuzzer {
   BufferPtr fuzzNulls(vector_size_t size);
 
   /// Generate a random indices buffer of 'size' with maximum possible index
-  /// pointing to (baseVectorSize-1).
-  BufferPtr fuzzIndices(vector_size_t size, vector_size_t baseVectorSize);
+  /// pointing to (baseVectorSize-1). If 'rawNullsForGarbage' is non-null,
+  /// null rows get out-of-range indices so reads behind a null are caught.
+  BufferPtr fuzzIndices(
+      vector_size_t size,
+      vector_size_t baseVectorSize,
+      const uint64_t* rawNullsForGarbage = nullptr);
 
   /// Generate a random inMap buffer (for use with flat map vectors) of 'size'
   /// number of rows. This should randomize the keys per row in the map.
@@ -458,21 +462,27 @@ class VectorFuzzer {
   // flat.
   VectorPtr fuzzComplex(const TypePtr& type, vector_size_t size);
 
+  // When 'rawNullsForGarbage' is non-null, null rows get out-of-range
+  // offsets/sizes instead of consuming elements.
   void fuzzOffsetsAndSizes(
       BufferPtr& offsets,
       BufferPtr& sizes,
       size_t elementsSize,
-      size_t size);
+      size_t size,
+      const uint64_t* rawNullsForGarbage);
 
   // Normalize a vector to be used as map key.
   // For each map element, if duplicate key values are found, remove them (and
   // any subsequent key values) by cutting the map short (reducing its size).
-  // Throws if the keys vector contains null values.
+  // Throws if the keys vector contains null values. Rows that are null in
+  // 'rawNulls' (when non-null) are skipped, since their offsets/sizes may be
+  // out-of-range garbage.
   VectorPtr normalizeMapKeys(
       const VectorPtr& keys,
       size_t mapSize,
       BufferPtr& offsets,
-      BufferPtr& sizes);
+      BufferPtr& sizes,
+      const uint64_t* rawNulls);
 
   VectorFuzzer::Options opts_;
 

@@ -16,6 +16,8 @@
 #pragma once
 
 #include <folly/hash/Hash.h>
+#include <algorithm>
+#include <span>
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -41,34 +43,112 @@ struct Coercion {
   /// Returns overall cost of a list of coercions by adding up individual costs.
   static int64_t overallCost(const std::vector<Coercion>& coercions);
 
-  /// Returns an index of the lowest cost coercion in 'candidates' or nullptr if
-  /// 'candidates' is empty or there is a tie.
+  /// Resolved return type and default null behavior of a function signature.
+  /// The return type is never null. A bound candidate always resolves one.
+  struct CandidateMetadata {
+    TypePtr returnType;
+    bool nullOnNull{false};
+  };
+
+  /// Returns the index of the strictly-lowest-cost candidate, or std::nullopt
+  /// if 'candidates' is empty or two or more tie for lowest cost.
   template <typename T>
   static std::optional<size_t> pickLowestCost(
       const std::vector<std::pair<std::vector<Coercion>, T>>& candidates) {
-    if (candidates.empty()) {
+    const auto tied = minCostCandidates(candidates);
+    return tied.size() == 1 ? std::optional<size_t>(tied[0]) : std::nullopt;
+  }
+
+  /// Resolves a lowest-cost tie between candidates when the tie is caused only
+  /// by bare UNKNOWN (untyped null) arguments. Returns the winning candidate's
+  /// index, or std::nullopt when the tie is genuinely ambiguous.
+  ///
+  /// Looks only at "unknown-only-coercion" candidates -- those whose coercions
+  /// fall solely on UNKNOWN positions, coercing nothing but the nulls. They are
+  /// more specific than candidates that also widen a real argument. Among them:
+  ///   - exactly one      -> it wins;
+  ///   - several, but interchangeable -> lowest index wins;
+  ///   - anything else    -> ambiguous (std::nullopt).
+  ///
+  /// Interchangeable means they share the same return type and all return null
+  /// on a null argument, so the pick cannot change the result.
+  ///
+  /// 'argTypes' are the call's actual argument types, used to locate the
+  /// UNKNOWN positions. 'resolutionAt(i)' returns candidate i's
+  /// CandidateMetadata.
+  template <typename T, typename ResolutionAt>
+  static std::optional<size_t> pickLowestCost(
+      const std::vector<std::pair<std::vector<Coercion>, T>>& candidates,
+      const std::vector<TypePtr>& argTypes,
+      ResolutionAt&& resolutionAt) {
+    const auto tied = minCostCandidates(candidates);
+    if (tied.size() == 1) {
+      return tied[0];
+    }
+    return tryResolveTie(
+        candidates, tied, argTypes, std::forward<ResolutionAt>(resolutionAt));
+  }
+
+ private:
+  // Returns true if 'coercions' has at least one coercion and every coercion
+  // falls on an UNKNOWN position of 'argTypes' (an exact bind has none).
+  static bool isUnknownOnlyCoercion(
+      const std::vector<Coercion>& coercions,
+      const std::vector<TypePtr>& argTypes);
+
+  // Returns the indices of the candidates tied at the lowest summed cost.
+  template <typename T>
+  static std::vector<size_t> minCostCandidates(
+      const std::vector<std::pair<std::vector<Coercion>, T>>& candidates) {
+    std::vector<size_t> tied;
+    int64_t minCost{0};
+    for (auto i = 0; i < candidates.size(); ++i) {
+      const auto cost = overallCost(candidates[i].first);
+      if (tied.empty() || cost < minCost) {
+        minCost = cost;
+        tied.clear();
+        tied.push_back(i);
+      } else if (cost == minCost) {
+        tied.push_back(i);
+      }
+    }
+    return tied;
+  }
+
+  // Resolves only an UNKNOWN-induced tie: keeps the unknown-only-coercion
+  // candidates among 'tied' and returns the winner, else std::nullopt.
+  template <typename T, typename ResolutionAt>
+  static std::optional<size_t> tryResolveTie(
+      const std::vector<std::pair<std::vector<Coercion>, T>>& candidates,
+      std::span<const size_t> tied,
+      const std::vector<TypePtr>& argTypes,
+      ResolutionAt&& resolutionAt) {
+    std::vector<size_t> unknownOnly;
+    for (auto index : tied) {
+      if (isUnknownOnlyCoercion(candidates[index].first, argTypes)) {
+        unknownOnly.push_back(index);
+      }
+    }
+    if (unknownOnly.empty()) {
       return std::nullopt;
     }
 
-    if (candidates.size() == 1) {
-      return 0;
+    // Lowest index, so the pick is deterministic regardless of candidate order.
+    const size_t selectedIndex =
+        *std::min_element(unknownOnly.begin(), unknownOnly.end());
+    if (unknownOnly.size() == 1) {
+      return selectedIndex;
     }
 
-    std::vector<std::pair<size_t, int64_t>> costs;
-    costs.reserve(candidates.size());
-    for (auto i = 0; i < candidates.size(); ++i) {
-      costs.emplace_back(i, overallCost(candidates[i].first));
+    const auto selectedReturnType = resolutionAt(selectedIndex).returnType;
+    VELOX_DCHECK_NOT_NULL(selectedReturnType);
+    for (auto index : unknownOnly) {
+      const auto metadata = resolutionAt(index);
+      if (!metadata.nullOnNull || *metadata.returnType != *selectedReturnType) {
+        return std::nullopt;
+      }
     }
-
-    std::sort(costs.begin(), costs.end(), [](const auto& a, const auto& b) {
-      return a.second < b.second;
-    });
-
-    if (costs[0].second < costs[1].second) {
-      return costs[0].first;
-    }
-
-    return std::nullopt;
+    return selectedIndex;
   }
 };
 
@@ -165,6 +245,12 @@ class TypeCoercer {
   /// Used by callers that have not selected a dialect-specific coercer.
   static const TypeCoercer& defaults();
 
+  /// Returns the coercion from 'fromType' to 'toType', or std::nullopt. A bare
+  /// UNKNOWN coerces to any complex target at a cost above every
+  /// UNKNOWN->scalar coercion; all other cases defer to coerceTypeBase().
+  std::optional<Coercion> coerce(const TypePtr& fromType, const TypePtr& toType)
+      const;
+
   /// Checks if 'fromType' can be implicitly converted to 'toType' via a
   /// single rule lookup. Does NOT recurse into container children -- for
   /// container coercibility (e.g., ARRAY<INT> vs ARRAY<BIGINT>), use
@@ -224,6 +310,9 @@ class TypeCoercer {
   // Flat map: (fromName, toName) -> Coercion{type, cost}.
   std::unordered_map<std::pair<std::string, std::string>, Coercion, PairHash>
       rules_;
+
+  // Derived from the rule set at construction (max UNKNOWN->scalar cost + 1).
+  int32_t unknownToComplexCost_{1};
 };
 
 } // namespace facebook::velox

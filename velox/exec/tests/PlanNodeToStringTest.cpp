@@ -568,7 +568,7 @@ TEST_F(PlanNodeToStringTest, enforceSingleRow) {
 
 TEST_F(PlanNodeToStringTest, assignUniqueId) {
   auto plan =
-      PlanBuilder().values({data_}).assignUniqueId("unique_id", 123).planNode();
+      PlanBuilder().values({data_}).assignUniqueId("unique_id").planNode();
 
   ASSERT_EQ("-- AssignUniqueId[1]\n", plan->toString());
   ASSERT_EQ(

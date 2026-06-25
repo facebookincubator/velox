@@ -234,7 +234,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 
   uint64_t filterTimeUs{0};
   if (remainingFilterExprSet_) {
-    MicrosecondTimer filterTimer(&filterTimeUs);
+    MicrosecondWallTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(cudfTableColumns.size());

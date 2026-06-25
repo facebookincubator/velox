@@ -2213,20 +2213,25 @@ PlanNodePtr NestedLoopJoinNode::create(
       outputType);
 }
 
+// static
+RowTypePtr AssignUniqueIdNode::makeOutputType(
+    const PlanNodePtr& source,
+    const std::string& idName) {
+  std::vector<std::string> names(source->outputType()->names());
+  std::vector<TypePtr> types(source->outputType()->children());
+  names.emplace_back(idName);
+  types.emplace_back(BIGINT());
+  return ROW(std::move(names), std::move(types));
+}
+
 AssignUniqueIdNode::AssignUniqueIdNode(
     const PlanNodeId& id,
     const std::string& idName,
-    const int32_t taskUniqueId,
     PlanNodePtr source)
-    : PlanNode(id), taskUniqueId_(taskUniqueId), sources_{std::move(source)} {
-  std::vector<std::string> names(sources_[0]->outputType()->names());
-  std::vector<TypePtr> types(sources_[0]->outputType()->children());
-
-  names.emplace_back(idName);
-  types.emplace_back(BIGINT());
-  outputType_ = ROW(std::move(names), std::move(types));
-  uniqueIdCounter_ = std::make_shared<std::atomic_int64_t>();
-}
+    : PlanNode(id),
+      taskUniqueId_(0),
+      sources_{std::move(source)},
+      outputType_(makeOutputType(sources_[0], idName)) {}
 
 void AssignUniqueIdNode::addDetails(std::stringstream& /* stream */) const {
   // Nothing to add.
@@ -2235,7 +2240,6 @@ void AssignUniqueIdNode::addDetails(std::stringstream& /* stream */) const {
 folly::dynamic AssignUniqueIdNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["idName"] = outputType_->names().back();
-  obj["taskUniqueId"] = taskUniqueId_;
   return obj;
 }
 
@@ -2252,10 +2256,7 @@ PlanNodePtr AssignUniqueIdNode::create(
   auto source = deserializeSingleSource(obj, context);
 
   return std::make_shared<AssignUniqueIdNode>(
-      deserializePlanNodeId(obj),
-      obj["idName"].asString(),
-      obj["taskUniqueId"].asInt(),
-      std::move(source));
+      deserializePlanNodeId(obj), obj["idName"].asString(), std::move(source));
 }
 
 namespace {

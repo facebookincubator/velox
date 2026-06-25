@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/TDigestFunctions.h"
 #include "velox/functions/prestosql/types/TDigestRegistration.h"
@@ -60,16 +61,8 @@ void registerTDigestFunctions(const std::string& prefix) {
       double,
       double,
       int64_t>({prefix + "construct_tdigest"});
-  registerFunction<
-      DestructureTDigestFunction,
-      Row<Array<double>,
-          Array<int32_t>,
-          double,
-          double,
-          double,
-          double,
-          int64_t>,
-      SimpleTDigest<double>>({prefix + "destructure_tdigest"});
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_destructure_tdigest, prefix + "destructure_tdigest");
   registerFunction<
       TrimmedMeanFunction,
       double,

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/base64.h>
+#include <gmock/gmock.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -587,6 +588,48 @@ TEST_F(TDigestFunctionsTest, testDestructureTDigest) {
   ASSERT_NEAR(resultMax->valueAt(0), 9.0, 0.001);
   ASSERT_NEAR(resultSum->valueAt(0), 45.0, 0.001);
   ASSERT_EQ(resultCount->valueAt(0), 10);
+}
+
+TEST_F(TDigestFunctionsTest, testDestructureTDigestByName) {
+  std::vector<std::vector<double>> means = {
+      {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0}};
+  auto meansArg = makeArrayVector<double>(means);
+  std::vector<std::vector<double>> weights = {
+      {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+  auto weightsArg = makeArrayVector<double>(weights);
+  auto compressionArg = makeFlatVector<double>(std::vector<double>{100.0});
+  auto minArg = makeFlatVector<double>(std::vector<double>{0.0});
+  auto maxArg = makeFlatVector<double>(std::vector<double>{9.0});
+  auto sumArg = makeFlatVector<double>(std::vector<double>{45.0});
+  auto countArg = makeFlatVector<int64_t>(std::vector<int64_t>{10});
+
+  auto tdigest = evaluate(
+      "construct_tdigest(c0, c1, c2, c3, c4, c5, c6)",
+      makeRowVector(
+          {meansArg,
+           weightsArg,
+           compressionArg,
+           minArg,
+           maxArg,
+           sumArg,
+           countArg}));
+
+  auto result = evaluate("destructure_tdigest(c0)", makeRowVector({tdigest}));
+
+  EXPECT_THAT(
+      result->type()->asRow().names(),
+      ::testing::ElementsAre(
+          "centroid_means",
+          "centroid_weights",
+          "compression",
+          "min",
+          "max",
+          "sum",
+          "count"));
+
+  auto max =
+      evaluate("(destructure_tdigest(c0)).max", makeRowVector({tdigest}));
+  ASSERT_NEAR(max->as<FlatVector<double>>()->valueAt(0), 9.0, 0.001);
 }
 
 TEST_F(TDigestFunctionsTest, testDestructureTDigestLarge) {

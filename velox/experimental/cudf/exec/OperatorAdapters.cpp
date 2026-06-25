@@ -800,8 +800,9 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
             operatorId,
             ctx,
             assignUniqueIdPlanNode,
-            assignUniqueIdPlanNode->taskUniqueId(),
-            assignUniqueIdPlanNode->uniqueIdCounter()));
+            ctx->task->planFragment().taskUniqueId.value_or(
+                assignUniqueIdPlanNode->taskUniqueId()),
+            ctx->task->uniqueRowIdPool()));
     return result;
   }
 };
