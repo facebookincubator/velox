@@ -113,8 +113,16 @@ CudfHiveDataSource::CudfHiveDataSource(
     }
 
     auto const remainingFilterType = getTableRowType();
+    // The connector exposes the session timezone directly rather than through a
+    // QueryConfig. sessionStartTimeMs is unused for filter pushdown (no now() /
+    // current_timestamp here), so it is left at 0.
+    const velox::cudf_velox::CudfExpressionContext context{
+        connectorQueryCtx_->sessionTimezone(),
+        connectorQueryCtx_->adjustTimestampToTimezone(),
+        0,
+    };
     cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
-        remainingFilterExprSet_->exprs()[0], remainingFilterType);
+        remainingFilterExprSet_->exprs()[0], remainingFilterType, context);
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }
