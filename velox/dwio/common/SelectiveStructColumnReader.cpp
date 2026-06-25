@@ -689,7 +689,7 @@ void SelectiveStructColumnReaderBase::getValues(
         makeColumnLoader(index), lazyType, rows.size(), pool_, childResult);
   }
 
-  resultRow->updateContainsLazyNotLoaded();
+  resultRow->invalidateContainsLazyNotLoaded();
 }
 
 namespace detail {

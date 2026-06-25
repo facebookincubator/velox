@@ -374,6 +374,17 @@ bool SignatureBinder::tryBindVariablesWithCoercion(
   }
 
   const auto& params = typeSignature.parameters();
+
+  // Bind the type variables to UNKNOWN so the parameterized formal resolves.
+  if (actualType->isUnknown()) {
+    for (const auto& param : params) {
+      if (!tryBindVariablesWithCoercion(param, UNKNOWN())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   if (params.size() != actualType->parameters().size()) {
     return false;
   }
@@ -409,6 +420,24 @@ bool SignatureBinderBase::tryBind(
   const auto& baseName = typeSignature.baseName();
   auto typeName = boost::algorithm::to_upper_copy(baseName);
   if (!boost::algorithm::iequals(typeName, actualType->name())) {
+    if (allowCoercion && actualType->isUnknown() &&
+        !typeSignature.parameters().empty()) {
+      auto resolvedType = SignatureBinder::tryResolveType(
+          typeSignature,
+          variables(),
+          typeVariablesBindings_,
+          integerVariablesBindings_,
+          longEnumVariablesBindings_,
+          varcharEnumVariablesBindings_);
+      // This path only coerces UNKNOWN to complex types.
+      if (!resolvedType || resolvedType->size() == 0) {
+        return false;
+      }
+      auto availableCoercion = coercer_.coerce(UNKNOWN(), resolvedType);
+      VELOX_CHECK(availableCoercion.has_value());
+      coercion = availableCoercion.value();
+      return true;
+    }
     if (allowCoercion && typeSignature.parameters().empty()) {
       if (auto availableCoercion =
               coercer_.coerceTypeBase(actualType, typeName)) {
@@ -638,6 +667,8 @@ TypePtr tryResolveReturnTypeWithCoercions(
     }
   }
 
+  // Aggregate/window signatures don't model null-on-null, so UNKNOWN ties stay
+  // ambiguous here (no tie-break).
   if (auto index = Coercion::pickLowestCost(candidates)) {
     const auto& requiredCoercions = candidates[index.value()].first;
     coercions.reserve(requiredCoercions.size());
