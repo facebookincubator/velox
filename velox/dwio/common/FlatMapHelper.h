@@ -52,10 +52,18 @@ enum class FlatMapOutput : uint8_t {
 };
 
 // Struct for keeping track flatmap key stream metrics.
-// Used by keySelectionCallback_ in FlatMapColumnReader
+// Used by keySelectionCallback_ in FlatMapColumnReader.
+//
+// 'columnName' and 'selectedFeatureNames' are optional and may be populated
+// by readers that have access to the flat map's column name and the names of
+// the features it actually projected (in the caller-specified order). They
+// can be consumed by logging infrastructure to inform write-time feature
+// reordering configurations.
 struct FlatMapKeySelectionStats {
   uint64_t totalKeys = 0;
   uint64_t selectedKeys = 0;
+  std::string columnName;
+  std::vector<std::string> selectedFeatureNames;
 };
 
 // Initialize flat vector
