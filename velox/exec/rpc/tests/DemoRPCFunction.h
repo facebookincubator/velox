@@ -62,6 +62,12 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) override;
 
+  /// Test hook: classifies any response carrying the "OVERLOAD" sentinel in
+  /// its result as congestion (kError), otherwise kNone. Lets RPCOperatorTest
+  /// drive the operator's congestion-window adjustment path.
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override;
+
   /// SQL function signatures for registration.
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures();
 

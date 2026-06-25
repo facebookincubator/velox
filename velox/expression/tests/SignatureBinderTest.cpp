@@ -1680,6 +1680,255 @@ TEST(SignatureBinderTest, unknownInComplexTypes) {
   }
 }
 
+TEST(SignatureBinderTest, unknownCoercesToComplexType) {
+  auto makeSignature = [](const std::string& returnType,
+                          const std::string& argType,
+                          const std::vector<std::string>& typeVariables) {
+    exec::FunctionSignatureBuilder builder;
+    for (const auto& variable : typeVariables) {
+      builder.typeVariable(variable);
+    }
+    return builder.returnType(returnType).argumentType(argType).build();
+  };
+
+  testCoercions(
+      makeSignature("bigint", "array(T)", {"T"}),
+      {UNKNOWN()},
+      {ARRAY(UNKNOWN())},
+      BIGINT());
+
+  testCoercions(
+      makeSignature("bigint", "map(K,V)", {"K", "V"}),
+      {UNKNOWN()},
+      {MAP(UNKNOWN(), UNKNOWN())},
+      BIGINT());
+
+  // Return type depends on the type variable, which stays UNKNOWN.
+  testCoercions(
+      makeSignature("T", "array(T)", {"T"}),
+      {UNKNOWN()},
+      {ARRAY(UNKNOWN())},
+      UNKNOWN());
+
+  testCoercions(
+      makeSignature("array(T)", "array(T)", {"T"}),
+      {UNKNOWN()},
+      {ARRAY(UNKNOWN())},
+      ARRAY(UNKNOWN()));
+}
+
+TEST(SignatureBinderTest, unknownDoesNotBindWithoutCoercion) {
+  // Exact bind must fail; only coercion can map UNKNOWN to array(T).
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("bigint")
+                       .argumentType("array(T)")
+                       .build();
+
+  assertCannotBind(signature, {UNKNOWN()});
+
+  // decimal(P,S) leaves precision and scale unbound, so even coercion fails.
+  auto decimalSignature = exec::FunctionSignatureBuilder()
+                              .integerVariable("a_precision")
+                              .integerVariable("a_scale")
+                              .returnType("bigint")
+                              .argumentType("decimal(a_precision, a_scale)")
+                              .build();
+
+  assertCannotBind(decimalSignature, {UNKNOWN()}, /*allowCoercion=*/true);
+
+  // Shared (p, s) resolves the UNKNOWN arg to a decimal scalar; no coercion.
+  auto boundDecimalSignature = exec::FunctionSignatureBuilder()
+                                   .integerVariable("p")
+                                   .integerVariable("s")
+                                   .returnType("decimal(p, s)")
+                                   .argumentType("decimal(p, s)")
+                                   .argumentType("decimal(p, s)")
+                                   .build();
+
+  assertCannotBind(
+      boundDecimalSignature,
+      {DECIMAL(10, 2), UNKNOWN()},
+      /*allowCoercion=*/true);
+}
+
+TEST(SignatureBinderTest, unknownArgUnifiesWithConcreteArg) {
+  // foo(array(T), T): the concrete INTEGER pins T, so UNKNOWN coerces to
+  // array(INTEGER). Order independent.
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("T")
+                       .argumentType("array(T)")
+                       .argumentType("T")
+                       .build();
+
+  testCoercions(
+      signature,
+      {UNKNOWN(), INTEGER()},
+      {ARRAY(INTEGER()), nullptr},
+      INTEGER());
+
+  auto reversed = exec::FunctionSignatureBuilder()
+                      .typeVariable("T")
+                      .returnType("T")
+                      .argumentType("T")
+                      .argumentType("array(T)")
+                      .build();
+
+  testCoercions(
+      reversed, {INTEGER(), UNKNOWN()}, {nullptr, ARRAY(INTEGER())}, INTEGER());
+
+  // Two type variables: foo(map(K,V), V). The concrete INTEGER pins V; K has no
+  // concrete arg, so the UNKNOWN map coerces to map(UNKNOWN, INTEGER). Order
+  // independent.
+  auto twoVariables = exec::FunctionSignatureBuilder()
+                          .typeVariable("K")
+                          .typeVariable("V")
+                          .returnType("V")
+                          .argumentType("map(K,V)")
+                          .argumentType("V")
+                          .build();
+
+  testCoercions(
+      twoVariables,
+      {UNKNOWN(), INTEGER()},
+      {MAP(UNKNOWN(), INTEGER()), nullptr},
+      INTEGER());
+
+  auto twoVariablesReversed = exec::FunctionSignatureBuilder()
+                                  .typeVariable("K")
+                                  .typeVariable("V")
+                                  .returnType("V")
+                                  .argumentType("V")
+                                  .argumentType("map(K,V)")
+                                  .build();
+
+  testCoercions(
+      twoVariablesReversed,
+      {INTEGER(), UNKNOWN()},
+      {nullptr, MAP(UNKNOWN(), INTEGER())},
+      INTEGER());
+}
+
+TEST(SignatureBinderTest, pickLowestCostUnknownTie) {
+  using Candidate =
+      std::pair<std::vector<Coercion>, Coercion::CandidateMetadata>;
+
+  auto resolutionAt = [](const std::vector<Candidate>& candidates) {
+    return [&candidates](size_t candidateIndex) {
+      return candidates[candidateIndex].second;
+    };
+  };
+
+  // Exactly one unknown-only-coercion candidate in the tie resolves to it.
+  {
+    std::vector<TypePtr> argTypes{UNKNOWN(), BIGINT()};
+    std::vector<Candidate> candidates{
+        // Not unknown-only: coercion on the non-UNKNOWN position.
+        {{Coercion{}, Coercion{.type = DOUBLE(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+        // Unknown-only: coercion on the UNKNOWN position.
+        {{Coercion{.type = BIGINT(), .cost = 1}, Coercion{}},
+         Coercion::CandidateMetadata{
+             .returnType = VARCHAR(), .nullOnNull = true}},
+    };
+
+    auto index = Coercion::pickLowestCost(
+        candidates, argTypes, resolutionAt(candidates));
+    ASSERT_TRUE(index.has_value());
+    EXPECT_EQ(index.value(), 1);
+  }
+
+  // Two unknown-only candidates with one shared null-on-null return type are
+  // interchangeable, so the lowest index resolves.
+  {
+    std::vector<TypePtr> argTypes{UNKNOWN()};
+    std::vector<Candidate> candidates{
+        {{Coercion{.type = BIGINT(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+        {{Coercion{.type = VARCHAR(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+    };
+
+    auto index = Coercion::pickLowestCost(
+        candidates, argTypes, resolutionAt(candidates));
+    ASSERT_TRUE(index.has_value());
+    EXPECT_EQ(index.value(), 0);
+  }
+
+  // Two unknown-only candidates sharing a return type but not all null-on-null
+  // stay ambiguous.
+  {
+    std::vector<TypePtr> argTypes{UNKNOWN()};
+    std::vector<Candidate> candidates{
+        {{Coercion{.type = BIGINT(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+        {{Coercion{.type = VARCHAR(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = false}},
+    };
+
+    EXPECT_FALSE(
+        Coercion::pickLowestCost(candidates, argTypes, resolutionAt(candidates))
+            .has_value());
+  }
+
+  // Two unknown-only candidates with differing return types stay ambiguous.
+  {
+    std::vector<TypePtr> argTypes{UNKNOWN()};
+    std::vector<Candidate> candidates{
+        {{Coercion{.type = BIGINT(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+        {{Coercion{.type = VARCHAR(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = VARCHAR(), .nullOnNull = true}},
+    };
+
+    EXPECT_FALSE(
+        Coercion::pickLowestCost(candidates, argTypes, resolutionAt(candidates))
+            .has_value());
+  }
+
+  // No unknown-only candidate in the tie stays ambiguous.
+  {
+    std::vector<TypePtr> argTypes{BIGINT()};
+    std::vector<Candidate> candidates{
+        {{Coercion{.type = DOUBLE(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+        {{Coercion{.type = DOUBLE(), .cost = 1}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+    };
+
+    EXPECT_FALSE(
+        Coercion::pickLowestCost(candidates, argTypes, resolutionAt(candidates))
+            .has_value());
+  }
+
+  // Two cost-0 exact-bind candidates with no coercions stay ambiguous.
+  {
+    std::vector<TypePtr> argTypes{BIGINT()};
+    std::vector<Candidate> candidates{
+        {{Coercion{}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+        {{Coercion{}},
+         Coercion::CandidateMetadata{
+             .returnType = BIGINT(), .nullOnNull = true}},
+    };
+
+    EXPECT_FALSE(
+        Coercion::pickLowestCost(candidates, argTypes, resolutionAt(candidates))
+            .has_value());
+  }
+}
+
 TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
   auto makeSignature = [](const std::string& returnType,
                           const std::vector<std::string>& argTypes) {
@@ -1768,6 +2017,32 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
     VELOX_ASSERT_EQ_TYPES(coercions[0], BIGINT());
     ASSERT_EQ(coercions[1], nullptr);
   }
+}
+
+TEST(SignatureBinderTest, aggregateUnknownArgTieStaysAmbiguous) {
+  // Aggregate mirror of the scalar cardinality(null) carve-out: aggregate and
+  // window signatures don't model null-on-null, so an UNKNOWN argument matching
+  // both array(T) and map(K,V) (both returning bigint) stays ambiguous.
+  std::vector<exec::FunctionSignaturePtr> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("array(T)")
+          .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("K")
+          .typeVariable("V")
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("map(K,V)")
+          .build(),
+  };
+
+  std::vector<TypePtr> coercions;
+  auto type = exec::tryResolveReturnTypeWithCoercions(
+      signatures, {UNKNOWN()}, coercions, TypeCoercer::defaults());
+  ASSERT_EQ(type, nullptr);
 }
 
 } // namespace

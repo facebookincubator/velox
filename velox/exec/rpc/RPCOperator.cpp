@@ -38,8 +38,16 @@ RPCOperator::RPCOperator(
       rpcNode_(std::move(rpcNode)),
       state_(std::make_shared<RPCState>()),
       dispatchBatchSize_(rpcNode_->dispatchBatchSize()) {
-  // Configure RPCState with streaming mode.
-  state_->setStreamingMode(rpcNode_->streamingMode());
+  // Configure RPCState with the streaming mode and the congestion-window
+  // tunables. The two knobs are registered QueryConfig properties
+  // (rpc.congestion.min_window / rpc.congestion.step_coef) with safe defaults,
+  // so they can be retuned via SET SESSION / configerator with no code change;
+  // unset means the controller's defaults (floor 1, headroom 1.0x).
+  const auto& queryConfig = driverCtx->queryConfig();
+  state_->setStreamingMode(
+      rpcNode_->streamingMode(),
+      queryConfig.rpcCongestionMinWindow(),
+      queryConfig.rpcCongestionStepCoef());
 }
 
 void RPCOperator::initialize() {
@@ -235,7 +243,13 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
   auto token = std::make_shared<RPCRateLimiter::Token>(
       RPCRateLimiter::acquire(tierKey_));
 
-  // Stamp rowIds onto responses.
+  // Scatter responses into batch-position order using each response's
+  // function-assigned rowId (its position within the batch), then stamp
+  // the global rowIds. Functions may return results out of order (e.g.,
+  // MetaGen's batchDialogCompletion streams results in arbitrary order).
+  // Without this, responses[i] would be paired with rowLocations[i] in
+  // buildOutputFromReadyBatch, silently mis-mapping results to wrong
+  // passthrough rows.
   auto wrapped =
       std::move(future)
           .within(kBatchRpcTimeout)
@@ -247,10 +261,26 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
                 "RPC batch response count ({}) does not match row count ({})",
                 resps.size(),
                 rowIds.size());
-            for (size_t i = 0; i < resps.size(); ++i) {
-              resps[i].rowId = rowIds[i];
+            std::vector<RPCResponse> sorted(resps.size());
+            std::vector<bool> seen(resps.size(), false);
+            for (auto& resp : resps) {
+              auto batchIdx = resp.rowId;
+              VELOX_CHECK_GE(batchIdx, 0);
+              VELOX_CHECK_LT(
+                  static_cast<size_t>(batchIdx),
+                  rowIds.size(),
+                  "RPC batch response rowId ({}) out of range (0-{})",
+                  batchIdx,
+                  rowIds.size() - 1);
+              VELOX_CHECK(
+                  !seen[static_cast<size_t>(batchIdx)],
+                  "Duplicate batch response rowId ({})",
+                  batchIdx);
+              seen[static_cast<size_t>(batchIdx)] = true;
+              resp.rowId = rowIds[static_cast<size_t>(batchIdx)];
+              sorted[static_cast<size_t>(batchIdx)] = std::move(resp);
             }
-            return resps;
+            return sorted;
           })
           .deferError([token](folly::exception_wrapper ew) {
             RPC_OP_LOG(ERROR) << "RPC batch failed: " << ew.what();
@@ -292,16 +322,46 @@ RowVectorPtr RPCOperator::getOutput() {
 
     // Drain additional ready rows (non-blocking) for batched output.
     // This amortizes RowVector allocation across multiple completed rows.
-    state_->drainReadyRows(claimedRows_, 1024);
+    state_->drainReadyRows(claimedRows_, 1'024);
 
+    // Materialize responses, locations, and round-trip latencies once — reused
+    // for the congestion signal and the output vector (no extra copy).
     auto numRows = static_cast<int64_t>(claimedRows_.size());
-    for (const auto& row : claimedRows_) {
-      if (row.response.hasError()) {
+    std::vector<RPCResponse> responses;
+    std::vector<std::pair<int32_t, vector_size_t>> locations;
+    std::vector<int64_t> roundTripTimesNs;
+    responses.reserve(claimedRows_.size());
+    locations.reserve(claimedRows_.size());
+    roundTripTimesNs.reserve(claimedRows_.size());
+    for (auto& row : claimedRows_) {
+      const bool hasError = row.response.hasError();
+      if (hasError) {
         numErrors_++;
       }
+      locations.emplace_back(row.location.batchIndex, row.location.rowIndex);
+      // Only successful rows feed the gradient. Errored rows (e.g. null_input,
+      // client-side rejections) complete without a real round trip, so their
+      // artificially small RTT would pull down the per-window minimum and skew
+      // the gradient/baseline.
+      if (!hasError) {
+        roundTripTimesNs.push_back(row.rttNs);
+      }
+      responses.push_back(std::move(row.response));
     }
-    auto output = buildOutputFromReadyRows(claimedRows_);
-    numResponsesCollected_ += numRows;
+
+    // Same congestion policy as BATCH: the function classifies the drained
+    // responses and the operator feeds the gradient window. On success the
+    // healthy rows' RTTs are samples; on overload the window shrinks.
+    auto signal = function_->evaluateCongestion(responses);
+    if (signal == AsyncRPCFunction::CongestionSignal::kError) {
+      state_->onUnitError();
+    } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
+      // Single lock acquisition for the whole drained batch of row RTTs.
+      state_->onUnitSamples(roundTripTimesNs);
+    }
+
+    auto output = buildOutputVector(responses, locations);
+    numResponsesReceived_ += numRows;
     claimedRows_.clear();
     return output;
   } else {
@@ -332,13 +392,15 @@ RowVectorPtr RPCOperator::getOutput() {
     // The function knows its domain-specific error semantics.
     auto signal = function_->evaluateCongestion(claimedBatch_->responses);
     if (signal == AsyncRPCFunction::CongestionSignal::kError) {
-      state_->onBatchError();
+      state_->onUnitError();
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
-      state_->onBatchSuccess(function_->congestionRecoveryIncrement());
+      // Feed the measured round-trip latency to the gradient window so it
+      // learns the in-flight-batch sweet spot without a fixed ceiling.
+      state_->onUnitSample(claimedBatch_->rttNs);
     }
 
     auto output = buildOutputFromReadyBatch(*claimedBatch_);
-    numResponsesCollected_ += numRows;
+    numResponsesReceived_ += numRows;
     claimedBatch_.reset();
     return output;
   }
@@ -523,7 +585,7 @@ void RPCOperator::recordRuntimeStats() {
   lockedStats->addRuntimeStat(
       kRpcRequestsDispatched, RuntimeCounter(numRequestsDispatched_));
   lockedStats->addRuntimeStat(
-      kRpcResponsesReceived, RuntimeCounter(numResponsesCollected_));
+      kRpcResponsesReceived, RuntimeCounter(numResponsesReceived_));
   lockedStats->addRuntimeStat(kRpcErrorCount, RuntimeCounter(numErrors_));
   if (totalBlockWaitNanos_ > 0) {
     lockedStats->addRuntimeStat(
@@ -540,28 +602,12 @@ void RPCOperator::recordRuntimeStats() {
             RuntimeCounter::Unit::kNanos));
   }
 
-  if (totalBlockWaitNanos_ > 0 || numResponsesCollected_ > 0) {
+  if (totalBlockWaitNanos_ > 0 || numResponsesReceived_ > 0) {
     const CpuWallTiming backgroundTiming{
-        static_cast<uint64_t>(numResponsesCollected_), totalBlockWaitNanos_, 0};
+        static_cast<uint64_t>(numResponsesReceived_), totalBlockWaitNanos_, 0};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
   }
-}
-
-RowVectorPtr RPCOperator::buildOutputFromReadyRows(
-    std::vector<RPCState::ReadyRow>& readyRows) {
-  std::vector<RPCResponse> responses;
-  responses.reserve(readyRows.size());
-
-  std::vector<std::pair<int32_t, vector_size_t>> locations;
-  locations.reserve(readyRows.size());
-
-  for (auto& row : readyRows) {
-    responses.push_back(std::move(row.response));
-    locations.emplace_back(row.location.batchIndex, row.location.rowIndex);
-  }
-
-  return buildOutputVector(responses, locations);
 }
 
 RowVectorPtr RPCOperator::buildOutputFromReadyBatch(

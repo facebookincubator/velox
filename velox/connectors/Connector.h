@@ -34,6 +34,7 @@
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 
 namespace facebook::velox {
 class Config;
@@ -214,6 +215,7 @@ class DataSink {
     uint64_t numCompressedBytes{0};
     uint64_t recodeTimeNs{0};
     uint64_t compressionTimeNs{0};
+    folly::F14FastMap<std::string, RuntimeMetric> writerRuntimeStats;
 
     exec::SpillStats spillStats;
 
