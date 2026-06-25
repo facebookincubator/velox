@@ -1097,6 +1097,11 @@ Parquet Options (prefix ``hive.parquet.``)
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge. Session: ``hive.parquet.writer.batch_size``.
+   * - ``writer.row-group-size``
+     - string
+     - 128MB
+     - Target uncompressed row group size in bytes for the Parquet writer.
+       Session: ``hive.parquet.writer.row-group-size``.
    * - ``writer.created-by``
      - string
      - parquet-cpp-velox version 0.0.0
