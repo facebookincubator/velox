@@ -455,7 +455,8 @@ TEST_F(CudfWindowTest, rowNumberMultiBatch) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-TEST_F(CudfWindowTest, multiFunctionPartitionOrder) {
+// Multi-column ORDER BY covered in follow-on PR (requires cuDF upgrade).
+TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
   // Same shape as valuesRowsStreamingWindowBuild (CPU) but non-streaming window
   // and explicit expected vectors (no DuckDB runner).
   auto data = makeRowVector(

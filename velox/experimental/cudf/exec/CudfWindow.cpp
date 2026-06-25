@@ -124,77 +124,6 @@ bool rangeWindowTypesEqual(
   return left.index() == right.index();
 }
 
-struct RangeOrderBy {
-  std::vector<cudf::column_view> columnViews;
-  ColumnOrView orderByColumnOwner;
-  cudf::table_view table;
-  std::vector<cudf::order> orders;
-  std::vector<cudf::null_order> nullOrders;
-
-  static RangeOrderBy fromSortedView(
-      const cudf::table_view& sortedView,
-      const std::vector<cudf::size_type>& sortKeyIndices,
-      const std::vector<cudf::order>& sortOrders,
-      const std::vector<cudf::null_order>& nullOrders,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) {
-    RangeOrderBy result;
-    if (sortKeyIndices.empty()) {
-      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-      result.orderByColumnOwner =
-          cudf::sequence(sortedView.num_rows(), oneScalar, oneScalar, stream, mr);
-      result.columnViews.push_back(asView(result.orderByColumnOwner));
-      result.orders.push_back(cudf::order::ASCENDING);
-      result.nullOrders.push_back(cudf::null_order::BEFORE);
-    } else {
-      result.columnViews.reserve(sortKeyIndices.size());
-      for (auto idx : sortKeyIndices) {
-        result.columnViews.push_back(sortedView.column(idx));
-      }
-      result.orders = sortOrders;
-      result.nullOrders = nullOrders;
-    }
-    result.table = cudf::table_view(result.columnViews);
-    return result;
-  }
-};
-
-std::unique_ptr<cudf::table> invokeGroupedRangeRollingBatch(
-    const cudf::table_view& partKeys,
-    const RangeOrderBy& orderby,
-    cudf::range_window_type preceding,
-    cudf::range_window_type following,
-    std::vector<cudf::rolling_request>& requests,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  const auto requestSpan = cudf::host_span<cudf::rolling_request const>(
-      requests.data(), requests.size());
-  if (orderby.columnViews.size() == 1) {
-    return cudf::grouped_range_rolling_window(
-        partKeys,
-        orderby.columnViews[0],
-        orderby.orders[0],
-        orderby.nullOrders[0],
-        preceding,
-        following,
-        requestSpan,
-        stream,
-        mr);
-  }
-  return cudf::grouped_range_rolling_window(
-      partKeys,
-      orderby.table,
-      cudf::host_span<cudf::order const>(
-          orderby.orders.data(), orderby.orders.size()),
-      cudf::host_span<cudf::null_order const>(
-          orderby.nullOrders.data(), orderby.nullOrders.size()),
-      preceding,
-      following,
-      requestSpan,
-      stream,
-      mr);
-}
-
 RangeRollingBatch* findRangeRollingBatch(
     std::vector<RangeRollingBatch>& batches,
     const std::pair<cudf::range_window_type, cudf::range_window_type>&
@@ -237,12 +166,10 @@ cudf::rank_method toRankMethod(const std::string& name) {
 
 struct RankValuesBuild {
   ColumnOrView sequenceColOwner;
-  std::vector<cudf::column_view> structChildren;
 };
 
 cudf::column_view buildRankValuesCol(
     const cudf::table_view& sortedInput,
-    const std::string& baseName,
     const std::vector<cudf::size_type>& sortKeyIndices,
     RankValuesBuild& holder,
     rmm::cuda_stream_view stream,
@@ -254,21 +181,7 @@ cudf::column_view buildRankValuesCol(
         cudf::sequence(n, oneScalar, oneScalar, stream, mr);
     return asView(holder.sequenceColOwner);
   }
-  if (sortKeyIndices.size() == 1 || baseName == "row_number") {
-    return sortedInput.column(sortKeyIndices[0]);
-  }
-  holder.structChildren.reserve(sortKeyIndices.size());
-  for (auto idx : sortKeyIndices) {
-    holder.structChildren.push_back(sortedInput.column(idx));
-  }
-  return cudf::column_view(
-      cudf::data_type{cudf::type_id::STRUCT},
-      n,
-      nullptr,
-      nullptr,
-      0,
-      0,
-      holder.structChildren);
+  return sortedInput.column(sortKeyIndices[0]);
 }
 
 std::unique_ptr<cudf::column> computeGlobalAggregate(
@@ -412,6 +325,14 @@ bool CudfWindow::canRunOnGPU(const core::WindowNode& windowNode) {
 bool CudfWindow::canRunOnGPU(
     const core::WindowNode& windowNode,
     std::optional<std::string>& reason) {
+  if (windowNode.sortingKeys().size() > 1) {
+    if (reason) {
+      reason =
+          "Multi-column ORDER BY requires a cuDF upgrade (follow-on PR)";
+    }
+    return false;
+  }
+
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
   const auto inputType = asRowType(windowNode.inputType());
   for (const auto& func : windowNode.windowFunctions()) {
@@ -606,12 +527,7 @@ void CudfWindow::computeRankColumnsBatch(
       }
       RankValuesBuild holder;
       auto valuesCol = buildRankValuesCol(
-          sortedInput,
-          baseName,
-          sortKeyIndices_,
-          holder,
-          stream,
-          mr);
+          sortedInput, sortKeyIndices_, holder, stream, mr);
       auto method = toRankMethod(baseName);
       auto agg = cudf::make_rank_aggregation<cudf::scan_aggregation>(
           method, colOrder, cudf::null_policy::INCLUDE, nullOrd);
@@ -643,12 +559,7 @@ void CudfWindow::computeRankColumnsBatch(
 
     cudf::groupby::scan_request request;
     request.values = buildRankValuesCol(
-        sortedInput,
-        baseName,
-        sortKeyIndices_,
-        valueHolders[i],
-        stream,
-        mr);
+        sortedInput, sortKeyIndices_, valueHolders[i], stream, mr);
     request.aggregations.push_back(
         cudf::make_rank_aggregation<cudf::groupby_scan_aggregation>(
             toRankMethod(baseName),
@@ -730,37 +641,6 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     VELOX_USER_CHECK(
         !sortKeyIndices_.empty(),
         "RANGE window frame requires ORDER BY clause");
-
-    if (sortKeyIndices_.size() > 1) {
-      auto windowTypes = toBatchRangeWindowTypes(func, isFullPartition);
-      VELOX_CHECK(
-          windowTypes.has_value(),
-          "Multi-column RANGE window requires peer-frame bounds");
-      std::vector<cudf::column_view> orderbyCols;
-      orderbyCols.reserve(sortKeyIndices_.size());
-      for (auto idx : sortKeyIndices_) {
-        orderbyCols.push_back(sortedView.column(idx));
-      }
-      cudf::table_view orderbyTable(orderbyCols);
-      std::vector<cudf::rolling_request> requests;
-      requests.push_back(
-          cudf::rolling_request{inputCol, 1, std::move(agg)});
-      auto result = cudf::grouped_range_rolling_window(
-          partKeys,
-          orderbyTable,
-          cudf::host_span<cudf::order const>(
-              sortOrders_.data(), sortOrders_.size()),
-          cudf::host_span<cudf::null_order const>(
-              nullOrders_.data(), nullOrders_.size()),
-          windowTypes->first,
-          windowTypes->second,
-          cudf::host_span<cudf::rolling_request const>(
-              requests.data(), requests.size()),
-          stream,
-          mr);
-      auto resultCols = result->release();
-      return std::move(resultCols[0]);
-    }
 
     auto orderbyCol = sortedView.column(sortKeyIndices_[0]);
     auto order = sortOrders_[0];
@@ -1126,13 +1006,20 @@ RowVectorPtr CudfWindow::doGetOutput() {
       mr);
 
   if (!rangeRollingBatches.empty()) {
-    auto rangeOrderBy = RangeOrderBy::fromSortedView(
-        sortedView,
-        sortKeyIndices_,
-        sortOrders_,
-        nullOrders_,
-        stream_,
-        mr);
+    ColumnOrView orderbyColHolder{cudf::column_view{}};
+    cudf::column_view orderbyCol;
+    cudf::order order = cudf::order::ASCENDING;
+    cudf::null_order nullOrder = cudf::null_order::BEFORE;
+    if (sortKeyIndices_.empty()) {
+      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream_, mr);
+      orderbyColHolder =
+          cudf::sequence(sortedView.num_rows(), oneScalar, oneScalar, stream_, mr);
+      orderbyCol = asView(orderbyColHolder);
+    } else {
+      orderbyCol = sortedView.column(sortKeyIndices_[0]);
+      order = sortOrders_[0];
+      nullOrder = nullOrders_[0];
+    }
     for (auto& batch : rangeRollingBatches) {
       auto& pendingRequests = batch.requests;
       if (pendingRequests.size() >= 2) {
@@ -1143,12 +1030,15 @@ RowVectorPtr CudfWindow::doGetOutput() {
               cudf::rolling_request{
                   pending.inputCol, 1, std::move(pending.agg)});
         }
-        auto batchResult = invokeGroupedRangeRollingBatch(
+        auto batchResult = cudf::grouped_range_rolling_window(
             partKeys,
-            rangeOrderBy,
+            orderbyCol,
+            order,
+            nullOrder,
             batch.preceding,
             batch.following,
-            rollingRequests,
+            cudf::host_span<cudf::rolling_request const>(
+                rollingRequests.data(), rollingRequests.size()),
             stream_,
             mr);
         auto resultCols = batchResult->release();
