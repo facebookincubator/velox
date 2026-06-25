@@ -252,6 +252,18 @@ Generic Configuration
        are not special forms and return them as part of their operator stats. Tracking these stats can
        be expensive (especially if operator stats are retrieved frequently) and this allows the user to
        explicitly enable it.
+   * - rpc.congestion.min_window
+     - integer
+     - 1
+     - Floor the RPC flow\-control congestion window may shrink to under overload in the RPC operator.
+       Default 1, which never fully stalls dispatch. The controller clamps this to the range
+       [1, maxWindow].
+   * - rpc.congestion.step_coef
+     - double
+     - 1.0
+     - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
+       is the plain sqrt headroom; lower values converge tighter at small windows. The controller
+       clamps this to be non\-negative.
 
 
 Expression Evaluation Configuration

@@ -343,6 +343,20 @@ are not special forms and return them as part of their operator stats. Tracking 
 be expensive (especially if operator stats are retrieved frequently) and this allows the user to
 explicitly enable it.</p></td>
 </tr>
+<tr class="row-even"><td><p>rpc.congestion.min_window</p></td>
+<td><p>integer</p></td>
+<td><p>1</p></td>
+<td><p>Floor the RPC flow-control congestion window may shrink to under overload in the RPC operator.
+Default 1, which never fully stalls dispatch. The controller clamps this to the range
+[1, maxWindow].</p></td>
+</tr>
+<tr class="row-odd"><td><p>rpc.congestion.step_coef</p></td>
+<td><p>double</p></td>
+<td><p>1.0</p></td>
+<td><p>Multiplier on the RPC congestion window’s sqrt(window) additive-increase headroom. Default 1.0
+is the plain sqrt headroom; lower values converge tighter at small windows. The controller
+clamps this to be non-negative.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
