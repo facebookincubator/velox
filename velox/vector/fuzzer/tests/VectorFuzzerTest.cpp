@@ -586,6 +586,47 @@ TEST_F(VectorFuzzerTest, verifyEmptyContainersGenerated) {
   EXPECT_GT(emptyMaps, 0);
 }
 
+TEST_F(VectorFuzzerTest, nonContiguousElements) {
+  constexpr vector_size_t kSize = 200;
+
+  // With the option on, some containers start after the end of the previous one
+  // (a gap of unreferenced elements), and the vector still passes validate().
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.0;
+    opts.fuzzNonContiguousElements = true;
+    VectorFuzzer fuzzer(opts, pool(), /*seed=*/12345);
+
+    auto array = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    ASSERT_NO_THROW(array->validate({}));
+    auto* arrayVector = array->as<ArrayVector>();
+    bool foundGap = false;
+    for (vector_size_t i = 1; i < kSize; ++i) {
+      if (arrayVector->offsetAt(i) >
+          arrayVector->offsetAt(i - 1) + arrayVector->sizeAt(i - 1)) {
+        foundGap = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(foundGap);
+  }
+
+  // With the option off (default), containers are laid out contiguously.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.0;
+    VectorFuzzer fuzzer(opts, pool(), /*seed=*/12345);
+
+    auto array = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    auto* arrayVector = array->as<ArrayVector>();
+    for (vector_size_t i = 1; i < kSize; ++i) {
+      EXPECT_LE(
+          arrayVector->offsetAt(i),
+          arrayVector->offsetAt(i - 1) + arrayVector->sizeAt(i - 1));
+    }
+  }
+}
+
 TEST_F(VectorFuzzerTest, map) {
   VectorFuzzer::Options opts;
   opts.containerVariableLength = false;
