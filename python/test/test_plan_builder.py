@@ -45,8 +45,10 @@ class TestPyVeloxPlanBuidler(unittest.TestCase):
 
         # Filter.
         self.assertRaises(
+            # pyrefly: ignore [missing-attribute]
             RuntimeError, plan_builder.filter, "c0 > 1"
         )  # c0 non-existent.
+        # pyrefly: ignore [missing-attribute]
         plan_builder.filter("d0 - 10 > 100")
         filter_node = plan_builder.get_plan_node()
         self.assertEqual(filter_node.name(), "Filter")
@@ -86,6 +88,7 @@ class TestPyVeloxPlanBuidler(unittest.TestCase):
 
     def test_plan_serialization(self):
         plan_builder = (
+            # pyrefly: ignore [missing-attribute]
             PlanBuilder()
             .table_scan(ROW(["c0"], [BIGINT()]))
             .project(["c0 + 1 AS d0", "100"])
