@@ -30,6 +30,10 @@ class OrcReaderFactory : public dwio::common::ReaderFactory {
       const dwio::common::ReaderOptions& options) override {
     return velox::dwrf::DwrfReader::create(std::move(input), options);
   }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 void registerOrcReaderFactory();

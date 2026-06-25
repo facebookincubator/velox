@@ -812,11 +812,11 @@ must be specified as raw byte counts.
      - integer
      - 128MB
      - Maximum size in bytes to coalesce requests to be fetched in a single request.
-   * - max-coalesced-distance
-     -
+   * - hive.orc.max-coalesced-distance
+     - orc_max_coalesced_distance
      - capacity
      - 512KB
-     - Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.
+     - Maximum distance in capacity units between ORC chunks to be fetched that may be coalesced into a single request.
    * - prefetch-rowgroups
      -
      - integer
@@ -966,7 +966,7 @@ must be specified as raw byte counts.
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns.
-   * - orc.footer-speculative-io-size
+   * - hive.orc.footer-speculative-io-size
      - orc_footer_speculative_io_size
      - integer
      - 256KB

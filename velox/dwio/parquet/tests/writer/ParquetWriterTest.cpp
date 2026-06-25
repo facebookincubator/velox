@@ -783,7 +783,9 @@ TEST_F(ParquetWriterTest, largeMetadata) {
   const auto* sinkPtr = write(data, options, writerOptions);
 
   auto readerOpts = makeDefaultReaderOptions();
-  readerOpts.setFooterSpeculativeIoSize(1024);
+  auto parquetOptions = std::make_shared<ParquetReaderOptions>();
+  parquetOptions->setFooterSpeculativeIoSize(1024);
+  readerOpts.setFormatSpecificOptions(std::move(parquetOptions));
   readerOpts.setFilePreloadThreshold(1024 * 8);
 
   const auto reader = createReaderInMemory(*sinkPtr, readerOpts);
