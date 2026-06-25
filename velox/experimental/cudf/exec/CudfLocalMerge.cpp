@@ -106,6 +106,19 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
     return nullptr;
   }
 
+  // Buffer every source fully before merging. Produces no output while any
+  // source is still blocked waiting for input.
+  if (!drainSources()) {
+    return nullptr;
+  }
+
+  // The merge emits the entire result in a single call.
+  auto output = mergeSources();
+  finished_ = true;
+  return output;
+}
+
+bool CudfLocalMerge::drainSources() {
   for (size_t i = 0; i < sources_.size(); ++i) {
     if (sourceDone_[i]) {
       continue;
@@ -119,7 +132,7 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
 
       if (reason != exec::BlockingReason::kNotBlocked) {
         blockingFutures_.push_back(std::move(future));
-        return nullptr;
+        return false;
       }
 
       if (!data || data->size() == 0) {
@@ -135,25 +148,27 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
     }
   }
 
-  bool allDone = std::all_of(
-      sourceDone_.begin(), sourceDone_.end(), [](bool d) { return d; });
-  if (!allDone) {
-    return nullptr;
-  }
+  // Reaching here means no source blocked, so every source has drained to
+  // end-of-data and all batches are buffered in 'sourceData_'.
+  return true;
+}
 
-  // All sources drained. Collect non-empty per-source tables and merge.
+RowVectorPtr CudfLocalMerge::mergeSources() {
   auto stream = cudfGlobalStreamPool().get_stream();
   auto mr = get_output_mr();
 
-  auto numNonEmptySources =
+  const auto numNonEmptySources =
       std::count_if(sourceData_.begin(), sourceData_.end(), [](const auto& v) {
         return !v.empty();
       });
+
   if (numNonEmptySources == 0) {
-    finished_ = true;
     return nullptr;
-  } else if (numNonEmptySources == 1) {
-    finished_ = true;
+  }
+
+  // A single source is already globally sorted; concatenate its batches in
+  // order instead of running a k-way merge.
+  if (numNonEmptySources == 1) {
     auto it =
         std::find_if(sourceData_.begin(), sourceData_.end(), [](const auto& v) {
           return !v.empty();
@@ -169,6 +184,7 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
         pool(), outputType_, numRows, std::move(concatenated), stream);
   }
 
+  // Multiple sorted sources: k-way merge all of their batches together.
   size_t numBatches = 0;
   for (const auto& batches : sourceData_) {
     numBatches += batches.size();
@@ -198,8 +214,6 @@ RowVectorPtr CudfLocalMerge::doGetOutput() {
   orderCudfVectorDeallocationsAfterStream(inputs, inputStreams, stream);
 
   auto numRows = mergedTable->num_rows();
-
-  finished_ = true;
   return std::make_shared<CudfVector>(
       pool(), outputType_, numRows, std::move(mergedTable), stream);
 }

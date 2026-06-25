@@ -931,7 +931,7 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
   }
 };
 
-/// CallbackSinkAdapter - Keeps original operator
+/// CallbackSinkAdapter - Keeps original operator (GPU input for LocalMerge)
 class CallbackSinkAdapter : public OperatorAdapter {
  public:
   CallbackSinkAdapter() : OperatorAdapter("CallbackSink") {}

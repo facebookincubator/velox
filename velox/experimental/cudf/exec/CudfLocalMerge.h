@@ -52,6 +52,13 @@ class CudfLocalMerge : public CudfSourceOperatorBase {
  private:
   void addMergeSources();
 
+  // Drains all sources into 'sourceData_'. Returns false if a source blocked,
+  // stashing the wait future in 'blockingFutures_'.
+  bool drainSources();
+
+  // Merges the drained per-source batches into a single sorted output.
+  RowVectorPtr mergeSources();
+
   std::vector<std::shared_ptr<exec::MergeSource>> sources_;
   bool sourcesAdded_{false};
   bool sourcesStarted_{false};
