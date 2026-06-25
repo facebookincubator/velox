@@ -19,11 +19,11 @@
 #include <folly/json.h>
 #include <gtest/gtest.h>
 
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 
 using namespace facebook::velox::common::testutil;
 
