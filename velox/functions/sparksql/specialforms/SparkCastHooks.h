@@ -98,7 +98,9 @@ class SparkCastHooks : public exec::CastHooks {
   // seconds since the epoch (1970-01-01 00:00:00 UTC).
   // Supports integer and floating-point types.
   template <typename T>
-  Expected<Timestamp> castNumberToTimestamp(T seconds) const;
+  Expected<Timestamp> castNumberToTimestamp(
+      T value,
+      bool allowOverflow) const;
 
   const core::QueryConfig& config_;
 
