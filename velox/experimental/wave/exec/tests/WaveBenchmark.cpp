@@ -206,8 +206,10 @@ class WaveBenchmark : public QueryBenchmarkBase {
           static_cast<uint64_t>(FLAGS_rows_per_stripe * FLAGS_num_columns * 8));
       config->set(dwrf::Config::USE_VINTS, FLAGS_dwrf_vints);
 
-      dwrf::WriterOptions options;
-      options.config = config;
+      dwio::common::WriterOptions options;
+      auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+      dwrfOptions->config = config;
+      options.formatSpecificOptions = dwrfOptions;
       options.schema = schema;
 
       options.memoryPool = childPool.get();

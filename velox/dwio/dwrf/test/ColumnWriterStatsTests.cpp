@@ -173,8 +173,10 @@ class ColumnWriterStatsTest : public ::testing::Test {
       config->set(
           dwrf::Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
     }
-    dwrf::WriterOptions options;
-    options.config = config;
+    dwio::common::WriterOptions options;
+    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+    dwrfOptions->config = config;
+    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     options.flushPolicyFactory = [&]() {
       return std::make_unique<LambdaFlushPolicy>([]() {

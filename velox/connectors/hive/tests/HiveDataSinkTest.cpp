@@ -1262,7 +1262,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
     return std::make_unique<dwrf::DefaultFlushPolicy>(1234, 0);
   };
 
-  auto writeOptions = std::make_shared<dwrf::WriterOptions>();
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
   writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,
@@ -2079,7 +2079,7 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
 
   // Create shared writer options (this simulates the scenario where
   // insertTableHandle_->writerOptions() returns a shared object)
-  auto sharedWriterOptions = std::make_shared<dwrf::WriterOptions>();
+  auto sharedWriterOptions = std::make_shared<dwio::common::WriterOptions>();
 
   // Create a data sink with multiple writers (one for each bucket)
   auto dataSink = createDataSink(
@@ -2109,7 +2109,7 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
 
 DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
   const auto outputDirectory = TempDirectoryPath::create();
-  auto writerOptions = std::make_shared<dwrf::WriterOptions>();
+  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
 
   const auto rowType = ROW({"c0", "p0"}, {BIGINT(), VARCHAR()});
   auto dataSink = createDataSink(
