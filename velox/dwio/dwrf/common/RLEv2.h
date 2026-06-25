@@ -111,6 +111,11 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
     while (curGap_ == 255 && curPatch_ == 0) {
       actualGap_ += 255;
       ++patchIdx_;
+      VELOX_CHECK_LT(
+          patchIdx_,
+          unpackedPatch_.size(),
+          "Corrupt PATCHED_BASE encoded data (patch list overrun)! ",
+          dwio::common::IntDecoder<isSigned>::inputStream_->getName());
       curGap_ =
           static_cast<uint64_t>(unpackedPatch_[patchIdx_]) >> patchBitSize_;
       curPatch_ = unpackedPatch_[patchIdx_] & patchMask_;
