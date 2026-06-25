@@ -28,6 +28,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox::dwio::common;
@@ -146,8 +147,10 @@ void IcebergSplitReader::configureBaseReaderOptions() {
   if (fieldIds.empty()) {
     return;
   }
-  baseReaderOpts_.setColumnMappingMode(
-      dwio::common::ColumnMappingMode::kFieldId);
+  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfOptions>(
+      baseReaderOpts_.formatSpecificOptions());
+  VELOX_CHECK_NOT_NULL(dwrfOptions);
+  dwrfOptions->setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
   baseReaderOpts_.setFieldIds(std::move(fieldIds));
 }
 

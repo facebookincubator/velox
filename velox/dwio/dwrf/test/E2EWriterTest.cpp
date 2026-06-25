@@ -307,7 +307,9 @@ RowTypePtr readWithFieldIds(
   writer.close();
 
   dwio::common::ReaderOptions readerOpts(leafPool);
-  readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
+  auto dwrfOptions = std::make_shared<dwrf::DwrfOptions>();
+  dwrfOptions->setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
+  readerOpts.setFormatSpecificOptions(std::move(dwrfOptions));
   readerOpts.setFileSchema(tableSchema);
   readerOpts.setFieldIds(fieldIds);
   std::string_view data(sinkPtr->data(), sinkPtr->size());

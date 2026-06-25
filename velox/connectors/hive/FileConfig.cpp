@@ -26,11 +26,9 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
 #define VELOX_HIVE_CONFIG_REGISTER(constName) \
   config::registerConfigProperty<FileConfig::constName##Property>(properties)
 
-    VELOX_HIVE_CONFIG_REGISTER(kOrcUseColumnNamesSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
     VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
     VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kOrcFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
@@ -46,7 +44,6 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kCacheIndexSession);
     VELOX_HIVE_CONFIG_REGISTER(kPinIndexSession);
     VELOX_HIVE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
     VELOX_HIVE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampUnitSession);
 
@@ -55,22 +52,6 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     return properties;
   }();
   return kProperties;
-}
-
-int32_t FileConfig::maxCoalescedDistanceBytes(
-    const config::ConfigBase* session) const {
-  const auto distance = config::toCapacity(
-      session->get<std::string>(
-          kMaxCoalescedDistanceSession,
-          config_->get<std::string>(kMaxCoalescedDistance, "512kB")),
-      config::CapacityUnit::BYTE);
-  VELOX_USER_CHECK_LE(
-      distance,
-      std::numeric_limits<int32_t>::max(),
-      "The max merge distance to combine read requests must be less than 2GB."
-      " Got {} bytes.",
-      distance);
-  return int32_t(distance);
 }
 
 int32_t FileConfig::prefetchRowGroups() const {

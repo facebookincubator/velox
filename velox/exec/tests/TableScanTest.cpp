@@ -40,6 +40,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
@@ -1248,7 +1249,7 @@ TEST_F(TableScanTest, structMatchByName) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                dwrf::Config::kOrcUseColumnNamesSession,
                 "true")
             .split(makeHiveConnectorSplit(filePath))
             .assertResults(sql);
@@ -1352,14 +1353,13 @@ TEST_F(TableScanTest, structMatchByName) {
                           .endTableScan()
                           .planNode();
       const auto split = makeHiveConnectorSplit(file->getPath());
-      const auto result =
-          AssertQueryBuilder(op)
-              .connectorSessionProperty(
-                  kHiveConnectorId,
-                  connector::hive::HiveConfig::kOrcUseColumnNamesSession,
-                  "true")
-              .split(split)
-              .copyResults(pool());
+      const auto result = AssertQueryBuilder(op)
+                              .connectorSessionProperty(
+                                  kHiveConnectorId,
+                                  dwrf::Config::kOrcUseColumnNamesSession,
+                                  "true")
+                              .split(split)
+                              .copyResults(pool());
       const auto rows = result->as<RowVector>();
       const auto expected = makeRowVector(ROW({}, {}), 5);
       facebook::velox::test::assertEqualVectors(expected, rows->childAt(1));
@@ -1389,9 +1389,7 @@ TEST_F(TableScanTest, structMatchByName) {
         PlanBuilder().tableScan(rowType, {}, "", rowType).planNode();
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .connectorSessionProperty(
-            kHiveConnectorId,
-            connector::hive::HiveConfig::kOrcUseColumnNamesSession,
-            "true")
+            kHiveConnectorId, dwrf::Config::kOrcUseColumnNamesSession, "true")
         .connectorSessionProperty(
             kHiveConnectorId,
             connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
@@ -5094,13 +5092,12 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
   // Now run query with column mapping using names - we should not be able to
   // find any names.
   split = makeHiveConnectorSplit(filePath->getPath());
-  result = AssertQueryBuilder(op)
-               .connectorSessionProperty(
-                   kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
-                   "true")
-               .split(split)
-               .copyResults(pool());
+  result =
+      AssertQueryBuilder(op)
+          .connectorSessionProperty(
+              kHiveConnectorId, dwrf::Config::kOrcUseColumnNamesSession, "true")
+          .split(split)
+          .copyResults(pool());
 
   ASSERT_EQ(result->size(), size);
   rows = result->as<RowVector>();
@@ -5356,13 +5353,12 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   // Now run query with column mapping using names - we should not be able to
   // find any names, except for the last string column.
   split = makeHiveConnectorSplit(filePath->getPath());
-  result = AssertQueryBuilder(op)
-               .connectorSessionProperty(
-                   kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
-                   "true")
-               .split(split)
-               .copyResults(pool());
+  result =
+      AssertQueryBuilder(op)
+          .connectorSessionProperty(
+              kHiveConnectorId, dwrf::Config::kOrcUseColumnNamesSession, "true")
+          .split(split)
+          .copyResults(pool());
 
   ASSERT_EQ(result->size(), size);
   rows = result->as<RowVector>();

@@ -55,7 +55,7 @@ class ParquetReaderTest : public ParquetTestBase {
   dwio::common::ReaderOptions makeThriftTrackingReaderOptions() {
     auto readerOptions = makeDefaultReaderOptions();
     auto parquetOptions = std::make_shared<ParquetReaderOptions>();
-    parquetOptions->footerMemoryTrackingThreshold = 1;
+    parquetOptions->setFooterMemoryTrackingThreshold(1);
     readerOptions.setFormatSpecificOptions(std::move(parquetOptions));
     return readerOptions;
   }
@@ -77,10 +77,10 @@ TEST_F(ParquetReaderTest, createFormatOptions) {
   ParquetReaderFactory factory;
   auto parquetOptions = checkedPointerCast<ParquetReaderOptions>(
       factory.createFormatOptions(connectorConfig, session));
-  EXPECT_EQ(parquetOptions->columnMappingMode, ColumnMappingMode::kName);
-  EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 2);
-  EXPECT_TRUE(parquetOptions->allowInt32Narrowing);
-  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 1);
+  EXPECT_EQ(parquetOptions->columnMappingMode(), ColumnMappingMode::kName);
+  EXPECT_EQ(parquetOptions->footerSpeculativeIoSize(), 2);
+  EXPECT_TRUE(parquetOptions->allowInt32Narrowing());
+  EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 1);
 }
 
 TEST_F(ParquetReaderTest, parseSample) {
@@ -112,7 +112,9 @@ TEST_F(ParquetReaderTest, parseSample) {
 
 TEST_F(ParquetReaderTest, parquetFieldIdColumnMappingNotImplemented) {
   auto readerOptions = makeDefaultReaderOptions();
-  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  auto parquetOptions = std::make_shared<ParquetReaderOptions>();
+  parquetOptions->setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFormatSpecificOptions(std::move(parquetOptions));
 
   VELOX_ASSERT_THROW(
       createReader("sample.parquet", readerOptions),

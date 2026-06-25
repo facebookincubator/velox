@@ -23,6 +23,7 @@
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -136,15 +137,15 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_EQ(
-        readerOptions.columnMappingMode(),
-        dwio::common::ColumnMappingMode::kPosition);
   }
 
-  // Test with ORC format and useColumnNames enabled via session.
+  // Test with ORC format and reader-specific options enabled via session.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kOrcUseColumnNamesSession, "true"}});
+        {{dwrf::Config::kOrcUseColumnNamesSession, "true"},
+         {dwrf::Config::kOrcFooterSpeculativeIoSizeSession,
+          std::to_string(128UL << 10)},
+         {dwrf::Config::kOrcMaxCoalescedDistanceSession, "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
@@ -158,9 +159,14 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::ORC);
+    EXPECT_EQ(readerOptions.maxCoalesceDistance(), 3 << 20);
+    auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfOptions>(
+        readerOptions.formatSpecificOptions());
+    ASSERT_NE(dwrfOptions, nullptr);
     EXPECT_EQ(
-        readerOptions.columnMappingMode(),
+        dwrfOptions->columnMappingMode(),
         dwio::common::ColumnMappingMode::kName);
+    EXPECT_EQ(dwrfOptions->footerSpeculativeIoSize(), 128UL << 10);
   }
 
   // Test format mismatch throws.
