@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -1047,6 +1048,94 @@ TEST_F(PlanNodeSerdeTest, countingJoin) {
                     .planNode();
     testSerde(plan);
   }
+}
+
+TEST_F(PlanNodeSerdeTest, fixedPoint) {
+  // A recursive-CTE reachability fixed point exercising every serializable
+  // field: an append-mode vector state read as a delta, a hash-table state with
+  // key columns probed via StateHashJoin, and a convergence plan.
+  auto schema = ROW({"id", "depth"}, {BIGINT(), BIGINT()});
+  auto edgesType = ROW({"src", "dst"}, {BIGINT(), BIGINT()});
+  auto joinOutput = ROW({"id", "depth", "dst"}, {BIGINT(), BIGINT(), BIGINT()});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"id", "depth"},
+              {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({0})})})
+          .planNode();
+  auto edges = PlanBuilder(idGenerator)
+                   .values({makeRowVector(
+                       {"src", "dst"},
+                       {makeFlatVector<int64_t>({1, 2}),
+                        makeFlatVector<int64_t>({2, 3})})})
+                   .planNode();
+
+  // Body: read the frontier delta, probe the edges table, append the next hop.
+  auto body = PlanBuilder(idGenerator)
+                  .stateSource("result", schema)
+                  .stateHashJoin("edges", {"id"}, joinOutput)
+                  .project({"dst AS id", "depth + 1 AS depth"})
+                  .planNode();
+  // Converged once the last iteration appended no rows.
+  auto convergence = PlanBuilder(idGenerator)
+                         .stateSource("result", schema)
+                         .singleAggregation({}, {"count(1)"})
+                         .project({"a0 = 0 AS converged"})
+                         .planNode();
+
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<core::HashTableStateDeclaration>(
+                   "edges", edgesType, std::vector<std::string>{"src"}, edges),
+               std::make_shared<core::VectorStateDeclaration>(
+                   "result", schema, seed, /*append=*/true)},
+              {body},
+              core::ConvergenceConfig{
+                  .plan = convergence,
+                  .convergedColumn = "converged",
+                  .maxIterations = 100},
+              "result")
+          .planNode();
+
+  testSerde(plan);
+
+  // toString() does not surface every field, so assert the structurally
+  // significant ones survive the round-trip directly.
+  const auto copy = velox::ISerializable::deserialize<core::PlanNode>(
+      plan->serialize(), pool());
+  const auto* fixedPoint =
+      dynamic_cast<const core::FixedPointNode*>(copy.get());
+  ASSERT_NE(fixedPoint, nullptr);
+  EXPECT_EQ(fixedPoint->outputStateEntry(), "result");
+  ASSERT_EQ(fixedPoint->stateDeclarations().size(), 2);
+  ASSERT_NE(fixedPoint->convergenceConfig().plan, nullptr);
+
+  const auto& hashTableState =
+      dynamic_cast<const core::HashTableStateDeclaration&>(
+          *fixedPoint->stateDeclarations()[0]);
+  EXPECT_EQ(hashTableState.keyColumns(), std::vector<std::string>{"src"});
+
+  const auto& vectorState = dynamic_cast<const core::VectorStateDeclaration&>(
+      *fixedPoint->stateDeclarations()[1]);
+  EXPECT_TRUE(vectorState.append());
+  ASSERT_NE(vectorState.initialPlan(), nullptr);
+
+  // The body's StateHashJoin probe keys and StateSource delta flag survive.
+  ASSERT_EQ(fixedPoint->plans().size(), 1);
+  const auto* project =
+      dynamic_cast<const core::ProjectNode*>(fixedPoint->plans()[0].get());
+  ASSERT_NE(project, nullptr);
+  const auto* join =
+      dynamic_cast<const core::StateHashJoinNode*>(project->sources()[0].get());
+  ASSERT_NE(join, nullptr);
+  EXPECT_EQ(join->probeKeys(), std::vector<std::string>{"id"});
+  const auto* bodySource =
+      dynamic_cast<const core::StateSourceNode*>(join->sources()[0].get());
+  ASSERT_NE(bodySource, nullptr);
+  EXPECT_TRUE(bodySource->delta());
 }
 
 } // namespace facebook::velox::exec::test

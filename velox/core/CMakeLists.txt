@@ -18,6 +18,7 @@ endif()
 velox_add_library(
   velox_core
   Expressions.cpp
+  FixedPointPlanNodes.cpp
   ITypedExpr.cpp
   PlanConsistencyChecker.cpp
   PlanFragment.cpp
@@ -29,6 +30,7 @@ velox_add_library(
   HEADERS
   CoreTypeSystem.h
   Expressions.h
+  FixedPointPlanNodes.h
   ITypedExpr.h
   PlanConsistencyChecker.h
   PlanFragment.h

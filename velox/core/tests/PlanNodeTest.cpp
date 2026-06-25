@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -732,6 +733,44 @@ TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
   EXPECT_EQ(
       promptVec->as<ConstantVector<StringView>>()->valueAt(0).str(),
       "You are helpful.");
+}
+
+TEST_F(PlanNodeTest, fixedPoint) {
+  auto rowType = ROW({"x", "y"}, {BIGINT(), BIGINT()});
+
+  // StateSource surfaces its read mode: delta (an append entry's frontier) vs
+  // full (its whole accumulation).
+  EXPECT_EQ(
+      std::make_shared<StateSourceNode>("s", "n", rowType, /*delta=*/true)
+          ->toString(true, false),
+      "-- StateSource[s][state: n, delta] -> x:BIGINT, y:BIGINT\n");
+  auto source =
+      std::make_shared<StateSourceNode>("s", "n", rowType, /*delta=*/false);
+  EXPECT_EQ(
+      source->toString(true, false),
+      "-- StateSource[s][state: n, full] -> x:BIGINT, y:BIGINT\n");
+
+  EXPECT_EQ(
+      std::make_shared<StateHashJoinNode>(
+          "j", "graph", std::vector<std::string>{"x"}, rowType, source)
+          ->toString(true, false),
+      "-- StateHashJoin[j][state: graph] -> x:BIGINT, y:BIGINT\n");
+
+  // A counting fixed point: one append-mode state entry and a single body plan.
+  std::vector<StateDeclarationPtr> declarations{
+      std::make_shared<VectorStateDeclaration>(
+          "n", rowType, /*initialPlan=*/nullptr, /*append=*/true)};
+  auto node = std::make_shared<FixedPointNode>(
+      "fp",
+      std::move(declarations),
+      std::vector<PlanNodePtr>{source},
+      ConvergenceConfig{
+          .maxIterations = 9, .errorWhenMaxIterationReached = false},
+      /*outputStateEntry=*/"n");
+  EXPECT_EQ(node->toString(), "-- FixedPoint[fp]\n");
+  EXPECT_EQ(
+      node->toString(/*detailed=*/true, /*recursive=*/false),
+      "-- FixedPoint[fp][maxIterations: 9, plans: 1] -> x:BIGINT, y:BIGINT\n");
 }
 
 } // namespace
