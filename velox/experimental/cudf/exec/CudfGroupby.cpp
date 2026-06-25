@@ -37,6 +37,7 @@
 
 #include <fmt/format.h>
 
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -538,6 +539,24 @@ bool isStreamingGroupbyCapacityError(const std::exception& e) {
       std::string_view::npos;
 }
 
+size_t cudfSizeTypeMaxRows() {
+  return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+}
+
+size_t saturatingAdd(size_t a, size_t b) {
+  if (a > std::numeric_limits<size_t>::max() - b) {
+    return std::numeric_limits<size_t>::max();
+  }
+  return a + b;
+}
+
+size_t saturatingMultiply(size_t a, size_t b) {
+  if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
+    return std::numeric_limits<size_t>::max();
+  }
+  return a * b;
+}
+
 uint64_t estimateStreamingRowWidth(const RowTypePtr& rowType) {
   uint64_t width = 0;
   for (const auto& child : rowType->children()) {
@@ -886,12 +905,13 @@ class StreamingGroupbyLeafState final : public BufferedState {
         input.owner ? input.owner->estimateFlatSize() : 0;
 
     if (!groupby_) {
-      currentCapacity_ = std::min<size_t>(
-          owner_.maxBufferedRows_, std::max<size_t>(inputRows * 4, 1));
+      currentCapacity_ = initialCapacity(inputRows);
       groupby_ = owner_.createStreamingGroupby(currentCapacity_);
       groupby_->aggregate(input.view, input.stream);
-    } else if (!tryAggregate(*groupby_, input.view, input.stream)) {
-      growAndAggregate(input);
+    } else if (mustRebuildBeforeAggregate(inputRows)) {
+      rebuildAndAggregate(input);
+    } else {
+      groupby_->aggregate(input.view, input.stream);
     }
 
     totalRows_ += inputRows;
@@ -915,38 +935,108 @@ class StreamingGroupbyLeafState final : public BufferedState {
   }
 
  private:
-  bool tryAggregate(
-      cudf::groupby::streaming_groupby& groupby,
-      cudf::table_view inputView,
-      rmm::cuda_stream_view stream) const {
-    try {
-      groupby.aggregate(inputView, stream);
-      return true;
-    } catch (const std::exception& e) {
-      if (isStreamingGroupbyCapacityError(e)) {
-        return false;
-      }
-      throw;
+  size_t distinctKeys() const {
+    if (!groupby_) {
+      return 0;
     }
+    auto keys = groupby_->distinct_keys();
+    VELOX_CHECK_GE(keys, 0);
+    return static_cast<size_t>(keys);
   }
 
-  void growAndAggregate(const InputChunk& input) {
-    while (currentCapacity_ < owner_.maxBufferedRows_) {
-      auto newCapacity = std::min<size_t>(
-          owner_.maxBufferedRows_,
-          std::max<size_t>(currentCapacity_ * 2, input.size()));
-      if (newCapacity == currentCapacity_) {
-        break;
-      }
+  size_t maxCapacityForBatch(size_t inputRows) const {
+    auto const cudfMaxRows = cudfSizeTypeMaxRows();
+    VELOX_CHECK_LE(
+        inputRows,
+        cudfMaxRows,
+        "streaming_groupby input batch of {} rows exceeds cudf::size_type "
+        "limit of {} rows",
+        inputRows,
+        cudfMaxRows);
+    VELOX_CHECK_LE(
+        inputRows,
+        cudfMaxRows / 2,
+        "streaming_groupby cannot safely aggregate a batch of {} rows: cuDF "
+        "requires max_distinct_keys to be at least the batch size, and "
+        "max_distinct_keys + batch_size must not exceed cudf::size_type max "
+        "({}). Reduce the upstream GPU batch size.",
+        inputRows,
+        cudfMaxRows);
+    return cudfMaxRows - inputRows;
+  }
 
-      auto grown = owner_.createStreamingGroupby(newCapacity);
+  size_t maxAllowedCapacity(size_t inputRows) const {
+    return std::min(owner_.maxBufferedRows_, maxCapacityForBatch(inputRows));
+  }
+
+  size_t initialCapacity(size_t inputRows) const {
+    auto const maxAllowed = maxAllowedCapacity(inputRows);
+    auto const requested = std::max<size_t>(
+        std::max<size_t>(inputRows, 1), saturatingMultiply(inputRows, 4));
+    auto const capacity = std::min(requested, maxAllowed);
+    VELOX_CHECK_GE(
+        capacity,
+        inputRows,
+        "streaming_groupby input batch has {} rows, exceeding the configured "
+        "capacity ceiling of {} rows",
+        inputRows,
+        maxAllowed);
+    return capacity;
+  }
+
+  bool mustRebuildBeforeAggregate(size_t inputRows) const {
+    return saturatingAdd(distinctKeys(), inputRows) > currentCapacity_ ||
+        currentCapacity_ > maxCapacityForBatch(inputRows);
+  }
+
+  size_t rebuildCapacity(size_t inputRows) const {
+    auto const currentDistinctKeys = distinctKeys();
+    auto const maxAllowed = maxAllowedCapacity(inputRows);
+
+    VELOX_CHECK_GE(
+        maxAllowed,
+        inputRows,
+        "streaming_groupby input batch has {} rows, exceeding the configured "
+        "capacity ceiling of {} rows",
+        inputRows,
+        maxAllowed);
+    VELOX_CHECK_GE(
+        maxAllowed,
+        currentDistinctKeys,
+        "streaming_groupby cannot aggregate a batch of {} rows with {} "
+        "existing distinct keys without exceeding cudf::size_type limits. "
+        "Reduce the upstream GPU batch size.",
+        inputRows,
+        currentDistinctKeys);
+
+    auto const requiredWorstCase =
+        saturatingAdd(currentDistinctKeys, inputRows);
+    auto const growth = saturatingAdd(
+        currentCapacity_, std::max(currentCapacity_ / 2, inputRows));
+    return std::min(std::max(requiredWorstCase, growth), maxAllowed);
+  }
+
+  size_t nextRebuildCapacity(size_t currentAttempt, size_t inputRows) const {
+    auto const maxAllowed = maxAllowedCapacity(inputRows);
+    if (currentAttempt >= maxAllowed) {
+      return currentAttempt;
+    }
+    return std::min(
+        maxAllowed,
+        saturatingAdd(currentAttempt, std::max<size_t>(currentAttempt / 2, 1)));
+  }
+
+  void rebuildAndAggregate(const InputChunk& input) {
+    auto capacity = rebuildCapacity(input.size());
+    for (;;) {
+      auto rebuilt = owner_.createStreamingGroupby(capacity);
       try {
-        grown->aggregate(input.view, input.stream);
+        rebuilt->aggregate(input.view, input.stream);
         if (groupby_) {
-          grown->merge(*groupby_, input.stream);
+          rebuilt->merge(*groupby_, input.stream);
         }
-        groupby_ = std::move(grown);
-        currentCapacity_ = newCapacity;
+        groupby_ = std::move(rebuilt);
+        currentCapacity_ = capacity;
         {
           auto lockedStats = owner_.stats_.wlock();
           lockedStats->addRuntimeStat(
@@ -957,6 +1047,11 @@ class StreamingGroupbyLeafState final : public BufferedState {
         if (!isStreamingGroupbyCapacityError(e)) {
           throw;
         }
+        auto const nextCapacity = nextRebuildCapacity(capacity, input.size());
+        if (nextCapacity == capacity) {
+          break;
+        }
+        capacity = nextCapacity;
       }
     }
 

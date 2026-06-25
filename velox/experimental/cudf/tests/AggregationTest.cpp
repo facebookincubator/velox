@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
@@ -247,15 +248,22 @@ class StreamingGroupbyApiAggregationTest : public AggregationTest {
   }
 };
 
-bool wasStreamingGroupbyApiUsed(
+bool hasCustomStat(
     const std::shared_ptr<exec::Task>& task,
-    const core::PlanNodeId& planNodeId) {
+    const core::PlanNodeId& planNodeId,
+    const std::string& name) {
   auto const planStats = toPlanStats(task->taskStats());
   auto it = planStats.find(planNodeId);
   if (it == planStats.end()) {
     return false;
   }
-  return it->second.customStats.count("streamingGroupbyApiUsed") > 0;
+  return it->second.customStats.count(name) > 0;
+}
+
+bool wasStreamingGroupbyApiUsed(
+    const std::shared_ptr<exec::Task>& task,
+    const core::PlanNodeId& planNodeId) {
+  return hasCustomStat(task, planNodeId, "streamingGroupbyApiUsed");
 }
 
 int64_t streamingGroupbyApiRebuilds(
@@ -1607,6 +1615,37 @@ TEST_F(
 
 TEST_F(
     StreamingGroupbyApiAggregationTest,
+    streamingGroupbyApiRebuildsBeforeCapacityFailure) {
+  setBatchSizeMaxThreshold(32);
+  auto batch1 = makeRowVector({
+      makeFlatVector<int64_t>({0, 1, 2, 3}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+  });
+  auto batch2 = makeRowVector({
+      makeFlatVector<int64_t>(20, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(20, [](auto /*row*/) { return 2; }),
+  });
+  std::vector<RowVectorPtr> vectors{batch1, batch2};
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, 4)
+                  .plan(
+                      PlanBuilder()
+                          .values(vectors)
+                          .partialAggregation({"c0"}, {"sum(c1)"})
+                          .finalAggregation()
+                          .capturePlanNodeId(finalAggId)
+                          .planNode())
+                  .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
+  ASSERT_GT(streamingGroupbyApiRebuilds(task, finalAggId), 0);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
     streamingGroupbyApiFailsWhenBatchExceedsCeiling) {
   setBatchSizeMaxThreshold(4);
   auto vectors = {makeRowVector({
@@ -1631,7 +1670,9 @@ TEST_F(
         .assertResults("SELECT c0, sum(c1), avg(c4) FROM tmp GROUP BY c0");
     FAIL() << "Expected streaming_groupby to fail when a batch exceeds the ceiling";
   } catch (const std::exception& e) {
-    ASSERT_NE(std::string{e.what()}.find("exceeds max_groups"), std::string::npos);
+    ASSERT_NE(
+        std::string{e.what()}.find("exceeding the configured capacity ceiling"),
+        std::string::npos);
   }
 }
 
