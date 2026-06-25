@@ -3809,7 +3809,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
   uint64_t reclaimWaitTimeUs{0};
   uint64_t reclaimedBytes{0};
   {
-    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     reclaimedBytes = reclaimTask(task, targetBytes, maxWaitMs, stats);
   }
   ++task->taskStats_.memoryReclaimCount;
@@ -3834,7 +3834,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   uint64_t reclaimWaitTimeUs{0};
   bool paused{true};
   {
-    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     if (maxWaitMs == 0) {
       task->requestPause().wait();
     } else {
@@ -3865,7 +3865,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   try {
     uint64_t reclaimExecTimeUs{0};
     {
-      MicrosecondTimer timer{&reclaimExecTimeUs};
+      MicrosecondWallTimer timer{&reclaimExecTimeUs};
       reclaimedBytes = memory::MemoryReclaimer::reclaim(
           task->pool(), targetBytes, maxWaitMs, stats);
     }
