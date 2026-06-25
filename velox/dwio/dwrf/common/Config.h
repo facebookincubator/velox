@@ -277,7 +277,7 @@ class Config : public config::ConfigBase {
 
   Config() : ConfigBase({}, true) {}
 
-  std::map<std::string, std::string> toSerdeParams() {
+  std::map<std::string, std::string> toSerdeParams() const {
     return std::map{configs_.cbegin(), configs_.cend()};
   }
 

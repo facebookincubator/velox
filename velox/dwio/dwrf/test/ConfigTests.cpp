@@ -31,6 +31,16 @@ T getConfig(
   return config->get(entry);
 }
 
+std::shared_ptr<const Config> createWriterConfig(
+    const facebook::velox::config::ConfigBase& connectorConfig,
+    const facebook::velox::config::ConfigBase& session) {
+  DwrfWriterFactory factory;
+  auto options = std::dynamic_pointer_cast<DwrfWriterOptions>(
+      factory.createFormatOptions(connectorConfig, session));
+  VELOX_CHECK_NOT_NULL(options);
+  return options->config;
+}
+
 TEST(ConfigTests, Set) {
   Config config;
   // set
@@ -83,12 +93,10 @@ inline void PrintTo(const ConfigTestParams& param, std::ostream* os) {
 }
 
 TEST(ConfigTests, writerOptionsDefaultConfig) {
-  WriterOptions options;
   const facebook::velox::config::ConfigBase base({});
   const facebook::velox::config::ConfigBase emptySession({});
 
-  options.processConfigs(base, emptySession);
-  auto config = options.config;
+  auto config = createWriterConfig(base, emptySession);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 64L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 16L * 1024L * 1024L);
@@ -112,9 +120,7 @@ TEST(ConfigTests, writerOptionsOverrideConfig) {
   const facebook::velox::config::ConfigBase base(std::move(configFromFile));
   const facebook::velox::config::ConfigBase emptySession({});
 
-  WriterOptions options;
-  options.processConfigs(base, emptySession);
-  auto config = options.config;
+  auto config = createWriterConfig(base, emptySession);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 100L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 100L * 1024L * 1024L);
@@ -137,13 +143,7 @@ TEST(ConfigTests, writerOptionsOverrideSession) {
       {Config::kOrcWriterCompressionLevelSession, "1"},
       {Config::kOrcWriterLinearStripeSizeHeuristicsSession, "false"}};
   const facebook::velox::config::ConfigBase session(std::move(sessionOverride));
-  WriterOptions options;
-  options.compressionKind = facebook::velox::common::CompressionKind_ZLIB;
-  options.processConfigs(base, session);
-  auto config = options.config;
-  ASSERT_EQ(
-      getConfig(config, Config::COMPRESSION),
-      facebook::velox::common::CompressionKind_ZLIB);
+  auto config = createWriterConfig(base, session);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 22L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 24L * 1024L * 1024L);

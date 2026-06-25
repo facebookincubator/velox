@@ -108,7 +108,7 @@ class E2EFilterTest : public E2EFilterTestBase {
   std::unordered_set<std::string> flatMapColumns_;
 
  private:
-  dwrf::WriterOptions createWriterOptions(const TypePtr& type) {
+  dwio::common::WriterOptions createWriterOptions(const TypePtr& type) {
     auto config = std::make_shared<dwrf::Config>();
     config->set(dwrf::Config::COMPRESSION, CompressionKind_NONE);
     config->set(dwrf::Config::USE_VINTS, useVInts_);
@@ -149,8 +149,10 @@ class E2EFilterTest : public E2EFilterTestBase {
       config->set<const std::vector<std::vector<std::string>>>(
           dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
     }
-    dwrf::WriterOptions options;
-    options.config = config;
+    dwio::common::WriterOptions options;
+    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
+    dwrfOptions->config = config;
+    options.formatSpecificOptions = dwrfOptions;
     options.schema = writerSchema;
     return options;
   }
