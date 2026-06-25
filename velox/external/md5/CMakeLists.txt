@@ -11,7 +11,4 @@
 # limitations under the License.
 velox_add_library(velox_external_md5 md5.cpp)
 
-velox_link_libraries(
-        velox_external_md5
-        PRIVATE
-        Folly::folly)
+velox_link_libraries(velox_external_md5 PRIVATE Folly::folly)

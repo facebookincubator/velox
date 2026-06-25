@@ -24,9 +24,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   # Parse the arguments
   set(one_value_args INCLUDE_DIR THRIFT_INCLUDE_DIR)
   set(multi_value_args SERVICES DEPENDS OPTIONS)
-  fb_cmake_parse_args(
-    ARG "" "${one_value_args}" "${multi_value_args}" "${ARGN}"
-  )
+  fb_cmake_parse_args(ARG "" "${one_value_args}" "${multi_value_args}" "${ARGN}")
   if(NOT DEFINED ARG_INCLUDE_DIR)
     set(ARG_INCLUDE_DIR "include")
   endif()
@@ -35,21 +33,18 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   endif()
 
   get_filename_component(base ${THRIFT_FILE} NAME_WE)
-  get_filename_component(
-    output_dir
-    ${CMAKE_CURRENT_BINARY_DIR}/${THRIFT_FILE}
-    DIRECTORY
-  )
+  get_filename_component(output_dir ${CMAKE_CURRENT_BINARY_DIR}/${THRIFT_FILE} DIRECTORY)
 
   # Generate relative paths in #includes
   file(
-    RELATIVE_PATH include_prefix
+    RELATIVE_PATH
+    include_prefix
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/${THRIFT_FILE}"
   )
   get_filename_component(include_prefix ${include_prefix} DIRECTORY)
 
-  if (NOT "${include_prefix}" STREQUAL "")
+  if(NOT "${include_prefix}" STREQUAL "")
     list(APPEND ARG_OPTIONS "include_prefix=${include_prefix}")
   endif()
   # CMake 3.12 is finally getting a list(JOIN) function, but until then
@@ -57,14 +52,18 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   string(REPLACE ";" "," GEN_ARG_STR "${ARG_OPTIONS}")
 
   # Compute the list of generated files
-  list(APPEND generated_headers
+  list(
+    APPEND
+    generated_headers
     "${output_dir}/gen-cpp2/${base}_constants.h"
     "${output_dir}/gen-cpp2/${base}_types.h"
     "${output_dir}/gen-cpp2/${base}_types.tcc"
     "${output_dir}/gen-cpp2/${base}_types_custom_protocol.h"
     "${output_dir}/gen-cpp2/${base}_metadata.h"
   )
-  list(APPEND generated_sources
+  list(
+    APPEND
+    generated_sources
     "${output_dir}/gen-cpp2/${base}_constants.cpp"
     "${output_dir}/gen-cpp2/${base}_data.h"
     "${output_dir}/gen-cpp2/${base}_data.cpp"
@@ -75,13 +74,17 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     "${output_dir}/gen-cpp2/${base}_metadata.cpp"
   )
   foreach(service IN LISTS ARG_SERVICES)
-    list(APPEND generated_headers
+    list(
+      APPEND
+      generated_headers
       "${output_dir}/gen-cpp2/${service}.h"
       "${output_dir}/gen-cpp2/${service}.tcc"
       "${output_dir}/gen-cpp2/${service}AsyncClient.h"
       "${output_dir}/gen-cpp2/${service}_custom_protocol.h"
     )
-    list(APPEND generated_sources
+    list(
+      APPEND
+      generated_sources
       "${output_dir}/gen-cpp2/${service}.cpp"
       "${output_dir}/gen-cpp2/${service}AsyncClient.cpp"
       "${output_dir}/gen-cpp2/${service}_processmap_binary.cpp"
@@ -97,7 +100,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   # to use a wrapper script around the thrift compiler that could take the
   # include list as a single argument and split it up before invoking the
   # thrift compiler.
-  if (NOT POLICY CMP0067)
+  if(NOT POLICY CMP0067)
     message(FATAL_ERROR "add_fbthrift_cpp_library() requires CMake 3.8+")
   endif()
   set(
@@ -107,28 +110,17 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
 
   # Emit the rule to run the thrift compiler
   add_custom_command(
-    OUTPUT
-      ${generated_headers}
-      ${generated_sources}
+    OUTPUT ${generated_headers} ${generated_sources}
     COMMAND_EXPAND_LISTS
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
     COMMAND
-      "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
-    COMMAND
-      "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$ENV{LD_LIBRARY_PATH}"
-      "${FBTHRIFT_COMPILER}"
-      --legacy-strict
-      --gen "mstch_cpp2:${GEN_ARG_STR}"
-      "${thrift_include_options}"
-      -I "${FBTHRIFT_INCLUDE_DIR}"
-      -o "${output_dir}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/${THRIFT_FILE}"
-    WORKING_DIRECTORY
-      "${CMAKE_BINARY_DIR}"
-    MAIN_DEPENDENCY
-      "${THRIFT_FILE}"
-    DEPENDS
-      ${ARG_DEPENDS}
-      "${FBTHRIFT_COMPILER}"
+      "${CMAKE_COMMAND}" -E env
+      "LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$ENV{LD_LIBRARY_PATH}" "${FBTHRIFT_COMPILER}"
+      --legacy-strict --gen "mstch_cpp2:${GEN_ARG_STR}" "${thrift_include_options}" -I
+      "${FBTHRIFT_INCLUDE_DIR}" -o "${output_dir}" "${CMAKE_CURRENT_SOURCE_DIR}/${THRIFT_FILE}"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    MAIN_DEPENDENCY "${THRIFT_FILE}"
+    DEPENDS ${ARG_DEPENDS} "${FBTHRIFT_COMPILER}"
   )
 
   add_library("${LIB_NAME}" STATIC ${generated_sources})
@@ -162,10 +154,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   # We define a HEADER_INSTALL_DIR property with the include directory prefix,
   # so typically callers should specify the PUBLIC_HEADER DESTINATION as
   # "$<TARGET_PROPERTY:${LIB_NAME},HEADER_INSTALL_DIR>"
-  set_property(
-    TARGET "${LIB_NAME}"
-    PROPERTY PUBLIC_HEADER ${generated_headers}
-  )
+  set_property(TARGET "${LIB_NAME}" PROPERTY PUBLIC_HEADER ${generated_headers})
 
   # Define a dummy interface library to help propagate the thrift include
   # directories between dependencies.
@@ -177,10 +166,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       "$<INSTALL_INTERFACE:${ARG_THRIFT_INCLUDE_DIR}>"
   )
   foreach(dep IN LISTS ARG_DEPENDS)
-    target_link_libraries(
-      "${LIB_NAME}.thrift_includes"
-      INTERFACE "${dep}.thrift_includes"
-    )
+    target_link_libraries("${LIB_NAME}.thrift_includes" INTERFACE "${dep}.thrift_includes")
   endforeach()
 
   set_target_properties(

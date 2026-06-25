@@ -29,23 +29,25 @@
 # treat the ";" characters as list element separators, and treat it as multiple
 # separate arguments.
 #
-function(fb_cmake_parse_args PREFIX OPTIONS ONE_VALUE_ARGS MULTI_VALUE_ARGS
-         ARGS)
+function(
+  fb_cmake_parse_args
+  PREFIX
+  OPTIONS
+  ONE_VALUE_ARGS
+  MULTI_VALUE_ARGS
+  ARGS
+)
   foreach(option IN LISTS ARGN)
     if("${option}" STREQUAL "ALLOW_UNPARSED_ARGS")
       set(ALLOW_UNPARSED_ARGS TRUE)
     else()
-      message(
-        FATAL_ERROR
-          "unknown optional argument for fb_cmake_parse_args(): ${option}")
+      message(FATAL_ERROR "unknown optional argument for fb_cmake_parse_args(): ${option}")
     endif()
   endforeach()
 
   # Define all options as FALSE in the parent scope to start with
   foreach(var_name IN LISTS OPTIONS)
-    set("${PREFIX}_${var_name}"
-        "FALSE"
-        PARENT_SCOPE)
+    set("${PREFIX}_${var_name}" "FALSE" PARENT_SCOPE)
   endforeach()
 
   # TODO: We aren't extremely strict about error checking for one-value
@@ -72,8 +74,7 @@ function(fb_cmake_parse_args PREFIX OPTIONS ONE_VALUE_ARGS MULTI_VALUE_ARGS
           # distinguish between an empty list and a list with a single empty
           # element.  We track our own SEEN_VALUES_arg setting to help
           # distinguish this and behave properly here.
-          if("${SEEN_${current_variable}}" AND "${${current_variable}}"
-                                               STREQUAL "")
+          if("${SEEN_${current_variable}}" AND "${${current_variable}}" STREQUAL "")
             set("${current_variable}" ";${arg}")
           else()
             list(APPEND "${current_variable}" "${arg}")
@@ -87,9 +88,7 @@ function(fb_cmake_parse_args PREFIX OPTIONS ONE_VALUE_ARGS MULTI_VALUE_ARGS
       endif()
     else()
       # We found an option variable
-      set("${PREFIX}_${arg}"
-          "TRUE"
-          PARENT_SCOPE)
+      set("${PREFIX}_${arg}" "TRUE" PARENT_SCOPE)
       set(current_variable)
     endif()
   endforeach()
@@ -107,17 +106,16 @@ function(fb_cmake_parse_args PREFIX OPTIONS ONE_VALUE_ARGS MULTI_VALUE_ARGS
         # We know an argument was specified and that we called list(APPEND). If
         # CMake thinks the list is empty that means there is really a single
         # empty element in the list.
-        set("${PREFIX}_${arg_name}"
-            ""
-            PARENT_SCOPE)
+        set("${PREFIX}_${arg_name}" "" PARENT_SCOPE)
       elseif("${num_args}" EQUAL 1)
         list(GET "VALUES_${arg_name}" 0 arg_value)
-        set("${PREFIX}_${arg_name}"
-            "${arg_value}"
-            PARENT_SCOPE)
+        set("${PREFIX}_${arg_name}" "${arg_value}" PARENT_SCOPE)
       else()
-        message(FATAL_ERROR "too many arguments specified for ${arg_name}: "
-                            "${VALUES_${arg_name}}")
+        message(
+          FATAL_ERROR
+          "too many arguments specified for ${arg_name}: "
+          "${VALUES_${arg_name}}"
+        )
       endif()
     endif()
   endforeach()
@@ -130,9 +128,7 @@ function(fb_cmake_parse_args PREFIX OPTIONS ONE_VALUE_ARGS MULTI_VALUE_ARGS
       # TODO: Our caller still won't be able to distinguish between an empty
       # list and a list with a single empty element.  We can tell which is
       # which, but CMake lists don't make it easy to show this to our caller.
-      set("${PREFIX}_${arg_name}"
-          "${VALUES_${arg_name}}"
-          PARENT_SCOPE)
+      set("${PREFIX}_${arg_name}" "${VALUES_${arg_name}}" PARENT_SCOPE)
     endif()
   endforeach()
 
@@ -140,9 +136,7 @@ function(fb_cmake_parse_args PREFIX OPTIONS ONE_VALUE_ARGS MULTI_VALUE_ARGS
   # if ALLOW_UNPARSED_ARGS was specified.
   if(DEFINED unparsed_args)
     if("${ALLOW_UNPARSED_ARGS}")
-      set("${PREFIX}_UNPARSED_ARGUMENTS"
-          "${unparsed_args}"
-          PARENT_SCOPE)
+      set("${PREFIX}_UNPARSED_ARGUMENTS" "${unparsed_args}" PARENT_SCOPE)
     else()
       message(FATAL_ERROR "unrecognized arguments: ${unparsed_args}")
     endif()
