@@ -199,6 +199,23 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
       mr);
 }
 
+int32_t getDecimalPrecision(const TypePtr& type) {
+  if (type->isShortDecimal()) {
+    return type->asShortDecimal().precision();
+  }
+  if (type->isLongDecimal()) {
+    return type->asLongDecimal().precision();
+  }
+  VELOX_FAIL("Expected decimal type, got {}", type->toString());
+}
+
+bool isCheckedDecimalArithmeticOp(cudf::binary_operator op) {
+  return op == cudf::binary_operator::ADD ||
+      op == cudf::binary_operator::SUB ||
+      op == cudf::binary_operator::MUL ||
+      op == cudf::binary_operator::MOD;
+}
+
 struct CudfExpressionEvaluatorEntry {
   int priority;
   CudfExpressionEvaluatorCanEvaluate canEvaluate;
@@ -446,6 +463,11 @@ class BinaryFunction : public CudfFunction {
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
+    if (cudf::is_fixed_point(type_) &&
+        (isCheckedDecimalArithmeticOp(op_) ||
+         op_ == cudf::binary_operator::DIV)) {
+      decimalPrecision_ = getDecimalPrecision(expr->type());
+    }
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "Binary function expects exactly 2 inputs");
     if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
@@ -507,7 +529,8 @@ class BinaryFunction : public CudfFunction {
         auto rhsScale = -rhsView.type().scale();
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
-        return decimalDivide(lhsView, rhsView, type_, aRescale, stream, mr);
+        return decimalDivide(
+            lhsView, rhsView, type_, aRescale, decimalPrecision_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       auto rhsView = asView(inputColumns[1]);
@@ -550,8 +573,8 @@ class BinaryFunction : public CudfFunction {
             rhsView = rhsCast->view();
           }
           // @TODO Check for divide-by-zero as in the DECIMAL case above?
-          return cudf::binary_operation(
-              lhsView, rhsView, op_, type_, stream, mr);
+          return decimalBinaryOperation(
+              lhsView, rhsView, op_, type_, decimalPrecision_, stream, mr);
         }
         if (op_ == cudf::binary_operator::MUL) {
           std::unique_ptr<cudf::column> lhsCast;
@@ -571,8 +594,8 @@ class BinaryFunction : public CudfFunction {
             }
           }
           // @TODO Check for divide-by-zero as in the DECIMAL case above?
-          return cudf::binary_operation(
-              lhsView, rhsView, op_, type_, stream, mr);
+          return decimalBinaryOperation(
+              lhsView, rhsView, op_, type_, decimalPrecision_, stream, mr);
         }
       }
       // @TODO Check for divide-by-zero as in the DECIMAL case above?
@@ -587,7 +610,8 @@ class BinaryFunction : public CudfFunction {
         auto rhsScale = -right_->type().scale();
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
-        return decimalDivide(lhsView, *right_, type_, aRescale, stream, mr);
+        return decimalDivide(
+            lhsView, *right_, type_, aRescale, decimalPrecision_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       if (isComparisonOp(op_) && cudf::is_fixed_point(lhsView.type()) &&
@@ -624,11 +648,11 @@ class BinaryFunction : public CudfFunction {
           }
           if (right_->type() != type_) {
             auto rhsScalar = castDecimalScalar(*right_, type_, stream, mr);
-            return cudf::binary_operation(
-                lhsView, *rhsScalar, op_, type_, stream, mr);
+            return decimalBinaryOperation(
+                lhsView, *rhsScalar, op_, type_, decimalPrecision_, stream, mr);
           }
-          return cudf::binary_operation(
-              lhsView, *right_, op_, type_, stream, mr);
+          return decimalBinaryOperation(
+              lhsView, *right_, op_, type_, decimalPrecision_, stream, mr);
         }
         if (op_ == cudf::binary_operator::MUL) {
           std::unique_ptr<cudf::column> lhsCast;
@@ -646,11 +670,12 @@ class BinaryFunction : public CudfFunction {
               rhsScalar = castDecimalScalar(*right_, castType, stream, mr);
             }
           }
-          return cudf::binary_operation(
+          return decimalBinaryOperation(
               lhsView,
               rhsScalar ? *rhsScalar : *right_,
               op_,
               type_,
+              decimalPrecision_,
               stream,
               mr);
         }
@@ -664,7 +689,8 @@ class BinaryFunction : public CudfFunction {
       auto rhsScale = -rhsView.type().scale();
       auto outScale = -type_.scale();
       auto aRescale = outScale - lhsScale + rhsScale;
-      return decimalDivide(*left_, rhsView, type_, aRescale, stream, mr);
+      return decimalDivide(
+          *left_, rhsView, type_, aRescale, decimalPrecision_, stream, mr);
     }
     auto rhsView = asView(inputColumns[0]);
     if (isComparisonOp(op_) && cudf::is_fixed_point(left_->type()) &&
@@ -701,10 +727,11 @@ class BinaryFunction : public CudfFunction {
         }
         if (left_->type() != type_) {
           auto lhsScalar = castDecimalScalar(*left_, type_, stream, mr);
-          return cudf::binary_operation(
-              *lhsScalar, rhsView, op_, type_, stream, mr);
+          return decimalBinaryOperation(
+              *lhsScalar, rhsView, op_, type_, decimalPrecision_, stream, mr);
         }
-        return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
+        return decimalBinaryOperation(
+            *left_, rhsView, op_, type_, decimalPrecision_, stream, mr);
       }
       if (op_ == cudf::binary_operator::MUL) {
         std::unique_ptr<cudf::column> rhsCast;
@@ -722,8 +749,14 @@ class BinaryFunction : public CudfFunction {
             lhsScalar = castDecimalScalar(*left_, castType, stream, mr);
           }
         }
-        return cudf::binary_operation(
-            lhsScalar ? *lhsScalar : *left_, rhsView, op_, type_, stream, mr);
+        return decimalBinaryOperation(
+            lhsScalar ? *lhsScalar : *left_,
+            rhsView,
+            op_,
+            type_,
+            decimalPrecision_,
+            stream,
+            mr);
       }
     }
     return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
@@ -732,6 +765,7 @@ class BinaryFunction : public CudfFunction {
  private:
   const cudf::binary_operator op_;
   const cudf::data_type type_;
+  int32_t decimalPrecision_{0};
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
 };
