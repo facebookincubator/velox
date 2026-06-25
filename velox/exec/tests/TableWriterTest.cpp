@@ -3317,8 +3317,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
               return;
             }
 
+            // Base the fake allocation on usedBytes() rather than
+            // reservedBytes() so it consumes all genuinely free capacity and
+            // forces the arbitrator to reclaim the sort writer's buffered
+            // memory by spilling, instead of being satisfied from unused
+            // reserved capacity.
             const auto fakeAllocationSize =
-                kQueryMemoryCapacity - op->pool()->parent()->reservedBytes();
+                kQueryMemoryCapacity - op->pool()->parent()->usedBytes();
             if (writerSpillEnabled) {
               auto* buffer = op->pool()->allocate(fakeAllocationSize);
               op->pool()->free(buffer, fakeAllocationSize);
