@@ -314,10 +314,10 @@ void KllSketch<T, A, C>::doInsert(T value) {
   if (items_.size() < k_ && numLevels() == 1) {
     // Do not allocate all k elements in the beginning because in some group-by
     // aggregation most of the group size is small and won't use all k spaces.
-    items_.push_back(value);
+    items_.push_back(std::move(value));
     ++levels_[1];
   } else {
-    items_[insertPosition()] = value;
+    items_[insertPosition()] = std::move(value);
   }
   ++n_;
   isLevelZeroSorted_ = false;
