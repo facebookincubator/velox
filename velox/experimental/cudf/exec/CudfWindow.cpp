@@ -30,7 +30,6 @@
 #include <cudf/copying.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/groupby.hpp>
-#include <cudf/join/hash_join.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/rolling.hpp>
 #include <cudf/rolling/range_window_bounds.hpp>
@@ -127,7 +126,7 @@ bool rangeWindowTypesEqual(
 
 struct RangeOrderBy {
   std::vector<cudf::column_view> columnViews;
-  ColumnOrView syntheticHolder;
+  ColumnOrView orderByColumnOwner;
   cudf::table_view table;
   std::vector<cudf::order> orders;
   std::vector<cudf::null_order> nullOrders;
@@ -142,9 +141,9 @@ struct RangeOrderBy {
     RangeOrderBy result;
     if (sortKeyIndices.empty()) {
       auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-      result.syntheticHolder =
+      result.orderByColumnOwner =
           cudf::sequence(sortedView.num_rows(), oneScalar, oneScalar, stream, mr);
-      result.columnViews.push_back(asView(result.syntheticHolder));
+      result.columnViews.push_back(asView(result.orderByColumnOwner));
       result.orders.push_back(cudf::order::ASCENDING);
       result.nullOrders.push_back(cudf::null_order::BEFORE);
     } else {
@@ -223,87 +222,87 @@ void addRangeRollingRequest(
   batches.push_back(std::move(batch));
 }
 
-std::unique_ptr<cudf::column> computeFullPartitionGroupAggregate(
-    const cudf::table_view& partKeys,
+cudf::rank_method toRankMethod(const std::string& name) {
+  if (name == "row_number") {
+    return cudf::rank_method::FIRST;
+  }
+  if (name == "rank") {
+    return cudf::rank_method::MIN;
+  }
+  if (name == "dense_rank") {
+    return cudf::rank_method::DENSE;
+  }
+  VELOX_FAIL("Unsupported rank window function: {}", name);
+}
+
+struct RankValuesBuild {
+  ColumnOrView sequenceColOwner;
+  std::vector<cudf::column_view> structChildren;
+};
+
+cudf::column_view buildRankValuesCol(
+    const cudf::table_view& sortedInput,
+    const std::string& baseName,
+    const std::vector<cudf::size_type>& sortKeyIndices,
+    RankValuesBuild& holder,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  const auto n = sortedInput.num_rows();
+  if (sortKeyIndices.empty()) {
+    auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+    holder.sequenceColOwner =
+        cudf::sequence(n, oneScalar, oneScalar, stream, mr);
+    return asView(holder.sequenceColOwner);
+  }
+  if (sortKeyIndices.size() == 1 || baseName == "row_number") {
+    return sortedInput.column(sortKeyIndices[0]);
+  }
+  holder.structChildren.reserve(sortKeyIndices.size());
+  for (auto idx : sortKeyIndices) {
+    holder.structChildren.push_back(sortedInput.column(idx));
+  }
+  return cudf::column_view(
+      cudf::data_type{cudf::type_id::STRUCT},
+      n,
+      nullptr,
+      nullptr,
+      0,
+      0,
+      holder.structChildren);
+}
+
+std::unique_ptr<cudf::column> computeGlobalAggregate(
     cudf::column_view inputCol,
     const std::string& baseName,
     bool isCountStar,
     cudf::size_type numRows,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  cudf::groupby::aggregation_request request;
-  request.values = inputCol;
+  std::unique_ptr<cudf::scalar> resultScalar;
   if (baseName == "sum") {
-    request.aggregations.push_back(
-        cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+    auto agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+    resultScalar =
+        cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
   } else if (baseName == "min") {
-    request.aggregations.push_back(
-        cudf::make_min_aggregation<cudf::groupby_aggregation>());
+    auto agg = cudf::make_min_aggregation<cudf::reduce_aggregation>();
+    resultScalar =
+        cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
   } else if (baseName == "max") {
-    request.aggregations.push_back(
-        cudf::make_max_aggregation<cudf::groupby_aggregation>());
+    auto agg = cudf::make_max_aggregation<cudf::reduce_aggregation>();
+    resultScalar =
+        cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
   } else if (baseName == "count") {
-    const auto nullPolicy = isCountStar ? cudf::null_policy::INCLUDE
-                                        : cudf::null_policy::EXCLUDE;
-    request.aggregations.push_back(
-        cudf::make_count_aggregation<cudf::groupby_aggregation>(nullPolicy));
+    auto agg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
+        isCountStar ? cudf::null_policy::INCLUDE
+                    : cudf::null_policy::EXCLUDE);
+    resultScalar = cudf::reduce(
+        inputCol, *agg, cudf::data_type(cudf::type_id::INT64), stream, mr);
   } else {
-    request.aggregations.push_back(
-        cudf::make_mean_aggregation<cudf::groupby_aggregation>());
+    auto agg = cudf::make_mean_aggregation<cudf::reduce_aggregation>();
+    resultScalar = cudf::reduce(
+        inputCol, *agg, cudf::data_type(cudf::type_id::FLOAT64), stream, mr);
   }
-
-  std::unique_ptr<cudf::column> aggCol;
-  if (partKeys.num_columns() == 0) {
-    std::unique_ptr<cudf::scalar> resultScalar;
-    if (baseName == "sum") {
-      auto agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-      resultScalar = cudf::reduce(
-          inputCol, *agg, inputCol.type(), stream, mr);
-    } else if (baseName == "min") {
-      auto agg = cudf::make_min_aggregation<cudf::reduce_aggregation>();
-      resultScalar = cudf::reduce(
-          inputCol, *agg, inputCol.type(), stream, mr);
-    } else if (baseName == "max") {
-      auto agg = cudf::make_max_aggregation<cudf::reduce_aggregation>();
-      resultScalar = cudf::reduce(
-          inputCol, *agg, inputCol.type(), stream, mr);
-    } else if (baseName == "count") {
-      auto agg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
-          isCountStar ? cudf::null_policy::INCLUDE
-                      : cudf::null_policy::EXCLUDE);
-      resultScalar = cudf::reduce(
-          inputCol, *agg, cudf::data_type(cudf::type_id::INT64), stream, mr);
-    } else {
-      auto agg = cudf::make_mean_aggregation<cudf::reduce_aggregation>();
-      resultScalar = cudf::reduce(
-          inputCol, *agg, cudf::data_type(cudf::type_id::FLOAT64), stream, mr);
-    }
-    return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
-  }
-
-  cudf::groupby::groupby grouper(partKeys, cudf::null_policy::INCLUDE);
-  std::vector<cudf::groupby::aggregation_request> requests;
-  requests.push_back(std::move(request));
-  auto [groupKeys, results] = grouper.aggregate(
-      cudf::host_span<cudf::groupby::aggregation_request const>(
-          requests.data(), requests.size()),
-      stream,
-      mr);
-  aggCol = std::move(results[0].results[0]);
-
-  cudf::hash_join hj(*groupKeys, cudf::null_equality::EQUAL);
-  auto [leftJoinIndices, rightJoinIndices] =
-      hj.left_join(partKeys, std::nullopt, stream, mr);
-  auto rightIndicesSpan =
-      cudf::device_span<cudf::size_type const>{*rightJoinIndices};
-  auto rightIndicesCol = cudf::column_view{rightIndicesSpan};
-  auto gathered = cudf::gather(
-      cudf::table_view{{aggCol->view()}},
-      rightIndicesCol,
-      cudf::out_of_bounds_policy::DONT_CHECK,
-      stream,
-      mr);
-  return std::move(gathered->release()[0]);
+  return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
 }
 
 // Convert Velox frame bounds to cudf window bounds.
@@ -405,9 +404,14 @@ cudf::range_window_bounds toRangeWindowBound(
 
 } // namespace
 
+bool CudfWindow::canRunOnGPU(const core::WindowNode& windowNode) {
+  std::optional<std::string> reason;
+  return canRunOnGPU(windowNode, reason);
+}
+
 bool CudfWindow::canRunOnGPU(
     const core::WindowNode& windowNode,
-    std::string* reason) {
+    std::optional<std::string>& reason) {
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
   const auto inputType = asRowType(windowNode.inputType());
   for (const auto& func : windowNode.windowFunctions()) {
@@ -416,7 +420,7 @@ bool CudfWindow::canRunOnGPU(
     if (!isSupportedWindowFunction(
             baseName, func.functionCall->inputs().size())) {
       if (reason) {
-        *reason = fmt::format(
+        reason = fmt::format(
             "Unsupported window function: {}", func.functionCall->name());
       }
       return false;
@@ -427,8 +431,7 @@ bool CudfWindow::canRunOnGPU(
       if (!std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
               func.functionCall->inputs()[1])) {
         if (reason) {
-          *reason =
-              fmt::format("Non-constant offset for {} not supported", baseName);
+          reason = fmt::format("Non-constant offset for {} not supported", baseName);
         }
         return false;
       }
@@ -442,7 +445,7 @@ bool CudfWindow::canRunOnGPU(
       if (auto channel = resolveInputChannel(func, inputType)) {
         if (*channel == kConstantChannel) {
           if (reason) {
-            *reason = "Constant window aggregate input not supported";
+            reason = "Constant window aggregate input not supported";
           }
           return false;
         }
@@ -456,7 +459,7 @@ bool CudfWindow::canRunOnGPU(
             func.frame.endType == core::WindowNode::BoundType::kCurrentRow;
         if (!startOk || !endOk) {
           if (reason) {
-            *reason =
+            reason =
                 "RANGE frame with non-unbounded/current bounds not supported";
           }
           return false;
@@ -476,7 +479,7 @@ bool CudfWindow::canRunOnGPU(
       if (!isConstantBound(func.frame.startType, func.frame.startValue) ||
           !isConstantBound(func.frame.endType, func.frame.endValue)) {
         if (reason) {
-          *reason = "Non-constant frame bound not supported";
+          reason = "Non-constant frame bound not supported";
         }
         return false;
       }
@@ -515,7 +518,7 @@ bool CudfWindow::canRunOnGPU(
       if (auto constant = isNonNegativeConstantBound(bound.first, bound.second)) {
         if (*constant < 0) {
           if (reason) {
-            *reason = fmt::format(
+            reason = fmt::format(
                 "Window frame {} offset must not be negative", *constant);
           }
           return false;
@@ -570,128 +573,105 @@ void CudfWindow::doAddInput(RowVectorPtr input) {
   }
 }
 
-cudf::size_type CudfWindow::resolveInputColumn(
-    const core::WindowNode::Function& func) const {
-  const auto& inputs = func.functionCall->inputs();
-  // e.g. count(*) OVER (...) has no call arguments; return -1 to indicate this.
-  if (inputs.empty()) {
-    return -1;
-  }
-  // Match exec::Window: resolve column via exprToChannel. Peel casts so we do
-  // not default to column 0 (which broke nested/wrapped refs e.g. TPC-DS Q12
-  // sum(sum(...)) / ratio over wrong column).
-  const core::TypedExprPtr* arg = &inputs[0];
-  while (auto cast =
-             std::dynamic_pointer_cast<const core::CastTypedExpr>(*arg)) {
-    VELOX_CHECK_EQ(cast->inputs().size(), 1u);
-    arg = &cast->inputs()[0];
-  }
-  auto channel = exec::exprToChannel(arg->get(), windowNode_->inputType());
-  return static_cast<cudf::size_type>(channel);
-}
-
-std::unique_ptr<cudf::column> CudfWindow::computeRankColumn(
+void CudfWindow::computeRankColumnsBatch(
     const cudf::table_view& sortedInput,
-    const std::string& baseName,
+    const std::vector<std::pair<size_t, std::string>>& pendingRanks,
     cudf::groupby::groupby* rankGrouper,
-    rmm::cuda_stream_view stream) const {
-  auto mr = get_output_mr();
-  auto const n = sortedInput.num_rows();
-
-  // Convert function name to cudf rank method.
-  auto toRankMethod = [](const std::string& name) {
-    if (name == "row_number") {
-      return cudf::rank_method::FIRST;
-    } else if (name == "rank") {
-      return cudf::rank_method::MIN;
-    }
-    return cudf::rank_method::DENSE;
-  };
-
-  // Without ORDER BY, rank/dense_rank treat all rows as tied (return 1 for
-  // all). row_number still assigns unique sequential numbers.
-  if (sortKeyIndices_.empty() && baseName != "row_number") {
-    auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-    return cudf::make_column_from_scalar(oneScalar, n, stream, mr);
+    std::vector<std::unique_ptr<cudf::column>>& windowResultCols,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
+  if (pendingRanks.empty()) {
+    return;
   }
 
-  // For row_number without ORDER BY, buildValuesCol creates a sequence column
-  // on first use (see ColumnOrView below).
-  ColumnOrView sequenceColHolder{cudf::column_view{}};
-  bool sequenceColCreated = false;
-
-  // Get sort order and null order for ranking.
+  const auto n = sortedInput.num_rows();
   auto colOrder =
       sortKeyIndices_.empty() ? cudf::order::ASCENDING : sortOrders_[0];
   auto nullOrd =
       sortKeyIndices_.empty() ? cudf::null_order::BEFORE : nullOrders_[0];
 
-  // Build the values column for tie detection. For rank/dense_rank with
-  // multiple sort keys, wrap them in a STRUCT for composite comparison.
-  // row_number doesn't need tie detection, so single column suffices.
-  std::vector<cudf::column_view> structChildren;
-  auto buildValuesCol = [&]() -> cudf::column_view {
-    if (sortKeyIndices_.empty()) {
-      if (!sequenceColCreated) {
-        auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-        sequenceColHolder = cudf::sequence(n, oneScalar, oneScalar, stream, mr);
-        sequenceColCreated = true;
-      }
-      return asView(sequenceColHolder);
-    }
-    if (sortKeyIndices_.size() == 1 || baseName == "row_number") {
-      return sortedInput.column(sortKeyIndices_[0]);
-    }
-    structChildren.reserve(sortKeyIndices_.size());
-    for (auto idx : sortKeyIndices_) {
-      structChildren.push_back(sortedInput.column(idx));
-    }
-    return cudf::column_view(
-        cudf::data_type{cudf::type_id::STRUCT},
-        n,
-        nullptr,
-        nullptr,
-        0,
-        0,
-        structChildren);
-  };
-
-  // For global windows (no partition keys), use cudf::scan or cudf::sequence
-  // instead of groupby with a synthetic partition column.
   if (partitionKeyIndices_.empty()) {
-    if (baseName == "row_number") {
-      // row_number is just a sequence 1, 2, 3, ..., N
-      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-      return cudf::sequence(n, oneScalar, oneScalar, stream, mr);
+    for (const auto& [funcIndex, baseName] : pendingRanks) {
+      if (sortKeyIndices_.empty() && baseName != "row_number") {
+        auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+        windowResultCols[funcIndex] =
+            cudf::make_column_from_scalar(oneScalar, n, stream, mr);
+        continue;
+      }
+      if (baseName == "row_number") {
+        auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+        windowResultCols[funcIndex] =
+            cudf::sequence(n, oneScalar, oneScalar, stream, mr);
+        continue;
+      }
+      RankValuesBuild holder;
+      auto valuesCol = buildRankValuesCol(
+          sortedInput,
+          baseName,
+          sortKeyIndices_,
+          holder,
+          stream,
+          mr);
+      auto method = toRankMethod(baseName);
+      auto agg = cudf::make_rank_aggregation<cudf::scan_aggregation>(
+          method, colOrder, cudf::null_policy::INCLUDE, nullOrd);
+      windowResultCols[funcIndex] = cudf::scan(
+          valuesCol,
+          *agg,
+          cudf::scan_type::INCLUSIVE,
+          cudf::null_policy::INCLUDE,
+          stream,
+          mr);
     }
-    auto method = toRankMethod(baseName);
-    auto agg = cudf::make_rank_aggregation<cudf::scan_aggregation>(
-        method, colOrder, cudf::null_policy::INCLUDE, nullOrd);
-    return cudf::scan(
-        buildValuesCol(),
-        *agg,
-        cudf::scan_type::INCLUSIVE,
-        cudf::null_policy::INCLUDE,
-        stream,
-        mr);
+    return;
   }
 
-  // Partitioned case: use groupby scan.
-  auto method = toRankMethod(baseName);
-  auto valuesCol = buildValuesCol();
+  std::vector<cudf::groupby::scan_request> scanRequests;
+  scanRequests.reserve(pendingRanks.size());
+  std::vector<RankValuesBuild> valueHolders(pendingRanks.size());
+  std::vector<size_t> batchedFuncIndices;
+  batchedFuncIndices.reserve(pendingRanks.size());
 
-  std::vector<cudf::groupby::scan_request> requests(1);
-  requests[0].values = valuesCol;
-  requests[0].aggregations.push_back(
-      cudf::make_rank_aggregation<cudf::groupby_scan_aggregation>(
-          method, colOrder, cudf::null_policy::INCLUDE, nullOrd));
+  for (size_t i = 0; i < pendingRanks.size(); ++i) {
+    const auto& [funcIndex, baseName] = pendingRanks[i];
+    if (sortKeyIndices_.empty() && baseName != "row_number") {
+      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
+      windowResultCols[funcIndex] =
+          cudf::make_column_from_scalar(oneScalar, n, stream, mr);
+      continue;
+    }
+
+    cudf::groupby::scan_request request;
+    request.values = buildRankValuesCol(
+        sortedInput,
+        baseName,
+        sortKeyIndices_,
+        valueHolders[i],
+        stream,
+        mr);
+    request.aggregations.push_back(
+        cudf::make_rank_aggregation<cudf::groupby_scan_aggregation>(
+            toRankMethod(baseName),
+            colOrder,
+            cudf::null_policy::INCLUDE,
+            nullOrd));
+    scanRequests.push_back(std::move(request));
+    batchedFuncIndices.push_back(funcIndex);
+  }
+
+  if (scanRequests.empty()) {
+    return;
+  }
 
   VELOX_CHECK_NOT_NULL(rankGrouper);
-  auto scanResult = rankGrouper->scan(requests, stream, mr);
+  auto scanResult = rankGrouper->scan(scanRequests, stream, mr);
   auto& aggResults = scanResult.second;
-  VELOX_CHECK_EQ(aggResults.size(), 1);
-  VELOX_CHECK_EQ(aggResults[0].results.size(), 1);
-  return std::move(aggResults[0].results[0]);
+  VELOX_CHECK_EQ(aggResults.size(), scanRequests.size());
+  for (size_t i = 0; i < scanRequests.size(); ++i) {
+    VELOX_CHECK_EQ(aggResults[i].results.size(), 1);
+    windowResultCols[batchedFuncIndices[i]] =
+        std::move(aggResults[i].results[0]);
+  }
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
@@ -743,8 +723,8 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     const core::WindowNode::Function& func,
     std::unique_ptr<cudf::rolling_aggregation> agg,
     bool isFullPartition,
-    rmm::cuda_stream_view stream) const {
-  auto mr = get_output_mr();
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
 
   if (func.frame.type == core::WindowNode::WindowType::kRange) {
     VELOX_USER_CHECK(
@@ -841,7 +821,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
     cudf::column_view inputCol,
     const core::WindowNode::Function& func,
     const std::string& baseName,
-    rmm::cuda_stream_view stream) const {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
   auto nullPolicy = func.ignoreNulls ? cudf::null_policy::EXCLUDE
                                      : cudf::null_policy::INCLUDE;
 
@@ -857,7 +838,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
         func,
         std::move(agg),
         isFullPartition,
-        stream);
+        stream,
+        mr);
   }
   // last_value: use -1 to get the last element in the frame.
   auto agg = cudf::make_nth_element_aggregation<cudf::rolling_aggregation>(
@@ -869,7 +851,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
       func,
       std::move(agg),
       isFullPartition,
-      stream);
+      stream,
+      mr);
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
@@ -879,7 +862,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
     const core::WindowNode::Function& func,
     const std::string& baseName,
     bool isCountStar,
-    rmm::cuda_stream_view stream) const {
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
   std::unique_ptr<cudf::rolling_aggregation> agg;
   if (baseName == "sum") {
     agg = cudf::make_sum_aggregation<cudf::rolling_aggregation>();
@@ -899,15 +883,15 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
   const bool isFullPartition =
       isFullPartitionFrame(func, !sortKeyIndices_.empty());
 
-  if (isFullPartition && sortKeyIndices_.empty()) {
-    return computeFullPartitionGroupAggregate(
-        partKeys,
+  if (isFullPartition && sortKeyIndices_.empty() &&
+      partKeys.num_columns() == 0) {
+    return computeGlobalAggregate(
         inputCol,
         baseName,
         isCountStar,
         sortedView.num_rows(),
         stream,
-        get_output_mr());
+        mr);
   }
 
   return invokeGroupedRollingWindow(
@@ -917,7 +901,8 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
       func,
       std::move(agg),
       isFullPartition,
-      stream);
+      stream,
+      mr);
 }
 
 void CudfWindow::doNoMoreInput() {
@@ -935,7 +920,7 @@ void CudfWindow::doNoMoreInput() {
   VELOX_CHECK_LE(
       totalRows,
       std::numeric_limits<cudf::size_type>::max(),
-      "Total row count {} exceeds cudf int32 limit",
+      "Total row count {} exceeds cudf size_type limit",
       totalRows);
 
   stream_ = cudfGlobalStreamPool().get_stream();
@@ -1023,6 +1008,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
   std::vector<std::unique_ptr<cudf::column>> windowResultCols(
       windowNode_->windowFunctions().size());
   std::vector<RangeRollingBatch> rangeRollingBatches;
+  std::vector<std::pair<size_t, std::string>> pendingRanks;
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
 
   for (size_t funcIndex = 0; funcIndex < windowNode_->windowFunctions().size();
@@ -1033,16 +1019,23 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
     if (baseName == "row_number" || baseName == "rank" ||
         baseName == "dense_rank") {
-      windowResultCols[funcIndex] =
-          computeRankColumn(sortedView, baseName, rankGrouper.get(), stream_);
+      pendingRanks.emplace_back(funcIndex, baseName);
     } else if (baseName == "lag" || baseName == "lead") {
-      auto inputColIdx = resolveInputColumn(func);
-      auto inputCol = sortedView.column(inputColIdx);
+      auto inputColIdx = resolveInputChannel(func, inputRowType_);
+      VELOX_CHECK(
+          inputColIdx.has_value(),
+          "Window function {} requires an input column",
+          baseName);
+      auto inputCol = sortedView.column(*inputColIdx);
       windowResultCols[funcIndex] =
           computeLeadLagColumn(partKeys, inputCol, func, baseName, stream_);
     } else if (baseName == "first_value" || baseName == "last_value") {
-      auto inputColIdx = resolveInputColumn(func);
-      auto inputCol = sortedView.column(inputColIdx);
+      auto inputColIdx = resolveInputChannel(func, inputRowType_);
+      VELOX_CHECK(
+          inputColIdx.has_value(),
+          "Window function {} requires an input column",
+          baseName);
+      auto inputCol = sortedView.column(*inputColIdx);
       const bool isFullPartition =
           isFullPartitionFrame(func, !sortKeyIndices_.empty());
       if (auto rangeTypes = toBatchRangeWindowTypes(func, isFullPartition)) {
@@ -1062,19 +1055,26 @@ RowVectorPtr CudfWindow::doGetOutput() {
             PendingRangeRolling{funcIndex, inputCol, std::move(agg)});
       } else {
         windowResultCols[funcIndex] = computeNthValueColumn(
-            partKeys, sortedView, inputCol, func, baseName, stream_);
+            partKeys, sortedView, inputCol, func, baseName, stream_, mr);
       }
     } else if (
         baseName == "sum" || baseName == "min" || baseName == "max" ||
         baseName == "count" || baseName == "avg") {
-      auto inputColIdx = resolveInputColumn(func);
-      bool isCountStar = (baseName == "count" && inputColIdx < 0);
-      auto inputCol = sortedView.column(isCountStar ? 0 : inputColIdx);
+      auto inputColIdx = resolveInputChannel(func, inputRowType_);
+      const bool isCountStar =
+          baseName == "count" && !inputColIdx.has_value();
+      if (!isCountStar) {
+        VELOX_CHECK(
+            inputColIdx.has_value(),
+            "Window function {} requires an input column",
+            baseName);
+      }
+      auto inputCol = sortedView.column(isCountStar ? 0 : *inputColIdx);
       const bool isFullPartition =
           isFullPartitionFrame(func, !sortKeyIndices_.empty());
-      if (isFullPartition && sortKeyIndices_.empty()) {
-        windowResultCols[funcIndex] = computeFullPartitionGroupAggregate(
-            partKeys,
+      if (isFullPartition && sortKeyIndices_.empty() &&
+          partKeys.num_columns() == 0) {
+        windowResultCols[funcIndex] = computeGlobalAggregate(
             inputCol,
             baseName,
             isCountStar,
@@ -1109,12 +1109,21 @@ RowVectorPtr CudfWindow::doGetOutput() {
             func,
             baseName,
             isCountStar,
-            stream_);
+            stream_,
+            mr);
       }
     } else {
       VELOX_FAIL("Unsupported window function for cudf: {}", baseName);
     }
   }
+
+  computeRankColumnsBatch(
+      sortedView,
+      pendingRanks,
+      rankGrouper.get(),
+      windowResultCols,
+      stream_,
+      mr);
 
   if (!rangeRollingBatches.empty()) {
     auto rangeOrderBy = RangeOrderBy::fromSortedView(
@@ -1160,7 +1169,8 @@ RowVectorPtr CudfWindow::doGetOutput() {
             func,
             std::move(pending.agg),
             isFullPartition,
-            stream_);
+            stream_,
+            mr);
       }
     }
   }
@@ -1190,6 +1200,8 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
 void CudfWindow::doClose() {
   Operator::close();
+  // Release GPU allocations only after pending work on stream_ completes.
+  stream_.synchronize();
   inputBatches_.clear();
   sortedData_.reset();
 }

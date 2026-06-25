@@ -30,6 +30,7 @@
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -64,10 +65,12 @@ class CudfWindow : public CudfOperatorBase {
       const std::shared_ptr<const core::WindowNode>& windowNode);
 
   /// Returns true if every window function and frame in the plan node is
-  /// supported by CudfWindow. Optional @p reason is set on failure.
+  /// supported by CudfWindow. On failure, @p reason is set when provided.
+  static bool canRunOnGPU(const core::WindowNode& windowNode);
+
   static bool canRunOnGPU(
       const core::WindowNode& windowNode,
-      std::string* reason = nullptr);
+      std::optional<std::string>& reason);
 
   /// Returns true if the window function is supported by CudfWindow.
   static bool isSupportedWindowFunction(
@@ -116,16 +119,14 @@ class CudfWindow : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  // Resolve the input column index for a window function's first argument.
-  cudf::size_type resolveInputColumn(
-      const core::WindowNode::Function& func) const;
-
   // Compute row_number/rank/dense_rank via cudf::groupby::scan or cudf::scan.
-  std::unique_ptr<cudf::column> computeRankColumn(
+  void computeRankColumnsBatch(
       const cudf::table_view& sortedInput,
-      const std::string& baseName,
+      const std::vector<std::pair<size_t, std::string>>& pendingRanks,
       cudf::groupby::groupby* rankGrouper,
-      rmm::cuda_stream_view stream) const;
+      std::vector<std::unique_ptr<cudf::column>>& windowResultCols,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
 
   // Compute LAG or LEAD via cudf::grouped_rolling_window.
   std::unique_ptr<cudf::column> computeLeadLagColumn(
@@ -142,7 +143,8 @@ class CudfWindow : public CudfOperatorBase {
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
-      rmm::cuda_stream_view stream) const;
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
 
   // Compute aggregate window functions (sum, min, max, count, avg)
   // with frame bounds from the WindowNode.
@@ -153,7 +155,8 @@ class CudfWindow : public CudfOperatorBase {
       const core::WindowNode::Function& func,
       const std::string& baseName,
       bool isCountStar,
-      rmm::cuda_stream_view stream) const;
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
 
   // Dispatch to grouped_rolling_window (ROWS) or grouped_range_rolling_window
   // (RANGE) based on the frame type.
@@ -164,7 +167,8 @@ class CudfWindow : public CudfOperatorBase {
       const core::WindowNode::Function& func,
       std::unique_ptr<cudf::rolling_aggregation> agg,
       bool isFullPartition,
-      rmm::cuda_stream_view stream) const;
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
 
   std::shared_ptr<const core::WindowNode> windowNode_;
   const RowTypePtr inputRowType_;
