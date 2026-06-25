@@ -182,8 +182,10 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       0,
       deleteFile.fileSizeInBytes);
 
-  dwio::common::ReaderOptions deleteReaderOpts(
-      pool_, ioStatistics.get(), ioStatistics.get());
+  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  // TODO: Use separate IoStatistics for data and metadata.
+  deleteReaderOpts.setDataIoStats(ioStatistics);
+  deleteReaderOpts.setMetadataIoStats(ioStatistics);
   configureReaderOptions(
       fileConfig,
       connectorQueryCtx,

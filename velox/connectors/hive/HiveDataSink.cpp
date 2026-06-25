@@ -19,10 +19,11 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/common/config/Config.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SortingWriter.h"
 #include "velox/exec/SortBuffer.h"
 
@@ -156,10 +157,10 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
 
 std::string computeBucketedFileName(
     const std::string& queryId,
-    uint32_t maxBucketCount,
+    uint32_t maxNumBuckets,
     uint32_t bucket) {
   const uint32_t kMaxBucketCountPadding =
-      std::to_string(maxBucketCount - 1).size();
+      std::to_string(maxNumBuckets - 1).size();
   const std::string bucketValueStr = std::to_string(bucket);
   return fmt::format(
       "0{:0>{}}_0_{}", bucketValueStr, kMaxBucketCountPadding, queryId);
@@ -444,6 +445,7 @@ HiveDataSink::HiveDataSink(
           std::move(partitionIdGenerator),
           dwio::common::getWriterFactory(insertTableHandle->storageFormat()),
           hiveConfig->maxTargetFileSizeBytes(
+              insertTableHandle->storageFormat(),
               connectorQueryCtx->sessionProperties()),
           hiveConfig->isPartitionPathAsLowerCase(
               connectorQueryCtx->sessionProperties()),
@@ -606,10 +608,6 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     options->schema = getNonPartitionTypes(dataChannels_, inputType_);
   }
 
-  if (options->memoryPool == nullptr) {
-    options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
-  }
-
   if (!options->compressionKind) {
     options->compressionKind = insertTableHandle_->compressionKind();
   }
@@ -618,9 +616,10 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     options->spillConfig = spillConfig_;
   }
 
-  // Always set nonReclaimableSection to the current writer's holder.
-  // Since insertTableHandle_->writerOptions() returns a shared_ptr, we need
-  // to ensure each writer has its own nonReclaimableSection pointer.
+  // Always set per-writer options to the current writer's values.
+  // Since insertTableHandle_->writerOptions() returns a shared_ptr, each writer
+  // needs its own memory pool and nonReclaimableSection pointer.
+  options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
   options->nonReclaimableSection =
       writerInfo_[writerIndex]->nonReclaimableSectionHolder.get();
 
@@ -640,6 +639,16 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
   options->sessionTimezoneName = connectorQueryCtx_->sessionTimezone();
   options->adjustTimestampToTimezone =
       connectorQueryCtx_->adjustTimestampToTimezone();
+  options->maxTargetFileSizeBytes = maxTargetFileBytes_;
+  if (options->formatSpecificOptions == nullptr) {
+    auto formatScopedConfigs = makeFormatScopedConfigs(
+        *hiveConfig_,
+        *connectorSessionProperties,
+        writerFactory_->fileFormat());
+    options->formatSpecificOptions = writerFactory_->createFormatOptions(
+        formatScopedConfigs.connectorConfig,
+        formatScopedConfigs.sessionProperties);
+  }
   options->processConfigs(*hiveConfig_->config(), *connectorSessionProperties);
   return options;
 }
@@ -733,43 +742,19 @@ WriterParameters HiveDataSink::getWriterParameters(
 
 std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     std::optional<uint32_t> bucketId) const {
-  if (auto hiveInsertFileNameGenerator =
-          std::dynamic_pointer_cast<const HiveInsertFileNameGenerator>(
-              fileNameGenerator_)) {
-    return hiveInsertFileNameGenerator->gen(
-        bucketId,
-        insertTableHandle_,
-        *connectorQueryCtx_,
-        hiveConfig_,
-        isCommitRequired());
-  }
-
   return fileNameGenerator_->gen(
-      bucketId, insertTableHandle_, *connectorQueryCtx_, isCommitRequired());
-}
-
-std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
-    std::optional<uint32_t> bucketId,
-    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-    const ConnectorQueryCtx& connectorQueryCtx,
-    bool commitRequired) const {
-  auto defaultHiveConfig =
-      std::make_shared<const HiveConfig>(std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>()));
-
-  return this->gen(
       bucketId,
-      insertTableHandle,
-      connectorQueryCtx,
-      defaultHiveConfig,
-      commitRequired);
+      insertTableHandle_,
+      *connectorQueryCtx_,
+      hiveConfig_->maxBucketCount(connectorQueryCtx_->sessionProperties()),
+      isCommitRequired());
 }
 
 std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
-    const std::shared_ptr<const HiveConfig>& hiveConfig,
+    uint32_t maxNumBuckets,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   const bool generateFileName = targetFileName.empty();
@@ -777,9 +762,7 @@ std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
     VELOX_CHECK(generateFileName);
     // TODO: add hive.file_renaming_enabled support.
     targetFileName = computeBucketedFileName(
-        connectorQueryCtx.queryId(),
-        hiveConfig->maxBucketCount(connectorQueryCtx.sessionProperties()),
-        bucketId.value());
+        connectorQueryCtx.queryId(), maxNumBuckets, bucketId.value());
     // queryId may contain unsafe characters.
     sanitizeFileName(targetFileName);
   } else if (generateFileName) {
@@ -893,7 +876,8 @@ folly::dynamic HiveInsertTableHandle::serialize() const {
 
   obj["inputColumns"] = arr;
   obj["locationHandle"] = locationHandle_->serialize();
-  obj["tableStorageFormat"] = dwio::common::toString(storageFormat_);
+  obj["tableStorageFormat"] =
+      dwio::common::FileFormatName::toName(storageFormat_);
 
   if (bucketProperty_) {
     obj["bucketProperty"] = bucketProperty_->serialize();
@@ -977,7 +961,8 @@ void HiveInsertTableHandle::registerSerDe() {
 
 std::string HiveInsertTableHandle::toString() const {
   std::ostringstream out;
-  out << "HiveInsertTableHandle [" << dwio::common::toString(storageFormat_);
+  out << "HiveInsertTableHandle ["
+      << dwio::common::FileFormatName::toName(storageFormat_);
   if (compressionKind_.has_value()) {
     out << " " << common::compressionKindToString(compressionKind_.value());
   } else {

@@ -342,8 +342,8 @@ class AsyncDataCacheEntry {
   // The data being cached (non-contiguous page runs).
   memory::Allocation nonContiguousData_;
 
-  // Contiguous bytes allocated via allocateBytes (jemalloc). Populated when
-  // the entry is created with contiguous=true and size >= kTinyDataSize.
+  // Contiguous bytes allocated via allocateBytes. Populated when the entry is
+  // created with contiguous=true and size >= kTinyDataSize.
   void* contiguousData_{nullptr};
 
   // Contains the cached data if this is much smaller than a MemoryAllocator

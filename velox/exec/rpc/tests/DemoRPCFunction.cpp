@@ -66,6 +66,22 @@ DemoAsyncRPCFunction::dispatchPerRow(
   return results;
 }
 
+AsyncRPCFunction::CongestionSignal DemoAsyncRPCFunction::evaluateCongestion(
+    const std::vector<RPCResponse>& responses) const {
+  // Test hook: a non-error response carrying the "OVERLOAD" sentinel simulates
+  // backend congestion so the operator's shrink path is exercised.
+  for (const auto& response : responses) {
+    if (!response.hasError() &&
+        response.result.find("OVERLOAD") != std::string::npos) {
+      return CongestionSignal::kError;
+    }
+  }
+  // Healthy completions feed RTT to the gradient window (the kSuccess path);
+  // an empty/all-null drain has nothing to learn from.
+  return responses.empty() ? CongestionSignal::kNone
+                           : CongestionSignal::kSuccess;
+}
+
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 DemoAsyncRPCFunction::signatures() {
   // 1-argument form: demo_rpc(prompt)

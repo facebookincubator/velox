@@ -717,7 +717,7 @@ void copyIntoRow(
       copyImpl(
           options, source.childAt(i), ranges, targetChild, targetChildMutable);
     }
-    targetRow->updateContainsLazyNotLoaded();
+    targetRow->invalidateContainsLazyNotLoaded();
   } else {
     BufferPtr nulls;
     if (target->rawNulls() || sourceNulls) {
@@ -944,6 +944,10 @@ void copyIntoFlatMapMutable(
       if (targetInMapsBuffer == nullptr) {
         targetInMapsBuffer =
             AlignedBuffer::allocate<bool>(size, options.pool, false);
+      }
+      if (targetInMapsBuffer->isView()) {
+        targetInMapsBuffer =
+            AlignedBuffer::copy(options.pool, targetInMapsBuffer);
       }
       auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
 

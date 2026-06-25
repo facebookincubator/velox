@@ -101,9 +101,10 @@ bool hasCoercion(const std::vector<Coercion>& coercions) {
 TypePtr resolveVectorFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   if (auto result = resolveVectorFunctionWithMetadataWithCoercions(
-          functionName, argTypes, coercions)) {
+          functionName, argTypes, coercions, coercer)) {
     return result->first;
   }
 
@@ -119,7 +120,8 @@ resolveVectorFunctionWithMetadata(
       [&](const auto& /*name*/, const auto& entry)
           -> std::optional<std::pair<TypePtr, VectorFunctionMetadata>> {
         for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, argTypes);
+          exec::SignatureBinder binder(
+              *signature, argTypes, TypeCoercer::defaults());
           if (binder.tryBind()) {
             return {{binder.tryResolveReturnType(), entry.metadata}};
           }
@@ -132,7 +134,8 @@ std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadataWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions) {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
   coercions.clear();
 
   return applyToVectorFunctionEntry<std::pair<TypePtr, VectorFunctionMetadata>>(
@@ -141,10 +144,11 @@ resolveVectorFunctionWithMetadataWithCoercions(
           -> std::optional<std::pair<TypePtr, VectorFunctionMetadata>> {
         std::vector<std::pair<std::vector<Coercion>, TypePtr>> candidates;
         for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, argTypes);
+          exec::SignatureBinder binder(*signature, argTypes, coercer);
           std::vector<Coercion> requiredCoercions;
           if (binder.tryBindWithCoercions(requiredCoercions)) {
             auto type = binder.tryResolveReturnType();
+            VELOX_CHECK_NOT_NULL(type);
             if (!hasCoercion(requiredCoercions)) {
               coercions.resize(argTypes.size(), nullptr);
               return {{type, entry.metadata}};
@@ -154,7 +158,15 @@ resolveVectorFunctionWithMetadataWithCoercions(
           }
         }
 
-        if (auto index = Coercion::pickLowestCost(candidates)) {
+        // All signatures share one metadata, so null behavior is uniform.
+        auto index = Coercion::pickLowestCost(
+            candidates, argTypes, [&](size_t candidateIndex) {
+              return Coercion::CandidateMetadata{
+                  .returnType = candidates[candidateIndex].second,
+                  .nullOnNull = entry.metadata.defaultNullBehavior};
+            });
+
+        if (index) {
           const auto& requiredCoercions = candidates[index.value()].first;
           coercions.reserve(requiredCoercions.size());
           for (const auto& coercion : requiredCoercions) {
@@ -200,7 +212,8 @@ getVectorFunctionWithMetadata(
               std::shared_ptr<VectorFunction>,
               VectorFunctionMetadata>> {
         for (const auto& signature : entry.signatures) {
-          exec::SignatureBinder binder(*signature, inputTypes);
+          exec::SignatureBinder binder(
+              *signature, inputTypes, TypeCoercer::defaults());
           if (binder.tryBind()) {
             auto inputArgs = toVectorFunctionArgs(inputTypes, constantInputs);
 

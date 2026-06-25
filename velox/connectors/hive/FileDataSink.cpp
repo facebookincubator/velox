@@ -36,6 +36,18 @@ std::shared_ptr<memory::MemoryPool> createSortPool(
     const std::shared_ptr<memory::MemoryPool>& writerPool) {
   return writerPool->addLeafChild(fmt::format("{}.sort", writerPool->name()));
 }
+
+void mergeWriterStats(
+    folly::F14FastMap<std::string, RuntimeMetric>& mergedStats,
+    const folly::F14FastMap<std::string, RuntimeMetric>& stats) {
+  for (const auto& [name, metric] : stats) {
+    auto [it, inserted] = mergedStats.emplace(name, metric);
+    if (!inserted) {
+      VELOX_CHECK_EQ(it->second.unit, metric.unit);
+      it->second.merge(metric);
+    }
+  }
+}
 } // namespace
 
 const WriterId& WriterId::unpartitionedId() {
@@ -244,6 +256,8 @@ void FileDataSink::rotateWriter(size_t index) {
   // Finalize the current file state.
   finalizeWriterFile(index);
 
+  mergeWriterStats(closedWriterStats_, writers_[index]->runtimeStats());
+
   // Release old writer's memory pools. The new writer will be created lazily
   // on the next write to avoid creating empty files.
   writers_[index].reset();
@@ -279,6 +293,15 @@ DataSink::Stats FileDataSink::stats() const {
 
   if (state_ != State::kClosed) {
     return stats;
+  }
+
+  stats.writerRuntimeStats = closedWriterStats_;
+  for (const auto& writer : writers_) {
+    // Null entries are rotated writers whose stats are already in
+    // closedWriterStats_.
+    if (writer != nullptr) {
+      mergeWriterStats(stats.writerRuntimeStats, writer->runtimeStats());
+    }
   }
 
   // Count total files written, including rotated files.
@@ -453,7 +476,9 @@ uint32_t FileDataSink::appendWriter(const WriterId& id) {
   setMemoryReclaimers(writerInfo_.back().get(), ioStats_.back().get());
   writers_.emplace_back(createWriterForIndex(writerInfo_.size() - 1));
   addThreadLocalRuntimeStat(
-      fmt::format("{}WriterCount", dwio::common::toString(storageFormat_)),
+      fmt::format(
+          "{}WriterCount",
+          dwio::common::FileFormatName::toName(storageFormat_)),
       RuntimeCounter(1));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);

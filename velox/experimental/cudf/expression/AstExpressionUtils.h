@@ -23,7 +23,6 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 // TODO(kn): in another PR
 // #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/expression/DecimalTypeCheck.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/FieldReference.h"
@@ -50,7 +49,12 @@ cudf::ast::literal createLiteral(
   variant value =
       VELOX_DYNAMIC_TYPE_DISPATCH(getVariant, kind, vector, atIndex);
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      makeScalarAndLiteral, kind, type, value, scalars);
+      makeScalarAndLiteral,
+      kind,
+      type,
+      value,
+      vector->isNullAt(atIndex),
+      scalars);
 }
 
 // Helper function to extract literals from array elements based on type
@@ -282,14 +286,12 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::FieldReference;
   using Op = cudf::ast::ast_operator;
 
-  // For now, AST does not support expressions with DECIMAL output, or immediate
-  // DECIMAL inputs.
-  // @TODO implement DECIMAL in AST and JIT
-  if (containsDecimalType(expr, false)) {
+  // Reject expressions with types not yet supported in AST/JIT (currently
+  // TIMESTAMP and DECIMAL).
+  if (containsAstUnsupportedType(expr)) {
     if (cudf_velox::CudfConfig::getInstance().debugEnabled) {
-      LOG(WARNING)
-          << "Expression contains DECIMAL type, which is not supported by AST/JIT: "
-          << expr->toString();
+      LOG(WARNING) << "Expression contains a type not supported by AST/JIT: "
+                   << expr->toString();
     }
     return false;
   }
@@ -298,7 +300,9 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
       stripPrefix(expr->name(), CudfConfig::getInstance().functionNamePrefix);
   const auto len = expr->inputs().size();
 
-  // Literals and field references are always supported
+  // Literals and top-level field references are always supported in pure
+  // AST/JIT. Nested field references are delegated to FunctionExpression so
+  // computed ROW values keep Velox's dereference semantics.
   auto isSupportedLiteral = [&](const TypePtr& type) {
     try {
       auto cudfType = veloxToCudfDataType(type);
@@ -314,12 +318,21 @@ bool isAstExprSupported(const std::shared_ptr<velox::exec::Expr>& expr) {
     return isSupportedLiteral(type);
   }
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
-    const auto fieldName =
-        fieldExpr->inputs().empty() ? name : fieldExpr->inputs()[0]->name();
-    if (fieldExpr->field() == fieldName) {
-      return true;
+    if (fieldExpr->inputs().empty()) {
+      if (fieldExpr->field() == name) {
+        return true;
+      }
+      LOG(WARNING) << "Field " << name << " not found in expression "
+                   << expr->toString();
+      return false;
     }
-    LOG(WARNING) << "Field " << name << "not found, in expression "
+
+    // Nested FieldReferences can reuse the same field name as their parent
+    // (e.g. .c1.c1), which makes the pure AST/JIT path misclassify them as a
+    // top-level column reference. Keep only true top-level fields here and let
+    // FunctionExpression handle nested ROW dereference semantics.
+    LOG(WARNING) << "Nested FieldReference is not supported by AST/JIT and "
+                 << "will fall back to FunctionExpression: "
                  << expr->toString();
     return false;
   }
@@ -582,11 +595,17 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     auto value = c->value();
     VELOX_CHECK(value->isConstantEncoding());
 
+    // Materialize NULL literals via make_column_from_scalar so the output
+    // column preserves nullness for downstream operators like count(column).
+    //
+    // Also keep the standalone literal workaround: cudf::compute_column can
+    // produce spurious nulls for root literal expressions. See comment below.
+    //
     // TODO: There is a scalar stream synchronization bug that causes
     // cudf::compute_column to produce spurious nulls for standalone
     // literal expressions.  Work around it by materialising via
     // make_column_from_scalar instead.
-    if (expr == rootExpr) {
+    if (value->isNullAt(0) || expr == rootExpr) {
       // convert to cudf scalar and store it
       createLiteral(value, scalars);
       // The scalar index is scalars.size() - 1 since we just added it

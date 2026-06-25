@@ -68,6 +68,8 @@ class SparkCastHooks : public exec::CastHooks {
     return timestampToStringOptions_;
   }
 
+  TimestampToStringOptions timestampUtcToStringOptions() const override;
+
   bool truncate() const override {
     return allowOverflow_;
   }
@@ -77,6 +79,15 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   exec::PolicyType getPolicy() const override;
+
+  // Spark supports TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return true;
+  }
+
+  void castDateTimestampToGMT(
+      Timestamp& timestamp,
+      const tz::TimeZone& timeZone) const override;
 
   bool isScientific() const override {
     return true;

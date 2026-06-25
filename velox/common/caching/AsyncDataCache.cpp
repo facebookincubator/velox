@@ -157,11 +157,12 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
       cache->incrementCachedPages(memory::AllocationTraits::numPages(size_));
       return;
     }
+    const auto failedSize = size_;
     release();
     VELOX_CACHE_ERROR(
         fmt::format(
             "Failed to allocate {} for contiguous cache: {}",
-            succinctBytes(size_),
+            succinctBytes(failedSize),
             cache->allocator()->getAndClearFailureMessage()));
   }
 
@@ -171,11 +172,12 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
     cache->incrementCachedPages(nonContiguousData().numPages());
     return;
   }
+  const auto failedPages = sizePages;
   release();
   VELOX_CACHE_ERROR(
       fmt::format(
           "Failed to allocate {} pages for cache: {}",
-          sizePages,
+          failedPages,
           cache->allocator()->getAndClearFailureMessage()));
 }
 
@@ -486,9 +488,9 @@ void CacheShard::acquireEvictedData(
     const uint64_t bytes = entry->size_;
     if (bytesToAcquire > 0) {
       bytesToAcquire = bytes > bytesToAcquire ? 0 : bytesToAcquire - bytes;
-      acquired.contiguous.emplace_back(entry->contiguousData_, bytes);
+      acquired.byteAllocations.emplace_back(entry->contiguousData_, bytes);
     } else {
-      toFree.contiguous.emplace_back(entry->contiguousData_, bytes);
+      toFree.byteAllocations.emplace_back(entry->contiguousData_, bytes);
     }
     entry->contiguousData_ = nullptr;
     largeEvicted += memory::AllocationTraits::pageBytes(
@@ -498,9 +500,9 @@ void CacheShard::acquireEvictedData(
     const auto bytes = entry->nonContiguousData_.byteSize();
     if (bytesToAcquire > 0) {
       bytesToAcquire = bytes > bytesToAcquire ? 0 : bytesToAcquire - bytes;
-      acquired.nonContiguous.appendMove(entry->nonContiguousData());
+      acquired.nonContiguousAllocs.appendMove(entry->nonContiguousData());
     } else {
-      toFree.nonContiguous.appendMove(entry->nonContiguousData());
+      toFree.nonContiguousAllocs.appendMove(entry->nonContiguousData());
     }
     VELOX_DCHECK(entry->nonContiguousData().empty());
     largeEvicted += bytes;
@@ -746,16 +748,16 @@ bool CacheShard::removeFileEntries(
         continue;
       }
 
-      numAgedOut_++;
+      ++numAgedOut_;
       ++numRemoved;
       if (cacheEntry->contiguousData_ != nullptr) {
         pagesRemoved += memory::AllocationTraits::numPages(cacheEntry->size_);
-        toFree.contiguous.emplace_back(
+        toFree.byteAllocations.emplace_back(
             cacheEntry->contiguousData_, cacheEntry->size_);
         cacheEntry->contiguousData_ = nullptr;
       } else {
         pagesRemoved += cacheEntry->nonContiguousData().numPages();
-        toFree.nonContiguous.appendMove(cacheEntry->nonContiguousData());
+        toFree.nonContiguousAllocs.appendMove(cacheEntry->nonContiguousData());
       }
       removeEntryLocked(cacheEntry.get());
       emptySlots_.push_back(entryIndex);
@@ -990,7 +992,7 @@ bool AsyncDataCache::makeSpace(
     }
   }
   memory::setCacheFailureMessage(
-      fmt::format("Failed to evict from cache state: {}", toString(false)));
+      fmt::format("Failed to evict from cache state: {}", toString(true)));
   return false;
 }
 
@@ -1004,7 +1006,7 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
   uint64_t evictedBytes{0};
   uint64_t shrinkTimeUs{0};
   {
-    MicrosecondTimer timer(&shrinkTimeUs);
+    MicrosecondWallTimer timer(&shrinkTimeUs);
     for (int shard = 0; shard < shards_.size(); ++shard) {
       AcquiredMemory acquired;
       evictedBytes += shards_[shardCounter_++ & shardMask_]->evict(

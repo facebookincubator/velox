@@ -57,6 +57,19 @@ class IcebergSplitReader : public FileSplitReader {
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
  private:
+  // Configures the base reader options. For DWRF/ORC Iceberg reads, selects
+  // ColumnMappingMode::kFieldId and populates ReaderOptions::fieldIds() from
+  // the Iceberg column handles so the reader resolves columns by field id,
+  // enabling schema evolution (rename, reorder, delete, drop + re-add with same
+  // name).
+  void configureBaseReaderOptions() override;
+
+  // Builds the requested-schema field-id trees, one per top-level column,
+  // aligned to tableHandle_->dataColumns(). Data columns without an Iceberg
+  // handle (e.g. unprojected) get a negative sentinel id that matches no
+  // physical field. Returns empty when no Iceberg handles are available.
+  std::vector<dwio::common::ParquetFieldId> buildFieldIds() const;
+
   /// Adapts the data file schema to match the table schema expected by the
   /// query.
   ///
@@ -96,6 +109,22 @@ class IcebergSplitReader : public FileSplitReader {
   ///       Column was added to the table schema after this data file was
   ///       written. Set as NULL constant since the old file doesn't contain
   ///       this column.
+  ///    c) Row lineage (_last_updated_sequence_number):
+  ///       Per the Iceberg V3 spec, when first_row_id is absent, readers must
+  ///       produce null for both _row_id and _last_updated_sequence_number.
+  ///       This applies whether or not the columns are physically present in
+  ///       the file. When first_row_id is present and the column is absent
+  ///       from the file, inherit the data sequence number from the manifest
+  ///       entry ($data_sequence_number info column). When the column is
+  ///       physically present and first_row_id is present, use the stored
+  ///       value (null slots are filled from $data_sequence_number in next()).
+  ///    d) Row lineage (_row_id):
+  ///       Per the spec, when first_row_id is absent, produce null regardless
+  ///       of physical storage. When first_row_id is present and the column
+  ///       is absent from the file, null is installed here and next() replaces
+  ///       it with first_row_id + file position. When the column is physically
+  ///       present, null slots are filled from first_row_id + file position in
+  ///       next(); non-null slots are preserved.
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
@@ -138,9 +167,37 @@ class IcebergSplitReader : public FileSplitReader {
   uint64_t baseReadOffset_;
   /// File position for the first row in the split.
   uint64_t splitOffset_;
+  // Active readers for positional delete files associated with this split.
   std::list<std::unique_ptr<PositionalDeleteFileReader>>
       positionalDeleteFileReaders_;
+  // Bitmap of deleted rows in the current batch; set bits mark deleted rows.
   BufferPtr deleteBitmap_;
+  // Output column index of _last_updated_sequence_number, if projected.
+  std::optional<column_index_t> lastUpdatedSeqNumOutputIndex_;
+  // Data sequence number from the split's manifest entry, used to populate
+  // _last_updated_sequence_number for rows whose stored value is null.
+  std::optional<int64_t> dataSequenceNumber_;
+  // First row ID from the split's $first_row_id info column, used to compute
+  // _row_id as first_row_id + file position for rows whose stored value is
+  // null.
+  std::optional<int64_t> firstRowId_;
+  // Output column index of _row_id, if projected.
+  std::optional<column_index_t> rowIdOutputIndex_;
+  // Output column index of $target_table_row_id, if projected. Populated in
+  // prepareSplit() when the reader output includes the synthetic MERGE INTO
+  // row-id ROW column. next() consumes this index to overwrite the placeholder
+  // child set by adaptColumns() with a freshly synthesized 4-field RowVector.
+  std::optional<column_index_t> targetTableRowIdOutputIndex_;
+  // Constant values needed to synthesize the spec_id and partition_data
+  // fields of $target_table_row_id. Sourced from the split's infoColumns map
+  // ($spec_id and partition_data). file_path comes from the split's filePath
+  // directly. row_position is computed in next() per row.
+  std::optional<int32_t> targetTableSpecId_;
+  std::optional<std::string> targetTablePartitionData_;
+  // Whether an implicit row-number column is needed for _row_id computation
+  // (set when filters, random-skip, or positional deletes make output
+  // positions non-contiguous).
+  bool useRowNumberColumn_{false};
 
   /// Readers for Iceberg V3 deletion vectors (Puffin-encoded roaring bitmaps).
   std::list<std::unique_ptr<DeletionVectorReader>> deletionVectorReaders_;

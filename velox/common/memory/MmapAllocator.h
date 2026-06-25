@@ -316,8 +316,7 @@ class MmapAllocator : public MemoryAllocator {
   // track sizes and enforce caps etc. If 'alignment' is not kMinAlignment,
   // then 'bytes' must be a multiple of 'alignment'.
   //
-  // NOTE: 'alignment' must be power of two and in range of [kMinAlignment,
-  // kMaxAlignment].
+  // NOTE: 'alignment' must be power of two and >= kMinAlignment.
   void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
   // Ensures that there are at least 'newMappedNeeded' pages that are

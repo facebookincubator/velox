@@ -17,6 +17,7 @@
 
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -27,7 +28,7 @@ struct SparkPartitionIdFunction {
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config) {
-    partitionId_ = config.sparkPartitionId();
+    partitionId_ = SparkQueryConfig{config}.partitionId();
   }
 
   FOLLY_ALWAYS_INLINE void call(int32_t& result) {

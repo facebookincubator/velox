@@ -18,11 +18,7 @@
 
 #include "velox/dwio/parquet/common/BloomFilter.h"
 #include "velox/dwio/parquet/common/XxHasher.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
-#include "velox/dwio/parquet/thrift/ThriftTransport.h"
-
-#include <thrift/protocol/TCompactProtocol.h>
-#include <thrift/transport/TBufferTransports.h>
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 #include <cstdint>
 #include <cstring>
@@ -73,24 +69,26 @@ void BlockSplitBloomFilter::init(const uint8_t* bitset, uint32_t numBytes) {
 }
 
 static void validateBloomFilterHeader(const thrift::BloomFilterHeader& header) {
-  if (!header.algorithm.__isset.BLOCK) {
+  if (header.algorithm()->getType() !=
+      thrift::BloomFilterAlgorithm::Type::BLOCK) {
     VELOX_FAIL("Unsupported Bloom filter algorithm");
   }
 
-  if (!header.hash.__isset.XXHASH) {
+  if (header.hash()->getType() != thrift::BloomFilterHash::Type::XXHASH) {
     VELOX_FAIL("Unsupported Bloom filter hash");
   }
 
-  if (!header.compression.__isset.UNCOMPRESSED) {
+  if (header.compression()->getType() !=
+      thrift::BloomFilterCompression::Type::UNCOMPRESSED) {
     VELOX_FAIL("Unsupported Bloom filter compression");
   }
 
-  if (header.numBytes <= 0 ||
-      static_cast<uint32_t>(header.numBytes) >
+  if (*header.numBytes() <= 0 ||
+      static_cast<uint32_t>(*header.numBytes()) >
           BloomFilter::kMaximumBloomFilterBytes) {
     VELOX_FAIL(
         "Bloom filter size is incorrect: {}. Must be in range (0, {}].",
-        header.numBytes,
+        *header.numBytes(),
         BloomFilter::kMaximumBloomFilterBytes);
   }
 }
@@ -98,47 +96,32 @@ static void validateBloomFilterHeader(const thrift::BloomFilterHeader& header) {
 BlockSplitBloomFilter BlockSplitBloomFilter::deserialize(
     dwio::common::SeekableInputStream* input,
     memory::MemoryPool& pool) {
-  const void* headerBuffer;
-  int32_t size;
-  input->Next(&headerBuffer, &size);
-  const char* bufferStart = reinterpret_cast<const char*>(headerBuffer);
-  const char* bufferEnd = bufferStart + size;
-
-  std::shared_ptr<thrift::ThriftTransport> transport =
-      std::make_shared<thrift::ThriftStreamingTransport>(
-          input, bufferStart, bufferEnd);
-  apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport> protocol(
-      transport);
   thrift::BloomFilterHeader header;
-  uint32_t headerSize = header.read(&protocol);
+  auto result = thrift::deserialize(&header, input, nullptr, 0);
   validateBloomFilterHeader(header);
 
-  const int32_t bloomFilterSize = header.numBytes;
-  if (bloomFilterSize + headerSize <= size) {
+  auto data = result.remainedData;
+  const auto dataSize = result.remainedDataBytes;
+  const int32_t bloomFilterSize = *header.numBytes();
+  if (bloomFilterSize <= dataSize) {
     // The bloom filter data is entirely contained in the buffer we just read
     // => just return it.
     BlockSplitBloomFilter bloomFilter(&pool);
-    bloomFilter.init(
-        reinterpret_cast<const uint8_t*>(headerBuffer) + headerSize,
-        bloomFilterSize);
+    bloomFilter.init(data, bloomFilterSize);
     return bloomFilter;
   }
   // We have read a part of the bloom filter already, copy it to the target
   // buffer and read the remaining part from the InputStream.
   auto buffer = AlignedBuffer::allocate<char>(bloomFilterSize, &pool);
 
-  const auto bloomFilterSizeInHeaderBuffer = size - headerSize;
-  if (bloomFilterSizeInHeaderBuffer > 0) {
-    std::memcpy(
-        buffer->asMutable<char>(),
-        reinterpret_cast<const uint8_t*>(headerBuffer) + headerSize,
-        bloomFilterSizeInHeaderBuffer);
+  const auto bloomFilterSizeInData = dataSize;
+  if (bloomFilterSizeInData > 0) {
+    std::memcpy(buffer->asMutable<char>(), data, bloomFilterSizeInData);
   }
-  const auto requiredReadSize = bloomFilterSize - bloomFilterSizeInHeaderBuffer;
+  const auto requiredReadSize = bloomFilterSize - bloomFilterSizeInData;
 
   input->readFully(
-      buffer->asMutable<char>() + bloomFilterSizeInHeaderBuffer,
-      requiredReadSize);
+      buffer->asMutable<char>() + bloomFilterSizeInData, requiredReadSize);
   VELOX_CHECK_EQ(
       buffer->size(),
       bloomFilterSize,
@@ -159,36 +142,28 @@ void BlockSplitBloomFilter::writeTo(
   if (algorithm_ != BloomFilter::Algorithm::BLOCK) {
     VELOX_FAIL("BloomFilter does not support Algorithm other than BLOCK");
   }
-  header.algorithm.__set_BLOCK(thrift::SplitBlockAlgorithm());
+  header.algorithm()->set_BLOCK(thrift::SplitBlockAlgorithm());
   if (hashStrategy_ != HashStrategy::XXHASH) {
     VELOX_FAIL("BloomFilter does not support Hash other than XXHASH");
   }
-  header.hash.__set_XXHASH(thrift::XxHash());
+  header.hash()->set_XXHASH(thrift::XxHash());
   if (compressionStrategy_ != CompressionStrategy::UNCOMPRESSED) {
     VELOX_FAIL(
         "BloomFilter does not support Compression other than UNCOMPRESSED");
   }
-  header.compression.__set_UNCOMPRESSED(thrift::Uncompressed());
-  header.__set_numBytes(numBytes_);
+  header.compression()->set_UNCOMPRESSED(thrift::Uncompressed());
+  header.numBytes() = numBytes_;
 
-  std::shared_ptr<apache::thrift::transport::TMemoryBuffer> memBuffer =
-      std::make_shared<apache::thrift::transport::TMemoryBuffer>();
-  apache::thrift::protocol::TCompactProtocolFactoryT<
-      apache::thrift::transport::TMemoryBuffer>
-      factory;
-  std::shared_ptr<apache::thrift::protocol::TProtocol> protocol =
-      factory.getProtocol(memBuffer);
+  folly::IOBufQueue buffer;
   try {
-    memBuffer->resetBuffer();
-    header.write(protocol.get());
+    thrift::serialize(header, &buffer);
   } catch (std::exception& e) {
     VELOX_FAIL("Couldn't serialize thrift: {}", e.what());
   }
-  uint8_t* outBuffer;
-  uint32_t outLength;
-  memBuffer->getBuffer(&outBuffer, &outLength);
+  std::string output;
+  buffer.appendToString(output);
   // write header
-  sink->write(reinterpret_cast<const char*>(outBuffer), outLength);
+  sink->write(output.data(), output.size());
   // write bitset
   sink->write(data_->as<char>(), numBytes_);
 }

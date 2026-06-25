@@ -233,6 +233,8 @@ class TaskCursorBase : public TaskCursor {
         params.executionStrategy,
         params.numSplitGroups,
         params.groupedExecutionLeafNodeIds};
+    planFragment_.taskUniqueId = params.taskUniqueId;
+    beforeTaskStart_ = params.beforeTaskStart;
 
     if (!params.spillDirectory.empty()) {
       taskSpillDirectory_ = params.spillDirectory + "/" + taskId_;
@@ -264,6 +266,7 @@ class TaskCursorBase : public TaskCursor {
   core::PlanFragment planFragment_;
   std::string taskSpillDirectory_;
   std::function<std::string()> taskSpillDirectoryCb_;
+  std::function<void(Task&)> beforeTaskStart_;
 
  private:
   std::shared_ptr<folly::Executor> executor_;
@@ -336,6 +339,10 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           }
           queue->close();
         });
+
+    if (beforeTaskStart_) {
+      beforeTaskStart_(*task_);
+    }
   }
 
   ~MultiThreadedTaskCursor() override {
@@ -454,7 +461,12 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 class SingleThreadedTaskCursor : public TaskCursorBase {
  public:
   explicit SingleThreadedTaskCursor(const CursorParameters& params)
-      : TaskCursorBase(params, nullptr) {
+      : TaskCursorBase(params, nullptr),
+        outputPool_{
+            (params.outputPool != nullptr || !params.copyResult)
+                ? params.outputPool
+                : memory::memoryManager()->addLeafPool()},
+        copyResult_{params.copyResult} {
     VELOX_CHECK(params.serialExecution);
     VELOX_CHECK(
         !queryCtx_->isExecutorSupplied(),
@@ -479,6 +491,10 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     VELOX_CHECK(
         task_->supportSerialExecutionMode(),
         "Plan doesn't support serial execution mode");
+
+    if (beforeTaskStart_) {
+      beforeTaskStart_(*task_);
+    }
   }
 
   ~SingleThreadedTaskCursor() override {
@@ -509,7 +525,13 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
       ContinueFuture future = ContinueFuture::makeEmpty();
       RowVectorPtr next = task_->next(&future);
       if (next != nullptr) {
-        current_ = next;
+        if (outputPool_ && copyResult_) {
+          VectorPtr copy = encodedVectorCopy(
+              {.pool = outputPool_.get(), .reuseSource = false}, next);
+          current_ = std::static_pointer_cast<RowVector>(std::move(copy));
+        } else {
+          current_ = next;
+        }
         return true;
       }
       // When next is returned from task as a null pointer.
@@ -549,6 +571,8 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 
  private:
   std::shared_ptr<exec::Task> task_;
+  std::shared_ptr<memory::MemoryPool> outputPool_;
+  bool copyResult_{false};
   bool noMoreSplits_{false};
   RowVectorPtr current_;
   std::exception_ptr error_;

@@ -16,7 +16,10 @@
 
 #include <velox/type/Type.h>
 
+#include <folly/dynamic.h>
+
 #include "velox/common/EnumDefine.h"
+#include "velox/type/TypeSerde.h"
 
 #include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
@@ -258,6 +261,80 @@ TypePtr Type::create(const folly::dynamic& obj) {
   }
 }
 
+template <TypeKind KIND>
+folly::dynamic ScalarType<KIND>::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<KIND>::name;
+  return obj;
+}
+
+template folly::dynamic ScalarType<TypeKind::BOOLEAN>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::TINYINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::SMALLINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::INTEGER>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::BIGINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::REAL>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::DOUBLE>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::VARCHAR>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::VARBINARY>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::TIMESTAMP>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::HUGEINT>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::UNKNOWN>::serialize() const;
+template folly::dynamic ScalarType<TypeKind::OPAQUE>::serialize() const;
+
+template <TypeKind KIND>
+folly::dynamic DecimalType<KIND>::serialize() const {
+  auto obj = ScalarType<KIND>::serialize();
+  obj["type"] = name();
+  obj["precision"] = precision();
+  obj["scale"] = scale();
+  return obj;
+}
+
+template folly::dynamic DecimalType<TypeKind::BIGINT>::serialize() const;
+template folly::dynamic DecimalType<TypeKind::HUGEINT>::serialize() const;
+
+folly::dynamic UnknownType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "Type";
+  obj["type"] = TypeTraits<TypeKind::UNKNOWN>::name;
+  return obj;
+}
+
+folly::dynamic IntervalDayTimeType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IntervalDayTimeType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr IntervalDayTimeType::deserialize(const folly::dynamic& /*obj*/) {
+  return IntervalDayTimeType::get();
+}
+
+folly::dynamic IntervalYearMonthType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "IntervalYearMonthType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr IntervalYearMonthType::deserialize(const folly::dynamic& /*obj*/) {
+  return IntervalYearMonthType::get();
+}
+
+folly::dynamic DateType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "DateType";
+  obj["type"] = name();
+  return obj;
+}
+
+TypePtr DateType::deserialize(const folly::dynamic& /*obj*/) {
+  return DateType::get();
+}
+
 // static
 void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
@@ -269,6 +346,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -1027,6 +1105,10 @@ VELOX_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 
 #undef VELOX_DEFINE_SCALAR_ACCESSOR
 
+TypePtr TIMESTAMP_UTC() {
+  return TimestampUtcType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1364,6 +1446,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"VARCHAR", VARCHAR()},
       {"VARBINARY", VARBINARY()},
       {"TIMESTAMP", TIMESTAMP()},
+      {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
       {"DATE", DATE()},
@@ -1547,6 +1630,13 @@ const auto& typeParameterKindNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
+folly::dynamic TimestampUtcType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "TimestampUtcType";
+  obj["type"] = name();
+  return obj;
+}
 
 template <TimePrecision kPrecision, bool kLocalTime>
 folly::dynamic TimeType<kPrecision, kLocalTime>::serialize() const {

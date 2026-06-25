@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <utility>
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/common/time/Timer.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/UnitLoader.h"
@@ -548,15 +549,18 @@ class Statistics {
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
-/// Runs 'func' and records decompression stats if 'counter' is non-null.
+/// Runs 'func' and records decompression CPU time if 'counter' is non-null.
 template <typename F>
 auto withDecompressStats(io::IoCounter* counter, F&& func)
     -> std::enable_if_t<!std::is_void_v<decltype(func())>, decltype(func())> {
   if (counter) {
-    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
-      counter->increment(timing.cpuNanos);
-    });
-    return func();
+    uint64_t cpuNanos = 0;
+    auto result = [&] {
+      NanosecondCPUTimer timer{&cpuNanos};
+      return func();
+    }();
+    counter->increment(cpuNanos);
+    return result;
   }
   return func();
 }
@@ -565,10 +569,12 @@ template <typename F>
 auto withDecompressStats(io::IoCounter* counter, F&& func)
     -> std::enable_if_t<std::is_void_v<decltype(func())>> {
   if (counter) {
-    DeltaCpuWallTimer timer([counter](const CpuWallTiming& timing) {
-      counter->increment(timing.cpuNanos);
-    });
-    func();
+    uint64_t cpuNanos = 0;
+    {
+      NanosecondCPUTimer timer{&cpuNanos};
+      func();
+    }
+    counter->increment(cpuNanos);
     return;
   }
   func();
@@ -577,45 +583,47 @@ auto withDecompressStats(io::IoCounter* counter, F&& func)
 /// Per-column statistics counters. Wraps multiple IoCounter instances for
 /// different types of measurements (decompression, encoding, etc.).
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
-struct ColumnMetrics {
-  explicit ColumnMetrics(TypeKind type = TypeKind::INVALID) : typeKind(type) {}
+struct DecodingStats {
+  explicit DecodingStats(TypeKind type = TypeKind::INVALID) : typeKind(type) {}
 
   TypeKind typeKind;
   io::IoCounter decompressCPUTimeNanos;
   io::IoCounter decodeCPUTimeNanos;
 
-  /// Merges stats from another ColumnMetrics instance.
-  void merge(const ColumnMetrics& other) {
+  /// Merges stats from another DecodingStats instance.
+  void merge(const DecodingStats& other) {
     decompressCPUTimeNanos.merge(other.decompressCPUTimeNanos);
     decodeCPUTimeNanos.merge(other.decodeCPUTimeNanos);
   }
 };
 
-/// Thread-safe collection of per-column metrics keyed by nodeId.
+/// Thread-safe collection of per-column decoding statistics keyed by nodeId.
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
-struct ColumnMetricsSet {
-  /// Gets or creates a ColumnMetrics for a column. Sets typeKind when creating.
-  ColumnMetrics* getOrCreate(
+struct DecodingStatsSet {
+  /// Gets or creates a DecodingStats for a column. Sets typeKind when
+  /// creating.
+  DecodingStats* getOrCreate(
       uint32_t nodeId,
       TypeKind typeKind = TypeKind::INVALID) {
     auto locked = map_.wlock();
     auto it = locked->find(nodeId);
     if (it == locked->end()) {
-      it = locked->emplace(nodeId, std::make_unique<ColumnMetrics>(typeKind))
+      it = locked->emplace(nodeId, std::make_unique<DecodingStats>(typeKind))
                .first;
     }
     return it->second.get();
   }
 
-  /// Merges all column metrics from another ColumnMetricsSet instance.
-  void mergeFrom(const ColumnMetricsSet& other) {
+  /// Merges all column decoding statistics from another DecodingStatsSet
+  /// instance.
+  void mergeFrom(const DecodingStatsSet& other) {
     auto srcLocked = other.map_.rlock();
     auto dstLocked = map_.wlock();
     for (const auto& [nodeId, srcStats] : *srcLocked) {
       auto it = dstLocked->find(nodeId);
       if (it == dstLocked->end()) {
         it =
-            dstLocked->emplace(nodeId, std::make_unique<ColumnMetrics>()).first;
+            dstLocked->emplace(nodeId, std::make_unique<DecodingStats>()).first;
         it->second->typeKind = srcStats->typeKind;
       }
       it->second->merge(*srcStats);
@@ -662,7 +670,7 @@ struct ColumnMetricsSet {
 
  private:
   folly::Synchronized<
-      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnMetrics>>>
+      folly::F14FastMap<uint32_t, std::unique_ptr<DecodingStats>>>
       map_;
 };
 
@@ -674,9 +682,9 @@ struct ColumnReaderStatistics {
   // Total time spent in loading pages, in nanoseconds.
   io::IoCounter pageLoadTimeNs;
 
-  // Per-column decompression metrics. Only populated when column stats
+  // Per-column decoding statistics. Only populated when decoding stats
   // collection is enabled.
-  std::optional<ColumnMetricsSet> columnMetricsSet;
+  std::optional<DecodingStatsSet> decodingStatsSet;
 
   /// Initializes column stats collection for the given schema if enabled in
   /// options. Recursively registers metrics for all columns in the type tree.
@@ -686,19 +694,19 @@ struct ColumnReaderStatistics {
     if (!options.collectColumnCpuMetrics()) {
       return;
     }
-    columnMetricsSet.emplace();
-    registerColumnMetricsImpl(schema);
+    decodingStatsSet.emplace();
+    registerDecodingStatsImpl(schema);
   }
 
   /// Merges all stats from another ColumnReaderStatistics instance.
   void mergeFrom(const ColumnReaderStatistics& other) {
     flattenStringDictionaryValues += other.flattenStringDictionaryValues;
     pageLoadTimeNs.merge(other.pageLoadTimeNs);
-    if (other.columnMetricsSet) {
-      if (!columnMetricsSet) {
-        columnMetricsSet.emplace();
+    if (other.decodingStatsSet) {
+      if (!decodingStatsSet) {
+        decodingStatsSet.emplace();
       }
-      columnMetricsSet->mergeFrom(*other.columnMetricsSet);
+      decodingStatsSet->mergeFrom(*other.decodingStatsSet);
     }
   }
 
@@ -720,17 +728,17 @@ struct ColumnReaderStatistics {
               pageLoadTimeNs.max(),
               RuntimeCounter::Unit::kNanos));
     }
-    if (columnMetricsSet) {
-      columnMetricsSet->toRuntimeMetrics(result);
+    if (decodingStatsSet) {
+      decodingStatsSet->toRuntimeMetrics(result);
     }
   }
 
  private:
-  void registerColumnMetricsImpl(const TypeWithId& node) {
-    columnMetricsSet->getOrCreate(node.id(), node.type()->kind());
+  void registerDecodingStatsImpl(const TypeWithId& node) {
+    decodingStatsSet->getOrCreate(node.id(), node.type()->kind());
     for (uint32_t i = 0; i < node.size(); ++i) {
       if (const auto* child = node.childAt(i).get()) {
-        registerColumnMetricsImpl(*child);
+        registerDecodingStatsImpl(*child);
       }
     }
   }
@@ -754,7 +762,18 @@ struct RuntimeStatistics {
 
   int64_t footerBufferOverread{0};
 
+  int64_t footerBufferUnderread{0};
+
+  int64_t footerCacheHit{0};
+
   int64_t numStripes{0};
+
+  // Estimated bytes reported to the memory pool for the deserialized
+  // Parquet file footer, when the parquet reader's footer-memory
+  // tracking path is engaged. Lets operators compare the estimate
+  // against actual pool usage. 0 when the reader did not engage
+  // tracking (e.g. footer below threshold or non-parquet format).
+  int64_t parquetFooterEstimatedBytes{0};
 
   UnitLoaderStats unitLoaderStats;
   ColumnReaderStatistics columnReaderStats;
@@ -786,8 +805,22 @@ struct RuntimeStatistics {
           "footerBufferOverread",
           RuntimeMetric(footerBufferOverread, RuntimeCounter::Unit::kBytes));
     }
+    if (footerBufferUnderread > 0) {
+      result.emplace(
+          "footerBufferUnderread",
+          RuntimeMetric(footerBufferUnderread, RuntimeCounter::Unit::kBytes));
+    }
+    if (footerCacheHit > 0) {
+      result.emplace("footerCacheHit", RuntimeMetric(footerCacheHit));
+    }
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));
+    }
+    if (parquetFooterEstimatedBytes > 0) {
+      result.emplace(
+          "parquetFooterEstimatedBytes",
+          RuntimeMetric(
+              parquetFooterEstimatedBytes, RuntimeCounter::Unit::kBytes));
     }
     columnReaderStats.toRuntimeMetrics(result);
     return result;

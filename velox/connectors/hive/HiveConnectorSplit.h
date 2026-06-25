@@ -196,8 +196,13 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& batchSizeHint(int32_t hint) {
+    batchSizeHint_ = hint;
+    return *this;
+  }
+
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
-    return std::make_shared<connector::hive::HiveConnectorSplit>(
+    auto split = std::make_shared<connector::hive::HiveConnectorSplit>(
         connectorId_,
         filePath_,
         fileFormat_,
@@ -214,6 +219,8 @@ class HiveConnectorSplitBuilder {
         fileProperties_,
         rowIdProperties_,
         bucketConversion_);
+    split->batchSizeHint = batchSizeHint_;
+    return split;
   }
 
  private:
@@ -233,6 +240,7 @@ class HiveConnectorSplitBuilder {
   bool cacheable_{true};
   std::optional<FileProperties> fileProperties_;
   std::optional<RowIdProperties> rowIdProperties_ = std::nullopt;
+  int32_t batchSizeHint_{0};
 };
 
 } // namespace facebook::velox::connector::hive
