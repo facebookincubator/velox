@@ -29,6 +29,10 @@
 #include <variant>
 #include <vector>
 
+namespace facebook::velox::core {
+class QueryConfig;
+}
+
 namespace facebook::velox::cudf_velox {
 
 // Holds either a non-owning cudf::column_view (zero-copy) or an owning
@@ -84,6 +88,13 @@ struct CudfExpressionContext {
     return adjustTimestampToTimezone && !sessionTimezone.empty();
   }
 };
+
+/// Builds a CudfExpressionContext from the query config, copying the session
+/// timezone, the adjust-to-session-timezone flag, and the session start time.
+/// Operators that construct cuDF expressions build the context here so the
+/// derivation lives in one place and timezone-aware functions match the CPU
+/// path.
+CudfExpressionContext contextFromConfig(const core::QueryConfig& config);
 
 class CudfFunction {
  public:

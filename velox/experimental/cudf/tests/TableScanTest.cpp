@@ -818,3 +818,52 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
 }
+
+// hour(ts) selects different rows under UTC versus a non-UTC session timezone,
+// so the remaining filter on the cuDF hive scan must evaluate hour() in the
+// session timezone. Two instants straddle that boundary:
+//   kUtc1800   2021-01-01 18:00:00 UTC == 2021-01-01 10:00:00 Los_Angeles
+//   kLocal1800 2021-01-01 02:00:00 UTC == 2020-12-31 18:00:00 Los_Angeles
+// Under UTC "hour(ts) = 18" keeps id 1; under America/Los_Angeles it keeps
+// id 2. The hive path always evaluates the remaining filter on the GPU and the
+// fixture keeps the cuDF hive connector registered, so a registry-toggle CPU
+// oracle is not available; the expected ids are built by hand instead.
+TEST_F(TableScanTest, remainingFilterHonorsSessionTimezone) {
+  constexpr int64_t kUtc1800 = 1'609'524'000;
+  constexpr int64_t kLocal1800 = 1'609'466'400;
+  auto rowType = ROW({"id", "ts"}, {BIGINT(), TIMESTAMP()});
+  auto vector = makeRowVector(
+      {"id", "ts"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(kUtc1800, 0), Timestamp(kLocal1800, 0)}, TIMESTAMP())});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .remainingFilter("hour(ts) = 18")
+                  .endTableScan()
+                  .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .split(makeCudfHiveSplit(filePath->getPath()))
+          .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+          .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool());
+
+  // Assert only on the id column to stay independent of how the timestamp
+  // round-trips through the parquet writer and the cuDF reader.
+  auto expectedIds = makeFlatVector<int64_t>({2});
+  facebook::velox::test::assertEqualVectors(expectedIds, result->childAt(0));
+}

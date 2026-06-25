@@ -197,13 +197,10 @@ void CudfFilterProject::initialize() {
                                   : filter_->sources()[0]->outputType();
 
   // Capture the session timezone so timezone-aware GPU functions (date/time
-  // extraction, the TIMESTAMP WITH TIME ZONE family) match the CPU path.
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
-  const CudfExpressionContext exprContext{
-      queryConfig.sessionTimezone(),
-      queryConfig.adjustTimestampToTimezone(),
-      queryConfig.sessionStartTimeMs(),
-  };
+  // extraction, the TIMESTAMP WITH TIME ZONE family, temporal casts) match the
+  // CPU path.
+  const auto exprContext =
+      contextFromConfig(operatorCtx_->driverCtx()->queryConfig());
 
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {

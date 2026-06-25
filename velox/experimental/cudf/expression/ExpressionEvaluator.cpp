@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/EvalCtx.h"
@@ -261,6 +262,14 @@ getCudfFunctionRegistry() {
   static std::unordered_map<std::string, std::vector<CudfFunctionSpec>>
       registry;
   return registry;
+}
+
+CudfExpressionContext contextFromConfig(const core::QueryConfig& config) {
+  return CudfExpressionContext{
+      config.sessionTimezone(),
+      config.adjustTimestampToTimezone(),
+      config.sessionStartTimeMs(),
+  };
 }
 
 namespace {

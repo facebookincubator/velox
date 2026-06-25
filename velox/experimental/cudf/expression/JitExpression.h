@@ -32,7 +32,8 @@ class JitExpression : public CudfExpression {
   // precompute instructions and stores them
   JitExpression(
       std::shared_ptr<velox::exec::Expr> expr,
-      const RowTypePtr& inputRowSchema);
+      const RowTypePtr& inputRowSchema,
+      const CudfExpressionContext& context);
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(
