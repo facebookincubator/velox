@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
@@ -1692,6 +1693,109 @@ TEST_F(SparkCastExprTestAnsiOn, dateToTimestampTimezoneGap) {
   auto expected =
       makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
   testCast(input, expected);
+}
+
+// Cast TIMESTAMP → TIMESTAMP_UTC: applies the session timezone offset so the
+// local timestamp is preserved as a UTC epoch in TIMESTAMP_UTC.
+TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
+  // No session timezone: identity cast.
+  testCast(
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()));
+
+  // America/Los_Angeles (PST = UTC-8): 2020-01-01 00:00:00 UTC
+  // → local 2019-12-31 16:00:00 → stored as epoch 1577808000.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()));
+
+  // Asia/Kolkata (IST = UTC+5:30): epoch 0 → local 05:30:00
+  // → stored as epoch 19800.
+  setTimezone("Asia/Kolkata");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>({Timestamp(19'800, 0)}, TIMESTAMP_UTC()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToTimestampUtc) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()));
+}
+
+// Cast TIMESTAMP_UTC → TIMESTAMP: converts from the stored local timestamp
+// epoch back to a UTC epoch using the session timezone.
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
+  // No session timezone: identity cast.
+  testCast(
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()));
+
+  // America/Los_Angeles (PST = UTC-8): stored epoch 1577808000
+  // → local 2019-12-31 16:00:00 → UTC 2020-01-01 00:00:00 = epoch 1577836800.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()));
+
+  // Asia/Kolkata (IST = UTC+5:30): stored epoch 19800
+  // → local 05:30:00 → UTC 00:00:00 = epoch 0.
+  setTimezone("Asia/Kolkata");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(19'800, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestamp) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()));
+}
+
+// Verify that casting TIMESTAMP_UTC to TIMESTAMP in a timezone where the
+// stored local time falls in a DST gap does not throw.
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
+  // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
+  // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
+  // 1941-12-24 15:30:00 UTC.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("Asia/Hong_Kong");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(-884'248'200, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestampDSTGap) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("Asia/Hong_Kong");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(-884'248'200, 0)}, TIMESTAMP()));
 }
 } // namespace
 } // namespace facebook::velox::test
