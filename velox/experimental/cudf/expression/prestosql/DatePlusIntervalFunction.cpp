@@ -28,9 +28,7 @@
 
 #include <string_view>
 
-namespace facebook::velox::cudf_velox::prestosql {
-
-namespace {
+namespace facebook::velox::cudf_velox {
 
 // Throws a VeloxUserError with userMessage if any non-null entry of cond is
 // false. cond must be a BOOL8 column. Does nothing for empty or all-null
@@ -56,7 +54,7 @@ void checkAllTrue(
       result->is_valid(stream) && result->value(stream), "{}", userMessage);
 }
 
-} // namespace
+namespace prestosql {
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -172,4 +170,5 @@ ColumnOrView DatePlusIntervalFunction::eval(
   return cudf::make_column_from_scalar(nullDate, dateCol.size(), stream, mr);
 }
 
-} // namespace facebook::velox::cudf_velox::prestosql
+} // namespace prestosql
+} // namespace facebook::velox::cudf_velox

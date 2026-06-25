@@ -31,6 +31,8 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
+#include <optional>
+
 namespace facebook::velox::cudf_velox {
 
 template <typename T>
@@ -213,6 +215,19 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
   auto constValue = constExpr->value();
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       createCudfScalar, constValue->typeKind(), constValue, toType);
+}
+
+inline std::optional<StringView> constantVarcharValue(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr);
+  if (!constExpr || !expr->type()->isVarchar()) {
+    return std::nullopt;
+  }
+  auto value = constExpr->value();
+  if (value->isNullAt(0)) {
+    return std::nullopt;
+  }
+  return value->as<SimpleVector<StringView>>()->valueAt(0);
 }
 
 template <TypeKind kind>

@@ -2011,12 +2011,14 @@ bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
+  registry[name].push_back(CudfFunctionSpec{
+      std::move(factory), signatures, std::move(canEvaluate)});
   return true;
 }
 
