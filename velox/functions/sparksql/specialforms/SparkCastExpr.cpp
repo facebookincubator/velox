@@ -33,7 +33,7 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& toType) {
   // String to Boolean, Integer, or Date types support ANSI mode.
   if (fromType->isVarchar()) {
-    if (toType->isBoolean() || toType->isDate()) {
+    if (toType->isBoolean() || toType->isTimestamp() || toType->isDate()) {
       return true;
     }
     if (isIntegralType(toType)) {
@@ -65,9 +65,6 @@ exec::ExprPtr SparkCastCallToSpecialForm::constructSpecialForm(
   const bool isTryCast = !SparkQueryConfig{config}.ansiEnabled() ||
       !isAnsiSupported(fromType, type);
 
-  // For ANSI-supported casts, CAST mirrors TRY_CAST when ANSI is disabled.
-  // The distinction is controlled by the 'allowOverflow' flag in
-  // SparkCastHooks.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
@@ -87,7 +84,6 @@ exec::ExprPtr SparkTryCastCallToSpecialForm::constructSpecialForm(
       "TRY_CAST statements expect exactly 1 argument, received {}.",
       compiledChildren.size());
 
-  // TRY_CAST always uses allowOverflow=false to return NULL on cast failures.
   return std::make_shared<SparkCastExpr>(
       type,
       std::move(compiledChildren[0]),
