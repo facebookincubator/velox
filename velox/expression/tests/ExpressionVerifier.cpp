@@ -114,6 +114,14 @@ RowVectorPtr reduceToSelectedRows(
   if (rows.isAllSelected()) {
     return rowVector;
   }
+  if (!rows.hasSelections()) {
+    // No rows are selected; return an empty RowVector matching the input
+    // schema rather than asserting on cnt > 0 below. The fuzzer can produce
+    // SelectivityVectors with no bits set when verifying expressions
+    // whose result is fully filtered out.
+    return std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(rowVector->type(), 0, rowVector->pool()));
+  }
   BufferPtr indices = allocateIndices(rows.end(), rowVector->pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
   vector_size_t cnt = 0;
