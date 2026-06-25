@@ -143,8 +143,6 @@ ParquetReaderOptions getParquetReaderOptions(
   }
 
   ParquetReaderOptions parquetOptions;
-  parquetOptions.footerSpeculativeIoSize = options.footerSpeculativeIoSize();
-  parquetOptions.columnMappingMode = options.columnMappingMode();
   return parquetOptions;
 }
 
@@ -155,16 +153,16 @@ ParquetReaderFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
   auto options = std::make_shared<ParquetReaderOptions>();
-  options->footerSpeculativeIoSize =
-      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session);
-  options->allowInt32Narrowing =
-      ParquetConfig::allowInt32Narrowing(connectorConfig, session);
-  options->footerMemoryTrackingThreshold =
-      ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session);
+  options->setFooterSpeculativeIoSize(
+      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session));
+  options->setAllowInt32Narrowing(
+      ParquetConfig::allowInt32Narrowing(connectorConfig, session));
+  options->setFooterMemoryTrackingThreshold(
+      ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session));
   const auto useColumnNames =
       ParquetConfig::useColumnNames(connectorConfig, session);
-  options->columnMappingMode =
-      useColumnNames ? ColumnMappingMode::kName : ColumnMappingMode::kPosition;
+  options->setColumnMappingMode(
+      useColumnNames ? ColumnMappingMode::kName : ColumnMappingMode::kPosition);
   return options;
 }
 
@@ -367,9 +365,10 @@ void ReaderBase::releaseThriftBytes(size_t bytes) {
 void ReaderBase::loadFileMetaData() {
   bool preloadFile = fileLength_ <=
       std::max(filePreloadThreshold_,
-               parquetReaderOptions_.footerSpeculativeIoSize);
-  uint64_t readSize =
-      preloadFile ? fileLength_ : parquetReaderOptions_.footerSpeculativeIoSize;
+               parquetReaderOptions_.footerSpeculativeIoSize());
+  uint64_t readSize = preloadFile
+      ? fileLength_
+      : parquetReaderOptions_.footerSpeculativeIoSize();
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -418,7 +417,7 @@ void ReaderBase::loadFileMetaData() {
       std::string_view(
           reinterpret_cast<char*>(copy.data() + footerOffsetInBuffer),
           footerLength));
-  if (footerLength > parquetReaderOptions_.footerMemoryTrackingThreshold) {
+  if (footerLength > parquetReaderOptions_.footerMemoryTrackingThreshold()) {
     thriftSize_ = fileMetaData().estimateFileMetadataSize();
   }
 }
@@ -427,7 +426,7 @@ void ReaderBase::initializeSchema() {
   if (fileMetaData_->encryption_algorithm()) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }
-  if (parquetReaderOptions_.columnMappingMode ==
+  if (parquetReaderOptions_.columnMappingMode() ==
       ColumnMappingMode::kParquetFieldId) {
     VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
   }
@@ -520,7 +519,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (parquetReaderOptions_.columnMappingMode != ColumnMappingMode::kName &&
+  if (parquetReaderOptions_.columnMappingMode() != ColumnMappingMode::kName &&
       options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
@@ -567,7 +566,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (parquetReaderOptions_.columnMappingMode ==
+          if (parquetReaderOptions_.columnMappingMode() ==
               ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
@@ -950,7 +949,7 @@ TypePtr ReaderBase::convertType(
       "Converted type {} is not allowed for requested type {} for file column '{}'";
   const bool isRepeated = schemaElement.repetition_type() &&
       *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
-  const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing;
+  const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing();
   if (schemaElement.converted_type()) {
     switch (*schemaElement.converted_type()) {
       case thrift::ConvertedType::INT_8:

@@ -738,11 +738,6 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setColumnMappingMode(ColumnMappingMode mode) {
-    columnMappingMode_ = mode;
-    return *this;
-  }
-
   /// Sets the requested (table) schema field ids for
   /// ColumnMappingMode::kFieldId, one ParquetFieldId tree per top-level column,
   /// aligned to fileSchema().
@@ -822,10 +817,6 @@ class ReaderOptions : public io::ReaderOptions {
     return decrypterFactory_;
   }
 
-  uint64_t footerSpeculativeIoSize() const {
-    return footerSpeculativeIoSize_;
-  }
-
   uint64_t filePreloadThreshold() const {
     return filePreloadThreshold_;
   }
@@ -840,10 +831,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   bool fileColumnNamesReadAsLowerCase() const {
     return fileColumnNamesReadAsLowerCase_;
-  }
-
-  ColumnMappingMode columnMappingMode() const {
-    return columnMappingMode_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -1026,7 +1013,6 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
-  ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

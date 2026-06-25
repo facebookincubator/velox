@@ -21,6 +21,7 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -223,7 +224,7 @@ QueryBenchmarkBase::makeConnectorProperties() {
   auto configurationValues = std::unordered_map<std::string, std::string>();
   configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
       std::to_string(FLAGS_max_coalesced_bytes);
-  configurationValues[connector::hive::HiveConfig::kMaxCoalescedDistance] =
+  configurationValues[dwrf::Config::kOrcMaxCoalescedDistance] =
       FLAGS_max_coalesced_distance_bytes;
   configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
       std::to_string(FLAGS_parquet_prefetch_rowgroups);

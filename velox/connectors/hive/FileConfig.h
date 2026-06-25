@@ -37,16 +37,6 @@ class FileConfig {
   // --- VELOX_HIVE_CONFIG_LEGACY properties ---
 
   VELOX_HIVE_CONFIG_LEGACY(
-      kOrcUseColumnNamesSession,
-      kOrcUseColumnNames,
-      isOrcUseColumnNames,
-      "orc_use_column_names",
-      "orc.use-column-names",
-      bool,
-      false,
-      "Map ORC table field names to file field names using names, not indices.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
       kReadTimestampPartitionValueAsLocalTimeSession,
       kReadTimestampPartitionValueAsLocalTime,
       readTimestampPartitionValueAsLocalTime,
@@ -75,16 +65,6 @@ class FileConfig {
       bool,
       false,
       "Collect per-column CPU timing stats.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kOrcFooterSpeculativeIoSizeSession,
-      kOrcFooterSpeculativeIoSize,
-      orcFooterSpeculativeIoSize,
-      "orc_footer_speculative_io_size",
-      "orc.footer-speculative-io-size",
-      uint64_t,
-      256UL << 10,
-      "Speculative tail-read size in bytes for ORC files.")
 
   VELOX_HIVE_CONFIG_LEGACY(
       kNimbleFooterSpeculativeIoSizeSession,
@@ -245,14 +225,6 @@ class FileConfig {
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(
-      kMaxCoalescedDistanceSession,
-      "orc_max_merge_distance",
-      std::string,
-      "512kB",
-      "Maximum merge distance to combine read requests.")
-  static constexpr const char* kMaxCoalescedDistance = "max-coalesced-distance";
-
-  VELOX_HIVE_CONFIG_PROPERTY(
       kParallelUnitLoadCountSession,
       "parallel_unit_load_count",
       size_t,
@@ -294,8 +266,6 @@ class FileConfig {
   static std::string makeConnectorConfigPrefix(std::string_view connectorName) {
     return std::string(connectorName) + ".";
   }
-
-  int32_t maxCoalescedDistanceBytes(const config::ConfigBase* session) const;
 
   int32_t prefetchRowGroups() const;
 
