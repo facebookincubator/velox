@@ -102,6 +102,8 @@ std::string VectorSerde::kindName(Kind kind) {
       return "CompactRow";
     case Kind::kUnsafeRow:
       return "UnsafeRow";
+    case Kind::kArrowIpc:
+      return "ArrowIpc";
   }
   VELOX_UNREACHABLE(
       fmt::format("Unknown vector serde kind: {}", static_cast<int32_t>(kind)));
@@ -111,7 +113,8 @@ VectorSerde::Kind VectorSerde::kindByName(const std::string& kindName) {
   static const std::unordered_map<std::string, Kind> kNameToKind = {
       {"Presto", Kind::kPresto},
       {"CompactRow", Kind::kCompactRow},
-      {"UnsafeRow", Kind::kUnsafeRow}};
+      {"UnsafeRow", Kind::kUnsafeRow},
+      {"ArrowIpc", Kind::kArrowIpc}};
   const auto it = kNameToKind.find(kindName);
   VELOX_CHECK(
       it != kNameToKind.end(), "Unknown vector serde kind: {}", kindName);
@@ -175,6 +178,25 @@ VectorSerde* getNamedVectorSerde(const std::string& kind) {
       "Named vector serde '{}' is not registered.",
       kind);
   return it->second.get();
+}
+
+void VectorSerde::deserialize(
+    const folly::IOBuf& source,
+    velox::memory::MemoryPool* pool,
+    RowTypePtr type,
+    RowVectorPtr* result,
+    const Options* options) {
+  std::vector<ByteRange> ranges;
+  ranges.reserve(4);
+  for (const auto& range : source) {
+    ranges.emplace_back(
+        ByteRange{
+            const_cast<uint8_t*>(range.data()),
+            static_cast<int32_t>(range.size()),
+            0});
+  }
+  auto byteStream = std::make_unique<BufferInputStream>(std::move(ranges));
+  deserialize(byteStream.get(), pool, type, result, options);
 }
 
 void VectorStreamGroup::createStreamTree(
@@ -318,26 +340,12 @@ RowVectorPtr IOBufToRowVector(
     const RowTypePtr& outputType,
     memory::MemoryPool& pool,
     VectorSerde* serde) {
-  std::vector<ByteRange> ranges;
-  ranges.reserve(4);
-
-  for (const auto& range : ioBuf) {
-    ranges.emplace_back(
-        ByteRange{
-            const_cast<uint8_t*>(range.data()),
-            static_cast<int32_t>(range.size()),
-            0});
-  }
-
-  auto byteStream = std::make_unique<BufferInputStream>(std::move(ranges));
-  RowVectorPtr outputVector;
-
-  // If not supplied, use the default one.
   if (serde == nullptr) {
     serde = getVectorSerde();
   }
-  serde->deserialize(
-      byteStream.get(), &pool, outputType, &outputVector, nullptr);
+
+  RowVectorPtr outputVector;
+  serde->deserialize(ioBuf, &pool, outputType, &outputVector, nullptr);
   return outputVector;
 }
 
