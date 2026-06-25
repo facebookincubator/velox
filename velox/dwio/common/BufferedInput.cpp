@@ -128,7 +128,7 @@ void BufferedInput::readToBuffer(
     const LogType logType) {
   uint64_t storageReadTimeUs = 0;
   {
-    MicrosecondTimer timer(&storageReadTimeUs);
+    MicrosecondWallTimer timer(&storageReadTimeUs);
     input_->read(allocated.data(), allocated.size(), offset, logType);
   }
   if (auto* stats = input_->getStats()) {
