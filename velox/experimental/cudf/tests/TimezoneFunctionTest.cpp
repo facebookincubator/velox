@@ -137,6 +137,20 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
+
+  // Sets the session start time (consumed by now()/current_timestamp) and the
+  // session timezone, with adjust-to-session-timezone on, for subsequent
+  // evaluate() calls. testingOverrideConfigUnsafe replaces the whole config, so
+  // all three keys are set together.
+  void setSessionStartTimeAndTimeZone(
+      int64_t startTimeMs,
+      const std::string& zone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionStartTime, std::to_string(startTimeMs)},
+        {core::QueryConfig::kSessionTimezone, zone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
 };
 
 // A TIMESTAMP WITH TIME ZONE column projected unchanged must round-trip through
@@ -529,25 +543,63 @@ TEST_F(TimezoneFunctionTest, fromIso8601ZuluIgnoresSessionZone) {
 }
 
 // now()/current_timestamp -> timestamp with time zone. now() is
-// non-deterministic -- a CPU evaluation and a separate GPU evaluation observe
-// different instants -- so this cannot assert CPU == GPU. Instead it asserts
-// the GPU can evaluate now() at all and produces a TIMESTAMP WITH TIME ZONE;
-// today the GPU throws from the unsupported recursive-evaluation path. A dummy
-// column sizes the batch.
-TEST_F(TimezoneFunctionTest, now) {
+// non-deterministic -- a live CPU now() and a separate GPU now() observe
+// different instants -- so this cannot assert CPU == GPU against a live clock.
+// Instead it pins the deterministic contract CPU's CurrentTimestampFunction
+// implements: pack(sessionStartTimeMs, sessionZone). The GPU must emit a
+// TIMESTAMP WITH TIME ZONE whose UTC millis are the session start time and
+// whose zone key is the session zone. A dummy column sizes the batch.
+TEST_F(TimezoneFunctionTest, nowUsesSessionStartTimeAndTimezone) {
+  constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
+  setSessionStartTimeAndTimeZone(kStartMs, "America/Los_Angeles");
   auto input = doubleInput(0.0);
   auto exprSet = compileExpression("now()", asRowType(input->type()));
-  VectorPtr result;
-  try {
-    result = evaluate(*exprSet, input);
-  } catch (const std::exception& e) {
-    FAIL() << "now() must be evaluable on GPU but threw: " << e.what();
-  }
+  auto result = evaluate(*exprSet, input);
   ASSERT_NE(result, nullptr);
-  EXPECT_EQ(result->size(), input->size());
-  EXPECT_TRUE(isTimestampWithTimeZoneType(result->type()))
+  ASSERT_EQ(result->size(), input->size());
+  ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()))
       << "now() must produce TIMESTAMP WITH TIME ZONE, got "
       << result->type()->toString();
+  const auto packed = result->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
+}
+
+// now()/current_timestamp must be rejected exactly when CPU rejects it. CPU's
+// CurrentTimestampFunction throws "Timezone cannot be null" when
+// getTimeZoneFromConfig returns null -- i.e. when
+// adjust_timestamp_to_session_timezone is off, or the session timezone is
+// empty. The GPU previously honored neither condition (defaulting the zone key
+// to GMT) and silently produced a value where CPU failed. Assert both paths
+// throw for the two rejection configs. The exception is captured at
+// initialize() and re-thrown at eval time, so compileExpression succeeds and
+// the throw surfaces from evaluate().
+TEST_F(TimezoneFunctionTest, nowWithoutAdjustedSessionTimezoneRejectedLikeCpu) {
+  auto input = doubleInput(0.0);
+  const auto rowType = asRowType(input->type());
+
+  // Adjust on but no session timezone -> rejected on both paths.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  {
+    auto exprSet = compileExpression("now()", rowType);
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    EXPECT_ANY_THROW(evaluate(*exprSet, input));
+  }
+
+  // Session timezone set but adjust off -> rejected on both paths.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+  {
+    auto exprSet = compileExpression("now()", rowType);
+    EXPECT_ANY_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+    EXPECT_ANY_THROW(evaluate(*exprSet, input));
+  }
 }
 
 } // namespace
