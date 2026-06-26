@@ -16,6 +16,9 @@ velox_add_library(
   velox_hive_delta_splitreader
   HiveDeltaSplit.cpp
   DeltaSplitReader.cpp
+  HEADERS
+  DeltaSplitReader.h
+  HiveDeltaSplit.h
 )
 
 velox_link_libraries(

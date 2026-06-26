@@ -406,9 +406,6 @@ void FileSplitReader::setPartitionValue(
           connectorQueryCtx_->sessionProperties()),
       it->second->isPartitionDateValueDaysSinceEpoch(),
       adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
-  // Replace the placeholder null constant with the actual partition value.
-  // The column was already marked as constant in makeScanSpec to prevent
-  // child reader creation.
   spec->setConstantValue(constant);
 }
 

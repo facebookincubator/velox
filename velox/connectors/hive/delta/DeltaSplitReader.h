@@ -51,43 +51,11 @@ class DeltaSplitReader : public HiveSplitReader {
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
  private:
-  /// Adapts the data file schema to match the table schema expected by the
-  /// query.
+  /// Reconciles the physical file schema with the logical table schema.
   ///
-  /// This method reconciles differences between the physical data file schema
-  /// and the logical table schema, handling various scenarios where columns may
-  /// be missing, added, or need special treatment.
-  ///
-  /// @param fileType The schema read from the data file's metadata. This
-  /// represents the actual columns physically present in the Parquet/ORC file.
-  /// @param tableSchema The logical schema defined in the catalog (e.g., from
-  /// DDL). This represents the current table schema that queries expect.
-  ///
-  /// @return A vector of column types adapted to match the query's
-  /// expectations, with appropriate type conversions and constant values set
-  /// for missing or special columns.
-  ///
-  /// The method handles the following scenarios for each column in the scan
-  /// spec:
-  ///
-  /// 1. Info columns (e.g., $path, $file_size, $file_modified_time)
-  ///    These are virtual columns that provide metadata about the file itself.
-  ///    Values are read from hiveSplit_->infoColumns map and set as constant
-  ///    values in the scanSpec so they're materialized for all rows.
-  ///
-  /// 2. Regular columns present in File:
-  ///    Column exists in both fileType and readerOutputType. Type is adapted
-  ///    from fileType to match the expected output type, handling schema
-  ///    evolution where column types may have changed.
-  ///
-  /// 3. Columns missing from File:
-  ///    a) Partition columns:
-  ///       Column is marked as partition key in hiveSplit_->partitionKeys.
-  ///       Value is read from partition metadata and set as a constant.
-  ///    b) Schema evolution (newly added columns):
-  ///       Column was added to the table schema after this data file was
-  ///       written. Set as NULL constant since the old file doesn't contain
-  ///       this column.
+  /// Sets constant values for info columns ($path, $file_size) and partition
+  /// columns, maps present columns by name, and fills missing columns (schema
+  /// evolution) with NULL constants.
   std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;

@@ -79,14 +79,16 @@ class TimestampWithTimeZoneTest : public ParquetTestBase {
         FileSink::Options{.pool = leafPool_.get()});
     auto* sinkPtr = sink.get();
 
-    parquet::WriterOptions options;
-    options.memoryPool = leafPool_.get();
-    options.writeInt96AsTimestamp = false; // Use INT64 format
-    options.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+    ParquetWriterOptions parquetOptions;
+    parquetOptions.writeInt96AsTimestamp = false;
+    parquetOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(parquetOptions);
     auto writer = std::make_unique<parquet::Writer>(
         std::move(sink),
         options,
-        rootPool_,
         writeRowType);
 
     writer->write(batch);

@@ -31,6 +31,7 @@ velox_add_library(
   CoreTypeSystem.h
   Expressions.h
   ITypedExpr.h
+  VectorUtil.h
   PlanConsistencyChecker.h
   PlanFragment.h
   PlanNode.h

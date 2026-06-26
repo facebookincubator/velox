@@ -22,10 +22,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::connector::hive::delta;
 
-class HiveDeltaSplitTest : public ::testing::Test {
- protected:
-  void SetUp() override {}
-};
+class HiveDeltaSplitTest : public ::testing::Test {};
 
 TEST_F(HiveDeltaSplitTest, basicConstruction) {
   auto split = std::make_shared<HiveDeltaSplit>(

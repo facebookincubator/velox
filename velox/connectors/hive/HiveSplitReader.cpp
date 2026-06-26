@@ -204,7 +204,8 @@ std::vector<TypePtr> HiveSplitReader::adaptColumns(
           connectorQueryCtx_->memoryPool(),
           fileConfig_->readTimestampPartitionValueAsLocalTime(
               connectorQueryCtx_->sessionProperties()),
-          false);
+          false,
+          adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
       childSpec->setConstantValue(constant);
     } else if (
         childSpec->columnType() == common::ScanSpec::ColumnType::kRegular) {
