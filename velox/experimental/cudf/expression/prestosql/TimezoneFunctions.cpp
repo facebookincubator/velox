@@ -889,8 +889,12 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
 };
 
 // now() / current_timestamp -> timestamp with time zone. Emits a constant
-// column from the session start time and session zone; the value is not
-// compared against the CPU (now() is non-deterministic).
+// column packing the session start time with the session zone, matching CPU's
+// CurrentTimestampFunction (the value is not compared against a live CPU now(),
+// which is non-deterministic). Rejects like CPU when the session zone is
+// unusable: getTimeZoneFromConfig returns null when
+// adjust_timestamp_to_session_timezone is off or the session timezone is empty,
+// and CPU then throws "Timezone cannot be null".
 class NowFunction : public CudfFunction {
  public:
   ColumnOrView eval(
@@ -898,11 +902,11 @@ class NowFunction : public CudfFunction {
       cudf::size_type numRows,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    const int16_t zoneId = context_.sessionTimezone.empty()
-        ? 0
-        : tz::getTimeZoneID(context_.sessionTimezone);
-    const int64_t packed = (context_.sessionStartTimeMs << kMillisShift) |
-        (zoneId & kTimezoneMask);
+    VELOX_USER_CHECK(
+        context_.adjustTimestampToTimezone && !context_.sessionTimezone.empty(),
+        "Timezone cannot be null");
+    const auto zoneId = tz::getTimeZoneID(context_.sessionTimezone);
+    const int64_t packed = pack(context_.sessionStartTimeMs, zoneId);
     auto scalar = int64Scalar(packed, stream);
     return cudf::make_column_from_scalar(scalar, numRows, stream, mr);
   }
