@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
+#include <folly/container/Reserve.h>
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/Strings.h"
@@ -64,6 +65,10 @@ struct MapAccumulator {
     if (keys.insert({decodedKeys.valueAt<T>(index), cnt}).second) {
       values.appendValue(decodedValues, index, &allocator);
     }
+  }
+
+  void reserveAdditional(size_t n) {
+    folly::grow_capacity_by(keys, n);
   }
 
   /// Returns number of key-value pairs.
@@ -140,6 +145,10 @@ struct StringViewMapAccumulator {
     }
   }
 
+  void reserveAdditional(size_t n) {
+    base.reserveAdditional(n);
+  }
+
   size_t size() const {
     return base.size();
   }
@@ -189,6 +198,10 @@ struct ComplexTypeMapAccumulator {
     }
 
     base.values.appendValue(decodedValues, index, &allocator);
+  }
+
+  void reserveAdditional(size_t n) {
+    base.reserveAdditional(n);
   }
 
   size_t size() const {
@@ -301,6 +314,10 @@ struct CustomComparisonMapAccumulator {
       vector_size_t index,
       HashStringAllocator& allocator) {
     return base.insert(decodedKeys, decodedValues, index, allocator);
+  }
+
+  void reserveAdditional(size_t n) {
+    base.reserveAdditional(n);
   }
 
   /// Returns number of key-value pairs.
