@@ -1661,4 +1661,197 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       "Replacement with cuDF operator failed");
 }
 
+TEST_F(
+    CudfWindowTest,
+    explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
+  auto data = makeRowVector(
+      {"p", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .window({"sum(v) over (partition by p "
+                   "rows between unbounded preceding and current row) as s"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"p", "v", "s"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<int64_t>({10, 30, 60}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+      });
+
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({"sum(v) over (order by v "
+                     "rows between current row and current row) as s"})
+            .orderBy({"v ASC NULLS LAST"}, false)
+            .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeFlatVector<int64_t>({1, 2, 3}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({"sum(v) over (order by v "
+                     "rows between 1 preceding and current row) as s"})
+            .orderBy({"v ASC NULLS LAST"}, false)
+            .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeFlatVector<int64_t>({1, 3, 5}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({"sum(v) over (order by v "
+                     "rows between 1 following and 1 following) as s"})
+            .orderBy({"v ASC NULLS LAST"}, false)
+            .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({1, 2, 3}),
+            makeNullableFlatVector<int64_t>({2, 3, std::nullopt}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+TEST_F(CudfWindowTest, lagLeadIgnoreNullsFallsBack) {
+  auto data = makeRowVector(
+      {"p", "ord", "v"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1}),
+          makeFlatVector<int32_t>({1, 2, 3, 4}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 20, 30}),
+      });
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({data})
+              .window({
+                  "lag(v, 1 IGNORE NULLS) over "
+                  "(partition by p order by ord) as lag_v",
+                  "lead(v, 1 IGNORE NULLS) over "
+                  "(partition by p order by ord) as lead_v",
+              })
+              .planNode())
+          .copyResults(pool()),
+      "Replacement with cuDF operator failed");
+}
+
+TEST_F(
+    CudfWindowTest,
+    countStarOverZeroColumnInputPreservesLogicalRows) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({})
+                  .window({
+                      "count(*) over (rows between unbounded preceding "
+                      "and unbounded following) as cnt",
+                  })
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"cnt"},
+      {
+          makeFlatVector<int64_t>({4, 4, 4, 4}),
+      });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
+  auto data = makeRowVector(
+      {"v"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+      });
+
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({"sum(v) over (range between unbounded preceding "
+                     "and current row) as s"})
+            .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s"},
+        {
+            makeFlatVector<int64_t>({10, 20, 30}),
+            makeFlatVector<int64_t>({60, 60, 60}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
+  {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .window({
+                "sum(v) over (range between unbounded preceding "
+                "and current row) as s",
+                "count(v) over (range between unbounded preceding "
+                "and current row) as c",
+            })
+            .planNode();
+
+    auto expected = makeRowVector(
+        {"v", "s", "c"},
+        {
+            makeFlatVector<int64_t>({10, 20, 30}),
+            makeFlatVector<int64_t>({60, 60, 60}),
+            makeFlatVector<int64_t>({3, 3, 3}),
+        });
+
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
 } // namespace

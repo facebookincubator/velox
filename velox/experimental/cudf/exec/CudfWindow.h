@@ -128,13 +128,13 @@ class CudfWindow : public CudfOperatorBase {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const;
 
-  // Compute LAG or LEAD via cudf::grouped_rolling_window.
   std::unique_ptr<cudf::column> computeLeadLagColumn(
       const cudf::table_view& partKeys,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
-      rmm::cuda_stream_view stream) const;
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const;
 
   // Compute first_value or last_value via cudf rolling window APIs.
   std::unique_ptr<cudf::column> computeNthValueColumn(
@@ -143,6 +143,7 @@ class CudfWindow : public CudfOperatorBase {
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
+      bool isFullPartition,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const;
 
@@ -182,6 +183,7 @@ class CudfWindow : public CudfOperatorBase {
 
   // Sorted and concatenated input data, prepared in doNoMoreInput().
   std::unique_ptr<cudf::table> sortedData_;
+  cudf::size_type logicalRowCount_{0};
   rmm::cuda_stream_view stream_{};
 
   bool finished_ = false;

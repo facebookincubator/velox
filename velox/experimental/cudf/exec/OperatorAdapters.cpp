@@ -989,7 +989,8 @@ class WindowAdapter : public OperatorAdapter {
     if (!windowNode) {
       return false;
     }
-    std::optional<std::string> reason;
+    std::string reasonStr;
+    std::optional<std::string> reason = reasonStr;
     if (!CudfWindow::canRunOnGPU(*windowNode, reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason.value_or("unknown"), planNode->id());
       return false;
