@@ -234,8 +234,8 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
   cudf::size_type buildRowCount =
       buildType->size() == 0 ? zeroColumnBuildRows(inputs) : 0;
 
-  auto table =
-      getConcatenatedTable(std::move(inputs), buildType, stream, get_output_mr());
+  auto table = getConcatenatedTable(
+      std::move(inputs), buildType, stream, get_output_mr());
   if (buildType->size() > 0) {
     buildRowCount = table->num_rows();
   }
@@ -248,9 +248,10 @@ void CudfNestedLoopJoinBuild::doNoMoreInput() {
   auto bridge = std::dynamic_pointer_cast<CudfNestedLoopJoinBridge>(joinBridge);
 
   bridge->setBuildStream(stream); // Pass stream for CUDA synchronization
-  bridge->setData(std::make_optional(
-      CudfNestedLoopJoinBridge::build_data_type{
-          std::shared_ptr<cudf::table>(std::move(table)), buildRowCount}));
+  bridge->setData(
+      std::make_optional(
+          CudfNestedLoopJoinBridge::build_data_type{
+              std::shared_ptr<cudf::table>(std::move(table)), buildRowCount}));
 }
 
 exec::BlockingReason CudfNestedLoopJoinBuild::isBlocked(
@@ -564,8 +565,7 @@ void CudfNestedLoopJoinProbe::syncBuildStream(
   }
 }
 
-std::unique_ptr<cudf::table>
-CudfNestedLoopJoinProbe::crossJoinZeroColumnBuild(
+std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinZeroColumnBuild(
     cudf::table_view probeView,
     cudf::size_type buildRows,
     rmm::cuda_stream_view stream) {
