@@ -143,6 +143,7 @@ void RPCState::addPendingRow(
   {
     std::lock_guard<std::mutex> l(mutex_);
     inFlight_++;
+    peakInFlight_ = std::max(peakInFlight_, inFlight_);
     RPC_STATE_VLOG(2) << "addPendingRow: rowId=" << rowId
                       << ", inFlight=" << inFlight_;
   }
@@ -190,6 +191,12 @@ void RPCState::completeRow(
           .response = std::move(response),
           .rttNs = rttNs});
   inFlight_--;
+
+  if (rttNs > 0) {
+    rttMinNs_ = std::min(rttMinNs_, rttNs);
+    rttMaxNs_ = std::max(rttMaxNs_, rttNs);
+    ++numRttSamples_;
+  }
 
   RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
                     << ", readyRows=" << readyRows_.size()
@@ -307,6 +314,7 @@ void RPCState::addPendingBatch(
     std::lock_guard<std::mutex> l(mutex_);
     auto batchId = nextBatchId_++;
     inFlight_++;
+    peakInFlight_ = std::max(peakInFlight_, inFlight_);
     pendingBatches_.push_back(
         PendingBatch{
             .batchId = batchId,
@@ -345,6 +353,12 @@ RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
     result.responses = {};
     RPC_STATE_LOG(ERROR) << "extractReadyBatchLocked: batchId="
                          << result.batchId << " failed: " << e.what();
+  }
+
+  if (result.rttNs > 0) {
+    rttMinNs_ = std::min(rttMinNs_, result.rttNs);
+    rttMaxNs_ = std::max(rttMaxNs_, result.rttNs);
+    ++numRttSamples_;
   }
 
   pendingBatches_.erase(it);
@@ -453,6 +467,20 @@ void RPCState::notifyWaitersLocked() {
     promise.setValue();
   }
   promises_.clear();
+}
+
+RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return OperatorSnapshot{
+      .windowLimit = window_.limit(),
+      .baselineRttNs = window_.baselineRttNs(),
+      .numShrinks = window_.numShrinks(),
+      .peakInFlight = peakInFlight_,
+      .rttMinNs = numRttSamples_ > 0 ? rttMinNs_ : 0,
+      .rttMaxNs = rttMaxNs_,
+      .numRttSamples = numRttSamples_,
+      .streamingMode = streamingMode_,
+  };
 }
 
 } // namespace facebook::velox::exec::rpc
