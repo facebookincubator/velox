@@ -283,7 +283,14 @@ class SelectiveColumnReader {
     return returnReaderNulls_;
   }
 
-  void initReturnReaderNulls(const RowSet& rows);
+  /// Resolves which buffer resultNulls() returns for this read, by setting the
+  /// returnReaderNulls_ flag (and anyNulls_). Sets it true on the fast path --
+  /// bulk read, no filter, dense rows, and nulls present -- so the nulls
+  /// decoded into nullsInReadRange_ can be returned directly; otherwise false,
+  /// so resultNulls() returns the separately-built, output-aligned
+  /// resultNulls_. Resolves the flag only; allocates no buffer. Call after the
+  /// read-range nulls are decoded.
+  void setReturnNullsMode(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
     numValues_ = size;
