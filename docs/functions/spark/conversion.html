@@ -45,8 +45,10 @@
 <dt class="sig sig-object spark" id="cast">
 <span class="sig-name descname"><span class="pre">cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#cast" title="Link to this definition">¶</a></dt>
 <dd><p>Explicitly cast a <code class="docutils literal notranslate"><span class="pre">value</span></code> to a specified <code class="docutils literal notranslate"><span class="pre">type</span></code>.
-Follows the behavior when Spark ANSI mode is disabled, and does not support
-the behavior when ANSI is turned on:</p>
+For cast pairs with Velox Spark ANSI support, behavior follows Spark ANSI
+mode. Currently, ANSI mode is supported for casting from string to boolean,
+integral, and date types. Other cast pairs follow the behavior used when
+Spark ANSI mode is disabled:</p>
 <ul>
 <li><p>If the <code class="docutils literal notranslate"><span class="pre">value</span></code> exceeds the range of the <code class="docutils literal notranslate"><span class="pre">type</span></code>, no error is raised.
 Instead, the <code class="docutils literal notranslate"><span class="pre">value</span></code> is “wrapped” around.</p></li>
@@ -79,6 +81,15 @@ for failure to cast.
 </ul>
 </dd></dl>
 
+<section id="expression-level-cast-modes">
+<h2>Expression-level cast modes<a class="headerlink" href="#expression-level-cast-modes" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">spark_ansi_cast</span></code> and <code class="docutils literal notranslate"><span class="pre">spark_legacy_cast</span></code> are internal special form names
+registered with Spark SQL functions to preserve Spark’s per-expression cast
+mode. These are not Spark SQL functions. <code class="docutils literal notranslate"><span class="pre">spark_ansi_cast</span></code> applies ANSI
+behavior for supported cast pairs regardless of the session ANSI setting.
+<code class="docutils literal notranslate"><span class="pre">spark_legacy_cast</span></code> applies non-ANSI Spark cast behavior regardless of the
+session ANSI setting.</p>
+</section>
 <section id="cast-from-unknown-type">
 <h2>Cast from UNKNOWN Type<a class="headerlink" href="#cast-from-unknown-type" title="Link to this heading">¶</a></h2>
 <p>Casting from UNKNOWN type to all other scalar types is supported, e.g., cast(NULL as int).</p>
@@ -412,6 +423,7 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 <li><a class="reference internal" href="#">Conversion Functions</a><ul>
 <li><a class="reference internal" href="#cast"><code class="docutils literal notranslate"><span class="pre">cast()</span></code></a></li>
 <li><a class="reference internal" href="#try_cast"><code class="docutils literal notranslate"><span class="pre">try_cast()</span></code></a></li>
+<li><a class="reference internal" href="#expression-level-cast-modes">Expression-level cast modes</a></li>
 <li><a class="reference internal" href="#cast-from-unknown-type">Cast from UNKNOWN Type</a></li>
 <li><a class="reference internal" href="#cast-to-integral-types">Cast to Integral Types</a><ul>
 <li><a class="reference internal" href="#from-integral-types">From integral types</a></li>
