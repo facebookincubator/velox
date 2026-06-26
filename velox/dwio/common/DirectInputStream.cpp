@@ -181,7 +181,13 @@ void DirectInputStream::loadPosition() {
           waitFuture.wait();
         }
         loadedRegion_.offset = region_.offset;
-        loadedRegion_.length = load->getData(region_.offset, data_, tinyData_);
+        auto loaded = load->getData(region_.offset);
+        loadedRegion_.length = loaded.numBytes;
+        data_ = std::move(loaded.ownedData);
+        tinyData_ = std::move(loaded.tinyData);
+        if (loaded.arenaData != nullptr) {
+          arena_ = {loaded.arenaData, load};
+        }
       }
       ioStats_->queryThreadIoLatencyUs().increment(loadUs);
       // DirectCoalescedLoad always reads from remote storage, not SSD.
@@ -198,6 +204,9 @@ void DirectInputStream::loadPosition() {
       region_.offset + offsetInRegion_ < loadedRegion_.offset ||
       region_.offset + offsetInRegion_ >=
           loadedRegion_.offset + loadedRegion_.length) {
+    // Outside the loaded range: drop the arena buffer; loadSync() reloads
+    // below.
+    arena_.reset();
     loadedRegion_.offset = region_.offset + offsetInRegion_;
     loadedRegion_.length = (offsetInRegion_ + loadQuantum_ <= region_.length)
         ? loadQuantum_
@@ -208,9 +217,23 @@ void DirectInputStream::loadPosition() {
     loadSync();
   }
 
+  // Priority dispatch below would mask a double-set; assert at most one is
+  // live.
+  VELOX_DCHECK_LE(
+      static_cast<int>(arena_.data != nullptr) +
+          static_cast<int>(data_.numPages() > 0) +
+          static_cast<int>(!tinyData_.empty()),
+      1,
+      "DirectInputStream has multiple live buffer representations");
+
   const auto offsetInData =
       offsetInRegion_ - (loadedRegion_.offset - region_.offset);
-  if (data_.numPages() == 0) {
+  if (arena_) {
+    run_ = reinterpret_cast<uint8_t*>(const_cast<char*>(arena_.data));
+    runSize_ = static_cast<uint32_t>(loadedRegion_.length);
+    offsetInRun_ = static_cast<int>(offsetInData);
+    offsetOfRun_ = 0;
+  } else if (data_.numPages() == 0) {
     run_ = reinterpret_cast<uint8_t*>(tinyData_.data());
     runSize_ = tinyData_.size();
     offsetInRun_ = offsetInData;
