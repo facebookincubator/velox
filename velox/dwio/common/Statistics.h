@@ -425,6 +425,12 @@ class TimestampColumnStatistics : public virtual ColumnStatistics {
         min_(min),
         max_(max) {}
 
+  TimestampColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::optional<Timestamp> min,
+      std::optional<Timestamp> max)
+      : ColumnStatistics(colStats), min_(min), max_(max) {}
+
   ~TimestampColumnStatistics() override = default;
 
   std::optional<Timestamp> getMinimum() const {
