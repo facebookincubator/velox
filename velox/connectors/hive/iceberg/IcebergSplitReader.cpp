@@ -629,7 +629,8 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
             connectorQueryCtx_->memoryPool(),
             fileConfig_->readTimestampPartitionValueAsLocalTime(
                 connectorQueryCtx_->sessionProperties()),
-            isDaysSinceEpoch);
+            isDaysSinceEpoch,
+            adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
         fieldSpec->setConstantValue(constant);
         // Mirror Java's PARTITION_KEY column-type marking: this column's
         // value MUST come from the partition metadata, never from the file
@@ -1070,7 +1071,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                     icebergColumnHandle->initialDefaultValue().value(),
                     connectorQueryCtx_->memoryPool(),
                     readTimestampAsLocalTime,
-                    false);
+                    false,
+                    adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
                 childSpec->setConstantValue(constant);
                 hasDefaultValue = true;
                 break;

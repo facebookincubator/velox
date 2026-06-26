@@ -202,8 +202,8 @@ class FileSplitReader {
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
 
-  const tz::TimeZone* sessionTimezone_;
-  bool adjustTimestampToTimezone_;
+  const tz::TimeZone* const sessionTimezone_;
+  const bool adjustTimestampToTimezone_;
 
   const std::shared_ptr<common::ScanSpec> scanSpec_;
   // Subfield filters from HiveDataSource, includes both original

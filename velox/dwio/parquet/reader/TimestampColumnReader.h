@@ -182,6 +182,8 @@ class TimestampColumnReader : public IntegerColumnReader {
         // Convert to milliseconds
         const int64_t millis = seconds * 1000 + nanos / 1'000'000;
 
+        // Pack as (millis << 12) | (tzKey & 0xFFF): upper 52 bits hold
+        // milliseconds since epoch, lower 12 bits hold the timezone key (UTC=0).
         rawPacked[i] = (millis << 12);
       }
 

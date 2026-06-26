@@ -33,6 +33,7 @@ velox_add_library(
   Expressions.h
   FixedPointPlanNodes.h
   ITypedExpr.h
+  VectorUtil.h
   PlanConsistencyChecker.h
   PlanFragment.h
   PlanNode.h
