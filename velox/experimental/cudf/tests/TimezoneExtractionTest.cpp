@@ -128,6 +128,44 @@ class TimezoneExtractionTest : public OperatorTestBase {
         projection + " under session timezone " + std::string(timezone));
     facebook::velox::test::assertEqualVectors(cpu->childAt(0), gpu->childAt(0));
   }
+
+  // Filters then projects under the given session timezone. cuDF registration
+  // by the caller selects GPU vs CPU execution, exactly like project().
+  RowVectorPtr filterProject(
+      const RowVectorPtr& input,
+      const std::string& filter,
+      const std::string& projection,
+      std::string_view timezone) {
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .filter(filter)
+                    .project({projection})
+                    .planNode();
+    return AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kSessionTimezone, std::string(timezone))
+        .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+        .copyResults(pool());
+  }
+
+  // Runs a filter+project on GPU (cuDF registered) and CPU (cuDF unregistered)
+  // under the same session timezone and asserts the projected columns are
+  // equal. The filter is the work this exercises: a non-AST function inside the
+  // predicate (e.g. hour(ts)) is precomputed as a column, so the precompute
+  // must honor the session timezone or the GPU selects the wrong rows.
+  void assertFilterGpuMatchesCpu(
+      const RowVectorPtr& input,
+      const std::string& filter,
+      const std::string& projection,
+      std::string_view timezone) {
+    auto gpu = filterProject(input, filter, projection, timezone);
+    cudf_velox::unregisterCudf();
+    auto cpu = filterProject(input, filter, projection, timezone);
+    cudf_velox::registerCudf();
+    SCOPED_TRACE(
+        "filter " + filter + ", project " + projection +
+        " under session timezone " + std::string(timezone));
+    facebook::velox::test::assertEqualVectors(cpu->childAt(0), gpu->childAt(0));
+  }
 };
 
 // America/Los_Angeles is UTC-8 in January. This instant is 2021-01-01 02:00:00
@@ -143,8 +181,15 @@ constexpr int64_t kJan2021MondayUtc = 1'609'725'600;
 
 // 2021-01-01 00:00:00 UTC. Asia/Kolkata is UTC+5:30, a half-hour offset, so the
 // local minute differs from the UTC minute. Used for the minute field, which a
-// whole-hour offset zone like America/Los_Angeles cannot exercise.
+// whole-hour offset zone like America/Los_Angeles cannot exercise. Under
+// Asia/Kolkata the local hour is 5 (UTC hour 0).
 constexpr int64_t kJan2021MidnightUtc = 1'609'459'200;
+
+// 2021-01-01 05:00:00 UTC. Under Asia/Kolkata (+5:30) the local hour is 10
+// while the UTC hour is 5. Paired with kJan2021MidnightUtc so a filter on
+// hour = 5 selects different rows in UTC (this one) and in Asia/Kolkata (the
+// midnight row), exposing a filter that evaluates hour() in the wrong zone.
+constexpr int64_t kJan2021At0500Utc = 1'609'477'200;
 
 constexpr std::string_view kLosAngeles = "America/Los_Angeles";
 constexpr std::string_view kKolkata = "Asia/Kolkata";
@@ -177,6 +222,25 @@ TEST_F(TimezoneExtractionTest, hourHonorsSessionTimezone) {
   // Expect local hour 18; GPU currently returns UTC hour 2.
   assertGpuMatchesCpu(
       timestampInput(kJan2021At0200Utc), "hour(ts)", kLosAngeles);
+}
+
+// A filter "hour(ts) = 5" routes through the createAstTree precompute path: the
+// comparison is an AST node, but hour(ts) is a non-AST function precomputed as
+// a column (an AstContext PrecomputeInstruction built via createCudfExpression
+// at AstExpressionUtils.h). That precompute must receive the session-timezone
+// context, or the GPU evaluates hour() in UTC and the predicate selects the
+// wrong rows -- a silent wrong result, not an error. The projection tests above
+// cover the projection path; this covers the filter/AST-precompute path. The
+// two-row input selects different rows under UTC and Asia/Kolkata, so a GPU
+// that ignores the session timezone returns the UTC-hour-5 row while CPU
+// returns the local-hour-5 row.
+TEST_F(TimezoneExtractionTest, filterPrecomputeHonorsSessionTimezone) {
+  auto input = makeRowVector(
+      {"ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(kJan2021MidnightUtc, 0), Timestamp(kJan2021At0500Utc, 0)},
+          TIMESTAMP())});
+  assertFilterGpuMatchesCpu(input, "hour(ts) = 5", "ts", kKolkata);
 }
 
 TEST_F(TimezoneExtractionTest, dayOfWeekHonorsSessionTimezone) {
