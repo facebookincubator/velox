@@ -54,8 +54,13 @@ class TaskQueue {
   exec::BlockingReason
   enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
 
-  // Returns nullptr when all producers are at end. Otherwise blocks.
-  RowVectorPtr dequeue();
+  // Returns the next batch if one is available. Otherwise returns nullptr and,
+  // if more output may still arrive, sets '*future' to a future realized when
+  // the consumer should retry; when all producers are at end (or the queue is
+  // closed) returns nullptr and leaves '*future' untouched. The caller
+  // distinguishes "blocked" from "done" by whether '*future' is valid.
+  // 'future' must be non-null.
+  RowVectorPtr dequeue(velox::ContinueFuture* future);
 
   void close();
 
@@ -81,7 +86,6 @@ class TaskQueue {
   std::vector<ContinuePromise> producerUnblockPromises_;
   bool consumerBlocked_ = false;
   ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
-  ContinueFuture consumerFuture_;
   bool closed_ = false;
 };
 
@@ -127,46 +131,48 @@ exec::BlockingReason TaskQueue::enqueue(
   return exec::BlockingReason::kNotBlocked;
 }
 
-RowVectorPtr TaskQueue::dequeue() {
-  for (;;) {
-    RowVectorPtr vector;
-    std::vector<ContinuePromise> mayContinue;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      if (closed_) {
-        return nullptr;
-      }
+RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture* future) {
+  VELOX_CHECK_NOT_NULL(future);
+  RowVectorPtr vector;
+  std::vector<ContinuePromise> mayContinue;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return nullptr;
+    }
 
-      if (!queue_.empty()) {
-        auto result = std::move(queue_.front());
-        queue_.pop_front();
-        totalBytes_ -= result.bytes;
-        vector = std::move(result.vector);
-        if (totalBytes_ < maxBytes_ / 2) {
-          mayContinue = std::move(producerUnblockPromises_);
-        }
-      } else if (
-          numProducers_.has_value() && producersFinished_ == numProducers_) {
-        return nullptr;
-      } else if (numDrainedProducers_ == numProducers_) {
-        return nullptr;
+    if (!queue_.empty()) {
+      auto result = std::move(queue_.front());
+      queue_.pop_front();
+      totalBytes_ -= result.bytes;
+      vector = std::move(result.vector);
+      if (totalBytes_ < maxBytes_ / 2) {
+        mayContinue = std::move(producerUnblockPromises_);
       }
+    } else if (
+        numProducers_.has_value() && producersFinished_ == numProducers_) {
+      return nullptr;
+    } else if (numDrainedProducers_ == numProducers_) {
+      return nullptr;
+    }
 
-      if (!vector) {
-        consumerBlocked_ = true;
-        consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
-        consumerFuture_ = consumerPromise_.getFuture();
-      }
+    if (!vector) {
+      // No data yet but more may arrive: hand the consumer future to the caller
+      // so it can wait without blocking this thread. Single-consumer contract:
+      // the caller must wait on the previously handed-out future before
+      // re-calling. Always-on check: overwriting an unfulfilled promise would
+      // strand any waiter on the prior future in a silent, permanent hang.
+      VELOX_CHECK(!consumerBlocked_);
+      consumerBlocked_ = true;
+      consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
+      *future = consumerPromise_.getFuture();
     }
-    // outside of 'mutex_'
-    for (auto& promise : mayContinue) {
-      promise.setValue();
-    }
-    if (vector) {
-      return vector;
-    }
-    consumerFuture_.wait();
   }
+  // outside of 'mutex_'
+  for (auto& promise : mayContinue) {
+    promise.setValue();
+  }
+  return vector;
 }
 
 void TaskQueue::close() {
@@ -372,18 +378,37 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
 
   /// Fetches another batch from the task queue.
   /// Starts the task if not started yet.
-  bool moveNext() override {
-    start();
-    if (error_) {
-      std::rethrow_exception(error_);
-    }
+  bool moveNext(ContinueFuture* future) override {
+    while (true) {
+      start();
+      if (error_) {
+        std::rethrow_exception(error_);
+      }
 
-    // Task might be aborted before start.
-    checkTaskError();
-    current_ = queue_->dequeue();
+      // Task might be aborted before start.
+      ContinueFuture waitFuture = ContinueFuture::makeEmpty();
+      checkTaskError();
+      current_ = queue_->dequeue(&waitFuture);
+      checkTaskError();
 
-    checkTaskError();
-    if (!current_) {
+      if (current_) {
+        return true;
+      }
+      if (waitFuture.valid()) {
+        // More output may still arrive. Hand the future to the caller when
+        // non-blocking, otherwise wait here and retry.
+        if (future != nullptr) {
+          *future = std::move(waitFuture);
+          return false;
+        }
+        waitFuture.wait();
+        continue;
+      }
+      // No future from the queue means producers are at end (or drained).
+      // A completed drain returns false with an invalid '*future', the same
+      // signal as end-of-stream. This preserves the prior blocking contract
+      // (both yielded false); the moveNext() protocol does not distinguish a
+      // drain boundary from end-of-stream.
       if (queue_->numDrainedProducers_ > 0) {
         VELOX_CHECK(queue_->numProducers_.has_value());
         VELOX_CHECK_EQ(
@@ -392,12 +417,12 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         return false;
       }
       atEnd_ = true;
+      return false;
     }
-    return current_ != nullptr;
   }
 
   bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
-    return moveNext();
+    return moveNext(nullptr);
   }
 
   void setNoMoreSplits() override {
@@ -516,14 +541,20 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
     return noMoreSplits_;
   }
 
-  bool moveNext() override {
-    if (!task_->isRunning()) {
-      return false;
-    }
-
+  bool moveNext(ContinueFuture* future) override {
     while (true) {
-      ContinueFuture future = ContinueFuture::makeEmpty();
-      RowVectorPtr next = task_->next(&future);
+      if (!task_->isRunning()) {
+        // Surface a cancellation/abort error rather than reporting "done", so
+        // an async caller can distinguish a terminated task from end-of-stream
+        // (matches the parallel cursor's checkTaskError() behavior).
+        if (auto error = task_->error()) {
+          std::rethrow_exception(error);
+        }
+        return false;
+      }
+
+      ContinueFuture waitFuture = ContinueFuture::makeEmpty();
+      RowVectorPtr next = task_->next(&waitFuture);
       if (next != nullptr) {
         if (outputPool_ && copyResult_) {
           VectorPtr copy = encodedVectorCopy(
@@ -534,20 +565,23 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
         }
         return true;
       }
-      // When next is returned from task as a null pointer.
-      if (!future.valid()) {
-        VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
-        return false;
+      // next is null: either blocked on an external event (valid future) or
+      // the task is done (invalid future).
+      if (waitFuture.valid()) {
+        if (future != nullptr) {
+          *future = std::move(waitFuture);
+          return false;
+        }
+        waitFuture.wait();
+        continue;
       }
-      // Task is blocked for some reason. Wait and try again.
-      VELOX_CHECK_NULL(next);
-      future.wait();
+      VELOX_CHECK(!task_->isRunning() || !noMoreSplits_);
+      return false;
     }
-    return false;
   }
 
   bool moveStep(const core::PlanNodeId& /*planId*/ = "") override {
-    return moveNext();
+    return moveNext(nullptr);
   }
 
   RowVectorPtr& current() override {
@@ -584,6 +618,51 @@ class SingleThreadedTaskCursor : public TaskCursorBase {
 /// and inspecting intermediate results. Subclasses implement the execution
 /// model (serial vs parallel) via the `advance()` and `start()` methods.
 class TaskDebuggerCursorBase : public TaskCursorBase {
+ public:
+  // Debugging cursors are interactive and run synchronously, so they ignore
+  // 'future' and block, leaving it invalid.
+  bool moveNext(ContinueFuture* future) override {
+    if (future != nullptr) {
+      *future = ContinueFuture::makeEmpty();
+    }
+    return advance(false);
+  }
+
+  bool moveStep(const core::PlanNodeId& planId = "") override {
+    return advance(true, planId);
+  }
+
+  RowVectorPtr& current() override {
+    return current_;
+  }
+
+  core::PlanNodeId at() const override {
+    if (pendingTraceDriverState_) {
+      return pendingTraceDriverState_->planId;
+    }
+    return "";
+  }
+
+  void setNoMoreSplits() override {
+    VELOX_CHECK(!noMoreSplits_);
+    noMoreSplits_ = true;
+  }
+
+  bool noMoreSplits() const override {
+    return noMoreSplits_;
+  }
+
+  void setError(std::exception_ptr error) override {
+    error_ = error;
+    if (task_) {
+      task_->setError(error);
+    }
+  }
+
+  const std::shared_ptr<Task>& task() override {
+    return task_;
+  }
+
  protected:
   // Internal state for coordinating between the tracer and cursor.
   //
@@ -723,47 +802,6 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
     }
   }
 
- public:
-  bool moveNext() override {
-    return advance(false);
-  }
-
-  bool moveStep(const core::PlanNodeId& planId = "") override {
-    return advance(true, planId);
-  }
-
-  RowVectorPtr& current() override {
-    return current_;
-  }
-
-  core::PlanNodeId at() const override {
-    if (pendingTraceDriverState_) {
-      return pendingTraceDriverState_->planId;
-    }
-    return "";
-  }
-
-  void setNoMoreSplits() override {
-    VELOX_CHECK(!noMoreSplits_);
-    noMoreSplits_ = true;
-  }
-
-  bool noMoreSplits() const override {
-    return noMoreSplits_;
-  }
-
-  void setError(std::exception_ptr error) override {
-    error_ = error;
-    if (task_) {
-      task_->setError(error);
-    }
-  }
-
-  const std::shared_ptr<Task>& task() override {
-    return task_;
-  }
-
- protected:
   // Advance to the next vector to produce, storing it in `current_`. If
   // `isStep` is true, move to the next trace point or task output. If false,
   // moves to the next task output.
