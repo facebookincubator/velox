@@ -25,6 +25,7 @@
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -39,6 +40,19 @@ using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
 using dwio::common::UnitLoader;
 using dwio::common::UnitLoaderFactory;
+
+namespace {
+
+dwio::common::ColumnMappingMode columnMappingMode(
+    const ReaderOptions& options) {
+  if (auto formatOptions = std::dynamic_pointer_cast<DwrfOptions>(
+          options.formatSpecificOptions())) {
+    return formatOptions->columnMappingMode();
+  }
+  return dwio::common::ColumnMappingMode::kPosition;
+}
+
+} // namespace
 
 class DwrfUnit : public LoadUnit {
  public:
@@ -340,6 +354,8 @@ DwrfRowReader::DwrfRowReader(
   // after 'columnReaderOptions_' has been initialized.
   columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
       readerBaseShared()->readerOptions());
+  columnReaderOptions_.columnMappingMode_ =
+      columnMappingMode(readerBaseShared()->readerOptions());
   unitLoader_ = getUnitLoader();
   if (!emptyFile()) {
     getReader().loadCache();
@@ -871,8 +887,9 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  const auto mappingMode = columnMappingMode(readerBase_->readerOptions());
   VELOX_CHECK_NE(
-      readerBase_->readerOptions().columnMappingMode(),
+      mappingMode,
       dwio::common::ColumnMappingMode::kParquetFieldId,
       "Parquet field ID column mapping is not supported by DWRF.");
 
@@ -882,12 +899,10 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  const auto columnMappingMode =
-      readerBase_->readerOptions().columnMappingMode();
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
-    if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+    if (mappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
-    } else if (columnMappingMode != dwio::common::ColumnMappingMode::kName) {
+    } else if (mappingMode != dwio::common::ColumnMappingMode::kName) {
       updateColumnNamesFromTableSchema();
     }
   }
@@ -1215,8 +1230,10 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
-    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
+  auto formatOptions = checkedPointerCast<DwrfOptions>(
+      readerBase.readerOptions().formatSpecificOptions());
+  if (memoryBytes < footerLength + formatOptions->footerSpeculativeIoSize()) {
+    memoryBytes = footerLength + formatOptions->footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.
@@ -1267,6 +1284,22 @@ std::unique_ptr<DwrfReader> DwrfReader::create(
     return nullptr;
   }
   return std::make_unique<DwrfReader>(options, std::move(input));
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<DwrfOptions>();
+  options->setColumnMappingMode(
+      Config::useColumnNames(connectorConfig, session)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition);
+  options->setFooterSpeculativeIoSize(
+      Config::footerSpeculativeIoSize(connectorConfig, session));
+  options->setMaxCoalesceDistance(
+      Config::maxCoalescedDistance(connectorConfig, session));
+  return options;
 }
 
 void registerDwrfReaderFactory() {

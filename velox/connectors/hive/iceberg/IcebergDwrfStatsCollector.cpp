@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/Statistics.h"
@@ -449,13 +450,10 @@ IcebergDataFileStatisticsPtr IcebergDwrfStatsCollector::aggregate(
 
 void IcebergDwrfStatsCollector::configureWriterOptions(
     dwio::common::WriterOptions& options) const {
-  auto* dwrfOptions = dynamic_cast<dwrf::WriterOptions*>(&options);
-  if (dwrfOptions == nullptr) {
-    return;
-  }
+  auto dwrfOptions = checkedPointerCast<dwrf::DwrfWriterOptions>(
+      options.formatSpecificOptions);
   dwrfOptions->schemaAttributes = buildDwrfSchemaAttributes(
-      std::dynamic_pointer_cast<const RowType>(dwrfOptions->schema),
-      inputColumns_);
+      std::dynamic_pointer_cast<const RowType>(options.schema), inputColumns_);
 }
 
 IcebergDataFileStatisticsPtr IcebergDwrfStatsCollector::collect(

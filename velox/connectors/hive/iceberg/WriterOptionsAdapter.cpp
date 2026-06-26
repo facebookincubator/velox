@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
 
+#include "common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/parquet/common/ParquetConfig.h"
@@ -63,12 +64,10 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
     // DWRF stores microsecond-precision timestamps natively, so no
     // precision conversion is required; only timezone adjustment must be
     // disabled per the Iceberg spec. Unlike Parquet, DWRF exposes
-    // timestamp configuration as direct fields on dwrf::WriterOptions
+    // timestamp configuration as direct fields on dwrf::DwrfWriterOptions
     // rather than serdeParameters.
-    auto* dwrfOptions = dynamic_cast<dwrf::WriterOptions*>(&options);
-    if (dwrfOptions == nullptr) {
-      return;
-    }
+    auto dwrfOptions = checkedPointerCast<dwrf::DwrfWriterOptions>(
+        options.formatSpecificOptions);
     dwrfOptions->adjustTimestampToTimezone = false;
     dwrfOptions->sessionTimezone = nullptr;
   }

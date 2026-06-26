@@ -39,6 +39,7 @@
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Exchange.h"
@@ -75,6 +76,13 @@ void verifyCacheStats(
   EXPECT_EQ(cacheStats.curSize, curSize);
   EXPECT_EQ(cacheStats.numHits, numHits);
   EXPECT_EQ(cacheStats.numLookups, numLookups);
+}
+
+std::string orcSessionProperty(std::string_view name) {
+  return fmt::format(
+      "{}{}",
+      formatConfigPrefix(dwio::common::FileFormat::ORC, "_"),
+      std::string(name));
 }
 
 class TableScanTest : public TableScanTestBase {
@@ -1247,7 +1255,7 @@ TEST_F(TableScanTest, structMatchByName) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .connectorSessionProperty(
                 kHiveConnectorId,
-                connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                orcSessionProperty(dwrf::Config::kOrcUseColumnNamesSession),
                 "true")
             .split(makeHiveConnectorSplit(filePath))
             .assertResults(sql);
@@ -1355,7 +1363,7 @@ TEST_F(TableScanTest, structMatchByName) {
           AssertQueryBuilder(op)
               .connectorSessionProperty(
                   kHiveConnectorId,
-                  connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                  orcSessionProperty(dwrf::Config::kOrcUseColumnNamesSession),
                   "true")
               .split(split)
               .copyResults(pool());
@@ -1389,7 +1397,7 @@ TEST_F(TableScanTest, structMatchByName) {
     AssertQueryBuilder(op, duckDbQueryRunner_)
         .connectorSessionProperty(
             kHiveConnectorId,
-            connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+            orcSessionProperty(dwrf::Config::kOrcUseColumnNamesSession),
             "true")
         .connectorSessionProperty(
             kHiveConnectorId,
@@ -5096,7 +5104,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                   orcSessionProperty(dwrf::Config::kOrcUseColumnNamesSession),
                    "true")
                .split(split)
                .copyResults(pool());
@@ -5358,7 +5366,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
-                   connector::hive::HiveConfig::kOrcUseColumnNamesSession,
+                   orcSessionProperty(dwrf::Config::kOrcUseColumnNamesSession),
                    "true")
                .split(split)
                .copyResults(pool());

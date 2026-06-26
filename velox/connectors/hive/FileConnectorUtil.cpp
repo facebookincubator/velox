@@ -38,12 +38,13 @@ FormatScopedConfigs makeFormatScopedConfigs(
       dwio::common::FileFormat::UNKNOWN,
       "Cannot build format-specific configs for unknown file format");
 
+  auto connectorConfig = fileConfig.config()->rawConfigsWithPrefix(
+      fmt::format(
+          "{}{}",
+          fileConfig.connectorConfigPrefix(),
+          dwio::common::formatConfigPrefix(fileFormat, ".")));
   return {
-      config::ConfigBase(fileConfig.config()->rawConfigsWithPrefix(
-          fmt::format(
-              "{}{}",
-              fileConfig.connectorConfigPrefix(),
-              dwio::common::formatConfigPrefix(fileFormat, ".")))),
+      config::ConfigBase(std::move(connectorConfig)),
       config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
           dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
@@ -75,25 +76,9 @@ void configureReaderOptions(
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
-  readerOptions.setMaxCoalesceDistance(
-      fileConfig->maxCoalescedDistanceBytes(sessionProperties));
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  auto columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
-  switch (fileSplit->fileFormat) {
-    case dwio::common::FileFormat::DWRF:
-    case dwio::common::FileFormat::ORC: {
-      columnMappingMode = fileConfig->isOrcUseColumnNames(sessionProperties)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition;
-      break;
-    }
-    default:
-      columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
-  }
-
-  readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
@@ -122,25 +107,9 @@ void configureReaderOptions(
   readerOptions.setCacheIndex(
       fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
-
-  // Set footer speculative IO size based on file format.
-  switch (fileSplit->fileFormat) {
-    case dwio::common::FileFormat::DWRF:
-    case dwio::common::FileFormat::ORC:
-      readerOptions.setFooterSpeculativeIoSize(
-          fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
-      break;
-    case dwio::common::FileFormat::PARQUET:
-      break;
-    case dwio::common::FileFormat::NIMBLE:
-      readerOptions.setFooterSpeculativeIoSize(
-          fileConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
-      break;
-    default:
-      // Use ORC default for unknown formats.
-      readerOptions.setFooterSpeculativeIoSize(
-          fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
-      break;
+  if (fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE) {
+    readerOptions.setFooterSpeculativeIoSize(
+        fileConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
   }
 
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
@@ -158,8 +127,12 @@ void configureReaderOptions(
     return;
   }
 
-  auto formatScopedConfigs = makeFormatScopedConfigs(
-      *fileConfig, *sessionProperties, fileSplit->fileFormat);
+  const auto fileFormat =
+      fileSplit->fileFormat == dwio::common::FileFormat::DWRF
+      ? dwio::common::FileFormat::ORC
+      : fileSplit->fileFormat;
+  auto formatScopedConfigs =
+      makeFormatScopedConfigs(*fileConfig, *sessionProperties, fileFormat);
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(

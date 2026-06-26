@@ -18,6 +18,7 @@
 #include "gtest/gtest.h"
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/common/Config.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/common/ParquetConfig.h"
@@ -28,6 +29,17 @@
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using facebook::velox::connector::hive::HiveConfig;
+
+namespace {
+bool hasProperty(
+    const std::vector<config::ConfigProperty>& properties,
+    const std::string& name) {
+  return std::any_of(
+      properties.begin(), properties.end(), [&](const auto& property) {
+        return property.name == name;
+      });
+}
+} // namespace
 
 TEST(HiveConfigTest, defaultConfig) {
   HiveConfig hiveConfig(
@@ -43,12 +55,9 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.immutablePartitions(), false);
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
-  ASSERT_FALSE(hiveConfig.isOrcUseColumnNames(emptySession.get()));
   ASSERT_FALSE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
 
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 128 << 20);
-  ASSERT_EQ(
-      hiveConfig.maxCoalescedDistanceBytes(emptySession.get()), 512 << 10);
   ASSERT_FALSE(
       hiveConfig.readStatsBasedFilterReorderDisabled(emptySession.get()));
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 20'000);
@@ -66,8 +75,6 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_FALSE(hiveConfig.cacheMetadata(emptySession.get()));
   ASSERT_FALSE(hiveConfig.cacheIndex(emptySession.get()));
   ASSERT_EQ(
-      hiveConfig.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
-  ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
   ASSERT_FALSE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_FALSE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
@@ -80,11 +87,9 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kImmutablePartitions, "true"},
       {HiveConfig::kGcsEndpoint, "hey"},
       {HiveConfig::kGcsCredentialsPath, "hey"},
-      {HiveConfig::kOrcUseColumnNames, "true"},
       {HiveConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {HiveConfig::kAllowNullPartitionKeys, "false"},
       {HiveConfig::kMaxCoalescedBytes, "100"},
-      {HiveConfig::kMaxCoalescedDistance, "100kB"},
       {HiveConfig::kNumCacheFileHandles, "100"},
       {HiveConfig::kFileHandleExpirationDurationMs, "200"},
       {HiveConfig::kEnableFileHandleCache, "false"},
@@ -98,7 +103,6 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kIndexEnabled, "true"},
       {HiveConfig::kCacheMetadata, "true"},
       {HiveConfig::kCacheIndex, "true"},
-      {HiveConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
       {HiveConfig::kNimbleStringDecoderZeroCopy, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncoding, "true"},
@@ -115,12 +119,9 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.immutablePartitions());
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "hey");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "hey");
-  ASSERT_TRUE(hiveConfig.isOrcUseColumnNames(emptySession.get()));
   ASSERT_TRUE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   ASSERT_FALSE(hiveConfig.allowNullPartitionKeys(emptySession.get()));
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 100);
-  ASSERT_EQ(
-      hiveConfig.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 100);
   ASSERT_EQ(hiveConfig.fileHandleExpirationDurationMs(), 200);
   ASSERT_FALSE(hiveConfig.isFileHandleCacheEnabled());
@@ -138,8 +139,6 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.cacheMetadata(emptySession.get()));
   ASSERT_TRUE(hiveConfig.cacheIndex(emptySession.get()));
   ASSERT_EQ(
-      hiveConfig.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
-  ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
@@ -151,11 +150,9 @@ TEST(HiveConfigTest, overrideSession) {
           std::unordered_map<std::string, std::string>()));
   std::unordered_map<std::string, std::string> sessionOverride = {
       {HiveConfig::kInsertExistingPartitionsBehaviorSession, "OVERWRITE"},
-      {HiveConfig::kOrcUseColumnNamesSession, "true"},
       {HiveConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {HiveConfig::kSortWriterMaxOutputRowsSession, "20"},
       {HiveConfig::kSortWriterMaxOutputBytesSession, "20MB"},
-      {HiveConfig::kMaxCoalescedDistanceSession, "3MB"},
       {HiveConfig::kSortWriterFinishTimeSliceLimitMsSession, "300"},
       {HiveConfig::kPartitionPathAsLowerCaseSession, "false"},
       {HiveConfig::kAllowNullPartitionKeysSession, "false"},
@@ -166,8 +163,6 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kIndexEnabledSession, "true"},
       {HiveConfig::kCacheMetadataSession, "true"},
       {HiveConfig::kCacheIndexSession, "true"},
-      {HiveConfig::kOrcFooterSpeculativeIoSizeSession,
-       std::to_string(128UL << 10)},
       {HiveConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
       {HiveConfig::kNimbleStringDecoderZeroCopySession, "true"},
@@ -183,11 +178,9 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_FALSE(hiveConfig.immutablePartitions());
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
-  ASSERT_TRUE(hiveConfig.isOrcUseColumnNames(session.get()));
   ASSERT_TRUE(hiveConfig.isFileColumnNamesReadAsLowerCase(session.get()));
 
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(session.get()), 128 << 20);
-  ASSERT_EQ(hiveConfig.maxCoalescedDistanceBytes(session.get()), 3 << 20);
   ASSERT_EQ(hiveConfig.numCacheFileHandles(), 20'000);
   ASSERT_TRUE(hiveConfig.isFileHandleCacheEnabled());
   ASSERT_EQ(hiveConfig.sortWriterMaxOutputRows(session.get()), 20);
@@ -202,7 +195,6 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_TRUE(hiveConfig.indexEnabled(session.get()));
   ASSERT_TRUE(hiveConfig.cacheMetadata(session.get()));
   ASSERT_TRUE(hiveConfig.cacheIndex(session.get()));
-  ASSERT_EQ(hiveConfig.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
@@ -263,23 +255,35 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
 #ifdef VELOX_ENABLE_PARQUET
 TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
-
-  auto hasProperty = [&](const std::string& name) {
-    return std::any_of(
-        properties.begin(), properties.end(), [&](const auto& property) {
-          return property.name == name;
-        });
-  };
-
   const auto parquetSessionPrefix =
       dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_");
-  EXPECT_TRUE(hasProperty(HiveConfig::kParquetUseColumnNamesSession));
+  EXPECT_TRUE(
+      hasProperty(properties, HiveConfig::kParquetUseColumnNamesSession));
   EXPECT_TRUE(hasProperty(
+      properties,
       parquetSessionPrefix +
-      std::string(parquet::ParquetConfig::kWriterEnableDictionarySession)));
+          std::string(parquet::ParquetConfig::kWriterEnableDictionarySession)));
   EXPECT_TRUE(hasProperty(
+      properties,
       parquetSessionPrefix +
-      std::string(parquet::ParquetConfig::kWriterPageSizeSession)));
-  EXPECT_FALSE(hasProperty(HiveConfig::kParquetUseColumnNames));
+          std::string(parquet::ParquetConfig::kWriterPageSizeSession)));
+  EXPECT_FALSE(hasProperty(properties, HiveConfig::kParquetUseColumnNames));
 }
 #endif
+
+TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
+  const auto& properties = HiveConfig::registeredProperties();
+
+  const auto orcSessionPrefix =
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_");
+  EXPECT_TRUE(hasProperty(
+      properties,
+      orcSessionPrefix + std::string(dwrf::Config::kOrcUseColumnNamesSession)));
+  EXPECT_TRUE(hasProperty(
+      properties,
+      orcSessionPrefix +
+          std::string(dwrf::Config::kOrcWriterMaxStripeSizeSession)));
+  EXPECT_FALSE(
+      hasProperty(properties, dwrf::Config::kOrcUseColumnNamesSession));
+  EXPECT_FALSE(hasProperty(properties, dwrf::Config::kOrcUseColumnNames));
+}

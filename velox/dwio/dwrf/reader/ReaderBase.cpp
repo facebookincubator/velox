@@ -22,6 +22,7 @@
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::dwrf {
@@ -88,6 +89,14 @@ std::unique_ptr<PostScript> parsePostScript(const char* input, int size) {
   return std::make_unique<PostScript>(std::move(impl));
 }
 
+uint64_t footerSpeculativeIoSize(const dwio::common::ReaderOptions& options) {
+  if (auto formatOptions = std::dynamic_pointer_cast<DwrfOptions>(
+          options.formatSpecificOptions())) {
+    return formatOptions->footerSpeculativeIoSize();
+  }
+  return dwio::common::ReaderOptions::kDefaultFooterSpeculativeIoSize;
+}
+
 template <typename T>
 std::unique_ptr<FooterWrapper> parseFooter(
     dwio::common::SeekableInputStream* input,
@@ -117,7 +126,7 @@ ReaderBase::ReaderBase(
   }
 
   const int64_t footerBufSize =
-      std::min(fileLength_, options_.footerSpeculativeIoSize());
+      std::min(fileLength_, dwrf::footerSpeculativeIoSize(options_));
 
   // TODO: read footer from spectrum
   auto footerBuffer =

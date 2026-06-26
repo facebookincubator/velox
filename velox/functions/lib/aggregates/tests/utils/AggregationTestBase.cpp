@@ -682,7 +682,8 @@ void writeToFile(
     const std::string& path,
     const VectorPtr& vector,
     memory::MemoryPool* pool) {
-  dwrf::WriterOptions options;
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options.schema = vector->type();
   options.memoryPool = pool;
   auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);

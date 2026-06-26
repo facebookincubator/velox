@@ -868,7 +868,7 @@ RowVectorPtr WriterFuzzer::execute(
           "400")
       .connectorSessionProperty(
           kHiveConnectorId,
-          connector::hive::HiveConfig::kOrcMaxTargetFileSizeSession,
+          HiveConfig::kOrcMaxTargetFileSizeSession,
           maxTargetFileSizeBytes)
       .copyResults(pool_.get());
 }
