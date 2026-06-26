@@ -319,7 +319,7 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
         std::move(groupId),
         dataIoStats_,
         nullptr,
-        executor_.get(),
+        nullptr,
         readerOptions);
 
     auto stream1 = input.enqueue(common::Region{123, regionSize}, nullptr);
