@@ -15,7 +15,6 @@
  */
 #include "velox/connectors/hive/HiveIndexSource.h"
 
-
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 #include "velox/common/base/RuntimeMetrics.h"
