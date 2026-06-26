@@ -611,9 +611,11 @@ TEST_F(CudfWindowTest, spill) {
           makeFlatVector<int16_t>(
               size, [](auto row) { return row % numPartitions; }),
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-          makeFlatVector<int64_t>(size, [size, numPartitions](auto row) {
-            return rowNumberWithinPartitionAsc(row, size, numPartitions);
-          }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionAsc(row, size, numPartitions);
+              }),
       });
 
   AssertQueryBuilder(plan)
@@ -745,8 +747,8 @@ TEST_F(CudfWindowTest, rowBasedStreamingWindowOOM) {
                   .singleAggregation({}, {"sum(d)"})
                   .planNode();
 
-  auto expected = makeRowVector(
-      {makeConstant<int64_t>(size * (size - 1) / 2, 1)});
+  auto expected =
+      makeRowVector({makeConstant<int64_t>(size * (size - 1) / 2, 1)});
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
@@ -774,9 +776,11 @@ TEST_F(CudfWindowTest, prePartitionedSortBuild) {
           makeFlatVector<int16_t>(
               size, [](auto row) { return row % numPartitions; }),
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-          makeFlatVector<int64_t>(size, [size, numPartitions](auto row) {
-            return rowNumberWithinPartitionDesc(row, size, numPartitions);
-          }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionDesc(row, size, numPartitions);
+              }),
       });
 
   AssertQueryBuilder(plan)
@@ -809,9 +813,11 @@ TEST_F(CudfWindowTest, prePartitionedSortBuildSkewed) {
           makeFlatVector<int16_t>(
               size, [](auto row) { return row % numPartitions; }),
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-          makeFlatVector<int64_t>(size, [size, numPartitions](auto row) {
-            return rowNumberWithinPartitionDesc(row, size, numPartitions);
-          }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionDesc(row, size, numPartitions);
+              }),
       });
 
   AssertQueryBuilder(plan)
@@ -846,9 +852,11 @@ TEST_F(CudfWindowTest, prePartitionedBuildWithSpill) {
           makeFlatVector<int16_t>(
               size, [](auto row) { return row % numPartitions; }),
           makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-          makeFlatVector<int64_t>(size, [size, numPartitions](auto row) {
-            return rowNumberWithinPartitionDesc(row, size, numPartitions);
-          }),
+          makeFlatVector<int64_t>(
+              size,
+              [size, numPartitions](auto row) {
+                return rowNumberWithinPartitionDesc(row, size, numPartitions);
+              }),
       });
 
   AssertQueryBuilder(plan)
@@ -1661,9 +1669,7 @@ TEST_F(CudfWindowTest, windowAdapterGatingChecks) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(
-    CudfWindowTest,
-    explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
+TEST_F(CudfWindowTest, explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
   auto data = makeRowVector(
       {"p", "v"},
       {
@@ -1697,13 +1703,12 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
       });
 
   {
-    auto plan =
-        PlanBuilder()
-            .values({data})
-            .window({"sum(v) over (order by v "
-                     "rows between current row and current row) as s"})
-            .orderBy({"v ASC NULLS LAST"}, false)
-            .planNode();
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between current row and current row) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
 
     auto expected = makeRowVector(
         {"v", "s"},
@@ -1716,13 +1721,12 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
   }
 
   {
-    auto plan =
-        PlanBuilder()
-            .values({data})
-            .window({"sum(v) over (order by v "
-                     "rows between 1 preceding and current row) as s"})
-            .orderBy({"v ASC NULLS LAST"}, false)
-            .planNode();
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between 1 preceding and current row) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
 
     auto expected = makeRowVector(
         {"v", "s"},
@@ -1735,13 +1739,12 @@ TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
   }
 
   {
-    auto plan =
-        PlanBuilder()
-            .values({data})
-            .window({"sum(v) over (order by v "
-                     "rows between 1 following and 1 following) as s"})
-            .orderBy({"v ASC NULLS LAST"}, false)
-            .planNode();
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (order by v "
+                             "rows between 1 following and 1 following) as s"})
+                    .orderBy({"v ASC NULLS LAST"}, false)
+                    .planNode();
 
     auto expected = makeRowVector(
         {"v", "s"},
@@ -1778,9 +1781,7 @@ TEST_F(CudfWindowTest, lagLeadIgnoreNullsFallsBack) {
       "Replacement with cuDF operator failed");
 }
 
-TEST_F(
-    CudfWindowTest,
-    countStarOverZeroColumnInputPreservesLogicalRows) {
+TEST_F(CudfWindowTest, countStarOverZeroColumnInputPreservesLogicalRows) {
   auto data = makeRowVector(
       {"v"},
       {
@@ -1813,12 +1814,11 @@ TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
       });
 
   {
-    auto plan =
-        PlanBuilder()
-            .values({data})
-            .window({"sum(v) over (range between unbounded preceding "
-                     "and current row) as s"})
-            .planNode();
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({"sum(v) over (range between unbounded preceding "
+                             "and current row) as s"})
+                    .planNode();
 
     auto expected = makeRowVector(
         {"v", "s"},
@@ -1831,16 +1831,15 @@ TEST_F(CudfWindowTest, rangeWithoutOrderByDoesNotDependOnFunctionCount) {
   }
 
   {
-    auto plan =
-        PlanBuilder()
-            .values({data})
-            .window({
-                "sum(v) over (range between unbounded preceding "
-                "and current row) as s",
-                "count(v) over (range between unbounded preceding "
-                "and current row) as c",
-            })
-            .planNode();
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .window({
+                        "sum(v) over (range between unbounded preceding "
+                        "and current row) as s",
+                        "count(v) over (range between unbounded preceding "
+                        "and current row) as c",
+                    })
+                    .planNode();
 
     auto expected = makeRowVector(
         {"v", "s", "c"},

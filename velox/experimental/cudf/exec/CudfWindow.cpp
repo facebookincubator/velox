@@ -18,11 +18,11 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/Operator.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/type/Type.h"
 
 #include <cudf/aggregation.hpp>
@@ -40,8 +40,9 @@
 #include <cudf/types.hpp>
 #include <cudf/unary.hpp>
 
-#include <fmt/format.h>
 #include <nvtx3/nvtx3.hpp>
+
+#include <fmt/format.h>
 
 #include <limits>
 #include <optional>
@@ -76,8 +77,7 @@ bool isFullPartitionFrame(
       func.frame.endType == core::WindowNode::BoundType::kUnboundedFollowing;
   const bool isCurrentRowFollowing =
       func.frame.endType == core::WindowNode::BoundType::kCurrentRow;
-  const bool isRange =
-      func.frame.type == core::WindowNode::WindowType::kRange;
+  const bool isRange = func.frame.type == core::WindowNode::WindowType::kRange;
   return isUnboundedPreceding &&
       (isUnboundedFollowing ||
        (isRange && isCurrentRowFollowing && !hasSortKeys));
@@ -98,14 +98,13 @@ toBatchRangeWindowTypes(
   cudf::range_window_type following;
   if (func.frame.endType == core::WindowNode::BoundType::kCurrentRow) {
     following = cudf::current_row{};
-  } else if (func.frame.endType ==
-             core::WindowNode::BoundType::kUnboundedFollowing) {
+  } else if (
+      func.frame.endType == core::WindowNode::BoundType::kUnboundedFollowing) {
     following = cudf::unbounded{};
   } else {
     return std::nullopt;
   }
-  return std::make_pair(
-      cudf::range_window_type{cudf::unbounded{}}, following);
+  return std::make_pair(cudf::range_window_type{cudf::unbounded{}}, following);
 }
 
 struct PendingRangeRolling {
@@ -199,20 +198,16 @@ std::unique_ptr<cudf::column> computeGlobalAggregate(
   std::unique_ptr<cudf::scalar> resultScalar;
   if (baseName == "sum") {
     auto agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-    resultScalar =
-        cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
+    resultScalar = cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
   } else if (baseName == "min") {
     auto agg = cudf::make_min_aggregation<cudf::reduce_aggregation>();
-    resultScalar =
-        cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
+    resultScalar = cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
   } else if (baseName == "max") {
     auto agg = cudf::make_max_aggregation<cudf::reduce_aggregation>();
-    resultScalar =
-        cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
+    resultScalar = cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
   } else if (baseName == "count") {
     auto agg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
-        isCountStar ? cudf::null_policy::INCLUDE
-                    : cudf::null_policy::EXCLUDE);
+        isCountStar ? cudf::null_policy::INCLUDE : cudf::null_policy::EXCLUDE);
     resultScalar = cudf::reduce(
         inputCol, *agg, cudf::data_type(cudf::type_id::INT64), stream, mr);
   } else {
@@ -369,8 +364,7 @@ bool CudfWindow::canRunOnGPU(
     std::optional<std::string>& reason) {
   if (windowNode.sortingKeys().size() > 1) {
     if (reason) {
-      reason =
-          "Multi-column ORDER BY requires a cuDF upgrade (follow-on PR)";
+      reason = "Multi-column ORDER BY requires a cuDF upgrade (follow-on PR)";
     }
     return false;
   }
@@ -486,7 +480,8 @@ bool CudfWindow::canRunOnGPU(
     for (const auto& bound :
          {std::make_pair(func.frame.startType, func.frame.startValue),
           std::make_pair(func.frame.endType, func.frame.endValue)}) {
-      if (auto constant = isNonNegativeConstantBound(bound.first, bound.second)) {
+      if (auto constant =
+              isNonNegativeConstantBound(bound.first, bound.second)) {
         if (*constant < 0) {
           if (reason) {
             reason = fmt::format(
@@ -684,7 +679,6 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     bool isFullPartition,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
-
   if (func.frame.type == core::WindowNode::WindowType::kRange) {
     VELOX_USER_CHECK(
         !sortKeyIndices_.empty(),
@@ -815,12 +809,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
   if (isFullPartition && sortKeyIndices_.empty() &&
       partKeys.num_columns() == 0) {
     return computeGlobalAggregate(
-        inputCol,
-        baseName,
-        isCountStar,
-        sortedView.num_rows(),
-        stream,
-        mr);
+        inputCol, baseName, isCountStar, sortedView.num_rows(), stream, mr);
   }
 
   return invokeGroupedRollingWindow(
@@ -999,8 +988,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
         baseName == "sum" || baseName == "min" || baseName == "max" ||
         baseName == "count" || baseName == "avg") {
       auto inputColIdx = resolveInputChannel(func, inputRowType_);
-      const bool isCountStar =
-          baseName == "count" && !inputColIdx.has_value();
+      const bool isCountStar = baseName == "count" && !inputColIdx.has_value();
       if (!isCountStar) {
         VELOX_CHECK(
             inputColIdx.has_value(),
@@ -1016,13 +1004,9 @@ RowVectorPtr CudfWindow::doGetOutput() {
       if (isFullPartition && sortKeyIndices_.empty() &&
           partKeys.num_columns() == 0) {
         windowResultCols[funcIndex] = computeGlobalAggregate(
-            inputCol,
-            baseName,
-            isCountStar,
-            logicalRowCount_,
-            stream_,
-            mr);
-      } else if (auto rangeTypes = toBatchRangeWindowTypes(func, isFullPartition)) {
+            inputCol, baseName, isCountStar, logicalRowCount_, stream_, mr);
+      } else if (
+          auto rangeTypes = toBatchRangeWindowTypes(func, isFullPartition)) {
         std::unique_ptr<cudf::rolling_aggregation> agg;
         if (baseName == "sum") {
           agg = cudf::make_sum_aggregation<cudf::rolling_aggregation>();
@@ -1087,8 +1071,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
       rollingRequests.reserve(pendingRequests.size());
       for (auto& pending : pendingRequests) {
         rollingRequests.push_back(
-            cudf::rolling_request{
-                pending.inputCol, 1, std::move(pending.agg)});
+            cudf::rolling_request{pending.inputCol, 1, std::move(pending.agg)});
       }
       auto batchResult = cudf::grouped_range_rolling_window(
           partKeys,
