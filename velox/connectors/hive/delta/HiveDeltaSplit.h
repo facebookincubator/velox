@@ -21,22 +21,23 @@
 
 namespace facebook::velox::connector::hive::delta {
 
-/// Delta Lake split for reading data files.
-/// Extends HiveConnectorSplit to leverage existing Hive file reading infrastructure.
+/// Represents a Delta Lake data file to read. Extends HiveConnectorSplit to
+/// reuse the existing Hive file reading infrastructure.
 struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
-  /// Constructor for Delta Lake splits
-  /// @param connectorId Connector identifier
-  /// @param filePath Path to the data file
-  /// @param fileFormat File format (Parquet, ORC, etc.)
-  /// @param start Starting byte offset in the file
-  /// @param length Number of bytes to read
-  /// @param partitionKeys Map of partition column names to values
-  /// @param tableBucketNumber Optional bucket number for bucketed tables
-  /// @param customSplitInfo Custom split metadata (includes table_format=hive-delta)
-  /// @param extraFileInfo Additional file information
-  /// @param cacheable Whether the split data can be cached
-  /// @param infoColumns Additional metadata columns (e.g., file path, modification time)
-  /// @param fileProperties Optional file properties (row count, file size, etc.)
+  /// @param connectorId Connector identifier.
+  /// @param filePath Path to the data file.
+  /// @param fileFormat File format of the data file.
+  /// @param start Starting byte offset in the file.
+  /// @param length Number of bytes to read.
+  /// @param partitionKeys Partition column names to their values.
+  /// @param tableBucketNumber Bucket number for bucketed tables.
+  /// @param customSplitInfo Custom split metadata, includes
+  /// table_format=hive-delta.
+  /// @param extraFileInfo Additional file information.
+  /// @param cacheable Whether the split data can be cached.
+  /// @param infoColumns Synthesized metadata columns, e.g. $path and
+  /// $file_size.
+  /// @param fileProperties File properties such as row count and file size.
   HiveDeltaSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -54,4 +55,3 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
 };
 
 } // namespace facebook::velox::connector::hive::delta
-
