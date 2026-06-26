@@ -13,7 +13,7 @@
 # limitations under the License.
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -500,14 +500,14 @@ target_link_libraries(folly_test_util
+@@ -296,15 +296,15 @@ target_link_libraries(folly_test_util
  apply_folly_compile_options_to_target(folly_test_util)
  list(APPEND FOLLY_INSTALL_TARGETS folly_test_util)
 
@@ -22,6 +22,7 @@
 -  RUNTIME DESTINATION bin
 -  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 -  ARCHIVE DESTINATION ${LIB_INSTALL_DIR})
+-
 -auto_install_files(folly ${FOLLY_DIR}
 -  ${hfiles}
 -)
@@ -30,13 +31,14 @@
 +#  RUNTIME DESTINATION bin
 +#  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
 +#  ARCHIVE DESTINATION ${LIB_INSTALL_DIR})
++#
 +#auto_install_files(folly ${FOLLY_DIR}
 +#  ${hfiles}
 +#)
  install(
    FILES ${CMAKE_CURRENT_BINARY_DIR}/folly/folly-config.h
    DESTINATION ${INCLUDE_INSTALL_DIR}/folly
-@@ -531,13 +531,13 @@ install(
+@@ -328,13 +328,13 @@ install(
    DESTINATION ${CMAKE_INSTALL_DIR}
    COMPONENT dev
  )
