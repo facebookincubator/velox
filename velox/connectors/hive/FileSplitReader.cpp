@@ -16,9 +16,6 @@
 
 #include "velox/connectors/hive/FileSplitReader.h"
 
-#include <cstddef>
-#include <cstdint>
-
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/ConstantFromString.h"
@@ -87,7 +84,8 @@ FileSplitReader::FileSplitReader(
           connectorQueryCtx->sessionTimezone().empty()
               ? nullptr
               : tz::locateZone(connectorQueryCtx->sessionTimezone())),
-      adjustTimestampToTimezone_(connectorQueryCtx->adjustTimestampToTimezone()),
+      adjustTimestampToTimezone_(
+          connectorQueryCtx->adjustTimestampToTimezone()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
       fileSplit_(fileSplit),
@@ -412,9 +410,6 @@ void FileSplitReader::setPartitionValue(
           connectorQueryCtx_->sessionProperties()),
       it->second->isPartitionDateValueDaysSinceEpoch(),
       adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
-  // Replace the placeholder null constant with the actual partition value.
-  // The column was already marked as constant in makeScanSpec to prevent
-  // child reader creation.
   spec->setConstantValue(constant);
 }
 
