@@ -18,6 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
@@ -40,7 +41,7 @@ class ColumnChunkMetaDataPtr {
 
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
-      const TypePtr type,
+      const ParquetTypeWithId& parquetType,
       int64_t numRows);
 
   /// Return the Column Metadata Statistics Min Value

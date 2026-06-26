@@ -1735,7 +1735,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
       return nullptr;
     }
     auto rowGroupStats =
-        columnChunk.getColumnStatistics(parquetNode.type(), rowGroup.numRows());
+        columnChunk.getColumnStatistics(parquetNode, rowGroup.numRows());
     builder->merge(*rowGroupStats);
   }
 
