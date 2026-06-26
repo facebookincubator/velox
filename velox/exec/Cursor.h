@@ -154,8 +154,36 @@ class TaskCursor {
   /// Fetches another batch from the task queue. Starts the task if not started
   /// yet.
   ///
-  /// @return Returns false is the task is done producing output.
-  virtual bool moveNext() = 0;
+  ///  - When 'future' is null (as in the convenience moveNext() overload),
+  ///    blocks until a batch is available or the task is done.
+  ///  - When 'future' is non-null, does not block. Returns true with the batch
+  ///    in current() if one is ready. Otherwise returns false and either sets
+  ///    '*future' to a future realized when the caller should retry (more
+  ///    output may still arrive) or leaves '*future' invalid when the task is
+  ///    done. A valid future means "blocked", an invalid future means "done".
+  ///    A completed drain boundary also returns false with an invalid future;
+  ///    this protocol does not distinguish it from end-of-stream.
+  ///    Honors task cancellation (requestCancel()) by surfacing the task error
+  ///    on a subsequent call (parallel and serial cursors alike). The error
+  ///    path is the one exception to "does not block": before rethrowing, the
+  ///    call waits (bounded) for the task to terminate and its drivers to
+  ///    finish, so the executor outlives the drivers still using it.
+  ///
+  /// Single-consumer protocol: when a non-null call hands back a valid future,
+  /// the caller must wait on it before issuing the next moveNext(&future) call.
+  /// Re-entering with a blocked cursor throws (the prior future would otherwise
+  /// be stranded).
+  ///
+  /// Cursors that cannot suspend (e.g. interactive debugging cursors) ignore
+  /// 'future' and block, leaving it invalid.
+  ///
+  /// @return Returns false if the task is done producing output.
+  virtual bool moveNext(ContinueFuture* future) = 0;
+
+  /// Blocking convenience overload; equivalent to moveNext(nullptr).
+  bool moveNext() {
+    return moveNext(nullptr);
+  }
 
   /// Steps through execution, returning either the input to the next operator
   /// with a breakpoint installed, or the next task output. If no breakpoints
