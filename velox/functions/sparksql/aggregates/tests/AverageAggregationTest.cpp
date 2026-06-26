@@ -17,12 +17,16 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::functions::aggregate::sparksql::test {
 
@@ -431,6 +435,53 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
           .customStats.at("toIntermediateFastPathCalls")
           .sum,
       2);
+}
+
+// Decimal avg with ANSI mode enabled throws on overflow instead of NULL.
+TEST_F(AverageAggregationTest, decimalAvgOverflowAnsi) {
+  std::vector<int128_t> rawVector;
+  for (int i = 0; i < 10; ++i) {
+    rawVector.push_back(DecimalUtil::kLongDecimalMax);
+  }
+  auto input =
+      makeRowVector({makeFlatVector<int128_t>(rawVector, DECIMAL(38, 0))});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({}, {"spark_avg(c0)"})
+                  .planNode();
+
+  // ANSI enabled: throws.
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(
+              SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true")
+          .copyResults(pool()),
+      "Decimal overflow in average");
+
+  // ANSI disabled (default): returns NULL on overflow.
+  auto expectedNull = makeRowVector({makeNullableFlatVector(
+      std::vector<std::optional<int128_t>>{std::nullopt}, DECIMAL(38, 4))});
+  AssertQueryBuilder(plan)
+      .config(
+          SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false")
+      .assertResults({expectedNull});
+}
+
+// Decimal avg with normal values produces the same result regardless of ANSI.
+TEST_F(AverageAggregationTest, decimalAvgNormalAnsi) {
+  auto input =
+      makeRowVector({makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(12, 1))});
+  int64_t kRescale = 10000;
+  auto expected =
+      makeRowVector({makeConstant<int64_t>(200 * kRescale, 1, DECIMAL(16, 5))});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({}, {"spark_avg(c0)"})
+                  .planNode();
+  // ANSI on: normal values are unchanged.
+  AssertQueryBuilder(plan)
+      .config(SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true")
+      .assertResults({expected});
 }
 
 } // namespace
