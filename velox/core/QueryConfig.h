@@ -577,6 +577,20 @@ class QueryConfig {
       true,
       "Enable aggregation spilling. Requires spill_enabled.")
 
+  /// When true, aggregation spilling skips the spill-time sort and recovers
+  /// each spill partition by reading it with an unordered reader and
+  /// re-aggregating it through a hash table (vectorized), instead of the
+  /// row-by-row ordered (sorted) merge. This holds one spill partition in
+  /// memory at a time. Only applies to non-distinct aggregations without
+  /// sorted/distinct aggregates.
+  VELOX_QUERY_CONFIG(
+      kAggregationSpillHashRecoveryEnabled,
+      aggregationSpillHashRecoveryEnabled,
+      "aggregation_spill_hash_recovery_enabled",
+      bool,
+      true,
+      "Enable aggregation spilling hash recovery. Requires spill_enabled.")
+
   /// Join spilling flag, only applies if "spill_enabled" flag is set.
   VELOX_QUERY_CONFIG(
       kJoinSpillEnabled,
