@@ -31,7 +31,7 @@ HiveDeltaSplit::HiveDeltaSplit(
     const std::shared_ptr<std::string>& extraFileInfo,
     bool cacheable,
     const std::unordered_map<std::string, std::string>& infoColumns,
-    std::optional<FileProperties> properties)
+    std::optional<FileProperties> fileProperties)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -46,11 +46,8 @@ HiveDeltaSplit::HiveDeltaSplit(
           /*splitWeight=*/0,
           cacheable,
           infoColumns,
-          properties,
+          std::move(fileProperties),
           std::nullopt,
-          std::nullopt) {
-  // Delta Lake specific initialization can be added here if needed
-}
+          std::nullopt) {}
 
 } // namespace facebook::velox::connector::hive::delta
-
