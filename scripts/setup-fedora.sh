@@ -61,7 +61,8 @@ function install_velox_deps_from_dnf {
     elfutils-libelf-devel flex gflags-devel glog-devel gmock-devel \
     gtest-devel libdwarf-devel libevent-devel libicu-devel \
     libsodium-devel libzstd-devel lz4-devel openssl-devel-engine \
-    re2-devel snappy-devel xxhash-devel zlib-devel grpc-devel grpc-plugins
+    re2-devel snappy-devel xxhash-devel zlib-devel grpc-devel grpc-plugins \
+    numactl-devel
 
   install_faiss_deps
 }

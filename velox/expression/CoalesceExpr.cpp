@@ -45,12 +45,12 @@ TypePtr resolveTypeInt(
       continue;
     }
 
-    if (allowedCoercions && coercer.coercible(argTypes[i], resultType)) {
+    if (allowedCoercions && coercer.coerce(argTypes[i], resultType)) {
       coercions[i] = resultType;
       continue;
     }
 
-    if (allowedCoercions && coercer.coercible(resultType, argTypes[i])) {
+    if (allowedCoercions && coercer.coerce(resultType, argTypes[i])) {
       resultType = argTypes[i];
       for (auto j = 0; j < i; j++) {
         coercions[j] = resultType;

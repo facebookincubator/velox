@@ -23,22 +23,19 @@ namespace facebook::velox {
 namespace {
 
 void testCoercion(const TypePtr& fromType, const TypePtr& toType) {
-  auto coercion =
-      TypeCoercer::defaults().coerceTypeBase(fromType, toType->name());
+  auto coercion = TypeCoercer::defaults().coerce(fromType, toType);
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, toType);
 }
 
 void testBaseCoercion(const TypePtr& fromType) {
-  auto coercion =
-      TypeCoercer::defaults().coerceTypeBase(fromType, fromType->kindName());
+  auto coercion = TypeCoercer::defaults().coerce(fromType, fromType);
   ASSERT_TRUE(coercion.has_value());
   VELOX_EXPECT_EQ_TYPES(coercion->type, fromType);
 }
 
 void testNoCoercion(const TypePtr& fromType, const TypePtr& toType) {
-  auto coercion =
-      TypeCoercer::defaults().coerceTypeBase(fromType, toType->name());
+  auto coercion = TypeCoercer::defaults().coerce(fromType, toType);
   ASSERT_FALSE(coercion.has_value());
 }
 
@@ -63,9 +60,9 @@ TEST(TypeCoercerTest, decimal) {
   testNoCoercion(DECIMAL(10, 2), VARCHAR());
   testNoCoercion(DECIMAL(10, 2), BIGINT());
 
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(DECIMAL(10, 2), DOUBLE()));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(DECIMAL(10, 2), REAL()));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(DOUBLE(), DECIMAL(10, 2)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(DECIMAL(10, 2), DOUBLE()));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(DECIMAL(10, 2), REAL()));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(DOUBLE(), DECIMAL(10, 2)));
 }
 
 TEST(TypeCoercerTest, integerToDecimal) {
@@ -74,25 +71,25 @@ TEST(TypeCoercerTest, integerToDecimal) {
   testCoercion(INTEGER(), DECIMAL(10, 0));
   testCoercion(BIGINT(), DECIMAL(19, 0));
 
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(TINYINT(), DECIMAL(10, 2)));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(SMALLINT(), DECIMAL(10, 2)));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(INTEGER(), DECIMAL(38, 4)));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(BIGINT(), DECIMAL(38, 4)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(TINYINT(), DECIMAL(10, 2)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(SMALLINT(), DECIMAL(10, 2)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(INTEGER(), DECIMAL(38, 4)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(BIGINT(), DECIMAL(38, 4)));
 
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(TINYINT(), DECIMAL(3, 0)));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(SMALLINT(), DECIMAL(5, 0)));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(INTEGER(), DECIMAL(10, 0)));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(BIGINT(), DECIMAL(19, 0)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(TINYINT(), DECIMAL(3, 0)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(SMALLINT(), DECIMAL(5, 0)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(INTEGER(), DECIMAL(10, 0)));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(BIGINT(), DECIMAL(19, 0)));
 
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(TINYINT(), DECIMAL(2, 0)));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(SMALLINT(), DECIMAL(4, 0)));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(INTEGER(), DECIMAL(9, 0)));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(BIGINT(), DECIMAL(18, 0)));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(INTEGER(), DECIMAL(4, 2)));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(BIGINT(), DECIMAL(10, 2)));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(TINYINT(), DECIMAL(2, 0)));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(SMALLINT(), DECIMAL(4, 0)));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(INTEGER(), DECIMAL(9, 0)));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(BIGINT(), DECIMAL(18, 0)));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(INTEGER(), DECIMAL(4, 2)));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(BIGINT(), DECIMAL(10, 2)));
 
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(DECIMAL(10, 2), INTEGER()));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(DECIMAL(10, 2), BIGINT()));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(DECIMAL(10, 2), INTEGER()));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(DECIMAL(10, 2), BIGINT()));
 }
 
 TEST(TypeCoercerTest, integerToDecimalLeastCommonSuperType) {
@@ -168,13 +165,13 @@ TEST(TypeCoercerTest, date) {
 }
 
 TEST(TypeCoercerTest, unknown) {
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(UNKNOWN(), BOOLEAN()));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(UNKNOWN(), BIGINT()));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(UNKNOWN(), VARCHAR()));
-  ASSERT_TRUE(TypeCoercer::defaults().coercible(UNKNOWN(), ARRAY(INTEGER())));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(UNKNOWN(), BOOLEAN()));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(UNKNOWN(), BIGINT()));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(UNKNOWN(), VARCHAR()));
+  ASSERT_TRUE(TypeCoercer::defaults().coerce(UNKNOWN(), ARRAY(INTEGER())));
 }
 
-TEST(TypeCoercerTest, coerceTypeBaseFromUnknown) {
+TEST(TypeCoercerTest, coerceUnknownToScalar) {
   // Test coercion from UNKNOWN to various types.
   testCoercion(UNKNOWN(), TINYINT());
   testCoercion(UNKNOWN(), BOOLEAN());
@@ -187,12 +184,52 @@ TEST(TypeCoercerTest, coerceTypeBaseFromUnknown) {
   testCoercion(UNKNOWN(), VARBINARY());
 }
 
+TEST(TypeCoercerTest, coerceUnknownToParameterizedScalar) {
+  auto coercion = TypeCoercer::defaults().coerce(UNKNOWN(), DECIMAL(10, 2));
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, DECIMAL(10, 2));
+}
+
+TEST(TypeCoercerTest, coerceContainerResolvesToTargetType) {
+  const auto& coercer = TypeCoercer::defaults();
+
+  auto coercion = coercer.coerce(ARRAY(UNKNOWN()), ARRAY(INTEGER()));
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, ARRAY(INTEGER()));
+
+  coercion =
+      coercer.coerce(MAP(UNKNOWN(), UNKNOWN()), MAP(INTEGER(), DOUBLE()));
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, MAP(INTEGER(), DOUBLE()));
+
+  coercion = coercer.coerce(ARRAY(ARRAY(UNKNOWN())), ARRAY(ARRAY(INTEGER())));
+  ASSERT_TRUE(coercion.has_value());
+  VELOX_EXPECT_EQ_TYPES(coercion->type, ARRAY(ARRAY(INTEGER())));
+
+  ASSERT_FALSE(coercer.coerce(ARRAY(BIGINT()), ARRAY(REAL())).has_value());
+
+  // Mismatched container name or arity is not coercible.
+  ASSERT_FALSE(
+      coercer.coerce(ARRAY(INTEGER()), MAP(INTEGER(), INTEGER())).has_value());
+  ASSERT_FALSE(
+      coercer.coerce(ROW({INTEGER(), BIGINT()}), ROW({INTEGER()})).has_value());
+}
+
+TEST(TypeCoercerTest, unknownToContainerRanksAboveScalar) {
+  const auto& coercer = TypeCoercer::defaults();
+
+  // A bare UNKNOWN coerces to a container at a higher cost than to any scalar.
+  EXPECT_GT(
+      coercer.coerce(UNKNOWN(), ARRAY(INTEGER()))->cost,
+      coercer.coerce(UNKNOWN(), VARBINARY())->cost);
+}
+
 TEST(TypeCoercerTest, noCost) {
   auto assertNoCost = [](const TypePtr& type) {
     SCOPED_TRACE(type->toString());
-    auto cost = TypeCoercer::defaults().coercible(type, type);
-    ASSERT_TRUE(cost.has_value());
-    EXPECT_EQ(cost.value(), 0);
+    auto coercion = TypeCoercer::defaults().coerce(type, type);
+    ASSERT_TRUE(coercion.has_value());
+    EXPECT_EQ(coercion->cost, 0);
   };
 
   assertNoCost(UNKNOWN());
@@ -218,65 +255,63 @@ TEST(TypeCoercerTest, noCost) {
 
 TEST(TypeCoercerTest, array) {
   ASSERT_TRUE(
-      TypeCoercer::defaults().coercible(ARRAY(UNKNOWN()), ARRAY(INTEGER())));
+      TypeCoercer::defaults().coerce(ARRAY(UNKNOWN()), ARRAY(INTEGER())));
   ASSERT_TRUE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ARRAY(UNKNOWN()), ARRAY(ARRAY(VARCHAR()))));
 
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(ARRAY(BIGINT()), ARRAY(REAL())));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(ARRAY(BIGINT()), ARRAY(REAL())));
+      TypeCoercer::defaults().coerce(ARRAY(UNKNOWN()), MAP(INTEGER(), REAL())));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
-          ARRAY(UNKNOWN()), MAP(INTEGER(), REAL())));
-  ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(ARRAY(UNKNOWN()), ROW({UNKNOWN()})));
-  ASSERT_FALSE(TypeCoercer::defaults().coercible(ARRAY(VARCHAR()), VARCHAR()));
+      TypeCoercer::defaults().coerce(ARRAY(UNKNOWN()), ROW({UNKNOWN()})));
+  ASSERT_FALSE(TypeCoercer::defaults().coerce(ARRAY(VARCHAR()), VARCHAR()));
 }
 
 TEST(TypeCoercerTest, map) {
   ASSERT_TRUE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           MAP(UNKNOWN(), UNKNOWN()), MAP(INTEGER(), REAL())));
   ASSERT_TRUE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           MAP(VARCHAR(), REAL()), MAP(VARCHAR(), DOUBLE())));
   ASSERT_TRUE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           MAP(INTEGER(), REAL()), MAP(BIGINT(), DOUBLE())));
 
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           MAP(INTEGER(), REAL()), MAP(BIGINT(), INTEGER())));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           MAP(UNKNOWN(), UNKNOWN()), ARRAY(BIGINT())));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           MAP(UNKNOWN(), UNKNOWN()), ROW({INTEGER(), BIGINT()})));
 }
 
 TEST(TypeCoercerTest, row) {
   ASSERT_TRUE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ROW({UNKNOWN(), INTEGER(), REAL()}),
           ROW({SMALLINT(), BIGINT(), DOUBLE()})));
 
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ROW({UNKNOWN(), INTEGER(), REAL()}),
           ROW({SMALLINT(), VARCHAR(), DOUBLE()})));
 
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ROW({UNKNOWN(), INTEGER(), REAL()}), ARRAY(INTEGER())));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ROW({UNKNOWN(), INTEGER(), REAL()}), MAP(INTEGER(), REAL())));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ROW({UNKNOWN(), INTEGER(), REAL()}), ROW({UNKNOWN(), INTEGER()})));
   ASSERT_FALSE(
-      TypeCoercer::defaults().coercible(
+      TypeCoercer::defaults().coerce(
           ROW({UNKNOWN(), INTEGER(), REAL()}), BIGINT()));
 }
 
@@ -339,13 +374,6 @@ TEST(TypeCoercerTest, leastCommonSuperType) {
   ASSERT_TRUE(
       TypeCoercer::defaults().leastCommonSuperType(
           MAP(INTEGER(), REAL()), ROW({INTEGER(), REAL()})) == nullptr);
-}
-
-TEST(TypeCoercerTest, parametricBuiltinTargetDoesNotThrow) {
-  // Parametric built-in factories throw on empty params. Verify graceful
-  // handling.
-  EXPECT_EQ(
-      TypeCoercer::defaults().coerceTypeBase(BIGINT(), "ARRAY"), std::nullopt);
 }
 
 TEST(TypeCoercerTest, ctorRejectsDuplicateCostForSameSource) {

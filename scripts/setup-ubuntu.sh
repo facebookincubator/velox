@@ -126,6 +126,7 @@ function install_velox_deps_from_apt {
     flex \
     libfl-dev \
     tzdata \
+    libnuma-dev \
     libxxhash-dev
 }
 
