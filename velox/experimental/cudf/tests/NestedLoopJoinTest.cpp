@@ -1590,8 +1590,24 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
   ASSERT_EQ(inputPositions, 300);
 }
 
-// TODO: Zero-column build side is not yet supported. cudf::table with zero
-// columns reports num_rows() == 0, causing the operator to treat a non-empty
-// build as empty. Fixing this requires the bridge to carry row counts
-// separately. See CPU NestedLoopJoinTest::zeroColumnBuild for the expected
-// behavior.
+TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
+  auto probeData =
+      makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 5})});
+  auto buildData =
+      makeRowVector({"b0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildData})
+                          .project({})
+                          .planNode(),
+                      {"p0"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"p0"}, {makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
