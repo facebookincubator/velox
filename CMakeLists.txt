@@ -392,6 +392,10 @@ endif()
 if(UNIX AND NOT APPLE)
   # linker flags, -export-dynamic for rtti
   add_link_options("-Wl,-export-dynamic")
+  if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+    # Keep AArch64 branch stubs close enough for very large mono shared builds.
+    add_link_options("-Wl,--stub-group-size=1048576")
+  endif()
 endif()
 
 # Required so velox code can be used in a dynamic library
