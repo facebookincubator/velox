@@ -15,12 +15,14 @@
  */
 
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/VectorUtil.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
@@ -718,6 +720,97 @@ TEST_F(PartitionValueConversionTest, decimalEmptyString) {
             nullptr);
       },
       VeloxUserError);
+}
+
+// Tests for the corrected TIMESTAMP WITH TIME ZONE parsing (Presto semantics).
+
+// No timezone in string → packed with UTC key 0, millis unchanged.
+TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNoTimezoneUsesUTCKey) {
+  auto type = TIMESTAMP_WITH_TIME_ZONE();
+  auto result = core::newConstantFromString(
+      type, "1970-01-01 00:00:00", pool_.get(), false, false, nullptr);
+
+  ASSERT_NE(nullptr, result);
+  auto vec = result->as<ConstantVector<int64_t>>();
+  ASSERT_NE(nullptr, vec);
+  EXPECT_FALSE(vec->isNullAt(0));
+  EXPECT_EQ(0, unpackZoneKeyId(vec->valueAt(0))) << "UTC key must be 0";
+  EXPECT_EQ(0, unpackMillisUtc(vec->valueAt(0))) << "epoch → 0 millis";
+}
+
+// Named timezone in string → converted to UTC, timezone key preserved.
+TEST_F(PartitionValueConversionTest, timestampWithTimeZoneNamedTimezoneConvertsToUTC) {
+  auto type = TIMESTAMP_WITH_TIME_ZONE();
+  // "2021-01-01 00:00:00 America/Los_Angeles": LA is UTC-8 in January,
+  // so UTC time is 2021-01-01 08:00:00.
+  auto result = core::newConstantFromString(
+      type,
+      "2021-01-01 00:00:00 America/Los_Angeles",
+      pool_.get(),
+      false,
+      false,
+      nullptr);
+
+  ASSERT_NE(nullptr, result);
+  auto vec = result->as<ConstantVector<int64_t>>();
+  ASSERT_NE(nullptr, vec);
+  EXPECT_FALSE(vec->isNullAt(0));
+
+  const auto* laZone = tz::locateZone("America/Los_Angeles");
+  EXPECT_EQ(laZone->id(), unpackZoneKeyId(vec->valueAt(0)))
+      << "timezone key must match the parsed zone";
+
+  // LA is UTC-8 in January: 2021-01-01 00:00:00 LA = 2021-01-01 08:00:00 UTC.
+  // 2021-01-01 00:00:00 UTC = 1609459200s; +8h = 1609488000s.
+  EXPECT_EQ(1'609'488'000LL * 1'000, unpackMillisUtc(vec->valueAt(0)));
+}
+
+// UTC named timezone in string → UTC key, millis unchanged.
+TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUTCNamedZone) {
+  auto type = TIMESTAMP_WITH_TIME_ZONE();
+  auto result = core::newConstantFromString(
+      type, "2021-01-01 00:00:00 UTC", pool_.get(), false, false, nullptr);
+
+  ASSERT_NE(nullptr, result);
+  auto vec = result->as<ConstantVector<int64_t>>();
+  ASSERT_NE(nullptr, vec);
+
+  // toGMT on UTC is identity, so millis == 2021-01-01 00:00:00 UTC.
+  EXPECT_EQ(1'609'459'200LL * 1'000, unpackMillisUtc(vec->valueAt(0)));
+  const auto* utcZone = tz::locateZone("UTC");
+  EXPECT_EQ(utcZone->id(), unpackZoneKeyId(vec->valueAt(0)));
+}
+
+// Hour >= 24 is rejected by the offset parser, falls through to BIGINT
+// conversion which also fails — net result is a user error.
+TEST_F(PartitionValueConversionTest, timestampWithTimeZoneOutOfRangeHourThrows) {
+  auto type = TIMESTAMP_WITH_TIME_ZONE();
+  EXPECT_THROW(
+      core::newConstantFromString(
+          type,
+          "2021-01-01 00:00:00 +99:00",
+          pool_.get(),
+          false,
+          false,
+          nullptr),
+      VeloxUserError);
+}
+
+// Offset outside the [-14:00, +14:00] named-timezone range is syntactically
+// valid (hour < 24) but not in the database, so timeZone == nullptr while
+// offsetMillis is set. Our code rejects this rather than silently packing
+// the wrong millis.
+TEST_F(PartitionValueConversionTest, timestampWithTimeZoneUnrecognizedOffsetThrows) {
+  auto type = TIMESTAMP_WITH_TIME_ZONE();
+  VELOX_ASSERT_THROW(
+      core::newConstantFromString(
+          type,
+          "2021-01-01 00:00:00 +15:00",
+          pool_.get(),
+          false,
+          false,
+          nullptr),
+      "Unknown timezone");
 }
 
 TEST_F(PartitionValueConversionTest, dateInvalidDaysSinceEpoch) {
