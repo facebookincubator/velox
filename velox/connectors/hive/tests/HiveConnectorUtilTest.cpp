@@ -209,9 +209,8 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
 
   auto checkColumnMappingMode = [&]() {
     if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
-      auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfOptions>(
+      auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
           readerOptions.formatSpecificOptions());
-      ASSERT_NE(dwrfOptions, nullptr);
       auto orcConnectorConfig =
           hiveConfig->config()->rawConfigsWithPrefix("hive.orc.");
       const auto expectedMappingMode =
@@ -226,9 +225,8 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   };
 
   auto checkOrcMaxCoalesceDistance = [&](int32_t expected) {
-    auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfOptions>(
+    auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
         readerOptions.formatSpecificOptions());
-    ASSERT_NE(dwrfOptions, nullptr);
     EXPECT_EQ(dwrfOptions->maxCoalesceDistance(), expected);
   };
 

@@ -30,6 +30,17 @@ using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using facebook::velox::connector::hive::HiveConfig;
 
+namespace {
+bool hasProperty(
+    const std::vector<config::ConfigProperty>& properties,
+    const std::string& name) {
+  return std::any_of(
+      properties.begin(), properties.end(), [&](const auto& property) {
+        return property.name == name;
+      });
+}
+} // namespace
+
 TEST(HiveConfigTest, defaultConfig) {
   HiveConfig hiveConfig(
       std::make_shared<config::ConfigBase>(
@@ -244,44 +255,35 @@ TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {
 #ifdef VELOX_ENABLE_PARQUET
 TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
-
-  auto hasProperty = [&](const std::string& name) {
-    return std::any_of(
-        properties.begin(), properties.end(), [&](const auto& property) {
-          return property.name == name;
-        });
-  };
-
   const auto parquetSessionPrefix =
       dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_");
-  EXPECT_TRUE(hasProperty(HiveConfig::kParquetUseColumnNamesSession));
+  EXPECT_TRUE(
+      hasProperty(properties, HiveConfig::kParquetUseColumnNamesSession));
   EXPECT_TRUE(hasProperty(
+      properties,
       parquetSessionPrefix +
-      std::string(parquet::ParquetConfig::kWriterEnableDictionarySession)));
+          std::string(parquet::ParquetConfig::kWriterEnableDictionarySession)));
   EXPECT_TRUE(hasProperty(
+      properties,
       parquetSessionPrefix +
-      std::string(parquet::ParquetConfig::kWriterPageSizeSession)));
-  EXPECT_FALSE(hasProperty(HiveConfig::kParquetUseColumnNames));
+          std::string(parquet::ParquetConfig::kWriterPageSizeSession)));
+  EXPECT_FALSE(hasProperty(properties, HiveConfig::kParquetUseColumnNames));
 }
 #endif
 
 TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
 
-  auto hasProperty = [&](const std::string& name) {
-    return std::any_of(
-        properties.begin(), properties.end(), [&](const auto& property) {
-          return property.name == name;
-        });
-  };
-
   const auto orcSessionPrefix =
       dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_");
   EXPECT_TRUE(hasProperty(
+      properties,
       orcSessionPrefix + std::string(dwrf::Config::kOrcUseColumnNamesSession)));
   EXPECT_TRUE(hasProperty(
+      properties,
       orcSessionPrefix +
-      std::string(dwrf::Config::kOrcWriterMaxStripeSizeSession)));
-  EXPECT_FALSE(hasProperty(dwrf::Config::kOrcUseColumnNamesSession));
-  EXPECT_FALSE(hasProperty(dwrf::Config::kOrcUseColumnNames));
+          std::string(dwrf::Config::kOrcWriterMaxStripeSizeSession)));
+  EXPECT_FALSE(
+      hasProperty(properties, dwrf::Config::kOrcUseColumnNamesSession));
+  EXPECT_FALSE(hasProperty(properties, dwrf::Config::kOrcUseColumnNames));
 }

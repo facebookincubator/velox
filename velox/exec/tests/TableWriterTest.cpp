@@ -1603,7 +1603,9 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
             .config(QueryConfig::kTaskWriterCount, std::to_string(1))
             .connectorSessionProperty(
                 kHiveConnectorId,
-                dwrf::Config::kOrcWriterMaxStripeSizeSession,
+                dwio::common::formatConfigPrefix(
+                    dwio::common::FileFormat::ORC, "_") +
+                    std::string(dwrf::Config::kOrcWriterMaxStripeSizeSession),
                 testData.maxStripeSize)
             .assertResults("SELECT count(*) FROM tmp");
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
