@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/Casts.h"
 #include "folly/Random.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -35,9 +36,8 @@ std::shared_ptr<const Config> createWriterConfig(
     const facebook::velox::config::ConfigBase& connectorConfig,
     const facebook::velox::config::ConfigBase& session) {
   DwrfWriterFactory factory;
-  auto options = std::dynamic_pointer_cast<DwrfWriterOptions>(
+  auto options = facebook::velox::checkedPointerCast<DwrfWriterOptions>(
       factory.createFormatOptions(connectorConfig, session));
-  VELOX_CHECK_NOT_NULL(options);
   return options->config;
 }
 
