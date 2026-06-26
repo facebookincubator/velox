@@ -151,4 +151,3 @@ std::vector<TypePtr> DeltaSplitReader::adaptColumns(
 }
 
 } // namespace facebook::velox::connector::hive::delta
-
