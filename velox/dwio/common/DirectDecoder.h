@@ -167,7 +167,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
       auto outerVector = &visitor.outerNonNullRows();
       // In non-DWRF formats, it can be the visitor is not dense but
       // this run of rows is dense.
-      if (Visitor::dense || rowsAsRange.back() == rowsAsRange.size() - 1) {
+      if (Visitor::dense ||
+          (!rowsAsRange.empty() &&
+           rowsAsRange.back() == rowsAsRange.size() - 1)) {
         dwio::common::nonNullRowsFromDense(nulls, numRows, *outerVector);
         numNonNull = outerVector->size();
         if (!numNonNull) {
@@ -237,7 +239,9 @@ class DirectDecoder : public IntDecoder<isSigned> {
       }
     } else {
       if (super::useVInts_) {
-        if (Visitor::dense) {
+        if (Visitor::dense ||
+            (!rowsAsRange.empty() &&
+             rowsAsRange.back() == rowsAsRange.size() - 1)) {
           super::bulkRead(numRows, visitor.rawValues(numRows));
         } else {
           super::bulkReadRows(
