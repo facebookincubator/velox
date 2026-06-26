@@ -147,9 +147,8 @@ void IcebergSplitReader::configureBaseReaderOptions() {
   if (fieldIds.empty()) {
     return;
   }
-  auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfOptions>(
+  auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
       baseReaderOpts_.formatSpecificOptions());
-  VELOX_CHECK_NOT_NULL(dwrfOptions);
   dwrfOptions->setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
   baseReaderOpts_.setFieldIds(std::move(fieldIds));
 }
