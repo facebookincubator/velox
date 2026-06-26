@@ -1,0 +1,108 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Require-fbcode-import gate
+#
+# Velox GitHub-First control: once a PR is APPROVED on GitHub, it must NOT be
+# mergeable until the change has been imported into fbcode.
+#
+# Scope: this gate only enforces after approval. Before approval it is not
+# applicable and exits PASS — approval itself is enforced separately by the
+# "Require approvals" branch-protection rule. Once the PR reaches
+# reviewDecision == APPROVED, the gate FAILS CLOSED: it passes only on a
+# positive in-fbcode signal, and fails otherwise.
+#
+# How "in fbcode" is detected:
+#   * fbcode-originated co-dev PRs carry a "Differential Revision" trailer in
+#     their description.
+#   * External PRs are detected by the import comment that the Meta CodeSync
+#     GitHub App (meta-codesync[bot]) posts when it imports the PR into fbcode.
+#     The comment must be authored by that bot; a diff link pasted by any other
+#     user does not count and cannot bypass the gate.
+#
+# IMPORTANT: the bot's import comment attests IMPORT ONLY, not that internal CI
+# (Sandcastle) passed. Requiring internal CI to be green is a separate, follow-up
+# signal owned by the Velox auto-merge tool, which has the internal visibility to
+# verify the diff-to-PR association and the CI result. This workflow intentionally
+# does not assert CI status yet.
+#
+# Triggers: pull_request_review engages the gate on approval and re-evaluates on
+# dismissal; the label events are kept only as a cheap manual re-run hook (the
+# decision does not read any label). The authoritative, head-commit-attached
+# signal will come from the auto-merge tool in the follow-up.
+
+name: Require fbcode Import
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request:
+    types: [labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require import-to-fbcode once approved
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          # The GitHub App account that Meta CodeSync comments as on import.
+          CODESYNC_BOT: "meta-codesync[bot]"
+        run: |
+          set -uo pipefail
+
+          DECISION="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviewDecision -q .reviewDecision 2>/dev/null || echo '')"
+          echo "reviewDecision: ${DECISION:-<none>}"
+          if [ "$DECISION" != "APPROVED" ]; then
+            echo "::notice::PR not approved yet — import gate not applicable (approval is enforced by branch protection)."
+            exit 0
+          fi
+
+          # Pass 1: an fbcode-originated co-dev PR carries a Differential Revision trailer.
+          if printf '%s' "${PR_BODY}" | grep -Eq 'Differential Revision:.*D[0-9]+'; then
+            echo "::notice::Differential Revision present — fbcode-originated. Merge allowed."
+            exit 0
+          fi
+
+          # Pass 2: an external PR imported by Meta CodeSync. On import the bot posts a
+          # comment of the form "... you can view this in [D<number>](<url>)". Require the
+          # comment to be authored by ${CODESYNC_BOT}; a diff link from any other user does
+          # not count. This attests IMPORT only — internal CI is a separate follow-up signal.
+          BOT_COMMENTS="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate -q ".[] | select(.user.login==\"${CODESYNC_BOT}\") | .body" 2>/dev/null || echo '')"
+          if printf '%s' "${BOT_COMMENTS}" | grep -Eq 'you can view this in \[D[0-9]+\]'; then
+            echo "::notice::Imported by Meta CodeSync (${CODESYNC_BOT} posted the imported-diff comment). Merge allowed."
+            exit 0
+          fi
+
+          echo "::error title=fbcode import required::Approved PR is not yet imported into fbcode."
+          {
+            echo "## Blocked: approved PR not yet imported into fbcode"
+            echo ""
+            echo "This check blocks merging until the change exists in fbcode. After the Velox"
+            echo "oncall imports this pull request, the Meta CodeSync bot (${CODESYNC_BOT}) posts a"
+            echo "comment linking the imported diff, and this check passes."
+            echo ""
+            echo "_(Pull requests exported from an internal diff are exempt: they already carry a"
+            echo "Differential Revision trailer and exist in fbcode.)_"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
