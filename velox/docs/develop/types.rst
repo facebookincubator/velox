@@ -467,16 +467,14 @@ used by Target DECIMAL above (extending a fixed-width target to a wider
 caller-requested DECIMAL) and by ``LongDecimalType::commonSuperType``
 for DECIMAL -> DECIMAL reconciliation.
 
-``coerceTypeBase`` vs ``coercible``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+``coerce``
+^^^^^^^^^^
 
-``coerceTypeBase(from, to)`` is a single-rule lookup. It does NOT recurse
-into container children -- ``coerceTypeBase(ARRAY<INT>, ARRAY<BIGINT>)``
-returns ``nullopt`` because no flat rule keys on
-``("ARRAY", "ARRAY")``. ``coercible(from, to)`` is the structural
-predicate: for primitives it delegates to ``coerceTypeBase``; for
-containers it requires matching names and arities, then sums child
-coercion costs.
+``coerce(from, to)`` is the single recursive coercion primitive: scalars
+resolve via a single rule lookup, a bare UNKNOWN coerces to any resolved
+target, and containers match on name and arity then recurse element-wise,
+summing child costs (so ``coerce(ARRAY<INT>, ARRAY<BIGINT>)`` succeeds while
+a mismatched name or arity returns ``nullopt``).
 
 Default coercion rules
 ^^^^^^^^^^^^^^^^^^^^^^

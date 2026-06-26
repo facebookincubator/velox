@@ -126,8 +126,17 @@ class VectorFuzzer {
     size_t containerLength{10};
 
     /// If true, the length of array/map are randomly generated and
-    /// `containerLength` is treated as maximum length.
+    /// `containerLength` is treated as maximum length. With variable length,
+    /// containers can naturally have size 0 (empty), exercising empty-container
+    /// edge cases.
     bool containerVariableLength{true};
+
+    /// If true, array/map elements are laid out non-contiguously: random gaps
+    /// of unreferenced elements are left between containers. This catches code
+    /// that ignores offsets/sizes and reads the raw elements buffer
+    /// sequentially (or reads unreferenced positions). Defaults to false to
+    /// preserve existing (contiguous) behavior.
+    bool fuzzNonContiguousElements{false};
 
     /// Restricts the maximum inner (elements) vector size created when
     /// generating nested vectors (arrays, maps, and rows).
