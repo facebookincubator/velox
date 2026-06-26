@@ -307,3 +307,60 @@ TEST_F(TimestampWithTimeZoneTest, utcTimezoneKeyIsZero) {
     EXPECT_EQ(tzKey, 0) << "Timezone key should always be 0 (UTC) at row " << i;
   }
 }
+
+// INT96 timestamps written as TIMESTAMP WITH TIME ZONE should be read and
+// packed the same way as INT64 timestamps.
+TEST_F(TimestampWithTimeZoneTest, readInt96Timestamps) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(0, 0),
+      Timestamp(1'000'000, 0),
+      Timestamp(1'609'459'200, 0), // 2021-01-01 00:00:00 UTC
+  };
+
+  // Write using INT96 format.
+  ParquetWriterOptions parquetOptions;
+  parquetOptions.writeInt96AsTimestamp = true;
+  parquetOptions.parquetWriteTimestampUnit = TimestampPrecision::kNanoseconds;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(parquetOptions);
+
+  auto writeRowType = ROW({"ts_with_tz"}, {TIMESTAMP()});
+  auto timestampVector = makeFlatVector<Timestamp>(timestamps);
+  auto batch = makeRowVector({timestampVector});
+
+  auto sink = std::make_unique<MemorySink>(
+      4 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, writeRowType);
+  writer->write(batch);
+  writer->close();
+
+  // Read back requesting TIMESTAMP WITH TIME ZONE.
+  auto readRowType = ROW({"ts_with_tz"}, {timestampWithTimeZoneType()});
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  readerOpts.setFileSchema(readRowType);
+  auto reader = createReaderInMemory(*sinkPtr, readerOpts);
+
+  auto rowReaderOpts = makeRowReaderOpts(readRowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(readRowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr result = BaseVector::create(readRowType, 0, leafPool_.get());
+  auto rowsRead = rowReader->next(1000, result);
+
+  ASSERT_EQ(rowsRead, timestamps.size());
+  auto resultVector = result->loadedVector()->as<RowVector>();
+  auto tsVector = resultVector->childAt(0)->as<FlatVector<int64_t>>();
+
+  constexpr int16_t kUtcKey = 0;
+  for (size_t i = 0; i < timestamps.size(); ++i) {
+    ASSERT_FALSE(tsVector->isNullAt(i));
+    auto [ts, tzKey] = unpack(tsVector->valueAt(i));
+    EXPECT_EQ(ts.getSeconds(), timestamps[i].getSeconds())
+        << "Seconds mismatch at row " << i;
+    EXPECT_EQ(tzKey, kUtcKey) << "Timezone key should be UTC at row " << i;
+  }
+}

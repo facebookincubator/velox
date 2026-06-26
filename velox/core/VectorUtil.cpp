@@ -27,24 +27,33 @@
 namespace facebook::velox::core {
 namespace {
 
-// Helper function to handle TimestampWithTimeZone type conversion (BIGINT kind)
+// Parses a TIMESTAMP WITH TIME ZONE string using Presto-cast semantics and
+// returns a packed int64 constant vector, or nullopt if parsing fails.
 std::optional<VectorPtr> handleTimestampWithTimeZoneTypeConversion(
     const TypePtr& type,
     const std::string& value,
     memory::MemoryPool* pool) {
   auto timestampResult = util::fromTimestampWithTimezoneString(
-      StringView(value), util::TimestampParseMode::kSparkCast);
+      StringView(value), util::TimestampParseMode::kPrestoCast);
   if (timestampResult.hasError()) {
-    // Fall through to normal BIGINT handling
     return std::nullopt;
   }
 
-  auto parsed = std::move(timestampResult).value();
-  Timestamp timestamp = parsed.timestamp;
-  TimeZoneKey timeZoneKey = 0; // UTC_KEY
-
-  // Pack with UTC timezone key
-  int64_t packedValue = pack(timestamp, timeZoneKey);
+  auto [timestamp, timeZone, offsetMillis] = std::move(timestampResult).value();
+  if (timeZone == nullptr) {
+    if (offsetMillis.has_value()) {
+      // Offset found but timezone not recognized — reject rather than silently
+      // pack the wrong millis value.
+      VELOX_USER_FAIL(
+          "Unknown timezone in TIMESTAMP WITH TIME ZONE value: {}", value);
+    }
+    // No timezone in string — already UTC, skip toGMT.
+    int64_t packedValue = pack(timestamp.toMillis(), 0 /* UTC */);
+    return std::make_shared<ConstantVector<int64_t>>(
+        pool, 1, false, type, std::move(packedValue));
+  }
+  timestamp.toGMT(*timeZone);
+  int64_t packedValue = pack(timestamp.toMillis(), timeZone->id());
   return std::make_shared<ConstantVector<int64_t>>(
       pool, 1, false, type, std::move(packedValue));
 }
