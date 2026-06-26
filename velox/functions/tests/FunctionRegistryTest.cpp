@@ -1116,7 +1116,7 @@ TEST_F(FunctionRegistryTest, unknownArgToParameterizedFunction) {
 
   // A scalar overload outranks a complex one on a bare null. varbinary (the
   // highest-cost scalar UNKNOWN coercion) still beats array(T) because
-  // unknownToComplexCost is one above it.
+  // unknownFallbackCost is one above it.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -1133,6 +1133,21 @@ TEST_F(FunctionRegistryTest, unknownArgToParameterizedFunction) {
         std::make_unique<DummyVectorFunction>());
 
     testCoercions("foo", {UNKNOWN()}, VARBINARY(), {VARBINARY()});
+  }
+
+  // A plain-scalar overload outranks a parameterized-scalar one on a bare null.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {makeSignature("bigint", {"bigint"}),
+         makeSignature("bigint", {"decimal(10, 2)"})},
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions("foo", {UNKNOWN()}, BIGINT(), {BIGINT()});
   }
 
   // Vector resolver: differing return types stay ambiguous.

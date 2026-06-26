@@ -718,6 +718,18 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
       continue;
     }
 
+    // Optionally leave a gap of unreferenced elements before this container so
+    // the layout is non-contiguous. The skipped elements keep their (random)
+    // values, so code that ignores offsets is exercised. The gap is capped so a
+    // single container does not exhaust the elements vector. Rows whose offset
+    // ends up past the elements vector get size 0 below and are skipped by
+    // validate.
+    if (opts_.fuzzNonContiguousElements && childSize < elementsSize &&
+        coinToss(0.3)) {
+      const size_t maxGap = std::min(containerAvgLength, size_t{10});
+      childSize += 1 + rand<uint32_t>(rng_) % maxGap;
+    }
+
     rawOffsets[i] = childSize;
 
     // If variable length, generate a random number between zero and 2 *

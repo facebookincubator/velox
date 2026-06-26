@@ -114,11 +114,16 @@ RowVectorPtr reduceToSelectedRows(
   if (rows.isAllSelected()) {
     return rowVector;
   }
+  // The fuzzer can generate a test case whose active rows select nothing.
+  // Return an empty RowVector so callers compare zero rows.
+  if (!rows.hasSelections()) {
+    return std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(rowVector->type(), 0, rowVector->pool()));
+  }
   BufferPtr indices = allocateIndices(rows.end(), rowVector->pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
   vector_size_t cnt = 0;
   rows.applyToSelected([&](vector_size_t row) { rawIndices[cnt++] = row; });
-  VELOX_CHECK_GT(cnt, 0);
   indices->setSize(cnt * sizeof(vector_size_t));
   // Top level row vector is not expected to be encoded, therefore we copy
   // instead of wrapping in the indices.
