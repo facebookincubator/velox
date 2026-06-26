@@ -430,9 +430,7 @@ ColumnChunkMetaDataPtr::getColumnStatistics(
       apache::thrift::can_throw(*metaData.statistics()),
       *parquetType.type(),
       numRows,
-      parquetType.parquetType_.has_value()
-          ? parquetType.parquetType_.value()
-          : apache::thrift::can_throw(*metaData.type()),
+      apache::thrift::can_throw(*metaData.type()),
       parquetType.convertedType_,
       parquetType.logicalType_);
 }

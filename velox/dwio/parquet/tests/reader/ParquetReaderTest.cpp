@@ -1787,7 +1787,11 @@ TEST_F(ParquetReaderTest, columnStatisticsTimestamp) {
                Timestamp::fromMicros(5'000'000)}),
       });
 
-  auto* sink = write(data);
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  auto* sink = write(data, options, writerOptions);
   auto reader = createReaderInMemory(*sink);
   const auto& schema = reader->typeWithId();
 
@@ -1817,7 +1821,9 @@ TEST_F(ParquetReaderTest, timestampRowGroupPruning) {
            Timestamp::fromMicros(11'000'000),
            Timestamp::fromMicros(12'000'000)})});
 
-  auto* sink = write({batch1, batch2}, ParquetWriterOptions{});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  auto* sink = write({batch1, batch2}, writerOptions);
   auto reader = createReaderInMemory(*sink);
   ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
 
