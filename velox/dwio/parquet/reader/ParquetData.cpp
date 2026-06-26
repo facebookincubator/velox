@@ -93,7 +93,7 @@ bool ParquetData::rowGroupMatches(
   auto columnChunk = rowGroup.columnChunk(column);
   if (columnChunk.hasStatistics()) {
     auto columnStats =
-        columnChunk.getColumnStatistics(type, rowGroup.numRows());
+        columnChunk.getColumnStatistics(*type_, rowGroup.numRows());
     return testFilter(filter, columnStats.get(), rowGroup.numRows(), type);
   }
   return true;

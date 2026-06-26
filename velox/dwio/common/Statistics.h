@@ -410,6 +410,48 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
 };
 
 /**
+ * Statistics for timestamp columns.
+ */
+class TimestampColumnStatistics : public virtual ColumnStatistics {
+ public:
+  TimestampColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::optional<Timestamp> min,
+      std::optional<Timestamp> max)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        min_(min),
+        max_(max) {}
+
+  ~TimestampColumnStatistics() override = default;
+
+  std::optional<Timestamp> getMinimum() const {
+    return min_;
+  }
+
+  std::optional<Timestamp> getMaximum() const {
+    return max_;
+  }
+
+  std::string toString() const override {
+    return folly::to<std::string>(
+        ColumnStatistics::toString(),
+        ", min: ",
+        (min_.has_value() ? min_.value().toString() : "unknown"),
+        ", max: ",
+        (max_.has_value() ? max_.value().toString() : "unknown"));
+  }
+
+ protected:
+  TimestampColumnStatistics() {}
+
+  std::optional<Timestamp> min_;
+  std::optional<Timestamp> max_;
+};
+
+/**
  * Statistics for string columns.
  */
 class StringColumnStatistics : public virtual ColumnStatistics {

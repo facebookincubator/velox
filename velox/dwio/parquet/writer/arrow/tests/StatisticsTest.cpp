@@ -507,8 +507,10 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     EXPECT_EQ(
         expectedStats->encodeMax(),
         columnChunk.getColumnMetadataStatsMaxValue());
+    auto& parquetType = static_cast<const ParquetTypeWithId&>(
+        *reader->typeWithId()->childAt(0));
     auto columnStats =
-        columnChunk.getColumnStatistics(INTEGER(), rowGroup.numRows());
+        columnChunk.getColumnStatistics(parquetType, rowGroup.numRows());
     EXPECT_EQ(numValues - nullCount, columnStats->getNumberOfValues());
   }
 };
