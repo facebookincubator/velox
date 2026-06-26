@@ -41,7 +41,6 @@
 #define STREAMS_H
 #endif
 #include "velox/tpcds/gen/dsdgen/include/constants.h"
-#include "velox/tpcds/gen/dsdgen/include/tables.h"
 
 #ifndef R_DIST_H
 #define R_DIST_H
