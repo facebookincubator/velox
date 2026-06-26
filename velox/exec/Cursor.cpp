@@ -49,18 +49,17 @@ class TaskQueue {
 
   // Adds a batch of rows to the queue and returns kNotBlocked if the
   // producer may continue. Returns kWaitForConsumer if the queue is
-  // full after the addition and sets '*future' to a future that is
+  // full after the addition and sets 'future' to a future that is
   // realized when the producer may continue.
   exec::BlockingReason
-  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture& future);
 
   // Returns the next batch if one is available. Otherwise returns nullptr and,
-  // if more output may still arrive, sets '*future' to a future realized when
+  // if more output may still arrive, sets 'future' to a future realized when
   // the consumer should retry; when all producers are at end (or the queue is
-  // closed) returns nullptr and leaves '*future' untouched. The caller
-  // distinguishes "blocked" from "done" by whether '*future' is valid.
-  // 'future' must be non-null.
-  RowVectorPtr dequeue(velox::ContinueFuture* future);
+  // closed) returns nullptr and leaves 'future' untouched. The caller
+  // distinguishes "blocked" from "done" by whether 'future' is valid.
+  RowVectorPtr dequeue(velox::ContinueFuture& future);
 
   void close();
 
@@ -77,22 +76,22 @@ class TaskQueue {
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
-  int32_t producersFinished_ = 0;
-  uint64_t totalBytes_ = 0;
+  int32_t producersFinished_{0};
+  uint64_t totalBytes_{0};
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
   // adding the result.
   uint64_t maxBytes_;
   std::mutex mutex_;
   std::vector<ContinuePromise> producerUnblockPromises_;
-  bool consumerBlocked_ = false;
+  bool consumerBlocked_{false};
   ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
-  bool closed_ = false;
+  bool closed_{false};
 };
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
     bool drained,
-    velox::ContinueFuture* future) {
+    velox::ContinueFuture& future) {
   if (!vector) {
     std::lock_guard<std::mutex> l(mutex_);
     if (drained) {
@@ -125,14 +124,13 @@ exec::BlockingReason TaskQueue::enqueue(
     auto [unblockPromise, unblockFuture] =
         makeVeloxContinuePromiseContract("TaskQueue::enqueue");
     producerUnblockPromises_.emplace_back(std::move(unblockPromise));
-    *future = std::move(unblockFuture);
+    future = std::move(unblockFuture);
     return exec::BlockingReason::kWaitForConsumer;
   }
   return exec::BlockingReason::kNotBlocked;
 }
 
-RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture* future) {
-  VELOX_CHECK_NOT_NULL(future);
+RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
   RowVectorPtr vector;
   std::vector<ContinuePromise> mayContinue;
   {
@@ -165,7 +163,7 @@ RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture* future) {
       VELOX_CHECK(!consumerBlocked_);
       consumerBlocked_ = true;
       consumerPromise_ = ContinuePromise("TaskQueue::dequeue");
-      *future = consumerPromise_.getFuture();
+      future = consumerPromise_.getFuture();
     }
   }
   // outside of 'mutex_'
@@ -252,8 +250,8 @@ class TaskCursorBase : public TaskCursor {
         try {
           fileSystem->mkdir(taskSpillDirectory_);
         } catch (...) {
-          LOG(ERROR) << "Faield to create task spill directory "
-                     << taskSpillDirectory_ << " base director "
+          LOG(ERROR) << "Failed to create task spill directory "
+                     << taskSpillDirectory_ << " base directory "
                      << params.spillDirectory << " exists["
                      << std::filesystem::exists(taskSpillDirectory_) << "]";
 
@@ -323,14 +321,14 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           }
 
           if (!vector || !copyResult) {
-            return queue->enqueue(vector, drained, future);
+            return queue->enqueue(vector, drained, *future);
           }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
           return queue->enqueue(
               std::static_pointer_cast<RowVector>(std::move(copy)),
               drained,
-              future);
+              *future);
         },
         0,
         std::move(spillDiskOpts),
@@ -388,7 +386,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
       // Task might be aborted before start.
       ContinueFuture waitFuture = ContinueFuture::makeEmpty();
       checkTaskError();
-      current_ = queue_->dequeue(&waitFuture);
+      current_ = queue_->dequeue(waitFuture);
       checkTaskError();
 
       if (current_) {
@@ -458,7 +456,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
     if (!task_->error()) {
       return;
     }
-    // Wait for the task to finish (there's' a small period of time between
+    // Wait for the task to finish (there's a small period of time between
     // when the error is set on the Task and terminate is called).
     task_->taskCompletionFuture()
         .within(std::chrono::microseconds(5'000'000))
@@ -666,9 +664,8 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
  protected:
   // Internal state for coordinating between the tracer and cursor.
   //
-  // This struct manages the synchronization between the trace writer
-  // (which produces intermediate results) and the cursor (which consumes
-  // them).
+  // Manages the synchronization between the trace writer (which produces
+  // intermediate results) and the cursor (which consumes them).
   struct TraceDriverState {
     // Promise used to signal the tracer to continue after a partial result
     // has been consumed.
@@ -695,8 +692,8 @@ class TaskDebuggerCursorBase : public TaskCursorBase {
 
   // Custom trace context implementation for the debugger.
   //
-  // This trace context pauses execution at traced operators by blocking
-  // the trace writer until the cursor consumes the intermediate result.
+  // Pauses execution at traced operators by blocking the trace writer until
+  // the cursor consumes the intermediate result.
   class TaskDebuggerTraceCtx : public trace::TraceCtx {
    public:
     // Constructs a trace context for the specified plan nodes.
