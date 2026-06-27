@@ -25,6 +25,11 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/expression/SignatureBinder.h"
 
+#include <cudf/copying.hpp>
+#include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/transform.hpp>
+
 #include <algorithm>
 #include <numeric>
 
@@ -92,6 +97,16 @@ std::string getOriginalName(const std::string& kind) {
   return kind;
 }
 
+bool aggregationSupportsMask(const std::string& aggregateName) {
+  // TODO: Support masked avg/stddev (needs partial-struct null handling).
+  const auto originalName = getOriginalName(aggregateName);
+  const auto prefix = CudfConfig::getInstance().functionNamePrefix;
+  return originalName.rfind(prefix + "sum", 0) == 0 ||
+      originalName.rfind(prefix + "count", 0) == 0 ||
+      originalName.rfind(prefix + "min", 0) == 0 ||
+      originalName.rfind(prefix + "max", 0) == 0;
+}
+
 namespace {
 bool isCompanionAggregateName(std::string const& kind) {
   return kind.ends_with("_merge") || kind.ends_with("_partial") ||
@@ -120,11 +135,45 @@ bool hasCompanionAggregates(
   });
 }
 
+std::unique_ptr<cudf::column> applyMask(
+    cudf::column_view values,
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // copy_if_else(lhs, rhs, bool_mask): out[i] = (mask.valid(i) && mask[i]) ?
+  // lhs[i] : rhs. A null mask element is treated as false, so mask-false and
+  // mask-null both yield NULL (excluded) — matching Velox mask semantics.
+  // make_default_constructed_scalar uses values.type() so decimal scale and
+  // string/timestamp types are preserved.
+  auto nullScalar =
+      cudf::make_default_constructed_scalar(values.type(), stream, mr);
+  nullScalar->set_valid_async(false, stream);
+  return cudf::copy_if_else(values, *nullScalar, mask, stream, mr);
+}
+
+std::unique_ptr<cudf::column> maskToValidityColumn(
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // bools_to_mask sets bit i iff mask[i] is true; a false or null entry clears
+  // it. Using that bitmask as the column's validity makes COUNT_VALID over the
+  // result count the mask-true rows. The data buffer is never read by
+  // COUNT_VALID, so it is left uninitialized.
+  auto [validity, nullCount] = cudf::bools_to_mask(mask, stream, mr);
+  return std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::BOOL8},
+      mask.size(),
+      rmm::device_buffer{static_cast<std::size_t>(mask.size()), stream, mr},
+      std::move(*validity),
+      nullCount);
+}
+
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants) {
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels) {
   const auto numKeys = aggregationNode.groupingKeys().size();
 
   std::vector<ResolvedAggregateInfo> params;
@@ -139,6 +188,13 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     const auto isDecimalAggregate = aggregate.rawInputTypes.size() == 1 &&
         aggregate.rawInputTypes[0]->isDecimal();
 
+    // Masks apply only at raw-input steps; non-raw steps (kIntermediate/kFinal)
+    // gate it off so maskIndex stays nullopt there.
+    std::optional<uint32_t> maskIndex;
+    if (exec::isRawInput(companionStep) && i < maskChannels.size()) {
+      maskIndex = maskChannels[i];
+    }
+
     params.emplace_back(
         companionStep,
         aggregate.call->name(),
@@ -148,6 +204,7 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
         isCountFunctionName(aggregate.call->name())
             ? std::make_optional(getCountInputKind(aggregate, constants[i]))
             : std::nullopt,
+        maskIndex,
         isDecimalAggregate);
   }
   return params;
@@ -197,6 +254,25 @@ AggregationInputChannels buildAggregationInputChannels(
     }
 
     result.channels.push_back(aggInputs[0]);
+  }
+
+  // Append a mask channel for each masked aggregate whose (companion) step is
+  // raw input. Masks only apply to raw rows; final/intermediate carry none.
+  // Position is independent of which raw step (kSingle/kPartial), so the
+  // single-permutation table is correct for the streaming partial path too.
+  result.maskChannels.assign(aggregationNode.aggregates().size(), std::nullopt);
+  for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
+    auto const& aggregate = aggregationNode.aggregates()[i];
+    if (aggregate.mask == nullptr) {
+      continue;
+    }
+    if (!exec::isRawInput(
+            getCompanionStep(aggregate.call->name(), aggregationNode.step()))) {
+      continue;
+    }
+    result.maskChannels[i] = static_cast<uint32_t>(result.channels.size());
+    result.channels.push_back(
+        inputRowSchema->getChildIdx(aggregate.mask->name()));
   }
 
   return result;
