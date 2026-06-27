@@ -23,6 +23,118 @@
 #include <cudf/scalar/scalar_factories.hpp>
 
 namespace facebook::velox::cudf_velox {
+namespace {
+
+const char* decimalOverflowMessage(cudf::binary_operator op) {
+  switch (op) {
+    case cudf::binary_operator::ADD:
+      return "Decimal overflow in add";
+    case cudf::binary_operator::SUB:
+      return "Decimal overflow in subtract";
+    case cudf::binary_operator::MUL:
+      return "Decimal overflow in multiply";
+    case cudf::binary_operator::DIV:
+      return "Decimal overflow in divide";
+    case cudf::binary_operator::MOD:
+      return "Decimal overflow in modulo";
+    default:
+      return "Decimal overflow";
+  }
+}
+
+// Fail-fast on overflow, matching Presto / Velox CPU semantics: the kernel
+// reports a single batch-wide flag and we fail the whole expression if set.
+void throwIfDecimalOverflow(bool didOverflow, cudf::binary_operator op) {
+  if (didOverflow) {
+    VELOX_USER_FAIL("{}", decimalOverflowMessage(op));
+  }
+}
+
+} // namespace
+
+std::unique_ptr<cudf::column> decimalBinaryOperation(
+    const cudf::column_view& lhs,
+    const cudf::column_view& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
+      lhs, rhs, op, outputType, outputPrecision, stream, mr);
+  throwIfDecimalOverflow(didOverflow, op);
+  return std::move(result);
+}
+
+std::unique_ptr<cudf::column> decimalBinaryOperation(
+    const cudf::column_view& lhs,
+    const cudf::scalar& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
+      lhs, rhs, op, outputType, outputPrecision, stream, mr);
+  throwIfDecimalOverflow(didOverflow, op);
+  return std::move(result);
+}
+
+std::unique_ptr<cudf::column> decimalBinaryOperation(
+    const cudf::scalar& lhs,
+    const cudf::column_view& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
+      lhs, rhs, op, outputType, outputPrecision, stream, mr);
+  throwIfDecimalOverflow(didOverflow, op);
+  return std::move(result);
+}
+
+std::unique_ptr<cudf::column> decimalDivide(
+    const cudf::column_view& lhs,
+    const cudf::column_view& rhs,
+    cudf::data_type outputType,
+    int32_t aRescale,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto [result, didOverflow] = decimalDivideWithOverflow(
+      lhs, rhs, outputType, aRescale, outputPrecision, stream, mr);
+  throwIfDecimalOverflow(didOverflow, cudf::binary_operator::DIV);
+  return scatterNullsAtZeroDivisor(std::move(result), rhs, stream, mr);
+}
+
+std::unique_ptr<cudf::column> decimalDivide(
+    const cudf::column_view& lhs,
+    const cudf::scalar& rhs,
+    cudf::data_type outputType,
+    int32_t aRescale,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto [result, didOverflow] = decimalDivideWithOverflow(
+      lhs, rhs, outputType, aRescale, outputPrecision, stream, mr);
+  throwIfDecimalOverflow(didOverflow, cudf::binary_operator::DIV);
+  return std::move(result);
+}
+
+std::unique_ptr<cudf::column> decimalDivide(
+    const cudf::scalar& lhs,
+    const cudf::column_view& rhs,
+    cudf::data_type outputType,
+    int32_t aRescale,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto [result, didOverflow] = decimalDivideWithOverflow(
+      lhs, rhs, outputType, aRescale, outputPrecision, stream, mr);
+  throwIfDecimalOverflow(didOverflow, cudf::binary_operator::DIV);
+  return scatterNullsAtZeroDivisor(std::move(result), rhs, stream, mr);
+}
 
 // Scatters null values to positions where the divisor is zero.
 // Returns a new column with nulls at zero-divisor positions.

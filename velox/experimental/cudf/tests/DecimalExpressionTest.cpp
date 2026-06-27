@@ -1580,5 +1580,306 @@ TEST_F(CudfDecimalTest, decimalCoalesceStopsAtFirstLiteral) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+// Parameterized test that verifies cudf decimal binary ops fail-fast on
+// overflow, matching Presto / Velox CPU semantics. The cuDF kernel reports a
+// single batch-wide overflow flag and the host raises a user error for the
+// whole expression.
+struct DecimalOverflowParam {
+  std::string name;
+  std::string op;
+  TypePtr aType;
+  TypePtr bType;
+  std::vector<int128_t> aValues;
+  std::vector<int128_t> bValues;
+  std::string expectedMessage;
+};
+
+class CudfDecimalOverflowTest
+    : public CudfDecimalTest,
+      public testing::WithParamInterface<DecimalOverflowParam> {};
+
+TEST_P(CudfDecimalOverflowTest, throwsOnOverflow) {
+  const auto& param = GetParam();
+
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(param.aValues, param.aType),
+          makeFlatVector<int128_t>(param.bValues, param.bType),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({param.op + " AS result"})
+                  .planNode();
+
+  // cudf is registered in SetUp() and CPU fallback is disabled, so the
+  // expression is guaranteed to execute on the GPU.
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      param.expectedMessage);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DecimalOverflow,
+    CudfDecimalOverflowTest,
+    testing::Values(
+        // 9e37 + 2e37 = 1.1e38 needs 39 digits, exceeds output precision 38.
+        DecimalOverflowParam{
+            "add",
+            "a + b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {2 * DecimalUtil::kPowersOfTen[37]},
+            "Decimal overflow in add"},
+        // 9e37 - (-2e37) = 1.1e38, exceeds output precision 38.
+        DecimalOverflowParam{
+            "subtract",
+            "a - b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {-2 * DecimalUtil::kPowersOfTen[37]},
+            "Decimal overflow in subtract"},
+        // 1e19 * 1e19 = 1e38 needs 39 digits, exceeds output precision 38.
+        DecimalOverflowParam{
+            "multiply",
+            "a * b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            {DecimalUtil::kPowersOfTen[19]},
+            {DecimalUtil::kPowersOfTen[19]},
+            "Decimal overflow in multiply"},
+        // Raw int128 wrap (not just a precision violation): 9e37 + 9e37 = 1.8e38
+        // exceeds the int128 max (~1.7e38), so the checked add itself overflows.
+        DecimalOverflowParam{
+            "addInt128Wrap",
+            "a + b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            "Decimal overflow in add"},
+        // 9e37 - (-9e37) = 1.8e38 overflows the raw int128 subtraction.
+        DecimalOverflowParam{
+            "subtractInt128Wrap",
+            "a - b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {-9 * DecimalUtil::kPowersOfTen[37]},
+            "Decimal overflow in subtract"},
+        // 9e37 * 10 = 9e38 overflows the raw int128 multiplication.
+        DecimalOverflowParam{
+            "multiplyInt128Wrap",
+            "a * b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {DecimalUtil::kPowersOfTen[1]},
+            "Decimal overflow in multiply"},
+        // Dividend is rescaled by 10^6 before the divide (9e37 * 1e6 = 9e43),
+        // which overflows int128 (rescale path).
+        DecimalOverflowParam{
+            "divide",
+            "a / b",
+            DECIMAL(38, 6),
+            DECIMAL(38, 6),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {DecimalUtil::kPowersOfTen[6]},
+            "Decimal overflow in divide"},
+        // Precision path for divide: the rescaled dividend fits int128
+        // (1.5e36 * 1e2 = 1.5e38 < int128 max) but the quotient 1.5e36 / 0.01 =
+        // 1.5e38 (raw, scale 2) needs 39 digits and exceeds output precision 38.
+        DecimalOverflowParam{
+            "dividePrecision",
+            "a / b",
+            DECIMAL(38, 2),
+            DECIMAL(38, 2),
+            {15 * DecimalUtil::kPowersOfTen[35]},
+            {1},
+            "Decimal overflow in divide"}),
+    [](const testing::TestParamInfo<DecimalOverflowParam>& info) {
+      return info.param.name;
+    });
+
+// Guards against false-positive overflow: 6e37 + 3e37 = 9e37 still fits within
+// precision 38 (< 1e38), so the op must succeed and match CPU results.
+TEST_F(CudfDecimalTest, decimalAddNoFalseOverflowAtBoundary) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(
+              {6 * DecimalUtil::kPowersOfTen[37]}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>(
+              {3 * DecimalUtil::kPowersOfTen[37]}, DECIMAL(38, 0)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a + b AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Guards against false-positive overflow: 6e37 - (-3e37) = 9e37 still fits
+// within precision 38 (< 1e38), so the op must succeed and match CPU results.
+TEST_F(CudfDecimalTest, decimalSubtractNoFalseOverflowAtBoundary) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(
+              {6 * DecimalUtil::kPowersOfTen[37]}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>(
+              {-3 * DecimalUtil::kPowersOfTen[37]}, DECIMAL(38, 0)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a - b AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Guards against false-positive overflow: 3e18 * 3e19 = 9e37 still fits within
+// precision 38 (< 1e38), so the op must succeed and match CPU results.
+TEST_F(CudfDecimalTest, decimalMultiplyNoFalseOverflowAtBoundary) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(
+              {3 * DecimalUtil::kPowersOfTen[18]}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>(
+              {3 * DecimalUtil::kPowersOfTen[19]}, DECIMAL(38, 0)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a * b AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Exercises the int64 -> int128 promotion path: two DECIMAL64 (int64-backed)
+// inputs whose product needs precision 36 and is promoted to DECIMAL128. The
+// operands (9e17) fit int64, but the raw int64 product would wrap; promotion to
+// int128 must hold the true value 8.1e35 without a false overflow, matching CPU.
+TEST_F(CudfDecimalTest, decimalMultiplyInt64ToInt128PromotionAtBoundary) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {9 * DecimalUtil::kPowersOfTen[17]}, DECIMAL(18, 0)),
+          makeFlatVector<int64_t>(
+              {9 * DecimalUtil::kPowersOfTen[17]}, DECIMAL(18, 0)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a * b AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  // Pin the promotion explicitly: DECIMAL(18, 0) * DECIMAL(18, 0) derives
+  // precision 18 + 18 = 36, so the int64 inputs must yield an int128-backed
+  // DECIMAL(36, 0) output (the int64 -> int128 kernel path), not a DECIMAL64.
+  auto gpuType = gpuResult->childAt(0)->type();
+  ASSERT_TRUE(gpuType->equivalent(*DECIMAL(36, 0)))
+      << "expected promoted DECIMAL(36, 0), but got " << gpuType->toString();
+  ASSERT_TRUE(gpuType->isLongDecimal())
+      << "expected int128-backed long decimal, but got " << gpuType->toString();
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Guards against false-positive overflow on divide: the dividend is rescaled by
+// 10^2 (9e35 * 1e2 = 9e37 < int128 max) and the quotient 9e35 / 0.01 = 9e37
+// (raw, scale 2) still fits precision 38, so it must succeed and match CPU.
+TEST_F(CudfDecimalTest, decimalDivideNoFalseOverflowAtBoundary) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(
+              {9 * DecimalUtil::kPowersOfTen[35]}, DECIMAL(38, 2)),
+          makeFlatVector<int128_t>({1}, DECIMAL(38, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({"a / b AS result"})
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// Exercises the scalar-operand kernel path: a column multiplied by a literal
+// that overflows output precision must also fail-fast on the GPU.
+TEST_F(CudfDecimalTest, decimalScalarOverflow) {
+  auto input = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int128_t>(
+              {DecimalUtil::kPowersOfTen[19]}, DECIMAL(38, 0)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  // 1e19 * 1e19 = 1e38 needs 39 digits, exceeding output precision 38.
+  auto plan =
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project(
+              {"a * CAST('10000000000000000000' AS DECIMAL(38, 0)) AS result"})
+          .planNode();
+
+  VELOX_ASSERT_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool()),
+      "Decimal overflow in multiply");
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox
