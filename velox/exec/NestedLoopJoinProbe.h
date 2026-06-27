@@ -378,6 +378,14 @@ class NestedLoopJoinProbe : public Operator {
   // operator (need to wait until all peers are finished).
   bool lastProbe_{false};
 
+  // True once this operator has reached the peer-synchronization barrier in
+  // beginBuildMismatch(), regardless of whether it became the last prober or
+  // suspended waiting for peers. Used by close() to decide whether to disarm
+  // the barrier: only operators that close without ever reaching the barrier
+  // need to disarm it, because peers already there (or about to arrive) would
+  // otherwise wait for a count this operator will never contribute.
+  bool barrierReached_{false};
+
   // Indicate if the probe side has empty input or not. For the last probe,
   // this indicates if all the probe sides are empty or not. This flag is used
   // for mismatched output producing.

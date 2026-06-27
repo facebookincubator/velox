@@ -438,6 +438,14 @@ class HashProbe : public Operator {
   // table from the previously spilled data.
   bool lastProber_{false};
 
+  // True once this operator has reached the peer-synchronization barrier in
+  // noMoreInputInternal(), regardless of whether it became the last prober or
+  // suspended waiting for peers. Used by close() to decide whether to disarm
+  // the barrier: only operators that close without ever reaching the barrier
+  // need to disarm it, because peers already there (or about to arrive) would
+  // otherwise wait for a count this operator will never contribute.
+  bool barrierReached_{false};
+
   std::unique_ptr<HashLookup> lookup_;
 
   // Channel of probe keys in 'input_'.
