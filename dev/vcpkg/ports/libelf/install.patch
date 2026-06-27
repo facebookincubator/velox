@@ -1,0 +1,14 @@
+diff --git a/lib/Makefile.in b/lib/Makefile.in
+index 92a129f..8eed551 100644
+--- a/lib/Makefile.in
++++ b/lib/Makefile.in
+@@ -17,7 +17,8 @@
+ 
+ # @(#) $Id: Makefile.in,v 1.40 2009/11/01 13:04:19 michael Exp $
+ 
+-instroot =
++DESTDIR  =
++instroot = $(DESTDIR)
+ 
+ prefix = @prefix@
+ exec_prefix = @exec_prefix@

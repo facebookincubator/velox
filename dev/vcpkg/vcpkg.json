@@ -1,0 +1,129 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "velox",
+  "version-string": "0.0.1",
+  "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
+  "dependencies": [
+    "libevent",
+    "openssl",
+    "zstd",
+    "lz4",
+    "double-conversion",
+    "bzip2",
+    "curl",
+    "lzo",
+    "re2",
+    "gflags",
+    "glog",
+    "snappy",
+    "fmt",
+    {
+      "name": "folly",
+      "features": ["zstd", "lz4", "lzma", "snappy"]
+    },
+    "boost-atomic",
+    "boost-asio",
+    "boost-context",
+    "boost-circular-buffer",
+    "boost-date-time",
+    "boost-format",
+    "boost-filesystem",
+    "boost-program-options",
+    "boost-process",
+    "boost-regex",
+    "boost-locale",
+    "boost-system",
+    "boost-stacktrace",
+    "boost-sort",
+    "boost-thread",
+    "boost-multiprecision",
+    "boost-uuid",
+    "boost-variant",
+    "arrow",
+    "gtest",
+    "xsimd",
+    "simdjson",
+    "xxhash",
+    "protobuf",
+    "benchmark",
+    "icu",
+    "thrift",
+    "libstemmer",
+    "geos",
+    "s2geometry",
+    "grpc"
+  ],
+  "features": {
+    "s3": {
+      "description": "Enable S3 support",
+      "dependencies": [
+        {
+          "name": "aws-sdk-cpp",
+          "features": [
+            "identity-management",
+            "s3",
+            "sts",
+            "cognito-identity"
+          ]
+        }
+      ]
+    },
+    "gcs": {
+      "description": "Enable GCS support",
+      "dependencies": [
+        {
+          "name": "google-cloud-cpp",
+          "features": [
+            "storage"
+          ],
+          "version>=": "2.22.0"
+        }
+      ]
+    },
+    "abfs": {
+      "description": "Enable ABFS support",
+      "dependencies": [
+        "azure-storage-blobs-cpp",
+        "azure-storage-files-datalake-cpp",
+        "azure-identity-cpp"
+      ]
+    },
+    "hdfs": {
+      "description": "Enable HDFS support",
+      "dependencies": [
+        "libxml2"
+      ]
+    },
+    "duckdb": {
+      "description": "Enable DuckDB support",
+      "dependencies": [
+        "duckdb"
+      ]
+    },
+    "arrow": {
+      "description": "Enable Apache Arrow support",
+      "dependencies": [
+        {
+          "name": "arrow",
+          "features": ["parquet", "json"]
+        }
+      ]
+    }
+  },
+  "overrides": [
+    { "name": "fmt", "version": "11.2.0" },
+    { "name": "liblzma", "version": "5.6.2" },
+    { "name": "xsimd", "version": "10.0.0" },
+    { "name": "protobuf", "version": "3.21.8"},
+    { "name": "re2", "version": "2024-07-02"},
+    { "name": "glog", "version": "0.6.0"},
+    { "name": "gflags", "version": "2.2.2"},
+    { "name": "abseil", "version": "20240116.2"},
+    { "name": "azure-identity-cpp", "version": "1.11.0"},
+    { "name": "grpc", "version": "1.49.0"},
+    { "name": "google-cloud-cpp", "version": "2.22.0"},
+    { "name": "simdjson", "version": "4.1.0"},
+    { "name": "arrow", "version": "18.1.0"},
+    { "name": "thrift", "version": "0.22.0"}
+  ]
+}

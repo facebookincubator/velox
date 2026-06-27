@@ -68,7 +68,12 @@ macro(velox_resolve_dependency dependency_name)
 
   set(find_package_args ${dependency_name} ${ARGN})
   list(REMOVE_ITEM find_package_args REQUIRED QUIET)
-  if(${dependency_name}_SOURCE STREQUAL "AUTO")
+  
+  # When using vcpkg, dependencies are managed by vcpkg manifest
+  if(${dependency_name}_SOURCE STREQUAL "VCPKG")
+    message(STATUS "Using VCPKG ${dependency_name}")
+    find_package(${find_package_args} REQUIRED)
+  elseif(${dependency_name}_SOURCE STREQUAL "AUTO")
     find_package(${find_package_args})
     if(${${dependency_name}_FOUND})
       set(${dependency_name}_SOURCE "SYSTEM")
