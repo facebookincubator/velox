@@ -80,6 +80,25 @@ target_link_libraries(
   velox_link_libs
 )
 
+add_executable(
+  velox_dwio_parquet_timestamp_with_timezone_test
+  TimestampWithTimeZoneTest.cpp
+)
+add_test(
+  NAME velox_dwio_parquet_timestamp_with_timezone_test
+  COMMAND velox_dwio_parquet_timestamp_with_timezone_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_dwio_parquet_timestamp_with_timezone_test
+  velox_dwio_parquet_common
+  velox_dwio_parquet_writer
+  velox_functions_prestosql
+  velox_connector_registry
+  velox_link_libs
+  ${TEST_LINK_LIBS}
+)
+
 add_executable(velox_dwio_parquet_structure_decoder_test NestedStructureDecoderTest.cpp)
 add_test(
   NAME velox_dwio_parquet_structure_decoder_test

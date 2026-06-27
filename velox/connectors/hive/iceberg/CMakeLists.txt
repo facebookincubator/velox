@@ -75,6 +75,7 @@ velox_add_library(
 velox_link_libraries(
   velox_hive_iceberg_splitreader
   velox_connector
+  velox_core
   velox_functions_iceberg
   velox_dwio_dwrf_writer
   Folly::folly

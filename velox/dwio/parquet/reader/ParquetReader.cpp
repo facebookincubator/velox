@@ -25,6 +25,7 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
 
@@ -1059,7 +1060,8 @@ TypePtr ReaderBase::convertType(
                     requestedType,
                     isRepeated,
                     [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TIMESTAMP;
+                      return type->kind() == TypeKind::TIMESTAMP ||
+                          isTimestampWithTimeZoneType(type);
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
@@ -1235,7 +1237,8 @@ TypePtr ReaderBase::convertType(
                       requestedType,
                       isRepeated,
                       [](const TypePtr& type) {
-                        return type->kind() == TypeKind::TIMESTAMP;
+                        return type->kind() == TypeKind::TIMESTAMP ||
+                            isTimestampWithTimeZoneType(type);
                       }),
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
@@ -1258,7 +1261,8 @@ TypePtr ReaderBase::convertType(
                     requestedType,
                     isRepeated,
                     [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TIMESTAMP;
+                      return type->kind() == TypeKind::TIMESTAMP ||
+                          isTimestampWithTimeZoneType(type);
                     }),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
