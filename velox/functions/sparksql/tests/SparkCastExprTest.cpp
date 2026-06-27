@@ -691,6 +691,57 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
          Timestamp(-8 * 3600, 0)});
   }
 
+  void testStringToTimestampUtc() {
+    // Basic cases: stored as-is, not subject to session timezone adjustment.
+    testCast(
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01",
+             "1970-01-01 00:00:00",
+             "2000-01-01",
+             "2000-01-01 12:21:56",
+             "2015-03-18T12:03:17",
+             "2015-03-18 12:03:17.123"},
+            VARCHAR()),
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(0, 0),
+             Timestamp(946'684'800, 0),
+             Timestamp(946'729'316, 0),
+             Timestamp(1'426'680'197, 0),
+             Timestamp(1'426'680'197, 123'000'000)},
+            TIMESTAMP_UTC()));
+
+    // Timezone suffix is accepted but ignored.
+    testCast(
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00-02:00",
+             "1970-01-01 00:00:00 +02:00",
+             "2015-03-18T12:03:17Z",
+             "2015-03-18 12:03:17 America/Los_Angeles"},
+            VARCHAR()),
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(0, 0),
+             Timestamp(1'426'680'197, 0),
+             Timestamp(1'426'680'197, 0)},
+            TIMESTAMP_UTC()));
+
+    // Session timezone does not affect TIMESTAMP_UTC.
+    setTimezone("Asia/Shanghai");
+    testCast(
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00", "1970-01-01 08:00:00"}, VARCHAR()),
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0), Timestamp(28'800, 0)}, TIMESTAMP_UTC()));
+
+    // Leading and trailing whitespace is stripped before parsing.
+    testCast(
+        makeNullableFlatVector<std::string>(
+            {"\n\f\r\t\n 2000-01-01 12:21:56"}, VARCHAR()),
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()));
+  }
+
   void testStringToDate() {
     testCast<std::string, int32_t>(
         "date",
@@ -1221,6 +1272,10 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTimestamp) {
   testStringToTimestamp();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampUtc) {
+  testStringToTimestampUtc();
+}
+
 TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
   testStringToDate();
   auto testInvalidDate = [this](const std::string& value) {
@@ -1501,6 +1556,14 @@ TEST_F(SparkCastExprTestAnsiOff, stringToBoolean) {
 TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
   testStringToTimestamp();
   testCast<std::string, Timestamp>("timestamp", {"INVALID"}, {std::nullopt});
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToTimestampUtc) {
+  testStringToTimestampUtc();
+  // Invalid string produces null in non-ANSI mode.
+  testCast(
+      makeNullableFlatVector<std::string>({"INVALID"}, VARCHAR()),
+      makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()));
 }
 
 TEST_F(SparkCastExprTestAnsiOff, stringToDate) {

@@ -302,6 +302,12 @@ class CastExpr : public SpecialForm {
       const BaseVector& input,
       const TimestampToStringOptions& options);
 
+  // Casts VARCHAR to TIMESTAMP UTC, ignoring any timezone in the input string.
+  VectorPtr applyVarcharToTimestampUtcCast(
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
+      const BaseVector& input);
+
   // Casts basic numeric types to wider types.
   template <TypeKind ToKind, TypeKind FromKind>
   void applyNumericUpcast(
