@@ -21,6 +21,8 @@
 #include <folly/Singleton.h>
 #include <folly/lang/Bits.h>
 
+#include "connectors/hive/iceberg/IcebergSplit.h"
+#include "connectors/hive/iceberg/IcebergSplitReader.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/HiveConfig.h"
@@ -920,5 +922,118 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
       .assertResults({expected});
 }
 
+TEST_F(IcebergReadTest, prepareSplitRefreshesStalePartitionConstant) {
+  auto tableType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})})});
+
+  ColumnHandleMap assignments;
+  assignments["id"] = makeIcebergHandle("id", BIGINT(), 1);
+  assignments["name"] = makeIcebergHandle(
+      "name", VARCHAR(), 2, FileColumnHandle::ColumnType::kPartitionKey);
+
+  std::unordered_map<std::string, FileColumnHandlePtr> partitionKeys;
+  partitionKeys["name"] =
+      std::static_pointer_cast<const FileColumnHandle>(assignments["name"]);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addField("id", 0);
+  auto* nameSpec = scanSpec->addField("name", 1);
+
+  nameSpec->setConstantValue<StringView>(
+      StringView("old"), VARCHAR(), connectorQueryCtx_->memoryPool());
+  ASSERT_TRUE(nameSpec->isConstant());
+
+  auto tableHandle = std::make_shared<HiveTableHandle>(
+      test::kIcebergConnectorId,
+      "iceberg_table",
+      common::SubfieldFilters{},
+      nullptr,
+      tableType);
+
+  auto splits = makeIcebergSplits(
+      dataFilePath->getPath(),
+      {},
+      {{"name", std::optional<std::string>("new")}});
+  ASSERT_EQ(splits.size(), 1);
+
+  auto icebergSplit =
+      std::dynamic_pointer_cast<const HiveIcebergSplit>(splits.front());
+  ASSERT_NE(icebergSplit, nullptr);
+
+  auto fileConfig =
+      std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{}));
+
+  const std::shared_ptr<config::ConfigBase> connectorSessionProperties_ =
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>());
+
+  FileHandleFactory fileHandleFactory(
+      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(
+          fileConfig->numCacheFileHandles()),
+      std::make_unique<FileHandleGenerator>(connectorSessionProperties_));
+  dwio::common::RuntimeStatistics runtimeStats;
+
+  IcebergSplitReader reader(
+      icebergSplit,
+      tableHandle,
+      &partitionKeys,
+      connectorQueryCtx_.get(),
+      fileConfig,
+      tableType,
+      std::make_shared<io::IoStatistics>(),
+      std::make_shared<io::IoStatistics>(),
+      std::make_shared<IoStats>(),
+      &fileHandleFactory,
+      ioExecutor_.get(),
+      scanSpec,
+      std::make_shared<ColumnHandleMap>(assignments));
+
+  reader.configureReaderOptions(nullptr);
+  reader.prepareSplit(nullptr, runtimeStats);
+
+  ASSERT_TRUE(nameSpec->isConstant());
+  ASSERT_NE(nameSpec->constantValue(), nullptr);
+
+  DecodedVector decoded(*nameSpec->constantValue());
+  ASSERT_FALSE(decoded.isNullAt(0));
+  EXPECT_EQ(decoded.valueAt<StringView>(0).str(), "new");
+}
+
+TEST_F(IcebergReadTest, projectedSourceColumnBeforeNonIdentityPartitionValue) {
+  auto rowType = ROW({"id"}, {INTEGER()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector(
+          rowType->names(), {makeFlatVector<int32_t>({10, 11, 12})})});
+
+  ColumnHandleMap assignments;
+  assignments["id"] = makeIcebergHandle(
+      "id", INTEGER(), 1, FileColumnHandle::ColumnType::kRegular);
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expected =
+      makeRowVector(rowType->names(), {makeFlatVector<int32_t>({10, 11, 12})});
+
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(
+          dataFilePath->getPath(),
+          {},
+          {{"id", std::optional<std::string>("3")}}))
+      .assertResults({expected});
+}
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg

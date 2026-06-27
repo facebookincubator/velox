@@ -939,13 +939,13 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           childSpec->setConstantValue(
               BaseVector::createNullConstant(
                   columnType, 1, connectorQueryCtx_->memoryPool()));
+        } else if (auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
+                   partitionIt != fileSplit_->partitionKeys.end()) {
+          setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
         } else if (childSpec->isConstant()) {
           // Constant already set (equality-delete partition column, or set on
           // a previous prepareSplit call for the same scanSpec). Nothing to do.
           continue;
-        } else if (auto partitionIt = fileSplit_->partitionKeys.find(fieldName);
-                   partitionIt != fileSplit_->partitionKeys.end()) {
-          setPartitionValue(childSpec.get(), fieldName, partitionIt->second);
         } else {
           // Check if column has an initial-default value (Iceberg V3)
           bool hasDefaultValue = false;
