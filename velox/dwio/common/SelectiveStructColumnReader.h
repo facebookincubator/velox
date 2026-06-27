@@ -105,6 +105,11 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
     currentRowNumber_ = value;
   }
 
+  /// Evaluates split-time filtering for a constant field.
+  /// Returns true for non-null constants, or when no filter is present, or when
+  /// the filter allows null values.
+  static bool testFilterOnConstant(const velox::common::ScanSpec& spec);
+
  protected:
   template <typename T, typename KeyNode, typename FormatData>
   friend class SelectiveFlatMapColumnReaderHelper;
