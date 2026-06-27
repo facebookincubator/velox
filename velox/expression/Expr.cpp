@@ -2497,4 +2497,28 @@ VectorPtr tryEvaluateConstantExpression(
       expr, pool, &execCtx, suppressEvaluationFailures);
 }
 
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool suppressEvaluationFailures) {
+  auto exprSet = evaluator->compile(expr);
+  if (!exprSet->exprs()[0]->isConstantExpr()) {
+    return nullptr;
+  }
+  RowVector input(
+      evaluator->pool(), ROW({}, {}), nullptr, 1, std::vector<VectorPtr>{});
+  SelectivityVector rows(1);
+  VectorPtr result;
+  if (suppressEvaluationFailures) {
+    try {
+      evaluator->evaluate(exprSet.get(), rows, input, result);
+    } catch (const VeloxUserError&) {
+      return nullptr;
+    }
+  } else {
+    evaluator->evaluate(exprSet.get(), rows, input, result);
+  }
+  return result;
+}
+
 } // namespace facebook::velox::exec
