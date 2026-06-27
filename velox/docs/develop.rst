@@ -10,6 +10,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/types
     develop/vectors
     develop/scalar-functions
+    develop/remote-functions
     develop/aggregate-functions
     develop/view-and-writer-types
     develop/lambda-functions
