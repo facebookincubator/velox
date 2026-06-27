@@ -41,9 +41,12 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
 /// Converts a list of 'RowVector's into 'MaterializedRowMultiset'.
 MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors);
 
+/// Runs SQL queries against an in-memory DuckDB to compute expected results in
+/// tests. Not thread-safe: a single instance must be accessed from one thread
+/// at a time.
 class DuckDbQueryRunner {
  public:
-  DuckDbQueryRunner() : db_(nullptr) {}
+  DuckDbQueryRunner() = default;
 
   void createTable(
       const std::string& name,
@@ -79,7 +82,13 @@ class DuckDbQueryRunner {
   }
 
  private:
-  ::duckdb::DuckDB db_;
+  // Returns the in-memory DuckDB, building it on the first call. Construction
+  // is expensive, so it is deferred until the first query.
+  ::duckdb::DuckDB& database();
+
+  // shared_ptr (not unique_ptr) keeps DuckDbQueryRunner copyable; some callers
+  // hold it by value and rely on copy semantics.
+  std::shared_ptr<::duckdb::DuckDB> db_;
 
   void execute(
       const std::string& sql,
