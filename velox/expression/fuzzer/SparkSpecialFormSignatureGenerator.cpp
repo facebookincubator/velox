@@ -22,6 +22,9 @@ SparkSpecialFormSignatureGenerator::getSignaturesForCast() const {
   std::vector<exec::FunctionSignaturePtr> signatures =
       getCommonSignaturesForCast();
 
+  // Spark string-to-time casts use TIME_MICRO_UTC.
+  signatures.push_back(makeCastSignature("varchar", "TIME MICRO UTC"));
+
   // Cast integer types as varbinary is supported in Spark.
   for (auto fromType : {"tinyint", "smallint", "integer", "bigint"}) {
     signatures.push_back(makeCastSignature(fromType, "varbinary"));
