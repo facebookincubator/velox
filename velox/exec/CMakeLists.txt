@@ -80,6 +80,7 @@ velox_add_library(
   PrefixSort.cpp
   ProbeOperatorState.cpp
   RowContainer.cpp
+  RowLayout.cpp
   RowNumber.cpp
   ScaleWriterLocalPartition.cpp
   ScaledScanController.cpp
@@ -181,6 +182,7 @@ velox_add_library(
   ProbeOperatorState.h
   RoundRobinPartitionFunction.h
   RowContainer.h
+  RowLayout.h
   RowNumber.h
   ScaleWriterLocalPartition.h
   ScaledScanController.h
