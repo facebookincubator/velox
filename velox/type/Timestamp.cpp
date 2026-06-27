@@ -115,7 +115,7 @@ void Timestamp::toTimezone(const tz::TimeZone& zone) {
 }
 
 const tz::TimeZone& Timestamp::defaultTimezone() {
-  static const tz::TimeZone* kDefault = ({
+  static const tz::TimeZone* kDefault = []() -> const tz::TimeZone* {
     // TODO: We are hard-coding PST/PDT here to be aligned with the current
     // behavior in DWRF reader/writer.  Once they are fixed, we can use
     // tzdb::current_zone() here.
@@ -123,8 +123,8 @@ const tz::TimeZone& Timestamp::defaultTimezone() {
     // See https://github.com/facebookincubator/velox/issues/8127
     auto* tz = tz::locateZone("America/Los_Angeles");
     VELOX_CHECK_NOT_NULL(tz);
-    tz;
-  });
+    return tz;
+  }();
   return *kDefault;
 }
 

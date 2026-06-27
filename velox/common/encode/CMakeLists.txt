@@ -27,3 +27,8 @@ velox_add_library(
 velox_link_libraries(velox_encode PUBLIC velox_status Folly::folly)
 
 velox_add_library(velox_common_encode INTERFACE HEADERS ByteStream.h Coding.h UInt128.h)
+
+# Add Windows-specific glog defines
+if(WIN32)
+  velox_compile_definitions(velox_encode PRIVATE GLOG_USE_GLOG_EXPORT)
+endif()

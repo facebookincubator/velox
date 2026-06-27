@@ -38,4 +38,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # Mask compilation warning in clang 16.
-target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
+if(NOT MSVC)
+  target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
+endif()

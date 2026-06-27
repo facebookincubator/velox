@@ -746,7 +746,11 @@ folly::dynamic Variant::serialize() const {
       break;
     }
     case TypeKind::HUGEINT: {
-      objValue = value<TypeKind::HUGEINT>();
+      // folly::dynamic stores integers as int64_t; assigning the 128-bit value
+      // directly works on platforms where int128_t is a builtin but not with
+      // the Windows class shim, so narrow explicitly (matching folly's int64
+      // storage on other platforms).
+      objValue = static_cast<int64_t>(value<TypeKind::HUGEINT>());
       break;
     }
     case TypeKind::BOOLEAN: {

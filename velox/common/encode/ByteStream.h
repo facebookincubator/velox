@@ -28,6 +28,11 @@
 
 #include <folly/FBString.h>
 
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 namespace facebook::velox::strings {
 
 const size_t kSizeMax = std::numeric_limits<size_t>::max();
@@ -136,7 +141,7 @@ class ByteSinkBuffer : public std::basic_streambuf<char> {
   using traits = std::char_traits<char>;
 
   static constexpr const int_type kEOF = traits::eof();
-  static constexpr const size_t kPutAreaSize = 1UL << 10;
+  static constexpr const size_t kPutAreaSize = 1ULL << 10;
 
   explicit ByteSinkBuffer(ByteSink& sink) : sink_(sink) {
     setp(&putArea_[0], &putArea_[kPutAreaSize]);
@@ -288,7 +293,7 @@ class ByteSourceBuffer : public std::basic_streambuf<char> {
   using traits = std::char_traits<char>;
 
   static constexpr const int_type kEOF = traits::eof();
-  static constexpr const size_t kGetAreaSize = 1UL << 10;
+  static constexpr const size_t kGetAreaSize = 1ULL << 10;
 
   explicit ByteSourceBuffer(ByteSource& source) : source_(source) {
     reset();

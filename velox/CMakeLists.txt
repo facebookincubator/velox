@@ -33,7 +33,9 @@ if(${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(examples)
 endif()
 
-add_subdirectory(benchmarks)
+if(NOT WIN32)
+  add_subdirectory(benchmarks)
+endif()
 
 if(${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(expression)

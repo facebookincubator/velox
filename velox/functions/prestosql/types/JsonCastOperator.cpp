@@ -83,15 +83,17 @@ void generateJsonTyped(
       result.append(buffer);
       result.append("\"");
     } else if (isDate) {
-      std::string stringValue = DATE()->toString(value);
+      std::string stringValue = DATE()->toString(static_cast<int32_t>(value));
       result.reserve(stringValue.size() + 2);
       result.append("\"");
       result.append(stringValue);
       result.append("\"");
     } else if (isDecimal) {
       result.append(DecimalUtil::toString(value, type));
+    } else if constexpr (std::is_same_v<T, int128_t>) {
+      result.append(std::to_string(static_cast<int64_t>(value)));
     } else {
-      folly::toAppend<std::string, T>(value, &result);
+      folly::toAppend(value, &result);
     }
   }
 }
@@ -661,21 +663,30 @@ void castToJsonFromRow(
 
 template <typename T>
 simdjson::simdjson_result<T> fromString(const std::string_view& s) {
-  auto result = folly::tryTo<T>(s);
-  if (result.hasError()) {
-    return simdjson::INCORRECT_TYPE;
-  }
+  if constexpr (std::is_same_v<T, int128_t>) {
+    // int128_t is not supported by folly::tryTo, so we parse as int64_t
+    auto result = folly::tryTo<int64_t>(s);
+    if (result.hasError()) {
+      return simdjson::INCORRECT_TYPE;
+    }
+    return static_cast<int128_t>(*result);
+  } else {
+    auto result = folly::tryTo<T>(s);
+    if (result.hasError()) {
+      return simdjson::INCORRECT_TYPE;
+    }
 
-  if constexpr (std::is_floating_point_v<T>) {
-    // Only "NaN" is allowed to be converted to NaN.  "nan" is not allowed.
-    if (FOLLY_UNLIKELY(std::isnan(*result))) {
-      if (s != "NaN" && s != "-NaN") {
-        return simdjson::INCORRECT_TYPE;
+    if constexpr (std::is_floating_point_v<T>) {
+      // Only "NaN" is allowed to be converted to NaN.  "nan" is not allowed.
+      if (FOLLY_UNLIKELY(std::isnan(*result))) {
+        if (s != "NaN" && s != "-NaN") {
+          return simdjson::INCORRECT_TYPE;
+        }
       }
     }
-  }
 
-  return std::move(*result);
+    return std::move(*result);
+  }
 }
 
 // Write x to writer if x is in the range of writer type `To'.  Only the
@@ -1192,6 +1203,10 @@ void JsonCastOperator::castFromJson(
     maxSize = std::max(maxSize, input.size());
   });
   paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
+  memset(
+      paddedInput_.data() + maxSize,
+      0,
+      simdjson::SIMDJSON_PADDING);
   context.applyToSelectedNoThrow(
       rows,
       [&](auto row) INLINE_LAMBDA {
@@ -1202,9 +1217,23 @@ void JsonCastOperator::castFromJson(
         }
         auto& input = inputVector->valueAt(row);
         memcpy(paddedInput_.data(), input.data(), input.size());
+        if (input.size() < maxSize) {
+          memset(
+              paddedInput_.data() + input.size(),
+              0,
+              maxSize - input.size());
+        }
         simdjson::padded_string_view paddedInput(
             paddedInput_.data(), input.size(), paddedInput_.size());
         if (auto error = castFromJsonOneRow<kind>(paddedInput, writer)) {
+#ifdef _WIN32
+          // On MSVC, pre-initializing all error codes crashes due to stack
+          // trace capture exhaustion. Create errors lazily instead.
+          if (!errors_[error]) {
+            simdjson::simdjson_error e(error);
+            errors_[error] = toVeloxException(std::make_exception_ptr(e));
+          }
+#endif
           context.setVeloxExceptionError(row, errors_[error]);
           writer.commitNull();
         }
@@ -1257,8 +1286,14 @@ void JsonCastOperator::castFrom(
     const TypePtr& resultType,
     VectorPtr& result) const {
   // Initialize errors here so that we get the proper exception context.
+#ifdef _WIN32
+  // On MSVC, pre-initializing all 33 simdjson error codes at once crashes
+  // during VeloxException stack trace capture. Errors are created lazily
+  // in castFromJson instead.
+#else
   folly::call_once(
       initializeErrors_, [this] { simdjsonErrorsToExceptions(errors_); });
+#endif
   context.ensureWritable(rows, resultType, result);
   // Casting to unsupported types should have been rejected by isSupportedType()
   // in the caller.

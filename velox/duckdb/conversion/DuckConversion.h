@@ -173,8 +173,8 @@ struct DuckLongDecimalConversion {
       const int128_t& input,
       ::duckdb::Vector& /* unused */) {
     ::duckdb::hugeint_t duckValue;
-    duckValue.upper = (input >> 64);
-    duckValue.lower = input;
+    duckValue.upper = static_cast<int64_t>(input >> 64);
+    duckValue.lower = static_cast<uint64_t>(input);
     return duckValue;
   }
 

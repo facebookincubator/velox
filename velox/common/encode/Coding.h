@@ -27,6 +27,9 @@
 
 #include "velox/common/encode/ByteStream.h"
 #include "velox/common/encode/UInt128.h"
+#ifdef _MSC_VER
+#include "velox/type/HugeInt.h"
+#endif
 
 namespace facebook::velox {
 
@@ -271,6 +274,19 @@ class Varint {
 // if x >= 0, ZigZag::encode(x) == 2*x
 // if x < 0, ZigZag::encode(x) == -2*x + 1
 class ZigZag {
+ private:
+  // Helper to get signed type - default version
+  template <typename U, typename = void>
+  struct make_signed_helper {
+    using type = typename std::make_signed<U>::type;
+  };
+  
+  // Specialization for uint128_t
+  template <typename Dummy>
+  struct make_signed_helper<velox::uint128_t, Dummy> {
+    using type = velox::int128_t;
+  };
+
  public:
   static uint64_t encode(int64_t val) {
     // Bit-twiddling magic stolen from the Google protocol buffer document;
@@ -278,13 +294,42 @@ class ZigZag {
     return (static_cast<uint64_t>(val) << 1) ^ (val >> 63);
   }
 
+#ifndef _MSC_VER
   static __uint128_t encodeInt128(__int128_t val) {
     return (static_cast<__uint128_t>(val) << 1) ^ (val >> 127);
   }
+#else
+  static uint128_t encodeInt128(int128_t val) {
+    // ZigZag encode: (val << 1) ^ (val >> 127)
+    uint128_t uval(val);
+    uint128_t shifted = uval << 1;
+    // Arithmetic right shift by 127: all 1s if negative, all 0s if positive
+    uint128_t sign_mask = val < 0 ? uint128_t(~0ULL, ~0ULL) : uint128_t(0);
+    return shifted ^ sign_mask;
+  }
+#endif
 
-  template <typename U, typename T = typename std::make_signed<U>::type>
-  static T decode(U val) {
+  // Decode for standard types (not uint128_t)
+  template <typename U, typename T = typename make_signed_helper<U>::type>
+  static typename std::enable_if<!std::is_same<U, velox::uint128_t>::value, T>::type
+  decode(U val) {
     return static_cast<T>((val >> 1) ^ -(val & 1));
+  }
+  
+  // Decode for uint128_t (can't use unary minus)
+  template <typename U, typename T = typename make_signed_helper<U>::type>
+  static typename std::enable_if<std::is_same<U, velox::uint128_t>::value, T>::type
+  decode(U val) {
+#ifdef _MSC_VER
+    velox::uint128_t one(1);
+    velox::uint128_t bitVal = val & one;
+    velox::uint128_t decodeMask = (bitVal != velox::uint128_t(0)) ? velox::uint128_t(~0ULL, ~0ULL) : velox::uint128_t(0);
+    return static_cast<T>((val >> 1) ^ decodeMask);
+#else
+    velox::uint128_t one = 1;
+    velox::uint128_t mask = (val & one) ? static_cast<velox::uint128_t>(-1) : static_cast<velox::uint128_t>(0);
+    return static_cast<T>((val >> 1) ^ mask);
+#endif
   }
 };
 
@@ -303,6 +348,7 @@ class ByteSinkAppender {
 
 // Import GroupVarint encoding / decoding code from folly
 
+#if FOLLY_HAVE_GROUP_VARINT
 typedef folly::GroupVarint32 GroupVarint32;
 typedef folly::GroupVarint64 GroupVarint64;
 
@@ -313,5 +359,6 @@ typedef folly::GroupVarintEncoder<uint64_t, detail::ByteSinkAppender>
 
 typedef folly::GroupVarintDecoder<uint32_t> GroupVarint32Decoder;
 typedef folly::GroupVarintDecoder<uint64_t> GroupVarint64Decoder;
+#endif
 
 } // namespace facebook::velox

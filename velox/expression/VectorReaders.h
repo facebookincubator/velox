@@ -710,6 +710,7 @@ struct VectorReader<Generic<T, comparable, orderable>> {
     // TODO (kevinwilfong): Add support for Generics in callNullFree.
     VELOX_UNSUPPORTED(
         "Calling callNullFree with Generic arguments is not yet supported.");
+    return false; // unreachable; MSVC does not honor VELOX_UNSUPPORTED noreturn
   }
 
   bool containsNull(
@@ -719,6 +720,7 @@ struct VectorReader<Generic<T, comparable, orderable>> {
     // TODO (kevinwilfong): Add support for Generics in callNullFree.
     VELOX_UNSUPPORTED(
         "Calling callNullFree with Generic arguments is not yet supported.");
+    return false; // unreachable; MSVC does not honor VELOX_UNSUPPORTED noreturn
   }
 
   inline bool mayHaveNullsRecursive() const {
@@ -726,6 +728,7 @@ struct VectorReader<Generic<T, comparable, orderable>> {
     // TODO (kevinwilfong): Add support for Generics in callNullFree.
     VELOX_UNSUPPORTED(
         "Calling callNullFree with Generic arguments is not yet supported.");
+    return false; // unreachable; MSVC does not honor VELOX_UNSUPPORTED noreturn
   }
 
   bool mayHaveNulls() const {

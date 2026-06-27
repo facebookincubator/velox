@@ -286,6 +286,7 @@ uint64_t FlatMapVector::hashValueAt(vector_size_t index) const {
 std::unique_ptr<SimpleVector<uint64_t>> FlatMapVector::hashAll() const {
   // Method not implemented for any complex vectors in ComplexVectors.h also.
   VELOX_NYI();
+  return nullptr; // Unreachable, but required for MSVC
 }
 
 std::vector<vector_size_t> FlatMapVector::sortedKeyIndices(

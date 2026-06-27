@@ -83,7 +83,8 @@ class PrefixSortEncoder {
     switch ((typeKind)) {
 #define SCALAR_CASE(kind) \
   case TypeKind::kind:    \
-    return nullByteSize + sizeof(TypeTraits<TypeKind::kind>::NativeType);
+    return static_cast<uint32_t>(    \
+        nullByteSize + sizeof(TypeTraits<TypeKind::kind>::NativeType));
       SCALAR_CASE(SMALLINT)
       SCALAR_CASE(INTEGER)
       SCALAR_CASE(BIGINT)

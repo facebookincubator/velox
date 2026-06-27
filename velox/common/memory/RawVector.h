@@ -23,6 +23,14 @@
 
 #include <type_traits>
 
+#ifdef _WIN32
+#include <malloc.h>
+// Windows doesn't have aligned_alloc, use _aligned_malloc instead
+inline void* aligned_alloc(size_t alignment, size_t size) {
+  return _aligned_malloc(size, alignment);
+}
+#endif
+
 namespace facebook::velox {
 
 /// Class template similar to std::vector with no default construction and a
@@ -245,7 +253,11 @@ class raw_vector {
     if (pool_ != nullptr) {
       pool_->free(buffer, bufferSize(capacity_));
     } else {
+#ifdef _WIN32
+      _aligned_free(buffer);
+#else
       ::free(buffer);
+#endif
     }
     data_ = nullptr;
   }
@@ -262,7 +274,11 @@ class raw_vector {
         if (pool_ != nullptr) {
           pool_->free(newBuffer, bufferSize(newCapacity));
         } else {
+#ifdef _WIN32
+          _aligned_free(newBuffer);
+#else
           ::free(newBuffer);
+#endif
         }
         throw;
       }

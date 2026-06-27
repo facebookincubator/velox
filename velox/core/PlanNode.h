@@ -520,6 +520,7 @@ class ArrowStreamNode : public PlanNode {
 
   folly::dynamic serialize() const override {
     VELOX_UNSUPPORTED("ArrowStream plan node is not serializable");
+    return folly::dynamic{};
   }
 
  private:
@@ -2517,6 +2518,7 @@ class GatherPartitionFunctionSpec : public PartitionFunctionSpec {
       int /*numPartitions*/,
       bool /*localExchange*/) const override {
     VELOX_UNREACHABLE();
+    return nullptr;
   }
 
   std::string toString() const override {

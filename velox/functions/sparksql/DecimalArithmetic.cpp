@@ -87,8 +87,19 @@ struct DecimalAddSubtractBase {
   template <typename T>
   static std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
     const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[scale];
+#ifdef _WIN32
+    // MSVC: int128_t is a shim class; promote to int128_t so mixed
+    // int64/int128 division resolves, then narrow back to T explicitly.
+    const T whole = static_cast<T>(static_cast<int128_t>(value) / scaleFactor);
+    return {
+        whole,
+        static_cast<T>(
+            static_cast<int128_t>(value) -
+            static_cast<int128_t>(whole) * scaleFactor)};
+#else
     const T whole = value / scaleFactor;
     return {whole, value - whole * scaleFactor};
+#endif
   }
 
   // Increases the scale of input value by 'delta'. Returns the input value if
@@ -105,8 +116,17 @@ struct DecimalAddSubtractBase {
   template <typename T>
   static T
   decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
+#ifdef _WIN32
+    // MSVC: narrow the int128_t power-of-ten to T explicitly; the shim has no
+    // implicit narrowing conversion required to match multiply<T>'s signature.
+    T scaledWhole = sparksql::DecimalUtil::multiply<T>(
+        whole,
+        static_cast<T>(velox::DecimalUtil::kPowersOfTen[resultScale]),
+        overflow);
+#else
     T scaledWhole = sparksql::DecimalUtil::multiply<T>(
         whole, velox::DecimalUtil::kPowersOfTen[resultScale], overflow);
+#endif
     if (FOLLY_UNLIKELY(overflow)) {
       return 0;
     }
@@ -430,8 +450,12 @@ struct DecimalMultiplyFunction {
         // actually the case.
         if (UNLIKELY(totalLeadingZeros <= 128)) {
           // Needs int256.
+#ifdef _WIN32
+          int256_t reslarge = toInt256(a) * toInt256(b);
+#else
           int256_t reslarge =
               static_cast<int256_t>(a) * static_cast<int256_t>(b);
+#endif
           reslarge = reduceScaleBy(reslarge, deltaScale_);
           out = DecimalUtil::convert<R>(reslarge, overflow);
         } else {

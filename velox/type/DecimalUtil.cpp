@@ -17,7 +17,69 @@
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 
+#ifdef _MSC_VER
+#include "velox/common/base/windows/BuiltinUtil.h"
+#endif
+
 namespace facebook::velox {
+
+#ifdef _MSC_VER
+// Definition of kOverflowMultiplier for Windows
+const uint128_t DecimalUtil::kOverflowMultiplier = uint128_t(1) << 127;
+
+// Definition of kPowersOfTen for Windows
+const int128_t DecimalUtil::kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
+    1,
+    10,
+    100,
+    1'000,
+    10'000,
+    100'000,
+    1'000'000,
+    10'000'000,
+    100'000'000,
+    1'000'000'000,
+    10'000'000'000,
+    100'000'000'000,
+    1'000'000'000'000,
+    10'000'000'000'000,
+    100'000'000'000'000,
+    1'000'000'000'000'000,
+    10'000'000'000'000'000,
+    100'000'000'000'000'000,
+    1'000'000'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)10,
+    1'000'000'000'000'000'000 * (int128_t)100,
+    1'000'000'000'000'000'000 * (int128_t)1'000,
+    1'000'000'000'000'000'000 * (int128_t)10'000,
+    1'000'000'000'000'000'000 * (int128_t)100'000,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000,
+    1'000'000'000'000'000'000 * (int128_t)10'000'000,
+    1'000'000'000'000'000'000 * (int128_t)100'000'000,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)10'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)100'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
+        (int128_t)10,
+    1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
+        (int128_t)100};
+
+const int128_t DecimalUtil::kLongDecimalMin =
+    -kPowersOfTen[LongDecimalType::kMaxPrecision] + 1;
+const int128_t DecimalUtil::kLongDecimalMax =
+    kPowersOfTen[LongDecimalType::kMaxPrecision] - 1;
+const int128_t DecimalUtil::kShortDecimalMin =
+    -kPowersOfTen[ShortDecimalType::kMaxPrecision] + 1;
+const int128_t DecimalUtil::kShortDecimalMax =
+    kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
+#endif
 namespace {
 std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   VELOX_DCHECK_LT(scale, std::size(DecimalUtil::kPowersOfTen));
@@ -74,12 +136,20 @@ int32_t DecimalUtil::getByteArrayLength(int128_t value) {
 
 int32_t DecimalUtil::toByteArray(int128_t value, char* out) {
   int32_t length = getByteArrayLength(value);
-  auto lowBig = folly::Endian::big<int64_t>(value);
+#ifdef _MSC_VER
+  auto lowBig = folly::Endian::big<int64_t>(static_cast<int64_t>(value.low()));
+#else
+  auto lowBig = folly::Endian::big<int64_t>(static_cast<int64_t>(value));
+#endif
   uint8_t* lowAddr = reinterpret_cast<uint8_t*>(&lowBig);
   if (length <= sizeof(int64_t)) {
     memcpy(out, lowAddr + sizeof(int64_t) - length, length);
   } else {
-    auto highBig = folly::Endian::big<int64_t>(value >> 64);
+#ifdef _MSC_VER
+    auto highBig = folly::Endian::big<int64_t>(value.high());
+#else
+    auto highBig = folly::Endian::big<int64_t>(static_cast<int64_t>(value >> 64));
+#endif
     uint8_t* highAddr = reinterpret_cast<uint8_t*>(&highBig);
     memcpy(out, highAddr + sizeof(int128_t) - length, length - sizeof(int64_t));
     memcpy(out + length - sizeof(int64_t), lowAddr, sizeof(int64_t));
@@ -108,6 +178,29 @@ void DecimalUtil::computeAverage(
     // based on the combined remainder values (set "noRoundUp = false"), which
     // ensures accuracy.
     VELOX_DCHECK_LE(overflow, count);
+#ifdef _MSC_VER
+    UInt128 quotMul, remMul;
+    int128_t quotSum, remSum;
+    int128_t remTotal;
+    remMul = DecimalUtil::divideWithRoundUp<UInt128, UInt128, int64_t>(
+        quotMul, UInt128(kOverflowMultiplier), count, true, 0, 0);
+    // UInt128 * int64_t doesn't handle negative overflow correctly (int64_t
+    // is cast to uint64_t, losing the sign). Use absolute value and negate.
+    int64_t absOverflow = overflow < 0 ? -overflow : overflow;
+    remMul = remMul * absOverflow;
+    quotMul = quotMul * absOverflow;
+    int128_t signedQuotMul = int128_t(quotMul);
+    int128_t signedRemMul = int128_t(remMul);
+    if (overflow < 0) {
+      signedQuotMul = -signedQuotMul;
+      signedRemMul = -signedRemMul;
+    }
+    remSum = DecimalUtil::divideWithRoundUp<int128_t, int128_t, int64_t>(
+        quotSum, sum, count, true, 0, 0);
+    DecimalUtil::divideWithRoundUp<int128_t, int128_t, int64_t>(
+        remTotal, signedRemMul + remSum, count, false, 0, 0);
+    avg = signedQuotMul + quotSum + remTotal;
+#else
     __uint128_t quotMul, remMul;
     __int128_t quotSum, remSum;
     __int128_t remTotal;
@@ -120,6 +213,7 @@ void DecimalUtil::computeAverage(
     DecimalUtil::divideWithRoundUp<__int128_t, __int128_t, int64_t>(
         remTotal, remMul + remSum, count, false, 0, 0);
     avg = quotMul + quotSum + remTotal;
+#endif
   }
 }
 
@@ -236,6 +330,31 @@ parseDecimalComponents(const char* s, size_t size, DecimalComponents& out) {
 Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out) {
   // Parse the whole digits.
   if (decimalComponents.wholeDigits.size() > 0) {
+#ifdef _MSC_VER
+    // Parse digit-by-digit to build int128_t directly (std::stoll overflows
+    // for numbers with more than 18 digits).
+    {
+      // int128_t max is 170141183460469231731687303715884105727 (39 digits).
+      // More than 39 digits always overflows.
+      if (decimalComponents.wholeDigits.size() > 39) {
+        return Status::UserError("Value too large.");
+      }
+      out = int128_t(0);
+      // Max value that can be safely multiplied by 10 without overflow.
+      constexpr int128_t kMaxBeforeMul10 =
+          int128_t(0x0CCCCCCCCCCCCCCCLL, 0xCCCCCCCCCCCCCCCDULL);
+      for (size_t j = 0; j < decimalComponents.wholeDigits.size(); ++j) {
+        char ch = decimalComponents.wholeDigits[j];
+        if (ch < '0' || ch > '9') {
+          return Status::UserError("Value too large.");
+        }
+        if (out > kMaxBeforeMul10) {
+          return Status::UserError("Value too large.");
+        }
+        out = out * int128_t(10) + int128_t(static_cast<int64_t>(ch - '0'));
+      }
+    }
+#else
     const auto tryValue = folly::tryTo<int128_t>(std::string_view(
         decimalComponents.wholeDigits.data(),
         decimalComponents.wholeDigits.size()));
@@ -243,22 +362,44 @@ Status parseHugeInt(const DecimalComponents& decimalComponents, int128_t& out) {
       return Status::UserError("Value too large.");
     }
     out = tryValue.value();
+#endif
   }
 
   // Parse the fractional digits.
   if (decimalComponents.fractionalDigits.size() > 0) {
     const auto length = decimalComponents.fractionalDigits.size();
+#ifdef _WIN32
+    bool overflow = facebook::velox::windows::builtin_mul_overflow(
+        out, DecimalUtil::kPowersOfTen[length], &out);
+#else
     bool overflow =
         __builtin_mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
+#endif
     if (overflow) {
       return Status::UserError("Value too large.");
     }
+#ifdef _MSC_VER
+    int128_t tryValue(0);
+    for (size_t j = 0; j < length; ++j) {
+      char ch = decimalComponents.fractionalDigits[j];
+      if (ch < '0' || ch > '9') {
+        return Status::UserError("Value too large.");
+      }
+      tryValue = tryValue * int128_t(10) + int128_t(static_cast<int64_t>(ch - '0'));
+    }
+#else
     const auto tryValue = folly::tryTo<int128_t>(
         std::string_view(decimalComponents.fractionalDigits.data(), length));
     if (tryValue.hasError()) {
       return Status::UserError("Value too large.");
     }
+#endif
+#ifdef _WIN32
+    overflow =
+        facebook::velox::windows::builtin_add_overflow(out, tryValue, &out);
+#else
     overflow = __builtin_add_overflow(out, tryValue.value(), &out);
+#endif
     VELOX_DCHECK(!overflow);
   }
   return Status::OK();
@@ -330,7 +471,12 @@ Status DecimalUtil::parseStringToDecimalComponents(
   VELOX_RETURN_NOT_OK(parseHugeInt(decimalComponents, out));
 
   if (roundUp) {
+#ifdef _WIN32
+    bool overflow =
+        facebook::velox::windows::builtin_add_overflow(out, int128_t(1), &out);
+#else
     bool overflow = __builtin_add_overflow(out, 1, &out);
+#endif
     if (UNLIKELY(overflow)) {
       return Status::UserError("Value too large.");
     }
@@ -344,8 +490,13 @@ Status DecimalUtil::parseStringToDecimalComponents(
       return Status::UserError("Value too large.");
     }
 
+#ifdef _WIN32
+    bool overflow = facebook::velox::windows::builtin_mul_overflow(
+        out, kPowersOfTen[-parsedScale + toScale], &out);
+#else
     bool overflow =
         __builtin_mul_overflow(out, kPowersOfTen[-parsedScale + toScale], &out);
+#endif
     if (UNLIKELY(overflow)) {
       return Status::UserError("Value too large.");
     }

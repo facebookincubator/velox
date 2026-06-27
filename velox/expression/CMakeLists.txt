@@ -134,6 +134,12 @@ velox_link_libraries(
 )
 
 add_subdirectory(rpc)
+
+# Windows MSVC: CastExpr.cpp requires /bigobj due to heavy template instantiation
+if(MSVC)
+  set_source_files_properties(CastExpr.cpp PROPERTIES COMPILE_FLAGS "/bigobj")
+endif()
+
 add_subdirectory(type_calculation)
 add_subdirectory(signature_parser)
 

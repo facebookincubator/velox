@@ -19,6 +19,11 @@
 #include <charconv>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
+
+#ifdef _MSC_VER
+#include "velox/common/base/windows/BuiltinUtil.h"
+#include "velox/type/HugeInt.h"
+#endif
 #include "velox/common/base/CountBits.h"
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Exceptions.h"
@@ -31,6 +36,9 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
+#ifdef _WIN32
+  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1];
+#else
   static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
       1,
       10,
@@ -73,7 +81,14 @@ class DecimalUtil {
           (int128_t)10,
       1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
           (int128_t)100};
+#endif
 
+#ifdef _WIN32
+  static const int128_t kLongDecimalMin;
+  static const int128_t kLongDecimalMax;
+  static const int128_t kShortDecimalMin;
+  static const int128_t kShortDecimalMax;
+#else
   static constexpr int128_t kLongDecimalMin =
       -kPowersOfTen[LongDecimalType::kMaxPrecision] + 1;
   static constexpr int128_t kLongDecimalMax =
@@ -82,6 +97,7 @@ class DecimalUtil {
       -kPowersOfTen[ShortDecimalType::kMaxPrecision] + 1;
   static constexpr int128_t kShortDecimalMax =
       kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
+#endif
 
   /// Scale threshold for scientific notation.
   static constexpr int32_t kMinScientificNotationScale = 6;
@@ -175,17 +191,57 @@ class DecimalUtil {
               "Decimal scale difference is too large: {} vs max {}.",
               scaleDifference,
               LongDecimalType::kMaxPrecision));
+#ifdef _MSC_VER
+      if constexpr (std::is_same_v<TInput, int128_t>) {
+        isOverflow = windows::builtin_mul_overflow(
+            rescaledValue,
+            DecimalUtil::kPowersOfTen[scaleDifference],
+            &rescaledValue);
+      } else {
+        isOverflow = __builtin_mul_overflow(
+            rescaledValue,
+            DecimalUtil::kPowersOfTen[scaleDifference],
+            &rescaledValue);
+      }
+#else
       isOverflow = __builtin_mul_overflow(
           rescaledValue,
           DecimalUtil::kPowersOfTen[scaleDifference],
           &rescaledValue);
+#endif
     } else {
       scaleDifference = -scaleDifference;
       if (scaleDifference > LongDecimalType::kMaxPrecision) {
         rescaledValue = 0;
       } else {
-        VELOX_DCHECK_LT(scaleDifference, std::size(DecimalUtil::kPowersOfTen));
         const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
+#ifdef _MSC_VER
+        if constexpr (std::is_same_v<TInput, int128_t>) {
+          // Manual division and remainder for int128_t on MSVC.
+          int128_t quotient = rescaledValue / scalingFactor;
+          int128_t remainder = inputValue - (quotient * scalingFactor);
+          int128_t halfScaling = scalingFactor / int128_t(2);
+          int128_t zero = Int128(0);
+          int128_t negHalfScaling = -halfScaling;
+          rescaledValue = quotient;
+          if (inputValue >= zero && remainder >= halfScaling) {
+            ++rescaledValue;
+          } else if (remainder <= negHalfScaling) {
+            --rescaledValue;
+          }
+        } else {
+          // Cast scalingFactor to TInput for operator compatibility.
+          const TInput scalingFactorT = static_cast<TInput>(scalingFactor);
+          rescaledValue /= scalingFactorT;
+          TInput remainder = inputValue % scalingFactorT;
+          if (inputValue >= 0 && remainder >= scalingFactorT / 2) {
+            ++rescaledValue;
+          } else if (remainder <= -scalingFactorT / 2) {
+            --rescaledValue;
+          }
+        }
+#else
+        VELOX_DCHECK_LT(scaleDifference, std::size(DecimalUtil::kPowersOfTen));
         rescaledValue /= scalingFactor;
         int128_t remainder = inputValue % scalingFactor;
         if (inputValue >= 0 && remainder >= scalingFactor / 2) {
@@ -193,6 +249,7 @@ class DecimalUtil {
         } else if (remainder <= -scalingFactor / 2) {
           --rescaledValue;
         }
+#endif
       }
     }
     // Check overflow.
@@ -211,6 +268,33 @@ class DecimalUtil {
   inline static std::optional<TOutput>
   rescaleInt(TInput inputValue, int toPrecision, int toScale) {
     int128_t rescaledValue = static_cast<int128_t>(inputValue);
+#ifdef _MSC_VER
+    if constexpr (std::is_same_v<TInput, int128_t>) {
+      bool isOverflow = windows::builtin_mul_overflow(
+          rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
+      // Check overflow.
+      if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
+        VELOX_USER_FAIL(
+            "Cannot cast {} '{}' to DECIMAL({}, {})",
+            SimpleTypeTrait<TInput>::name,
+            inputValue,
+            toPrecision,
+            toScale);
+      }
+    } else {
+      bool isOverflow = __builtin_mul_overflow(
+          rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
+      // Check overflow.
+      if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
+        VELOX_USER_FAIL(
+            "Cannot cast {} '{}' to DECIMAL({}, {})",
+            SimpleTypeTrait<TInput>::name,
+            inputValue,
+            toPrecision,
+            toScale);
+      }
+    }
+#else
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
     // Check overflow.
@@ -222,7 +306,104 @@ class DecimalUtil {
           toPrecision,
           toScale);
     }
+#endif
     return static_cast<TOutput>(rescaledValue);
+  }
+
+  /// Rescales a decimal value to the target precision and scale with rounding.
+  ///
+  /// @tparam T The type of the decimal value.
+  /// @param value The input decimal value.
+  /// @param fromScale The original scale of the input value.
+  /// @param toPrecision The target precision.
+  /// @param toScale The target scale.
+  /// @param output The output decimal value after rescaling.
+  /// @return A Status indicating success or failure.
+  template <typename T>
+  static Status rescaleDecimal(
+      T value,
+      const int fromScale,
+      const int toPrecision,
+      const int toScale,
+      T& output) {
+    if (toScale > fromScale) {
+#ifdef _MSC_VER
+      if constexpr (std::is_same_v<T, int128_t>) {
+        int128_t result;
+        int128_t scaleFactor = kPowersOfTen[toScale - fromScale];
+        bool isOverflow = windows::builtin_mul_overflow(
+            value, scaleFactor, &result);
+        if (isOverflow) {
+          return Status::UserError("Result overflows.");
+        }
+        value = result;
+      } else {
+        T scaleFactor = static_cast<T>(kPowersOfTen[toScale - fromScale]);
+        const bool isOverflow = __builtin_mul_overflow(
+            value, scaleFactor, &value);
+        if (isOverflow) {
+          return Status::UserError("Result overflows.");
+        }
+      }
+#else
+      T scaleFactor = static_cast<T>(kPowersOfTen[toScale - fromScale]);
+      const bool isOverflow = __builtin_mul_overflow(
+          value, scaleFactor, &value);
+      if (isOverflow) {
+        return Status::UserError("Result overflows.");
+      }
+#endif
+    } else if (toScale < fromScale) {
+      const auto scalingFactor = kPowersOfTen[fromScale - toScale];
+#ifdef _MSC_VER
+      if constexpr (std::is_same_v<T, int128_t>) {
+        // MSVC doesn't support int128_t operators directly
+        // Compute quotient and remainder manually
+        int128_t quotient = value / scalingFactor;
+        int128_t remainder = value - (quotient * scalingFactor);
+        int128_t halfScaling = scalingFactor / int128_t(2);
+        int128_t zero = Int128(0);
+        int128_t negHalfScaling = -halfScaling;
+        
+        // Check for rounding
+        bool shouldRoundUp = (quotient >= zero) && (remainder >= halfScaling);
+        bool shouldRoundDown = (remainder <= negHalfScaling);
+        
+        if (shouldRoundUp) {
+          value = quotient + Int128(1);
+        } else if (shouldRoundDown) {
+          value = quotient - Int128(1);
+        } else {
+          value = quotient;
+        }
+      } else {
+        const T scalingFactorT = static_cast<T>(scalingFactor);
+        const T remainder = value % scalingFactorT;
+        value /= scalingFactorT;
+        if (value >= 0 && remainder >= scalingFactorT / 2) {
+          ++value;
+        } else if (remainder <= -scalingFactorT / 2) {
+          --value;
+        }
+      }
+#else
+      const T scalingFactorT = static_cast<T>(scalingFactor);
+      const T remainder = value % scalingFactorT;
+      value /= scalingFactorT;
+      if (value >= 0 && remainder >= scalingFactorT / 2) {
+        ++value;
+      } else if (remainder <= -scalingFactorT / 2) {
+        --value;
+      }
+#endif
+    }
+
+    if (!valueInPrecisionRange<T>(value, toPrecision)) {
+      return Status::UserError(
+          "Result cannot fit in the given precision {}.", toPrecision);
+    }
+    output = value;
+    return Status::OK();
   }
 
   /// Rescales a floating point value to decimal value of given precision and
@@ -246,9 +427,26 @@ class DecimalUtil {
       maxValue = kMaxDoubleBelowInt128Max;
     }
 
-    if (value <= std::numeric_limits<TOutput>::min() || value > maxValue) {
+#ifdef _MSC_VER
+    // MSVC: Handle Int128 comparison. operator int64_t() only returns low_,
+    // which is 0 for Int128::min(). Use operator double() for the full range.
+    TInput minValue;
+    if constexpr (std::is_same_v<TOutput, int128_t>) {
+      minValue = static_cast<TInput>(
+          static_cast<double>(std::numeric_limits<TOutput>::min()));
+    } else {
+      minValue = static_cast<TInput>(std::numeric_limits<TOutput>::min());
+    }
+    if (value <= minValue || 
+        static_cast<long double>(value) > static_cast<long double>(maxValue)) {
       return Status::UserError("Result overflows.");
     }
+#else
+    if (value <= std::numeric_limits<TOutput>::min() || 
+        static_cast<long double>(value) > static_cast<long double>(maxValue)) {
+      return Status::UserError("Result overflows.");
+    }
+#endif
 
     uint8_t digits;
     if constexpr (std::is_same_v<TInput, float>) {
@@ -274,34 +472,53 @@ class DecimalUtil {
     // -3333030000000000000 * 1e3 = -3333030000000000065536. No need to
     // consider the result becoming infinite as DOUBLE_MAX * 10^38 <
     // LONG_DOUBLE_MAX.
+#ifdef _MSC_VER
+    // MSVC doesn't support int128_t to long double cast, convert via double
+    long double valueAsLongDouble;
+    if constexpr (std::is_same_v<decltype(value), double> || std::is_same_v<decltype(value), float>) {
+      valueAsLongDouble = static_cast<long double>(value);
+    } else {
+      // Convert integral types via double
+      valueAsLongDouble = static_cast<long double>(static_cast<double>(value));
+    }
+    long double scaleAsLongDouble = static_cast<long double>(static_cast<int64_t>(DecimalUtil::kPowersOfTen[fractionDigits]));
+    long double scaledValue = std::round(valueAsLongDouble * scaleAsLongDouble);
+#else
     long double scaledValue = std::round(
         (long double)value * DecimalUtil::kPowersOfTen[fractionDigits]);
-    const auto result = folly::tryTo<TOutput>(scaledValue);
-    if (result.hasError()) {
-      return Status::UserError("Result overflows.");
-    }
-    TOutput rescaledValue = result.value();
-    if (scale > fractionDigits) {
-      bool isOverflow = __builtin_mul_overflow(
-          rescaledValue,
-          DecimalUtil::kPowersOfTen[scale - fractionDigits],
-          &rescaledValue);
-      if (isOverflow) {
-        return Status::UserError("Result overflows.");
+#endif
+#ifdef _MSC_VER
+    if constexpr (std::is_same_v<TOutput, int128_t>) {
+      // MSVC: folly::tryTo doesn't support int128_t, and long double to int128_t cast not supported
+      // Convert to int64_t first if within range, otherwise construct int128_t from parts
+      if (scaledValue > static_cast<long double>(std::numeric_limits<int64_t>::max()) ||
+          scaledValue < static_cast<long double>(std::numeric_limits<int64_t>::min())) {
+        // For values outside int64_t range, construct Int128 from high/low parts
+        long double absValue = std::abs(scaledValue);
+        constexpr long double k2pow64 = 18446744073709551616.0L; // 2^64
+        int64_t high = static_cast<int64_t>(absValue / k2pow64);
+        uint64_t low = static_cast<uint64_t>(
+            absValue - static_cast<long double>(high) * k2pow64);
+        int128_t resultValue(high, low);
+        if (scaledValue < 0) {
+          resultValue = -resultValue;
+        }
+        return rescaleDecimal<TOutput>(resultValue, fractionDigits, precision, scale, output);
+      } else {
+        int128_t resultValue = static_cast<int128_t>(static_cast<int64_t>(scaledValue));
+        return rescaleDecimal<TOutput>(resultValue, fractionDigits, precision, scale, output);
       }
     } else {
-      const auto scalingFactor =
-          DecimalUtil::kPowersOfTen[fractionDigits - scale];
-      divideWithRoundUp<TOutput, TOutput, int128_t>(
-          rescaledValue, rescaledValue, scalingFactor, false, 0, 0);
+#endif
+      const auto result = folly::tryTo<TOutput>(scaledValue);
+      if (result.hasError()) {
+        return Status::UserError("Result overflows.");
+      }
+      return rescaleDecimal<TOutput>(
+          result.value(), fractionDigits, precision, scale, output);
+#ifdef _MSC_VER
     }
-
-    if (!valueInPrecisionRange<TOutput>(rescaledValue, precision)) {
-      return Status::UserError(
-          "Result cannot fit in the given precision {}.", precision);
-    }
-    output = rescaledValue;
-    return Status::OK();
+#endif
   }
 
   template <typename R, typename A, typename B>
@@ -328,19 +545,98 @@ class DecimalUtil {
         unsignedDividendRescaled,
         R(DecimalUtil::kPowersOfTen[aRescale]),
         "Decimal");
+#ifdef _MSC_VER
+    // On Windows, if R is a smaller type than B (e.g., R=int64_t, B=int128_t),
+    // the / and % operators don't work directly, so we need to cast
+    if constexpr (sizeof(R) < sizeof(B)) {
+      B dividendB = static_cast<B>(unsignedDividendRescaled);
+      R quotient = static_cast<R>(dividendB / unsignedDivisor);
+      R remainder = static_cast<R>(dividendB % unsignedDivisor);
+#else
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
+#endif
     if (!noRoundUp && static_cast<const B>(remainder) * 2 >= unsignedDivisor) {
       ++quotient;
     }
     r = quotient * resultSign;
     return remainder * resultSign;
+#ifdef _MSC_VER
+    } else {
+      R quotient = unsignedDividendRescaled / static_cast<R>(unsignedDivisor);
+      R remainder = unsignedDividendRescaled % static_cast<R>(unsignedDivisor);
+      if (!noRoundUp && static_cast<const B>(remainder) * 2 >= unsignedDivisor) {
+        ++quotient;
+      }
+      r = quotient * resultSign;
+      return remainder * resultSign;
+    }
+#endif
   }
 
   /// Returns the max required size to convert the decimal of this precision and
   /// scale to varchar. A varchar's size is estimated with unscaled value
   /// digits, dot, leading zero, and possible minus sign.
   static int32_t maxStringViewSize(int precision, int scale);
+
+#ifdef _MSC_VER
+  // Helper function to convert int128_t to string for MSVC
+  static inline size_t int128ToChars(char* buffer, size_t bufferSize, int128_t value) {
+    if (value == 0) {
+      buffer[0] = '0';
+      return 1;
+    }
+    
+    bool negative = value < 0;
+    if (negative) {
+      value = -value;
+    }
+    
+    char temp[40]; // Enough for 128-bit number
+    size_t pos = 0;
+    
+    while (value > 0) {
+      temp[pos++] = '0' + static_cast<char>(static_cast<int64_t>(value % 10));
+      value = value / 10;
+    }
+    
+    size_t writePos = 0;
+    if (negative) {
+      buffer[writePos++] = '-';
+    }
+    
+    // Reverse the digits
+    for (size_t i = pos; i > 0; --i) {
+      buffer[writePos++] = temp[i - 1];
+    }
+    
+    return writePos;
+  }
+  
+  // Helper function to convert uint128_t to string for MSVC
+  static inline size_t uint128ToChars(char* buffer, size_t bufferSize, uint128_t value) {
+    if (value == 0) {
+      buffer[0] = '0';
+      return 1;
+    }
+    
+    char temp[40]; // Enough for 128-bit number
+    size_t pos = 0;
+    
+    while (value > 0) {
+      temp[pos++] = '0' + static_cast<char>(static_cast<uint64_t>(value % 10));
+      value = value / 10;
+    }
+    
+    // Reverse the digits
+    size_t writePos = 0;
+    for (size_t i = pos; i > 0; --i) {
+      buffer[writePos++] = temp[i - 1];
+    }
+    
+    return writePos;
+  }
+#endif
 
   /// @brief Convert the unscaled value of a decimal to string and write to raw
   /// string buffer from start position.
@@ -387,6 +683,62 @@ class DecimalUtil {
         *writePosition++ = '-';
         unscaledValue = -unscaledValue;
       }
+#ifdef _MSC_VER
+      // For int128_t on MSVC, use custom conversion.
+      if constexpr (std::is_same_v<T, int128_t>) {
+        int128_t integralPart = unscaledValue / DecimalUtil::kPowersOfTen[scale];
+        size_t len = int128ToChars(writePosition, maxSize, integralPart);
+        writePosition += len;
+
+        if (scale > 0) {
+          *writePosition++ = '.';
+          uint128_t fraction = static_cast<uint128_t>(unscaledValue) %
+              static_cast<uint128_t>(DecimalUtil::kPowersOfTen[scale]);
+          // Append leading zeros.
+          int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
+          std::memset(writePosition, '0', numLeadingZeros);
+          writePosition += numLeadingZeros;
+          // Append remaining fraction digits.
+          size_t fracLen = uint128ToChars(writePosition, maxSize, fraction);
+          writePosition += fracLen;
+        }
+      } else {
+        // For non-int128_t types on MSVC, handle division with int128_t
+        // scaleFactor.
+        auto scaleFactor = DecimalUtil::kPowersOfTen[scale];
+        T integralPart = static_cast<T>(
+            static_cast<int64_t>(unscaledValue) /
+            static_cast<int64_t>(scaleFactor));
+        auto [position, errorCode] =
+            std::to_chars(writePosition, writePosition + maxSize, integralPart);
+        VELOX_DCHECK_EQ(
+            errorCode,
+            std::errc(),
+            "Failed to cast decimal to varchar: {}",
+            std::make_error_code(errorCode).message());
+        writePosition = position;
+
+        if (scale > 0) {
+          *writePosition++ = '.';
+          uint64_t fraction = static_cast<uint64_t>(
+              static_cast<int64_t>(unscaledValue) %
+              static_cast<int64_t>(scaleFactor));
+          // Append leading zeros.
+          int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
+          std::memset(writePosition, '0', numLeadingZeros);
+          writePosition += numLeadingZeros;
+          // Append remaining fraction digits.
+          auto result =
+              std::to_chars(writePosition, writePosition + maxSize, fraction);
+          VELOX_DCHECK_EQ(
+              result.ec,
+              std::errc(),
+              "Failed to cast decimal to varchar: {}",
+              std::make_error_code(result.ec).message());
+          writePosition = result.ptr;
+        }
+      }
+#else
       if (isScientific) {
         if (scale >= kMinScientificNotationScale &&
             unscaledValue < DecimalUtil::kPowersOfTen
@@ -452,6 +804,7 @@ class DecimalUtil {
             std::make_error_code(result.ec).message());
         writePosition = result.ptr;
       }
+#endif
     }
     return writePosition - startPosition;
   }
@@ -464,11 +817,21 @@ class DecimalUtil {
       int128_t lhs,
       int128_t rhs,
       bool isResultNegative) {
+#ifdef _MSC_VER
+    UInt128 unsignedSum = UInt128(lhs) + UInt128(rhs);
+    // Ignore overflow value.
+    UInt128 overflow_mask = kOverflowMultiplier;
+    UInt128 masked = unsignedSum & ~overflow_mask;
+    sum = int128_t(static_cast<int64_t>(masked.high()), masked.low());
+    sum = isResultNegative ? -sum : sum;
+    return static_cast<int64_t>(unsignedSum >> static_cast<uint32_t>(127));
+#else
     __uint128_t unsignedSum = (__uint128_t)lhs + (__uint128_t)rhs;
     // Ignore overflow value.
     sum = (int128_t)unsignedSum & ~kOverflowMultiplier;
     sum = isResultNegative ? -sum : sum;
     return (unsignedSum >> 127);
+#endif
   }
 
   /// Adds two signed 128-bit numbers (int128_t), calculates the sum, and
@@ -521,8 +884,14 @@ class DecimalUtil {
       int64_t overflow) {
     // Value is valid if the conditions below are true.
     if ((overflow == 1 && sum < 0) || (overflow == -1 && sum > 0)) {
-      return static_cast<int128_t>(
-          DecimalUtil::kOverflowMultiplier * overflow + sum);
+#ifdef _MSC_VER
+      // On Windows, construct int128_t from UInt128 using high() and low()
+      return int128_t(
+          int128_t(static_cast<int64_t>(DecimalUtil::kOverflowMultiplier.high()), DecimalUtil::kOverflowMultiplier.low()) * overflow + sum);
+#else
+      // On Linux, kOverflowMultiplier is __uint128_t which can be used directly
+      return int128_t(kOverflowMultiplier) * overflow + sum;
+#endif
     }
     if (overflow != 0) {
       // The actual overflow occurred.
@@ -595,6 +964,7 @@ class DecimalUtil {
     VELOX_RETURN_NOT_OK(parseStringToDecimalComponents(
         s, toScale, parsedPrecision, parsedScale, out));
 
+
     const auto status = rescaleWithRoundUp<int128_t, T>(
         out,
         std::min(
@@ -610,7 +980,11 @@ class DecimalUtil {
     return status;
   }
 
+#ifdef _MSC_VER
+  static const UInt128 kOverflowMultiplier;
+#else
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+#endif
 
  private:
   // Parses the string view to decimal components, which contains the

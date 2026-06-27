@@ -59,6 +59,12 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 }
 
 struct BarrierState {
+  BarrierState() = default;
+  BarrierState(const BarrierState&) = delete;
+  BarrierState& operator=(const BarrierState&) = delete;
+  BarrierState(BarrierState&&) = default;
+  BarrierState& operator=(BarrierState&&) = default;
+
   int32_t numRequested;
   std::vector<std::shared_ptr<Driver>> drivers;
   /// Promises given to non-last peer drivers that the last driver will collect
@@ -203,6 +209,12 @@ struct LocalExchangeState {
 
 /// Stores inter-operator state (exchange, bridges) for split groups.
 struct SplitGroupState {
+  SplitGroupState() = default;
+  SplitGroupState(const SplitGroupState&) = delete;
+  SplitGroupState& operator=(const SplitGroupState&) = delete;
+  SplitGroupState(SplitGroupState&&) = default;
+  SplitGroupState& operator=(SplitGroupState&&) = default;
+
   /// Map from the plan node id of the join to the corresponding JoinBridge.
   /// This map will contain only HashJoinBridge and NestedLoopJoinBridge.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> bridges;

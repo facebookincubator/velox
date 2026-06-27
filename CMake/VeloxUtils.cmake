@@ -83,7 +83,9 @@ endfunction()
 # Base add velox library call to add a library and install it.
 function(velox_base_add_library TARGET)
   add_library(${TARGET} ${ARGN})
-  install(TARGETS ${TARGET} DESTINATION lib/velox)
+  # Force C++20 on each target for MSVC compatibility
+  set_target_properties(${TARGET} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  install(TARGETS ${TARGET} DESTINATION lib)
   velox_install_library_headers()
 endfunction()
 
@@ -122,8 +124,12 @@ function(velox_add_library TARGET)
       endif()
       # Create the target if this is the first invocation.
       add_library(velox ${_type} ${_sources})
-      set_target_properties(velox PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
-      set_target_properties(velox PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+      # Force C++20 on mono library target for MSVC compatibility
+      set_target_properties(velox PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
+        ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON)
       install(TARGETS velox DESTINATION lib/velox EXPORT velox_targets)
       if(VELOX_BUILD_CMAKE_PACKAGE)
         set(package_cmake_dir "lib/cmake/Velox")
@@ -396,3 +402,30 @@ function(velox_configure_clang_atomic_linker_flags)
     message(STATUS "compiler-rt found, skipping libatomic linking")
   endif()
 endfunction()
+
+if(MSVC)
+  function(velox_compile_options TARGET)
+    if(VELOX_MONO_LIBRARY)
+      target_compile_options(velox ${ARGN})
+    else()
+      target_compile_options(${TARGET} ${ARGN})
+    endif()
+  endfunction()
+
+  function(velox_set_target_properties TARGET)
+    if(VELOX_MONO_LIBRARY)
+      set_target_properties(velox ${ARGN})
+    else()
+      set_target_properties(${TARGET} ${ARGN})
+    endif()
+  endfunction()
+else()
+  # On non-MSVC platforms, these functions are aliases to the standard CMake commands
+  function(velox_compile_options TARGET)
+    target_compile_options(${TARGET} ${ARGN})
+  endfunction()
+
+  function(velox_set_target_properties TARGET)
+    set_target_properties(${TARGET} ${ARGN})
+  endfunction()
+endif()

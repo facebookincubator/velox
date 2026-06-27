@@ -23,6 +23,7 @@
 #include <mutex>
 #include <thread>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -39,6 +40,7 @@ DEFINE_int32(
     profiler_min_cpu_pct,
     200,
     "Minimum CPU percent to justify profile. 100 is one core busy");
+#endif
 
 DEFINE_int32(
     profiler_min_sample_seconds,
@@ -52,6 +54,7 @@ DEFINE_int32(
 
 DEFINE_string(profiler_perf_flags, "", "Extra flags for Linux perf");
 
+#ifndef _WIN32
 namespace facebook::velox::process {
 
 tsan_atomic<bool> Profiler::profileStarted_;
@@ -360,3 +363,19 @@ void Profiler::stop() {
 }
 
 } // namespace facebook::velox::process
+
+#else // _WIN32
+
+namespace facebook::velox::process {
+// Windows stubs for Profiler
+void Profiler::start(
+    const std::string& path,
+    std::function<void()> extraStart,
+    std::function<std::string()> extraReport) {
+  LOG(WARNING) << "Profiler not supported on Windows";
+}
+void Profiler::stop() {}
+bool Profiler::isRunning() { return false; }
+} // namespace facebook::velox::process
+
+#endif // _WIN32

@@ -60,3 +60,7 @@ velox_link_libraries(
   zstd::zstd
   ZLIB::ZLIB
 )
+
+if(MSVC)
+  velox_compile_options(velox_dwio_dwrf_writer PRIVATE /std:c++20)
+endif()

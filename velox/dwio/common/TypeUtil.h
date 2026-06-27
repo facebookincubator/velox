@@ -55,7 +55,11 @@ struct make_index<uint64_t> {
 
 template <>
 struct make_index<int128_t> {
+#ifdef _MSC_VER
+  using type = facebook::velox::uint128_t;
+#else
   using type = __uint128_t;
+#endif
 };
 
 template <>

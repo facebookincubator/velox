@@ -697,6 +697,8 @@ class BaseVector {
   /// agnostic code without a switch on all data types.
   virtual const VectorPtr& valueVector() const {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
+    static const VectorPtr kDummy;
+    return kDummy; // Unreachable, but required for MSVC
   }
 
   virtual void setValueVector(VectorPtr valueVector) {
@@ -715,16 +717,21 @@ class BaseVector {
 
   virtual const BufferPtr& values() const {
     VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
+    static const BufferPtr kDummy;
+    return kDummy; // Unreachable, but required for MSVC
   }
 
   virtual const void* valuesAsVoid() const {
     VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
+    return nullptr; // Unreachable, but required for MSVC
   }
 
   /// If 'this' is a wrapper, returns the wrap info, interpretation depends on
   /// encoding.
   virtual const BufferPtr& wrapInfo() const {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
+    static const BufferPtr dummy;
+    return dummy;
   }
 
   virtual void setWrapInfo(BufferPtr wrapInfo) {

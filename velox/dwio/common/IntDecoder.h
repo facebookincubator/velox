@@ -388,7 +388,12 @@ inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
   for (uint32_t i = 0; i < numBytes_; ++i) {
     b = readByte();
     if constexpr (sizeof(cppType) == 16) {
+#ifdef _WIN32
+      numBytesBigEndian |= static_cast<cppType>(b & BASE_256_MASK)
+          << static_cast<int>(offset);
+#else
       numBytesBigEndian |= (b & INT128_BASE_256_MASK) << offset;
+#endif
     } else {
       numBytesBigEndian |= (b & BASE_256_MASK) << offset;
     }

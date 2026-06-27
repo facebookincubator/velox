@@ -22,6 +22,7 @@
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/windows/Int128.h"
 #include "velox/vector/AggregationHook.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DictionaryVector.h"

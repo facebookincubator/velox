@@ -17,6 +17,9 @@
 #include "velox/exec/Cursor.h"
 
 #include <folly/system/HardwareConcurrency.h>
+#ifdef _WIN32
+#include "velox/common/base/windows/FollyConcurrencyCompat.h"
+#endif
 #include <filesystem>
 #include <optional>
 

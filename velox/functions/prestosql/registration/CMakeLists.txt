@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(WIN32)
+  find_package(Java QUIET)
+  find_package(JNI QUIET)
+else()
+  find_package(Java REQUIRED)
+  find_package(JNI REQUIRED)
+endif()
+
 velox_add_library(
   velox_functions_prestosql
   ArrayConcatRegistration.cpp
@@ -65,6 +73,10 @@ if(VELOX_ENABLE_FAISS)
   )
 endif()
 
+if(NOT WIN32 AND JNI_FOUND)
+  velox_include_directories(velox_functions_prestosql PRIVATE ${JNI_INCLUDE_DIRS})
+endif()
+
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends
 # up failing compilation in an openssl header included by a hash-related
 # function.
@@ -82,4 +94,9 @@ velox_link_libraries(
 
 if(NOT VELOX_MONO_LIBRARY)
   set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE high_memory_pool)
+endif()
+
+# On Windows MSVC, registration files generate too many sections
+if(MSVC)
+  velox_compile_options(velox_functions_prestosql PRIVATE /bigobj)
 endif()

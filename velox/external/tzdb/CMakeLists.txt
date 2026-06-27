@@ -11,8 +11,15 @@
 # limitations under the License.
 
 
-velox_add_library(velox_external_tzdb chrono_exception.cpp time_zone.cpp
-tzdb_list.cpp tzdb.cpp)
+if(WIN32)
+  # On Windows, the timezone layer uses TimeZoneMapStubs.cpp (UTC-only)
+  # and does NOT link to velox_external_tzdb. Build a minimal stub library
+  # with just chrono_exception.cpp so the CMake target still exists.
+  velox_add_library(velox_external_tzdb chrono_exception.cpp)
+else()
+  velox_add_library(velox_external_tzdb chrono_exception.cpp time_zone.cpp
+  tzdb_list.cpp tzdb.cpp)
+endif()
 
 velox_link_libraries(
   velox_external_tzdb

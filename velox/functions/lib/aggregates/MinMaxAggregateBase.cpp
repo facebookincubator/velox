@@ -31,6 +31,21 @@ namespace {
 template <typename T>
 struct MinMaxTrait : public std::numeric_limits<T> {};
 
+#ifdef _MSC_VER
+// std::numeric_limits doesn't support int128_t on Windows
+template <>
+struct MinMaxTrait<int128_t> {
+  static inline int128_t lowest() {
+    // Most negative 128-bit signed integer
+    return static_cast<int128_t>(1) << 127;
+  }
+  static inline int128_t max() {
+    // Most positive 128-bit signed integer
+    return ~lowest();
+  }
+};
+#endif
+
 template <typename T>
 class SimpleNumericMinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
   using BaseAggregate = SimpleNumericAggregate<T, T, T>;
@@ -588,6 +603,8 @@ class MinAggregate : public MinMaxAggregateBase {
   }
 };
 
+} // namespace
+
 template <
     template <typename T> class TSimpleNumericAggregate,
     template <
@@ -661,8 +678,6 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
   return factory;
 }
 
-} // namespace
-
 exec::AggregateFunctionFactory getMinFunctionFactory(
     const std::string& name,
     CompareFlags::NullHandlingMode nullHandlingMode,
@@ -680,4 +695,5 @@ exec::AggregateFunctionFactory getMaxFunctionFactory(
       SimpleNumericMaxAggregate,
       MaxAggregate>(name, nullHandlingMode, precision);
 }
+
 } // namespace facebook::velox::functions::aggregate

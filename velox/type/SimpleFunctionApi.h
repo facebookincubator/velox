@@ -291,8 +291,9 @@ struct isConstantType<Constant<T>> {
 
 template <typename... TArgs>
 struct ConstantChecker {
-  static constexpr bool isConstant[sizeof...(TArgs)] = {
-      isConstantType<TArgs>::value...};
+  static constexpr bool
+      isConstant[sizeof...(TArgs) == 0 ? 1 : sizeof...(TArgs)] = {
+          isConstantType<TArgs>::value...};
 };
 
 /// CppToType templates for types introduced above.
@@ -427,7 +428,11 @@ struct SimpleTypeTrait<CustomType<T, providesCustomComparison>>
   static constexpr bool isFixedWidth = physical_t::isFixedWidth;
 
   // This is different than the physical type name.
+#ifdef _MSC_VER
+  static inline const auto& name = T::typeName;
+#else
   static constexpr const char* name = T::typeName;
+#endif
 };
 
 /// MaterializeType template.

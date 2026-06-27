@@ -140,6 +140,11 @@ if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_aggregates PRIVATE VELOX_ENABLE_GEO)
 endif()
 
+# On Windows MSVC, aggregate files generate too many sections
+if(MSVC)
+  velox_compile_options(velox_aggregates PRIVATE /bigobj)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

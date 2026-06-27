@@ -30,6 +30,11 @@ velox_add_library(
   XxHasher.h
 )
 
+# Fix sockaddr_un redefinition between folly and Windows SDK
+if(WIN32)
+  velox_compile_definitions(velox_dwio_parquet_common PRIVATE _AFUNIX_)
+endif()
+
 velox_link_libraries(
   velox_dwio_parquet_common
   velox_dwio_parquet_thrift

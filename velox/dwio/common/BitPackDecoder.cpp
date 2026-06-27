@@ -18,14 +18,22 @@
 
 namespace facebook::velox::dwio::common {
 
+#ifndef _MSC_VER
 using int128_t = __int128_t;
+#endif
 
 #if XSIMD_WITH_AVX2
 
+#ifndef _MSC_VER
 typedef int32_t __m256si __attribute__((__vector_size__(32), __may_alias__));
 
 typedef int32_t __m256si_u
     __attribute__((__vector_size__(32), __may_alias__, __aligned__(1)));
+#else
+// MSVC doesn't support __attribute__ vector types, use __m256i directly
+typedef __m256i __m256si;
+typedef __m256i __m256si_u;
+#endif
 
 namespace {
 
@@ -53,12 +61,22 @@ inline T* addBytes(T* pointer, int32_t bytes) {
 
 template <typename T>
 inline __m256i as256i(T x) {
+#ifdef _MSC_VER
+  // On MSVC, __m256i is a struct, so just return directly when T is __m256i
+  return x;
+#else
   return reinterpret_cast<__m256i>(x);
+#endif
 }
 
 template <typename T>
 inline __m256si as8x32(T x) {
+#ifdef _MSC_VER
+  // On MSVC, __m256si is typedef'd to __m256i, so just return directly
+  return x;
+#else
   return reinterpret_cast<__m256si>(x);
+#endif
 }
 
 template <uint8_t width, typename T>
@@ -69,6 +87,7 @@ FOLLY_ALWAYS_INLINE __m256i gather8Sparse(
     int32_t i,
     __m256si masks,
     T* result) {
+#ifndef _MSC_VER
   constexpr __m256si kMultipliers = {256, 128, 64, 32, 16, 8, 4, 2};
   // workaround for:
   // https://github.com/llvm/llvm-project/issues/64819#issuecomment-1684943890
@@ -89,6 +108,38 @@ FOLLY_ALWAYS_INLINE __m256i gather8Sparse(
     data = (data * multipliers) >> 8;
   }
   return as256i(data & masks);
+#else
+  // MSVC: use intrinsics instead of operators
+  const __m256si kMultipliers = _mm256_setr_epi32(256, 128, 64, 32, 16, 8, 4, 2);
+  const __m256si kWidthSplat = _mm256_set1_epi32(width);
+
+  // indices = rows[i] * width + bitOffset
+  __m256si loaded = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rows + i));
+  __m256si indices = _mm256_add_epi32(_mm256_mullo_epi32(loaded, kWidthSplat), _mm256_set1_epi32(bitOffset));
+  
+  __m256si multipliers;
+  if (width % 8 != 0) {
+    // multipliers = kMultipliers[indices & 7]
+    __m256si mask7 = _mm256_set1_epi32(7);
+    __m256si indicesMod8 = _mm256_and_si256(indices, mask7);
+    multipliers = _mm256_permutevar8x32_epi32(kMultipliers, indicesMod8);
+  }
+  
+  // byteIndices = indices >> 3
+  __m256si byteIndices = _mm256_srli_epi32(indices, 3);
+  
+  // data = gather from bits using byteIndices
+  __m256si data = _mm256_i32gather_epi32(reinterpret_cast<const int*>(bits), byteIndices, 1);
+  
+  if (width % 8 != 0) {
+    // data = (data * multipliers) >> 8
+    data = _mm256_mullo_epi32(data, multipliers);
+    data = _mm256_srli_epi32(data, 8);
+  }
+  
+  // return data & masks
+  return _mm256_and_si256(data, masks);
+#endif
 }
 
 template <uint8_t width, typename T>
@@ -176,7 +227,7 @@ int32_t decode1To24(
 
 } // namespace
 
-#endif
+#endif // XSIMD_WITH_AVX2
 
 template <typename T>
 void unpack(

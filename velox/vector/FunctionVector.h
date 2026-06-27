@@ -194,12 +194,14 @@ class FunctionVector : public BaseVector {
 
   VectorPtr slice(vector_size_t, vector_size_t) const override {
     VELOX_NYI();
+    return nullptr;
   }
 
   VectorPtr testingCopyPreserveEncodings(
       velox::memory::MemoryPool* /* pool */ = nullptr) const override {
     VELOX_UNSUPPORTED(
         "testingCopyPreserveEncodings not defined for FunctionVector");
+    return nullptr; // unreachable, satisfies MSVC return requirement
   }
 
   void transferOrCopyTo(velox::memory::MemoryPool* /*pool*/) override {
@@ -210,6 +212,7 @@ class FunctionVector : public BaseVector {
   uint64_t retainedSizeImpl(
       uint64_t& /*totalStringBufferSize*/) const override {
     VELOX_UNREACHABLE("retainedSize should not be called on FunctionVector");
+    return 0; // unreachable, satisfies MSVC return requirement
   }
 
   std::vector<std::shared_ptr<Callable>> functions_;

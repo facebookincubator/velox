@@ -138,6 +138,46 @@ namespace detail {
 
 template <typename T, typename F>
 Expected<T> callFollyTo(const F& v) {
+#ifdef _WIN32
+  // Windows-specific handling when either T or F is Int128/UInt128
+  // folly::tryTo doesn't support int128_t as either source or target
+  if constexpr (std::is_same_v<T, int128_t> || std::is_same_v<T, uint128_t> ||
+                std::is_same_v<F, int128_t> || std::is_same_v<F, uint128_t>) {
+    // Converting from int128_t to other types
+    if constexpr (std::is_same_v<F, int128_t> || std::is_same_v<F, uint128_t>) {
+      if constexpr (std::is_floating_point_v<T>) {
+        // int128_t to float/double - use explicit conversion via double
+        return T(static_cast<double>(v));
+      } else if constexpr (std::is_integral_v<T>) {
+        // int128_t to other integral types
+        return T(static_cast<int64_t>(v));
+      } else {
+        return folly::makeUnexpected(Status::UserError(
+            "Cannot convert from Int128 to this type"));
+      }
+    } else {
+      // Converting to int128_t from other types
+      if constexpr (std::is_integral_v<F>) {
+        return T(static_cast<int64_t>(v));
+      } else if constexpr (std::is_floating_point_v<F>) {
+        return T(static_cast<int64_t>(v));
+      } else {
+        return folly::makeUnexpected(Status::UserError(
+            "Cannot convert to Int128 from this type"));
+      }
+    }
+  } else {
+    const auto result = folly::tryTo<T>(v);
+    if (result.hasError()) {
+      if (threadSkipErrorDetails()) {
+        return folly::makeUnexpected(Status::UserError());
+      }
+      return folly::makeUnexpected(Status::UserError(
+          "{}", folly::makeConversionError(result.error(), "").what()));
+    }
+    return result.value();
+  }
+#else
   const auto result = folly::tryTo<T>(v);
   if (result.hasError()) {
     if (threadSkipErrorDetails()) {
@@ -147,8 +187,8 @@ Expected<T> callFollyTo(const F& v) {
         Status::UserError(
             "{}", folly::makeConversionError(result.error(), "").what()));
   }
-
   return result.value();
+#endif
 }
 
 } // namespace detail
@@ -363,7 +403,15 @@ struct Converter<
   }
 
   static Expected<T> tryCast(const bool& v) {
+#ifdef _WIN32
+    if constexpr (std::is_same_v<T, int128_t> || std::is_same_v<T, uint128_t>) {
+      return T(v ? 1 : 0);
+    } else {
+      return folly::to<T>(v);
+    }
+#else
     return folly::to<T>(v);
+#endif
   }
 
   struct LimitType {
@@ -403,7 +451,16 @@ struct Converter<
       if (kByteOrSmallInt) {
         return T(int32_t(v));
       }
+#ifdef _MSC_VER
+      // On MSVC, int128_t has explicit constructor from double
+      if constexpr (std::is_same_v<T, int128_t> && std::is_floating_point_v<FP>) {
+        return T(static_cast<int64_t>(v));
+      } else {
+        return T(v);
+      }
+#else
       return T(v);
+#endif
     }
   };
 
@@ -558,7 +615,13 @@ struct Converter<
   // Convert large integer to double or float directly, not using folly, as it
   // might throw 'loss of precision' error.
   static Expected<T> tryCast(const int128_t& v) {
+#ifdef _MSC_VER
+    // On MSVC, int128_t has explicit conversion to double, use it first
+    double doubleValue = static_cast<double>(v);
+    return static_cast<T>(doubleValue);
+#else
     return static_cast<T>(v);
+#endif
   }
 
   static Expected<T> tryCast(const Timestamp&) {
@@ -583,7 +646,41 @@ template <typename TPolicy>
 struct Converter<TypeKind::VARCHAR, void, TPolicy> {
   template <typename T>
   static Expected<std::string> tryCast(const T& val) {
-    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<T, int128_t>) {
+      // folly::to<std::string> doesn't support __int128, convert manually
+      if (val == 0) {
+        return std::string("0");
+      }
+      
+      std::string result;
+      int128_t value = val < 0 ? -val : val;
+      
+      while (value > 0) {
+        result.insert(result.begin(), '0' + static_cast<char>(value % 10));
+        value /= 10;
+      }
+      
+      if (val < 0) {
+        result.insert(result.begin(), '-');
+      }
+      
+      return result;
+    } else if constexpr (std::is_same_v<T, uint128_t>) {
+      // folly::to<std::string> doesn't support __uint128, convert manually
+      if (val == 0) {
+        return std::string("0");
+      }
+      
+      std::string result;
+      uint128_t value = val;
+      
+      while (value > 0) {
+        result.insert(result.begin(), '0' + static_cast<char>(value % 10));
+        value /= 10;
+      }
+      
+      return result;
+    } else if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
       if constexpr (TPolicy::legacyCast) {
         auto str = folly::to<std::string>(val);
         normalizeStandardNotation(str);
@@ -612,9 +709,9 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
       }
       normalizeScientificNotation(str);
       return str;
+    } else {
+      return folly::to<std::string>(val);
     }
-
-    return folly::to<std::string>(val);
   }
 
   static Expected<std::string> tryCast(const Timestamp& val) {
@@ -630,6 +727,51 @@ struct Converter<TypeKind::VARCHAR, void, TPolicy> {
   static Expected<std::string> tryCast(const bool& val) {
     return val ? "true" : "false";
   }
+
+#ifdef _WIN32
+  // Windows-specific: int128_t to string conversion
+  // folly::to and folly::toAppend don't support int128_t on MSVC
+  static Expected<std::string> tryCast(const int128_t& val) {
+    // Convert to string manually since folly doesn't support int128_t
+    bool negative = val < 0;
+    int128_t absVal = negative ? -val : val;
+    
+    std::string result;
+    if (absVal == 0) {
+      return "0";
+    }
+    
+    while (absVal > 0) {
+      int digit = static_cast<int>(static_cast<int64_t>(absVal % 10));
+      result = char('0' + digit) + result;
+      absVal /= 10;
+    }
+    
+    if (negative) {
+      result = '-' + result;
+    }
+    
+    return result;
+  }
+  
+  static Expected<std::string> tryCast(const uint128_t& val) {
+    // Convert unsigned int128_t to string
+    uint128_t remaining = val;
+    
+    std::string result;
+    if (remaining == 0) {
+      return "0";
+    }
+    
+    while (remaining > 0) {
+      int digit = static_cast<int>(static_cast<int64_t>(remaining % 10));
+      result = char('0' + digit) + result;
+      remaining /= 10;
+    }
+    
+    return result;
+  }
+#endif
 
   /// Normalize the given floating-point standard notation string in place, by
   /// appending '.0' if it has only the integer part but no fractional part. For

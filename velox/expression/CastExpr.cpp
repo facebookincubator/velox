@@ -1148,6 +1148,7 @@ CastOperatorPtr CastExpr::getCastOperator(const TypePtr& type) {
 TypePtr CastCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& /* argTypes */) {
   VELOX_FAIL("CAST expressions do not support type resolution.");
+  return nullptr; // Unreachable, but MSVC requires a return statement
 }
 
 ExprPtr CastCallToSpecialForm::constructSpecialForm(
@@ -1179,6 +1180,7 @@ ExprPtr CastCallToSpecialForm::constructSpecialForm(
 TypePtr TryCastCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& /* argTypes */) {
   VELOX_FAIL("TRY CAST expressions do not support type resolution.");
+  return nullptr; // Unreachable, but MSVC requires a return statement
 }
 
 ExprPtr TryCastCallToSpecialForm::constructSpecialForm(

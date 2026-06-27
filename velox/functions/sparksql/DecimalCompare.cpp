@@ -28,9 +28,25 @@ int32_t rescaleAndCompare(T a, T b, int32_t deltaScale) {
   T aScaled = a;
   T bScaled = b;
   if (deltaScale < 0) {
+#ifdef _WIN32
+    if constexpr (std::is_same_v<T, int256_t>) {
+      aScaled = a * toInt256(velox::DecimalUtil::kPowersOfTen[-deltaScale]);
+    } else {
+      aScaled = a * velox::DecimalUtil::kPowersOfTen[-deltaScale];
+    }
+#else
     aScaled = a * velox::DecimalUtil::kPowersOfTen[-deltaScale];
+#endif
   } else if (deltaScale > 0) {
+#ifdef _WIN32
+    if constexpr (std::is_same_v<T, int256_t>) {
+      bScaled = b * toInt256(velox::DecimalUtil::kPowersOfTen[deltaScale]);
+    } else {
+      bScaled = b * velox::DecimalUtil::kPowersOfTen[deltaScale];
+    }
+#else
     bScaled = b * velox::DecimalUtil::kPowersOfTen[deltaScale];
+#endif
   }
   if (aScaled == bScaled) {
     return 0;
@@ -45,8 +61,13 @@ int32_t rescaleAndCompare(T a, T b, int32_t deltaScale) {
 int32_t
 decimalCompare(int128_t a, int128_t b, int8_t deltaScale, bool need256) {
   if (need256) {
+#ifdef _WIN32
+    return rescaleAndCompare<int256_t>(
+        toInt256(a), toInt256(b), deltaScale);
+#else
     return rescaleAndCompare<int256_t>(
         static_cast<int256_t>(a), static_cast<int256_t>(b), deltaScale);
+#endif
   }
   return rescaleAndCompare<int128_t>(a, b, deltaScale);
 }

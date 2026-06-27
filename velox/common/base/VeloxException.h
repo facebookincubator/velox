@@ -40,101 +40,101 @@ namespace facebook {
 namespace velox {
 
 namespace error_source {
-using namespace folly::string_literals;
+// Use regular const char* for Windows compatibility instead of _fs literals
 
 /// Errors where the root cause of the problem is either because of bad input
 /// or an unsupported pattern of use are classified with source USER. Examples
 /// of errors in this category include syntax errors, unavailable names or
 /// objects.
-inline constexpr auto kErrorSourceUser = "USER"_fs;
+inline constexpr const char* kErrorSourceUser = "USER";
 
 /// Errors where the root cause of the problem is an unexpected internal state
 /// in the system.
-inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
+inline constexpr const char* kErrorSourceRuntime = "RUNTIME";
 
 /// Errors where the root cause of the problem is some unreliable aspect of the
 /// system are classified with source SYSTEM.
-inline constexpr auto kErrorSourceSystem = "SYSTEM"_fs;
+inline constexpr const char* kErrorSourceSystem = "SYSTEM";
 
 /// Errors where the root cause of the problem is some external dependency (e.g.
 /// storage)
-inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs;
+inline constexpr const char* kErrorSourceExternal = "EXTERNAL";
 } // namespace error_source
 
 namespace error_code {
-using namespace folly::string_literals;
+// Use regular const char* for Windows compatibility instead of _fs literals
 
 ///====================== User Error Codes ======================:
 
 /// A generic user error code
-inline constexpr auto kGenericUserError = "GENERIC_USER_ERROR"_fs;
+inline constexpr const char* kGenericUserError = "GENERIC_USER_ERROR";
 
 /// An error raised when an argument verification fails
-inline constexpr auto kInvalidArgument = "INVALID_ARGUMENT"_fs;
+inline constexpr const char* kInvalidArgument = "INVALID_ARGUMENT";
 
 /// An error raised when a requested operation is not supported.
-inline constexpr auto kUnsupported = "UNSUPPORTED"_fs;
+inline constexpr const char* kUnsupported = "UNSUPPORTED";
 
 /// Arithmetic errors - underflow, overflow, divide by zero etc.
-inline constexpr auto kArithmeticError = "ARITHMETIC_ERROR"_fs;
+inline constexpr const char* kArithmeticError = "ARITHMETIC_ERROR";
 
 /// An error raised when types are not compatible
-inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
+inline constexpr const char* kSchemaMismatch = "SCHEMA_MISMATCH";
 
 ///====================== Runtime Error Codes ======================:
 
 /// An error raised when the current state of a component is invalid.
-inline constexpr auto kInvalidState = "INVALID_STATE"_fs;
+inline constexpr const char* kInvalidState = "INVALID_STATE";
 
 /// An error raised when unreachable code point was executed.
-inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
+inline constexpr const char* kUnreachableCode = "UNREACHABLE_CODE";
 
 /// An error raised when a requested operation is not yet supported.
-inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
+inline constexpr const char* kNotImplemented = "NOT_IMPLEMENTED";
 
 /// An error raised when memory pool exceeds limits.
-inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
+inline constexpr const char* kMemCapExceeded = "MEM_CAP_EXCEEDED";
 
 /// An error raised when memory request failed due to arbitration failures. This
 /// is normally caused by insufficient global memory resource.
-inline constexpr auto kMemArbitrationFailure = "MEM_ARBITRATION_FAILURE"_fs;
+inline constexpr const char* kMemArbitrationFailure = "MEM_ARBITRATION_FAILURE";
 
 /// An error raised when memory pool is aborted.
-inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
+inline constexpr const char* kMemAborted = "MEM_ABORTED";
 
 /// An error raised when memory arbitration times out.
-inline constexpr auto kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT"_fs;
+inline constexpr const char* kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT";
 
 /// Error caused by memory allocation failure (inclusive of allocator memory cap
 /// exceeded).
-inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
+inline constexpr const char* kMemAllocError = "MEM_ALLOC_ERROR";
 
 /// Error caused by failing to allocate cache buffer space for IO.
-inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
+inline constexpr const char* kNoCacheSpace = "NO_CACHE_SPACE";
 
 /// An error raised when spill bytes exceeds limits.
-inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+inline constexpr const char* kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED";
 
 /// An error raised to indicate any general failure happened during spilling.
-inline constexpr auto kGenericSpillFailure = "GENERIC_SPILL_FAILURE"_fs;
+inline constexpr const char* kGenericSpillFailure = "GENERIC_SPILL_FAILURE";
 
 /// An error raised when trace bytes exceeds limits.
-inline constexpr auto kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED"_fs;
+inline constexpr const char* kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED";
 
 /// Errors indicating file read corruptions.
-inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
+inline constexpr const char* kFileCorruption = "FILE_CORRUPTION";
 
 /// Errors indicating file not found.
-inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
+inline constexpr const char* kFileNotFound = "FILE_NOT_FOUND";
 
 /// We do not know how to classify it yet.
-inline constexpr auto kUnknown = "UNKNOWN"_fs;
+inline constexpr const char* kUnknown = "UNKNOWN";
 
 /// VeloxRuntimeErrors due to unsupported input values such as unicode input to
 /// cast-varchar-to-integer. This kind of errors is allowed in expression
 /// fuzzer.
-inline constexpr auto kUnsupportedInputUncatchable =
-    "UNSUPPORTED_INPUT_UNCATCHABLE"_fs;
+inline constexpr const char* kUnsupportedInputUncatchable =
+    "UNSUPPORTED_INPUT_UNCATCHABLE";
 } // namespace error_code
 
 class VeloxException : public std::exception {

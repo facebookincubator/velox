@@ -2270,4 +2270,49 @@ const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries() {
   return *tzDB;
 }
 
+#ifdef _WIN32
+// On Windows the timezone database is assembled by TimeZoneMapStubs.cpp (the
+// velox_external_tzdb dependency is unavailable). Its locateZone() resolves
+// three-letter zone abbreviations through this mapping, which it externs from
+// this translation unit alongside getTimeZoneEntries(). The data mirrors
+// OpenJDK's java.time.ZoneId short-id overrides (TZDB 2005r and later, where
+// 'EST', 'MST' and 'HST' map to fixed offsets without daylight savings).
+// Guarded by _WIN32 so the POSIX object file is byte-identical to upstream.
+const std::vector<std::pair<std::string, std::string>>&
+getShortNameTimeZoneMapping() {
+  static auto* tzDB = new std::vector<std::pair<std::string, std::string>>([] {
+    return std::vector<std::pair<std::string, std::string>>{
+        {"ACT", "Australia/Darwin"},
+        {"AET", "Australia/Sydney"},
+        {"AGT", "America/Argentina/Buenos_Aires"},
+        {"ART", "Africa/Cairo"},
+        {"AST", "America/Anchorage"},
+        {"BET", "America/Sao_Paulo"},
+        {"BST", "Asia/Dhaka"},
+        {"CAT", "Africa/Harare"},
+        {"CNT", "America/St_Johns"},
+        {"CST", "America/Chicago"},
+        {"CTT", "Asia/Shanghai"},
+        {"EAT", "Africa/Addis_Ababa"},
+        {"ECT", "Europe/Paris"},
+        {"IET", "America/Indiana/Indianapolis"},
+        {"IST", "Asia/Kolkata"},
+        {"JST", "Asia/Tokyo"},
+        {"MIT", "Pacific/Apia"},
+        {"NET", "Asia/Yerevan"},
+        {"NST", "Pacific/Auckland"},
+        {"PLT", "Asia/Karachi"},
+        {"PNT", "America/Phoenix"},
+        {"PRT", "America/Puerto_Rico"},
+        {"PST", "America/Los_Angeles"},
+        {"SST", "Pacific/Guadalcanal"},
+        {"VST", "Asia/Ho_Chi_Minh"},
+        {"EST", "-05:00"},
+        {"HST", "-10:00"},
+        {"MST", "-07:00"}};
+  }());
+  return *tzDB;
+}
+#endif // _WIN32
+
 } // namespace facebook::velox::tz

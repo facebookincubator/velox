@@ -25,6 +25,17 @@
 #include "velox/exec/AdaptivePrefetch.h"
 #include "velox/exec/OperatorUtils.h"
 
+#ifdef _MSC_VER
+// MSVC has no __builtin_prefetch; map it to the corresponding intrinsic.
+#include <intrin.h>
+#if defined(_M_ARM64)
+#define __builtin_prefetch(addr, ...) __prefetch(addr)
+#else
+#define __builtin_prefetch(addr, ...) \
+  _mm_prefetch((const char*)(addr), _MM_HINT_T0)
+#endif
+#endif
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -2356,6 +2367,7 @@ int32_t HashTable<true>::listNullKeyRows(
     char**,
     const std::vector<std::unique_ptr<VectorHasher>>&) {
   VELOX_UNREACHABLE();
+  return 0;
 }
 
 template <bool ignoreNullKeys>

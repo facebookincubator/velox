@@ -25,6 +25,28 @@
 
 namespace facebook::velox::parquet {
 
+// WINDOWS BUILD: Helper trait to get signed index type
+// std::make_signed_t doesn't work with uint128_t on MSVC
+template <typename T, typename Enable = void>
+struct make_signed_index {
+  using type = std::make_signed_t<T>;
+};
+
+// Specialization for int128_t: return int128_t itself
+template <>
+struct make_signed_index<int128_t> {
+  using type = int128_t;
+};
+
+// Specialization for uint128_t: return int128_t
+template <>
+struct make_signed_index<uint128_t> {
+  using type = int128_t;
+};
+
+template <typename T>
+using make_signed_index_t = typename make_signed_index<T>::type;
+
 // This class will be used for dictionary Ids or other data that is RLE/BP
 // encoded.
 class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
@@ -175,8 +197,9 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
         (rows[rowIndex + numRows - 1] + 1 - currentRow) * bitWidth_;
 
     using TValues = typename std::remove_reference<decltype(values[0])>::type;
-    using TIndex = typename std::make_signed_t<
-        typename dwio::common::make_index<TValues>::type>;
+    using TIndexBase = typename dwio::common::make_index<TValues>::type;
+    using TIndex = make_signed_index_t<TIndexBase>;
+    
     facebook::velox::dwio::common::unpack(
         reinterpret_cast<const uint64_t*>(super::bufferStart_),
         bitOffset_,

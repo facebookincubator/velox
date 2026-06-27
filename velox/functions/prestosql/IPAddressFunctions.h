@@ -99,7 +99,7 @@ struct IPPrefixFunction {
 
     int128_t intAddr;
     std::reverse(canonicalBytes.begin(), canonicalBytes.end());
-    memcpy(&intAddr, &canonicalBytes, ipaddress::kIPAddressBytes);
+    intAddr = HugeInt::deserializeNative(canonicalBytes.data());
     return std::make_tuple(intAddr, static_cast<int8_t>(prefixBits));
   }
 };
@@ -267,7 +267,12 @@ struct IPPrefixCollapseFunction {
         (num < 0) ? static_cast<uint128_t>(-num) : static_cast<uint128_t>(num);
 
     // Find the position of the highest bit using logarithm (base 2)
+#ifdef _MSC_VER
+    // MSVC: std::log2 doesn't accept int128_t, convert to double
+    return static_cast<int64_t>(std::log2(static_cast<double>(abs_num))) + 1;
+#else
     return static_cast<int64_t>(std::log2(abs_num)) + 1;
+#endif
   }
 
   FOLLY_ALWAYS_INLINE static int64_t getLowestSetBit(int128_t x) {
@@ -277,12 +282,21 @@ struct IPPrefixCollapseFunction {
 
     // Check the lower 64 bits
     static constexpr uint64_t mask = 0xFFFFFFFFFFFFFFFF;
+#ifdef _MSC_VER
+    uint64_t low_bits = static_cast<uint64_t>(x & mask);
+    if (low_bits) {
+      return __builtin_ctzll(low_bits);
+    }
+    // Check the upper 64 bits
+    return __builtin_ctzll(static_cast<uint64_t>(x >> 64)) + 64;
+#else
     if (x & mask) {
       return __builtin_ctzll(x & mask);
     }
 
     // Check the upper 64 bits
     return __builtin_ctzll(x >> 64) + 64;
+#endif
   }
 
   FOLLY_ALWAYS_INLINE static int64_t findRangeBits(
@@ -340,7 +354,7 @@ struct IPPrefixCollapseFunction {
       ipPrefixSlices.emplace_back(firstIpAddress, prefixLength);
 
       int128_t ipCount = static_cast<int128_t>(1)
-          << static_cast<int128_t>(ipVersionMaxBits - prefixLength);
+          << static_cast<int>(ipVersionMaxBits - prefixLength);
       firstIpAddress += ipCount;
     }
     return ipPrefixSlices;

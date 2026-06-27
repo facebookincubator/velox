@@ -316,19 +316,20 @@ struct VeloxCheckFailStringType<std::string> {
   } while (0)
 
 #define _VELOX_THROW(exception, ...) \
-  _VELOX_THROW_IMPL(exception, "", ##__VA_ARGS__)
+  FB_VA_GLUE(_VELOX_THROW_IMPL, (exception, "", ##__VA_ARGS__))
 
 DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 
-#define _VELOX_CHECK_IMPL(expr, exprStr, ...)                       \
-  _VELOX_CHECK_AND_THROW_IMPL(                                      \
-      expr,                                                         \
-      exprStr,                                                      \
-      ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kInvalidState.c_str(),         \
-      /* isRetriable */ false,                                      \
-      ##__VA_ARGS__)
+#define _VELOX_CHECK_IMPL(expr, exprStr, ...)                 \
+  FB_VA_GLUE(                                                  \
+      _VELOX_CHECK_AND_THROW_IMPL,                             \
+      (expr,                                                   \
+       exprStr,                                                \
+       ::facebook::velox::VeloxRuntimeError,                   \
+       ::facebook::velox::error_source::kErrorSourceRuntime,   \
+       ::facebook::velox::error_code::kInvalidState,           \
+       /* isRetriable */ false,                                \
+       ##__VA_ARGS__))
 
 /// Throws VeloxRuntimeError when functions receive input values out of the
 /// supported range. This should only be used when we want to force TRY() to not
@@ -339,8 +340,8 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
       _VELOX_THROW_IMPL(                                                       \
           ::facebook::velox::VeloxRuntimeError,                                \
           #expr,                                                               \
-          ::facebook::velox::error_source::kErrorSourceRuntime.c_str(),        \
-          ::facebook::velox::error_code::kUnsupportedInputUncatchable.c_str(), \
+          ::facebook::velox::error_source::kErrorSourceRuntime,        \
+          ::facebook::velox::error_code::kUnsupportedInputUncatchable, \
           /* isRetriable */ false,                                             \
           __VA_ARGS__);                                                        \
     }                                                                          \
@@ -365,8 +366,9 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 #define _VELOX_CHECK_OP_HELPER(implmacro, expr1, expr2, op, ...) \
   do {                                                           \
     if constexpr (FOLLY_PP_DETAIL_NARGS(__VA_ARGS__) > 0) {      \
-      _VELOX_CHECK_OP_WITH_USER_FMT_HELPER(                      \
-          implmacro, expr1, expr2, op, __VA_ARGS__);             \
+      FB_VA_GLUE(                                               \
+          _VELOX_CHECK_OP_WITH_USER_FMT_HELPER,                 \
+          (implmacro, expr1, expr2, op, __VA_ARGS__));             \
     } else {                                                     \
       implmacro(                                                 \
           (expr1)op(expr2),                                      \
@@ -385,8 +387,8 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
       expr,                                                      \
       exprStr,                                                   \
       ::facebook::velox::VeloxUserError,                         \
-      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
-      ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
+      ::facebook::velox::error_source::kErrorSourceUser, \
+      ::facebook::velox::error_code::kInvalidArgument,   \
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
@@ -415,40 +417,40 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 #define VELOX_UNSUPPORTED(...)                                   \
   _VELOX_THROW(                                                  \
       ::facebook::velox::VeloxUserError,                         \
-      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
-      ::facebook::velox::error_code::kUnsupported.c_str(),       \
+      ::facebook::velox::error_source::kErrorSourceUser, \
+      ::facebook::velox::error_code::kUnsupported,       \
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
 #define VELOX_ARITHMETIC_ERROR(...)                              \
   _VELOX_THROW(                                                  \
       ::facebook::velox::VeloxUserError,                         \
-      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
-      ::facebook::velox::error_code::kArithmeticError.c_str(),   \
+      ::facebook::velox::error_source::kErrorSourceUser, \
+      ::facebook::velox::error_code::kArithmeticError,   \
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
 #define VELOX_SCHEMA_MISMATCH_ERROR(...)                         \
   _VELOX_THROW(                                                  \
       ::facebook::velox::VeloxUserError,                         \
-      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
-      ::facebook::velox::error_code::kSchemaMismatch.c_str(),    \
+      ::facebook::velox::error_source::kErrorSourceUser, \
+      ::facebook::velox::error_code::kSchemaMismatch,    \
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
 #define VELOX_FILE_NOT_FOUND_ERROR(...)                             \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kFileNotFound.c_str(),         \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kFileNotFound,         \
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
 #define VELOX_UNREACHABLE(...)                                      \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kUnreachableCode.c_str(),      \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kUnreachableCode,      \
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
@@ -479,8 +481,8 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 #define VELOX_FAIL(...)                                             \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kInvalidState.c_str(),         \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kInvalidState,         \
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 
@@ -490,16 +492,16 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError)
 #define VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(...)                      \
   _VELOX_THROW(                                                            \
       ::facebook::velox::VeloxRuntimeError,                                \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(),        \
-      ::facebook::velox::error_code::kUnsupportedInputUncatchable.c_str(), \
+      ::facebook::velox::error_source::kErrorSourceRuntime,        \
+      ::facebook::velox::error_code::kUnsupportedInputUncatchable, \
       /* isRetriable */ false,                                             \
       ##__VA_ARGS__)
 
 #define VELOX_TRACE_LIMIT_EXCEEDED(...)                             \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kTraceLimitExceeded.c_str(),   \
+      ::facebook::velox::error_source::kErrorSourceRuntime,         \
+      ::facebook::velox::error_code::kTraceLimitExceeded,           \
       /* isRetriable */ true,                                       \
       ##__VA_ARGS__)
 
@@ -558,16 +560,16 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxUserError)
 #define VELOX_USER_FAIL(...)                                     \
   _VELOX_THROW(                                                  \
       ::facebook::velox::VeloxUserError,                         \
-      ::facebook::velox::error_source::kErrorSourceUser.c_str(), \
-      ::facebook::velox::error_code::kInvalidArgument.c_str(),   \
+      ::facebook::velox::error_source::kErrorSourceUser, \
+      ::facebook::velox::error_code::kInvalidArgument,   \
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
 #define VELOX_NYI(...)                                              \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kNotImplemented.c_str(),       \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kNotImplemented,       \
       /* isRetriable */ false,                                      \
       ##__VA_ARGS__)
 

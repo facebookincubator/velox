@@ -15,7 +15,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <climits>
+#include <ctime>
 #include <iomanip>
+#include <limits>
 #include <random>
 #include <sstream>
 
@@ -24,8 +27,131 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+#ifdef _MSC_VER
+// Days since 1970-01-01 for a proleptic-Gregorian date (month in [1,12]).
+// Howard Hinnant's public-domain days_from_civil; mirrors the day count used
+// by Timestamp::calendarUtcToEpoch so the shims below agree with it exactly.
+static inline int64_t veloxDaysFromCivil(int64_t y, int64_t m, int64_t d) {
+  y -= m <= 2;
+  const int64_t era = (y >= 0 ? y : y - 399) / 400;
+  const int64_t yoe = y - era * 400;
+  const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+// MSVC provides neither POSIX gmtime_r nor timegm. The CRT's _gmtime64_s /
+// _mkgmtime only cover years 1970-3000 with no negative epochs, which is far
+// narrower than Velox's full-range epoch<->calendar conversions. Provide
+// full-range UTC replacements (mirroring Timestamp::epochToCalendarUtc /
+// calendarUtcToEpoch) so the shared test bodies exercise the same domain on
+// Windows as on POSIX glibc, rather than spuriously failing at the CRT limits.
+inline time_t timegm(std::tm* tm) {
+  int64_t year = static_cast<int64_t>(tm->tm_year) + 1900;
+  int64_t month = tm->tm_mon;
+  if (month > 11) {
+    year += month / 12;
+    month %= 12;
+  } else if (month < 0) {
+    const int64_t yearsDiff = (-month + 11) / 12;
+    year -= yearsDiff;
+    month += 12 * yearsDiff;
+  }
+  const int64_t days = veloxDaysFromCivil(year, month + 1, tm->tm_mday);
+  return static_cast<time_t>(
+      86400LL * days + 3600LL * tm->tm_hour + 60LL * tm->tm_min + tm->tm_sec);
+}
+
+inline std::tm* gmtime_r(const time_t* timer, std::tm* result) {
+  const int64_t epoch = static_cast<int64_t>(*timer);
+  int64_t days = epoch / 86400;
+  int64_t rem = epoch % 86400;
+  if (rem < 0) {
+    rem += 86400;
+    --days;
+  }
+  // civil_from_days: inverse of veloxDaysFromCivil.
+  const int64_t z = days + 719468;
+  const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const int64_t doe = z - era * 146097;
+  const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int64_t y = yoe + era * 400;
+  const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const int64_t mp = (5 * doy + 2) / 153;
+  const int64_t d = doy - (153 * mp + 2) / 5 + 1;
+  const int64_t m = mp < 10 ? mp + 3 : mp - 9;
+  const int64_t year = y + (m <= 2);
+  const int64_t tmYear = year - 1900;
+  // Match epochToCalendarUtc, which fails only when tm_year overflows int.
+  if (tmYear > std::numeric_limits<int>::max() ||
+      tmYear < std::numeric_limits<int>::min()) {
+    return nullptr;
+  }
+  result->tm_year = static_cast<int>(tmYear);
+  result->tm_mon = static_cast<int>(m - 1);
+  result->tm_mday = static_cast<int>(d);
+  result->tm_hour = static_cast<int>(rem / 3600);
+  result->tm_min = static_cast<int>((rem % 3600) / 60);
+  result->tm_sec = static_cast<int>(rem % 60);
+  int64_t wday = (4 + days) % 7;
+  if (wday < 0) {
+    wday += 7;
+  }
+  result->tm_wday = static_cast<int>(wday);
+  result->tm_yday = static_cast<int>(days - veloxDaysFromCivil(year, 1, 1));
+  result->tm_isdst = 0;
+  return result;
+}
+#endif
+
 namespace facebook::velox {
 namespace {
+
+// Portable substitute for std::put_time limited to the %F and %T specifiers
+// used by these tests. MSVC's std::put_time/strftime emits "?" for years
+// outside a narrow supported range, whereas Velox's Timestamp formatting
+// supports the full epoch range; format the fields manually on MSVC so the
+// reference oracle matches production. POSIX keeps std::put_time unchanged for
+// a genuinely independent reference.
+std::string putTimePortable(const std::tm& tm, const char* format) {
+#ifdef _MSC_VER
+  const auto pad2 = [](int v) {
+    auto s = std::to_string(v);
+    return s.size() < 2 ? std::string(2 - s.size(), '0') + s : s;
+  };
+  std::string out;
+  for (const char* p = format; *p != '\0'; ++p) {
+    if (*p != '%' || *(p + 1) == '\0') {
+      out += *p;
+      continue;
+    }
+    switch (*++p) {
+      case 'F': // ISO date: year-month-day
+        out += std::to_string(tm.tm_year + 1900);
+        out += '-';
+        out += pad2(tm.tm_mon + 1);
+        out += '-';
+        out += pad2(tm.tm_mday);
+        break;
+      case 'T': // ISO time: hour:minute:second
+        out += pad2(tm.tm_hour);
+        out += ':';
+        out += pad2(tm.tm_min);
+        out += ':';
+        out += pad2(tm.tm_sec);
+        break;
+      default:
+        out += '%';
+        out += *p;
+    }
+  }
+  return out;
+#else
+  std::ostringstream oss;
+  oss << std::put_time(&tm, format);
+  return oss.str();
+#endif
+}
 
 std::string timestampToString(
     Timestamp ts,
@@ -275,7 +401,7 @@ std::string toStringAlt(
       ? t.getNanos() / 1'000'000
       : t.getNanos();
   std::ostringstream oss;
-  oss << std::put_time(&tmValue, "%FT%T");
+  oss << putTimePortable(tmValue, "%FT%T");
   oss << '.' << std::setfill('0') << std::setw(width) << value;
   return oss.str();
 }
@@ -423,7 +549,7 @@ std::string tmToString(
       : nanos;
 
   std::ostringstream oss;
-  oss << std::put_time(&tmValue, format.c_str());
+  oss << putTimePortable(tmValue, format.c_str());
 
   if (options.mode != TimestampToStringOptions::Mode::kDateOnly) {
     oss << '.' << std::setfill('0') << std::setw(width) << value;

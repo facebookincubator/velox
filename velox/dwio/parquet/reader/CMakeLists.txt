@@ -63,3 +63,11 @@ velox_link_libraries(
   Snappy::snappy
   zstd::zstd
 )
+
+if(MSVC)
+  velox_compile_options(velox_dwio_native_parquet_reader PRIVATE 
+    /std:c++20
+    /FI${CMAKE_CURRENT_SOURCE_DIR}/WindowsSocketFix.h)
+  velox_compile_definitions(velox_dwio_native_parquet_reader PRIVATE 
+    _WINSOCK_DEPRECATED_NO_WARNINGS)
+endif()

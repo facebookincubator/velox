@@ -828,7 +828,7 @@ std::shared_ptr<RuleList> URLInputGenerator::generateMailToRules() {
               std::make_shared<RepeatingRule>(
                   rng_,
                   std::make_shared<RuleList>(std::vector<std::shared_ptr<Rule>>{
-                      std::make_shared<ConstantRule>("\%20"),
+                      std::make_shared<ConstantRule>("%20"),
                       std::make_shared<WordRule>(rng_)}),
                   1,
                   3)})),
@@ -867,7 +867,7 @@ std::shared_ptr<RuleList> URLInputGenerator::generateMailToRules() {
               std::make_shared<RepeatingRule>(
                   rng_,
                   std::make_shared<RuleList>(std::vector<std::shared_ptr<Rule>>{
-                      std::make_shared<ConstantRule>("\%20"),
+                      std::make_shared<ConstantRule>("%20"),
                       std::make_shared<WordRule>(rng_)}),
                   1,
                   3)})),

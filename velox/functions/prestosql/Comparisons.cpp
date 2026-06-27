@@ -90,9 +90,15 @@ struct SimdComparator {
       exec::LocalDecodedVector lhsDecoded(context, lhs, rows);
       exec::LocalDecodedVector rhsDecoded(context, rhs, rows);
 
+#ifdef _MSC_VER
+      context.applyToSelectedNoThrow(rows, [&](auto row) {
+        auto l = lhsDecoded->valueAt<T>(row);
+        auto r = rhsDecoded->valueAt<T>(row);
+#else
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         auto l = lhsDecoded->template valueAt<T>(row);
         auto r = rhsDecoded->template valueAt<T>(row);
+#endif
         auto filtered = compare(l, r);
         resultVector->set(row, filtered);
       });

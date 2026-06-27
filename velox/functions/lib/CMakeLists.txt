@@ -41,6 +41,14 @@ velox_add_library(
 
 velox_link_libraries(velox_functions_lib_date_time_formatter velox_type_tz)
 
+if(WIN32)
+  find_package(Java QUIET)
+  find_package(JNI QUIET)
+else()
+  find_package(Java REQUIRED)
+  find_package(JNI REQUIRED)
+endif()
+
 velox_add_library(
   velox_functions_lib
   ArrayShuffle.cpp
@@ -92,6 +100,13 @@ velox_add_library(
   ZetaDistribution.h
 )
 
+if(WIN32)
+  # Windows: Never use JNI (removes jvm.lib dependency)
+  # Java/JNI not needed for Windows builds
+else()
+  velox_include_directories(velox_functions_lib PRIVATE ${JNI_INCLUDE_DIRS})
+endif()
+
 velox_link_libraries(
   velox_functions_lib
   velox_expression
@@ -102,6 +117,10 @@ velox_link_libraries(
   re2::re2
   Folly::folly
 )
+
+if(NOT WIN32 AND JNI_FOUND)
+  velox_link_libraries(velox_functions_lib ${JNI_LIBRARIES})
+endif()
 
 add_subdirectory(aggregates)
 add_subdirectory(sfm)
