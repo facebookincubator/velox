@@ -2140,3 +2140,16 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
 }
+TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
+  // bss_float.parquet: 100 rows of REQUIRED float encoded with
+  // BYTE_STREAM_SPLIT, no compression, data page v1.
+  auto schema = ROW({"float_val"}, {REAL()});
+  auto readerBundle = readerBuilder("bss_float.parquet", schema).build();
+  EXPECT_EQ(readerBundle.reader->numberOfRows().value(), 100ULL);
+
+  auto result = BaseVector::create(schema, 0, leafPool_.get());
+  EXPECT_TRUE(readerBundle.rowReader->next(100, result));
+  EXPECT_EQ(result->size(), 100);
+  // Force eager loading of the float column.
+  result->loadedVector();
+}

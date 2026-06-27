@@ -23,6 +23,7 @@
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
+#include "velox/dwio/parquet/reader/ByteStreamSplitDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaByteArrayDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
@@ -299,7 +300,10 @@ class PageReader {
     if (nulls) {
       nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor) &&
           (!this->type_->type()->isLongDecimal()) &&
-          (this->type_->type()->isShortDecimal() ? isDictionary() : true);
+          (this->type_->type()->isShortDecimal()
+               ? (isDictionary() ||
+                  type_->parquetType_ == thrift::Type::INT64)
+               : true);
 
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
@@ -319,7 +323,10 @@ class PageReader {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
-            nulls, visitor, !this->type_->type()->isShortDecimal());
+            nulls,
+            visitor,
+            !(this->type_->type()->isShortDecimal() &&
+              type_->parquetType_ != thrift::Type::INT64));
       }
     }
   }
@@ -553,7 +560,11 @@ class PageReader {
   std::unique_ptr<DeltaByteArrayDecoder> deltaByteArrDecoder_;
   std::unique_ptr<DeltaLengthByteArrayDecoder> deltaLengthByteArrDecoder_;
   std::unique_ptr<RleBpDataDecoder> rleBooleanDecoder_;
-  // Add decoders for other encodings here.
+
+  /// Scratch buffer for BYTE_STREAM_SPLIT decoded data. Separate from
+  /// decompressedData_ to avoid overwriting the source when the page is
+  /// compressed.
+  BufferPtr bssDecodedData_;
 };
 
 FOLLY_ALWAYS_INLINE dwio::common::compression::CompressionOptions
