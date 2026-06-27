@@ -196,6 +196,12 @@ void CudfFilterProject::initialize() {
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
 
+  // Capture the session timezone so timezone-aware GPU functions (date/time
+  // extraction, the TIMESTAMP WITH TIME ZONE family, temporal casts) match the
+  // CPU path.
+  const auto exprContext =
+      contextFromConfig(operatorCtx_->driverCtx()->queryConfig());
+
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
@@ -206,21 +212,22 @@ void CudfFilterProject::initialize() {
   }
   if (hasFilter_) {
     // First expr is Filter, rest are Project
-    filterEvaluator_ = createCudfExpression(expr->exprs()[0], inputType);
+    filterEvaluator_ =
+        createCudfExpression(expr->exprs()[0], inputType, exprContext);
     std::transform(
         expr->exprs().begin() + 1,
         expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [&](const auto& expr) {
+          return createCudfExpression(expr, inputType, exprContext);
         });
   } else {
     std::transform(
         expr->exprs().begin(),
         expr->exprs().end(),
         std::back_inserter(projectEvaluators_),
-        [inputType](const auto& expr) {
-          return createCudfExpression(expr, inputType);
+        [&](const auto& expr) {
+          return createCudfExpression(expr, inputType, exprContext);
         });
   }
 
