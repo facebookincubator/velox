@@ -21,6 +21,7 @@
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/types.hpp>
 
 #include <memory>
 #include <vector>
@@ -33,21 +34,27 @@ class tree;
 
 namespace facebook::velox::cudf_velox {
 
-// Convert subfield filters to cudf AST
+/// Convert a single subfield filter to a cuDF AST expression.
+/// @param timestampUnit The cuDF timestamp type_id used by the Parquet reader
+///   (e.g. TIMESTAMP_MILLISECONDS). Timestamp range scalars are created with
+///   this resolution so they match the column data types at evaluation time.
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS);
 
-// Build a single AST expression representing logical AND of all filters in
-// 'subfieldFilters'. The resulting expression reference is owned by the passed
-// 'tree'.
+/// Build a single AST expression representing logical AND of all filters in
+/// 'subfieldFilters'. The resulting expression reference is owned by the passed
+/// 'tree'.
+/// @param timestampUnit The cuDF timestamp type_id used by the Parquet reader.
 cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS);
 
 } // namespace facebook::velox::cudf_velox
