@@ -23,7 +23,7 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
-std::shared_ptr<IcebergStatsCollector> IcebergStatsCollector::create(
+std::unique_ptr<IcebergStatsCollector> IcebergStatsCollector::create(
     dwio::common::FileFormat format,
     const std::vector<IcebergColumnHandlePtr>& inputColumns,
     const RowTypePtr& schema) {
@@ -32,10 +32,10 @@ std::shared_ptr<IcebergStatsCollector> IcebergStatsCollector::create(
     case dwio::common::FileFormat::ORC:
       // DWRF/ORC statistics are read from the writer footer; the collector maps
       // footer node ids to Iceberg field ids using the written row type.
-      return std::make_shared<IcebergDwrfStatsCollector>(inputColumns, schema);
+      return std::make_unique<IcebergDwrfStatsCollector>(inputColumns, schema);
 #ifdef VELOX_ENABLE_PARQUET
     case dwio::common::FileFormat::PARQUET:
-      return std::make_shared<IcebergParquetStatsCollector>(inputColumns);
+      return std::make_unique<IcebergParquetStatsCollector>(inputColumns);
 #endif
     default:
       return nullptr;

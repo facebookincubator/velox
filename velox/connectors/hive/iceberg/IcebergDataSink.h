@@ -325,7 +325,7 @@ class IcebergDataSink : public HiveDataSink {
   // into the writer options. Polymorphic over the table's file format; created
   // via IcebergStatsCollector::create() and reused across all writers. Null
   // when the format has no Iceberg statistics support compiled in.
-  std::shared_ptr<IcebergStatsCollector> statsCollector_;
+  std::unique_ptr<IcebergStatsCollector> statsCollector_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
