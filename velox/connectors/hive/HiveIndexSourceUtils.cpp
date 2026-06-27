@@ -25,6 +25,10 @@ namespace facebook::velox::connector::hive {
 std::optional<variant> extractPointLookupValue(const common::Filter* filter) {
   VELOX_CHECK_NOT_NULL(filter);
 
+  if (filter->nullAllowed()) {
+    return std::nullopt;
+  }
+
   switch (filter->kind()) {
     case common::FilterKind::kBigintRange: {
       const auto* range = filter->as<common::BigintRange>();
@@ -77,6 +81,10 @@ std::optional<variant> extractPointLookupValue(const common::Filter* filter) {
 std::optional<std::pair<variant, variant>> extractRangeBounds(
     const common::Filter* filter) {
   VELOX_CHECK_NOT_NULL(filter);
+
+  if (filter->nullAllowed()) {
+    return std::nullopt;
+  }
 
   switch (filter->kind()) {
     case common::FilterKind::kBigintRange: {

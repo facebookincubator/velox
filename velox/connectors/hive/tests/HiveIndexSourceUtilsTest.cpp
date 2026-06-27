@@ -213,6 +213,44 @@ TEST_F(ExtractRangeBoundsTest, floatRangeUnboundedReturnsNullopt) {
   EXPECT_FALSE(result.has_value());
 }
 
+// --- nullAllowed tests ---
+// Filters with nullAllowed=true must not be converted, because the
+// caller erases the original filter after conversion and the simplified
+// condition cannot represent IS NULL semantics.
+
+TEST_F(ExtractRangeBoundsTest, bigintRangeNullAllowedReturnsNullopt) {
+  auto filter = std::make_unique<common::BigintRange>(
+      /*lower=*/10, /*upper=*/20, /*nullAllowed=*/true);
+  auto result = extractRangeBounds(filter.get());
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(ExtractRangeBoundsTest, doubleRangeNullAllowedReturnsNullopt) {
+  auto filter = std::make_unique<common::DoubleRange>(
+      /*lower=*/1.0,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      /*upper=*/5.0,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/true);
+  auto result = extractRangeBounds(filter.get());
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(ExtractRangeBoundsTest, floatRangeNullAllowedReturnsNullopt) {
+  auto filter = std::make_unique<common::FloatRange>(
+      /*lower=*/1.0f,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      /*upper=*/5.0f,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/true);
+  auto result = extractRangeBounds(filter.get());
+  EXPECT_FALSE(result.has_value());
+}
+
 // --- extractPointLookupValue tests ---
 
 class ExtractPointLookupValueTest : public ::testing::Test {};
@@ -295,6 +333,42 @@ TEST_F(ExtractPointLookupValueTest, floatExclusiveNotPoint) {
       /*upperUnbounded=*/false,
       /*upperExclusive=*/true,
       /*nullAllowed=*/false);
+  auto result = extractPointLookupValue(filter.get());
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(ExtractPointLookupValueTest, bigintNullAllowedReturnsNullopt) {
+  // key = 42 OR key IS NULL
+  auto filter = std::make_unique<common::BigintRange>(
+      /*lower=*/42, /*upper=*/42, /*nullAllowed=*/true);
+  auto result = extractPointLookupValue(filter.get());
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(ExtractPointLookupValueTest, doubleNullAllowedReturnsNullopt) {
+  // score = 3.14 OR score IS NULL
+  auto filter = std::make_unique<common::DoubleRange>(
+      /*lower=*/3.14,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      /*upper=*/3.14,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/true);
+  auto result = extractPointLookupValue(filter.get());
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(ExtractPointLookupValueTest, floatNullAllowedReturnsNullopt) {
+  // score = 2.5f OR score IS NULL
+  auto filter = std::make_unique<common::FloatRange>(
+      /*lower=*/2.5f,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      /*upper=*/2.5f,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/true);
   auto result = extractPointLookupValue(filter.get());
   EXPECT_FALSE(result.has_value());
 }
