@@ -1270,6 +1270,86 @@ TEST_F(AggregationTest, spillAll) {
   }
 }
 
+// Verifies the vectorized hash-recovery spill-merge path (recovering spilled
+// aggregation state by re-aggregating through a hash table instead of the
+// row-by-row sorted merge) produces results identical to the in-memory plan,
+// without recursive re-spill (spill level limited to the input level).
+TEST_F(AggregationTest, hashRecoverySpill) {
+  auto inputs = makeVectors(rowType_, 200, 8);
+
+  auto plan = PlanBuilder()
+                  .values(inputs)
+                  .singleAggregation({"c0"}, {"sum(c2)", "max(c4)", "min(c5)"})
+                  .planNode();
+  auto expected = AssertQueryBuilder(plan).copyResults(pool_.get());
+
+  for (int numPartitionBits : {1, 2, 3}) {
+    SCOPED_TRACE(fmt::format("numPartitionBits {}", numPartitionBits));
+    auto tempDirectory = exec::test::TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(tempDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillHashRecoveryEnabled, true)
+            // Disable recursive re-spill: only the input-level spill happens,
+            // so this isolates the basic (non-recursive) hash-recovery path.
+            .config(QueryConfig::kMaxSpillLevel, "0")
+            .config(
+                QueryConfig::kSpillNumPartitionBits,
+                std::to_string(numPartitionBits))
+            .maxDrivers(1)
+            .assertResults(expected);
+
+    auto stats = task->taskStats().pipelineStats;
+    ASSERT_LT(
+        0, stats[0].operatorStats[1].runtimeStats[Operator::kSpillRuns].count);
+    ASSERT_LT(0, stats[0].operatorStats[1].spilledBytes);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+// Verifies recursive re-spill during hash recovery: when a recovered partition
+// does not fit in memory it is re-partitioned with finer bits and processed
+// recursively. The deterministic re-spill trigger (TestScopedSpillInjection)
+// forces re-spill on every recovered batch, exercising the recursion down to
+// the configured spill level limit. Results must still match the in-memory
+// plan.
+TEST_F(AggregationTest, hashRecoveryRecursiveRespill) {
+  auto inputs = makeVectors(rowType_, 200, 8);
+
+  auto plan = PlanBuilder()
+                  .values(inputs)
+                  .singleAggregation({"c0"}, {"sum(c2)", "count(1)", "max(c4)"})
+                  .planNode();
+  auto expected = AssertQueryBuilder(plan).copyResults(pool_.get());
+
+  for (int maxSpillLevel : {1, 2, 3}) {
+    SCOPED_TRACE(fmt::format("maxSpillLevel {}", maxSpillLevel));
+    auto tempDirectory = exec::test::TempDirectoryPath::create();
+    // 100% injection forces both the input spill and (via the recovery
+    // re-spill trigger) recursive re-spill of every recovered partition.
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(tempDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillHashRecoveryEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, "2")
+            .config(QueryConfig::kMaxSpillLevel, std::to_string(maxSpillLevel))
+            .maxDrivers(1)
+            .assertResults(expected);
+
+    auto stats = task->taskStats().pipelineStats;
+    ASSERT_LT(
+        0, stats[0].operatorStats[1].runtimeStats[Operator::kSpillRuns].count);
+    ASSERT_LT(0, stats[0].operatorStats[1].spilledBytes);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
 // Verify number of memory allocations in the HashAggregation operator.
 TEST_F(AggregationTest, memoryAllocations) {
   vector_size_t size = 1'024;

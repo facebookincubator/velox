@@ -1085,7 +1085,10 @@ void GroupingSet::ensureOutputFits() {
 }
 
 RowTypePtr GroupingSet::makeSpillType() const {
-  auto rows = table_->rows();
+  return makeSpillType(table_->rows());
+}
+
+RowTypePtr GroupingSet::makeSpillType(const RowContainer* rows) const {
   auto types = rows->keyTypes();
 
   for (const auto& accumulator : rows->accumulators()) {
@@ -1138,7 +1141,11 @@ void GroupingSet::spill() {
                 spillConfig_->numPartitionBits)),
         sortingKeys,
         spillConfig_,
-        spillStats_);
+        spillStats_,
+        // When hash recovery is used, spilled runs do not need to be sorted:
+        // the data is read back unordered and re-aggregated through a hash
+        // table. This removes the spill-time sort.
+        /*needSort=*/!useHashRecovery());
   }
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations
@@ -1234,28 +1241,334 @@ bool GroupingSet::getOutputWithSpill(
       return false;
     }
   }
-  VELOX_CHECK_NOT_NULL(merge_);
+  // Spill output may already be fully produced (e.g. a redundant getOutput()
+  // call after completion). Guard against re-entering the merge with no active
+  // partition.
+  if (merge_ == nullptr && !currentPartitionHashRecovery_) {
+    return false;
+  }
   return mergeNext(maxOutputRows, maxOutputBytes, result);
 }
 
 bool GroupingSet::prepareNextSpillPartitionOutput() {
-  VELOX_CHECK_EQ(merge_ == nullptr, outputSpillPartition_ == -1);
   merge_ = nullptr;
-  if (spillPartitionSet_.empty()) {
+  currentPartitionHashRecovery_ = false;
+
+  // Process recursively re-spilled sub-partitions (deeper levels) first so the
+  // working set of open spill files stays small.
+  if (!recoveryWorkStack_.empty()) {
+    auto item = std::move(recoveryWorkStack_.back());
+    recoveryWorkStack_.pop_back();
+    outputSpillPartition_ = item.partition->id().partitionNumber();
+    startHashRecovery(*item.partition, item.respillStartBit);
+    return true;
+  }
+
+  while (!spillPartitionSet_.empty()) {
+    auto it = spillPartitionSet_.begin();
+    outputSpillPartition_ = it->first.partitionNumber();
+    if (useHashRecovery()) {
+      // Top-level partitions written by the input spiller are partitioned with
+      // bits [startPartitionBit, startPartitionBit + numPartitionBits), so a
+      // recursive re-spill must advance past them. The output spiller writes a
+      // single, unpartitioned partition and therefore re-spills from the base
+      // bit.
+      const uint8_t respillStartBit = inputSpiller_ != nullptr
+          ? static_cast<uint8_t>(
+                spillConfig_->startPartitionBit +
+                spillConfig_->numPartitionBits)
+          : spillConfig_->startPartitionBit;
+      startHashRecovery(*it->second, respillStartBit);
+      spillPartitionSet_.erase(it);
+      return true;
+    }
+    merge_ = it->second->createOrderedReader(*spillConfig_, pool_, spillStats_);
+    spillPartitionSet_.erase(it);
+    // 'createOrderedReader' returns null for an empty partition (no spill
+    // files). Skip it and move on to keep the postcondition: when this returns
+    // true, exactly one of 'merge_' / 'currentPartitionHashRecovery_' is set.
+    if (merge_ != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool GroupingSet::useHashRecovery() const {
+  if (!queryConfig_->aggregationSpillHashRecoveryEnabled()) {
     return false;
   }
-  auto it = spillPartitionSet_.begin();
-  VELOX_CHECK_NE(outputSpillPartition_, it->first.partitionNumber());
-  outputSpillPartition_ = it->first.partitionNumber();
-  merge_ = it->second->createOrderedReader(*spillConfig_, pool_, spillStats_);
-  spillPartitionSet_.erase(it);
+  // Hash recovery only supports plain group-by aggregates. Distinct hash
+  // aggregation, and sorted/distinct aggregates, rely on the ordered merge to
+  // collocate equal keys, so they stay on the existing sorted path.
+  if (isDistinct() || sortedAggregations_ != nullptr) {
+    return false;
+  }
+  for (const auto& distinctAgg : distinctAggregations_) {
+    if (distinctAgg != nullptr) {
+      return false;
+    }
+  }
   return true;
+}
+
+void GroupingSet::startHashRecovery(
+    SpillPartition& partition,
+    uint8_t respillStartBit) {
+  // Build hashers over the spilled key columns, which occupy channels
+  // [0, numKeys) of the spill row (see makeSpillType()).
+  const auto& keyTypes = mergeRows_->keyTypes();
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  hashers.reserve(keyTypes.size());
+  for (column_index_t i = 0; i < keyTypes.size(); ++i) {
+    hashers.push_back(VectorHasher::create(keyTypes[i], i));
+  }
+  if (ignoreNullKeys_) {
+    recoveryTable_ = HashTable<true>::createForAggregation(
+        std::move(hashers), accumulators(false), pool_);
+  } else {
+    recoveryTable_ = HashTable<false>::createForAggregation(
+        std::move(hashers), accumulators(false), pool_);
+  }
+  initializeAggregates(aggregates_, *recoveryTable_->rows(), false);
+  recoveryLookup_ =
+      std::make_unique<HashLookup>(recoveryTable_->hashers(), pool_);
+
+  recoveryReader_ = partition.createUnorderedReader(
+      spillConfig_->readBufferSize, pool_, spillStats_);
+  recoveryResultIterator_ = RowContainerIterator{};
+  hashRecoveryDrained_ = false;
+  currentPartitionHashRecovery_ = true;
+  currentRespillStartBit_ = respillStartBit;
+  recoverySpiller_.reset();
+  recoveryRespilling_ = false;
+}
+
+void GroupingSet::addSpillBatchToHashRecovery(const RowVectorPtr& batch) {
+  const auto numRows = batch->size();
+  if (numRows == 0) {
+    return;
+  }
+  activeRows_.resize(numRows);
+  activeRows_.setAll();
+
+  recoveryTable_->prepareForGroupProbe(
+      *recoveryLookup_,
+      batch,
+      activeRows_,
+      BaseHashTable::kNoSpillInputStartPartitionBit);
+  recoveryTable_->groupProbe(
+      *recoveryLookup_, BaseHashTable::kNoSpillInputStartPartitionBit);
+
+  auto* groups = recoveryLookup_->hits.data();
+  const auto& newGroups = recoveryLookup_->newGroups;
+  const auto numKeys = mergeRows_->keyTypes().size();
+
+  std::vector<VectorPtr> args(1);
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    auto& function = aggregates_[i].function;
+    if (!newGroups.empty()) {
+      function->initializeNewGroups(groups, newGroups);
+    }
+    args[0] = batch->childAt(i + numKeys);
+    function->addIntermediateResults(groups, activeRows_, args, false);
+  }
+}
+
+bool GroupingSet::mergeNextWithHashRecovery(
+    int32_t maxOutputRows,
+    int32_t maxOutputBytes,
+    const RowVectorPtr& result) {
+  for (;;) {
+    VELOX_CHECK(currentPartitionHashRecovery_);
+    if (!hashRecoveryDrained_) {
+      RowVectorPtr batch;
+      while (recoveryReader_->nextBatch(batch)) {
+        // Re-spill the partially built recovery table when it no longer fits in
+        // memory, so the partition is processed recursively at a finer
+        // granularity instead of risking an OOM during output.
+        if (recoveryShouldRespill(batch)) {
+          respillRecoveryTable();
+        }
+        addSpillBatchToHashRecovery(batch);
+      }
+      hashRecoveryDrained_ = true;
+      recoveryResultIterator_ = RowContainerIterator{};
+
+      if (recoveryRespilling_) {
+        // This partition was recursively re-spilled into sub-partitions and
+        // produces no direct output. Finalize the sub-partitions, release the
+        // partition state, and advance to process them (or the next partition).
+        finalizeRecoveryRespill();
+        finishHashRecoveryPartition();
+        if (!prepareNextSpillPartitionOutput()) {
+          return false;
+        }
+        return mergeNext(maxOutputRows, maxOutputBytes, result);
+      }
+    }
+
+    // @lint-ignore CLANGTIDY
+    std::vector<char*> groups(maxOutputRows);
+    const int32_t numGroups = recoveryTable_->rows()->listRows(
+        &recoveryResultIterator_, maxOutputRows, maxOutputBytes, groups.data());
+    if (numGroups > 0) {
+      extractGroups(
+          recoveryTable_->rows(),
+          folly::Range<char**>(groups.data(), numGroups),
+          result);
+      return true;
+    }
+
+    // Current partition is fully extracted; release it and advance.
+    finishHashRecoveryPartition();
+    if (!prepareNextSpillPartitionOutput()) {
+      return false;
+    }
+    // The next partition may use ordered merge or hash recovery; dispatch
+    // centrally so the right reader is used.
+    return mergeNext(maxOutputRows, maxOutputBytes, result);
+  }
+}
+
+void GroupingSet::finishHashRecoveryPartition() {
+  recoveryReader_.reset();
+  recoveryLookup_.reset();
+  if (recoveryTable_ != nullptr) {
+    recoveryTable_->clear(/*freeTable=*/true);
+    recoveryTable_.reset();
+  }
+  recoverySpiller_.reset();
+  recoveryRespilling_ = false;
+  recoveryResultIterator_ = RowContainerIterator{};
+  hashRecoveryDrained_ = false;
+  currentPartitionHashRecovery_ = false;
+  // Return any memory freed by clearing the recovery table back to the
+  // arbitrator.
+  pool_->release();
+}
+
+bool GroupingSet::recoveryShouldRespill(const RowVectorPtr& batch) {
+  VELOX_CHECK_NOT_NULL(recoveryTable_);
+  if (recoveryTable_->numDistinct() == 0) {
+    return false;
+  }
+  // Cannot descend below the configured spill level limit. Keep accumulating in
+  // memory (best effort) to preserve correctness; this matches HashBuild which
+  // also disables further spilling at the deepest level.
+  if (spillConfig_->exceedSpillLevelLimit(currentRespillStartBit_)) {
+    return false;
+  }
+
+  // Test-only deterministic re-spill trigger.
+  if (testingTriggerSpill(pool_->name())) {
+    return true;
+  }
+
+  // The decision below mirrors ensureInputFits(): try to reserve enough memory
+  // to absorb 'batch'; if the reservation cannot be grown, re-spill instead of
+  // risking an OOM during output (where reclaim is a no-op).
+  auto* rows = recoveryTable_->rows();
+  const auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
+  const auto outOfLineBytes =
+      rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const int64_t flatBytes = batch->estimateFlatSize();
+
+  const auto currentUsage = pool_->usedBytes();
+  const auto minReservationBytes =
+      currentUsage * spillConfig_->minSpillableReservationPct / 100;
+  const auto availableReservationBytes = pool_->availableReservation();
+  const auto tableIncrementBytes =
+      recoveryTable_->hashTableSizeIncrease(batch->size());
+  const auto incrementBytes =
+      rows->sizeIncrement(batch->size(), outOfLineBytes ? flatBytes * 2 : 0) +
+      tableIncrementBytes;
+
+  if (availableReservationBytes >= minReservationBytes) {
+    if ((tableIncrementBytes == 0) && (freeRows > batch->size()) &&
+        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatBytes * 2)) {
+      return false;
+    }
+    if (availableReservationBytes > 2 * incrementBytes) {
+      return false;
+    }
+  }
+
+  const auto targetIncrementBytes = std::max<int64_t>(
+      incrementBytes * 2,
+      currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
+  {
+    memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
+    if (pool_->maybeReserve(targetIncrementBytes)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void GroupingSet::respillRecoveryTable() {
+  VELOX_CHECK_NOT_NULL(recoveryTable_);
+  auto* rows = recoveryTable_->rows();
+  if (rows->numRows() == 0) {
+    return;
+  }
+  if (recoverySpiller_ == nullptr) {
+    const auto numBits = spillConfig_->numPartitionBits;
+    const auto sortingKeys = SpillState::makeSortingKeys(
+        std::vector<CompareFlags>(rows->keyTypes().size()));
+    recoverySpiller_ = std::make_unique<AggregationInputSpiller>(
+        rows,
+        makeSpillType(rows),
+        HashBitRange(
+            currentRespillStartBit_,
+            static_cast<uint8_t>(currentRespillStartBit_ + numBits)),
+        sortingKeys,
+        spillConfig_,
+        spillStats_,
+        /*needSort=*/false);
+  }
+  rows->stringAllocator().freezeAndExecute(
+      [&]() { recoverySpiller_->spill(); });
+  recoveryTable_->clear(/*freeTable=*/true);
+  recoveryRespilling_ = true;
+  // Return the memory freed by clearing the table so subsequent draining can
+  // reuse it.
+  pool_->release();
+}
+
+void GroupingSet::finalizeRecoveryRespill() {
+  VELOX_CHECK(recoveryRespilling_);
+  VELOX_CHECK_NOT_NULL(recoverySpiller_);
+
+  // Spill rows accumulated since the last re-spill so the entire partition ends
+  // up in the sub-partitions and no key is split between memory and disk.
+  if (recoveryTable_ != nullptr && recoveryTable_->rows()->numRows() > 0) {
+    auto* rows = recoveryTable_->rows();
+    rows->stringAllocator().freezeAndExecute(
+        [&]() { recoverySpiller_->spill(); });
+    recoveryTable_->clear(/*freeTable=*/true);
+  }
+
+  SpillPartitionSet subPartitions;
+  recoverySpiller_->finishSpill(subPartitions);
+  removeEmptyPartitions(subPartitions);
+
+  const auto childRespillStartBit = static_cast<uint8_t>(
+      currentRespillStartBit_ + spillConfig_->numPartitionBits);
+  for (auto& [id, partition] : subPartitions) {
+    recoveryWorkStack_.push_back(
+        RecoveryPartition{std::move(partition), childRespillStartBit});
+  }
+  recoverySpiller_.reset();
 }
 
 bool GroupingSet::mergeNext(
     int32_t maxOutputRows,
     int32_t maxOutputBytes,
     const RowVectorPtr& result) {
+  if (currentPartitionHashRecovery_) {
+    return mergeNextWithHashRecovery(maxOutputRows, maxOutputBytes, result);
+  }
   if (isDistinct()) {
     return mergeNextWithoutAggregates(maxOutputRows, result);
   } else {
@@ -1285,8 +1598,9 @@ bool GroupingSet::mergeNextWithAggregates(
         VELOX_CHECK_NULL(merge_);
         return false;
       }
-      VELOX_CHECK_NOT_NULL(merge_);
-      continue;
+      // The next partition may use ordered merge or hash recovery; dispatch
+      // centrally so the right reader is used.
+      return mergeNext(maxOutputRows, maxOutputBytes, result);
     }
     if (!nextKeyIsEqual) {
       mergeState_ = mergeRows_->newRow();
@@ -1685,7 +1999,8 @@ AggregationInputSpiller::AggregationInputSpiller(
     const HashBitRange& hashBitRange,
     const std::vector<SpillSortKey>& sortingKeys,
     const common::SpillConfig* spillConfig,
-    exec::SpillStats* spillStats)
+    exec::SpillStats* spillStats,
+    bool needSort)
     : SpillerBase(
           container,
           std::move(rowType),
@@ -1695,7 +2010,8 @@ AggregationInputSpiller::AggregationInputSpiller(
           spillConfig->maxSpillRunRows,
           std::nullopt,
           spillConfig,
-          spillStats) {}
+          spillStats),
+      needSort_(needSort) {}
 
 AggregationOutputSpiller::AggregationOutputSpiller(
     RowContainer* container,
