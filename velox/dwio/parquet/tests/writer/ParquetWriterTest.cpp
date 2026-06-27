@@ -1102,6 +1102,85 @@ TEST_F(ParquetWriterTest, allNulls) {
   auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
+TEST_F(ParquetWriterTest, rowGroupSizeConfig) {
+  constexpr int64_t kRows = 1'000;
+  constexpr int64_t kBatchRows = 100;
+
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kRows / kBatchRows);
+
+  for (int64_t offset = 0; offset < kRows; offset += kBatchRows) {
+    const auto rows = std::min<int64_t>(kBatchRows, kRows - offset);
+    batches.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            rows, [offset](auto row) { return offset + row; }),
+        makeFlatVector<int64_t>(
+            rows, [offset](auto row) { return (offset + row) * 2; }),
+        makeFlatVector<int64_t>(
+            rows, [offset](auto row) { return (offset + row) * 3; }),
+    }));
+  }
+
+  const auto writeBatchesWithConfig =
+      [&](std::unordered_map<std::string, std::string> configFromFile,
+          std::unordered_map<std::string, std::string> sessionProperties) {
+        auto sink = std::make_unique<MemorySink>(
+            200 * 1024 * 1024,
+            dwio::common::FileSink::Options{.pool = leafPool_.get()});
+        auto* sinkPtr = sink.get();
+
+        dwio::common::WriterOptions options;
+        options.memoryPool = rootPool_.get();
+
+        ParquetWriterFactory factory;
+        options.formatSpecificOptions = factory.createFormatOptions(
+            config::ConfigBase(std::move(configFromFile)),
+            config::ConfigBase(std::move(sessionProperties)));
+
+        auto writer = std::make_unique<parquet::Writer>(
+            std::move(sink), options, batches[0]->rowType());
+
+        for (const auto& batch : batches) {
+          writer->write(batch);
+        }
+
+        writer->close();
+        writers_.push_back(std::move(writer));
+
+        return sinkPtr;
+      };
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {std::string(parquet::ParquetConfig::kWriterRowGroupSize), "1KB"}};
+  std::unordered_map<std::string, std::string> sessionProperties = {
+      {std::string(parquet::ParquetConfig::kWriterRowGroupSizeSession), "1KB"}};
+
+  auto* sinkPtr = writeBatchesWithConfig(configFromFile, sessionProperties);
+  auto reader = createReaderInMemory(*sinkPtr);
+
+  EXPECT_EQ(kRows, reader->numberOfRows());
+  EXPECT_GT(reader->fileMetaData().numRowGroups(), 1);
+
+  std::unordered_map<std::string, std::string> defaultConfig;
+  std::unordered_map<std::string, std::string> defaultSession;
+
+  auto* defaultSinkPtr = writeBatchesWithConfig(defaultConfig, defaultSession);
+  auto defaultReader = createReaderInMemory(*defaultSinkPtr);
+
+  EXPECT_EQ(kRows, defaultReader->numberOfRows());
+  EXPECT_EQ(1, defaultReader->fileMetaData().numRowGroups());
+
+  std::unordered_map<std::string, std::string> numericConfig = {
+      {std::string(parquet::ParquetConfig::kWriterRowGroupSize), "256MB"}};
+  std::unordered_map<std::string, std::string> numericSession = {
+      {std::string(parquet::ParquetConfig::kWriterRowGroupSizeSession),
+       "256MB"}};
+
+  auto* numericSinkPtr = writeBatchesWithConfig(numericConfig, numericSession);
+  auto numericReader = createReaderInMemory(*numericSinkPtr);
+
+  EXPECT_EQ(kRows, numericReader->numberOfRows());
+  EXPECT_EQ(1, numericReader->fileMetaData().numRowGroups());
+}
 
 } // namespace
 

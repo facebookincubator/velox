@@ -376,11 +376,10 @@ Writer::Writer(
     RowTypePtr schema)
     : pool_(std::move(pool)),
       generalPool_{pool_->addLeafChild(".general")},
-      stream_(
-          std::make_shared<ArrowDataBufferSink>(
-              std::move(sink),
-              *generalPool_,
-              getFormatOptions(options).bufferGrowRatio)),
+      stream_(std::make_shared<ArrowDataBufferSink>(
+          std::move(sink),
+          *generalPool_,
+          getFormatOptions(options).bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
   const auto& parquetWriterOptions = getFormatOptions(options);
@@ -409,14 +408,18 @@ Writer::Writer(
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
-  } else if (options.maxTargetFileSizeBytes > 0) {
-    auto bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
-        DefaultFlushPolicy::kDefaultBytesInRowGroup,
-        options.maxTargetFileSizeBytes));
+  } else {
+    auto bytesInRowGroup = parquetWriterOptions.rowGroupSizeBytes.value_or(
+        DefaultFlushPolicy::kDefaultBytesInRowGroup);
+
+    if (options.maxTargetFileSizeBytes > 0) {
+      bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
+          static_cast<uint64_t>(bytesInRowGroup),
+          options.maxTargetFileSizeBytes));
+    }
+
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
         DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
-  } else {
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
   options_.timestampUnit = static_cast<TimestampUnit>(
       parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
@@ -438,10 +441,9 @@ Writer::Writer(
     : Writer{
           std::move(sink),
           options,
-          options.memoryPool->addAggregateChild(
-              fmt::format(
-                  "writer_node_{}",
-                  folly::to<std::string>(folly::Random::rand64()))),
+          options.memoryPool->addAggregateChild(fmt::format(
+              "writer_node_{}",
+              folly::to<std::string>(folly::Random::rand64()))),
           std::move(schema)} {}
 
 void Writer::flush() {
@@ -659,6 +661,8 @@ ParquetWriterFactory::createFormatOptions(
       ParquetConfig::writerDataPageVersion(connectorConfig, session));
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->rowGroupSizeBytes = toParquetPageSize(
+      ParquetConfig::writerRowGroupSize(connectorConfig, session));
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
