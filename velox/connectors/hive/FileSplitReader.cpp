@@ -348,7 +348,8 @@ bool FileSplitReader::filterOnStats(
           fileSplit_->partitionKeys,
           *partitionKeys_,
           fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+              connectorQueryCtx_->sessionProperties()),
+          fileSplit_->fileFormat)) {
     ++runtimeStats.processedSplits;
     return true;
   }

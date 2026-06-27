@@ -263,7 +263,7 @@ void setBounds(
     int32_t truncateLength,
     IcebergDataFileStatistics::ColumnStats& out) {
   if (const auto* intStats =
-          dynamic_cast<const dwio::common::IntegerColumnStatistics*>(
+          dynamic_cast<const dwio::common::IntegerColumnStatistics<int64_t>*>(
               &columnStatistics)) {
     const auto min = intStats->getMinimum();
     const auto max = intStats->getMaximum();
