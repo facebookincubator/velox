@@ -48,6 +48,58 @@ FormatScopedConfigs makeFormatScopedConfigs(
           dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
 
+// Test a filter against a constant vector value.
+// Returns true if the filter matches the constant value, false otherwise.
+// For unsupported types, conservatively returns true.
+bool testFilterOnConstantVector(
+    const common::Filter* filter,
+    const VectorPtr& constantVec) {
+  VELOX_CHECK_EQ(constantVec->size(), 1, "Constant vector must have size 1");
+
+  const auto& type = constantVec->type();
+  switch (type->kind()) {
+    case TypeKind::BIGINT: {
+      auto value = constantVec->as<SimpleVector<int64_t>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::INTEGER: {
+      auto value = constantVec->as<SimpleVector<int32_t>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::SMALLINT: {
+      auto value = constantVec->as<SimpleVector<int16_t>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::TINYINT: {
+      auto value = constantVec->as<SimpleVector<int8_t>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::REAL: {
+      auto value = constantVec->as<SimpleVector<float>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::DOUBLE: {
+      auto value = constantVec->as<SimpleVector<double>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::BOOLEAN: {
+      auto value = constantVec->as<SimpleVector<bool>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::TIMESTAMP: {
+      auto value = constantVec->as<SimpleVector<Timestamp>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
+      auto value = constantVec->as<SimpleVector<StringView>>()->valueAt(0);
+      return applyFilter(*filter, value);
+    }
+    default:
+      return true;
+  }
+}
+
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -291,14 +343,42 @@ bool testFilters(
               child->filter(),
               asLocalTime);
         }
-        // Column is missing, most likely due to schema evolution. Or it's a
-        // partition key but the partition value is NULL.
-        if (child->filter()->isDeterministic() &&
-            !child->filter()->testNull()) {
-          VLOG(1) << "Skipping " << filePath
-                  << " because the filter testNull() failed for column "
+        // Column is missing from the file. Check if it has a constant value
+        // (e.g., initial-default for schema evolution, or partition key with
+        // NULL value).
+        if (child->isConstant()) {
+          // Column has a constant value (e.g., initial-default). Test the
+          // filter against this constant value.
+          auto constantVec = child->constantValue();
+          if (constantVec->isNullAt(0)) {
+            // Constant is NULL, test if filter accepts NULL
+            if (child->filter()->isDeterministic() &&
+                !child->filter()->testNull()) {
+              VLOG(1)
+                  << "Skipping " << filePath
+                  << " because the filter testNull() failed for constant column "
                   << child->fieldName();
-          return false;
+              return false;
+            }
+          } else {
+            // Constant has a value, test the filter against it
+            if (!testFilterOnConstantVector(child->filter(), constantVec)) {
+              VLOG(1) << "Skipping " << filePath
+                      << " because the filter failed for constant column "
+                      << child->fieldName();
+              return false;
+            }
+          }
+        } else {
+          // Column is missing and has no constant value. Test if filter
+          // accepts NULL.
+          if (child->filter()->isDeterministic() &&
+              !child->filter()->testNull()) {
+            VLOG(1) << "Skipping " << filePath
+                    << " because the filter testNull() failed for column "
+                    << child->fieldName();
+            return false;
+          }
         }
       } else {
         const auto& typeWithId = fileTypeWithId->childByName(name);
