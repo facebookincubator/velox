@@ -339,17 +339,22 @@ variant nullVariant(const TypePtr& type) {
   return variant(type->kind());
 }
 
+variant arrayVariantAt(const ::duckdb::Value& vector, const TypePtr& arrayType);
+
 variant rowVariantAt(const ::duckdb::Value& vector, const TypePtr& rowType) {
   std::vector<variant> values;
   const auto& structValue = ::duckdb::StructValue::GetChildren(vector);
   for (size_t i = 0; i < structValue.size(); ++i) {
     auto currChild = structValue[i];
     auto currType = rowType->childAt(i);
-    // TODO: Add support for ARRAY and MAP children types.
     if (currChild.IsNull()) {
       values.push_back(nullVariant(currType));
     } else if (currType->kind() == TypeKind::ROW) {
       values.push_back(rowVariantAt(currChild, currType));
+    } else if (currType->kind() == TypeKind::ARRAY) {
+      values.push_back(arrayVariantAt(currChild, currType));
+    } else if (currType->isDecimal()) {
+      values.push_back(duckdb::decimalVariant(currChild));
     } else {
       auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, currType->kind(), currChild);
@@ -370,17 +375,22 @@ variant mapVariantAt(const ::duckdb::Value& vector, const TypePtr& mapType) {
 
   const auto& valueList = ::duckdb::ListValue::GetChildren(vector);
   for (int i = 0; i < valueList.size(); i++) {
-    // TODO: Add support for complex key and value types.
     variant variantKey;
     variant variantValue;
     auto value = ::duckdb::StructValue::GetChildren(valueList[i]);
     // Map key cannot be null.
     VELOX_CHECK(!value[0].IsNull());
-    variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        variantAt, keyType->kind(), value[0]);
+    if (keyType->isDecimal()) {
+      variantKey = duckdb::decimalVariant(value[0]);
+    } else {
+      variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          variantAt, keyType->kind(), value[0]);
+    }
 
     if (value[1].IsNull()) {
       variantValue = nullVariant(valueType);
+    } else if (valueType->isDecimal()) {
+      variantValue = duckdb::decimalVariant(value[1]);
     } else {
       variantValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, valueType->kind(), value[1]);
@@ -400,12 +410,15 @@ variant arrayVariantAt(
   auto arrayTypePtr = dynamic_cast<const ArrayType*>(arrayType.get());
   auto elementType = arrayTypePtr->elementType();
   for (int i = 0; i < elementList.size(); i++) {
-    // TODO: Add support for MAP and ROW element types.
     if (elementList[i].IsNull()) {
       array.push_back(nullVariant(elementType));
     } else if (elementType->kind() == TypeKind::ARRAY) {
       array.push_back(
           arrayVariantAt(elementList[i], arrayTypePtr->elementType()));
+    } else if (elementType->kind() == TypeKind::ROW) {
+      array.push_back(rowVariantAt(elementList[i], elementType));
+    } else if (elementType->isDecimal()) {
+      array.push_back(duckdb::decimalVariant(elementList[i]));
     } else {
       auto variant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, elementType->kind(), elementList[i]);

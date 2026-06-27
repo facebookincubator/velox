@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/time/Timer.h"
@@ -30,18 +31,24 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
 
+#include <cudf/column/column.hpp>
+#include <cudf/column/column_factories.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
+#include <cudf/unary.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
 #include <memory>
+#include <ranges>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -57,6 +64,96 @@ bool isAbfsPath([[maybe_unused]] const std::string_view path) {
 #else
   return false;
 #endif
+}
+
+// Returns true if the column has a decimal type mismatch that requires casting.
+bool needsDecimalCast(cudf::column_view const& col, const TypePtr& veloxType) {
+  if (veloxType->isDecimal()) {
+    return col.type() != veloxToCudfDataType(veloxType);
+  } else if (veloxType->kind() == TypeKind::ROW) {
+    auto const& rowType = veloxType->asRow();
+    auto numChildren = static_cast<size_t>(col.num_children());
+    VELOX_CHECK_EQ(
+        numChildren,
+        rowType.size(),
+        "Scanned struct column has {} fields but the expected schema has {}",
+        numChildren,
+        rowType.size());
+    return std::ranges::any_of(
+        std::views::iota(size_t{0}, numChildren), [&](size_t i) {
+          return needsDecimalCast(col.child(i), rowType.childAt(i));
+        });
+  } else if (veloxType->kind() == TypeKind::ARRAY && col.num_children() > 1) {
+    return needsDecimalCast(col.child(1), veloxType->childAt(0));
+  }
+  return false;
+}
+
+// Casts decimal columns from the physical type read by cuDF (e.g. DECIMAL32)
+// to the type expected by Velox (e.g. DECIMAL64), recursing into nested types.
+std::unique_ptr<cudf::column> castDecimalColumn(
+    cudf::column_view const& col,
+    const TypePtr& veloxType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (veloxType->isDecimal()) {
+    return cudf::cast(col, veloxToCudfDataType(veloxType), stream, mr);
+  } else if (veloxType->kind() == TypeKind::ROW) {
+    auto const& rowType = veloxType->asRow();
+    auto numChildren = static_cast<size_t>(col.num_children());
+    std::vector<std::unique_ptr<cudf::column>> children(numChildren);
+    std::ranges::transform(
+        std::views::iota(size_t{0}, numChildren),
+        children.begin(),
+        [&](size_t i) {
+          return castDecimalColumn(
+              col.child(i), rowType.childAt(i), stream, mr);
+        });
+    return cudf::make_structs_column(
+        col.size(),
+        std::move(children),
+        col.null_count(),
+        cudf::copy_bitmask(col, stream, mr),
+        stream,
+        mr);
+  } else if (veloxType->kind() == TypeKind::ARRAY && col.num_children() > 1) {
+    auto offsets = std::make_unique<cudf::column>(col.child(0), stream, mr);
+    auto child =
+        castDecimalColumn(col.child(1), veloxType->childAt(0), stream, mr);
+    return cudf::make_lists_column(
+        col.size(),
+        std::move(offsets),
+        std::move(child),
+        col.null_count(),
+        cudf::copy_bitmask(col, stream, mr));
+  }
+  return std::make_unique<cudf::column>(col, stream, mr);
+}
+
+std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
+    std::unique_ptr<cudf::table>&& table,
+    const RowTypePtr& rowType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto tableView = table->view();
+  auto numColumns = std::min<size_t>(tableView.num_columns(), rowType->size());
+  // Fast path.
+  bool anyCastNeeded = std::ranges::any_of(
+      std::views::iota(size_t{0}, numColumns), [&](size_t i) {
+        return needsDecimalCast(tableView.column(i), rowType->childAt(i));
+      });
+  if (!anyCastNeeded) {
+    return std::move(table);
+  }
+
+  auto columns = table->release();
+  for (size_t i = 0; i < numColumns; ++i) {
+    auto&& col = columns[i];
+    if (needsDecimalCast(col->view(), rowType->childAt(i))) {
+      col = castDecimalColumn(col->view(), rowType->childAt(i), stream, mr);
+    }
+  }
+  return std::make_unique<cudf::table>(std::move(columns));
 }
 
 } // namespace
@@ -153,7 +250,8 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
     }
 
     auto tableWithMetadata = splitReader_->read_chunk();
-    return std::move(tableWithMetadata.tbl);
+    return castDecimalColumnsToVeloxTypes(
+        std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
   }
 
   // Read table using the experimental parquet reader
@@ -216,7 +314,8 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
   }
 
   auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
-  return std::move(tableWithMetadata.tbl);
+  return castDecimalColumnsToVeloxTypes(
+      std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
 }
 
 void CudfSplitReader::resetSplit() {
