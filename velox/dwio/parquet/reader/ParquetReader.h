@@ -50,6 +50,11 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
   bool allowInt32Narrowing{
       ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
 
+  /// Returns NULL for fully-missing structs under name-based mapping.
+  bool nullStructIfAllFieldsMissing{
+      ParquetConfig::kNullStructIfAllFieldsMissingSessionProperty::
+          defaultValue};
+
   /// Serialized footer size threshold above which heap tracking is enabled.
   uint64_t footerMemoryTrackingThreshold{
       ParquetConfig::kDefaultFooterMemoryTrackingThreshold};
