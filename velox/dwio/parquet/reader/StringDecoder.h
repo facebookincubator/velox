@@ -25,6 +25,13 @@ class StringDecoder {
         lastSafeWord_(end - simd::kPadding),
         fixedLength_(fixedLength) {}
 
+  /// Reset to decode from a new page buffer without reallocating.
+  void reset(const char* start, const char* end, int fixedLength = -1) {
+    bufferStart_ = start;
+    lastSafeWord_ = end - simd::kPadding;
+    fixedLength_ = fixedLength;
+  }
+
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
   }
@@ -102,8 +109,8 @@ class StringDecoder {
   }
 
   const char* bufferStart_;
-  const char* const lastSafeWord_;
-  const int fixedLength_;
+  const char* lastSafeWord_;
+  int fixedLength_;
 };
 
 } // namespace facebook::velox::parquet

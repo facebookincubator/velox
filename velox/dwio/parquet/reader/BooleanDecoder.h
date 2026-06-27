@@ -23,6 +23,13 @@ class BooleanDecoder {
   BooleanDecoder(const char* start, const char* /*end*/)
       : bufferStart_(start) {}
 
+  /// Reset to decode from a new page buffer without reallocating.
+  void reset(const char* start, const char* /*end*/) {
+    bufferStart_ = start;
+    remainingBits_ = 0;
+    reversedLastByte_ = 0;
+  }
+
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
   }
