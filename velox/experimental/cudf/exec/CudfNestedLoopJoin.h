@@ -49,7 +49,12 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
   // table because the cross-join output is probe_rows × build_rows — batching
   // the build side does not prevent output overflow, so we enforce a single
   // table and fail early if the build side exceeds cudf::size_type limits.
-  using build_data_type = std::shared_ptr<cudf::table>;
+  struct BuildData {
+    std::shared_ptr<cudf::table> table;
+    // cudf::table cannot represent the row count of a zero-column table.
+    cudf::size_type rowCount;
+  };
+  using build_data_type = BuildData;
 
   void setData(std::optional<build_data_type> data);
 
@@ -180,13 +185,22 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  /// Joins a single probe batch against the build table. Uses cross_join for
-  /// unfiltered joins and conditional_inner_join for filtered joins. Updates
-  /// probeMatchedFlags_ for left/full joins and buildMatchedFlags_ for
-  /// right/full joins.
+  /// Joins a single probe batch against the build table. Uses cuDF cross_join
+  /// for regular unfiltered joins and a repeat path for zero-column builds.
+  /// Uses conditional_inner_join for filtered joins. Updates probeMatchedFlags_
+  /// for left/full joins and buildMatchedFlags_ for right/full joins.
   std::unique_ptr<cudf::table> joinWithBuildBatch(
       cudf::table_view probeTableView,
       cudf::table_view buildView,
+      cudf::size_type buildRows,
+      rmm::cuda_stream_view stream);
+
+  /// Produces the cross-join output when the build side has zero columns.
+  /// cudf::cross_join cannot be used because a zero-column build table reports
+  /// num_rows() == 0, so each probe row is repeated buildRows times.
+  std::unique_ptr<cudf::table> crossJoinZeroColumnBuild(
+      cudf::table_view probeView,
+      cudf::size_type buildRows,
       rmm::cuda_stream_view stream);
 
   /// Emits probe rows that had no match across all build batches, with null
