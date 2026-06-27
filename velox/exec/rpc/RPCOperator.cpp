@@ -337,6 +337,7 @@ RowVectorPtr RPCOperator::getOutput() {
       const bool hasError = row.response.hasError();
       if (hasError) {
         numErrors_++;
+        recordErrorKind(row.response.errorKind);
       }
       locations.emplace_back(row.location.batchIndex, row.location.rowIndex);
       // Only successful rows feed the gradient. Errored rows (e.g. null_input,
@@ -385,6 +386,7 @@ RowVectorPtr RPCOperator::getOutput() {
     for (const auto& response : claimedBatch_->responses) {
       if (response.hasError()) {
         numErrors_++;
+        recordErrorKind(response.errorKind);
       }
     }
 
@@ -580,6 +582,24 @@ void RPCOperator::initOutputProjections() {
                  << passthroughProjections_.size();
 }
 
+void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
+  switch (kind) {
+    case velox::rpc::RPCErrorKind::kRateLimited:
+      ++numErrorsRateLimited_;
+      break;
+    case velox::rpc::RPCErrorKind::kTimeout:
+      ++numErrorsTimeout_;
+      break;
+    case velox::rpc::RPCErrorKind::kBackendError:
+      ++numErrorsBackend_;
+      break;
+    case velox::rpc::RPCErrorKind::kNone:
+    case velox::rpc::RPCErrorKind::kNullInput:
+    case velox::rpc::RPCErrorKind::kEmptyResponse:
+      break;
+  }
+}
+
 void RPCOperator::recordRuntimeStats() {
   auto lockedStats = stats_.wlock();
   lockedStats->addRuntimeStat(
@@ -607,6 +627,52 @@ void RPCOperator::recordRuntimeStats() {
         static_cast<uint64_t>(numResponsesReceived_), totalBlockWaitNanos_, 0};
     lockedStats->backgroundTiming.clear();
     lockedStats->backgroundTiming.add(backgroundTiming);
+  }
+
+  if (state_) {
+    auto snapshot = state_->operatorSnapshot();
+    lockedStats->addRuntimeStat(
+        kRpcCongestionWindowFinal, RuntimeCounter(snapshot.windowLimit));
+    lockedStats->addRuntimeStat(
+        kRpcPeakInFlight, RuntimeCounter(snapshot.peakInFlight));
+    if (snapshot.numShrinks > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCongestionShrinks, RuntimeCounter(snapshot.numShrinks));
+    }
+    if (snapshot.baselineRttNs > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcBaselineRttNanos,
+          RuntimeCounter(snapshot.baselineRttNs, RuntimeCounter::Unit::kNanos));
+    }
+
+    if (snapshot.numRttSamples > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcRttMinWallNanos,
+          RuntimeCounter(snapshot.rttMinNs, RuntimeCounter::Unit::kNanos));
+      lockedStats->addRuntimeStat(
+          kRpcRttMaxWallNanos,
+          RuntimeCounter(snapshot.rttMaxNs, RuntimeCounter::Unit::kNanos));
+      lockedStats->addRuntimeStat(
+          kRpcRttCount, RuntimeCounter(snapshot.numRttSamples));
+    }
+
+    lockedStats->addRuntimeStat(
+        kRpcStreamingMode,
+        RuntimeCounter(
+            snapshot.streamingMode == RPCStreamingMode::kBatch ? 1 : 0));
+  }
+
+  if (numErrorsRateLimited_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindRateLimited, RuntimeCounter(numErrorsRateLimited_));
+  }
+  if (numErrorsTimeout_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindTimeout, RuntimeCounter(numErrorsTimeout_));
+  }
+  if (numErrorsBackend_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
   }
 }
 
