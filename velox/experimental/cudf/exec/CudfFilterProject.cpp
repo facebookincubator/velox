@@ -19,9 +19,11 @@
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/exec/Driver.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -233,6 +235,21 @@ void CudfFilterProject::doAddInput(RowVectorPtr input) {
 }
 
 RowVectorPtr CudfFilterProject::doGetOutput() {
+  // Propagate the session timezone to CudfFunction::eval() so that
+  // timezone-sensitive functions (CastFunction, PrestoDateAddFunction) can
+  // access it via getSessionTimeZone().
+  const tz::TimeZone* sessionTz = nullptr;
+  {
+    const auto& config = operatorCtx_->driverCtx()->queryConfig();
+    if (config.adjustTimestampToTimezone()) {
+      const auto tzName = config.sessionTimezone();
+      if (!tzName.empty()) {
+        sessionTz = tz::locateZone(tzName);
+      }
+    }
+  }
+  SessionTimeZoneScope tzScope(sessionTz);
+
   if (allInputProcessed()) {
     return nullptr;
   }
