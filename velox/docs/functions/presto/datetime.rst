@@ -44,21 +44,23 @@ Date and Time Operators
    :noindex:
 
     Returns the sum of ``x`` and ``y``. Both ``x`` and ``y`` are intervals day
-    to second or one of them can be timestamp. For addition of two intervals day to
-    second, returns ``-106751991167 07:12:55.808`` when the addition overflows
-    in positive and returns ``106751991167 07:12:55.807`` when the addition
-    overflows in negative. When addition of a timestamp with an interval day to
-    second, overflowed results are wrapped around.
+    to second or one of them can be timestamp, time, or time with time zone. For
+    addition of two intervals day to second, returns ``-106751991167 07:12:55.808``
+    when the addition overflows in positive and returns ``106751991167 07:12:55.807``
+    when the addition overflows in negative. When addition of a timestamp, time, or
+    time with time zone with an interval day to second, overflowed results are
+    wrapped around.
 
 .. function:: minus(x, y) -> [same as x]
    :noindex:
 
     Returns the result of subtracting ``y`` from ``x``. Both ``x`` and ``y``
-    are intervals day to second or ``x`` can be timestamp. For subtraction of
-    two intervals day to second, returns ``-106751991167 07:12:55.808`` when
-    the subtraction overflows in positive and returns ``106751991167 07:12:55.807``
-    when the subtraction overflows in negative. For subtraction of an interval
-    day to second from a timestamp, overflowed results are wrapped around.
+    are intervals day to second or ``x`` can be timestamp, time, or time with
+    time zone. For subtraction of two intervals day to second, returns
+    ``-106751991167 07:12:55.808`` when the subtraction overflows in positive
+    and returns ``106751991167 07:12:55.807`` when the subtraction overflows in
+    negative. For subtraction of an interval day to second from a timestamp, time,
+    or time with time zone, overflowed results are wrapped around.
 
 .. function:: multiply(interval day to second, x) -> interval day to second
 
@@ -418,7 +420,7 @@ arbitrary large timestamps.
 
     Returns the hour of the day from ``x``. The value ranges from 0 to 23.
     Supported types for ``x`` are: DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE,
-    INTERVAL DAY TO SECOND¶.
+    TIME, TIME WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
 
 .. function:: last_day_of_month(x) -> date
 
@@ -432,7 +434,8 @@ arbitrary large timestamps.
 .. function:: minute(x) -> bigint
 
     Returns the minute of the hour from ``x``. Supported types for ``x`` are:
-    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, TIME, TIME WITH TIME ZONE,
+    INTERVAL DAY TO SECOND¶.
 
 .. function:: month(x) -> bigint
 
@@ -446,7 +449,8 @@ arbitrary large timestamps.
 .. function:: second(x) -> bigint
 
     Returns the second of the minute from ``x``. Supported types for ``x`` are:
-    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, INTERVAL DAY TO SECOND¶.
+    DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, TIME, TIME WITH TIME ZONE,
+    INTERVAL DAY TO SECOND¶.
 
 .. function:: timezone_hour(timestamp) -> bigint
 
