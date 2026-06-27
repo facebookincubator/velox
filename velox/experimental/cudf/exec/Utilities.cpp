@@ -22,6 +22,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda_runtime_api.h>
@@ -218,6 +219,42 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
 
   // Input tables are deallocated here when 'tables' goes out of scope.
   return outputTables;
+}
+
+void checkStringOffsetLimit(
+    const std::vector<int64_t>& perColumnCharBytes,
+    int64_t maxColumnCharBytes) {
+  for (size_t col = 0; col < perColumnCharBytes.size(); ++col) {
+    VELOX_USER_CHECK_LE(
+        perColumnCharBytes[col],
+        maxColumnCharBytes,
+        "Concatenated string column exceeds cuDF's 32-bit character-offset "
+        "limit; reduce input cardinality or run the query on the CPU path. "
+        "Column: {}, bytes: {}",
+        col,
+        perColumnCharBytes[col]);
+  }
+}
+
+void checkStringOffsetLimit(
+    const std::vector<cudf::table_view>& tables,
+    int64_t maxColumnCharBytes,
+    rmm::cuda_stream_view stream) {
+  if (tables.empty()) {
+    return;
+  }
+  const auto numColumns = tables.front().num_columns();
+  std::vector<int64_t> perColumnCharBytes(numColumns, 0);
+  for (const auto& table : tables) {
+    for (cudf::size_type col = 0; col < numColumns; ++col) {
+      const auto& column = table.column(col);
+      if (column.type().id() == cudf::type_id::STRING) {
+        perColumnCharBytes[col] +=
+            cudf::strings_column_view(column).chars_size(stream);
+      }
+    }
+  }
+  checkStringOffsetLimit(perColumnCharBytes, maxColumnCharBytes);
 }
 
 std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(

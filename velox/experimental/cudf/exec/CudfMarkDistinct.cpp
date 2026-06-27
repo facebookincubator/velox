@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
@@ -154,6 +155,10 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
       // concatenate-per-batch idiom.
       std::vector<cudf::table_view> seenPlusNew = {
           seenKeys_->view(), newKeys->view()};
+      // seenKeys_ grows for the whole query, so its string key buffer can
+      // outgrow cuDF's 32-bit offset limit. Bail cleanly before the
+      // concatenate launches a kernel that overflows and aborts the context.
+      checkStringOffsetLimit(seenPlusNew, kCudfStringOffsetLimit, stream);
       seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
       seenFilter_ = std::make_unique<cudf::filtered_join>(
           seenKeys_->view(), cudf::null_equality::EQUAL, stream);
