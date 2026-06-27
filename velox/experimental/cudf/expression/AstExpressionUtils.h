@@ -66,9 +66,12 @@ void extractArrayLiterals(
     vector_size_t size) {
   auto elements = arrayVector->elements();
 
+  // TODO: When the in-list contains both non-null and null elements,
+  // non-matching rows should return NULL (not false) per Presto
+  // three-valued IN semantics. Currently null elements are skipped
+  // by extractArrayLiterals, so the null contribution is lost.
   for (auto i = offset; i < offset + size; ++i) {
     if (elements->isNullAt(i)) {
-      // Skip null values for IN expressions
       continue;
     } else {
       literals.emplace_back(createLiteral(elements, scalars, i));
@@ -96,8 +99,7 @@ std::vector<cudf::ast::literal> createLiteralsFromArray(
       auto index = constantVector->index();
       auto size = arrayVector->sizeAt(index);
       if (size == 0) {
-        // Return empty vector for empty array
-        return literals;
+        VELOX_USER_FAIL("IN list must not be empty");
       }
 
       auto offset = arrayVector->offsetAt(index);
@@ -670,14 +672,16 @@ cudf::ast::expression const& AstContext::pushExprToTree(
       exprVec.push_back(&logicalNode);
     }
 
-    // Handle empty IN list case
+    // Null-array IN semantics per Presto: `x IN NULL` returns NULL
+    // regardless of x. Materialize via the fill/precompute path so the
+    // output column carries a proper null validity mask for downstream
+    // operators (e.g. count(column)).
     if (exprVec.empty()) {
-      // FAIL
-      VELOX_FAIL("Empty IN list");
-      // Return FALSE for empty IN list
-      // auto falseValue = std::make_shared<ConstantVector<bool>>(
-      //     value->pool(), 1, false, TypeKind::BOOLEAN, false);
-      // return tree.push(createLiteral(falseValue, scalars));
+      auto nullBoolean =
+          BaseVector::createNullConstant(BOOLEAN(), 1, value->pool());
+      createLiteral(nullBoolean, scalars);
+      std::string fillExpr = "fill " + std::to_string(scalars.size() - 1);
+      return addPrecomputeInstruction(inputRowSchema[0]->nameOf(0), fillExpr);
     }
 
     // OR all logical nodes
