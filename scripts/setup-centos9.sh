@@ -98,6 +98,10 @@ function install_faiss_deps {
   dnf_install openblas-devel libomp
 }
 
+function install_cxl_deps {
+  dnf_install numactl-devel
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_conda
