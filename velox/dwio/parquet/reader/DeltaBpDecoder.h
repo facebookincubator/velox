@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <array>
+
 #include <folly/Varint.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
@@ -37,6 +39,11 @@ class DeltaBpDecoder {
     initHeader();
   }
 
+  void reset(const char* start) {
+    bufferStart_ = start;
+    initHeader();
+  }
+
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
   }
@@ -47,9 +54,7 @@ class DeltaBpDecoder {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
-    for (int32_t i = 0; i < numValues; ++i) {
-      readLong();
-    }
+    skipValues(numValues);
   }
 
   template <bool hasNulls, typename Visitor>
@@ -123,6 +128,77 @@ class DeltaBpDecoder {
 
  private:
   static constexpr int32_t kBatch = 1024;
+
+  /// Skip 'numValues' values efficiently. For constant-delta miniblocks
+  /// (bitWidth==0), compute the final value in O(1). For other cases, use
+  /// the batched decode path which is faster than per-value readLong().
+  void skipValues(int32_t numValues) {
+    if (numValues <= 0) {
+      return;
+    }
+
+    // Handle the first value (block header) if block is uninitialized.
+    if (!firstBlockInitialized_ && numValues > 0) {
+      readLong();
+      --numValues;
+      if (numValues <= 0) {
+        return;
+      }
+    }
+
+    while (numValues > 0) {
+      if (valuesRemainingCurrentMiniBlock_ == 0) {
+        advanceMiniBlock();
+      }
+
+      auto toSkipInBlock = std::min<int32_t>(
+          numValues,
+          std::min<int32_t>(
+              valuesRemainingCurrentMiniBlock_, totalValuesRemaining_));
+
+      if (deltaBitWidth_ == 0) {
+        // Constant-delta miniblock: compute lastValue in O(1).
+        lastValue_ = static_cast<int64_t>(
+            static_cast<uint64_t>(lastValue_) +
+            static_cast<uint64_t>(minDelta_) *
+                static_cast<uint64_t>(toSkipInBlock));
+        valuesRemainingCurrentMiniBlock_ -= toSkipInBlock;
+        totalValuesRemaining_ -= toSkipInBlock;
+        if (valuesRemainingCurrentMiniBlock_ == 0 ||
+            totalValuesRemaining_ == 0) {
+          bufferStart_ += bits::nbytes(deltaBitWidth_ * valuesPerMiniBlock_);
+        }
+      } else {
+        // Non-constant delta: for skip we only need the final lastValue,
+        // not intermediate prefix-sums. When skipping full miniblocks from
+        // their start, compute sum(deltas) directly (no dependency chain).
+        if (toSkipInBlock == static_cast<int32_t>(valuesRemainingCurrentMiniBlock_) &&
+            valuesRemainingCurrentMiniBlock_ == valuesPerMiniBlock_) {
+          // Full miniblock from start: sum deltas without prefix-sum.
+          uint64_t deltaSum = sumMiniBlockDeltas(
+              bufferStart_, valuesPerMiniBlock_, deltaBitWidth_);
+          lastValue_ = static_cast<int64_t>(
+              static_cast<uint64_t>(lastValue_) +
+              static_cast<uint64_t>(minDelta_) * valuesPerMiniBlock_ +
+              deltaSum);
+          valuesRemainingCurrentMiniBlock_ = 0;
+          totalValuesRemaining_ -= toSkipInBlock;
+          bufferStart_ += bits::nbytes(deltaBitWidth_ * valuesPerMiniBlock_);
+        } else {
+          // Partial miniblock: must decode (prefix-sum needed for lastValue).
+          int64_t scratch[kBatch];
+          int32_t skipped = 0;
+          while (skipped < toSkipInBlock) {
+            auto batch =
+                std::min<int32_t>(kBatch, toSkipInBlock - skipped);
+            decodeLongs(scratch, batch);
+            skipped += batch;
+          }
+        }
+      }
+      numValues -= toSkipInBlock;
+    }
+  }
 
   template <typename Visitor>
   void readWithVisitorDenseBatched(Visitor& visitor) {
@@ -282,6 +358,30 @@ class DeltaBpDecoder {
     lastValue_ = lastValue;
   }
 
+  /// Compute the sum of packed deltas in a miniblock without a prefix-sum
+  /// dependency chain. Used by skipValues() when only the final lastValue
+  /// is needed (not intermediate values). This is a simple horizontal
+  /// reduction that the compiler can auto-vectorize.
+  uint64_t sumMiniBlockDeltas(
+      const char* src,
+      uint64_t numValues,
+      uint64_t bitWidth) {
+    if (bitWidth == 0) {
+      return 0;
+    }
+    const uint64_t mask =
+        (bitWidth >= 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
+    uint64_t sum = 0;
+    for (uint64_t i = 0; i < numValues; ++i) {
+      uint64_t bitPos = i * bitWidth;
+      uint64_t byteOff = bitPos >> 3;
+      uint64_t bitInByte = bitPos & 7;
+      uint64_t word = *reinterpret_cast<const uint64_t*>(src + byteOff);
+      sum += (word >> bitInByte) & mask;
+    }
+    return sum;
+  }
+
   /// Decode one whole miniblock with prefix-sum fused. Unsigned mod-2^64
   /// per Parquet spec. Reads up to 7 bytes past the miniblock end;
   /// safe via kPageReadPadding at page end and adjacent miniblocks
@@ -297,8 +397,12 @@ class DeltaBpDecoder {
     constexpr uint64_t mask =
         (bitWidth == 32) ? 0xFFFFFFFFULL : ((1ULL << bitWidth) - 1);
     const uint8_t* p = reinterpret_cast<const uint8_t*>(src);
-    uint64_t cumulative = static_cast<uint64_t>(lastValue);
-    const uint64_t step = static_cast<uint64_t>(minDelta);
+    // Use narrower accumulator for INT32 to improve throughput.
+    // Parquet spec: arithmetic is unsigned modular, so 32-bit wraparound
+    // is correct for INT32 columns.
+    using AccumType = std::conditional_t<sizeof(DataType) <= 4, uint32_t, uint64_t>;
+    AccumType cumulative = static_cast<AccumType>(lastValue);
+    const AccumType step = static_cast<AccumType>(minDelta);
     if constexpr (bitWidth <= 16) {
       // 4*bw <= 64; one u64 load per iter.
       for (int32_t i = 0; i < numValues; i += 4) {
@@ -307,19 +411,17 @@ class DeltaBpDecoder {
         const int32_t bitInByte = bitPos & 7;
         const uint64_t word =
             *reinterpret_cast<const uint64_t*>(p + byteOff) >> bitInByte;
-        cumulative += step + (word & mask);
+        cumulative += step + static_cast<AccumType>(word & mask);
         out[i + 0] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> bitWidth) & mask);
+        cumulative += step + static_cast<AccumType>((word >> bitWidth) & mask);
         out[i + 1] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> (2 * bitWidth)) & mask);
+        cumulative += step + static_cast<AccumType>((word >> (2 * bitWidth)) & mask);
         out[i + 2] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> (3 * bitWidth)) & mask);
+        cumulative += step + static_cast<AccumType>((word >> (3 * bitWidth)) & mask);
         out[i + 3] = static_cast<DataType>(cumulative);
       }
     } else {
       // 2*bw + bitInByte > 64; load via __uint128_t (two u64 + SHRD).
-      // The +8 read is safe: kPageReadPadding covers page end and
-      // adjacent miniblocks cover intra-page.
       for (int32_t i = 0; i < numValues; i += 2) {
         const int32_t bitPos = i * bitWidth;
         const int32_t byteOff = bitPos >> 3;
@@ -331,9 +433,9 @@ class DeltaBpDecoder {
                  *reinterpret_cast<const uint64_t*>(p + byteOff + 8))
              << 64);
         const uint64_t word = static_cast<uint64_t>(window >> bitInByte);
-        cumulative += step + (word & mask);
+        cumulative += step + static_cast<AccumType>(word & mask);
         out[i + 0] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> bitWidth) & mask);
+        cumulative += step + static_cast<AccumType>((word >> bitWidth) & mask);
         out[i + 1] = static_cast<DataType>(cumulative);
       }
     }
@@ -355,47 +457,53 @@ class DeltaBpDecoder {
     lastValue = static_cast<int64_t>(cumulative);
   }
 
-  /// Dispatches a whole-miniblock SIMD decode by runtime `bitWidth`.
-  /// Returns false for `bitWidth` outside [0, 32] so the caller falls
-  /// back to the scalar inner loop.
+  /// Dispatch to the compile-time-specialized miniblock decoder for the given
+  /// bitWidth. Uses a switch for a proper jump table (better I-cache behavior
+  /// than the fold-expression linear comparison chain).
   template <typename DataType>
-  FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlock(
+  bool dispatchSimdMiniBlock(
       uint64_t bitWidth,
       const char* src,
       int32_t numValues,
       int64_t minDelta,
       int64_t& lastValue,
       DataType* out) {
-    if (bitWidth == 0) {
-      decodeMiniBlockConstantDelta(numValues, minDelta, lastValue, out);
-      return true;
+    switch (bitWidth) {
+      case 0: decodeMiniBlockConstantDelta(numValues, minDelta, lastValue, out); return true;
+      case 1: decodeMiniBlockSimd<DataType, 1>(src, numValues, minDelta, lastValue, out); return true;
+      case 2: decodeMiniBlockSimd<DataType, 2>(src, numValues, minDelta, lastValue, out); return true;
+      case 3: decodeMiniBlockSimd<DataType, 3>(src, numValues, minDelta, lastValue, out); return true;
+      case 4: decodeMiniBlockSimd<DataType, 4>(src, numValues, minDelta, lastValue, out); return true;
+      case 5: decodeMiniBlockSimd<DataType, 5>(src, numValues, minDelta, lastValue, out); return true;
+      case 6: decodeMiniBlockSimd<DataType, 6>(src, numValues, minDelta, lastValue, out); return true;
+      case 7: decodeMiniBlockSimd<DataType, 7>(src, numValues, minDelta, lastValue, out); return true;
+      case 8: decodeMiniBlockSimd<DataType, 8>(src, numValues, minDelta, lastValue, out); return true;
+      case 9: decodeMiniBlockSimd<DataType, 9>(src, numValues, minDelta, lastValue, out); return true;
+      case 10: decodeMiniBlockSimd<DataType, 10>(src, numValues, minDelta, lastValue, out); return true;
+      case 11: decodeMiniBlockSimd<DataType, 11>(src, numValues, minDelta, lastValue, out); return true;
+      case 12: decodeMiniBlockSimd<DataType, 12>(src, numValues, minDelta, lastValue, out); return true;
+      case 13: decodeMiniBlockSimd<DataType, 13>(src, numValues, minDelta, lastValue, out); return true;
+      case 14: decodeMiniBlockSimd<DataType, 14>(src, numValues, minDelta, lastValue, out); return true;
+      case 15: decodeMiniBlockSimd<DataType, 15>(src, numValues, minDelta, lastValue, out); return true;
+      case 16: decodeMiniBlockSimd<DataType, 16>(src, numValues, minDelta, lastValue, out); return true;
+      case 17: decodeMiniBlockSimd<DataType, 17>(src, numValues, minDelta, lastValue, out); return true;
+      case 18: decodeMiniBlockSimd<DataType, 18>(src, numValues, minDelta, lastValue, out); return true;
+      case 19: decodeMiniBlockSimd<DataType, 19>(src, numValues, minDelta, lastValue, out); return true;
+      case 20: decodeMiniBlockSimd<DataType, 20>(src, numValues, minDelta, lastValue, out); return true;
+      case 21: decodeMiniBlockSimd<DataType, 21>(src, numValues, minDelta, lastValue, out); return true;
+      case 22: decodeMiniBlockSimd<DataType, 22>(src, numValues, minDelta, lastValue, out); return true;
+      case 23: decodeMiniBlockSimd<DataType, 23>(src, numValues, minDelta, lastValue, out); return true;
+      case 24: decodeMiniBlockSimd<DataType, 24>(src, numValues, minDelta, lastValue, out); return true;
+      case 25: decodeMiniBlockSimd<DataType, 25>(src, numValues, minDelta, lastValue, out); return true;
+      case 26: decodeMiniBlockSimd<DataType, 26>(src, numValues, minDelta, lastValue, out); return true;
+      case 27: decodeMiniBlockSimd<DataType, 27>(src, numValues, minDelta, lastValue, out); return true;
+      case 28: decodeMiniBlockSimd<DataType, 28>(src, numValues, minDelta, lastValue, out); return true;
+      case 29: decodeMiniBlockSimd<DataType, 29>(src, numValues, minDelta, lastValue, out); return true;
+      case 30: decodeMiniBlockSimd<DataType, 30>(src, numValues, minDelta, lastValue, out); return true;
+      case 31: decodeMiniBlockSimd<DataType, 31>(src, numValues, minDelta, lastValue, out); return true;
+      case 32: decodeMiniBlockSimd<DataType, 32>(src, numValues, minDelta, lastValue, out); return true;
+      default: return false;
     }
-    return dispatchSimdMiniBlockImpl<DataType>(
-        bitWidth,
-        src,
-        numValues,
-        minDelta,
-        lastValue,
-        out,
-        std::make_index_sequence<32>{});
-  }
-
-  template <typename DataType, std::size_t... Is>
-  FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlockImpl(
-      uint64_t bitWidth,
-      const char* src,
-      int32_t numValues,
-      int64_t minDelta,
-      int64_t& lastValue,
-      DataType* out,
-      std::index_sequence<Is...>) {
-    bool dispatched = false;
-    (void)((bitWidth == Is + 1 ? (decodeMiniBlockSimd<DataType, Is + 1>(
-                                      src, numValues, minDelta, lastValue, out),
-                                  dispatched = true)
-                               : false) ||
-           ...);
-    return dispatched;
   }
 
   bool getVlqInt(uint64_t& v) {
@@ -444,7 +552,10 @@ class DeltaBpDecoder {
         valuesPerMiniBlock_);
 
     totalValuesRemaining_ = totalValueCount_;
-    deltaBitWidths_.resize(miniBlocksPerBlock_);
+    VELOX_CHECK_LE(
+        miniBlocksPerBlock_,
+        kMaxMiniBlocksPerBlock,
+        "miniBlocksPerBlock exceeds supported maximum");
     firstBlockInitialized_ = false;
     valuesRemainingCurrentMiniBlock_ = 0;
   }
@@ -561,7 +672,11 @@ class DeltaBpDecoder {
   bool firstBlockInitialized_;
   int64_t minDelta_;
   uint64_t miniBlockIdx_;
-  std::vector<uint8_t> deltaBitWidths_;
+  // Parquet default: 4 miniblocks per block. Use a fixed-size array to
+  // avoid heap allocation. The spec allows arbitrary values but real-world
+  // writers use <= 8.
+  static constexpr uint64_t kMaxMiniBlocksPerBlock = 64;
+  std::array<uint8_t, kMaxMiniBlocksPerBlock> deltaBitWidths_;
   uint64_t deltaBitWidth_;
 
   int64_t lastValue_;
