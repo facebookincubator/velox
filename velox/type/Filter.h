@@ -2453,6 +2453,11 @@ class MultiRange final : public Filter {
 
   bool testDoubleRange(double min, double max, bool hasNull) const final;
 
+  bool testTimestampRange(
+      const Timestamp& min,
+      const Timestamp& max,
+      bool hasNull) const final;
+
   const std::vector<std::unique_ptr<Filter>>& filters() const {
     return filters_;
   }
