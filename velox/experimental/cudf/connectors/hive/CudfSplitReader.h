@@ -86,9 +86,9 @@ class CudfSplitReader : public NvtxHelper {
   /// Clear splitReaders and datasources after split has been fully processed.
   void resetSplit();
 
-  /// Read the next raw chunk from the parquet reader (regular or hybrid).
-  /// Returns nullopt when no more data.
-  virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk(
+  /// Read the next table chunk with metadata from the parquet reader (regular
+  /// or hybrid). Returns nullopt when no more data.
+  virtual std::optional<cudf::io::table_with_metadata> readNextChunk(
       rmm::device_async_resource_ref output_mr);
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
