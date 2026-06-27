@@ -49,6 +49,7 @@ ENV VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.pat
 # are required to avoid tzdata installation
 # to prompt for region selection.
 ARG DEBIAN_FRONTEND="noninteractive"
+ARG VELOX_STAGING
 # Set a default timezone, can be overriden via ARG
 ARG tz="Etc/UTC"
 ENV TZ=${tz}
