@@ -118,6 +118,30 @@ void registerMathFunctions(const std::string& prefix) {
       UnaryMinusFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>>({prefix + "unaryminus"});
+  registerFunction<UnaryMinusFunction, IntervalDayTime, IntervalDayTime>(
+      {prefix + "unaryminus"});
+  registerFunction<UnaryMinusFunction, IntervalYearMonth, IntervalYearMonth>(
+      {prefix + "unaryminus"});
+  registerFunction<
+      PlusFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "add"});
+  registerFunction<
+      PlusFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "add"});
+  registerFunction<
+      MinusFunction,
+      IntervalDayTime,
+      IntervalDayTime,
+      IntervalDayTime>({prefix + "subtract"});
+  registerFunction<
+      MinusFunction,
+      IntervalYearMonth,
+      IntervalYearMonth,
+      IntervalYearMonth>({prefix + "subtract"});
 
   registerDecimalAdd(prefix);
   registerDecimalSubtract(prefix);
