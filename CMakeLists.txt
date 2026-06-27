@@ -275,6 +275,21 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   endif()
 endif()
 
+execute_process(
+  COMMAND
+    bash -c
+    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+  RESULT_VARIABLE COMMAND_STATUS
+)
+
+if(COMMAND_STATUS EQUAL "1")
+  message(FATAL_ERROR "Unable to determine compiler flags!")
+endif()
+message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
+
 if(${VELOX_ENABLE_DUCKDB})
   velox_set_source(DuckDB)
   velox_resolve_dependency(DuckDB)
@@ -387,6 +402,10 @@ endif()
 if(UNIX AND NOT APPLE)
   # linker flags, -export-dynamic for rtti
   add_link_options("-Wl,-export-dynamic")
+  if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+    # Keep AArch64 branch stubs close enough for very large mono shared builds.
+    add_link_options("-Wl,--stub-group-size=1048576")
+  endif()
 endif()
 
 # Required so velox code can be used in a dynamic library
@@ -417,20 +436,6 @@ if(
   )
 endif()
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS
-)
-
-if(COMMAND_STATUS EQUAL "1")
-  message(FATAL_ERROR "Unable to determine compiler flags!")
-endif()
-message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
