@@ -32,7 +32,7 @@
 
 namespace facebook::velox::exec {
 
-class OutputBufferManager;
+class IOutputBufferManager;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
@@ -1470,7 +1470,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
-  std::weak_ptr<OutputBufferManager> bufferManager_;
+  // Output buffer manager that handles this task's partitioned output. Resolved
+  // in initializePartitionOutput() using the transport type from QueryCtx.
+  // Stored as weak_ptr to break the reference cycle through OutputBuffer::task_
+  // which holds a shared_ptr<Task>.
+  std::weak_ptr<IOutputBufferManager> bufferManager_;
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.

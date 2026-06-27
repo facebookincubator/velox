@@ -37,6 +37,7 @@
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
@@ -438,8 +439,7 @@ Task::Task(
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
-      splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(OutputBufferManager::getInstanceRef()) {
+      splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
   // Validate that any per-node transport type annotations refer to the right
   // kind of plan node before they are used to select exchange transports.
@@ -1282,11 +1282,6 @@ void Task::initializePartitionOutput() {
       taskId_,
       errorMessageLocked());
 
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "PartitionedOutputBufferManager was already destructed");
   std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
       nullptr};
   int numOutputDrivers{0};
@@ -1330,7 +1325,17 @@ void Task::initializePartitionOutput() {
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
-    bufferManager->initializeTask(
+    const auto& outputTransportTypes = planFragment_.outputTransportTypes;
+    const auto it = outputTransportTypes.find(partitionedOutputNode->id());
+    const std::string transportType = it != outputTransportTypes.end()
+        ? it->second
+        : std::string{core::TransportKind::kHttp};
+    auto mgr = OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
+    if (!mgr) {
+      mgr = OutputBufferManager::getInstanceRef();
+    }
+    bufferManager_ = mgr;
+    mgr->initializeTask(
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
@@ -2135,9 +2140,10 @@ bool Task::checkNoMoreSplitGroupsLocked() {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
     if (groupedPartitionedOutput_) {
-      auto bufferManager = bufferManager_.lock();
-      bufferManager->updateNumDrivers(
-          taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      if (auto mgr = bufferManager_.lock()) {
+        mgr->updateNumDrivers(
+            taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      }
     }
 
     return checkIfFinishedLocked();
@@ -2324,22 +2330,19 @@ bool Task::isFinishedLocked() const {
 }
 
 bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "OutputBufferManager was already destructed");
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (noMoreOutputBuffers_) {
-      // Ignore messages received after no-more-buffers message.
       return false;
     }
     if (noMoreBuffers) {
       noMoreOutputBuffers_ = true;
     }
   }
-  return bufferManager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  if (auto mgr = bufferManager_.lock()) {
+    return mgr->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  }
+  return false;
 }
 
 int Task::getOutputPipelineId() const {
@@ -2832,15 +2835,14 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
-    if (auto bufferManager = bufferManager_.lock()) {
-      // Capture output buffer stats before deleting the buffer.
+    if (auto mgr = bufferManager_.lock()) {
       {
         std::lock_guard<std::timed_mutex> l(mutex_);
         if (!taskStats_.outputBufferStats.has_value()) {
-          taskStats_.outputBufferStats = bufferManager->stats(taskId_);
+          taskStats_.outputBufferStats = mgr->stats(taskId_);
         }
       }
-      bufferManager->removeTask(taskId_);
+      mgr->removeTask(taskId_);
     }
   }
 }
@@ -2999,11 +3001,10 @@ TaskStats Task::taskStats() const {
     }
   }
 
-  auto bufferManager = bufferManager_.lock();
-  taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
-  taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
-  if (!taskStats.outputBufferStats.has_value()) {
-    taskStats.outputBufferStats = bufferManager->stats(taskId_);
+  if (auto mgr = bufferManager_.lock()) {
+    taskStats.outputBufferUtilization = mgr->getUtilization(taskId_);
+    taskStats.outputBufferOverutilized = mgr->isOverutilized(taskId_);
+    taskStats.outputBufferStats = mgr->stats(taskId_);
   }
   return taskStats;
 }
@@ -3263,9 +3264,10 @@ folly::dynamic Task::toJson() const {
   }
   obj["drivers"] = drivers;
 
-  if (auto buffers = bufferManager_.lock()) {
-    if (auto buffer = buffers->getBufferIfExists(taskId_)) {
-      obj["buffer"] = buffer->toString();
+  if (auto mgr = bufferManager_.lock()) {
+    auto s = mgr->toString(taskId_);
+    if (!s.empty()) {
+      obj["outputBuffer"] = s;
     }
   }
 

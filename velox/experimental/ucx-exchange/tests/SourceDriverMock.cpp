@@ -55,10 +55,7 @@ SourceDriverMock::SourceDriverMock(
 
     partitionedOutputs_.emplace_back(
         std::make_unique<UcxPartitionedOutput>(
-            operatorId,
-            driverCtxs_.back().get(),
-            partitionedOutputNode,
-            false /* eagerFlush */));
+            operatorId, driverCtxs_.back().get(), partitionedOutputNode));
   }
 }
 
