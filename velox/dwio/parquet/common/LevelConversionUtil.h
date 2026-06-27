@@ -26,7 +26,12 @@
 #include "arrow/util/bitmap_writer.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/parquet/common/LevelComparison.h"
+
+#ifdef __BMI2__
+#include <immintrin.h>
+#endif
 
 namespace facebook::velox::parquet {
 
@@ -257,6 +262,11 @@ using extractBitmapT = uint64_t;
 inline extractBitmapT ExtractBits(
     extractBitmapT bitmap,
     extractBitmapT selectBitmap) {
+#ifdef __BMI2__
+  if (FOLLY_LIKELY(process::hasBmi2())) {
+    return _pext_u64(bitmap, selectBitmap);
+  }
+#endif
   return ExtractBitsSoftware(bitmap, selectBitmap);
 }
 
