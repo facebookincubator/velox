@@ -943,314 +943,378 @@ Each query can override the config by setting corresponding query session proper
 </section>
 <section id="hive-connector">
 <h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Link to this heading">¶</a></h2>
-<p>Hive Connector config is initialized on velox runtime startup and is shared among queries as the default config.
-Each query can override the config by setting corresponding query session properties such as in Prestissimo.</p>
-<p>Configuration property names use kebab-case (e.g., <code class="docutils literal notranslate"><span class="pre">max-bucket-count</span></code>)
-and session property names use snake_case (e.g., <code class="docutils literal notranslate"><span class="pre">max_bucket_count</span></code>).
-Format-specific Hive connector configuration properties use prefixes such as
-<code class="docutils literal notranslate"><span class="pre">hive.parquet.</span></code>, <code class="docutils literal notranslate"><span class="pre">hive.orc.</span></code>, and <code class="docutils literal notranslate"><span class="pre">hive.nimble.</span></code>. Format-specific session
-properties do not include a connector prefix because they are scoped by catalog
-or connector ID by the engine.
-Configuration keys use dashes and session keys use underscores.
-Properties without a session property name in the table below are fixed for the lifetime of the process
-and cannot be modified per query.</p>
+<p>Hive connector configuration is loaded when Velox starts and provides the
+default behavior for queries that use that connector instance.</p>
+<p>Some of these defaults can be overridden for a single query by setting a
+session property in the engine, such as Prestissimo. A connector configuration
+key and a session property name are different things:</p>
+<ul class="simple">
+<li><p>The connector configuration key is the name you put in the connector
+configuration file, for example <code class="docutils literal notranslate"><span class="pre">hive.max-partitions-per-writers</span></code>.</p></li>
+<li><p>The session property name is the per-query override exposed by the engine, for
+example <code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code>.</p></li>
+<li><p>Connector configuration keys use <code class="docutils literal notranslate"><span class="pre">-</span></code> between words, while session
+property names usually use <code class="docutils literal notranslate"><span class="pre">_</span></code> between words.</p></li>
+</ul>
+<p>If a session override is available, the description includes <code class="docutils literal notranslate"><span class="pre">Session:</span>
+<span class="pre">&lt;name&gt;</span></code>. That override applies only to the current query; it does not change
+the connector’s configured default.</p>
+<p>Hive connector properties include table scan behavior, file I/O, metadata and
+index caching, file handle caching, table writes, and file-format-specific
+reader and writer behavior. In the common table below, property names are shown
+without the <code class="docutils literal notranslate"><span class="pre">hive.</span></code> prefix; for example, <code class="docutils literal notranslate"><span class="pre">max-partitions-per-writers</span></code> is
+configured as <code class="docutils literal notranslate"><span class="pre">hive.max-partitions-per-writers</span></code>. In the ORC, Parquet, and
+Nimble tables, the listed value is usually appended to the prefix shown in the
+section title. When an option uses a legacy <code class="docutils literal notranslate"><span class="pre">orc.</span></code> or <code class="docutils literal notranslate"><span class="pre">nimble.</span></code> key
+instead, the description calls that out explicitly.</p>
 <p>Properties of type <code class="docutils literal notranslate"><span class="pre">capacity</span></code> accept human-readable size strings such as <code class="docutils literal notranslate"><span class="pre">512kB</span></code>, <code class="docutils literal notranslate"><span class="pre">128MB</span></code>, <code class="docutils literal notranslate"><span class="pre">1GB</span></code>, etc.
 Properties of type <code class="docutils literal notranslate"><span class="pre">integer</span></code> with byte-valued defaults (shown as <code class="docutils literal notranslate"><span class="pre">256KB</span></code>, <code class="docutils literal notranslate"><span class="pre">8MB</span></code>, etc. for readability)
 must be specified as raw byte counts.</p>
-<table class="docutils align-default">
+<section id="common-options">
+<h3>Common Options<a class="headerlink" href="#common-options" title="Link to this heading">¶</a></h3>
+<style>
+table.hive-config-table {
+  width: 100%;
+}
+table.hive-config-table td:first-child .docutils.literal,
+table.hive-config-table td:first-child .docutils.literal > .pre,
+table.hive-config-table td:last-child .docutils.literal,
+table.hive-config-table td:last-child .docutils.literal > .pre {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
+}
+</style><table class="hive-config-table docutils align-default">
 <colgroup>
-<col style="width: 15.4%" />
-<col style="width: 15.4%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 53.8%" />
+<col style="width: 46.7%" />
+<col style="width: 8.3%" />
+<col style="width: 8.3%" />
+<col style="width: 36.7%" />
 </colgroup>
 <thead>
-<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
-<th class="head"><p>Session Property Name</p></th>
+<tr class="row-odd"><th class="head"><p>Property Name</p></th>
 <th class="head"><p>Type</p></th>
 <th class="head"><p>Default Value</p></th>
 <th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>max-partitions-per-writers</p></td>
-<td><p>max_partitions_per_writers</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">max-partitions-per-writers</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>128</p></td>
-<td><p>Maximum number of (bucketed) partitions per a single table writer instance.</p></td>
+<td><p>Maximum number of (bucketed) partitions per a single table writer instance. Session: <code class="docutils literal notranslate"><span class="pre">max_partitions_per_writers</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-bucket-count</p></td>
-<td><p>max_bucket_count</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">max-bucket-count</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>100000</p></td>
-<td><p>Maximum number of buckets that a table writer is allowed to write to.</p></td>
+<td><p>Maximum number of buckets that a table writer is allowed to write to. Session: <code class="docutils literal notranslate"><span class="pre">max_bucket_count</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>insert-existing-partitions-behavior</p></td>
-<td><p>insert_existing_partitions_behavior</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">insert-existing-partitions-behavior</span></code></p></td>
 <td><p>string</p></td>
 <td><p>ERROR</p></td>
 <td><p><strong>Allowed values:</strong> <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>, <code class="docutils literal notranslate"><span class="pre">ERROR</span></code>. The behavior on insert existing partitions. This property only derives
 the update mode field of the table writer operator output. <code class="docutils literal notranslate"><span class="pre">OVERWRITE</span></code>
 sets the update mode to indicate overwriting a partition if exists. <code class="docutils literal notranslate"><span class="pre">ERROR</span></code> sets the update mode to indicate
-error throwing if writing to an existing partition.</p></td>
+error throwing if writing to an existing partition. Session: <code class="docutils literal notranslate"><span class="pre">insert_existing_partitions_behavior</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>immutable-partitions</p></td>
-<td></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">immutable-partitions</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
-support appending to existing partitions.</p></td>
+<td><p>If true, disallow appending data to an existing unpartitioned table. Velox currently does not support appending
+to existing partitions.</p></td>
 </tr>
-<tr class="row-even"><td><p>file-column-names-read-as-lower-case</p></td>
-<td></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">file-column-names-read-as-lower-case</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>True if reading the source file column names as lower case, and planner should guarantee
-the input column name and filter is also lower case to achive case-insensitive read.</p></td>
+the input column name and filter is also lower case to achive case-insensitive read. Session: <code class="docutils literal notranslate"><span class="pre">file_column_names_read_as_lower_case</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.orc.use-column-names</p></td>
-<td><p>orc_use_column_names</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>Map ORC table field names to file field names using names, not indices.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.parquet.use-column-names</p></td>
-<td><p>parquet_use_column_names</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>Map Parquet table field names to file field names using names, not indices.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.parquet.allow-int32-narrowing</p></td>
-<td><p>parquet_allow_int32_narrowing</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>Allow reading INT32 Parquet columns as a narrower integer type.</p></td>
-</tr>
-<tr class="row-even"><td><p>partition_path_as_lower_case</p></td>
-<td></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">partition_path_as_lower_case</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
-<td><p>If true, the partition directory will be converted to lowercase when executing a table write operation.</p></td>
+<td><p>If true, the partition directory will be converted to lowercase when executing a table write operation. Session: <code class="docutils literal notranslate"><span class="pre">partition_path_as_lower_case</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>allow-null-partition-keys</p></td>
-<td><p>allow_null_partition_keys</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">allow-null-partition-keys</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Determines whether null values for partition keys are allowed or not. If not, fails with “Partition key must
 not be null” error message when writing data with null partition key.
 Null check for partitioning key should be used only when partitions are generated dynamically during query execution.
-For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.</p></td>
+For queries that write to fixed partitions, this check should happen much earlier before the Velox execution even starts.
+Session: <code class="docutils literal notranslate"><span class="pre">allow_null_partition_keys</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>ignore_missing_files</p></td>
-<td></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ignore_missing_files</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>If true, splits that refer to missing files don’t generate errors and are processed as empty splits.</p></td>
+<td><p>If true, splits that refer to missing files don’t generate errors and are processed as empty splits. Session: <code class="docutils literal notranslate"><span class="pre">ignore_missing_files</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-coalesced-bytes</p></td>
-<td></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">max-coalesced-bytes</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>128MB</p></td>
-<td><p>Maximum size in bytes to coalesce requests to be fetched in a single request.</p></td>
+<td><p>Maximum size in bytes to coalesce requests to be fetched in a single request. Session: <code class="docutils literal notranslate"><span class="pre">max-coalesced-bytes</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>max-coalesced-distance</p></td>
-<td></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">max-coalesced-distance</span></code></p></td>
 <td><p>capacity</p></td>
 <td><p>512KB</p></td>
 <td><p>Maximum distance in capacity units between chunks to be fetched that may be coalesced into a single request.</p></td>
 </tr>
-<tr class="row-odd"><td><p>prefetch-rowgroups</p></td>
-<td></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">prefetch-rowgroups</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>1</p></td>
 <td><p>Number of row groups to prefetch.</p></td>
 </tr>
-<tr class="row-even"><td><p>parallel-unit-load-count</p></td>
-<td><p>parallel_unit_load_count</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">parallel-unit-load-count</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
-<td><p>Number of units, such as stripes, to load in parallel. 0 disables parallel unit loading.</p></td>
+<td><p>Number of units, such as stripes, to load in parallel. 0 disables parallel unit loading. Session: <code class="docutils literal notranslate"><span class="pre">parallel_unit_load_count</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>load-quantum</p></td>
-<td><p>load-quantum</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">load-quantum</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
-<td><p>Define the size of each coalesce load request. E.g. in Parquet scan, if it’s bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk</p></td>
+<td><p>Define the size of each coalesce load request. E.g. in Parquet scan, if it’s bigger than rowgroup size then the whole row group can be fetched together. Otherwise, the row group will be fetched column chunk by column chunk. Session: <code class="docutils literal notranslate"><span class="pre">load-quantum</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>num-cached-file-handles</p></td>
-<td></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">num_cached_file_handles</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>20000</p></td>
 <td><p>Maximum number of entries in the file handle cache. The value must be non-negative. Zero value
 indicates infinite cache capacity.</p></td>
 </tr>
-<tr class="row-odd"><td><p>file-handle-cache-enabled</p></td>
-<td></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">file-handle-cache-enabled</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enables caching of file handles if true. Disables caching if false. File handle cache should be
 disabled if files are not immutable, i.e. file content may change while file path stays the same.</p></td>
 </tr>
-<tr class="row-even"><td><p>file-handle-expiration-duration-ms</p></td>
-<td></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">file-handle-expiration-duration-ms</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Expiration time in milliseconds for file handle cache entries. 0 disables time-based expiration.</p></td>
 </tr>
-<tr class="row-odd"><td><p>write-file-create-config</p></td>
-<td></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">write-file-create-config</span></code></p></td>
 <td><p>string</p></td>
 <td><p>“”</p></td>
-<td><p>Free-form configuration passed to the underlying file system when creating write files. The legacy
-key <code class="docutils literal notranslate"><span class="pre">hive.write_file_create_config</span></code> is also accepted.</p></td>
+<td><p>Free-form configuration passed to the underlying file system when creating write files. Key
+<code class="docutils literal notranslate"><span class="pre">hive.write_file_create_config</span></code> is also accepted.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort-writer-max-output-rows</p></td>
-<td><p>sort_writer_max_output_rows</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sort-writer-max-output-rows</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
-<td><p>Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
+<td><p>Maximum number of rows for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+Session: <code class="docutils literal notranslate"><span class="pre">sort_writer_max_output_rows</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sort-writer-max-output-bytes</p></td>
-<td><p>sort_writer_max_output_bytes</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sort-writer-max-output-bytes</span></code></p></td>
 <td><p>capacity</p></td>
 <td><p>10MB</p></td>
-<td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.</p></td>
+<td><p>Maximum bytes for sort writer in one batch of output. This is to limit the memory usage of sort writer.
+Session: <code class="docutils literal notranslate"><span class="pre">sort_writer_max_output_bytes</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort-writer-finish-time-slice-limit-ms</p></td>
-<td><p>sort_writer_finish_time_slice_limit_ms</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sort-writer-finish-time-slice-limit-ms</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>5000</p></td>
-<td><p>Time slice limit in milliseconds for sort writer finish. 0 means no limit.</p></td>
+<td><p>Time slice limit in milliseconds for sort writer finish. 0 means no limit. Session: <code class="docutils literal notranslate"><span class="pre">sort_writer_finish_time_slice_limit_ms</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.parquet.writer.max-target-file-size</p></td>
-<td><p>parquet_writer_max_target_file_size</p></td>
-<td><p>capacity</p></td>
-<td><p>0B</p></td>
-<td><p>Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
-closes the current file and starts writing to a new file. Accepts human-readable values like
-“1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
-sorted writes.</p></td>
-</tr>
-<tr class="row-even"><td><p>file-preload-threshold</p></td>
-<td></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">file-preload-threshold</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
 <td><p>Usually Velox fetches the meta data firstly then fetch the rest of file. But if the file is very small, Velox can fetch the whole file directly to avoid multiple IO requests.
 The parameter controls the threshold when whole file is fetched.</p></td>
 </tr>
-<tr class="row-odd"><td><p>cache.no_retention</p></td>
-<td><p>cache.no_retention</p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>If true, evict out a query scanned data out of in-memory cache right after the access,
-and also skip staging to the ssd cache. This helps to prevent the cache space pollution
-from the one-time table scan by large batch query when mixed running with interactive
-query which has high data locality.</p></td>
-</tr>
-<tr class="row-even"><td><p>stats-based-filter-reorder-disabled</p></td>
-<td><p>stats_based_filter_reorder_disabled</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">stats-based-filter-reorder-disabled</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, disable the stats based filter reordering during the read processing, and the
 filter execution order is totally determined by the filter type. Otherwise, the file
 reader will dynamically adjust the filter execution order based on the past filter
-execution stats.</p></td>
+execution stats. Session: <code class="docutils literal notranslate"><span class="pre">stats_based_filter_reorder_disabled</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>index-enabled</p></td>
-<td><p>index_enabled</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">selective-nimble-reader-enabled</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Enable selective Nimble reader. Session: <code class="docutils literal notranslate"><span class="pre">selective_nimble_reader_enabled</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">index-enabled</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>Use the cluster index for filter-based row pruning.</p></td>
+<td><p>Use the cluster index for filter-based row pruning. Session: <code class="docutils literal notranslate"><span class="pre">index_enabled</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>reader.timestamp-unit</p></td>
-<td><p>reader.timestamp_unit</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">reader.timestamp-unit</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>3</p></td>
 <td><p>Unit for reading timestamps from files. Supported values are <code class="docutils literal notranslate"><span class="pre">3</span></code> for milliseconds,
-<code class="docutils literal notranslate"><span class="pre">6</span></code> for microseconds, and <code class="docutils literal notranslate"><span class="pre">9</span></code> for nanoseconds. The legacy key
-<code class="docutils literal notranslate"><span class="pre">hive.reader.timestamp-unit</span></code> is also accepted.</p></td>
+<code class="docutils literal notranslate"><span class="pre">6</span></code> for microseconds, and <code class="docutils literal notranslate"><span class="pre">9</span></code> for nanoseconds. Key
+<code class="docutils literal notranslate"><span class="pre">hive.reader.timestamp-unit</span></code> is also accepted. Session: <code class="docutils literal notranslate"><span class="pre">reader.timestamp_unit</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>reader.timestamp-partition-value-as-local-time</p></td>
-<td><p>reader.timestamp_partition_value_as_local_time</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">reader.timestamp-partition-value-as-local-time</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Reads TIMESTAMP partition value as local time if true. Otherwise, reads
 as UTC. This setting does not apply to TIMESTAMP_UTC partition values,
-which are always read as UTC.</p></td>
+which are always read as UTC. Session: <code class="docutils literal notranslate"><span class="pre">reader.timestamp_partition_value_as_local_time</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>preserve-flat-maps-in-memory</p></td>
-<td><p>preserve_flat_maps_in_memory</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">preserve-flat-maps-in-memory</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.</p></td>
+<td><p>Whether to preserve flat maps in memory as FlatMapVectors instead of converting them to MapVectors. This is only applied during data reading inside the DWRF and Nimble readers, not during downstream processing like expression evaluation etc.
+Session: <code class="docutils literal notranslate"><span class="pre">preserve_flat_maps_in_memory</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max-rows-per-index-request</p></td>
-<td><p>max_rows_per_index_request</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">max-rows-per-index-request</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum number of output rows to return per index lookup request. The limit is applied to the actual output rows
-after filtering. 0 means no limit (default).</p></td>
+after filtering. 0 means no limit (default). Session: <code class="docutils literal notranslate"><span class="pre">max_rows_per_index_request</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>cache-metadata</p></td>
-<td><p>cache_metadata</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cache-metadata</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to cache file metadata (footer, stripes, index) in the process-wide AsyncDataCache. When enabled,
 the first reader performs a speculative tail read and populates the cache; subsequent readers on the same file
-serve metadata from cache with zero file IO. Currently only supported by Nimble format.</p></td>
+serve metadata from cache with zero file IO. Currently only supported by Nimble format. Session: <code class="docutils literal notranslate"><span class="pre">cache_metadata</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>pin-metadata</p></td>
-<td><p>pin_metadata</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pin-metadata</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to pin parsed metadata objects (e.g., StripeGroup, IndexGroup) in the reader’s metadata cache with
 strong references so they are never evicted. This avoids re-reading and re-parsing metadata on every stripe
 access when weak-pointer cache entries would otherwise expire. Can be used independently of
-cache-metadata. Currently only supported by Nimble format.</p></td>
+cache-metadata. Currently only supported by Nimble format. Session: <code class="docutils literal notranslate"><span class="pre">pin_metadata</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>cache-index</p></td>
-<td><p>cache_index</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cache-index</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to cache index data (e.g., cluster index key stream) in the async data cache.
-Currently only supported by Nimble format.</p></td>
+Currently only supported by Nimble format. Session: <code class="docutils literal notranslate"><span class="pre">cache_index</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>pin-index</p></td>
-<td><p>pin_index</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pin-index</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to pin parsed index objects (e.g., HashIndex, SortedIndex) in the reader’s index cache with
 strong references so they are never evicted. Can be used independently of
-cache-index. Currently only supported by Nimble format.</p></td>
+cache-index. Currently only supported by Nimble format. Session: <code class="docutils literal notranslate"><span class="pre">pin_index</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>reader.collect-column-cpu-metrics</p></td>
-<td><p>reader.collect_column_cpu_metrics</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">reader.collect-column-cpu-metrics</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, enables collection of per-column timing statistics during file reading. This includes
 decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
 <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decompressCPUTimeNanos</span></code> and <code class="docutils literal notranslate"><span class="pre">column_&lt;nodeId&gt;.&lt;type&gt;.decodeCPUTimeNanos</span></code>.
-Useful for performance analysis and identifying slow columns.</p></td>
+Useful for performance analysis and identifying slow columns. Session: <code class="docutils literal notranslate"><span class="pre">reader.collect_column_cpu_metrics</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>orc.footer-speculative-io-size</p></td>
-<td><p>orc_footer_speculative_io_size</p></td>
+</tbody>
+</table>
+</section>
+<section id="orc-options-prefix-hive-orc">
+<h3>ORC Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.orc.</span></code>)<a class="headerlink" href="#orc-options-prefix-hive-orc" title="Link to this heading">¶</a></h3>
+<table class="hive-config-table docutils align-default">
+<colgroup>
+<col style="width: 46.7%" />
+<col style="width: 8.3%" />
+<col style="width: 8.3%" />
+<col style="width: 36.7%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Suffix</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">use-column-names</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Map ORC table field names to file field names using names, not indices. Configure as <code class="docutils literal notranslate"><span class="pre">orc.use-column-names</span></code>. Key <code class="docutils literal notranslate"><span class="pre">hive.orc.use-column-names</span></code> is also accepted. Session: <code class="docutils literal notranslate"><span class="pre">orc_use_column_names</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">footer-speculative-io-size</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>256KB</p></td>
 <td><p>Speculative tail-read size in bytes when opening ORC files. Controls how many bytes are read from the end
 of the file to load the footer and nearby metadata in a single IO operation.
-Set to 0 for adaptive mode.</p></td>
+Set to 0 for adaptive mode. Configure as <code class="docutils literal notranslate"><span class="pre">orc.footer-speculative-io-size</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>.
+Session: <code class="docutils literal notranslate"><span class="pre">orc_footer_speculative_io_size</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.parquet.footer-speculative-io-size</p></td>
-<td><p>parquet_footer_speculative_io_size</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.stripe-max-size</span></code></p></td>
+<td><p>string</p></td>
+<td><p>64M</p></td>
+<td><p>Maximum stripe size in orc writer. Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_max_stripe_size</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.dictionary-max-memory</span></code></p></td>
+<td><p>string</p></td>
+<td><p>16M</p></td>
+<td><p>Maximum dictionary memory that can be used in orc writer. Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_max_dictionary_memory</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.integer-dictionary-encoding-enabled</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether or not dictionary encoding of integer types should be used by the ORC writer.
+Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_integer_dictionary_encoding_enabled</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.string-dictionary-encoding-enabled</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether or not dictionary encoding of string types should be used by the ORC writer.
+Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_string_dictionary_encoding_enabled</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.linear-stripe-size-heuristics</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Enables historical based stripe size estimation after compression. Session: <code class="docutils literal notranslate"><span class="pre">orc_writer_linear_stripe_size_heuristics</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
+<td><p>capacity</p></td>
+<td><p>0B</p></td>
+<td><p>Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
+closes the current file and starts writing to a new file. Accepts human-readable values like
+“1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
+sorted writes. Session: <code class="docutils literal notranslate"><span class="pre">orc_writer_max_target_file_size</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.min-compression-size</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Minimal number of items in an encoded stream. Session: <code class="docutils literal notranslate"><span class="pre">orc_writer_min_compression_size</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.compression-level</span></code></p></td>
+<td><p>tinyint</p></td>
+<td><p>3 for ZSTD and 4 for ZLIB</p></td>
+<td><p>The compression level to use with ZLIB and ZSTD. Session: <code class="docutils literal notranslate"><span class="pre">orc_optimized_writer_compression_level</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="parquet-options-prefix-hive-parquet">
+<h3>Parquet Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.parquet.</span></code>)<a class="headerlink" href="#parquet-options-prefix-hive-parquet" title="Link to this heading">¶</a></h3>
+<table class="hive-config-table docutils align-default">
+<colgroup>
+<col style="width: 46.7%" />
+<col style="width: 8.3%" />
+<col style="width: 8.3%" />
+<col style="width: 36.7%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Suffix</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">use-column-names</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Map Parquet table field names to file field names using names, not indices. Session: <code class="docutils literal notranslate"><span class="pre">parquet_use_column_names</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">allow-int32-narrowing</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Allow reading INT32 Parquet columns as a narrower integer type. Session: <code class="docutils literal notranslate"><span class="pre">parquet_allow_int32_narrowing</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">footer-speculative-io-size</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>256KB</p></td>
 <td><p>Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
 of the file to load the footer and nearby metadata in a single IO operation.
-Set to 0 for adaptive mode.</p></td>
+Set to 0 for adaptive mode. Session: <code class="docutils literal notranslate"><span class="pre">parquet_footer_speculative_io_size</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.parquet.footer-memory-tracking-threshold</p></td>
-<td><p>parquet_footer_memory_tracking_threshold</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">footer-memory-tracking-threshold</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>disabled (max uint64)</p></td>
 <td><p>Serialized footer byte size above which the Parquet reader engages
@@ -1276,183 +1340,119 @@ silently over-consuming. The reservation shrinks as row groups are
 skipped by filterRowGroups and is released in full when the reader
 is destroyed. When tracking engages, the estimate is also surfaced
 per scan via the runtime stat <code class="docutils literal notranslate"><span class="pre">parquetFooterEstimatedBytes</span></code> so
-operators can compare it against actual pool usage.</p>
+operators can compare it against actual pool usage. Session: <code class="docutils literal notranslate"><span class="pre">parquet_footer_memory_tracking_threshold</span></code>.</p>
 </td>
 </tr>
-<tr class="row-even"><td><p>nimble.footer-speculative-io-size</p></td>
-<td><p>nimble_footer_speculative_io_size</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
+<td><p>capacity</p></td>
+<td><p>0B</p></td>
+<td><p>Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
+closes the current file and starts writing to a new file. Accepts human-readable values like
+“1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
+sorted writes. Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_max_target_file_size</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-dictionary</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
+Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_dictionary</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.dictionary-page-size-limit</span></code></p></td>
+<td><p>string</p></td>
+<td><p>1MB</p></td>
+<td><p>Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
+Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.dictionary_page_size_limit</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.timestamp-unit</span></code></p></td>
+<td><p>tinyint</p></td>
+<td><p>9</p></td>
+<td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
+Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
+Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.timestamp_unit</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.datapage-version</span></code></p></td>
+<td><p>string</p></td>
+<td><p>V1</p></td>
+<td><p>Data Page version used when writing into Parquet through Arrow bridge.
+Valid values are “V1” and “V2”. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.datapage_version</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.page-size</span></code></p></td>
+<td><p>string</p></td>
+<td><p>1MB</p></td>
+<td><p>Data Page size used when writing into Parquet through Arrow bridge. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.page_size</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.batch-size</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>1024</p></td>
+<td><p>Batch size used when writing into Parquet through Arrow bridge. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.batch_size</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
+<td><p>string</p></td>
+<td><p>parquet-cpp-velox version 0.0.0</p></td>
+<td><p>Created-by value used when writing to Parquet.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
+When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
+Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_store_decimal_as_integer</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="nimble-options-prefix-hive-nimble">
+<h3>Nimble Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.nimble.</span></code>)<a class="headerlink" href="#nimble-options-prefix-hive-nimble" title="Link to this heading">¶</a></h3>
+<table class="hive-config-table docutils align-default">
+<colgroup>
+<col style="width: 46.7%" />
+<col style="width: 8.3%" />
+<col style="width: 8.3%" />
+<col style="width: 36.7%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property Suffix</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default Value</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">footer-speculative-io-size</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>8MB</p></td>
 <td><p>Speculative tail-read size in bytes when opening Nimble files. Controls how many bytes are read from the end
 of the file to load the footer and nearby metadata in a single IO operation.
-Set to 0 for adaptive mode.</p></td>
+Set to 0 for adaptive mode. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.footer-speculative-io-size</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>.
+Session: <code class="docutils literal notranslate"><span class="pre">nimble_footer_speculative_io_size</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>nimble.lazy-column-io</p></td>
-<td><p>nimble_lazy_column_io</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">lazy-column-io</span></code></p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>Lazy IO for Nimble projected columns without pushdown filters, remaining filters, or transforms.
 Lazy IO columns are loaded through a separate buffered input other than the one used by early
 materialization during the scan. If all rows from a stripe have been filtered out, lazy IO will
 not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn’t
-allow lazy IO across stripes.</p></td>
+allow lazy IO across stripes. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.lazy-column-io</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>.
+Session: <code class="docutils literal notranslate"><span class="pre">nimble_lazy_column_io</span></code>.</p></td>
 </tr>
-</tbody>
-</table>
-<section id="orc-file-format-configuration">
-<h3><code class="docutils literal notranslate"><span class="pre">ORC</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#orc-file-format-configuration" title="Link to this heading">¶</a></h3>
-<table class="docutils align-default">
-<colgroup>
-<col style="width: 15.4%" />
-<col style="width: 15.4%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 53.8%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
-<th class="head"><p>Session Property Name</p></th>
-<th class="head"><p>Type</p></th>
-<th class="head"><p>Default Value</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>hive.orc.writer.stripe-max-size</p></td>
-<td><p>orc_optimized_writer_max_stripe_size</p></td>
-<td><p>string</p></td>
-<td><p>64M</p></td>
-<td><p>Maximum stripe size in orc writer.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.orc.writer.dictionary-max-memory</p></td>
-<td><p>orc_optimized_writer_max_dictionary_memory</p></td>
-<td><p>string</p></td>
-<td><p>16M</p></td>
-<td><p>Maximum dictionary memory that can be used in orc writer.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.orc.writer.integer-dictionary-encoding-enabled</p></td>
-<td><p>orc_optimized_writer_integer_dictionary_encoding_enabled</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">string-decoder-zero-copy</span></code></p></td>
 <td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Whether or not dictionary encoding of integer types should be used by the ORC writer.</p></td>
+<td><p>false</p></td>
+<td><p>Enable zero-copy string decoding in Nimble selective reader. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.string-decoder-zero-copy</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>. Session: <code class="docutils literal notranslate"><span class="pre">nimble_string_decoder_zero_copy</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>hive.orc.writer.string-dictionary-encoding-enabled</p></td>
-<td><p>orc_optimized_writer_string_dictionary_encoding_enabled</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">preserve-dictionary-encoding</span></code></p></td>
 <td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Whether or not dictionary encoding of string types should be used by the ORC writer.</p></td>
+<td><p>false</p></td>
+<td><p>Preserve dictionary encoding for Nimble string column reads. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.preserve-dictionary-encoding</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>. Session: <code class="docutils literal notranslate"><span class="pre">nimble_preserve_dictionary_encoding</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>hive.orc.writer.linear-stripe-size-heuristics</p></td>
-<td><p>orc_writer_linear_stripe_size_heuristics</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Enables historical based stripe size estimation after compression.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.orc.writer.max-target-file-size</p></td>
-<td><p>orc_writer_max_target_file_size</p></td>
-<td><p>capacity</p></td>
-<td><p>0B</p></td>
-<td><p>Maximum target file size for ORC writers. When a file exceeds this size during writing, the writer
-closes the current file and starts writing to a new file. Accepts human-readable values like
-“1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
-sorted writes.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.nimble.writer.max-target-file-size</p></td>
-<td><p>nimble_writer_max_target_file_size</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
 <td><p>capacity</p></td>
 <td><p>0B</p></td>
 <td><p>Maximum target file size for Nimble writers. When a file exceeds this size during writing, the writer
 closes the current file and starts writing to a new file. Accepts human-readable values like
 “1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
-sorted writes.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.orc.writer.min-compression-size</p></td>
-<td><p>orc_writer_min_compression_size</p></td>
-<td><p>integer</p></td>
-<td><p>1024</p></td>
-<td><p>Minimal number of items in an encoded stream.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.orc.writer.compression-level</p></td>
-<td><p>orc_optimized_writer_compression_level</p></td>
-<td><p>tinyint</p></td>
-<td><p>3 for ZSTD and 4 for ZLIB</p></td>
-<td><p>The compression level to use with ZLIB and ZSTD.</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="parquet-file-format-configuration">
-<h3><code class="docutils literal notranslate"><span class="pre">Parquet</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code><a class="headerlink" href="#parquet-file-format-configuration" title="Link to this heading">¶</a></h3>
-<table class="docutils align-default">
-<colgroup>
-<col style="width: 15.4%" />
-<col style="width: 15.4%" />
-<col style="width: 7.7%" />
-<col style="width: 7.7%" />
-<col style="width: 53.8%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Configuration Property Name</p></th>
-<th class="head"><p>Session Property Name</p></th>
-<th class="head"><p>Type</p></th>
-<th class="head"><p>Default Value</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>hive.parquet.writer.enable-dictionary</p></td>
-<td><p>parquet_writer_enable_dictionary</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.parquet.writer.dictionary-page-size-limit</p></td>
-<td><p>parquet_writer_dictionary_page_size_limit</p></td>
-<td><p>string</p></td>
-<td><p>1MB</p></td>
-<td><p>Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.parquet.writer.timestamp-unit</p></td>
-<td><p>parquet_writer_timestamp_unit</p></td>
-<td><p>tinyint</p></td>
-<td><p>9</p></td>
-<td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
-Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.parquet.writer.datapage-version</p></td>
-<td><p>parquet_writer_datapage_version</p></td>
-<td><p>string</p></td>
-<td><p>V1</p></td>
-<td><p>Data Page version used when writing into Parquet through Arrow bridge.
-Valid values are “V1” and “V2”.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.parquet.writer.page-size</p></td>
-<td><p>parquet_writer_page_size</p></td>
-<td><p>string</p></td>
-<td><p>1MB</p></td>
-<td><p>Data Page size used when writing into Parquet through Arrow bridge.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.parquet.writer.batch-size</p></td>
-<td><p>parquet_writer_batch_size</p></td>
-<td><p>integer</p></td>
-<td><p>1024</p></td>
-<td><p>Batch size used when writing into Parquet through Arrow bridge.</p></td>
-</tr>
-<tr class="row-even"><td><p>hive.parquet.writer.created-by</p></td>
-<td><ul class="simple">
-<li></li>
-</ul>
-</td>
-<td><p>string</p></td>
-<td><p>parquet-cpp-velox version 0.0.0</p></td>
-<td><p>Created-by value used when writing to Parquet.</p></td>
-</tr>
-<tr class="row-odd"><td><p>hive.parquet.writer.enable-store-decimal-as-integer</p></td>
-<td><p>parquet_writer_enable_store_decimal_as_integer</p></td>
-<td><p>bool</p></td>
-<td><p>true</p></td>
-<td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
-When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.</p></td>
+sorted writes. Session: <code class="docutils literal notranslate"><span class="pre">nimble_writer_max_target_file_size</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -2011,8 +2011,10 @@ Reader options map to <a class="reference external" href="https://docs.rapids.ai
 <li><a class="reference internal" href="#table-writer">Table Writer</a></li>
 <li><a class="reference internal" href="#connector-config">Connector Config</a></li>
 <li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
-<li><a class="reference internal" href="#orc-file-format-configuration"><code class="docutils literal notranslate"><span class="pre">ORC</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code></a></li>
-<li><a class="reference internal" href="#parquet-file-format-configuration"><code class="docutils literal notranslate"><span class="pre">Parquet</span> <span class="pre">File</span> <span class="pre">Format</span> <span class="pre">Configuration</span></code></a></li>
+<li><a class="reference internal" href="#common-options">Common Options</a></li>
+<li><a class="reference internal" href="#orc-options-prefix-hive-orc">ORC Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.orc.</span></code>)</a></li>
+<li><a class="reference internal" href="#parquet-options-prefix-hive-parquet">Parquet Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.parquet.</span></code>)</a></li>
+<li><a class="reference internal" href="#nimble-options-prefix-hive-nimble">Nimble Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.nimble.</span></code>)</a></li>
 <li><a class="reference internal" href="#amazon-s3-configuration"><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code></a><ul>
 <li><a class="reference internal" href="#bucket-level-configuration">Bucket Level Configuration</a></li>
 </ul>
