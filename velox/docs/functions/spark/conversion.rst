@@ -414,3 +414,38 @@ Valid examples
 
   SELECT cast(true as timestamp); -- 1970-01-01 00:00:00.000001
   SELECT cast(false as timestamp); -- 1970-01-01 00:00:00
+
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a timestamp in UTC (TIMESTAMP_UTC) to TIMESTAMP interprets the stored
+date-time as a local date-time in the session timezone and returns the
+corresponding UTC epoch. When the local time falls in a DST spring-forward gap,
+Spark adjusts to the post-transition time instead of throwing.
+
+Valid examples (session timezone = America/Los_Angeles, UTC-8 in January)
+
+::
+
+  -- Stored epoch 1577808000 represents local 2019-12-31 16:00:00.
+  -- In America/Los_Angeles (UTC-8) that is 2020-01-01 00:00:00 UTC.
+  SELECT cast(timestamp_utc '2019-12-31 16:00:00' as timestamp); -- 2020-01-01 00:00:00
+
+Cast to TIMESTAMP UTC
+---------------------
+
+From TIMESTAMP
+^^^^^^^^^^^^^^
+
+Casting a TIMESTAMP to TIMESTAMP_UTC applies the session timezone offset so
+that the local date-time is preserved. The stored epoch in TIMESTAMP_UTC
+represents the same date-time fields as the local time, treated as a UTC epoch.
+When no session timezone is configured the cast is an identity operation.
+
+Valid examples (session timezone = America/Los_Angeles, UTC-8 in January)
+
+::
+
+  -- 2020-01-01 00:00:00 UTC in America/Los_Angeles is local 2019-12-31 16:00:00.
+  -- TIMESTAMP_UTC stores that local time as epoch 1577808000.
+  SELECT cast(timestamp '2020-01-01 00:00:00' as timestamp_utc); -- 2019-12-31 16:00:00
