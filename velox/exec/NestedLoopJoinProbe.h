@@ -31,8 +31,8 @@ namespace facebook::velox::exec {
 /// nullptr.
 ///
 /// The output follows the order of the probe side rows (for inner and left
-/// joins). All build vectors are materialized upfront (check buildVectors_),
-/// but probe batches are processed one-by-one as a stream.
+/// joins). Build data is either shared in memory or replayed from spill
+/// files, while probe batches are processed one-by-one as a stream.
 ///
 /// To produce output, the operator processes each probe record from probe
 /// input, using the following steps:
@@ -91,6 +91,10 @@ class NestedLoopJoinProbe : public Operator {
     return state_ == ProbeOperatorState::kFinish;
   }
 
+  bool canReclaim() const override {
+    return false;
+  }
+
   void close() override;
 
  private:
@@ -101,10 +105,9 @@ class NestedLoopJoinProbe : public Operator {
       const RowTypePtr& leftType,
       const RowTypePtr& rightType);
 
-  // Materializes build data from nested loop join bridge into `buildVectors_`.
-  // Returns whether the data has been materialized and is ready for use. Nested
-  // loop join requires all build data to be materialized and available in
-  // `buildVectors_` before it can produce output.
+  // Gets build data from nested loop join bridge. Returns whether the data is
+  // ready for use. Nested loop join requires the build side to be complete
+  // before it can produce output.
   bool getBuildData(ContinueFuture* future);
 
   // Generates output from join matches between probe and build sides, as well
@@ -265,17 +268,16 @@ class NestedLoopJoinProbe : public Operator {
         noMoreInput_;
   }
 
-  // Whether we have processed all build data for the current probe row (based
-  // on buildIndex_'s value).
-  bool hasProbedAllBuildData() const {
-    return (buildIndex_ >= buildVectors_.value().size());
+  bool isBuildDataSpilled() const {
+    return !buildData_->spillFiles.empty();
   }
 
-  // Whether processing last batch of build data or processed all build data for
-  // the current probe row (based on buildIndex_'s value).
-  bool isLastBuildIndex() const {
-    return buildIndex_ + 1 >= buildVectors_.value().size();
-  }
+  // Returns whether the current probe row has exhausted the build input.
+  bool hasProbedAllBuildData() const;
+
+  // Returns whether the current batch is the last in memory, or spilled input
+  // has reached EOF. Spilled input cannot identify its last batch in advance.
+  bool isLastBuildIndex() const;
 
   // Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
@@ -286,18 +288,16 @@ class NestedLoopJoinProbe : public Operator {
   // dictionaries and produce as many combinations of probe and build rows,
   // until `numOutputRows_` is filled.
   bool isSingleBuildVector() const {
-    return buildVectors_->size() == 1;
+    return buildData_->vectors.size() == 1;
   }
 
   // If there are no incoming records in the build side.
-  bool isBuildSideEmpty() const {
-    return buildVectors_->empty();
-  }
+  bool isBuildSideEmpty() const;
 
   // If build has a single row, we can simply add it as a constant to probe
   // batches.
   bool isSingleBuildRow() const {
-    return isSingleBuildVector() && buildVectors_->front()->size() == 1;
+    return isSingleBuildVector() && buildData_->vectors.front()->size() == 1;
   }
 
   // Check if this is a probe-only join (left semi filter/project, anti) with
@@ -310,6 +310,30 @@ class NestedLoopJoinProbe : public Operator {
   // Handles a probe-only join (left semi filter/project, anti) with no join
   // condition.
   void handleProbeOnlyNoCondition();
+
+  // Returns the current in-memory or deserialized build batch.
+  const RowVectorPtr& currentBuildVector() const;
+
+  // Advances the batch index and loads the next spilled batch, if needed.
+  void advanceBuildVector();
+
+  // Rewinds build input for a new probe row or unmatched-build output.
+  void resetBuildCursor();
+
+  // Releases replay buffers and resets the batch and file indices.
+  void clearBuildCursor();
+
+  // Opens spill files one at a time to bound replay memory and file handles.
+  void loadNextSpilledBuildVector();
+
+  // Stops reading build input after a semi or anti join finds a match.
+  void finishBuildCursor();
+
+  // Allocates the current batch's match bitmap on first use.
+  SelectivityVector& buildMatched(vector_size_t size);
+
+  // Unions peer matches in the shared file and batch order.
+  void mergeBuildMatched(const NestedLoopJoinProbe& peer);
 
   // Wraps rows of 'data' that are not selected in 'matched' and projects
   // to the output according to 'projections'. 'nullProjections' is used to
@@ -396,10 +420,20 @@ class NestedLoopJoinProbe : public Operator {
 
   // Build side state.
 
-  // Stores the data for build vectors (right side of the join).
-  std::optional<std::vector<RowVectorPtr>> buildVectors_;
+  // Shares completed build input with all probe drivers.
+  std::shared_ptr<const NestedLoopJoinBuildData> buildData_;
 
-  // Index into `buildVectors_` for the build vector being currently processed.
+  // Keeps only the current spill file open during replay.
+  std::unique_ptr<SpillReadFile> spillReader_;
+
+  // Holds the current deserialized batch. Returned output may retain its data.
+  RowVectorPtr spilledBuildVector_;
+
+  // Identifies the next spill file to open in buildData_->spillFiles.
+  size_t spillFileIndex_{0};
+
+  // Identifies the current build batch, in memory or in the spill file
+  // sequence. All probe drivers use the same order to index buildMatched_.
   size_t buildIndex_{0};
 
   // Row being currently processed from `decodedFilterResult_`.
@@ -414,7 +448,7 @@ class NestedLoopJoinProbe : public Operator {
   // after yield.
   vector_size_t filterProbeRow_{0};
 
-  // Row being currently processed from `buildVector_[buildIndex_]`.
+  // Identifies the row being processed in the current build batch.
   vector_size_t buildRow_{0};
 
   // Keep track of the build rows that had matches (only used for right or full

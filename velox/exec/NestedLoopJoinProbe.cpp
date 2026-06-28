@@ -57,7 +57,12 @@ NestedLoopJoinProbe::NestedLoopJoinProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          OperatorType::kNestedLoopJoinProbe),
+          OperatorType::kNestedLoopJoinProbe,
+          joinNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    OperatorType::kNestedLoopJoinProbe)
+              : std::nullopt),
       joinType_(joinNode->joinType()),
       outputBatchSize_{outputBatchRows()},
       joinNode_(joinNode) {
@@ -125,6 +130,99 @@ void NestedLoopJoinProbe::initializeFilter(
   filterInputType_ = ROW(std::move(names), std::move(types));
 }
 
+bool NestedLoopJoinProbe::hasProbedAllBuildData() const {
+  if (isBuildDataSpilled()) {
+    return spilledBuildVector_ == nullptr;
+  }
+  return buildIndex_ >= buildData_->vectors.size();
+}
+
+bool NestedLoopJoinProbe::isLastBuildIndex() const {
+  if (isBuildDataSpilled()) {
+    return hasProbedAllBuildData();
+  }
+  return buildIndex_ + 1 >= buildData_->vectors.size();
+}
+
+bool NestedLoopJoinProbe::isBuildSideEmpty() const {
+  return buildData_->vectors.empty() && !isBuildDataSpilled();
+}
+
+const RowVectorPtr& NestedLoopJoinProbe::currentBuildVector() const {
+  if (isBuildDataSpilled()) {
+    return spilledBuildVector_;
+  }
+  return buildData_->vectors[buildIndex_];
+}
+
+void NestedLoopJoinProbe::advanceBuildVector() {
+  ++buildIndex_;
+  if (isBuildDataSpilled()) {
+    loadNextSpilledBuildVector();
+  }
+}
+
+void NestedLoopJoinProbe::resetBuildCursor() {
+  clearBuildCursor();
+  if (isBuildDataSpilled()) {
+    loadNextSpilledBuildVector();
+  }
+}
+
+void NestedLoopJoinProbe::clearBuildCursor() {
+  buildIndex_ = 0;
+  spillFileIndex_ = 0;
+  spillReader_.reset();
+  spilledBuildVector_.reset();
+}
+
+void NestedLoopJoinProbe::loadNextSpilledBuildVector() {
+  // Output can retain the previous batch; deserialize into a fresh vector.
+  spilledBuildVector_.reset();
+  while (spillReader_ == nullptr ||
+         !spillReader_->nextBatch(spilledBuildVector_)) {
+    spillReader_.reset();
+    if (spillFileIndex_ == buildData_->spillFiles.size()) {
+      return;
+    }
+    spillReader_ = SpillReadFile::create(
+        buildData_->spillFiles[spillFileIndex_++],
+        spillConfig()->readBufferSize,
+        pool(),
+        spillStats_.get());
+  }
+}
+
+void NestedLoopJoinProbe::finishBuildCursor() {
+  if (!isBuildDataSpilled()) {
+    buildIndex_ = buildData_->vectors.size();
+    return;
+  }
+  spillReader_.reset();
+  spilledBuildVector_.reset();
+}
+
+SelectivityVector& NestedLoopJoinProbe::buildMatched(vector_size_t size) {
+  VELOX_CHECK(needsBuildMismatch(joinType_));
+  if (buildMatched_.size() <= buildIndex_) {
+    buildMatched_.resize(buildIndex_ + 1);
+  }
+  auto& matched = buildMatched_[buildIndex_];
+  if (matched.size() == 0) {
+    matched.resizeFill(size, false);
+  }
+  return matched;
+}
+
+void NestedLoopJoinProbe::mergeBuildMatched(const NestedLoopJoinProbe& peer) {
+  if (buildMatched_.size() < peer.buildMatched_.size()) {
+    buildMatched_.resize(peer.buildMatched_.size());
+  }
+  for (auto i = 0; i < peer.buildMatched_.size(); ++i) {
+    buildMatched_[i].select(peer.buildMatched_[i]);
+  }
+}
+
 BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
   switch (state_) {
     case ProbeOperatorState::kRunning:
@@ -139,19 +237,18 @@ BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
       setState(ProbeOperatorState::kFinish);
       return BlockingReason::kNotBlocked;
     case ProbeOperatorState::kWaitForBuild: {
-      VELOX_CHECK(!buildVectors_.has_value());
+      VELOX_CHECK_NULL(buildData_);
       if (!getBuildData(future)) {
         return BlockingReason::kWaitForJoinBuild;
       }
-      VELOX_CHECK(buildVectors_.has_value());
+      VELOX_CHECK_NOT_NULL(buildData_);
 
-      // If we just got build data, check if this is a right or full join where
-      // we need to hit track of hits on build records. If it is, initialize the
-      // selectivity vectors that do so.
-      if (needsBuildMismatch(joinType_)) {
-        buildMatched_.resize(buildVectors_->size());
-        for (auto i = 0; i < buildVectors_->size(); ++i) {
-          buildMatched_[i].resizeFill(buildVectors_.value()[i]->size(), false);
+      // In-memory batches have known sizes; spilled batches allocate match
+      // bitmaps lazily during replay.
+      if (needsBuildMismatch(joinType_) && !isBuildDataSpilled()) {
+        buildMatched_.resize(buildData_->vectors.size());
+        for (auto i = 0; i < buildData_->vectors.size(); ++i) {
+          buildMatched_[i].resizeFill(buildData_->vectors[i]->size(), false);
         }
       }
 
@@ -167,7 +264,8 @@ void NestedLoopJoinProbe::close() {
   if (joinCondition_ != nullptr) {
     joinCondition_->clear();
   }
-  buildVectors_.reset();
+  clearBuildCursor();
+  buildData_.reset();
   Operator::close();
 }
 
@@ -185,6 +283,9 @@ void NestedLoopJoinProbe::addInput(RowVectorPtr input) {
     probeSideEmpty_ = false;
   }
   VELOX_CHECK_EQ(buildIndex_, 0);
+  if (isBuildDataSpilled()) {
+    resetBuildCursor();
+  }
 }
 
 void NestedLoopJoinProbe::noMoreInput() {
@@ -200,18 +301,18 @@ void NestedLoopJoinProbe::noMoreInput() {
 }
 
 bool NestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
-  VELOX_CHECK(!buildVectors_.has_value());
+  VELOX_CHECK_NULL(buildData_);
 
   auto buildData =
       operatorCtx_->task()
           ->getNestedLoopJoinBridge(
               operatorCtx_->driverCtx()->splitGroupId, planNodeId())
           ->dataOrFuture(future);
-  if (!buildData.has_value()) {
+  if (buildData == nullptr) {
     return false;
   }
 
-  buildVectors_ = std::move(buildData);
+  buildData_ = std::move(buildData);
   return true;
 }
 
@@ -230,13 +331,14 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
       // Scans build input producing build mismatches by wrapping dictionaries
       // to build input, and null constant to probe projections.
       while (output == nullptr && !hasProbedAllBuildData()) {
+        const auto& buildVector = currentBuildVector();
         output = getBuildMismatchedOutput(
-            buildVectors_.value()[buildIndex_],
-            buildMatched_[buildIndex_],
+            buildVector,
+            buildMatched(buildVector->size()),
             buildOutMapping_,
             buildProjections_,
             identityProjections_);
-        ++buildIndex_;
+        advanceBuildVector();
       }
       if (hasProbedAllBuildData()) {
         setState(ProbeOperatorState::kFinish);
@@ -254,12 +356,12 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
     output = generateOutput();
 
     // generateOutput() can be computationally expensive when
-    // processing large buildVectors_, as it iterates through all build rows for
-    // each probe row. The probe moves slowly through buildVectors_, making the
-    // numOutputRows_ >= outputBatchSize_ check harder to reach, which can cause
-    // driver threads to get stuck in long-running processing loops that exceed
-    // their allocated CPU time slice limits, preventing other tasks from being
-    // scheduled and degrading overall system responsiveness.
+    // processing large build inputs, as it iterates through all build rows for
+    // each probe row. The probe moves slowly through the build input, making
+    // the numOutputRows_ >= outputBatchSize_ check harder to reach, which can
+    // cause driver threads to get stuck in long-running processing loops that
+    // exceed their allocated CPU time slice limits, preventing other tasks from
+    // being scheduled and degrading overall system responsiveness.
     if (FOLLY_UNLIKELY(shouldYield())) {
       break;
     }
@@ -312,12 +414,12 @@ bool NestedLoopJoinProbe::advanceProbe() {
   if (hasProbedAllBuildData()) {
     probeRow_ += probeRowCount_;
     probeRowHasMatch_ = false;
-    buildIndex_ = 0;
 
     // If we finished processing the probe side.
     if (probeRow_ >= input_->size()) {
       return true;
     }
+    resetBuildCursor();
   }
   return false;
 }
@@ -326,7 +428,7 @@ void NestedLoopJoinProbe::handleProbeOnlyNoCondition() {
   // Reached only with a non-empty build vector, so every probe row matches.
   if (isAntiJoin(joinType_)) {
     // Anti join emits nothing when the probe row matches.
-    buildIndex_ = buildVectors_.value().size();
+    finishBuildCursor();
     filterResultRow_ = 0;
     return;
   }
@@ -338,7 +440,7 @@ void NestedLoopJoinProbe::handleProbeOnlyNoCondition() {
         ->asFlatVector<bool>()
         ->set(numOutputRows_ - 1, true);
   }
-  buildIndex_ = buildVectors_.value().size();
+  finishBuildCursor();
   filterResultRow_ = 0;
 }
 
@@ -403,7 +505,7 @@ bool NestedLoopJoinProbe::addFilteredOutput(
   }
 
   copyBuildValues(buildVector);
-  ++buildIndex_;
+  advanceBuildVector();
   filterResultRow_ = 0;
   buildRow_ = 0;
   if (!singleProbeRow) {
@@ -418,7 +520,7 @@ bool NestedLoopJoinProbe::handleMatchedFilterRow(
     vector_size_t buildRowCount,
     bool singleProbeRow) {
   if (needsBuildMismatch(joinType_)) {
-    buildMatched_[buildIndex_].setValid(buildRow_, true);
+    buildMatched(buildRowCount).setValid(buildRow_, true);
   }
 
   // Anti join: a match disqualifies the probe row, so emit nothing and stop
@@ -456,7 +558,7 @@ void NestedLoopJoinProbe::shortCircuitProbeRow(
     vector_size_t buildRowCount,
     bool singleProbeRow) {
   if (singleProbeRow) {
-    buildIndex_ = buildVectors_.value().size();
+    finishBuildCursor();
     filterResultRow_ = 0;
     buildRow_ = 0;
   } else {
@@ -482,11 +584,11 @@ bool NestedLoopJoinProbe::addToOutput() {
   }
 
   while (!hasProbedAllBuildData()) {
-    const auto& currentBuild = buildVectors_.value()[buildIndex_];
+    const auto& currentBuild = currentBuildVector();
 
     // Empty build vector; move to the next.
     if (currentBuild->size() == 0) {
-      ++buildIndex_;
+      advanceBuildVector();
       filterResultRow_ = 0;
       continue;
     }
@@ -499,7 +601,7 @@ bool NestedLoopJoinProbe::addToOutput() {
           currentBuild, outputType_, identityProjections_, buildProjections_);
       numOutputRows_ = output_->size();
       probeRowHasMatch_ = true;
-      ++buildIndex_;
+      advanceBuildVector();
       filterResultRow_ = 0;
       return false;
     }
@@ -530,9 +632,8 @@ bool NestedLoopJoinProbe::addToOutput() {
     }
   }
 
-  // If build side is empty, need to add mismatch row (for left, left semi and
-  // full outer joins)
-  if (isBuildSideEmpty()) {
+  // Spilled input has no known last batch until its reader reaches EOF.
+  if (isBuildSideEmpty() || isBuildDataSpilled()) {
     checkProbeMismatchRow();
   }
   // Signals that all input has been generated for the probeRow and build
@@ -786,7 +887,7 @@ bool NestedLoopJoinProbe::checkProbeMismatchRow() {
 void NestedLoopJoinProbe::finishProbeInput() {
   VELOX_CHECK_NOT_NULL(input_);
   input_.reset();
-  buildIndex_ = 0;
+  clearBuildCursor();
   probeRow_ = 0;
 
   if (!noMoreInput_) {
@@ -825,10 +926,8 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   for (const auto& peer : peerOperators) {
     auto* probe = peer->as<NestedLoopJoinProbe>();
     VELOX_CHECK_NOT_NULL(probe);
-    for (auto i = 0; i < buildMatched_.size(); ++i) {
-      buildMatched_[i].select(probe->buildMatched_[i]);
-      probeSideEmpty_ &= probe->probeSideEmpty_;
-    }
+    mergeBuildMatched(*probe);
+    probeSideEmpty_ &= probe->probeSideEmpty_;
   }
   peerOperators.clear();
   for (auto& matched : buildMatched_) {
@@ -837,6 +936,7 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   for (auto& promise : promises) {
     promise.setValue();
   }
+  resetBuildCursor();
 }
 
 RowVectorPtr NestedLoopJoinProbe::getBuildMismatchedOutput(

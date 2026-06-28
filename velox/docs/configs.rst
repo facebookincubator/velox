@@ -443,7 +443,7 @@ Spilling
    * - join_spill_enabled
      - boolean
      - true
-     - When `spill_enabled` is true, determines whether HashBuild and HashProbe operators can spill to disk under memory pressure.
+     - When `spill_enabled` is true, determines whether HashBuild, HashProbe, and NestedLoopJoinBuild operators can spill to disk under memory pressure.
    * - local_merge_spill_enabled
      - boolean
      - false

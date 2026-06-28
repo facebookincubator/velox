@@ -17,29 +17,35 @@
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 
-namespace facebook::velox::exec {
+#include <algorithm>
 
-void NestedLoopJoinBridge::setData(std::vector<RowVectorPtr> buildVectors) {
+namespace facebook::velox::exec {
+namespace {
+const SpillPartitionId kNestedLoopJoinSpillPartitionId{0};
+} // namespace
+
+void NestedLoopJoinBridge::setData(NestedLoopJoinBuildData buildData) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!buildVectors_.has_value(), "setData must be called only once");
-    buildVectors_ = std::move(buildVectors);
+    VELOX_CHECK_NULL(buildData_, "setData must be called only once");
+    buildData_ =
+        std::make_shared<const NestedLoopJoinBuildData>(std::move(buildData));
     promises = std::move(promises_);
   }
   notify(std::move(promises));
 }
 
-std::optional<std::vector<RowVectorPtr>> NestedLoopJoinBridge::dataOrFuture(
-    ContinueFuture* future) {
+std::shared_ptr<const NestedLoopJoinBuildData>
+NestedLoopJoinBridge::dataOrFuture(ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
-  if (buildVectors_.has_value()) {
-    return buildVectors_;
+  if (buildData_ != nullptr) {
+    return buildData_;
   }
-  promises_.emplace_back("NestedLoopJoinBridge::tableOrFuture");
+  promises_.emplace_back("NestedLoopJoinBridge::dataOrFuture");
   *future = promises_.back().getSemiFuture();
-  return std::nullopt;
+  return nullptr;
 }
 
 NestedLoopJoinBuild::NestedLoopJoinBuild(
@@ -51,16 +57,37 @@ NestedLoopJoinBuild::NestedLoopJoinBuild(
           nullptr,
           operatorId,
           joinNode->id(),
-          OperatorType::kNestedLoopJoinBuild) {}
+          OperatorType::kNestedLoopJoinBuild,
+          joinNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    OperatorType::kNestedLoopJoinBuild)
+              : std::nullopt),
+      buildType_(joinNode->sources()[1]->outputType()) {}
 
 void NestedLoopJoinBuild::addInput(RowVectorPtr input) {
-  if (input->size() > 0) {
-    // Load lazy vectors before storing.
+  if (input->size() == 0) {
+    return;
+  }
+  {
+    Operator::ReclaimableSectionGuard guard(this);
     for (auto& child : input->children()) {
       child->loadedVector();
     }
-    dataVectors_.emplace_back(std::move(input));
+    if (canSpill() && spiller_ == nullptr) {
+      // Charge retained input to the build pool so arbitration can reclaim it.
+      auto copy =
+          BaseVector::create<RowVector>(buildType_, input->size(), pool());
+      copy->copy(input.get(), 0, 0, input->size());
+      input = std::move(copy);
+    }
   }
+  // Copying input may have triggered reclamation and started spilling.
+  if (spiller_ != nullptr) {
+    spiller_->spill(kNestedLoopJoinSpillPartitionId, input);
+    return;
+  }
+  dataVectors_.emplace_back(std::move(input));
 }
 
 BlockingReason NestedLoopJoinBuild::isBlocked(ContinueFuture* future) {
@@ -104,6 +131,34 @@ std::vector<RowVectorPtr> NestedLoopJoinBuild::mergeDataVectors() const {
   return merged;
 }
 
+void NestedLoopJoinBuild::spillBufferedVectors() {
+  if (dataVectors_.empty()) {
+    return;
+  }
+  if (spiller_ == nullptr) {
+    spiller_ = std::make_unique<NoRowContainerSpiller>(
+        buildType_,
+        std::nullopt,
+        HashBitRange{},
+        spillConfig(),
+        spillStats_.get());
+  }
+  for (auto& vector : dataVectors_) {
+    spiller_->spill(kNestedLoopJoinSpillPartitionId, vector);
+    vector.reset();
+  }
+  dataVectors_.clear();
+  pool()->release();
+}
+
+void NestedLoopJoinBuild::reclaim(
+    uint64_t /*targetBytes*/,
+    memory::MemoryReclaimer::Stats& /*stats*/) {
+  VELOX_CHECK(canSpill());
+  VELOX_CHECK(!nonReclaimableSection_);
+  spillBufferedVectors();
+}
+
 void NestedLoopJoinBuild::noMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
@@ -127,6 +182,37 @@ void NestedLoopJoinBuild::noMoreInput() {
       }
     };
 
+    std::vector<NestedLoopJoinBuild*> builds{this};
+    for (const auto& peer : peerOperators) {
+      auto* build = peer->as<NestedLoopJoinBuild>();
+      VELOX_CHECK_NOT_NULL(build);
+      builds.push_back(build);
+    }
+
+    const bool anySpilled =
+        std::any_of(builds.begin(), builds.end(), [](auto* build) {
+          return build->spiller_ != nullptr;
+        });
+
+    if (anySpilled) {
+      SpillPartitionSet spillPartitions;
+      for (auto* build : builds) {
+        build->spillBufferedVectors();
+        if (build->spiller_ != nullptr) {
+          build->spiller_->finishSpill(spillPartitions);
+          build->spiller_.reset();
+        }
+      }
+
+      operatorCtx_->task()
+          ->getNestedLoopJoinBridge(
+              operatorCtx_->driverCtx()->splitGroupId, planNodeId())
+          ->setData(
+              {{},
+               spillPartitions.at(kNestedLoopJoinSpillPartitionId)->files()});
+      return;
+    }
+
     for (const auto& peer : peerOperators) {
       auto* build = peer->as<NestedLoopJoinBuild>();
       VELOX_CHECK_NOT_NULL(build);
@@ -141,7 +227,13 @@ void NestedLoopJoinBuild::noMoreInput() {
   operatorCtx_->task()
       ->getNestedLoopJoinBridge(
           operatorCtx_->driverCtx()->splitGroupId, planNodeId())
-      ->setData(std::move(dataVectors_));
+      ->setData({std::move(dataVectors_), {}});
+}
+
+void NestedLoopJoinBuild::close() {
+  dataVectors_.clear();
+  spiller_.reset();
+  Operator::close();
 }
 
 bool NestedLoopJoinBuild::isFinished() {

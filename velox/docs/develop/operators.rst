@@ -574,6 +574,12 @@ and emitting results. Nested loop join supports non-equality joins, and emit out
 rows in the same order as the probe input (for inner and left outer joins) for each
 thread of execution.
 
+When both ``spill_enabled`` and ``join_spill_enabled`` are enabled, the build
+side can spill under memory pressure while collecting input. If any build driver
+spills, all build input is spilled before probing begins. Each probe driver
+replays the build files one at a time for each probe row. Right and full joins
+also retain match bitmaps and replay the files to emit unmatched build rows.
+
 .. list-table::
    :widths: 10 30
    :align: left
