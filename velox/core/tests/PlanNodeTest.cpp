@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -237,6 +238,15 @@ TEST_F(PlanNodeTest, nestedLoopJoin) {
       std::make_shared<NestedLoopJoinNode>(
           nextId(), leftValues, rightValues, ROW({"a"}, VARCHAR())),
       "Join output column type must match the input type: VARCHAR vs. INTEGER");
+
+  auto join = std::make_shared<NestedLoopJoinNode>(
+      nextId(), leftValues, rightValues, ROW({"a"}, {INTEGER()}));
+  ASSERT_FALSE(join->canSpill(QueryConfig(
+      std::unordered_map<std::string, std::string>{
+          {QueryConfig::kJoinSpillEnabled, "false"}})));
+  ASSERT_TRUE(join->canSpill(QueryConfig(
+      std::unordered_map<std::string, std::string>{
+          {QueryConfig::kJoinSpillEnabled, "true"}})));
 }
 
 TEST_F(PlanNodeTest, indexLookupJoin) {
