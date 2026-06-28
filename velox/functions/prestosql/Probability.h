@@ -22,7 +22,6 @@
 #include <boost/math/distributions/weibull.hpp>
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
-#include "boost/math/distributions/cauchy.hpp"
 #include "boost/math/distributions/chi_squared.hpp"
 #include "boost/math/distributions/fisher_f.hpp"
 #include "boost/math/distributions/gamma.hpp"
