@@ -57,6 +57,9 @@ class DuckDbQueryPlanner {
     makeTableScan_ = std::move(func);
   }
 
+  /// Supports CROSS and INNER LATERAL joins by independently scanning the left
+  /// input for correlation keys. Left inputs must be repeatable; volatile
+  /// expressions in these inputs are not supported.
   PlanNodePtr plan(const std::string& sql);
 
  private:
