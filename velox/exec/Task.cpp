@@ -37,6 +37,7 @@
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
@@ -438,8 +439,7 @@ Task::Task(
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
-      splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(OutputBufferManager::getInstanceRef()) {
+      splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
   // Validate that any per-node transport type annotations refer to the right
   // kind of plan node before they are used to select exchange transports.
@@ -1282,11 +1282,6 @@ void Task::initializePartitionOutput() {
       taskId_,
       errorMessageLocked());
 
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "PartitionedOutputBufferManager was already destructed");
   std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
       nullptr};
   int numOutputDrivers{0};
@@ -1330,12 +1325,42 @@ void Task::initializePartitionOutput() {
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
-    bufferManager->initializeTask(
+    const auto& outputTransportTypes = planFragment_.outputTransportTypes;
+    const auto it = outputTransportTypes.find(partitionedOutputNode->id());
+    const std::string transportType = it != outputTransportTypes.end()
+        ? it->second
+        : std::string{core::TransportKind::kHttp};
+    // Resolve the output buffer manager for the node's transport. The registry
+    // applies its per-query availability predicate, returning a manager only
+    // when one is registered and enabled for this query. If the requested
+    // transport is unavailable, fall back to the default HTTP manager so the
+    // query proceeds over HTTP rather than failing.
+    auto manager =
+        OutputBufferManagerRegistry::tryGet(*queryCtx_, transportType);
+    if (!manager) {
+      manager = OutputBufferManagerRegistry::tryGet(
+          *queryCtx_, std::string{core::TransportKind::kHttp});
+    }
+    if (!manager) {
+      manager = OutputBufferManager::getInstanceRef();
+    }
+    setOutputBufferManager(manager);
+    manager->initializeTask(
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
         numOutputDrivers);
   }
+}
+
+std::weak_ptr<IOutputBufferManager> Task::outputBufferManager() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return bufferManager_;
+}
+
+void Task::setOutputBufferManager(std::weak_ptr<IOutputBufferManager> manager) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  bufferManager_ = std::move(manager);
 }
 
 // static
@@ -2135,9 +2160,10 @@ bool Task::checkNoMoreSplitGroupsLocked() {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
     if (groupedPartitionedOutput_) {
-      auto bufferManager = bufferManager_.lock();
-      bufferManager->updateNumDrivers(
-          taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      if (auto manager = bufferManager_.lock()) {
+        manager->updateNumDrivers(
+            taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      }
     }
 
     return checkIfFinishedLocked();
@@ -2324,22 +2350,20 @@ bool Task::isFinishedLocked() const {
 }
 
 bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "OutputBufferManager was already destructed");
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
+    // Ignore messages received after no-more-buffers message.
     if (noMoreOutputBuffers_) {
-      // Ignore messages received after no-more-buffers message.
       return false;
     }
     if (noMoreBuffers) {
       noMoreOutputBuffers_ = true;
     }
   }
-  return bufferManager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  if (auto manager = outputBufferManager().lock()) {
+    return manager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  }
+  return false;
 }
 
 int Task::getOutputPipelineId() const {
@@ -2832,15 +2856,14 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
-    if (auto bufferManager = bufferManager_.lock()) {
-      // Capture output buffer stats before deleting the buffer.
+    if (auto manager = outputBufferManager().lock()) {
       {
         std::lock_guard<std::timed_mutex> l(mutex_);
         if (!taskStats_.outputBufferStats.has_value()) {
-          taskStats_.outputBufferStats = bufferManager->stats(taskId_);
+          taskStats_.outputBufferStats = manager->stats(taskId_);
         }
       }
-      bufferManager->removeTask(taskId_);
+      manager->removeTask(taskId_);
     }
   }
 }
@@ -2999,11 +3022,12 @@ TaskStats Task::taskStats() const {
     }
   }
 
-  auto bufferManager = bufferManager_.lock();
-  taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
-  taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
-  if (!taskStats.outputBufferStats.has_value()) {
-    taskStats.outputBufferStats = bufferManager->stats(taskId_);
+  if (auto manager = bufferManager_.lock()) {
+    taskStats.outputBufferUtilization = manager->getUtilization(taskId_);
+    taskStats.outputBufferOverutilized = manager->isOverutilized(taskId_);
+    if (!taskStats.outputBufferStats.has_value()) {
+      taskStats.outputBufferStats = manager->stats(taskId_);
+    }
   }
   return taskStats;
 }
@@ -3263,9 +3287,10 @@ folly::dynamic Task::toJson() const {
   }
   obj["drivers"] = drivers;
 
-  if (auto buffers = bufferManager_.lock()) {
-    if (auto buffer = buffers->getBufferIfExists(taskId_)) {
-      obj["buffer"] = buffer->toString();
+  if (auto manager = bufferManager_.lock()) {
+    auto s = manager->toString(taskId_);
+    if (!s.empty()) {
+      obj["buffer"] = s;
     }
   }
 

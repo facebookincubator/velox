@@ -116,6 +116,10 @@ class OutputBufferManagerTest : public testing::Test {
         exec::Consumer{});
 
     bufferManager_->initializeTask(task, kind, numDestinations, numDrivers);
+    // Bind the manager to the task the same way
+    // Task::initializePartitionOutput() does in production, so
+    // task->taskStats() can surface buffer utilization.
+    task->testingSetOutputBufferManager(bufferManager_);
     return task;
   }
 
