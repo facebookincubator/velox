@@ -295,6 +295,48 @@ TEST(DateTimeUtilTest, fromDateStringInvalid) {
   testCastFromDateStringInvalid("1970-01-01T01:00:47.000", ParseMode::kIso8601);
 }
 
+// Locks in the strict 10-char `YYYY-MM-DD` fast path in fromDateString: its
+// eligibility edges, the shape mismatches that must fall through to the general
+// parser, and the invalid dates the fast path must reject with the canonical
+// error.
+TEST(DateTimeUtilTest, fromDateStringStrictIsoFastPath) {
+  // Fast-path-eligible boundaries: epoch, the year-zero edge, and the
+  // year-9999 edge all land in the fast inverse domain.
+  EXPECT_EQ(20581, parseDate("2026-05-08", ParseMode::kPrestoCast));
+  EXPECT_EQ(-719528, parseDate("0000-01-01", ParseMode::kPrestoCast));
+  EXPECT_EQ(2932896, parseDate("9999-12-31", ParseMode::kPrestoCast));
+
+  // Shape mismatches must fall through to the general parser and produce the
+  // same answer: unpadded fields, a leading sign, and surrounding whitespace.
+  EXPECT_EQ(20581, parseDate("2026-5-8", ParseMode::kPrestoCast));
+  EXPECT_EQ(20581, parseDate("+2026-05-08", ParseMode::kPrestoCast));
+  EXPECT_EQ(20581, parseDate(" 2026-05-08 ", ParseMode::kPrestoCast));
+
+  // The fast path computes an invalid date — it must reject and let the general
+  // parser produce the canonical error rather than returning a bogus day count.
+  auto expectInvalid = [](const StringView& str) {
+    VELOX_ASSERT_THROW(
+        parseDate(str, ParseMode::kPrestoCast),
+        fmt::format(
+            "Unable to parse date value: \"{}\". "
+            "Valid date string pattern is (YYYY-MM-DD), "
+            "and can be prefixed with [+-]",
+            std::string(str.data(), str.size())));
+  };
+  expectInvalid("2026-02-29"); // Not a leap year.
+  expectInvalid("2026-13-08"); // Month out of range.
+  expectInvalid("2026-00-08"); // Month zero.
+  expectInvalid("2026-05-32"); // Day out of range.
+
+  // A non-digit byte at any digit position underflows the unsigned digit
+  // subtraction and trips the same bounds branch as an out-of-range digit, so
+  // the fast path falls through; a wrong separator byte fails the shape check.
+  expectInvalid("X026-05-08");
+  expectInvalid("2026-X5-08");
+  expectInvalid("2026-05-0X");
+  expectInvalid("2026:05-08");
+}
+
 // bash command to verify:
 // $ date -d "2000-01-01 12:21:56Z" +%s
 // ('Z' at the end means UTC).
