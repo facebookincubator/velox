@@ -22,7 +22,9 @@
 #include <duckdb/main/connection.hpp> // @manual
 #include <duckdb/planner/expression/bound_aggregate_expression.hpp> // @manual
 #include <duckdb/planner/expression/bound_cast_expression.hpp> // @manual
+#include <duckdb/planner/expression/bound_columnref_expression.hpp> // @manual
 #include <duckdb/planner/expression/bound_comparison_expression.hpp> // @manual
+#include <duckdb/planner/expression/bound_conjunction_expression.hpp> // @manual
 #include <duckdb/planner/expression/bound_constant_expression.hpp> // @manual
 #include <duckdb/planner/expression/bound_function_expression.hpp> // @manual
 #include <duckdb/planner/expression/bound_reference_expression.hpp> // @manual
@@ -31,6 +33,8 @@
 namespace facebook::velox::core {
 
 namespace {
+
+using DuckColumnBindings = std::vector<::duckdb::ColumnBinding>;
 
 class ColumnNameGenerator {
  public:
@@ -56,7 +60,11 @@ struct QueryContext {
   const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
       inMemoryTables;
   MakeTableScan makeTableScan;
-  bool isInDelimJoin{false};
+
+  struct DelimJoinContext {
+    ::duckdb::LogicalDelimJoin* join;
+  };
+  std::vector<DelimJoinContext> delimJoinStack;
 
   QueryContext(
       const std::unordered_map<std::string, std::vector<RowVectorPtr>>&
@@ -107,6 +115,11 @@ std::string mapAggregateFunctionName(const std::string& name) {
 
   return name;
 }
+
+PlanNodePtr toVeloxPlan(
+    ::duckdb::LogicalOperator& plan,
+    memory::MemoryPool* pool,
+    QueryContext& queryContext);
 
 PlanNodePtr toVeloxPlan(
     ::duckdb::LogicalDummyScan& logicalDummyScan,
@@ -193,17 +206,19 @@ PlanNodePtr toVeloxPlan(
 
 TypedExprPtr toVeloxExpression(
     ::duckdb::Expression& expression,
-    const TypePtr& inputType);
+    const TypePtr& inputType,
+    const DuckColumnBindings* inputBindings = nullptr);
 
 TypedExprPtr toVeloxComparisonExpression(
     const std::string& name,
     ::duckdb::Expression& expression,
-    const TypePtr& inputType) {
+    const TypePtr& inputType,
+    const DuckColumnBindings* inputBindings = nullptr) {
   auto* comparison =
       dynamic_cast<::duckdb::BoundComparisonExpression*>(&expression);
   std::vector<TypedExprPtr> children{
-      toVeloxExpression(*comparison->left, inputType),
-      toVeloxExpression(*comparison->right, inputType)};
+      toVeloxExpression(*comparison->left, inputType, inputBindings),
+      toVeloxExpression(*comparison->right, inputType, inputBindings)};
 
   return std::make_shared<CallTypedExpr>(BOOLEAN(), std::move(children), name);
 }
@@ -214,8 +229,9 @@ struct VeloxColumnProjections {
 
   core::FieldAccessTypedExprPtr toFieldAccess(
       ::duckdb::Expression& expression,
-      const TypePtr& inputType) {
-    auto expr = toVeloxExpression(expression, inputType);
+      const TypePtr& inputType,
+      const DuckColumnBindings* inputBindings = nullptr) {
+    auto expr = toVeloxExpression(expression, inputType, inputBindings);
     auto column = std::dynamic_pointer_cast<const FieldAccessTypedExpr>(expr);
     if (column) {
       columns.push_back(column);
@@ -265,9 +281,68 @@ struct VeloxColumnProjections {
 };
 } // namespace
 
+std::string comparisonFunctionName(::duckdb::ExpressionType type) {
+  switch (type) {
+    case ::duckdb::ExpressionType::COMPARE_EQUAL:
+      return "eq";
+    case ::duckdb::ExpressionType::COMPARE_NOTEQUAL:
+      return "neq";
+    case ::duckdb::ExpressionType::COMPARE_GREATERTHAN:
+      return "gt";
+    case ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+      return "gte";
+    case ::duckdb::ExpressionType::COMPARE_LESSTHAN:
+      return "lt";
+    case ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:
+      return "lte";
+    case ::duckdb::ExpressionType::COMPARE_DISTINCT_FROM:
+    case ::duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+      return "distinct_from";
+    default:
+      VELOX_NYI(
+          "Comparison type {} is not supported yet",
+          ::duckdb::ExpressionTypeToString(type));
+  }
+}
+
+TypedExprPtr maybeNegateNotDistinct(
+    ::duckdb::ExpressionType type,
+    TypedExprPtr expr) {
+  if (type == ::duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
+    return std::make_shared<CallTypedExpr>(BOOLEAN(), "not", std::move(expr));
+  }
+  return expr;
+}
+
+std::string conjunctionFunctionName(::duckdb::ExpressionType type) {
+  switch (type) {
+    case ::duckdb::ExpressionType::CONJUNCTION_AND:
+      return "and";
+    case ::duckdb::ExpressionType::CONJUNCTION_OR:
+      return "or";
+    default:
+      VELOX_NYI(
+          "Conjunction type {} is not supported yet",
+          ::duckdb::ExpressionTypeToString(type));
+  }
+}
+
+int32_t findColumnBindingIndex(
+    const ::duckdb::ColumnBinding& binding,
+    const DuckColumnBindings& inputBindings) {
+  for (auto i = 0; i < inputBindings.size(); ++i) {
+    if (inputBindings[i].table_index == binding.table_index &&
+        inputBindings[i].column_index == binding.column_index) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 TypedExprPtr toVeloxExpression(
     ::duckdb::Expression& expression,
-    const TypePtr& inputType) {
+    const TypePtr& inputType,
+    const DuckColumnBindings* inputBindings) {
   switch (expression.type) {
     case ::duckdb::ExpressionType::VALUE_CONSTANT: {
       auto* constant =
@@ -277,23 +352,47 @@ TypedExprPtr toVeloxExpression(
           duckdb::duckValueToVariant(constant->value));
     }
     case ::duckdb::ExpressionType::COMPARE_EQUAL:
-      return toVeloxComparisonExpression("eq", expression, inputType);
     case ::duckdb::ExpressionType::COMPARE_NOTEQUAL:
-      return toVeloxComparisonExpression("neq", expression, inputType);
     case ::duckdb::ExpressionType::COMPARE_GREATERTHAN:
-      return toVeloxComparisonExpression("gt", expression, inputType);
     case ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-      return toVeloxComparisonExpression("gte", expression, inputType);
     case ::duckdb::ExpressionType::COMPARE_LESSTHAN:
-      return toVeloxComparisonExpression("lt", expression, inputType);
     case ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO:
-      return toVeloxComparisonExpression("lte", expression, inputType);
+    case ::duckdb::ExpressionType::COMPARE_DISTINCT_FROM:
+    case ::duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM: {
+      auto call = toVeloxComparisonExpression(
+          comparisonFunctionName(expression.type),
+          expression,
+          inputType,
+          inputBindings);
+      return maybeNegateNotDistinct(expression.type, std::move(call));
+    }
+    case ::duckdb::ExpressionType::CONJUNCTION_AND:
+    case ::duckdb::ExpressionType::CONJUNCTION_OR: {
+      auto* conjunction =
+          dynamic_cast<::duckdb::BoundConjunctionExpression*>(&expression);
+      VELOX_CHECK_GT(conjunction->children.size(), 0);
+      TypedExprPtr result;
+      for (auto& child : conjunction->children) {
+        auto conjunct = toVeloxExpression(*child, inputType, inputBindings);
+        if (!result) {
+          result = std::move(conjunct);
+        } else {
+          result = std::make_shared<CallTypedExpr>(
+              BOOLEAN(),
+              conjunctionFunctionName(expression.type),
+              std::move(result),
+              std::move(conjunct));
+        }
+      }
+      return result;
+    }
 
     case ::duckdb::ExpressionType::OPERATOR_CAST: {
       auto* cast = dynamic_cast<::duckdb::BoundCastExpression*>(&expression);
       return std::make_shared<CastTypedExpr>(
           duckdb::toVeloxType(cast->return_type),
-          std::vector<TypedExprPtr>{toVeloxExpression(*cast->child, inputType)},
+          std::vector<TypedExprPtr>{
+              toVeloxExpression(*cast->child, inputType, inputBindings)},
           cast->try_cast);
     }
     case ::duckdb::ExpressionType::BOUND_FUNCTION: {
@@ -302,7 +401,7 @@ TypedExprPtr toVeloxExpression(
 
       std::vector<TypedExprPtr> children;
       for (auto& child : func->children) {
-        children.push_back(toVeloxExpression(*child, inputType));
+        children.push_back(toVeloxExpression(*child, inputType, inputBindings));
       }
 
       auto name = mapScalarFunctionName(func->function.name);
@@ -327,13 +426,30 @@ TypedExprPtr toVeloxExpression(
           duckdb::toVeloxType(ref->return_type),
           inputType->asRow().nameOf(ref->index));
     }
+    case ::duckdb::ExpressionType::BOUND_COLUMN_REF: {
+      auto* ref =
+          dynamic_cast<::duckdb::BoundColumnRefExpression*>(&expression);
+      VELOX_CHECK_NOT_NULL(
+          inputBindings,
+          "Column binding expression requires input bindings: {}",
+          expression.ToString());
+      auto index = findColumnBindingIndex(ref->binding, *inputBindings);
+      VELOX_CHECK_GE(
+          index,
+          0,
+          "Column binding not found while planning expression: {}",
+          expression.ToString());
+      return std::make_shared<FieldAccessTypedExpr>(
+          duckdb::toVeloxType(ref->return_type),
+          inputType->asRow().nameOf(index));
+    }
     case ::duckdb::ExpressionType::BOUND_AGGREGATE: {
       auto* agg =
           dynamic_cast<::duckdb::BoundAggregateExpression*>(&expression);
 
       std::vector<TypedExprPtr> children;
       for (auto& child : agg->children) {
-        children.push_back(toVeloxExpression(*child, inputType));
+        children.push_back(toVeloxExpression(*child, inputType, inputBindings));
       }
 
       return std::make_shared<CallTypedExpr>(
@@ -355,8 +471,10 @@ PlanNodePtr toVeloxPlan(
     std::vector<PlanNodePtr> sources,
     QueryContext& queryContext) {
   TypedExprPtr veloxFilter;
+  auto inputBindings = logicalFilter.children[0]->GetColumnBindings();
   for (auto& expr : logicalFilter.expressions) {
-    auto conjunct = toVeloxExpression(*expr, sources[0]->outputType());
+    auto conjunct =
+        toVeloxExpression(*expr, sources[0]->outputType(), &inputBindings);
     if (!veloxFilter) {
       veloxFilter = conjunct;
     } else {
@@ -374,9 +492,11 @@ PlanNodePtr toVeloxPlan(
     std::vector<PlanNodePtr> sources,
     QueryContext& queryContext) {
   std::vector<TypedExprPtr> projections;
+  auto inputBindings = logicalProjection.children[0]->GetColumnBindings();
   for (auto& expression : logicalProjection.expressions) {
     projections.push_back(
-        toVeloxExpression(*expression, sources[0]->outputType()));
+        toVeloxExpression(
+            *expression, sources[0]->outputType(), &inputBindings));
   }
 
   // TODO Figure out how to use these.
@@ -411,6 +531,7 @@ PlanNodePtr toVeloxPlan(
     std::vector<PlanNodePtr> sources,
     QueryContext& queryContext) {
   std::vector<AggregationNode::Aggregate> aggregates;
+  auto inputBindings = logicalAggregate.children[0]->GetColumnBindings();
 
   std::vector<std::string> projectNames;
   std::vector<TypedExprPtr> projections;
@@ -418,7 +539,8 @@ PlanNodePtr toVeloxPlan(
   bool identityProjection = true;
   for (auto& expression : logicalAggregate.expressions) {
     auto call = std::dynamic_pointer_cast<const CallTypedExpr>(
-        toVeloxExpression(*expression, sources[0]->outputType()));
+        toVeloxExpression(
+            *expression, sources[0]->outputType(), &inputBindings));
     if (expression->return_type.InternalType() ==
         ::duckdb::PhysicalType::INT128) {
       call = std::make_shared<CallTypedExpr>(
@@ -457,7 +579,7 @@ PlanNodePtr toVeloxPlan(
   std::vector<FieldAccessTypedExprPtr> groupingKeys;
   for (auto& expression : logicalAggregate.groups) {
     auto groupingExpr =
-        toVeloxExpression(*expression, sources[0]->outputType());
+        toVeloxExpression(*expression, sources[0]->outputType(), &inputBindings);
     projections.push_back(groupingExpr);
     if (auto field = std::dynamic_pointer_cast<const FieldAccessTypedExpr>(
             groupingExpr)) {
@@ -509,9 +631,10 @@ PlanNodePtr toVeloxPlan(
   std::vector<FieldAccessTypedExprPtr> keys;
   std::vector<SortOrder> sortOrder;
   const auto& source = sources[0];
+  auto inputBindings = logicalOrder.children[0]->GetColumnBindings();
   for (auto& order : logicalOrder.orders) {
-    keys.push_back(
-        projections.toFieldAccess(*order.expression, source->outputType()));
+    keys.push_back(projections.toFieldAccess(
+        *order.expression, source->outputType(), &inputBindings));
     sortOrder.push_back(SortOrder(
         order.type == ::duckdb::OrderType::ASCENDING ||
             order.type == ::duckdb::OrderType::ORDER_DEFAULT,
@@ -564,59 +687,69 @@ std::vector<idx_t> columnIndices(std::vector<idx_t> map, int32_t size) {
   }
   return map;
 }
-} // namespace
 
-PlanNodePtr toVeloxPlan(
-    ::duckdb::LogicalComparisonJoin& join,
-    memory::MemoryPool* pool,
-    std::vector<PlanNodePtr> sources,
-    QueryContext& queryContext) {
-  VELOX_CHECK_EQ(2, sources.size());
-
-  auto& leftInputType = sources[0]->outputType();
-  auto& rightInputType = sources[1]->outputType();
-
-  VeloxColumnProjections leftProjection(queryContext);
-  VeloxColumnProjections rightProjection(queryContext);
-  JoinType joinType = JoinType::kInner;
-  switch (join.join_type) {
+JoinType toVeloxJoinType(::duckdb::JoinType joinType) {
+  switch (joinType) {
     case ::duckdb::JoinType::INNER:
     case ::duckdb::JoinType::SINGLE:
-      joinType = JoinType::kInner;
-      break;
+      return JoinType::kInner;
     case ::duckdb::JoinType::LEFT:
-      joinType = JoinType::kLeft;
-      break;
+      return JoinType::kLeft;
     case ::duckdb::JoinType::RIGHT:
-      joinType = JoinType::kRight;
-      break;
+      return JoinType::kRight;
     case ::duckdb::JoinType::OUTER:
-      joinType = JoinType::kFull;
-      break;
+      return JoinType::kFull;
     case ::duckdb::JoinType::SEMI:
-      joinType = JoinType::kLeftSemiFilter;
-      break;
+      return JoinType::kLeftSemiFilter;
     case ::duckdb::JoinType::ANTI:
-      joinType = JoinType::kAnti;
-      break;
+      return JoinType::kAnti;
     case ::duckdb::JoinType::MARK:
-      joinType = JoinType::kLeftSemiProject;
-      break;
+      return JoinType::kLeftSemiProject;
     default:
-      VELOX_NYI("Bad Duck join type {}", static_cast<int32_t>(join.join_type));
+      VELOX_NYI("Bad Duck join type {}", static_cast<int32_t>(joinType));
   }
+}
 
+RowTypePtr concatRowTypes(
+    const RowTypePtr& leftType,
+    const RowTypePtr& rightType) {
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  names.reserve(leftType->size() + rightType->size());
+  types.reserve(leftType->size() + rightType->size());
+  for (auto i = 0; i < leftType->size(); ++i) {
+    names.push_back(leftType->nameOf(i));
+    types.push_back(leftType->childAt(i));
+  }
+  for (auto i = 0; i < rightType->size(); ++i) {
+    names.push_back(rightType->nameOf(i));
+    types.push_back(rightType->childAt(i));
+  }
+  return ROW(std::move(names), std::move(types));
+}
+
+DuckColumnBindings concatBindings(
+    DuckColumnBindings leftBindings,
+    const DuckColumnBindings& rightBindings) {
+  leftBindings.insert(
+      leftBindings.end(), rightBindings.begin(), rightBindings.end());
+  return leftBindings;
+}
+
+RowTypePtr joinOutputType(
+    ::duckdb::LogicalJoin& join,
+    const RowTypePtr& leftInputType,
+    const RowTypePtr& rightInputType,
+    JoinType joinType,
+    const PlanNodeId& joinNodeId) {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (auto i :
        columnIndices(join.left_projection_map, leftInputType->size())) {
-    auto source = std::make_shared<core::FieldAccessTypedExpr>(
-        leftInputType->childAt(i), leftInputType->nameOf(i));
-    leftProjection.addColumn(source);
-    names.push_back(source->name());
-    types.push_back(source->type());
+    names.push_back(leftInputType->nameOf(i));
+    types.push_back(leftInputType->childAt(i));
   }
-  auto joinNodeId = queryContext.nextNodeId();
+
   switch (joinType) {
     case JoinType::kLeftSemiFilter:
     case JoinType::kAnti:
@@ -628,31 +761,142 @@ PlanNodePtr toVeloxPlan(
     default:
       for (auto i :
            columnIndices(join.right_projection_map, rightInputType->size())) {
-        auto source = std::make_shared<core::FieldAccessTypedExpr>(
-            rightInputType->childAt(i), rightInputType->nameOf(i));
-        rightProjection.addColumn(source);
-        names.push_back(source->name());
-        types.push_back(source->type());
+        names.push_back(rightInputType->nameOf(i));
+        types.push_back(rightInputType->childAt(i));
       }
   }
-  auto outputType = ROW(std::move(names), std::move(types));
+  return ROW(std::move(names), std::move(types));
+}
+
+TypedExprPtr andExpr(TypedExprPtr left, TypedExprPtr right) {
+  if (!left) {
+    return right;
+  }
+  return std::make_shared<CallTypedExpr>(
+      BOOLEAN(), "and", std::move(left), std::move(right));
+}
+
+TypedExprPtr toVeloxJoinCondition(
+    const ::duckdb::JoinCondition& condition,
+    const RowTypePtr& leftInputType,
+    const RowTypePtr& rightInputType,
+    const DuckColumnBindings& leftBindings,
+    const DuckColumnBindings& rightBindings) {
+  std::vector<TypedExprPtr> inputs{
+      toVeloxExpression(*condition.left, leftInputType, &leftBindings),
+      toVeloxExpression(*condition.right, rightInputType, &rightBindings)};
+  auto call = std::make_shared<CallTypedExpr>(
+      BOOLEAN(),
+      std::move(inputs),
+      comparisonFunctionName(condition.comparison));
+  return maybeNegateNotDistinct(condition.comparison, std::move(call));
+}
+
+TypedExprPtr toVeloxJoinCondition(
+    ::duckdb::LogicalComparisonJoin& join,
+    const RowTypePtr& leftInputType,
+    const RowTypePtr& rightInputType) {
+  auto leftBindings = join.children[0]->GetColumnBindings();
+  auto rightBindings = join.children[1]->GetColumnBindings();
+  auto joinInputType = concatRowTypes(leftInputType, rightInputType);
+  auto joinInputBindings = concatBindings(leftBindings, rightBindings);
+
+  TypedExprPtr condition;
+  for (auto& joinCondition : join.conditions) {
+    condition = andExpr(
+        std::move(condition),
+        toVeloxJoinCondition(
+            joinCondition,
+            leftInputType,
+            rightInputType,
+            leftBindings,
+            rightBindings));
+  }
+  for (auto& expression : join.expressions) {
+    condition = andExpr(
+        std::move(condition),
+        toVeloxExpression(*expression, joinInputType, &joinInputBindings));
+  }
+  return condition;
+}
+
+bool canUseHashJoin(const ::duckdb::LogicalComparisonJoin& join) {
+  if (join.conditions.empty()) {
+    return false;
+  }
+  for (auto& condition : join.conditions) {
+    if (condition.comparison != ::duckdb::ExpressionType::COMPARE_EQUAL) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
+PlanNodePtr toVeloxPlan(
+    ::duckdb::LogicalComparisonJoin& join,
+    memory::MemoryPool* pool,
+    std::vector<PlanNodePtr> sources,
+    QueryContext& queryContext) {
+  VELOX_CHECK_EQ(2, sources.size());
+
+  auto leftInputType = sources[0]->outputType();
+  auto rightInputType = sources[1]->outputType();
+  auto joinNodeId = queryContext.nextNodeId();
+  auto joinType = toVeloxJoinType(join.join_type);
+  auto outputType =
+      joinOutputType(join, leftInputType, rightInputType, joinType, joinNodeId);
+
+  if (!canUseHashJoin(join)) {
+    VELOX_USER_CHECK(
+        NestedLoopJoinNode::isSupported(joinType),
+        "The join type is not supported by nested loop join: {}",
+        JoinTypeName::toName(joinType));
+    return std::make_shared<NestedLoopJoinNode>(
+        joinNodeId,
+        joinType,
+        toVeloxJoinCondition(join, leftInputType, rightInputType),
+        std::move(sources[0]),
+        std::move(sources[1]),
+        outputType);
+  }
+
+  VeloxColumnProjections leftProjection(queryContext);
+  VeloxColumnProjections rightProjection(queryContext);
+  auto leftBindings = join.children[0]->GetColumnBindings();
+  auto rightBindings = join.children[1]->GetColumnBindings();
+
+  for (auto i :
+       columnIndices(join.left_projection_map, leftInputType->size())) {
+    auto source = std::make_shared<core::FieldAccessTypedExpr>(
+        leftInputType->childAt(i), leftInputType->nameOf(i));
+    leftProjection.addColumn(source);
+  }
+  if (!isProbeOnlyJoin(joinType)) {
+    for (auto i :
+         columnIndices(join.right_projection_map, rightInputType->size())) {
+      auto source = std::make_shared<core::FieldAccessTypedExpr>(
+          rightInputType->childAt(i), rightInputType->nameOf(i));
+      rightProjection.addColumn(source);
+    }
+  }
+
   TypedExprPtr filter;
-  if (!join.expressions.empty()) {
-    VELOX_CHECK_EQ(join.expressions.size(), 1);
-    filter = toVeloxExpression(*join.expressions.front(), outputType);
+  auto outputBindings = join.GetColumnBindings();
+  for (auto& expression : join.expressions) {
+    filter = andExpr(
+        std::move(filter),
+        toVeloxExpression(*expression, outputType, &outputBindings));
   }
 
   std::vector<FieldAccessTypedExprPtr> leftKeys;
   std::vector<FieldAccessTypedExprPtr> rightKeys;
   for (auto& condition : join.conditions) {
-    VELOX_CHECK(
-        condition.comparison == ::duckdb::ExpressionType::COMPARE_EQUAL ||
-        condition.comparison ==
-            ::duckdb::ExpressionType::COMPARE_NOT_DISTINCT_FROM);
-    leftKeys.push_back(
-        leftProjection.toFieldAccess(*condition.left, leftInputType));
+    leftKeys.push_back(leftProjection.toFieldAccess(
+        *condition.left, leftInputType, &leftBindings));
     rightKeys.push_back(
-        rightProjection.toFieldAccess(*condition.right, rightInputType));
+        rightProjection.toFieldAccess(
+            *condition.right, rightInputType, &rightBindings));
   }
 
   return std::make_shared<HashJoinNode>(
@@ -667,45 +911,95 @@ PlanNodePtr toVeloxPlan(
       outputType);
 }
 
-int32_t getDelimCrossRightSide(
-    ::duckdb::Expression& filter,
-    int32_t numFromDelimGet) {
-  if (filter.type != ::duckdb::ExpressionType::COMPARE_EQUAL) {
-    return -1;
-  }
-  auto& comparison =
-      reinterpret_cast<const ::duckdb::BoundComparisonExpression&>(filter);
-  auto left =
-      dynamic_cast<::duckdb::BoundReferenceExpression*>(comparison.left.get());
-  auto right =
-      dynamic_cast<::duckdb::BoundReferenceExpression*>(comparison.right.get());
-  if (left && right) {
-    if (left->index < numFromDelimGet && right->index >= numFromDelimGet) {
-      return right->index - numFromDelimGet;
-    }
-    if (left->index >= numFromDelimGet && right->index < numFromDelimGet) {
-      return left->index - numFromDelimGet;
-    }
-  }
-  return -1;
+PlanNodePtr toVeloxPlan(
+    ::duckdb::LogicalAnyJoin& join,
+    memory::MemoryPool* pool,
+    std::vector<PlanNodePtr> sources,
+    QueryContext& queryContext) {
+  VELOX_CHECK_EQ(2, sources.size());
+  auto leftInputType = sources[0]->outputType();
+  auto rightInputType = sources[1]->outputType();
+  auto joinNodeId = queryContext.nextNodeId();
+  auto joinType = toVeloxJoinType(join.join_type);
+  VELOX_USER_CHECK(
+      NestedLoopJoinNode::isSupported(joinType),
+      "The join type is not supported by nested loop join: {}",
+      JoinTypeName::toName(joinType));
+
+  auto leftBindings = join.children[0]->GetColumnBindings();
+  auto rightBindings = join.children[1]->GetColumnBindings();
+  auto joinInputType = concatRowTypes(leftInputType, rightInputType);
+  auto joinInputBindings = concatBindings(leftBindings, rightBindings);
+  return std::make_shared<NestedLoopJoinNode>(
+      joinNodeId,
+      joinType,
+      toVeloxExpression(*join.condition, joinInputType, &joinInputBindings),
+      std::move(sources[0]),
+      std::move(sources[1]),
+      joinOutputType(join, leftInputType, rightInputType, joinType, joinNodeId));
 }
 
-// Processesa filter over cross join of delim get and the table in
-// the correlated subq. Some of the filters are joining the delim
-// get and the table in the subquery. The delim get side of the
-// output must be aliases to the corresponding columns on the
-// right. This comes from some of the filters. There can be other
-// filters that pertain to the right side that will be left in
-// place.
-PlanNodePtr processDelimGetJoin(
-    const ::duckdb::LogicalFilter& filter,
+PlanNodePtr toVeloxPlan(
+    ::duckdb::LogicalDelimGet& logicalDelimGet,
     memory::MemoryPool* pool,
-    QueryContext& queryContext);
+    QueryContext& queryContext) {
+  VELOX_CHECK(
+      !queryContext.delimJoinStack.empty(),
+      "LOGICAL_DELIM_GET must be planned under LOGICAL_DELIM_JOIN");
+  auto& delimJoin = *queryContext.delimJoinStack.back().join;
+  VELOX_CHECK_EQ(
+      delimJoin.duplicate_eliminated_columns.size(),
+      logicalDelimGet.chunk_types.size());
 
-PlanNodePtr processDelimGetJoin(
-    const ::duckdb::LogicalComparisonJoin& join,
+  auto left = toVeloxPlan(*delimJoin.children[0], pool, queryContext);
+  auto leftBindings = delimJoin.children[0]->GetColumnBindings();
+
+  std::vector<std::string> names;
+  std::vector<TypedExprPtr> exprs;
+  std::vector<FieldAccessTypedExprPtr> groupingKeys;
+  names.reserve(delimJoin.duplicate_eliminated_columns.size());
+  exprs.reserve(delimJoin.duplicate_eliminated_columns.size());
+  groupingKeys.reserve(delimJoin.duplicate_eliminated_columns.size());
+  for (auto& expression : delimJoin.duplicate_eliminated_columns) {
+    auto veloxExpr =
+        toVeloxExpression(*expression, left->outputType(), &leftBindings);
+    auto name = queryContext.nextColumnName("_delim");
+    groupingKeys.push_back(
+        std::make_shared<FieldAccessTypedExpr>(veloxExpr->type(), name));
+    names.push_back(std::move(name));
+    exprs.push_back(std::move(veloxExpr));
+  }
+
+  auto project = std::make_shared<ProjectNode>(
+      queryContext.nextNodeId(), std::move(names), std::move(exprs), left);
+  return std::make_shared<AggregationNode>(
+      queryContext.nextNodeId(),
+      AggregationNode::Step::kSingle,
+      groupingKeys,
+      std::vector<FieldAccessTypedExprPtr>{}, // preGroupedKeys
+      std::vector<std::string>{}, // aggregateNames
+      std::vector<AggregationNode::Aggregate>{}, // aggregates
+      /*ignoreNullKeys=*/false,
+      /*noGroupsSpanBatches=*/false,
+      project);
+}
+
+PlanNodePtr toVeloxPlan(
+    ::duckdb::LogicalDelimJoin& join,
     memory::MemoryPool* pool,
-    QueryContext& queryContext);
+    QueryContext& queryContext) {
+  VELOX_CHECK_EQ(2, join.children.size());
+  std::vector<PlanNodePtr> sources;
+  sources.push_back(toVeloxPlan(*join.children[0], pool, queryContext));
+  queryContext.delimJoinStack.push_back(QueryContext::DelimJoinContext{&join});
+  sources.push_back(toVeloxPlan(*join.children[1], pool, queryContext));
+  queryContext.delimJoinStack.pop_back();
+  return toVeloxPlan(
+      static_cast<::duckdb::LogicalComparisonJoin&>(join),
+      pool,
+      std::move(sources),
+      queryContext);
+}
 
 PlanNodePtr toVeloxPlan(
     ::duckdb::LogicalOperator& plan,
@@ -714,26 +1008,12 @@ PlanNodePtr toVeloxPlan(
   std::vector<PlanNodePtr> sources;
 
   if (plan.type == ::duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN) {
-    queryContext.isInDelimJoin = true;
+    return toVeloxPlan(
+        dynamic_cast<::duckdb::LogicalDelimJoin&>(plan), pool, queryContext);
   }
-  if (queryContext.isInDelimJoin &&
-      plan.type == ::duckdb::LogicalOperatorType::LOGICAL_FILTER) {
-    auto& filter = dynamic_cast<::duckdb::LogicalFilter&>(plan);
-    if (filter.children[0]->type ==
-            ::duckdb::LogicalOperatorType::LOGICAL_CROSS_PRODUCT &&
-        filter.children[0]->children[1]->type ==
-            ::duckdb::LogicalOperatorType::LOGICAL_DELIM_GET) {
-      return processDelimGetJoin(filter, pool, queryContext);
-    }
-  }
-  if (plan.type == ::duckdb::LogicalOperatorType::LOGICAL_COMPARISON_JOIN &&
-      queryContext.isInDelimJoin &&
-      plan.children[1]->type ==
-          ::duckdb::LogicalOperatorType::LOGICAL_DELIM_GET) {
-    return processDelimGetJoin(
-        dynamic_cast<::duckdb::LogicalComparisonJoin&>(plan),
-        pool,
-        queryContext);
+  if (plan.type == ::duckdb::LogicalOperatorType::LOGICAL_DELIM_GET) {
+    return toVeloxPlan(
+        dynamic_cast<::duckdb::LogicalDelimGet&>(plan), pool, queryContext);
   }
   for (auto& child : plan.children) {
     sources.push_back(toVeloxPlan(*child, pool, queryContext));
@@ -798,112 +1078,17 @@ PlanNodePtr toVeloxPlan(
           pool,
           std::move(sources),
           queryContext);
-    case ::duckdb::LogicalOperatorType::LOGICAL_DELIM_JOIN: {
+    case ::duckdb::LogicalOperatorType::LOGICAL_ANY_JOIN:
       return toVeloxPlan(
-          dynamic_cast<::duckdb::LogicalComparisonJoin&>(plan),
+          dynamic_cast<::duckdb::LogicalAnyJoin&>(plan),
           pool,
           std::move(sources),
           queryContext);
-    }
-    case ::duckdb::LogicalOperatorType::LOGICAL_DELIM_GET:
-      return nullptr;
     default:
       VELOX_NYI(
           "Plan node is not supported yet: {}",
           ::duckdb::LogicalOperatorToString(plan.type));
   }
-}
-
-PlanNodePtr processDelimGetJoin(
-    const ::duckdb::LogicalFilter& filter,
-    memory::MemoryPool* pool,
-    QueryContext& queryContext) {
-  auto& cross =
-      dynamic_cast<::duckdb::LogicalCrossProduct&>(*filter.children[0]);
-  int32_t numFromDelimGet = cross.children[1]->types.size();
-  // Column index on the left side for each delim get column.
-  std::vector<int32_t> delimAlias;
-  auto right =
-      toVeloxPlan(*filter.children[0]->children[0], pool, queryContext);
-  auto rightType = right->outputType();
-  std::vector<::duckdb::Expression*> remaining;
-  for (auto& conjunct : filter.expressions) {
-    auto rightSide = getDelimCrossRightSide(*conjunct, numFromDelimGet);
-    if (rightSide >= 0) {
-      delimAlias.push_back(rightSide);
-    } else {
-      remaining.push_back(conjunct.get());
-    }
-  }
-  std::vector<std::string> names;
-  std::vector<TypedExprPtr> exprs;
-  for (auto i = 0; i < numFromDelimGet; ++i) {
-    names.push_back(queryContext.nextColumnName("_delim"));
-    auto rightIndex = delimAlias[i];
-    auto type = rightType->childAt(rightIndex);
-    exprs.push_back(
-        std::make_shared<FieldAccessTypedExpr>(
-            type, rightType->nameOf(rightIndex)));
-  }
-  for (auto i = 0; i < rightType->size(); ++i) {
-    names.push_back(rightType->nameOf(i));
-    auto type = rightType->childAt(i);
-    exprs.push_back(std::make_shared<FieldAccessTypedExpr>(type, names.back()));
-  }
-  auto project = std::make_shared<ProjectNode>(
-      queryContext.nextNodeId(), std::move(names), std::move(exprs), right);
-  if (remaining.empty()) {
-    return project;
-  }
-  TypedExprPtr veloxFilter;
-  for (auto& expr : remaining) {
-    auto conjunct = toVeloxExpression(*expr, project->outputType());
-    if (!veloxFilter) {
-      veloxFilter = conjunct;
-    } else {
-      veloxFilter = std::make_shared<CallTypedExpr>(
-          BOOLEAN(), "and", veloxFilter, conjunct);
-    }
-  }
-  return std::make_shared<FilterNode>(
-      queryContext.nextNodeId(), veloxFilter, project);
-}
-
-PlanNodePtr processDelimGetJoin(
-    const ::duckdb::LogicalComparisonJoin& join,
-    memory::MemoryPool* pool,
-    QueryContext& queryContext) {
-  int32_t numFromDelimGet = join.children[1]->types.size();
-  // Column index on the right side for each delim get column.
-  std::vector<int32_t> delimAlias(numFromDelimGet);
-  auto right = toVeloxPlan(*join.children[0], pool, queryContext);
-  auto rightType = right->outputType();
-  for (auto& condition : join.conditions) {
-    auto left =
-        dynamic_cast<::duckdb::BoundReferenceExpression*>(condition.left.get());
-    auto right = dynamic_cast<::duckdb::BoundReferenceExpression*>(
-        condition.right.get());
-    VELOX_CHECK(left && right);
-    VELOX_CHECK_LT(left->index, numFromDelimGet);
-    delimAlias[left->index] = right->index;
-  }
-  std::vector<std::string> names;
-  std::vector<TypedExprPtr> exprs;
-  for (auto i = 0; i < numFromDelimGet; ++i) {
-    names.push_back(queryContext.nextColumnName("_delim"));
-    auto rightIndex = delimAlias[i];
-    auto type = rightType->childAt(rightIndex);
-    exprs.push_back(
-        std::make_shared<FieldAccessTypedExpr>(
-            type, rightType->nameOf(rightIndex)));
-  }
-  for (auto i = 0; i < rightType->size(); ++i) {
-    names.push_back(rightType->nameOf(i));
-    auto type = rightType->childAt(i);
-    exprs.push_back(std::make_shared<FieldAccessTypedExpr>(type, names.back()));
-  }
-  return std::make_shared<ProjectNode>(
-      queryContext.nextNodeId(), std::move(names), std::move(exprs), right);
 }
 
 static void customScalarFunction(
