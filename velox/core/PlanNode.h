@@ -1422,23 +1422,7 @@ using AggregationNodePtr = std::shared_ptr<const AggregationNode>;
 inline std::ostream& operator<<(
     std::ostream& out,
     const AggregationNode::Step& step) {
-  switch (step) {
-    case AggregationNode::Step::kFinal:
-      return out << "FINAL";
-    case AggregationNode::Step::kIntermediate:
-      return out << "INTERMEDIATE";
-    case AggregationNode::Step::kPartial:
-      return out << "PARTIAL";
-    case AggregationNode::Step::kSingle:
-      return out << "SINGLE";
-  }
-  VELOX_UNREACHABLE();
-}
-
-inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
-  std::stringstream ss;
-  ss << step;
-  return ss.str();
+  return out << AggregationNode::toName(step);
 }
 
 /// Specify the column stats collection by aggregation. This is used by table
