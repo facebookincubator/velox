@@ -3,7 +3,7 @@
 [![Linux Build using GCC](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/linux-build.yml)
 [![macOS Build](https://github.com/facebookincubator/velox/actions/workflows/macos.yml/badge.svg)](https://github.com/facebookincubator/velox/actions/workflows/macos.yml)
 
-Velox is a composable execution engine distributed as an open source C++
+Velox is a composable execution engine distributed as an open-source C++
 library. It provides reusable, extensible, and high-performance data processing
 components that can be (re-)used to build data management systems focused on
 different analytical workloads, including batch, interactive, stream
