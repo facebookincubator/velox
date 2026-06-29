@@ -115,7 +115,7 @@ class EncodingTest : public testing::Test, public velox::test::VectorTestBase {
     checkDictionarize(row, 1000);
 
     vector = createScalar<kind>(type, 1000, 10, 1, false);
-    // The vector has values repeating in in a 10 value cycle. If each 10 values
+    // The vector has values repeating in a 10 value cycle. If each 10 values
     // are map values with the same key, the map from the base is constant. If
     // we take every 5 consecutive values as map values with the same keys, we
     // have 2 distinct maps.

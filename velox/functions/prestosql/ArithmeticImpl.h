@@ -26,7 +26,7 @@ namespace facebook::velox::functions {
 /// Round function
 /// When AlwaysRoundNegDec is false, presto semantics is followed which does not
 /// round negative decimals for integrals and round it otherwise
-/// Note that is is likely techinically impossible for this function to return
+/// Note that is likely techinically impossible for this function to return
 /// expected results in all cases as the loss of precision plagues it on both
 /// paths: factor multiplication for large numbers and addition of truncated
 /// number to the rounded fraction for small numbers.
