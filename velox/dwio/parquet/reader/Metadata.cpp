@@ -340,7 +340,8 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<std::string>(columnChunkStats),
           std::nullopt);
     case TypeKind::TIMESTAMP:
-      if (physicalType == thrift::Type::INT64) {
+      if (physicalType == thrift::Type::INT64 &&
+          (convertedType.has_value() || logicalType.has_value())) {
         return std::make_unique<dwio::common::TimestampColumnStatistics>(
             valueCount,
             hasNull,
@@ -421,18 +422,20 @@ bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
 
 std::unique_ptr<dwio::common::ColumnStatistics>
 ColumnChunkMetaDataPtr::getColumnStatistics(
-    const ParquetTypeWithId& parquetType,
-    int64_t numRows) {
+    const TypePtr type,
+    int64_t numRows,
+    std::optional<thrift::ConvertedType> convertedType,
+    const std::optional<thrift::LogicalType>& logicalType) {
   VELOX_CHECK(hasStatistics());
   const auto& metaData =
       apache::thrift::can_throw(*thriftColumnChunkPtr(ptr_)->meta_data());
   return buildColumnStatisticsFromThrift(
       apache::thrift::can_throw(*metaData.statistics()),
-      *parquetType.type(),
+      *type,
       numRows,
       apache::thrift::can_throw(*metaData.type()),
-      parquetType.convertedType_,
-      parquetType.logicalType_);
+      convertedType,
+      logicalType);
 }
 
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {

@@ -18,7 +18,6 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
-#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
@@ -39,10 +38,13 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
 
-  /// Return the ColumnChunk statistics.
+  /// Return the ColumnChunk statistics. Timestamp columns require
+  /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
-      const ParquetTypeWithId& parquetType,
-      int64_t numRows);
+      const TypePtr type,
+      int64_t numRows,
+      std::optional<thrift::ConvertedType> convertedType = std::nullopt,
+      const std::optional<thrift::LogicalType>& logicalType = std::nullopt);
 
   /// Return the Column Metadata Statistics Min Value
   std::string getColumnMetadataStatsMinValue();
