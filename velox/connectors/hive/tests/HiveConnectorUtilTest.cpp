@@ -208,20 +208,11 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   };
 
   auto checkColumnMappingMode = [&]() {
-    if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
-      auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
-          readerOptions.formatSpecificOptions());
-      auto orcConnectorConfig =
-          hiveConfig->config()->rawConfigsWithPrefix("hive.orc.");
-      const auto expectedMappingMode =
-          dwrf::Config::useColumnNames(
-              config::ConfigBase(std::move(orcConnectorConfig)),
-              config::ConfigBase(
-                  sessionProperties.rawConfigsWithPrefix("orc_")))
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition;
-      EXPECT_EQ(dwrfOptions->columnMappingMode(), expectedMappingMode);
-    }
+    const auto expectedMappingMode =
+        hiveConfig->useColumnNames(&sessionProperties)
+        ? dwio::common::ColumnMappingMode::kName
+        : dwio::common::ColumnMappingMode::kPosition;
+    EXPECT_EQ(readerOptions.columnMappingMode(), expectedMappingMode);
   };
 
   auto checkOrcMaxCoalesceDistance = [&](int32_t expected) {
@@ -346,13 +337,11 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       dwrf::Config::kOrcMaxCoalesceDistance)] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
-  customHiveConfigProps[hiveOrcConfigKey(dwrf::Config::kOrcUseColumnNames)] =
-      "true";
+  customHiveConfigProps["hive.use-column-names"] = "true";
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   customHiveConfigProps[hive::HiveConfig::kCacheMetadata] = "true";
-  customHiveConfigProps[hiveOrcConfigKey(
-      dwrf::Config::kOrcFooterSpeculativeIoSize)] = "1111";
+  customHiveConfigProps["hive.footer-speculative-io-size"] = "1111";
   hiveConfig = std::make_shared<hive::HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(customHiveConfigProps)));
   performConfigure();
@@ -383,14 +372,11 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   checkColumnMappingMode();
 }
 
-TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
+TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSize) {
   config::ConfigBase sessionProperties{
       std::unordered_map<std::string, std::string>{
-          {"nimble.unused", "1"},
-          {"parquet.unused", "2"},
-          {"parquet_footer_speculative_io_size", "7777"},
+          {hive::FileConfig::kFooterSpeculativeIoSizeSession, "7777"},
           {"parquet_footer_memory_tracking_threshold", "6666"},
-          {"hive.parquet.footer_speculative_io_size", "8888"},
           {"unrelated.unused", "3"},
       }};
   auto connectorQueryCtx = std::make_unique<connector::ConnectorQueryCtx>(
@@ -408,20 +394,12 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
       "");
 
   std::unordered_map<std::string, std::string> customHiveConfigProps;
-  customHiveConfigProps["orc.footer-speculative-io-size"] = "9999";
-  customHiveConfigProps
-      [std::string("hive.orc.") + dwrf::Config::kOrcFooterSpeculativeIoSize] =
-          "1111";
+  customHiveConfigProps["hive.footer-speculative-io-size"] = "1111";
 #ifdef VELOX_ENABLE_PARQUET
-  customHiveConfigProps["parquet.footer-speculative-io-size"] = "9999";
   customHiveConfigProps["parquet.footer-memory-tracking-threshold"] = "9999";
-  customHiveConfigProps["hive.parquet.footer-speculative-io-size"] = "2222";
   customHiveConfigProps["hive.parquet.footer-memory-tracking-threshold"] =
       "5555";
-  customHiveConfigProps["iceberg.parquet.footer-speculative-io-size"] = "4444";
 #endif
-  customHiveConfigProps[hive::HiveConfig::kNimbleFooterSpeculativeIoSize] =
-      "3333";
   auto hiveConfig = std::make_shared<hive::HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(customHiveConfigProps)));
 
@@ -469,9 +447,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         split,
         split->serdeParameters,
         readerOptions);
-    auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
-        readerOptions.formatSpecificOptions());
-    EXPECT_EQ(dwrfOptions->footerSpeculativeIoSize(), 1111);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 7777);
   }
 
   // Test DWRF format (uses ORC config).
@@ -488,9 +464,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         split,
         split->serdeParameters,
         readerOptions);
-    auto dwrfOptions = checkedPointerCast<dwrf::DwrfOptions>(
-        readerOptions.formatSpecificOptions());
-    EXPECT_EQ(dwrfOptions->footerSpeculativeIoSize(), 1111);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 7777);
   }
 
   // Test Parquet format.
@@ -509,7 +483,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         readerOptions);
     auto parquetOptions = checkedPointerCast<parquet::ParquetReaderOptions>(
         readerOptions.formatSpecificOptions());
-    EXPECT_EQ(parquetOptions->footerSpeculativeIoSize(), 7777);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 7777);
     EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 6666);
   }
 
@@ -527,7 +501,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         split,
         split->serdeParameters,
         readerOptions);
-    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 3333);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 7777);
   }
 }
 

@@ -44,6 +44,22 @@ TEST(OptionsTests, configFileFormat) {
   EXPECT_EQ(FileFormat::PARQUET, configFileFormat(FileFormat::PARQUET));
 }
 
+TEST(OptionsTests, commonReaderOptions) {
+  facebook::velox::memory::MemoryManager::testingSetInstance({});
+  auto pool = facebook::velox::memory::memoryManager()->addRootPool(
+      "commonReaderOptionsTest");
+  facebook::velox::dwio::common::ReaderOptions options(pool.get());
+
+  options.setColumnMappingMode(ColumnMappingMode::kName);
+  options.setFooterSpeculativeIoSize(1234);
+
+  EXPECT_EQ(options.columnMappingMode(), ColumnMappingMode::kName);
+  EXPECT_EQ(options.footerSpeculativeIoSize(), 1234);
+  EXPECT_EQ(
+      makeColumnReaderOptions(options).columnMappingMode_,
+      ColumnMappingMode::kName);
+}
+
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
   RowReaderOptions rowReaderOptions;
   RowNumberColumnInfo rowNumberColumnInfo;

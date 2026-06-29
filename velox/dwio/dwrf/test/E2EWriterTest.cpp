@@ -311,9 +311,7 @@ RowTypePtr readWithFieldIds(
   writer.close();
 
   dwio::common::ReaderOptions readerOpts(leafPool);
-  auto dwrfOptions = std::make_shared<dwrf::DwrfOptions>();
-  dwrfOptions->setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
-  readerOpts.setFormatSpecificOptions(std::move(dwrfOptions));
+  readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
   readerOpts.setFileSchema(tableSchema);
   readerOpts.setFieldIds(fieldIds);
   std::string_view data(sinkPtr->data(), sinkPtr->size());
@@ -358,21 +356,6 @@ TEST_F(E2EWriterTest, rejectWrongFormatSpecificOptions) {
       std::make_shared<dwio::common::FormatSpecificOptions>();
   VELOX_ASSERT_THROW(
       dwrf::Writer(std::move(sink), options), "DwrfWriterOptions");
-}
-
-TEST_F(E2EWriterTest, writerOptionsOverrideCompression) {
-  auto sink = std::make_unique<MemorySink>(
-      1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
-  dwio::common::WriterOptions options;
-  options.schema = ROW({"c0"}, {BIGINT()});
-  options.memoryPool = rootPool_.get();
-  options.compressionKind = common::CompressionKind_ZSTD;
-  options.formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>(
-      std::make_shared<dwrf::Config>());
-  dwrf::Writer writer(std::move(sink), options);
-  EXPECT_EQ(
-      writer.getContext().getConfig(dwrf::Config::COMPRESSION),
-      common::CompressionKind_ZSTD);
 }
 
 TEST_F(E2EWriterTest, FieldIdMappingDropReaddSameName) {

@@ -141,14 +141,12 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
   // Test with ORC format and reader-specific options enabled via session.
   {
-    auto orcSessionKey = [](std::string_view key) {
-      return fmt::format("{}{}", std::string("orc_"), key);
-    };
     auto holder = makeConnectorQueryCtx(
-        {{orcSessionKey(dwrf::Config::kOrcUseColumnNamesSession), "true"},
-         {orcSessionKey(dwrf::Config::kOrcFooterSpeculativeIoSizeSession),
+        {{hive::FileConfig::kUseColumnNamesSession, "true"},
+         {hive::FileConfig::kFooterSpeculativeIoSizeSession,
           std::to_string(128UL << 10)},
-         {orcSessionKey(dwrf::Config::kOrcMaxCoalesceDistanceSession), "3MB"}});
+         {fmt::format("orc_{}", dwrf::Config::kOrcMaxCoalesceDistanceSession),
+          "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
@@ -162,13 +160,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::ORC);
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kName);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 128UL << 10);
     auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfOptions>(
         readerOptions.formatSpecificOptions());
     ASSERT_NE(dwrfOptions, nullptr);
-    EXPECT_EQ(
-        dwrfOptions->columnMappingMode(),
-        dwio::common::ColumnMappingMode::kName);
-    EXPECT_EQ(dwrfOptions->footerSpeculativeIoSize(), 128UL << 10);
     EXPECT_EQ(dwrfOptions->maxCoalesceDistance(), 3 << 20);
   }
 
