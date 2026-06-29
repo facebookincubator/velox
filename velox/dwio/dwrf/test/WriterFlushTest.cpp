@@ -374,9 +374,8 @@ class WriterFlushTestHelper {
       const std::shared_ptr<MockMemoryPool>& sinkPool,
       int64_t writerMemoryBudget) {
     WriterOptions options;
-    auto dwrfOptions =
+    options.formatSpecificOptions =
         std::make_shared<DwrfWriterOptions>(std::make_shared<Config>());
-    options.formatSpecificOptions = dwrfOptions;
     options.schema = type::fbhive::HiveTypeParser().parse(
         "struct<int_val:int,string_val:string>");
     // A completely memory pressure based flush policy.

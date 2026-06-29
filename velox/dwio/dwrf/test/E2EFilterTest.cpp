@@ -150,8 +150,8 @@ class E2EFilterTest : public E2EFilterTestBase {
           dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
     }
     dwio::common::WriterOptions options;
-    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
-    options.formatSpecificOptions = dwrfOptions;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
     options.schema = writerSchema;
     return options;
   }

@@ -98,8 +98,8 @@ class E2EWriterTest : public testing::Test {
     auto sinkPtr = sink.get();
 
     dwio::common::WriterOptions options;
-    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
-    options.formatSpecificOptions = dwrfOptions;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
     options.schema = type;
     options.memoryPool = rootPool_.get();
     dwrf::Writer writer{std::move(sink), options};
@@ -156,8 +156,8 @@ class E2EWriterTest : public testing::Test {
     auto sinkPtr = sink.get();
 
     dwio::common::WriterOptions options;
-    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
-    options.formatSpecificOptions = dwrfOptions;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
     options.schema = type;
     options.memoryPool = rootPool_.get();
     dwrf::Writer writer{std::move(sink), options};
@@ -302,10 +302,10 @@ RowTypePtr readWithFieldIds(
   dwio::common::WriterOptions options;
   auto dwrfWriterOptions = std::make_shared<dwrf::DwrfWriterOptions>(
       std::make_shared<dwrf::Config>());
+  dwrfWriterOptions->schemaAttributes = schemaAttributes;
   options.formatSpecificOptions = dwrfWriterOptions;
   options.schema = fileSchema;
   options.memoryPool = rootPool;
-  dwrfWriterOptions->schemaAttributes = schemaAttributes;
   dwrf::Writer writer{std::move(sink), options};
   writer.write(BatchMaker::createBatch(fileSchema, 10, *leafPool, nullptr, 0));
   writer.close();
@@ -1035,8 +1035,8 @@ TEST_F(E2EWriterTest, PartialStride) {
   auto sinkPtr = sink.get();
 
   dwio::common::WriterOptions options;
-  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
-  options.formatSpecificOptions = dwrfOptions;
+  options.formatSpecificOptions =
+      std::make_shared<dwrf::DwrfWriterOptions>(config);
   options.schema = type;
   options.memoryPool = rootPool_.get();
   dwrf::Writer writer{std::move(sink), options};
@@ -1258,10 +1258,10 @@ class E2EEncryptionTest : public E2EWriterTest {
     dwio::common::WriterOptions options;
     auto dwrfOptions =
         std::make_shared<::facebook::velox::dwrf::DwrfWriterOptions>(config);
-    options.formatSpecificOptions = dwrfOptions;
-    options.schema = type;
     dwrfOptions->encryptionSpec = spec;
     dwrfOptions->encrypterFactory = std::make_shared<TestEncrypterFactory>();
+    options.formatSpecificOptions = dwrfOptions;
+    options.schema = type;
     writer_ =
         std::make_unique<dwrf::Writer>(std::move(sink), options, rootPool_);
 
@@ -1897,9 +1897,8 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnWrite) {
 
     tsan_atomic<bool> nonReclaimableSection{false};
     dwio::common::WriterOptions options;
-    auto dwrfOptions =
+    options.formatSpecificOptions =
         std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
-    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     options.nonReclaimableSection = &nonReclaimableSection;
     if (enableReclaim) {
@@ -2025,9 +2024,8 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimOnFlush) {
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
     dwio::common::WriterOptions options;
-    auto dwrfOptions =
+    options.formatSpecificOptions =
         std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
-    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
@@ -2131,9 +2129,8 @@ TEST_F(E2EWriterTest, memoryReclaimAfterClose) {
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
     dwio::common::WriterOptions options;
-    auto dwrfOptions =
+    options.formatSpecificOptions =
         std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
-    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
@@ -2212,9 +2209,8 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimDuringInit) {
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
     dwio::common::WriterOptions options;
-    auto dwrfOptions =
+    options.formatSpecificOptions =
         std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
-    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
@@ -2303,9 +2299,8 @@ DEBUG_ONLY_TEST_F(E2EWriterTest, memoryReclaimThreshold) {
     config->set<uint64_t>(dwrf::Config::MAX_DICTIONARY_SIZE, 1L << 30);
 
     dwio::common::WriterOptions options;
-    auto dwrfOptions =
+    options.formatSpecificOptions =
         std::make_shared<dwrf::DwrfWriterOptions>(std::move(config));
-    options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     tsan_atomic<bool> nonReclaimableSection{false};
     options.nonReclaimableSection = &nonReclaimableSection;
