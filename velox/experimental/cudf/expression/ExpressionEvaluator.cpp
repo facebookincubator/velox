@@ -72,7 +72,6 @@
 
 #include <cctype>
 #include <memory>
-#include <mutex>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -423,6 +422,16 @@ class RoundFunction : public CudfFunction {
       VELOX_CHECK_NOT_NULL(scaleExpr, "round scale must be a constant");
       scale_ = scaleExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
     }
+    decimalsScalar_ = std::unique_ptr<cudf::numeric_scalar<int32_t>>(
+        static_cast<cudf::numeric_scalar<int32_t>*>(
+            makeScalarFromValue<int32_t>(INTEGER(), scale_, false).release()));
+    factorScalar_ = std::unique_ptr<cudf::numeric_scalar<double>>(
+        static_cast<cudf::numeric_scalar<double>*>(
+            makeScalarFromValue<double>(
+                DOUBLE(),
+                std::pow(10.0, static_cast<double>(scale_)),
+                false)
+                .release()));
   }
 
   ColumnOrView eval(
@@ -461,13 +470,9 @@ __device__ void velox_round_double(
 }
 )***";
 
-      // The scale-derived `decimals` and `factor` values are constants for
-      // the lifetime of this RoundFunction. Build them on the device once
-      // (lazily, on the first eval's stream/mr) and reuse the same
-      // numeric_scalars across batches. Each eval then only constructs two
-      // non-owning column_views over those scalars' device storage and wraps
-      // them in scalar_column_view -- no per-batch device allocations.
-      ensureScalarsBuilt(stream, mr);
+      // The scale-derived `decimals` and `factor` scalars are built once in
+      // the constructor (see makeScalarFromValue). Each eval only constructs
+      // two non-owning column_views over their device storage.
       const cudf::column_view decimalsView{
           cudf::data_type{cudf::type_id::INT32},
           /*size=*/1,
@@ -504,24 +509,9 @@ __device__ void velox_round_double(
   }
 
  private:
-  // Lazily allocate the per-instance scalar broadcasts on first use. The
-  // numeric_scalars are bound to the stream/mr seen on the first eval, which
-  // matches Velox-cuDF's single-stream-per-operator execution model.
-  void ensureScalarsBuilt(
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) const {
-    std::call_once(scalarsInit_, [&] {
-      decimalsScalar_ = std::make_unique<cudf::numeric_scalar<int32_t>>(
-          scale_, true, stream, mr);
-      factorScalar_ = std::make_unique<cudf::numeric_scalar<double>>(
-          std::pow(10.0, static_cast<double>(scale_)), true, stream, mr);
-    });
-  }
-
   int32_t scale_ = 0;
-  mutable std::once_flag scalarsInit_;
-  mutable std::unique_ptr<cudf::numeric_scalar<int32_t>> decimalsScalar_;
-  mutable std::unique_ptr<cudf::numeric_scalar<double>> factorScalar_;
+  std::unique_ptr<cudf::numeric_scalar<int32_t>> decimalsScalar_;
+  std::unique_ptr<cudf::numeric_scalar<double>> factorScalar_;
 };
 
 class BinaryFunction : public CudfFunction {
