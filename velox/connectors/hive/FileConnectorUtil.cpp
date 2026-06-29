@@ -129,10 +129,7 @@ void configureReaderOptions(
     return;
   }
 
-  const auto fileFormat =
-      fileSplit->fileFormat == dwio::common::FileFormat::DWRF
-      ? dwio::common::FileFormat::ORC
-      : fileSplit->fileFormat;
+  const auto fileFormat = dwio::common::configFileFormat(fileSplit->fileFormat);
   auto formatScopedConfigs =
       makeFormatScopedConfigs(*fileConfig, *sessionProperties, fileFormat);
   readerOptions.setFormatSpecificOptions(

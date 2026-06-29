@@ -16,7 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
 
-#include "common/Casts.h"
+#include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #ifdef VELOX_ENABLE_NIMBLE
 #include "velox/connectors/hive/iceberg/fb/NimbleWriterOptionsAdapter.h"

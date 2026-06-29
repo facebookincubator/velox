@@ -174,8 +174,7 @@ class ColumnWriterStatsTest : public ::testing::Test {
           dwrf::Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
     }
     dwio::common::WriterOptions options;
-    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
-    dwrfOptions->config = config;
+    auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
     options.formatSpecificOptions = dwrfOptions;
     options.schema = type;
     options.flushPolicyFactory = [&]() {

@@ -32,7 +32,7 @@ OrcReaderFactory::createFormatOptions(
   options->setFooterSpeculativeIoSize(
       dwrf::Config::footerSpeculativeIoSize(connectorConfig, session));
   options->setMaxCoalesceDistance(
-      dwrf::Config::maxCoalescedDistance(connectorConfig, session));
+      dwrf::Config::maxCoalesceDistance(connectorConfig, session));
   return options;
 }
 

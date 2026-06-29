@@ -22,6 +22,47 @@
 
 #include "velox/common/EnumDeclare.h"
 
+#define VELOX_FORMAT_CONFIG_PROPERTY(                         \
+    sessionConstName,                                         \
+    configConstName,                                          \
+    sessionKey,                                               \
+    configKey,                                                \
+    CppType,                                                  \
+    defaultVal,                                               \
+    desc)                                                     \
+  struct sessionConstName##Property {                         \
+    using type = CppType;                                     \
+    static constexpr const char* key = sessionKey;            \
+    static constexpr auto defaultValue = defaultVal;          \
+    static constexpr const char* description = desc;          \
+  };                                                          \
+  static constexpr const char* sessionConstName = sessionKey; \
+  static constexpr const char* configConstName = configKey;
+
+#define VELOX_FORMAT_CONFIG(                                                   \
+    sessionConstName,                                                          \
+    configConstName,                                                           \
+    accessorName,                                                              \
+    sessionKey,                                                                \
+    configKey,                                                                 \
+    CppType,                                                                   \
+    defaultVal,                                                                \
+    desc)                                                                      \
+  VELOX_FORMAT_CONFIG_PROPERTY(                                                \
+      sessionConstName,                                                        \
+      configConstName,                                                         \
+      sessionKey,                                                              \
+      configKey,                                                               \
+      CppType,                                                                 \
+      defaultVal,                                                              \
+      desc)                                                                    \
+  static CppType accessorName(                                                 \
+      const config::ConfigBase& connectorConfig,                               \
+      const config::ConfigBase& session) {                                     \
+    return session.getWithFallback<CppType>(sessionConstName, connectorConfig) \
+        .value_or(sessionConstName##Property::defaultValue);                   \
+  }
+
 namespace facebook::velox::config {
 
 enum class ConfigPropertyType {
@@ -86,9 +127,11 @@ std::string configPropertyDefaultToString(const T& value) {
 /// Registers a property from a traits struct into a vector.
 /// The traits struct must have: key, type, defaultValue, description.
 template <typename PropertyTraits>
-void registerConfigProperty(std::vector<ConfigProperty>& registry) {
+void registerConfigProperty(
+    std::vector<ConfigProperty>& registry,
+    std::string_view prefix = {}) {
   registry.push_back({
-      PropertyTraits::key,
+      std::string(prefix) + std::string(PropertyTraits::key),
       detail::configPropertyTypeOf<typename PropertyTraits::type>(),
       detail::configPropertyDefaultToString<typename PropertyTraits::type>(
           PropertyTraits::defaultValue),

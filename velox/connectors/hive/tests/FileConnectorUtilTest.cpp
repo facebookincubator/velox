@@ -141,15 +141,14 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
   // Test with ORC format and reader-specific options enabled via session.
   {
-    auto orcSessionKey = [](const char* key) {
+    auto orcSessionKey = [](std::string_view key) {
       return fmt::format("{}{}", std::string("orc_"), key);
     };
     auto holder = makeConnectorQueryCtx(
         {{orcSessionKey(dwrf::Config::kOrcUseColumnNamesSession), "true"},
          {orcSessionKey(dwrf::Config::kOrcFooterSpeculativeIoSizeSession),
           std::to_string(128UL << 10)},
-         {orcSessionKey(dwrf::Config::kOrcMaxCoalescedDistanceSession),
-          "3MB"}});
+         {orcSessionKey(dwrf::Config::kOrcMaxCoalesceDistanceSession), "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);

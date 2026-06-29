@@ -374,8 +374,8 @@ class WriterFlushTestHelper {
       const std::shared_ptr<MockMemoryPool>& sinkPool,
       int64_t writerMemoryBudget) {
     WriterOptions options;
-    auto dwrfOptions = std::make_shared<DwrfWriterOptions>();
-    dwrfOptions->config = std::make_shared<Config>();
+    auto dwrfOptions =
+        std::make_shared<DwrfWriterOptions>(std::make_shared<Config>());
     options.formatSpecificOptions = dwrfOptions;
     options.schema = type::fbhive::HiveTypeParser().parse(
         "struct<int_val:int,string_val:string>");

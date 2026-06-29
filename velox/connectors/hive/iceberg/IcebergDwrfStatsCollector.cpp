@@ -22,7 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "common/Casts.h"
+#include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/Statistics.h"
