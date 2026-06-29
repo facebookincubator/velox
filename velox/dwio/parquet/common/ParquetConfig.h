@@ -32,26 +32,6 @@ namespace facebook::velox::parquet {
 class ParquetConfig {
  public:
   VELOX_FORMAT_CONFIG(
-      kUseColumnNamesSession,
-      kUseColumnNames,
-      useColumnNames,
-      "use_column_names",
-      "use-column-names",
-      bool,
-      false,
-      "Map Parquet table field names to file field names using names, not indices.")
-
-  VELOX_FORMAT_CONFIG(
-      kFooterSpeculativeIoSizeSession,
-      kFooterSpeculativeIoSize,
-      footerSpeculativeIoSize,
-      "footer_speculative_io_size",
-      "footer-speculative-io-size",
-      uint64_t,
-      256UL << 10,
-      "Speculative tail-read size in bytes for Parquet files.")
-
-  VELOX_FORMAT_CONFIG(
       kAllowInt32NarrowingSession,
       kAllowInt32Narrowing,
       allowInt32Narrowing,
@@ -213,10 +193,6 @@ class ParquetConfig {
   static void registerProperties(
       std::vector<config::ConfigProperty>& properties,
       std::string_view sessionPrefix) {
-    config::registerConfigProperty<kUseColumnNamesSessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<kFooterSpeculativeIoSizeSessionProperty>(
-        properties, sessionPrefix);
     config::registerConfigProperty<kAllowInt32NarrowingSessionProperty>(
         properties, sessionPrefix);
     config::registerConfigProperty<

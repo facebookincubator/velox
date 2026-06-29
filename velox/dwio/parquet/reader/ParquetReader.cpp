@@ -153,16 +153,10 @@ ParquetReaderFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
   auto options = std::make_shared<ParquetReaderOptions>();
-  options->setFooterSpeculativeIoSize(
-      ParquetConfig::footerSpeculativeIoSize(connectorConfig, session));
   options->setAllowInt32Narrowing(
       ParquetConfig::allowInt32Narrowing(connectorConfig, session));
   options->setFooterMemoryTrackingThreshold(
       ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session));
-  const auto useColumnNames =
-      ParquetConfig::useColumnNames(connectorConfig, session);
-  options->setColumnMappingMode(
-      useColumnNames ? ColumnMappingMode::kName : ColumnMappingMode::kPosition);
   return options;
 }
 
@@ -364,11 +358,9 @@ void ReaderBase::releaseThriftBytes(size_t bytes) {
 
 void ReaderBase::loadFileMetaData() {
   bool preloadFile = fileLength_ <=
-      std::max(filePreloadThreshold_,
-               parquetReaderOptions_.footerSpeculativeIoSize());
-  uint64_t readSize = preloadFile
-      ? fileLength_
-      : parquetReaderOptions_.footerSpeculativeIoSize();
+      std::max(filePreloadThreshold_, options_.footerSpeculativeIoSize());
+  uint64_t readSize =
+      preloadFile ? fileLength_ : options_.footerSpeculativeIoSize();
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (preloadFile) {
@@ -426,8 +418,7 @@ void ReaderBase::initializeSchema() {
   if (fileMetaData_->encryption_algorithm()) {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }
-  if (parquetReaderOptions_.columnMappingMode() ==
-      ColumnMappingMode::kParquetFieldId) {
+  if (options_.columnMappingMode() == ColumnMappingMode::kParquetFieldId) {
     VELOX_NYI("Parquet field ID column mapping is not implemented yet.");
   }
 
@@ -519,7 +510,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     name = functions::stringImpl::utf8StrToLowerCopy(name);
   }
 
-  if (parquetReaderOptions_.columnMappingMode() != ColumnMappingMode::kName &&
+  if (options_.columnMappingMode() != ColumnMappingMode::kName &&
       options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
@@ -566,8 +557,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         }
 
         if (requestedRowType) {
-          if (parquetReaderOptions_.columnMappingMode() ==
-              ColumnMappingMode::kName) {
+          if (options_.columnMappingMode() == ColumnMappingMode::kName) {
             auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
             if (fileTypeIdx.has_value()) {
               childRequestedType = requestedRowType->childAt(*fileTypeIdx);
@@ -1448,7 +1438,8 @@ class ParquetRowReader::Impl {
       advanceToNextRowGroup();
     }
 
-    columnReaderOptions_ = dwio::common::ColumnReaderOptions{};
+    columnReaderOptions_ =
+        dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
   void filterRowGroups() {

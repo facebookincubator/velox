@@ -1692,9 +1692,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFilePreloadThreshold(0);
-  auto dwrfOptions = std::make_shared<DwrfOptions>();
-  dwrfOptions->setFooterSpeculativeIoSize(17);
-  readerOpts.setFormatSpecificOptions(std::move(dwrfOptions));
+  readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1724,9 +1722,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFilePreloadThreshold(0);
-  auto dwrfOptions = std::make_shared<DwrfOptions>();
-  dwrfOptions->setFooterSpeculativeIoSize(17);
-  readerOpts.setFormatSpecificOptions(std::move(dwrfOptions));
+  readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<
@@ -1757,9 +1753,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFilePreloadThreshold(0);
-  auto dwrfOptions = std::make_shared<DwrfOptions>();
-  dwrfOptions->setFooterSpeculativeIoSize(17);
-  readerOpts.setFormatSpecificOptions(std::move(dwrfOptions));
+  readerOpts.setFooterSpeculativeIoSize(17);
   RowReaderOptions rowReaderOpts;
 
   std::shared_ptr<const RowType> requestedType = std::dynamic_pointer_cast<

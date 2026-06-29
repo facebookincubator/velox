@@ -67,16 +67,6 @@ class FileConfig {
       "Collect per-column CPU timing stats.")
 
   VELOX_HIVE_CONFIG_LEGACY(
-      kNimbleFooterSpeculativeIoSizeSession,
-      kNimbleFooterSpeculativeIoSize,
-      nimbleFooterSpeculativeIoSize,
-      "nimble_footer_speculative_io_size",
-      "nimble.footer-speculative-io-size",
-      uint64_t,
-      8UL << 20,
-      "Speculative tail-read size in bytes for Nimble files.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
       kNimbleStringDecoderZeroCopySession,
       kNimbleStringDecoderZeroCopy,
       nimbleStringDecoderZeroCopy,
@@ -107,6 +97,23 @@ class FileConfig {
       "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
 
   // --- VELOX_HIVE_CONFIG properties ---
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kUseColumnNamesSession,
+      "use_column_names",
+      bool,
+      false,
+      "Map table fields to file fields using names, not indices.")
+  static constexpr const char* kUseColumnNames = "use-column-names";
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kFooterSpeculativeIoSizeSession,
+      "footer_speculative_io_size",
+      uint64_t,
+      256UL << 10,
+      "Speculative tail-read size in bytes for columnar files.")
+  static constexpr const char* kFooterSpeculativeIoSize =
+      "footer-speculative-io-size";
 
   VELOX_HIVE_CONFIG(
       kFileColumnNamesReadAsLowerCaseSession,
@@ -272,6 +279,22 @@ class FileConfig {
   size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   uint64_t filePreloadThreshold() const;
+
+  bool useColumnNames(const config::ConfigBase* session) const {
+    return session->get<bool>(
+        kUseColumnNamesSession,
+        config_->get<bool>(
+            connectorConfigPrefix_ + kUseColumnNames,
+            kUseColumnNamesSessionProperty::defaultValue));
+  }
+
+  uint64_t footerSpeculativeIoSize(const config::ConfigBase* session) const {
+    return session->get<uint64_t>(
+        kFooterSpeculativeIoSizeSession,
+        config_->get<uint64_t>(
+            connectorConfigPrefix_ + kFooterSpeculativeIoSize,
+            kFooterSpeculativeIoSizeSessionProperty::defaultValue));
+  }
 
   // Returns the timestamp unit used when reading timestamps from files.
   uint8_t readTimestampUnit(const config::ConfigBase* session) const;

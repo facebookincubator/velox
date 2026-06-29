@@ -821,9 +821,7 @@ TEST_F(ParquetTableScanTest, array) {
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
-          kHiveConnectorId,
-          parquetSessionProperty(ParquetConfig::kUseColumnNamesSession),
-          "true")
+          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
       .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
       .assertResults(expected);
 }
@@ -1446,14 +1444,11 @@ TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
 
   // Now run query with column mapping using names - we should not be able to
   // find any names.
-  result =
-      AssertQueryBuilder(op)
-          .connectorSessionProperty(
-              kHiveConnectorId,
-              parquetSessionProperty(ParquetConfig::kUseColumnNamesSession),
-              "true")
-          .split(makeSplit(filePath))
-          .copyResults(pool());
+  result = AssertQueryBuilder(op)
+               .connectorSessionProperty(
+                   kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+               .split(makeSplit(filePath))
+               .copyResults(pool());
   rows = result->as<RowVector>();
   // check for rest of the selected columns
   auto nullBigIntVector = makeFlatVector<int64_t>(
@@ -1521,14 +1516,11 @@ TEST_F(ParquetTableScanTest, schemaMatch) {
            .endTableScan()
            .planNode();
 
-  result =
-      AssertQueryBuilder(op)
-          .connectorSessionProperty(
-              kHiveConnectorId,
-              parquetSessionProperty(ParquetConfig::kUseColumnNamesSession),
-              "true")
-          .split(makeSplit(filePath))
-          .copyResults(pool());
+  result = AssertQueryBuilder(op)
+               .connectorSessionProperty(
+                   kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+               .split(makeSplit(filePath))
+               .copyResults(pool());
 
   rows = result->as<RowVector>();
   auto nullVector = makeFlatVector<std::string>(

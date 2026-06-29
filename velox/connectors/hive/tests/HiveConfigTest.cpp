@@ -74,8 +74,9 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_FALSE(hiveConfig.indexEnabled(emptySession.get()));
   ASSERT_FALSE(hiveConfig.cacheMetadata(emptySession.get()));
   ASSERT_FALSE(hiveConfig.cacheIndex(emptySession.get()));
+  ASSERT_FALSE(hiveConfig.useColumnNames(emptySession.get()));
   ASSERT_EQ(
-      hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
+      hiveConfig.footerSpeculativeIoSize(emptySession.get()), 256UL << 10);
   ASSERT_FALSE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_FALSE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
@@ -103,7 +104,8 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kIndexEnabled, "true"},
       {HiveConfig::kCacheMetadata, "true"},
       {HiveConfig::kCacheIndex, "true"},
-      {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
+      {"hive.use-column-names", "true"},
+      {"hive.footer-speculative-io-size", std::to_string(4UL << 20)},
       {HiveConfig::kNimbleStringDecoderZeroCopy, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncoding, "true"},
   };
@@ -138,8 +140,8 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.indexEnabled(emptySession.get()));
   ASSERT_TRUE(hiveConfig.cacheMetadata(emptySession.get()));
   ASSERT_TRUE(hiveConfig.cacheIndex(emptySession.get()));
-  ASSERT_EQ(
-      hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
+  ASSERT_TRUE(hiveConfig.useColumnNames(emptySession.get()));
+  ASSERT_EQ(hiveConfig.footerSpeculativeIoSize(emptySession.get()), 4UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
@@ -163,8 +165,8 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kIndexEnabledSession, "true"},
       {HiveConfig::kCacheMetadataSession, "true"},
       {HiveConfig::kCacheIndexSession, "true"},
-      {HiveConfig::kNimbleFooterSpeculativeIoSizeSession,
-       std::to_string(2UL << 20)},
+      {HiveConfig::kUseColumnNamesSession, "true"},
+      {HiveConfig::kFooterSpeculativeIoSizeSession, std::to_string(2UL << 20)},
       {HiveConfig::kNimbleStringDecoderZeroCopySession, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncodingSession, "true"},
   };
@@ -195,7 +197,8 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_TRUE(hiveConfig.indexEnabled(session.get()));
   ASSERT_TRUE(hiveConfig.cacheMetadata(session.get()));
   ASSERT_TRUE(hiveConfig.cacheIndex(session.get()));
-  ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
+  ASSERT_TRUE(hiveConfig.useColumnNames(session.get()));
+  ASSERT_EQ(hiveConfig.footerSpeculativeIoSize(session.get()), 2UL << 20);
   ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
 }
@@ -257,8 +260,7 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
   const auto& properties = HiveConfig::registeredProperties();
   const auto parquetSessionPrefix =
       dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_");
-  EXPECT_TRUE(
-      hasProperty(properties, HiveConfig::kParquetUseColumnNamesSession));
+  EXPECT_TRUE(hasProperty(properties, HiveConfig::kUseColumnNamesSession));
   EXPECT_TRUE(hasProperty(
       properties,
       parquetSessionPrefix +
@@ -267,7 +269,9 @@ TEST(HiveConfigTest, registeredParquetPropertiesUseSessionPrefix) {
       properties,
       parquetSessionPrefix +
           std::string(parquet::ParquetConfig::kWriterPageSizeSession)));
-  EXPECT_FALSE(hasProperty(properties, HiveConfig::kParquetUseColumnNames));
+  EXPECT_FALSE(hasProperty(
+      properties,
+      parquetSessionPrefix + std::string(HiveConfig::kUseColumnNamesSession)));
 }
 #endif
 
@@ -276,14 +280,12 @@ TEST(HiveConfigTest, registeredOrcPropertiesUseSessionPrefix) {
 
   const auto orcSessionPrefix =
       dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_");
-  EXPECT_TRUE(hasProperty(
-      properties,
-      orcSessionPrefix + std::string(dwrf::Config::kOrcUseColumnNamesSession)));
+  EXPECT_TRUE(hasProperty(properties, HiveConfig::kUseColumnNamesSession));
   EXPECT_TRUE(hasProperty(
       properties,
       orcSessionPrefix +
           std::string(dwrf::Config::kOrcWriterMaxStripeSizeSession)));
-  EXPECT_FALSE(
-      hasProperty(properties, dwrf::Config::kOrcUseColumnNamesSession));
-  EXPECT_FALSE(hasProperty(properties, dwrf::Config::kOrcUseColumnNames));
+  EXPECT_FALSE(hasProperty(
+      properties,
+      orcSessionPrefix + std::string(HiveConfig::kUseColumnNamesSession)));
 }

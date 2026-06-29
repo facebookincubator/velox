@@ -90,26 +90,6 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kNimbleMaxTargetFileSize =
       "hive.nimble.writer.max-target-file-size";
 
-  // Backward-compatible names for Parquet reader options. The values are still
-  // translated by the Parquet reader factory using format-scoped configs.
-  VELOX_HIVE_CONFIG_PROPERTY(
-      kParquetUseColumnNamesSession,
-      "parquet_use_column_names",
-      bool,
-      false,
-      "Map Parquet table field names to file field names using names, not indices.")
-  static constexpr const char* kParquetUseColumnNames =
-      "hive.parquet.use-column-names";
-
-  VELOX_HIVE_CONFIG_PROPERTY(
-      kParquetFooterSpeculativeIoSizeSession,
-      "parquet_footer_speculative_io_size",
-      uint64_t,
-      256UL << 10,
-      "Speculative tail-read size in bytes for Parquet files.")
-  static constexpr const char* kParquetFooterSpeculativeIoSize =
-      "hive.parquet.footer-speculative-io-size";
-
   VELOX_HIVE_CONFIG_PROPERTY(
       kAllowInt32NarrowingSession,
       "parquet_allow_int32_narrowing",

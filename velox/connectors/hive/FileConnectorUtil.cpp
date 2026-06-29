@@ -79,6 +79,12 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
+  readerOptions.setColumnMappingMode(
+      fileConfig->useColumnNames(sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition);
+  readerOptions.setFooterSpeculativeIoSize(
+      fileConfig->footerSpeculativeIoSize(sessionProperties));
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
@@ -109,11 +115,6 @@ void configureReaderOptions(
   readerOptions.setCacheIndex(
       fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
-  if (fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE) {
-    readerOptions.setFooterSpeculativeIoSize(
-        fileConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
-  }
-
   if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
     VELOX_CHECK(
         readerOptions.fileFormat() == fileSplit->fileFormat,

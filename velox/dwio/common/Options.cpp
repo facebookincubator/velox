@@ -75,4 +75,10 @@ std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
   return std::string(FileFormatName::toName(fmt)) + std::string(separator);
 }
 
+ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
+  ColumnReaderOptions columnReaderOptions;
+  columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
+  return columnReaderOptions;
+}
+
 } // namespace facebook::velox::dwio::common

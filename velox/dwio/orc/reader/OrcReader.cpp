@@ -25,12 +25,6 @@ OrcReaderFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
   auto options = std::make_shared<dwrf::DwrfOptions>();
-  options->setColumnMappingMode(
-      dwrf::Config::useColumnNames(connectorConfig, session)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition);
-  options->setFooterSpeculativeIoSize(
-      dwrf::Config::footerSpeculativeIoSize(connectorConfig, session));
   options->setMaxCoalesceDistance(
       dwrf::Config::maxCoalesceDistance(connectorConfig, session));
   return options;
