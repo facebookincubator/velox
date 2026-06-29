@@ -77,14 +77,9 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
-/// Returns the format whose configuration applies to 'fileFormat'. DWRF uses
-/// ORC configuration properties because both formats share the DWRF reader and
-/// writer implementations.
-FileFormat configFileFormat(FileFormat fileFormat);
-
-/// Returns a format-scoped config prefix using the file format's canonical
-/// string token. For example, PARQUET with "." returns "parquet.", while
-/// PARQUET with "_" returns "parquet_".
+/// Returns a format-scoped config prefix. DWRF and ORC share the ORC config
+/// namespace. For example, DWRF with "." returns "orc.", while PARQUET with
+/// "_" returns "parquet_".
 std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
 
 /// Controls how a reader maps the requested table schema to physical file
