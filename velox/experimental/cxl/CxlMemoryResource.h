@@ -16,8 +16,37 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <string_view>
+
+#include "velox/common/memory/CustomMemoryResource.h"
+#include "velox/experimental/cxl/CxlResourceTag.h"
+
 namespace facebook::velox::cxl {
 
-// Placeholder for the CXL memory resource.
+/// Builds a memory::CustomMemoryResource backed by CXL-attached memory.
+///
+/// The resource bundles a CxlMemoryAllocator bound to 'numaNode' with the
+/// default SHARED arbitrator and reclaimer, reused unchanged from the CPU
+/// tier. Register the returned resource with
+/// memory::CustomMemoryResourceRegistry and reference it by 'kCxlResourceTag'
+/// when building per-query pools via MemoryManager::addCustomRootPool.
+///
+/// 'numaNode' is the virtual NUMA node id exposed by the CXL device.
+/// 'maxCapacity' bounds, in bytes, both the allocator and the per-query root
+/// pool created from this resource; it defaults to unbounded.
+std::shared_ptr<memory::CustomMemoryResource> makeCxlMemoryResource(
+    int32_t numaNode,
+    int64_t maxCapacity = std::numeric_limits<int64_t>::max());
+
+/// Returns true if 'numaNode' has CPUs attached. CXL memory expanders surface
+/// to Linux as CPU-less (memory-only) NUMA nodes, so a node with CPUs is most
+/// likely regular DRAM rather than a CXL device. makeCxlMemoryResource uses
+/// this to warn on a likely-misconfigured node. Best-effort, not proof:
+/// userspace cannot reliably confirm a node is CXL-backed. Always returns false
+/// off Linux or when NUMA is unavailable.
+bool numaNodeHasCpus(int32_t numaNode);
 
 } // namespace facebook::velox::cxl
