@@ -105,6 +105,8 @@ class SparkCastHooks : public exec::CastHooks {
       Timestamp& timestamp,
       const tz::TimeZone& timeZone) const override;
 
+  bool isDateOverflowForTimestampUtc(int64_t days) const override;
+
   bool isScientific() const override {
     return true;
   }

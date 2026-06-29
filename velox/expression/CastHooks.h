@@ -142,6 +142,12 @@ class CastHooks {
   /// Spark supports them; Presto does not.
   virtual bool supportsTimestampUtc() const = 0;
 
+  /// True if 'days' is out of range for TIMESTAMP_UTC. Default never
+  /// overflows.
+  virtual bool isDateOverflowForTimestampUtc(int64_t days) const {
+    return false;
+  }
+
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;
 
