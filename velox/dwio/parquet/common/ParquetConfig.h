@@ -28,38 +28,10 @@
 
 namespace facebook::velox::parquet {
 
-#define VELOX_PARQUET_CONFIG_PROPERTY(               \
-    constName, keyStr, CppType, defaultVal, desc)    \
-  struct constName##Property {                       \
-    using type = CppType;                            \
-    static constexpr std::string_view key = keyStr;  \
-    static constexpr auto defaultValue = defaultVal; \
-    static constexpr const char* description = desc; \
-  };                                                 \
-  static constexpr std::string_view constName = keyStr;
-
-#define VELOX_PARQUET_CONFIG(                                              \
-    constName,                                                             \
-    configConstName,                                                       \
-    accessorName,                                                          \
-    key,                                                                   \
-    configKey,                                                             \
-    CppType,                                                               \
-    defaultVal,                                                            \
-    desc)                                                                  \
-  VELOX_PARQUET_CONFIG_PROPERTY(constName, key, CppType, defaultVal, desc) \
-  static constexpr std::string_view configConstName = configKey;           \
-  static CppType accessorName(                                             \
-      const config::ConfigBase& connectorConfig,                           \
-      const config::ConfigBase& session) {                                 \
-    return session.getWithFallback<CppType>(constName, connectorConfig)    \
-        .value_or(constName##Property::defaultValue);                      \
-  }
-
 /// Defines Parquet reader config and session properties.
 class ParquetConfig {
  public:
-  VELOX_PARQUET_CONFIG(
+  VELOX_FORMAT_CONFIG(
       kUseColumnNamesSession,
       kUseColumnNames,
       useColumnNames,
@@ -69,7 +41,7 @@ class ParquetConfig {
       false,
       "Map Parquet table field names to file field names using names, not indices.")
 
-  VELOX_PARQUET_CONFIG(
+  VELOX_FORMAT_CONFIG(
       kFooterSpeculativeIoSizeSession,
       kFooterSpeculativeIoSize,
       footerSpeculativeIoSize,
@@ -79,7 +51,7 @@ class ParquetConfig {
       256UL << 10,
       "Speculative tail-read size in bytes for Parquet files.")
 
-  VELOX_PARQUET_CONFIG(
+  VELOX_FORMAT_CONFIG(
       kAllowInt32NarrowingSession,
       kAllowInt32Narrowing,
       allowInt32Narrowing,
@@ -91,7 +63,7 @@ class ParquetConfig {
 
   static constexpr uint64_t kDefaultFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
-  VELOX_PARQUET_CONFIG(
+  VELOX_FORMAT_CONFIG(
       kFooterMemoryTrackingThresholdSession,
       kFooterMemoryTrackingThreshold,
       footerMemoryTrackingThreshold,
@@ -103,69 +75,64 @@ class ParquetConfig {
       "estimates and reports the deserialized footer's heap footprint to "
       "the memory pool. Defaults to disabled (max uint64).")
 
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterTimestampUnitSession,
+      kWriterTimestampUnit,
       "writer_timestamp_unit",
+      "writer.timestamp-unit",
       uint8_t,
       9,
       "Timestamp unit used by the Parquet writer. Supported values are 3 "
       "(milliseconds), 6 (microseconds), and 9 (nanoseconds).")
-  static constexpr std::string_view kWriterTimestampUnit =
-      "writer.timestamp-unit";
-
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterEnableDictionarySession,
+      kWriterEnableDictionary,
       "writer_enable_dictionary",
+      "writer.enable-dictionary",
       bool,
       true,
       "Enable dictionary encoding in the Parquet writer.")
-  static constexpr std::string_view kWriterEnableDictionary =
-      "writer.enable-dictionary";
-
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterEnableStoreDecimalAsIntegerSession,
+      kWriterEnableStoreDecimalAsInteger,
       "writer_enable_store_decimal_as_integer",
+      "writer.enable-store-decimal-as-integer",
       bool,
       true,
       "Store short DECIMAL values as integers in the Parquet writer.")
-  static constexpr std::string_view kWriterEnableStoreDecimalAsInteger =
-      "writer.enable-store-decimal-as-integer";
-
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterDictionaryPageSizeLimitSession,
+      kWriterDictionaryPageSizeLimit,
       "writer_dictionary_page_size_limit",
+      "writer.dictionary-page-size-limit",
       std::string_view,
       "1MB",
       "Dictionary page size limit for the Parquet writer.")
-  static constexpr std::string_view kWriterDictionaryPageSizeLimit =
-      "writer.dictionary-page-size-limit";
-
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterDataPageVersionSession,
+      kWriterDataPageVersion,
       "writer_datapage_version",
+      "writer.datapage-version",
       std::string_view,
       "V1",
       "Data page version used by the Parquet writer. Supported values are V1 "
       "and V2.")
-  static constexpr std::string_view kWriterDataPageVersion =
-      "writer.datapage-version";
-
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterPageSizeSession,
+      kWriterPageSize,
       "writer_page_size",
+      "writer.page-size",
       std::string_view,
       "1MB",
       "Data page size for the Parquet writer.")
-  static constexpr std::string_view kWriterPageSize = "writer.page-size";
-
-  VELOX_PARQUET_CONFIG_PROPERTY(
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterBatchSizeSession,
+      kWriterBatchSize,
       "writer_batch_size",
+      "writer.batch-size",
       std::string_view,
       "1024",
       "Write batch size for the Parquet writer.")
-  static constexpr std::string_view kWriterBatchSize = "writer.batch-size";
-
   static constexpr std::string_view kWriterCreatedBy = "writer.created-by";
 
   // Writer config accessors expect format-scoped configs. Connector prefixes
@@ -246,44 +213,32 @@ class ParquetConfig {
   static void registerProperties(
       std::vector<config::ConfigProperty>& properties,
       std::string_view sessionPrefix) {
-    registerProperty<kUseColumnNamesSessionProperty>(properties, sessionPrefix);
-    registerProperty<kFooterSpeculativeIoSizeSessionProperty>(
+    config::registerConfigProperty<kUseColumnNamesSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kAllowInt32NarrowingSessionProperty>(
+    config::registerConfigProperty<kFooterSpeculativeIoSizeSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kFooterMemoryTrackingThresholdSessionProperty>(
+    config::registerConfigProperty<kAllowInt32NarrowingSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterTimestampUnitSessionProperty>(
+    config::registerConfigProperty<
+        kFooterMemoryTrackingThresholdSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterEnableDictionarySessionProperty>(
+    config::registerConfigProperty<kWriterTimestampUnitSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterEnableStoreDecimalAsIntegerSessionProperty>(
+    config::registerConfigProperty<kWriterEnableDictionarySessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterDictionaryPageSizeLimitSessionProperty>(
+    config::registerConfigProperty<
+        kWriterEnableStoreDecimalAsIntegerSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterDataPageVersionSessionProperty>(
+    config::registerConfigProperty<
+        kWriterDictionaryPageSizeLimitSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterPageSizeSessionProperty>(properties, sessionPrefix);
-    registerProperty<kWriterBatchSizeSessionProperty>(
+    config::registerConfigProperty<kWriterDataPageVersionSessionProperty>(
         properties, sessionPrefix);
-  }
-
- private:
-  template <typename Property>
-  static void registerProperty(
-      std::vector<config::ConfigProperty>& properties,
-      std::string_view sessionPrefix) {
-    properties.push_back({
-        std::string(sessionPrefix) + std::string(Property::key),
-        config::detail::configPropertyTypeOf<typename Property::type>(),
-        config::detail::configPropertyDefaultToString<typename Property::type>(
-            Property::defaultValue),
-        Property::description,
-    });
+    config::registerConfigProperty<kWriterPageSizeSessionProperty>(
+        properties, sessionPrefix);
+    config::registerConfigProperty<kWriterBatchSizeSessionProperty>(
+        properties, sessionPrefix);
   }
 };
-
-#undef VELOX_PARQUET_CONFIG
-#undef VELOX_PARQUET_CONFIG_PROPERTY
 
 } // namespace facebook::velox::parquet

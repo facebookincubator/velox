@@ -224,9 +224,9 @@ QueryBenchmarkBase::makeConnectorProperties() {
   auto configurationValues = std::unordered_map<std::string, std::string>();
   configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
       std::to_string(FLAGS_max_coalesced_bytes);
-  const auto orcMaxCoalescedDistance =
-      std::string("hive.orc.") + dwrf::Config::kOrcMaxCoalescedDistance;
-  configurationValues[orcMaxCoalescedDistance] =
+  const auto orcMaxCoalesceDistance = std::string("hive.orc.") +
+      std::string(dwrf::Config::kOrcMaxCoalesceDistance);
+  configurationValues[orcMaxCoalesceDistance] =
       FLAGS_max_coalesced_distance_bytes;
   configurationValues[connector::hive::HiveConfig::kPrefetchRowGroups] =
       std::to_string(FLAGS_parquet_prefetch_rowgroups);

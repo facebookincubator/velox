@@ -77,6 +77,11 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
+/// Returns the format whose configuration applies to 'fileFormat'. DWRF uses
+/// ORC configuration properties because both formats share the DWRF reader and
+/// writer implementations.
+FileFormat configFileFormat(FileFormat fileFormat);
+
 /// Returns a format-scoped config prefix using the file format's canonical
 /// string token. For example, PARQUET with "." returns "parquet.", while
 /// PARQUET with "_" returns "parquet_".
@@ -728,6 +733,10 @@ class ReaderOptions : public io::ReaderOptions {
     footerSpeculativeIoSize_ = size;
     return *this;
   }
+
+  uint64_t footerSpeculativeIoSize() const {
+    return footerSpeculativeIoSize_;
+  }
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
     filePreloadThreshold_ = threshold;
     return *this;
@@ -1070,8 +1079,6 @@ struct ColumnReaderOptions {
   /// How to map table fields to file fields.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
 };
-
-ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);
 
 } // namespace facebook::velox::dwio::common
 

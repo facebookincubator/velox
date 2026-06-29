@@ -38,6 +38,12 @@ TEST(OptionsTests, formatConfigPrefix) {
   EXPECT_EQ("", formatConfigPrefix(FileFormat::UNKNOWN, "."));
 }
 
+TEST(OptionsTests, configFileFormat) {
+  EXPECT_EQ(FileFormat::ORC, configFileFormat(FileFormat::DWRF));
+  EXPECT_EQ(FileFormat::ORC, configFileFormat(FileFormat::ORC));
+  EXPECT_EQ(FileFormat::PARQUET, configFileFormat(FileFormat::PARQUET));
+}
+
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
   RowReaderOptions rowReaderOptions;
   RowNumberColumnInfo rowNumberColumnInfo;

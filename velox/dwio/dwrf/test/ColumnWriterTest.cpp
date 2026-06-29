@@ -1952,8 +1952,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   auto sinkPtr = sink.get();
 
   dwio::common::WriterOptions options;
-  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
-  dwrfOptions->config = config;
+  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
   options.formatSpecificOptions = dwrfOptions;
   options.schema = type;
   options.flushPolicyFactory = [&]() {

@@ -207,8 +207,7 @@ class WaveBenchmark : public QueryBenchmarkBase {
       config->set(dwrf::Config::USE_VINTS, FLAGS_dwrf_vints);
 
       dwio::common::WriterOptions options;
-      auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
-      dwrfOptions->config = config;
+      auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
       options.formatSpecificOptions = dwrfOptions;
       options.schema = schema;
 

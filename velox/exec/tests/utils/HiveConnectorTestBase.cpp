@@ -120,8 +120,7 @@ void HiveConnectorTestBase::writeToFile(
     const std::function<std::unique_ptr<dwrf::DWRFFlushPolicy>()>&
         flushPolicyFactory) {
   dwio::common::WriterOptions options;
-  auto dwrfOptions = std::make_shared<velox::dwrf::DwrfWriterOptions>();
-  dwrfOptions->config = config;
+  auto dwrfOptions = std::make_shared<velox::dwrf::DwrfWriterOptions>(config);
   options.formatSpecificOptions = dwrfOptions;
   options.schema = schema;
   auto fs = filesystems::getFileSystem(filePath, {});

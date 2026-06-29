@@ -16,8 +16,10 @@
 
 #include <gtest/gtest.h>
 
-#include "common/Casts.h"
+#include <optional>
+
 #include "folly/Random.h"
+#include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -34,11 +36,14 @@ T getConfig(
 
 std::shared_ptr<const Config> createWriterConfig(
     const facebook::velox::config::ConfigBase& connectorConfig,
-    const facebook::velox::config::ConfigBase& session) {
+    const facebook::velox::config::ConfigBase& session,
+    std::optional<CompressionKind> compressionKind = std::nullopt) {
   DwrfWriterFactory factory;
-  auto options = facebook::velox::checkedPointerCast<DwrfWriterOptions>(
+  auto dwrfOptions = facebook::velox::checkedPointerCast<DwrfWriterOptions>(
       factory.createFormatOptions(connectorConfig, session));
-  return options->config;
+  facebook::velox::dwio::common::WriterOptions options;
+  options.compressionKind = compressionKind;
+  return Writer::makeWriterConfig(options, *dwrfOptions);
 }
 
 TEST(ConfigTests, Set) {
@@ -143,7 +148,8 @@ TEST(ConfigTests, writerOptionsOverrideSession) {
       {Config::kOrcWriterCompressionLevelSession, "1"},
       {Config::kOrcWriterLinearStripeSizeHeuristicsSession, "false"}};
   const facebook::velox::config::ConfigBase session(std::move(sessionOverride));
-  auto config = createWriterConfig(base, session);
+  auto config = createWriterConfig(base, session, CompressionKind_ZLIB);
+  ASSERT_EQ(getConfig(config, Config::COMPRESSION), CompressionKind_ZLIB);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 22L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 24L * 1024L * 1024L);

@@ -230,7 +230,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(dwrfOptions->maxCoalesceDistance(), expected);
   };
 
-  auto hiveOrcConfigKey = [](const char* key) {
+  auto hiveOrcConfigKey = [](std::string_view key) {
     return fmt::format("{}{}", std::string("hive.orc."), key);
   };
 
@@ -247,7 +247,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
       readerOptions.maxCoalesceDistance(),
       dwio::common::ReaderOptions::kDefaultCoalesceDistance);
   checkOrcMaxCoalesceDistance(
-      dwrf::Config::maxCoalescedDistance(
+      dwrf::Config::maxCoalesceDistance(
           *hiveConfig->config(), sessionProperties));
   EXPECT_EQ(
       readerOptions.fileColumnNamesReadAsLowerCase(),
@@ -343,7 +343,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kLoadQuantum] = "321";
   customHiveConfigProps[hive::HiveConfig::kMaxCoalescedBytes] = "129";
   customHiveConfigProps[hiveOrcConfigKey(
-      dwrf::Config::kOrcMaxCoalescedDistance)] = "513KB";
+      dwrf::Config::kOrcMaxCoalesceDistance)] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
   customHiveConfigProps[hiveOrcConfigKey(dwrf::Config::kOrcUseColumnNames)] =
@@ -527,6 +527,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
         split,
         split->serdeParameters,
         readerOptions);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 3333);
   }
 }
 

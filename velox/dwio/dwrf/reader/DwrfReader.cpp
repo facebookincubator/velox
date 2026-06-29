@@ -352,10 +352,9 @@ DwrfRowReader::DwrfRowReader(
   // Configure reader options before calling 'getUnitLoader()'.
   // Construction is single-threaded, and the unit loader is created only
   // after 'columnReaderOptions_' has been initialized.
-  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
-      readerBaseShared()->readerOptions());
-  columnReaderOptions_.columnMappingMode_ =
-      columnMappingMode(readerBaseShared()->readerOptions());
+  columnReaderOptions_ = {
+      .columnMappingMode_ =
+          columnMappingMode(readerBaseShared()->readerOptions())};
   unitLoader_ = getUnitLoader();
   if (!emptyFile()) {
     getReader().loadCache();
@@ -1324,7 +1323,7 @@ DwrfReaderFactory::createFormatOptions(
   options->setFooterSpeculativeIoSize(
       Config::footerSpeculativeIoSize(connectorConfig, session));
   options->setMaxCoalesceDistance(
-      Config::maxCoalescedDistance(connectorConfig, session));
+      Config::maxCoalesceDistance(connectorConfig, session));
   return options;
 }
 

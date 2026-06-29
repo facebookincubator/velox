@@ -1448,8 +1448,7 @@ class ParquetRowReader::Impl {
       advanceToNextRowGroup();
     }
 
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
+    columnReaderOptions_ = dwio::common::ColumnReaderOptions{};
   }
 
   void filterRowGroups() {

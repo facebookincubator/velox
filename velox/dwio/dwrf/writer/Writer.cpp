@@ -18,6 +18,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/base/StatsReporter.h"
@@ -188,7 +189,11 @@ void addOrcWriterConfigs(
       std::to_string(orcWriterZSTDCompressionLevel(connectorConfig, session)));
 }
 
-std::shared_ptr<const Config> makeWriterConfig(
+#define NON_RECLAIMABLE_SECTION_CHECK() \
+  VELOX_CHECK(nonReclaimableSection_ == nullptr || *nonReclaimableSection_);
+} // namespace
+
+std::shared_ptr<const Config> Writer::makeWriterConfig(
     const dwio::common::WriterOptions& options,
     const DwrfWriterOptions& dwrfOptions) {
   std::map<std::string, std::string> configs = options.serdeParameters;
@@ -204,10 +209,6 @@ std::shared_ptr<const Config> makeWriterConfig(
   return dwrf::Config::fromMap(configs);
 }
 
-#define NON_RECLAIMABLE_SECTION_CHECK() \
-  VELOX_CHECK(nonReclaimableSection_ == nullptr || *nonReclaimableSection_);
-} // namespace
-
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
     const dwio::common::WriterOptions& options,
@@ -216,11 +217,10 @@ Writer::Writer(
       schema_{dwio::common::TypeWithId::create(options.schema)},
       spillConfig_{options.spillConfig},
       nonReclaimableSection_(options.nonReclaimableSection) {
-  const auto dwrfOptions = std::dynamic_pointer_cast<DwrfWriterOptions>(
-      options.formatSpecificOptions);
   DwrfWriterOptions defaultDwrfOptions;
-  const auto& formatOptions =
-      dwrfOptions == nullptr ? defaultDwrfOptions : *dwrfOptions;
+  const auto& formatOptions = options.formatSpecificOptions == nullptr
+      ? defaultDwrfOptions
+      : *checkedPointerCast<DwrfWriterOptions>(options.formatSpecificOptions);
 
   VELOX_CHECK(
       spillConfig_ == nullptr || nonReclaimableSection_ != nullptr,
@@ -994,11 +994,9 @@ std::shared_ptr<dwio::common::FormatSpecificOptions>
 DwrfWriterFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
     const config::ConfigBase& session) const {
-  auto options = std::make_shared<dwrf::DwrfWriterOptions>();
   std::map<std::string, std::string> configs;
   addOrcWriterConfigs(configs, connectorConfig, session);
-  options->config = dwrf::Config::fromMap(configs);
-  return options;
+  return std::make_shared<DwrfWriterOptions>(Config::fromMap(configs));
 }
 
 void registerDwrfWriterFactory() {

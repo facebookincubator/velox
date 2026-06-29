@@ -39,6 +39,11 @@ namespace facebook::velox::dwrf {
 class DwrfFileMetadata : public dwio::common::FileMetadata {};
 
 struct DwrfWriterOptions : public dwio::common::FormatSpecificOptions {
+  DwrfWriterOptions() = default;
+
+  explicit DwrfWriterOptions(std::shared_ptr<const Config> config)
+      : config(std::move(config)) {}
+
   std::shared_ptr<const Config> config = std::make_shared<Config>();
   /// Changes the interface to stream list and encoding iter.
   std::function<std::unique_ptr<LayoutPlanner>(const dwio::common::TypeWithId&)>
@@ -64,6 +69,10 @@ struct DwrfWriterOptions : public dwio::common::FormatSpecificOptions {
 
 class Writer : public dwio::common::Writer {
  public:
+  static std::shared_ptr<const Config> makeWriterConfig(
+      const dwio::common::WriterOptions& options,
+      const DwrfWriterOptions& dwrfOptions);
+
   Writer(
       const dwio::common::WriterOptions& options,
       std::unique_ptr<dwio::common::FileSink> sink,
