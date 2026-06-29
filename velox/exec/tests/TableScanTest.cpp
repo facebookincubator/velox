@@ -79,13 +79,6 @@ void verifyCacheStats(
   EXPECT_EQ(cacheStats.numLookups, numLookups);
 }
 
-std::string orcSessionProperty(std::string_view name) {
-  return fmt::format(
-      "{}{}",
-      formatConfigPrefix(dwio::common::FileFormat::ORC, "_"),
-      std::string(name));
-}
-
 class TableScanTest : public TableScanTestBase {
   void SetUp() override {
     TableScanTestBase::SetUp();

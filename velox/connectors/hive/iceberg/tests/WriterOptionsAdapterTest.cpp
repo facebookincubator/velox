@@ -145,11 +145,11 @@ TEST(WriterOptionsAdapterTest, dwrfPostConfigsOverridesTimestampFields) {
   auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::DWRF);
   ASSERT_NE(adapter, nullptr);
 
-  dwio::common::WriterOptions options;
   auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
-  options.formatSpecificOptions = dwrfOptions;
   dwrfOptions->adjustTimestampToTimezone = true;
   dwrfOptions->sessionTimezone = tz::locateZone("America/Los_Angeles");
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = dwrfOptions;
 
   adapter->applyPostConfigs(options);
 
@@ -167,12 +167,11 @@ TEST(WriterOptionsAdapterTest, orcRoutesToDwrfAdapter) {
 
   EXPECT_EQ(adapter->manifestFormatString(), "ORC");
 
-  dwio::common::WriterOptions options;
   auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
-  options.formatSpecificOptions = dwrfOptions;
   dwrfOptions->adjustTimestampToTimezone = true;
   dwrfOptions->sessionTimezone = tz::locateZone("America/Los_Angeles");
-
+  dwio::common::WriterOptions options;
+  options.formatSpecificOptions = dwrfOptions;
   adapter->applyPostConfigs(options);
 
   EXPECT_FALSE(dwrfOptions->adjustTimestampToTimezone);

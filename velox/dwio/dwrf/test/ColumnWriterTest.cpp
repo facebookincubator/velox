@@ -1951,8 +1951,8 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   auto sinkPtr = sink.get();
 
   dwio::common::WriterOptions options;
-  auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>(config);
-  options.formatSpecificOptions = dwrfOptions;
+  options.formatSpecificOptions =
+      std::make_shared<dwrf::DwrfWriterOptions>(config);
   options.schema = type;
   options.flushPolicyFactory = [&]() {
     return std::make_unique<LambdaFlushPolicy>([]() {
