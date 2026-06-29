@@ -1371,11 +1371,9 @@ PlanBuilder& PlanBuilder::enforceSingleRow() {
   return *this;
 }
 
-PlanBuilder& PlanBuilder::assignUniqueId(
-    const std::string& idName,
-    const int32_t taskUniqueId) {
+PlanBuilder& PlanBuilder::assignUniqueId(const std::string& idName) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
-      nextPlanNodeId(), idName, taskUniqueId, planNode_);
+      nextPlanNodeId(), idName, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
 }

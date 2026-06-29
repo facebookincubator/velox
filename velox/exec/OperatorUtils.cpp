@@ -137,7 +137,14 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "ssdCacheReadWallNanos",
       "cacheWaitWallNanos",
       "coalescedSsdLoadWallNanos",
-      "coalescedStorageLoadWallNanos"};
+      "coalescedStorageLoadWallNanos",
+      "rpcCongestionWindowFinal",
+      "rpcPeakInFlight",
+      "rpcBaselineRttNanos",
+      "rpcRttMinWallNanos",
+      "rpcRttMaxWallNanos",
+      "rpcStreamingMode",
+  };
   if (metricNames.contains(name)) {
     return true;
   }

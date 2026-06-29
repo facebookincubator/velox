@@ -1183,12 +1183,7 @@ class PlanBuilder {
   ///
   /// @param idName The name of output column that contains the unique ID.
   /// Column type is assumed as BIGINT.
-  /// @param taskUniqueId ID of the Task that will be used to run the query
-  /// plan. The ID must be unique across all the tasks of a single query. Tasks
-  /// may possibly run on different machines.
-  PlanBuilder& assignUniqueId(
-      const std::string& idName = "unique",
-      const int32_t taskUniqueId = 1);
+  PlanBuilder& assignUniqueId(const std::string& idName = "unique");
 
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.

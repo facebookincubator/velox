@@ -174,6 +174,7 @@ option(
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
 option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
+option(VELOX_ENABLE_CXL "Build CXL experimental memory subsystem (Linux only)." OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
@@ -334,6 +335,15 @@ if(VELOX_ENABLE_S3)
   endif()
   find_package(AWSSDK 1.11.654 REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
+endif()
+
+if(VELOX_ENABLE_CXL AND NOT (UNIX AND NOT APPLE))
+  # libnuma's numa_tonode_memory page binding is unavailable off Linux.
+  message(STATUS "VELOX_ENABLE_CXL is only supported on Linux; forcing OFF.")
+  set(VELOX_ENABLE_CXL OFF)
+endif()
+if(VELOX_ENABLE_CXL)
+  add_compile_definitions(VELOX_ENABLE_CXL)
 endif()
 
 if(VELOX_ENABLE_ABFS)

@@ -138,6 +138,14 @@ class Task : public std::enable_shared_from_this<Task> {
     return destination_;
   }
 
+  /// Returns the pool of unique row ids shared by all AssignUniqueId operators
+  /// in this task. Each operator atomically claims disjoint ranges from it, so
+  /// the ids it generates never collide across operators or drivers of the same
+  /// task.
+  const std::shared_ptr<std::atomic_int64_t>& uniqueRowIdPool() const {
+    return uniqueRowIdPool_;
+  }
+
   /// Configured cpu slice time limit for drivers. 0 (meaning slicing/yield
   /// disabled) when task is under serial mode.
   uint64_t driverCpuTimeSliceLimitMs() const;
@@ -1312,6 +1320,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // process remaining remote splits after the task has completed early.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
       exchangeClientByPlanNode_;
+
+  // Pool of unique row ids shared by all AssignUniqueId operators in this task.
+  // See uniqueRowIdPool().
+  const std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool_{
+      std::make_shared<std::atomic_int64_t>(0)};
 
   ConsumerSupplier consumerSupplier_;
 

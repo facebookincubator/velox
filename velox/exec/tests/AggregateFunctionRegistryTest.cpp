@@ -133,6 +133,40 @@ TEST_F(AggregateFunctionRegistryTest, coercions) {
       "aggregate_func", {INTEGER(), DOUBLE()}, BIGINT(), {BIGINT(), nullptr});
 }
 
+TEST_F(AggregateFunctionRegistryTest, unknownArgTieStaysAmbiguous) {
+  // Aggregate signatures carry no null-on-null metadata, so an UNKNOWN-induced
+  // tie stays ambiguous even when both overloads share a return type.
+  registerAggregateFunction(
+      "unknown_tie",
+      {exec::AggregateFunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("bigint")
+           .intermediateType("bigint")
+           .argumentType("array(T)")
+           .build(),
+       exec::AggregateFunctionSignatureBuilder()
+           .typeVariable("K")
+           .typeVariable("V")
+           .returnType("bigint")
+           .intermediateType("bigint")
+           .argumentType("map(K,V)")
+           .build()},
+      [](core::AggregationNode::Step,
+         const std::vector<TypePtr>&,
+         const TypePtr& resultType,
+         const core::QueryConfig&) -> std::unique_ptr<exec::Aggregate> {
+        return std::make_unique<AggregateFunc>(resultType);
+      },
+      /*registerCompanionFunctions*/ false,
+      /*overwrite*/ true);
+
+  std::vector<TypePtr> coercions;
+  VELOX_ASSERT_THROW(
+      resolveResultTypeWithCoercions(
+          "unknown_tie", {UNKNOWN()}, coercions, TypeCoercer::defaults()),
+      "Aggregate function signature is not supported");
+}
+
 TEST_F(AggregateFunctionRegistryTest, functionNameInMixedCase) {
   testResolve(
       "aggregatE_funC", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));

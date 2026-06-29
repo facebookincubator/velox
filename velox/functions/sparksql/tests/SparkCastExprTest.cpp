@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -25,6 +26,9 @@ using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::test {
 namespace {
+
+constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
 
 class SparkCastExprTest : public functions::test::CastBaseTest {
  protected:
@@ -38,6 +42,17 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
           std::to_string(value)}});
+  }
+
+  VectorPtr evaluateCastModeSpecialForm(
+      const std::string& castName,
+      const TypePtr& toType,
+      const VectorPtr& input) {
+    auto inputField =
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0");
+    auto cast = std::make_shared<const core::CallTypedExpr>(
+        toType, std::vector<core::TypedExprPtr>{inputField}, castName);
+    return evaluate(cast, makeRowVector({input}));
   }
 
   void testBoolToTimestamp() {
@@ -537,6 +552,35 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             "1970-01-01 10:01:06",
             std::nullopt,
         });
+  }
+
+  void testTimestampUtcToString() {
+    // Basic formatting: output reflects the stored UTC time directly.
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(946'684'800, 0),
+             Timestamp(946'729'316, 0),
+             Timestamp(1'426'680'197, 0),
+             Timestamp(1'426'680'197, 123'000'000),
+             Timestamp(1'426'680'197, 123'456'000)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00",
+             "2000-01-01 00:00:00",
+             "2000-01-01 12:21:56",
+             "2015-03-18 12:03:17",
+             "2015-03-18 12:03:17.123",
+             "2015-03-18 12:03:17.123456"},
+            VARCHAR()));
+
+    // Session timezone does not affect TIMESTAMP_UTC output.
+    setTimezone("Asia/Shanghai");
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0), Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()),
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00", "2000-01-01 12:21:56"}, VARCHAR()));
   }
 
   void testInvalidDate() {
@@ -1043,6 +1087,29 @@ class SparkCastExprTestAnsiOff : public SparkCastExprTest {
   }
 };
 
+TEST_F(SparkCastExprTest, ansiCastModeIgnoresSessionAnsiOff) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          INTEGER(),
+          makeFlatVector<std::string>({"2147483648"})),
+      "Cannot cast");
+}
+
+TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
+  setAnsiSupport(true);
+
+  auto result = evaluateCastModeSpecialForm(
+      kSparkLegacyCast,
+      INTEGER(),
+      makeFlatVector<std::string>({"2147483648", "123"}));
+  auto expected =
+      makeNullableFlatVector<int32_t>({std::nullopt, 123}, INTEGER());
+  assertEqualVectors(expected, result);
+}
+
 // ============================================================================
 // ANSI ON Tests
 // ============================================================================
@@ -1093,6 +1160,10 @@ TEST_F(SparkCastExprTestAnsiOn, timestampToInt) {
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
   testTimestampToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToString) {
+  testTimestampUtcToString();
 }
 
 TEST_F(SparkCastExprTestAnsiOn, testInvalidDate) {
@@ -1374,6 +1445,10 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToInt) {
 
 TEST_F(SparkCastExprTestAnsiOff, timestampToString) {
   testTimestampToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToString) {
+  testTimestampUtcToString();
 }
 
 TEST_F(SparkCastExprTestAnsiOff, testInvalidDate) {

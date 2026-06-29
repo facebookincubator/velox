@@ -104,17 +104,26 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcWaitWallNanos{"rpcWaitWallNanos"};
   static inline const std::string kRpcBackpressureWaitNanos{
       "rpcBackpressureWaitNanos"};
+  static inline const std::string kRpcCongestionWindowFinal{
+      "rpcCongestionWindowFinal"};
+  static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
+  static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
+  static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
+  static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
+  static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
+  static inline const std::string kRpcRttCount{"rpcRttCount"};
+  static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
+  static inline const std::string kRpcErrorKindRateLimited{
+      "rpcErrorKindRateLimited"};
+  static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
+  static inline const std::string kRpcErrorKindBackendError{
+      "rpcErrorKindBackendError"};
 
  private:
   /// Flush accumulated batch rows via function_->flushBatch().
   /// Called when threshold is reached or at noMoreInput/drain time.
   /// @param maxRows Maximum rows to flush. 0 means flush all.
   void flushBatchRequests(int32_t maxRows = 0);
-
-  /// Build output RowVector from ready rows (PER_ROW mode).
-  /// Supports multiple rows via batched drain for pipeline efficiency.
-  RowVectorPtr buildOutputFromReadyRows(
-      std::vector<RPCState::ReadyRow>& readyRows);
 
   /// Build output RowVector from a ready batch (BATCH mode).
   RowVectorPtr buildOutputFromReadyBatch(RPCState::ReadyBatch& readyBatch);
@@ -128,6 +137,9 @@ class RPCOperator : public exec::Operator {
   /// Called once in initialize() to avoid repeated string lookups in
   /// buildOutputVector().
   void initOutputProjections();
+
+  // Increment the per-error-kind counter for a single response.
+  void recordErrorKind(velox::rpc::RPCErrorKind kind);
 
   /// Record runtime stats into operator stats. Called from close().
   void recordRuntimeStats();
@@ -152,8 +164,12 @@ class RPCOperator : public exec::Operator {
   std::vector<int64_t> batchRowIds_;
 
   int64_t numRequestsDispatched_{0};
-  int64_t numResponsesCollected_{0};
+  int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
+  // Per-error-kind breakdown of numErrors_, populated by recordErrorKind().
+  int64_t numErrorsRateLimited_{0};
+  int64_t numErrorsTimeout_{0};
+  int64_t numErrorsBackend_{0};
 
   // Global row ID counter for unique IDs across all input batches.
   int64_t globalRowIdCounter_{0};

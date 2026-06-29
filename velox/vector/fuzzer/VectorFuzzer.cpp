@@ -681,13 +681,14 @@ VectorPtr VectorFuzzer::fuzzDictionary(const VectorPtr& vector) {
 VectorPtr VectorFuzzer::fuzzDictionary(
     const VectorPtr& vector,
     vector_size_t size) {
-  const size_t vectorSize = vector->size();
+  const vector_size_t vectorSize = vector->size();
   VELOX_CHECK(
       vectorSize > 0 || size == 0,
       "Cannot build a non-empty dictionary on an empty underlying vector");
-  BufferPtr indices = fuzzIndices(size, vectorSize);
 
   auto nulls = opts_.dictionaryHasNulls ? fuzzNulls(size) : nullptr;
+  BufferPtr indices =
+      fuzzIndices(size, vectorSize, nulls ? nulls->as<uint64_t>() : nullptr);
   return BaseVector::wrapInDictionary(nulls, indices, size, vector);
 }
 
@@ -695,7 +696,8 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
     BufferPtr& offsets,
     BufferPtr& sizes,
     size_t elementsSize,
-    size_t size) {
+    size_t size,
+    const uint64_t* rawNullsForGarbage) {
   offsets = allocateOffsets(size, pool_);
   sizes = allocateSizes(size, pool_);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
@@ -704,8 +706,30 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
   size_t containerAvgLength = std::max(elementsSize / size, 1UL);
   size_t childSize = 0;
   size_t length = 0;
+  const auto bound = static_cast<vector_size_t>(elementsSize);
 
   for (auto i = 0; i < size; ++i) {
+    if (rawNullsForGarbage != nullptr &&
+        bits::isBitNull(rawNullsForGarbage, i)) {
+      // Null rows get out-of-range offsets/sizes so any read behind the null
+      // is out of bounds.
+      rawOffsets[i] = rand<vector_size_t>(rng_, bound + 1, 2 * bound + 1);
+      rawSizes[i] = rand<vector_size_t>(rng_, 1, bound + 1);
+      continue;
+    }
+
+    // Optionally leave a gap of unreferenced elements before this container so
+    // the layout is non-contiguous. The skipped elements keep their (random)
+    // values, so code that ignores offsets is exercised. The gap is capped so a
+    // single container does not exhaust the elements vector. Rows whose offset
+    // ends up past the elements vector get size 0 below and are skipped by
+    // validate.
+    if (opts_.fuzzNonContiguousElements && childSize < elementsSize &&
+        coinToss(0.3)) {
+      const size_t maxGap = std::min(containerAvgLength, size_t{10});
+      childSize += 1 + rand<uint32_t>(rng_) % maxGap;
+    }
+
     rawOffsets[i] = childSize;
 
     // If variable length, generate a random number between zero and 2 *
@@ -740,23 +764,24 @@ ArrayVectorPtr VectorFuzzer::fuzzArray(
 ArrayVectorPtr VectorFuzzer::fuzzArray(
     const VectorPtr& elements,
     vector_size_t size) {
+  auto nulls = fuzzNulls(size);
   BufferPtr offsets, sizes;
-  fuzzOffsetsAndSizes(offsets, sizes, elements->size(), size);
-  return std::make_shared<ArrayVector>(
-      pool_,
-      ARRAY(elements->type()),
-      fuzzNulls(size),
-      size,
+  fuzzOffsetsAndSizes(
       offsets,
       sizes,
-      elements);
+      elements->size(),
+      size,
+      nulls ? nulls->as<uint64_t>() : nullptr);
+  return std::make_shared<ArrayVector>(
+      pool_, ARRAY(elements->type()), nulls, size, offsets, sizes, elements);
 }
 
 VectorPtr VectorFuzzer::normalizeMapKeys(
     const VectorPtr& keys,
     size_t mapSize,
     BufferPtr& offsets,
-    BufferPtr& sizes) {
+    BufferPtr& sizes,
+    const uint64_t* rawNulls) {
   // Map keys cannot be null.
   const auto& nulls = keys->nulls();
   if (nulls) {
@@ -772,6 +797,12 @@ VectorPtr VectorFuzzer::normalizeMapKeys(
   // Looks for duplicate key values.
   std::unordered_set<uint64_t> set;
   for (size_t i = 0; i < mapSize; ++i) {
+    // Null rows carry out-of-range garbage offsets/sizes; skip them so we
+    // never dereference out-of-range positions.
+    if (rawNulls != nullptr &&
+        bits::isBitNull(rawNulls, static_cast<uint32_t>(i))) {
+      continue;
+    }
     set.clear();
 
     for (size_t j = 0; j < rawSizes[i]; ++j) {
@@ -797,17 +828,22 @@ MapVectorPtr VectorFuzzer::fuzzMap(
     const VectorPtr& values,
     vector_size_t size) {
   size_t elementsSize = std::min(keys->size(), values->size());
+  auto nulls = fuzzNulls(size);
+  const uint64_t* rawNulls = nulls ? nulls->as<uint64_t>() : nullptr;
   BufferPtr offsets, sizes;
-  fuzzOffsetsAndSizes(offsets, sizes, elementsSize, size);
+  fuzzOffsetsAndSizes(offsets, sizes, elementsSize, size, rawNulls);
+  auto mapKeys = keys;
+  if (opts_.normalizeMapKeys) {
+    mapKeys = normalizeMapKeys(keys, size, offsets, sizes, rawNulls);
+  }
   return std::make_shared<MapVector>(
       pool_,
       MAP(keys->type(), values->type()),
-      fuzzNulls(size),
+      nulls,
       size,
       offsets,
       sizes,
-      opts_.normalizeMapKeys ? normalizeMapKeys(keys, size, offsets, sizes)
-                             : keys,
+      std::move(mapKeys),
       values);
 }
 
@@ -992,13 +1028,22 @@ BufferPtr VectorFuzzer::fuzzNulls(vector_size_t size) {
 
 BufferPtr VectorFuzzer::fuzzIndices(
     vector_size_t size,
-    vector_size_t baseVectorSize) {
+    vector_size_t baseVectorSize,
+    const uint64_t* rawNullsForGarbage) {
   VELOX_CHECK_GE(size, 0);
   BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool_);
   auto rawIndices = indices->asMutable<vector_size_t>();
 
   for (size_t i = 0; i < size; ++i) {
-    rawIndices[i] = rand<vector_size_t>(rng_) % baseVectorSize;
+    if (rawNullsForGarbage != nullptr &&
+        bits::isBitNull(rawNullsForGarbage, static_cast<uint32_t>(i))) {
+      // Out-of-range index (>= baseVectorSize) so a read behind the null is out
+      // of bounds.
+      rawIndices[i] =
+          rand<vector_size_t>(rng_, baseVectorSize, 2 * baseVectorSize - 1);
+    } else {
+      rawIndices[i] = rand<vector_size_t>(rng_) % baseVectorSize;
+    }
   }
   return indices;
 }
