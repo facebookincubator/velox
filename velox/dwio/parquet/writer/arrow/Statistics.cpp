@@ -556,7 +556,9 @@ TypedComparatorImpl<false, ByteArrayType>::getMinMax(
 template <typename T>
 std::string encodeDecimalToBigEndian(T value) {
   uint8_t buffer[sizeof(T)];
-  if constexpr (std::is_same_v<T, int64_t>) {
+  if constexpr (std::is_same_v<T, int32_t>) {
+    *reinterpret_cast<int32_t*>(buffer) = ::arrow::bit_util::ToBigEndian(value);
+  } else if constexpr (std::is_same_v<T, int64_t>) {
     *reinterpret_cast<int64_t*>(buffer) = ::arrow::bit_util::ToBigEndian(value);
   } else if constexpr (std::is_same_v<T, int128_t>) {
     *reinterpret_cast<int128_t*>(buffer) = DecimalUtil::bigEndian(value);
@@ -787,6 +789,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   }
 
   std::string icebergLowerBoundInclusive(int32_t truncateTo) const override {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      if (descr_->logicalType()->isDecimal()) {
+        return encodeDecimalToBigEndian(min_);
+      }
+    }
     if constexpr (std::is_same_v<T, int64_t>) {
       if (descr_->logicalType()->isDecimal()) {
         return encodeDecimalToBigEndian(min_);
@@ -819,6 +826,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
 
   std::optional<std::string> icebergUpperBoundExclusive(
       int32_t truncateTo) const override {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      if (descr_->logicalType()->isDecimal()) {
+        return encodeDecimalToBigEndian(max_);
+      }
+    }
     if constexpr (std::is_same_v<T, int64_t>) {
       if (descr_->logicalType()->isDecimal()) {
         return encodeDecimalToBigEndian(max_);

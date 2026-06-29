@@ -167,7 +167,7 @@ TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
         entry.to->name());
   }
 
-  unknownToComplexCost_ = maxUnknownCost + 1;
+  unknownFallbackCost_ = maxUnknownCost + 1;
 }
 
 // static
@@ -179,10 +179,28 @@ const TypeCoercer& TypeCoercer::defaults() {
 std::optional<Coercion> TypeCoercer::coerce(
     const TypePtr& fromType,
     const TypePtr& toType) const {
-  if (fromType->isUnknown() && toType->size() > 0) {
-    return Coercion{.type = toType, .cost = unknownToComplexCost_};
+  if (fromType->size() == 0 && toType->size() == 0) {
+    if (auto coercion = coerceTypeBase(fromType, toType)) {
+      return coercion;
+    }
+  } else if (
+      fromType->name() == toType->name() &&
+      fromType->size() == toType->size()) {
+    int32_t totalCost = 0;
+    for (auto i = 0; i < fromType->size(); ++i) {
+      const auto child = coerce(fromType->childAt(i), toType->childAt(i));
+      if (!child) {
+        return std::nullopt;
+      }
+      totalCost += child->cost;
+    }
+    return Coercion{.type = toType, .cost = totalCost};
   }
-  return coerceTypeBase(fromType, toType);
+
+  if (fromType->isUnknown() && !toType->isUnknown()) {
+    return Coercion{.type = toType, .cost = unknownFallbackCost_};
+  }
+  return std::nullopt;
 }
 
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
@@ -218,73 +236,6 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
   }
 
   return std::nullopt;
-}
-
-std::optional<Coercion> TypeCoercer::coerceTypeBase(
-    const TypePtr& fromType,
-    const std::string& toTypeName) const {
-  if (fromType->name() == toTypeName) {
-    return Coercion{.type = fromType, .cost = 0};
-  }
-
-  // Check this coercer's rule set first.
-  auto it = rules_.find({fromType->name(), toTypeName});
-  if (it != rules_.end()) {
-    return it->second;
-  }
-
-  // Fall back to CastRulesRegistry for custom type coercions. Skip
-  // parameterized types -- we cannot construct the target type without knowing
-  // its type parameters.
-  // getCustomType() returns nullptr for built-in types. Callers must not
-  // pass parametric custom type names (e.g., "BIGINT_ENUM") because their
-  // factories throw when called with empty parameters. SignatureBinder
-  // guards against this by checking typeSignature.parameters().empty().
-  if (fromType->size() == 0 && fromType->parameters().empty()) {
-    if (auto toType = getCustomType(toTypeName, {})) {
-      if (auto cost =
-              CastRulesRegistry::instance().canCoerce(fromType, toType)) {
-        return Coercion{.type = std::move(toType), .cost = *cost};
-      }
-    }
-  }
-
-  return std::nullopt;
-}
-
-std::optional<int32_t> TypeCoercer::coercible(
-    const TypePtr& fromType,
-    const TypePtr& toType) const {
-  if (fromType->isUnknown()) {
-    if (toType->isUnknown()) {
-      return 0;
-    }
-    return 1;
-  }
-
-  if (fromType->size() == 0) {
-    if (auto coercion = coerceTypeBase(fromType, toType)) {
-      return coercion->cost;
-    }
-
-    return std::nullopt;
-  }
-
-  if (fromType->name() != toType->name() ||
-      fromType->size() != toType->size()) {
-    return std::nullopt;
-  }
-
-  int32_t totalCost = 0;
-  for (auto i = 0; i < fromType->size(); i++) {
-    if (auto cost = coercible(fromType->childAt(i), toType->childAt(i))) {
-      totalCost += cost.value();
-    } else {
-      return std::nullopt;
-    }
-  }
-
-  return totalCost;
 }
 
 namespace {
