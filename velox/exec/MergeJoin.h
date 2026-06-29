@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 #pragma once
+#include <cstdint>
 #include <string_view>
 
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Operator.h"
@@ -260,7 +262,15 @@ class MergeJoin : public Operator {
       const RowVectorPtr& leftBatch,
       vector_size_t leftRow,
       const RowVectorPtr& rightBatch,
-      vector_size_t rightRow);
+      vector_size_t rightRow,
+      size_t rightBatchIndex);
+
+  struct RightCandidateCursor {
+    size_t rightBatchIndex{0};
+    vector_size_t rightRowIndex{0};
+  };
+
+  bool appendRightCandidates();
 
   // If the right side projected columns in the current output vector happen to
   // span more than one vector from the right side, they cannot be simply
@@ -562,6 +572,11 @@ class MergeJoin : public Operator {
   vector_size_t* rawLeftOutputIndices_;
   vector_size_t* rawRightOutputIndices_;
 
+  BufferPtr rightRowIds_;
+  uint64_t* rawRightRowIds_{nullptr};
+  BufferPtr rightRowIsCandidate_;
+  uint64_t* rawRightRowIsCandidate_{nullptr};
+
   // Stores the current left and right vectors being used by the output
   // dictionaries.
   RowVectorPtr currentLeft_;
@@ -644,6 +659,8 @@ class MergeJoin : public Operator {
 
   // A set of rows with matching keys on the right side.
   std::optional<Match> rightMatch_;
+  std::optional<RightCandidateCursor> rightCandidateCursor_;
+  folly::F14FastSet<uint64_t> passedRightRows_;
 
   RowVectorPtr output_;
 
