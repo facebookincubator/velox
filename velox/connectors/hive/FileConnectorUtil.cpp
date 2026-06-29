@@ -130,9 +130,8 @@ void configureReaderOptions(
     return;
   }
 
-  const auto fileFormat = dwio::common::configFileFormat(fileSplit->fileFormat);
-  auto formatScopedConfigs =
-      makeFormatScopedConfigs(*fileConfig, *sessionProperties, fileFormat);
+  auto formatScopedConfigs = makeFormatScopedConfigs(
+      *fileConfig, *sessionProperties, fileSplit->fileFormat);
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(

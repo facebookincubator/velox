@@ -35,13 +35,9 @@ TEST(OptionsTests, fluxFileFormatRoundTrip) {
 TEST(OptionsTests, formatConfigPrefix) {
   EXPECT_EQ("parquet.", formatConfigPrefix(FileFormat::PARQUET, "."));
   EXPECT_EQ("parquet_", formatConfigPrefix(FileFormat::PARQUET, "_"));
+  EXPECT_EQ("orc.", formatConfigPrefix(FileFormat::DWRF, "."));
+  EXPECT_EQ("orc_", formatConfigPrefix(FileFormat::DWRF, "_"));
   EXPECT_EQ("", formatConfigPrefix(FileFormat::UNKNOWN, "."));
-}
-
-TEST(OptionsTests, configFileFormat) {
-  EXPECT_EQ(FileFormat::ORC, configFileFormat(FileFormat::DWRF));
-  EXPECT_EQ(FileFormat::ORC, configFileFormat(FileFormat::ORC));
-  EXPECT_EQ(FileFormat::PARQUET, configFileFormat(FileFormat::PARQUET));
 }
 
 TEST(OptionsTests, commonReaderOptions) {

@@ -64,13 +64,12 @@ FileFormat toFileFormat(std::string_view s) {
   return FileFormatName::tryToFileFormat(s).value_or(FileFormat::UNKNOWN);
 }
 
-FileFormat configFileFormat(FileFormat fileFormat) {
-  return fileFormat == FileFormat::DWRF ? FileFormat::ORC : fileFormat;
-}
-
 std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
   if (fmt == FileFormat::UNKNOWN) {
     return "";
+  }
+  if (fmt == FileFormat::DWRF) {
+    fmt = FileFormat::ORC;
   }
   return std::string(FileFormatName::toName(fmt)) + std::string(separator);
 }
