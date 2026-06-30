@@ -14,136 +14,142 @@
 
 # Require-fbcode-import gate
 #
-# Velox GitHub-First control: once a PR is APPROVED on GitHub, it must NOT be
-# mergeable until the change has been imported into fbcode.
+# Once a pull request is APPROVED, it must not be mergeable until the change
+# exists in fbcode. Before approval the gate is not applicable and reports
+# success (approval itself is enforced by branch protection). Once APPROVED the
+# gate reports success only on a positive in-fbcode signal:
 #
-# Scope: this gate only enforces after approval. Before approval it is not
-# applicable and exits PASS — approval itself is enforced separately by the
-# "Require approvals" branch-protection rule. Once the PR reaches
-# reviewDecision == APPROVED, the gate FAILS CLOSED: it passes only on a
-# positive in-fbcode signal, and fails otherwise.
+#   * fbcode-originated PRs carry a "Differential Revision" trailer in the body.
+#   * Imported PRs are detected by the comment that Meta CodeSync
+#     (meta-codesync[bot]) posts on import, which links the imported diff. To
+#     keep this per-commit-correct, the comment counts only if it was posted
+#     after the current head commit; pushing a new commit re-blocks the gate
+#     until the new commit is imported.
 #
-# How "in fbcode" is detected:
-#   * fbcode-originated co-dev PRs carry a "Differential Revision" trailer in
-#     their description.
-#   * External PRs require BOTH of these together: the "imported-to-fbcode" label,
-#     and an import comment authored by the Meta CodeSync GitHub App
-#     (meta-codesync[bot]). The label is what re-runs this check on import (it is
-#     the trigger and a necessary signal); the bot comment is the unforgeable
-#     proof. Requiring both means a label applied by hand, without a real import,
-#     cannot pass the gate.
-#
-# IMPORTANT: the bot's import comment attests IMPORT ONLY, not that internal CI
-# (Sandcastle) passed. Requiring internal CI to be green is a separate, follow-up
-# signal owned by the Velox auto-merge tool, which has the internal visibility to
-# verify the diff-to-PR association and the CI result. This workflow intentionally
-# does not assert CI status yet.
-#
-# Triggers: pull_request_review engages the gate on approval and re-evaluates on
-# dismissal; pull_request labeled/unlabeled re-runs it when the import label is
-# applied, turning the gate green automatically on import. The label event runs
-# in the PR context, so the check attaches to the PR head commit.
+# Reporting the result:
+#   * On pull_request and pull_request_review the run is associated with the PR
+#     head commit, so the job exit code (0/1) is recorded as the check on the
+#     right commit. No API write and no write token are needed, which is why
+#     this works for fork pull requests (whose token is read-only).
+#   * On issue_comment the run is associated with the default branch, not the PR
+#     head, so the exit code would land on the wrong commit. There we explicitly
+#     publish the result to the PR head SHA via the Checks API. issue_comment
+#     runs in the base-repo context and so has a write token even for fork PRs.
+# When several check runs share the name "gate" on a commit, GitHub uses the
+# latest, so the issue_comment result supersedes an earlier pull_request result.
 
 name: Require fbcode Import
 
 on:
+  pull_request:
+    types: [opened, reopened, synchronize]
   pull_request_review:
     types: [submitted, dismissed]
-  pull_request:
-    types: [labeled, unlabeled]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: read
   issues: read
+  # Used only by the issue_comment path, to publish the result on the PR head.
+  checks: write
 
 jobs:
   gate:
     name: gate
     runs-on: ubuntu-latest
+    # Always run for PR activity and reviews. For comments, run only for the
+    # CodeSync bot's import comment, so the job is skipped (no runner) for
+    # ordinary comments.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request != null &&
+       github.event.comment.user.login == 'meta-codesync[bot]')
     steps:
-      - name: Require import-to-fbcode once approved
+      - name: Evaluate the import gate
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          # The "imported" label the Velox auto-merge tool / oncall applies after
-          # importing the PR into fbcode. Applying it re-runs this check.
-          REQUIRED_LABEL: imported-to-fbcode
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           # The GitHub App account that Meta CodeSync comments as on import.
           CODESYNC_BOT: meta-codesync[bot]
+          # The check name enforced by branch protection (the required context).
+          CHECK_NAME: gate
         run: |
           set -uo pipefail
 
-          # Determine whether the PR is approved. reviewDecision is only populated
-          # when the base branch requires approving reviews; if branch protection is
-          # missing or misconfigured it comes back empty, so we must NOT rely on it
-          # alone (doing so makes the gate silently pass — fail open). We therefore
-          # also consult the reviews API and err toward "approved": treating a PR as
-          # approved only makes the gate REQUIRE import (fail closed); it never lets
-          # an un-imported change through.
-          DECISION="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviewDecision -q .reviewDecision 2>/dev/null || echo '')"
-          echo "reviewDecision: ${DECISION:-<none>}"
-
-          APPROVED=false
-          if [ "$DECISION" = "APPROVED" ]; then
-            APPROVED=true
-          elif gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" -q '.[].state' 2>/dev/null | grep -qx 'APPROVED'; then
-            echo "::notice::reviewDecision is '${DECISION:-<none>}' but an approving review exists; treating as approved."
-            APPROVED=true
-          fi
-
-          if [ "$APPROVED" != "true" ]; then
-            echo "::notice::PR not approved yet — import gate not applicable (approval is enforced by branch protection)."
+          if [ -z "${PR_NUMBER}" ] || [ "${PR_NUMBER}" = "null" ]; then
+            echo "::notice::No pull request on this event; nothing to do."
             exit 0
           fi
 
-          # Pass 1: an fbcode-originated co-dev PR carries a Differential Revision
-          # trailer. Fetch the body here (not from the event payload, which is
-          # absent on issue_comment events) so this works on every trigger.
-          PR_BODY="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body -q .body 2>/dev/null || echo '')"
-          if printf '%s' "${PR_BODY}" | grep -Eq 'Differential Revision:.*D[0-9]+'; then
-            echo "::notice::Differential Revision present — fbcode-originated. Merge allowed."
+          PR_JSON="$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid,reviewDecision,body)"
+          HEAD_SHA="$(printf '%s' "${PR_JSON}" | jq -r '.headRefOid')"
+          DECISION="$(printf '%s' "${PR_JSON}" | jq -r '.reviewDecision // ""')"
+          PR_BODY="$(printf '%s' "${PR_JSON}" | jq -r '.body // ""')"
+          echo "PR #${PR_NUMBER} head=${HEAD_SHA} reviewDecision=${DECISION:-<none>} event=${EVENT_NAME}"
+
+          CONCLUSION=""
+          TITLE=""
+          SUMMARY=""
+          result() { CONCLUSION="$1"; TITLE="$2"; SUMMARY="$3"; }
+
+          if [ "${DECISION}" != "APPROVED" ]; then
+            # Before approval the gate is not applicable; re-evaluated when the
+            # review decision changes.
+            result "success" "Not applicable until approved" \
+              "Approval is enforced separately by branch protection. This gate engages once the PR is APPROVED."
+          elif printf '%s' "${PR_BODY}" | grep -Eq 'Differential Revision:.*D[0-9]+'; then
+            result "success" "fbcode-originated" \
+              "PR carries a Differential Revision trailer; the change already exists in fbcode."
+          else
+            # Meta CodeSync posts an imported-diff comment on import. The comment
+            # must be authored by ${CODESYNC_BOT}, and must be newer than the
+            # current head commit so a new commit re-blocks the gate.
+            BOT_TSV="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+              --jq ".[] | select(.user.login==\"${CODESYNC_BOT}\") | [.created_at, (.body | gsub(\"[\\n\\r]\"; \" \"))] | @tsv" 2>/dev/null || true)"
+            IMPORT_TS="$(printf '%s\n' "${BOT_TSV}" | grep -E 'you can view this in \[D[0-9]+\]' | cut -f1 | sort | tail -1)"
+
+            if [ -n "${IMPORT_TS}" ]; then
+              HEAD_TS="$(gh api "repos/${REPO}/commits/${HEAD_SHA}" --jq '.commit.committer.date' 2>/dev/null || echo '')"
+              IMPORT_EPOCH="$(date -d "${IMPORT_TS}" +%s 2>/dev/null || echo 0)"
+              HEAD_EPOCH="$(date -d "${HEAD_TS}" +%s 2>/dev/null || echo 0)"
+              echo "import comment=${IMPORT_TS} (${IMPORT_EPOCH}) head commit=${HEAD_TS} (${HEAD_EPOCH})"
+              if [ "${IMPORT_EPOCH}" -gt "${HEAD_EPOCH}" ]; then
+                result "success" "Imported into fbcode" \
+                  "Meta CodeSync (${CODESYNC_BOT}) imported this PR; the current head exists in fbcode."
+              else
+                result "failure" "Head not yet imported into fbcode" \
+                  "The latest import predates the current head commit. Import the new commit; once Meta CodeSync (${CODESYNC_BOT}) posts the imported-diff comment, this check turns green automatically."
+              fi
+            else
+              result "failure" "Approved PR not yet imported into fbcode" \
+                "Import this PR into fbcode. Once Meta CodeSync (${CODESYNC_BOT}) posts the imported-diff comment, this check turns green automatically."
+            fi
+          fi
+
+          echo "verdict: ${CONCLUSION} — ${TITLE}"
+
+          # On issue_comment the run is not tied to the PR head, so publish the
+          # result to the head SHA via the Checks API (write token available in
+          # the base-repo context). Otherwise the job exit code is recorded on
+          # the head commit directly.
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            gh api -X POST "repos/${REPO}/check-runs" \
+              -f name="${CHECK_NAME}" \
+              -f head_sha="${HEAD_SHA}" \
+              -f status="completed" \
+              -f conclusion="${CONCLUSION}" \
+              -f "output[title]=${TITLE}" \
+              -f "output[summary]=${SUMMARY}" >/dev/null
+            echo "published ${CHECK_NAME}=${CONCLUSION} on ${HEAD_SHA}"
             exit 0
           fi
 
-          # Pass 2: an external PR imported into fbcode. Require BOTH signals:
-          #   1. the "${REQUIRED_LABEL}" label, applied by the oncall / auto-merge tool
-          #      on import (this is also the event that re-runs this check), and
-          #   2. an import comment authored by ${CODESYNC_BOT} of the form
-          #      "... you can view this in [D<number>]".
-          # The label alone is forgeable, so it is necessary but not sufficient; the
-          # bot comment is the unforgeable proof. A diff link from any other user does
-          # not count. This attests IMPORT only — internal CI is a separate signal.
-          HAS_LABEL=false
-          if gh pr view "$PR_NUMBER" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null | grep -qx "$REQUIRED_LABEL"; then
-            HAS_LABEL=true
-          fi
-
-          HAS_BOT_COMMENT=false
-          BOT_COMMENTS="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate -q ".[] | select(.user.login==\"${CODESYNC_BOT}\") | .body" 2>/dev/null || echo '')"
-          if printf '%s' "${BOT_COMMENTS}" | grep -Eq 'you can view this in \[D[0-9]+\]'; then
-            HAS_BOT_COMMENT=true
-          fi
-
-          if [ "$HAS_LABEL" = "true" ] && [ "$HAS_BOT_COMMENT" = "true" ]; then
-            echo "::notice::Imported into fbcode ('${REQUIRED_LABEL}' label and ${CODESYNC_BOT} import comment both present). Merge allowed."
+          if [ "${CONCLUSION}" = "success" ]; then
             exit 0
           fi
-
-          echo "::error title=fbcode import required::Approved PR is not yet imported into fbcode."
-          {
-            echo "## Blocked: approved PR not yet imported into fbcode"
-            echo ""
-            echo "This check blocks merging until the change exists in fbcode. The Velox oncall"
-            echo "imports this pull request with the auto-merge tool; on import the"
-            echo "\`${REQUIRED_LABEL}\` label is applied and the Meta CodeSync bot"
-            echo "(${CODESYNC_BOT}) posts a comment linking the imported diff. This check"
-            echo "requires both, then turns green."
-            echo ""
-            echo "Current state: label=${HAS_LABEL}, import-comment=${HAS_BOT_COMMENT}."
-            echo ""
-            echo "_(Pull requests exported from an internal diff are exempt: they already carry"
-            echo "a Differential Revision trailer and exist in fbcode.)_"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=${TITLE}::${SUMMARY}"
           exit 1
