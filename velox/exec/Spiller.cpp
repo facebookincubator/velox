@@ -201,7 +201,7 @@ std::unique_ptr<SpillerBase::SpillStatus> SpillerBase::writeSpill(
   // these will be materialized at a time for each stream of the
   // merge.
   constexpr int32_t kTargetBatchBytes = 1 << 18; // 256K
-  constexpr int32_t kTargetBatchRows = 64;
+  constexpr int32_t kTargetBatchRows = 1024;
 
   RowVectorPtr spillVector;
   auto& run = spillRuns_.at(id);
