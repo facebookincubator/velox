@@ -31,8 +31,9 @@ bool numaNodeHasCpus(int32_t numaNode) {
   if (cpus == nullptr) {
     return false;
   }
-  const bool hasCpus =
-      numa_node_to_cpus(numaNode, cpus) == 0 && numa_bitmask_weight(cpus) > 0;
+  // Fill 'cpus' with the CPUs attached to 'numaNode', then count them.
+  const bool filled = numa_node_to_cpus(numaNode, cpus) == 0;
+  const bool hasCpus = filled && numa_bitmask_weight(cpus) > 0;
   numa_free_cpumask(cpus);
   return hasCpus;
 }
@@ -61,17 +62,12 @@ int32_t validateNumaNode(int32_t numaNode) {
   return numaNode;
 }
 
-// Binds [address, address + bytes) to 'numaNode'.
-void bindToNumaNode(void* address, size_t bytes, int32_t numaNode) {
-  numa_tonode_memory(address, bytes, numaNode);
-}
-
-// Returns 'options' with an onMap hook binding to 'numaNode'.
+// Returns 'options' with an onMap hook binding mapped pages to 'numaNode'.
 memory::MemoryAllocator::Options withNumaBinding(
     memory::MemoryAllocator::Options options,
     int32_t numaNode) {
   options.onMap = [numaNode](void* address, size_t bytes) {
-    bindToNumaNode(address, bytes, numaNode);
+    numa_tonode_memory(address, bytes, numaNode);
   };
   return options;
 }
