@@ -175,6 +175,10 @@ class FileDataSource : public DataSource {
 
   dwio::common::RuntimeStatistics runtimeStats_;
 
+  virtual const RowTypePtr getOutputType() {
+    return outputType_;
+  }
+
  private:
   // Configure extraction columns on the ScanSpec and build
   // readerProducedType_.  Called from the constructor after scanSpec_ is

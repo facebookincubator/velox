@@ -16,6 +16,7 @@ set(
   DeletionVectorReader.cpp
   DeletionVectorWriter.cpp
   EqualityDeleteFileReader.cpp
+  IcebergChangelogSplitReader.cpp
   IcebergColumnHandle.cpp
   IcebergConfig.cpp
   IcebergConnector.cpp
@@ -48,6 +49,8 @@ velox_add_library(
   DeletionVectorReader.h
   DeletionVectorWriter.h
   EqualityDeleteFileReader.h
+  IcebergChangelogSplitInfo.h
+  IcebergChangelogSplitReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h
