@@ -76,14 +76,20 @@ bool needsDecimalCast(cudf::column_view const& col, const TypePtr& veloxType) {
     VELOX_CHECK_EQ(
         numChildren,
         rowType.size(),
-        "Scanned struct column has {} fields but the expected schema has {}",
+        "Scanned STRUCT column has {} fields but the expected schema has {}.",
         numChildren,
         rowType.size());
     return std::ranges::any_of(
         std::views::iota(size_t{0}, numChildren), [&](size_t i) {
           return needsDecimalCast(col.child(i), rowType.childAt(i));
         });
-  } else if (veloxType->kind() == TypeKind::ARRAY && col.num_children() > 1) {
+  } else if (veloxType->kind() == TypeKind::ARRAY) {
+    auto numChildren = static_cast<size_t>(col.num_children());
+    VELOX_CHECK_EQ(
+        numChildren,
+        2,
+        "Scanned LIST column has {} fields, expected 2.",
+        numChildren);
     return needsDecimalCast(col.child(1), veloxType->childAt(0));
   }
   return false;
@@ -116,7 +122,7 @@ std::unique_ptr<cudf::column> castDecimalColumn(
         cudf::copy_bitmask(col, stream, mr),
         stream,
         mr);
-  } else if (veloxType->kind() == TypeKind::ARRAY && col.num_children() > 1) {
+  } else if (veloxType->kind() == TypeKind::ARRAY) {
     auto offsets = std::make_unique<cudf::column>(col.child(0), stream, mr);
     auto child =
         castDecimalColumn(col.child(1), veloxType->childAt(0), stream, mr);
@@ -127,7 +133,7 @@ std::unique_ptr<cudf::column> castDecimalColumn(
         col.null_count(),
         cudf::copy_bitmask(col, stream, mr));
   }
-  return std::make_unique<cudf::column>(col, stream, mr);
+  VELOX_UNREACHABLE("Unsupported type: {}.", veloxType->toString());
 }
 
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
@@ -135,17 +141,8 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     const RowTypePtr& rowType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  auto tableView = table->view();
-  auto numColumns = std::min<size_t>(tableView.num_columns(), rowType->size());
-  // Fast path.
-  bool anyCastNeeded = std::ranges::any_of(
-      std::views::iota(size_t{0}, numColumns), [&](size_t i) {
-        return needsDecimalCast(tableView.column(i), rowType->childAt(i));
-      });
-  if (!anyCastNeeded) {
-    return std::move(table);
-  }
-
+  auto numColumns =
+      std::min<size_t>(table->view().num_columns(), rowType->size());
   auto columns = table->release();
   for (size_t i = 0; i < numColumns; ++i) {
     auto&& col = columns[i];
