@@ -126,7 +126,6 @@ function install_velox_deps_from_apt {
     flex \
     libfl-dev \
     tzdata \
-    libnuma-dev \
     libxxhash-dev
 }
 
@@ -228,6 +227,10 @@ function install_adapters {
 
 function install_faiss_deps {
   ${SUDO} apt-get install -y libopenblas-dev libomp-dev
+}
+
+function install_cxl_deps {
+  ${SUDO} apt install -y libnuma-dev
 }
 
 function install_velox_deps {

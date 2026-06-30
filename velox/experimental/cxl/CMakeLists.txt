@@ -11,17 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-rules:
-  use-trusted-publishing:
-    ignore:
-      - build_pyvelox.yml
-  dangerous-triggers:
-    ignore:
-      - selective-build-comment.yml
-      - ci-failure-comment.yml
-      - labeler.yml
-      - detect-force-full.yml
-      - rerun-on-force-full.yml
-      - force-full-on-comment.yml
-      - require-fbcode-import.yml
-      - detect-approval.yml
+
+# CXL experimental memory subsystem.
+# This validates that libnuma is discoverable when VELOX_ENABLE_CXL is enabled.
+find_package(Numa REQUIRED)
+
+velox_add_library(velox_experimental_cxl INTERFACE HEADERS CxlMemoryResource.h)
