@@ -203,9 +203,8 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
         stream,
         mr);
     // cuDF row_number is int32; Velox expects bigint.
-    const auto rowNumberCudfType = cudf::data_type(
-        cudf_velox::veloxToCudfTypeId(
-            outputType_->childAt(outputType_->size() - 1)));
+    const auto rowNumberCudfType = cudf_velox::veloxToCudfDataType(
+        outputType_->childAt(outputType_->size() - 1));
     if (filtRowNums->type() != rowNumberCudfType) {
       filtRowNums = cudf::cast(*filtRowNums, rowNumberCudfType, stream, mr);
     }
