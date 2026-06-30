@@ -35,12 +35,6 @@ int32_t outOfRangeNode() {
 
 class CxlMemoryAllocatorTest : public testing::Test {
  protected:
-  void SetUp() override {
-    if (numa_available() < 0) {
-      GTEST_SKIP() << "NUMA is unavailable on this host.";
-    }
-  }
-
   // Options sized small enough to keep the test cheap; node 0 always exists on
   // a NUMA-capable host.
   static MemoryAllocator::Options options() {

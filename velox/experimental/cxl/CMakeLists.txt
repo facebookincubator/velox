@@ -23,7 +23,6 @@ velox_add_library(
   HEADERS
   CxlMemoryAllocator.h
   CxlMemoryResource.h
-  CxlResourceTag.h
 )
 
 # Route the numa link through velox_link_libraries: with VELOX_MONO_LIBRARY the

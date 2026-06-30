@@ -22,23 +22,35 @@
 #include <string_view>
 
 #include "velox/common/memory/CustomMemoryResource.h"
-#include "velox/experimental/cxl/CxlResourceTag.h"
 
 namespace facebook::velox::cxl {
 
-/// Builds a memory::CustomMemoryResource backed by CXL-attached memory.
-///
-/// The resource bundles a CxlMemoryAllocator bound to 'numaNode' with the
-/// default SHARED arbitrator and reclaimer, reused unchanged from the CPU
-/// tier. Register the returned resource with
-/// memory::CustomMemoryResourceRegistry and reference it by 'kCxlResourceTag'
-/// when building per-query pools via MemoryManager::addCustomRootPool.
-///
-/// 'numaNode' is the virtual NUMA node id exposed by the CXL device.
-/// 'maxCapacity' bounds, in bytes, both the allocator and the per-query root
-/// pool created from this resource; it defaults to unbounded.
-std::shared_ptr<memory::CustomMemoryResource> makeCxlMemoryResource(
-    int32_t numaNode,
-    int64_t maxCapacity = std::numeric_limits<int64_t>::max());
+/// Factory and identity for the CXL memory tier built on the core
+/// CustomMemoryResource framework.
+class CxlMemoryResource {
+ public:
+  /// Tag identifying the CXL memory resource: used to register it with
+  /// memory::CustomMemoryResourceRegistry and to build a per-query pool via
+  /// MemoryManager::addCustomRootPool. Set this as the value of the
+  /// 'relocation_resource_tag' query config to have an operator relocate its
+  /// payload here; core resolves the tag generically and never references this
+  /// symbol.
+  static constexpr std::string_view kTag{"cxl"};
+
+  /// Builds a memory::CustomMemoryResource backed by CXL-attached memory.
+  ///
+  /// The resource bundles a CxlMemoryAllocator bound to 'numaNode' with the
+  /// default SHARED arbitrator and reclaimer, reused unchanged from the CPU
+  /// tier. Register the returned resource with
+  /// memory::CustomMemoryResourceRegistry and reference it by 'kTag' when
+  /// building per-query pools via MemoryManager::addCustomRootPool.
+  ///
+  /// 'numaNode' is the virtual NUMA node id exposed by the CXL device.
+  /// 'maxCapacity' bounds, in bytes, both the allocator and the per-query root
+  /// pool created from this resource; it defaults to unbounded.
+  static std::shared_ptr<memory::CustomMemoryResource> create(
+      int32_t numaNode,
+      int64_t maxCapacity = std::numeric_limits<int64_t>::max());
+};
 
 } // namespace facebook::velox::cxl

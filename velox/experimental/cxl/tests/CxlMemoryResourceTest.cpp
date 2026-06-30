@@ -18,9 +18,13 @@
 
 #include <numa.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/common/testutil/TestValue.h"
 
 #include <gtest/gtest.h>
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::cxl {
 namespace {
@@ -28,29 +32,38 @@ namespace {
 class CxlMemoryResourceTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
-    // makeCxlMemoryResource creates a SHARED arbitrator, whose factory must be
-    // registered first.
+    // CxlMemoryResource::create creates a SHARED arbitrator, whose factory must
+    // be registered first.
     memory::SharedArbitrator::registerFactory();
+    TestValue::enable();
   }
 
   static void TearDownTestCase() {
     memory::SharedArbitrator::unregisterFactory();
   }
-
-  void SetUp() override {
-    if (numa_available() < 0) {
-      GTEST_SKIP() << "NUMA is unavailable on this host.";
-    }
-  }
 };
 
-TEST_F(CxlMemoryResourceTest, buildsResource) {
+// Real CXL hardware is absent on CI, so the node-is-CXL check is bypassed via a
+// TestValue hook to exercise resource creation end to end on a DRAM node.
+DEBUG_ONLY_TEST_F(CxlMemoryResourceTest, buildsResource) {
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cxl::checkNodeIsCxl",
+      std::function<void(bool*)>([](bool* hasCpus) { *hasCpus = false; }));
+
   constexpr int64_t kMaxCapacity = 64 << 20; // 64MB
-  auto resource = makeCxlMemoryResource(0, kMaxCapacity);
+  auto resource = CxlMemoryResource::create(0, kMaxCapacity);
   ASSERT_NE(resource, nullptr);
-  EXPECT_EQ(resource->tag(), std::string{kCxlResourceTag});
+  EXPECT_EQ(resource->tag(), std::string{CxlMemoryResource::kTag});
   EXPECT_NE(resource->allocator(), nullptr);
   EXPECT_NE(resource->arbitrator(), nullptr);
+}
+
+TEST_F(CxlMemoryResourceTest, rejectsNonCxlNode) {
+  // The node hosting CPU 0 is guaranteed to have CPUs, so it is DRAM, not a
+  // CXL device, and binding a CXL resource there must fail.
+  const int32_t cpuNode = numa_node_of_cpu(0);
+  VELOX_ASSERT_USER_THROW(
+      CxlMemoryResource::create(cpuNode), "requires a CPU-less NUMA node");
 }
 
 } // namespace
