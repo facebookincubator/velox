@@ -299,7 +299,8 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       const SelectivityVector& rows,
       exec::EvalCtx& context,
-      const BaseVector& input);
+      const BaseVector& input,
+      const TimestampToStringOptions& options);
 
   // Casts basic numeric types to wider types.
   template <TypeKind ToKind, TypeKind FromKind>

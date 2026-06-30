@@ -15,9 +15,12 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
-#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
+#include <fmt/format.h>
 #include <folly/Synchronized.h>
+
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
 namespace facebook::velox::filesystems {
 
@@ -32,6 +35,26 @@ azureClientFactoryRegistry() {
   return factories;
 }
 
+const std::unordered_map<std::string, AzureClientProviderFactory>&
+defaultProviderRegistry() {
+  static const std::unordered_map<std::string, AzureClientProviderFactory>
+      kRegistry = {
+          {kAzureSharedKeyAuthType,
+           [](const std::string& /*account*/) {
+             return std::make_unique<SharedKeyAzureClientProvider>();
+           }},
+          {kAzureOAuthAuthType,
+           [](const std::string& /*account*/) {
+             return std::make_unique<OAuthAzureClientProvider>();
+           }},
+          {kAzureSASAuthType,
+           [](const std::string& /*account*/) {
+             return std::make_unique<FixedSasAzureClientProvider>();
+           }},
+      };
+  return kRegistry;
+}
+
 } // namespace
 
 void AzureClientProviderFactories::registerFactory(
@@ -44,19 +67,57 @@ void AzureClientProviderFactories::registerFactory(
   });
 }
 
+AzureClientProviderFactory
+AzureClientProviderFactories::getDefaultProviderFactory(
+    const std::string& authType) {
+  const auto& registry = defaultProviderRegistry();
+  auto it = registry.find(authType);
+
+  if (it != registry.end()) {
+    return it->second;
+  }
+
+  return nullptr;
+}
+
 AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
-    const std::string& account) {
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  const auto& account = abfsPath->accountName();
   return azureClientFactoryRegistry().withRLock(
       [&](const auto& factories) -> AzureClientProviderFactory {
         if (auto it = factories.find(account); it != factories.end()) {
           return it->second;
         }
-        VELOX_USER_FAIL(
-            "No AzureClientProviderFactory registered for account '{}'."
-            "Please use `registerAzureClientProvider` or "
-            "`registerAzureClientProviderFactory` to register a factory for "
-            "the account before using it.",
+        LOG(INFO) << "No AzureClientProviderFactory registered for account '"
+                  << account << "', creating default provider from config.";
+
+        // Build the auth-type key using the full account-name-with-suffix so
+        // ABFS URLs targeting non-public clouds or custom endpoints resolve
+        // the same key that the provider implementations already use.
+        auto authTypeKey = fmt::format(
+            "{}.{}", kAzureAccountAuthType, abfsPath->accountNameWithSuffix());
+        VELOX_USER_CHECK(
+            config.valueExists(authTypeKey),
+            "No AzureClientProviderFactory registered for account '{}' and no "
+            "auth type found in config key '{}'. "
+            "Please either register a factory using `registerAzureClientProvider` "
+            "or `registerAzureClientProviderFactory`, or provide auth type in config.",
+            account,
+            authTypeKey);
+
+        auto authType = config.get<std::string>(authTypeKey).value();
+
+        // Return a factory based on the auth type that doesn't depend on config
+        auto factory = getDefaultProviderFactory(authType);
+        VELOX_USER_CHECK(
+            factory != nullptr,
+            "Unsupported auth type '{}' for account '{}'. "
+            "Supported auth types are SharedKey, OAuth and SAS.",
+            authType,
             account);
+
+        return factory;
       });
 }
 
@@ -64,7 +125,7 @@ std::unique_ptr<AzureBlobClient>
 AzureClientProviderFactories::getReadFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  auto factory = getClientFactory(abfsPath->accountName());
+  auto factory = getClientFactory(abfsPath, config);
   return factory(abfsPath->accountName())->getReadFileClient(abfsPath, config);
 }
 
@@ -72,7 +133,7 @@ std::unique_ptr<AzureDataLakeFileClient>
 AzureClientProviderFactories::getWriteFileClient(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  auto factory = getClientFactory(abfsPath->accountName());
+  auto factory = getClientFactory(abfsPath, config);
   return factory(abfsPath->accountName())->getWriteFileClient(abfsPath, config);
 }
 

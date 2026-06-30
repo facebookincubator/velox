@@ -177,6 +177,31 @@ TEST_F(RemainderTest, float) {
   EXPECT_TRUE(std::isnan(remainderValue<float>(kInf, kInf)));
 }
 
+TEST_F(RemainderTest, divisionByZeroAnsi) {
+  // Test remainder with ANSI off (default behavior): division by zero
+  // returns NULL.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+
+  EXPECT_EQ(std::nullopt, remainder<int8_t>(1, 0));
+  EXPECT_EQ(std::nullopt, remainder<int16_t>(1, 0));
+  EXPECT_EQ(std::nullopt, remainder<int32_t>(1, 0));
+  EXPECT_EQ(std::nullopt, remainder<int64_t>(10, 0));
+  EXPECT_EQ(std::nullopt, remainder<float>(1.0f, 0.0f));
+  EXPECT_EQ(std::nullopt, remainder<double>(1.0, 0.0));
+
+  // Test remainder with ANSI on: division by zero throws.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+
+  VELOX_ASSERT_THROW(remainder<int8_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<int16_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<int32_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<int64_t>(10, 0), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<float>(1.0f, 0.0f), "Division by zero");
+  VELOX_ASSERT_THROW(remainder<double>(1.0, 0.0), "Division by zero");
+}
+
 class ArithmeticTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
@@ -539,6 +564,57 @@ TEST_F(ArithmeticTest, sinh) {
   EXPECT_TRUE(std::isnan(sinh(kNan).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, sin) {
+  const auto sin = [&](std::optional<double> a) {
+    return evaluateOnce<double>("sin(c0)", a);
+  };
+
+  EXPECT_EQ(sin(0), 0);
+  EXPECT_EQ(sin(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(sin(kInf).value_or(0)));
+  EXPECT_TRUE(std::isnan(sin(-kInf).value_or(0)));
+  EXPECT_TRUE(std::isnan(sin(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, tan) {
+  const auto tan = [&](std::optional<double> a) {
+    return evaluateOnce<double>("tan(c0)", a);
+  };
+
+  EXPECT_EQ(tan(0), 0);
+  EXPECT_EQ(tan(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(tan(kInf).value_or(0)));
+  EXPECT_TRUE(std::isnan(tan(-kInf).value_or(0)));
+  EXPECT_TRUE(std::isnan(tan(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, tanh) {
+  const auto tanh = [&](std::optional<double> a) {
+    return evaluateOnce<double>("tanh(c0)", a);
+  };
+
+  EXPECT_EQ(tanh(0), 0);
+  EXPECT_EQ(tanh(kInf), 1);
+  EXPECT_EQ(tanh(-kInf), -1);
+  EXPECT_EQ(tanh(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(tanh(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, radians) {
+  const auto radians = [&](std::optional<double> a) {
+    return evaluateOnce<double>("radians(c0)", a);
+  };
+
+  EXPECT_EQ(radians(0), 0);
+  EXPECT_DOUBLE_EQ(radians(180).value(), M_PI);
+  EXPECT_DOUBLE_EQ(radians(-180).value(), -M_PI);
+  EXPECT_DOUBLE_EQ(radians(360).value(), 2 * M_PI);
+  EXPECT_EQ(radians(kInf), kInf);
+  EXPECT_EQ(radians(-kInf), -kInf);
+  EXPECT_EQ(radians(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(radians(kNan).value_or(0)));
+}
+
 TEST_F(ArithmeticTest, log1p) {
   const double kE = std::exp(1);
 
@@ -867,6 +943,18 @@ TEST_F(LogNTest, log2) {
   EXPECT_EQ(log2(-1.0), std::nullopt);
   EXPECT_EQ(log2(0.0), std::nullopt);
   EXPECT_EQ(log2(kInf), kInf);
+}
+
+TEST_F(LogNTest, ln) {
+  const auto ln = [&](std::optional<double> a) {
+    return evaluateOnce<double>("ln(c0)", a);
+  };
+  EXPECT_EQ(ln(1.0), 0.0);
+  EXPECT_DOUBLE_EQ(ln(std::exp(1)).value(), 1.0);
+  EXPECT_EQ(ln(0.0), std::nullopt);
+  EXPECT_EQ(ln(-1.0), std::nullopt);
+  EXPECT_EQ(ln(kInf), kInf);
+  EXPECT_TRUE(std::isnan(ln(kNan).value_or(0)));
 }
 
 TEST_F(LogNTest, log10) {

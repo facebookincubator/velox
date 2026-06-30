@@ -32,6 +32,12 @@ TEST(OptionsTests, fluxFileFormatRoundTrip) {
   ASSERT_EQ("flux", FileFormatName::toName(FileFormat::FLUX));
 }
 
+TEST(OptionsTests, formatConfigPrefix) {
+  EXPECT_EQ("parquet.", formatConfigPrefix(FileFormat::PARQUET, "."));
+  EXPECT_EQ("parquet_", formatConfigPrefix(FileFormat::PARQUET, "_"));
+  EXPECT_EQ("", formatConfigPrefix(FileFormat::UNKNOWN, "."));
+}
+
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
   RowReaderOptions rowReaderOptions;
   RowNumberColumnInfo rowNumberColumnInfo;

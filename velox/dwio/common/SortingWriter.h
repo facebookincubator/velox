@@ -46,6 +46,10 @@ class SortingWriter : public Writer {
   /// available (e.g. for an empty file).
   std::unique_ptr<FileMetadata> close() override;
 
+  folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const override {
+    return outputWriter_->runtimeStats();
+  }
+
   void abort() override;
 
  private:

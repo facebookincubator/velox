@@ -21,18 +21,19 @@
 #include <chrono>
 #include <optional>
 
+#include "velox/common/process/ProcessBase.h"
+
 namespace facebook::velox {
 
-/// Measures the time between construction and destruction with
-/// std::chrono::steady_clock and increments a user-supplied counter with the
-/// elapsed time in microseconds.
-class MicrosecondTimer {
+/// Measures wall time (steady_clock) between construction and destruction,
+/// incrementing a user-supplied counter in microseconds.
+class MicrosecondWallTimer {
  public:
-  explicit MicrosecondTimer(uint64_t* timer) : timer_(timer) {
+  explicit MicrosecondWallTimer(uint64_t* timer) : timer_(timer) {
     start_ = std::chrono::steady_clock::now();
   }
 
-  ~MicrosecondTimer() {
+  ~MicrosecondWallTimer() {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - start_);
 
@@ -44,13 +45,15 @@ class MicrosecondTimer {
   uint64_t* timer_;
 };
 
-class NanosecondTimer {
+/// Measures wall time (steady_clock) between construction and destruction,
+/// incrementing a user-supplied counter in nanoseconds.
+class NanosecondWallTimer {
  public:
-  explicit NanosecondTimer(uint64_t* timer) : timer_(timer) {
+  explicit NanosecondWallTimer(uint64_t* timer) : timer_(timer) {
     start_ = std::chrono::steady_clock::now();
   }
 
-  ~NanosecondTimer() {
+  ~NanosecondWallTimer() {
     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start_);
 
@@ -61,6 +64,43 @@ class NanosecondTimer {
   std::chrono::steady_clock::time_point start_;
   uint64_t* timer_;
 };
+
+/// Measures per-thread CPU time (CLOCK_THREAD_CPUTIME_ID) between construction
+/// and destruction, incrementing a user-supplied counter in microseconds.
+/// Excludes time spent sleeping or blocked on I/O.
+class MicrosecondCPUTimer {
+ public:
+  explicit MicrosecondCPUTimer(uint64_t* timer)
+      : timer_(timer), start_(process::threadCpuNanos()) {}
+
+  ~MicrosecondCPUTimer() {
+    (*timer_) += (process::threadCpuNanos() - start_) / 1'000;
+  }
+
+ private:
+  uint64_t* timer_;
+  uint64_t start_;
+};
+
+/// Measures per-thread CPU time (CLOCK_THREAD_CPUTIME_ID) between construction
+/// and destruction, incrementing a user-supplied counter in nanoseconds.
+/// Excludes time spent sleeping or blocked on I/O.
+class NanosecondCPUTimer {
+ public:
+  explicit NanosecondCPUTimer(uint64_t* timer)
+      : timer_(timer), start_(process::threadCpuNanos()) {}
+
+  ~NanosecondCPUTimer() {
+    (*timer_) += process::threadCpuNanos() - start_;
+  }
+
+ private:
+  uint64_t* timer_;
+  uint64_t start_;
+};
+
+using MicrosecondTimer = MicrosecondWallTimer;
+using NanosecondTimer = NanosecondWallTimer;
 
 /// Measures the time between construction and destruction with CPU clock
 /// counter (rdtsc on X86) and increments a user-supplied counter with the cycle

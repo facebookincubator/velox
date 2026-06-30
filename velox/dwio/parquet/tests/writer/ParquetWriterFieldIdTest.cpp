@@ -49,8 +49,7 @@ TEST_P(ParquetWriterFieldIdTest, fieldIds) {
        makeMapVectorFromJson<std::string, int32_t>(
            std::vector<std::string>(kRows, R"({"k": 4})"))});
 
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
 
   if (GetParam()) {
     // Provide Parquet field IDs aligned with the Velox schema tree.

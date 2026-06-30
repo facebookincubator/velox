@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <arrow/util/endian.h>
 #include <folly/Conv.h>
 #include <folly/json.h>
 #include <gtest/gtest.h>
@@ -21,6 +22,8 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -215,21 +218,50 @@ TEST_F(IcebergParquetStatsTest, bigint) {
 }
 
 TEST_F(IcebergParquetStatsTest, decimal) {
-  constexpr vector_size_t size = 100;
-  constexpr int32_t expectedNulls = 20;
-  constexpr int32_t decimalColId = 1;
+  {
+    constexpr vector_size_t size = 100;
+    constexpr int32_t expectedNulls = 20;
+    constexpr int32_t decimalColId = 1;
 
-  const auto& stats =
-      writeDataAndGetAllStats(makeRowVector({makeFlatVector<int128_t>(
-          size,
-          [](vector_size_t row) { return HugeInt::build(row, row * 123); },
-          nullEvery(5),
-          DECIMAL(38, 3))}));
-  verifyBasicStats(
-      stats[0], size, {{decimalColId, size}}, {{decimalColId, expectedNulls}});
-  verifyBoundsExist(stats[0], {decimalColId});
+    const auto& stats =
+        writeDataAndGetAllStats(makeRowVector({makeFlatVector<int128_t>(
+            size,
+            [](vector_size_t row) { return HugeInt::build(row, row * 123); },
+            nullEvery(5),
+            DECIMAL(38, 3))}));
+    verifyBasicStats(
+        stats[0],
+        size,
+        {{decimalColId, size}},
+        {{decimalColId, expectedNulls}});
+    verifyBoundsExist(stats[0], {decimalColId});
+  }
+  {
+    const auto& statsTemp =
+        writeDataAndGetAllStats(makeRowVector({makeFlatVector<int64_t>(
+            2,
+            [](vector_size_t row) { return row == 0 ? 19900 : 20000; },
+            nullptr,
+            DECIMAL(7, 2))}));
+
+    const auto& columnStats = statsTemp[0]->columnStats.at(1);
+
+    ASSERT_TRUE(columnStats.lowerBound.has_value());
+    ASSERT_TRUE(columnStats.upperBound.has_value());
+
+    auto decodeDecimalInt32 = [](const std::string& base64Value) {
+      const auto decoded = encoding::Base64::decode(base64Value);
+      EXPECT_EQ(decoded.size(), sizeof(int32_t));
+
+      int32_t value;
+      std::memcpy(&value, decoded.data(), sizeof(value));
+      return ::arrow::bit_util::FromBigEndian(value);
+    };
+
+    EXPECT_EQ(decodeDecimalInt32(columnStats.lowerBound.value()), 19900);
+    EXPECT_EQ(decodeDecimalInt32(columnStats.upperBound.value()), 20000);
+  }
 }
-
 TEST_F(IcebergParquetStatsTest, varchar) {
   constexpr vector_size_t size = 100;
   constexpr int32_t varcharColId = 1;

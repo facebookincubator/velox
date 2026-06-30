@@ -90,6 +90,25 @@ std::vector<c10::IValue> loadReferenceValues(const std::string& path);
 std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
     std::vector<c10::IValue>& inputs);
 
+/// Inserts an `aten._to_copy(self, device=cpu)` node before every input
+/// argument flagged `cpuOnly` in its wave Metadata (e.g. the indices of
+/// `aten.tensor_split.tensor_indices_or_sections`), repointing just that edge.
+/// This lets the generic nativert executor run the graph on GPU: tensor_split
+/// reads its indices on the host and returns views of `self`, so `self` and the
+/// outputs stay on GPU and no move-back is needed. Mutates `graph` in place, so
+/// call it on a clone reserved for the nativert-GPU run (wave handles cpuOnly
+/// args itself at runtime and must keep its own copy-free graph). Returns the
+/// number of nodes inserted.
+int32_t insertCpuOnlyCopies(nativert::Graph& graph);
+
+/// Rewrites ops that have no CUDA implementation to a CUDA-capable equivalent
+/// so the generic nativert executor can run the graph on GPU. Currently
+/// rewrites `fb.simple_1d_concat` (CUDA registration is a throwing dummy) to
+/// `aten.cat.default(dim=0)`, mirroring wave's MoreBuiltins rewrite. Mutates
+/// `graph`; call on the nativert-GPU clone. Returns the number of nodes
+/// rewritten.
+int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph);
+
 /// Snapshots a frame: returns a map from value id to shape string (e.g.
 /// "[3,4]") for tensors, "scalar" for scalars. None slots are omitted.
 std::unordered_map<int32_t, std::string> snapshotFrame(
@@ -143,6 +162,17 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& expected,
       const std::function<void(nativert::ExecutionFrame&)>& alterInputs =
           nullptr);
+
+  /// Runs only the wave path on 'fixture' (no serial run, no output
+  /// verification) for testing device-side error conditions. 'alterInputs' is
+  /// called after the frame is filled and before execution, so it can corrupt
+  /// an input (e.g. an out-of-range index) to trigger a device-side check.
+  /// Returns the formatted device error string (waveThreadInfo().errors), which
+  /// is empty if no block reported an error. throwOnError is forced off for the
+  /// run and restored afterwards.
+  std::string runWaveExpectError(
+      ModelFixture& fixture,
+      const std::function<void(nativert::ExecutionFrame&)>& alterInputs);
 
   /// Loads a .pt2 model and reference results, runs serial on CPU, serial on
   /// device and wave, and logs the run times for each.

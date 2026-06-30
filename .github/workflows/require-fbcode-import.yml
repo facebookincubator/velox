@@ -1,0 +1,155 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Require-fbcode-import gate
+#
+# Once a pull request is APPROVED, it must not be mergeable until the change
+# exists in fbcode. Before approval the gate is not applicable and reports
+# success (approval itself is enforced by branch protection). Once APPROVED the
+# gate reports success only on a positive in-fbcode signal:
+#
+#   * fbcode-originated PRs carry a "Differential Revision" trailer in the body.
+#   * Imported PRs are detected by the comment that Meta CodeSync
+#     (meta-codesync[bot]) posts on import, which links the imported diff. To
+#     keep this per-commit-correct, the comment counts only if it was posted
+#     after the current head commit; pushing a new commit re-blocks the gate
+#     until the new commit is imported.
+#
+# Reporting the result:
+#   * On pull_request and pull_request_review the run is associated with the PR
+#     head commit, so the job exit code (0/1) is recorded as the check on the
+#     right commit. No API write and no write token are needed, which is why
+#     this works for fork pull requests (whose token is read-only).
+#   * On issue_comment the run is associated with the default branch, not the PR
+#     head, so the exit code would land on the wrong commit. There we explicitly
+#     publish the result to the PR head SHA via the Checks API. issue_comment
+#     runs in the base-repo context and so has a write token even for fork PRs.
+# When several check runs share the name "gate" on a commit, GitHub uses the
+# latest, so the issue_comment result supersedes an earlier pull_request result.
+
+name: Require fbcode Import
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted, dismissed]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  # Used only by the issue_comment path, to publish the result on the PR head.
+  checks: write
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    # Always run for PR activity and reviews. For comments, run only for the
+    # CodeSync bot's import comment, so the job is skipped (no runner) for
+    # ordinary comments.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request != null &&
+       github.event.comment.user.login == 'meta-codesync[bot]')
+    steps:
+      - name: Evaluate the import gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          # The GitHub App account that Meta CodeSync comments as on import.
+          CODESYNC_BOT: meta-codesync[bot]
+          # The check name enforced by branch protection (the required context).
+          CHECK_NAME: gate
+        run: |
+          set -uo pipefail
+
+          if [ -z "${PR_NUMBER}" ] || [ "${PR_NUMBER}" = "null" ]; then
+            echo "::notice::No pull request on this event; nothing to do."
+            exit 0
+          fi
+
+          PR_JSON="$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid,reviewDecision,body)"
+          HEAD_SHA="$(printf '%s' "${PR_JSON}" | jq -r '.headRefOid')"
+          DECISION="$(printf '%s' "${PR_JSON}" | jq -r '.reviewDecision // ""')"
+          PR_BODY="$(printf '%s' "${PR_JSON}" | jq -r '.body // ""')"
+          echo "PR #${PR_NUMBER} head=${HEAD_SHA} reviewDecision=${DECISION:-<none>} event=${EVENT_NAME}"
+
+          CONCLUSION=""
+          TITLE=""
+          SUMMARY=""
+          result() { CONCLUSION="$1"; TITLE="$2"; SUMMARY="$3"; }
+
+          if [ "${DECISION}" != "APPROVED" ]; then
+            # Before approval the gate is not applicable; re-evaluated when the
+            # review decision changes.
+            result "success" "Not applicable until approved" \
+              "Approval is enforced separately by branch protection. This gate engages once the PR is APPROVED."
+          elif printf '%s' "${PR_BODY}" | grep -Eq 'Differential Revision:.*D[0-9]+'; then
+            result "success" "fbcode-originated" \
+              "PR carries a Differential Revision trailer; the change already exists in fbcode."
+          else
+            # Meta CodeSync posts an imported-diff comment on import. The comment
+            # must be authored by ${CODESYNC_BOT}, and must be newer than the
+            # current head commit so a new commit re-blocks the gate.
+            BOT_TSV="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+              --jq ".[] | select(.user.login==\"${CODESYNC_BOT}\") | [.created_at, (.body | gsub(\"[\\n\\r]\"; \" \"))] | @tsv" 2>/dev/null || true)"
+            IMPORT_TS="$(printf '%s\n' "${BOT_TSV}" | grep -E 'you can view this in \[D[0-9]+\]' | cut -f1 | sort | tail -1)"
+
+            if [ -n "${IMPORT_TS}" ]; then
+              HEAD_TS="$(gh api "repos/${REPO}/commits/${HEAD_SHA}" --jq '.commit.committer.date' 2>/dev/null || echo '')"
+              IMPORT_EPOCH="$(date -d "${IMPORT_TS}" +%s 2>/dev/null || echo 0)"
+              HEAD_EPOCH="$(date -d "${HEAD_TS}" +%s 2>/dev/null || echo 0)"
+              echo "import comment=${IMPORT_TS} (${IMPORT_EPOCH}) head commit=${HEAD_TS} (${HEAD_EPOCH})"
+              if [ "${IMPORT_EPOCH}" -gt "${HEAD_EPOCH}" ]; then
+                result "success" "Imported into fbcode" \
+                  "Meta CodeSync (${CODESYNC_BOT}) imported this PR; the current head exists in fbcode."
+              else
+                result "failure" "Head not yet imported into fbcode" \
+                  "The latest import predates the current head commit. Import the new commit; once Meta CodeSync (${CODESYNC_BOT}) posts the imported-diff comment, this check turns green automatically."
+              fi
+            else
+              result "failure" "Approved PR not yet imported into fbcode" \
+                "Import this PR into fbcode. Once Meta CodeSync (${CODESYNC_BOT}) posts the imported-diff comment, this check turns green automatically."
+            fi
+          fi
+
+          echo "verdict: ${CONCLUSION} — ${TITLE}"
+
+          # On issue_comment the run is not tied to the PR head, so publish the
+          # result to the head SHA via the Checks API (write token available in
+          # the base-repo context). Otherwise the job exit code is recorded on
+          # the head commit directly.
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            gh api -X POST "repos/${REPO}/check-runs" \
+              -f name="${CHECK_NAME}" \
+              -f head_sha="${HEAD_SHA}" \
+              -f status="completed" \
+              -f conclusion="${CONCLUSION}" \
+              -f "output[title]=${TITLE}" \
+              -f "output[summary]=${SUMMARY}" >/dev/null
+            echo "published ${CHECK_NAME}=${CONCLUSION} on ${HEAD_SHA}"
+            exit 0
+          fi
+
+          if [ "${CONCLUSION}" = "success" ]; then
+            exit 0
+          fi
+          echo "::error title=${TITLE}::${SUMMARY}"
+          exit 1

@@ -86,6 +86,11 @@ DEFINE_string(
     "",
     "Path to load reference frame for verifying wave intermediates");
 DEFINE_bool(
+    reference_from_gpu,
+    false,
+    "When saving a reference frame, capture it from the nativert GPU run "
+    "(cpuOnly args moved to CPU via inserted _to_copy) instead of the CPU run");
+DEFINE_bool(
     reverify,
     false,
     "Re-verify all previously passed reference values each step to detect corruption");
@@ -133,6 +138,11 @@ DEFINE_bool(
     auto_adjust_cost,
     false,
     "Adjust per-op cost multipliers after each execution based on actual thread block clocks");
+
+DEFINE_bool(
+    enable_reuse,
+    false,
+    "Reuse a value's buffer in place when an op is its unique last use (turn copying ops into in-place ops)");
 
 namespace torch::wave {
 
@@ -280,6 +290,85 @@ std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
   }
 
   return {std::move(result), us};
+}
+
+int32_t insertCpuOnlyCopies(nativert::Graph& graph) {
+  // Collect insertion sites first; don't mutate the node list while iterating.
+  struct Site {
+    nativert::Node* consumer;
+    size_t inputIdx;
+    nativert::Value* deviceValue;
+  };
+  std::vector<Site> sites;
+  for (auto& node : graph.nodes()) {
+    const auto* meta = Registry::metadata(node.target());
+    if (!meta) {
+      continue;
+    }
+    auto& inputs = node.inputs();
+    for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size();
+         ++i) {
+      // cpuOnly is only set on tensor args (e.g. tensor_split indices), so a
+      // non-null value here is the tensor we must keep on host.
+      if (meta->argumentMeta[i].cpuOnly && inputs[i].value) {
+        sites.push_back({&node, i, inputs[i].value});
+      }
+    }
+  }
+
+  // For each cpuOnly tensor arg, insert aten._to_copy(self, device=cpu) right
+  // before the consumer and repoint only that edge. tensor_split (the only
+  // cpuOnly op) reads its indices on the host and returns views of self, so
+  // self and the outputs stay on GPU -- no move-back is needed. Lets the
+  // generic nativert executor run the graph on GPU (wave handles cpuOnly args
+  // itself at runtime; see Launch in CompiledOp.cpp).
+  for (const auto& site : sites) {
+    auto* copyNode = graph.createNode(
+        "torch.ops.aten._to_copy.default", {{"self", site.deviceValue}});
+    copyNode->addAttribute({"dtype", torch::nativert::None{}});
+    copyNode->addAttribute({"layout", torch::nativert::None{}});
+    copyNode->addAttribute({"device", c10::Device(c10::kCPU)});
+    copyNode->addAttribute({"pin_memory", torch::nativert::None{}});
+    copyNode->addAttribute({"non_blocking", false});
+    copyNode->addAttribute({"memory_format", torch::nativert::None{}});
+    auto* cpuValue = copyNode->addOutput(
+        graph.getUniqueValueName(), site.deviceValue->type());
+    graph.insertBefore(copyNode, site.consumer);
+    site.consumer->inputs()[site.inputIdx].value = cpuValue;
+    site.deviceValue->eraseUser(site.consumer);
+    cpuValue->addUser(site.consumer);
+  }
+  LOG(INFO) << "insertCpuOnlyCopies: inserted " << sites.size()
+            << " _to_copy(device=cpu) node(s)";
+  return static_cast<int32_t>(sites.size());
+}
+
+int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph) {
+  // fb::simple_1d_concat has no CUDA implementation -- its CUDA registration is
+  // a throwing Dummy
+  // (caffe2/torch/fb/sparsenn/cpu_operators/simple_concat.cpp). It is a plain
+  // 1-D concat, identical to aten.cat(tensors, dim=0), which does have a CUDA
+  // kernel. Mirror wave's rewrite (MoreBuiltins.cpp) so the generic nativert
+  // executor can run it on GPU. (The other fb ops in this model -- sigrid_hash,
+  // grouped_masked_select_jagged_1d, batch_flip_and_truncate_sparse,
+  // group_length_guard_sparse, fused_datafm_merge_and_dedup_by_reference --
+  // have real CUDA kernels in sparsenn_operators_gpu and self-register.)
+  int32_t rewritten = 0;
+  for (auto& node : graph.nodes()) {
+    if (node.target() == "torch.ops.fb.simple_1d_concat.default") {
+      node.setTarget("torch.ops.aten.cat.default");
+      // nativert matches node inputs to schema args by name; rename the
+      // TensorList input "inputs" -> "tensors" to match aten::cat's schema.
+      if (!node.inputs().empty()) {
+        node.inputs()[0].name = "tensors";
+      }
+      node.addAttribute({"dim", static_cast<int64_t>(0)});
+      ++rewritten;
+    }
+  }
+  LOG(INFO) << "rewriteGpuIncompatibleOps: rewrote " << rewritten
+            << " fb.simple_1d_concat -> aten.cat.default";
+  return rewritten;
 }
 
 std::vector<c10::IValue> outputsToHost(
@@ -484,6 +573,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
+  WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -765,6 +855,19 @@ RunTiming ExecutorTestBase::runWave(
   auto hostOutputs = outputsToHost(waveOutputs, "wave");
   verifyOutputs(hostOutputs, expected, "wave");
   return {dataMovUs, waveUs, waveThreadInfo().debugInfo};
+}
+
+std::string ExecutorTestBase::runWaveExpectError(
+    ModelFixture& fixture,
+    const std::function<void(nativert::ExecutionFrame&)>& alterInputs) {
+  bool savedThrow = WaveConfig::get().throwOnError;
+  WaveConfig::get().throwOnError = false;
+  // Empty 'expected' makes runWave skip output verification: an erroring run
+  // has no meaningful reference to compare against.
+  runWave(fixture, /*expected=*/{}, alterInputs);
+  std::string errors = waveThreadInfo().errors;
+  WaveConfig::get().throwOnError = savedThrow;
+  return errors;
 }
 
 void ExecutorTestBase::runTest(
@@ -1092,6 +1195,20 @@ void ExecutorTestBase::verifyOutputs(
           << actual.tagKind();
       EXPECT_EQ(actual.toBool(), exp.toBool())
           << fullLabel << " output " << i << " scalar mismatch";
+    } else if (exp.isString()) {
+      // String outputs are constant keys (e.g. KJT feature names) baked into
+      // the graph; compare them by value.
+      ASSERT_TRUE(actual.isString())
+          << fullLabel << " output " << i << " expected string, got "
+          << actual.tagKind();
+      EXPECT_EQ(actual.toStringRef(), exp.toStringRef())
+          << fullLabel << " output " << i << " string mismatch";
+    } else if (exp.isNone()) {
+      // None outputs are structural (e.g. optional/absent leaves in the
+      // out-spec); the actual must also be None.
+      EXPECT_TRUE(actual.isNone())
+          << fullLabel << " output " << i << " expected None, got "
+          << actual.tagKind();
     } else {
       ADD_FAILURE() << fullLabel << " output " << i
                     << " unsupported expected type: " << exp.tagKind();

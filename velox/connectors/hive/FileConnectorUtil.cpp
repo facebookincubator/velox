@@ -16,12 +16,37 @@
 
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
+#include <fmt/format.h>
+#include <unordered_map>
+
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
+
+FormatScopedConfigs makeFormatScopedConfigs(
+    const FileConfig& fileConfig,
+    const config::ConfigBase& sessionProperties,
+    dwio::common::FileFormat fileFormat) {
+  VELOX_CHECK_NE(
+      fileFormat,
+      dwio::common::FileFormat::UNKNOWN,
+      "Cannot build format-specific configs for unknown file format");
+
+  return {
+      config::ConfigBase(fileConfig.config()->rawConfigsWithPrefix(
+          fmt::format(
+              "{}{}",
+              fileConfig.connectorConfigPrefix(),
+              dwio::common::formatConfigPrefix(fileFormat, ".")))),
+      config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
+          dwio::common::formatConfigPrefix(fileFormat, "_")))};
+}
 
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -46,6 +71,7 @@ void configureReaderOptions(
     const std::unordered_map<std::string, std::string>& /*tableParameters*/,
     dwio::common::ReaderOptions& readerOptions) {
   auto sessionProperties = connectorQueryCtx->sessionProperties();
+  VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
@@ -63,14 +89,6 @@ void configureReaderOptions(
           : dwio::common::ColumnMappingMode::kPosition;
       break;
     }
-    case dwio::common::FileFormat::PARQUET: {
-      columnMappingMode = fileConfig->isParquetUseColumnNames(sessionProperties)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition;
-      readerOptions.setAllowInt32Narrowing(
-          fileConfig->allowInt32Narrowing(sessionProperties));
-      break;
-    }
     default:
       columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   }
@@ -78,8 +96,6 @@ void configureReaderOptions(
   readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
-  readerOptions.setParquetFooterMemoryTrackingThreshold(
-      fileConfig->parquetFooterMemoryTrackingThreshold(sessionProperties));
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
@@ -100,9 +116,11 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setCacheMetadata(fileConfig->cacheMetadata(sessionProperties));
+  readerOptions.setCacheMetadata(
+      fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
-  readerOptions.setCacheIndex(fileConfig->cacheIndex(sessionProperties));
+  readerOptions.setCacheIndex(
+      fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
@@ -113,8 +131,6 @@ void configureReaderOptions(
           fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::PARQUET:
-      readerOptions.setFooterSpeculativeIoSize(
-          fileConfig->parquetFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::NIMBLE:
       readerOptions.setFooterSpeculativeIoSize(
@@ -136,6 +152,19 @@ void configureReaderOptions(
   } else {
     readerOptions.setFileFormat(fileSplit->fileFormat);
   }
+
+  if (!dwio::common::hasReaderFactory(fileSplit->fileFormat)) {
+    readerOptions.setFormatSpecificOptions(nullptr);
+    return;
+  }
+
+  auto formatScopedConfigs = makeFormatScopedConfigs(
+      *fileConfig, *sessionProperties, fileSplit->fileFormat);
+  readerOptions.setFormatSpecificOptions(
+      dwio::common::getReaderFactory(fileSplit->fileFormat)
+          ->createFormatOptions(
+              formatScopedConfigs.connectorConfig,
+              formatScopedConfigs.sessionProperties));
 }
 
 void configureRowReaderOptions(
@@ -169,7 +198,7 @@ void configureRowReaderOptions(
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
     rowReaderOptions.setLazyColumnIo(
-        fileConfig->lazyColumnIo(sessionProperties));
+        fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
   }

@@ -50,6 +50,17 @@ def main() -> None:
     idx2d_1 = torch.arange(num_scatter, dtype=torch.long) * 7 % 130
     vals2d = (torch.arange(num_scatter, dtype=torch.float) + 1000).float()
 
+    # Functional index_put (out-of-place) inputs.
+    ip_n = 100
+    # Numeric indices: distinct positions get distinct values (compacted scatter).
+    ip_num_src = (torch.arange(ip_n, dtype=torch.float) % 17).float()
+    ip_num_idx = torch.tensor([0, 5, 10, 15, 20, 50, 99], dtype=torch.long)
+    ip_num_vals = (torch.arange(ip_num_idx.numel(), dtype=torch.float) + 300).float()
+    # Bool mask: a single scalar value is broadcast to every selected position.
+    ip_bool_src = (torch.arange(ip_n, dtype=torch.float) % 9 + 1).float()
+    ip_bool_mask = torch.arange(ip_n) % 7 == 0
+    ip_bool_vals = torch.tensor([777.0])
+
     inputs = (
         source_f,
         source_l,
@@ -65,6 +76,12 @@ def main() -> None:
         idx2d_0,
         idx2d_1,
         vals2d,
+        ip_num_src,
+        ip_num_idx,
+        ip_num_vals,
+        ip_bool_src,
+        ip_bool_mask,
+        ip_bool_vals,
     )
 
     module = MaskedPutTest()

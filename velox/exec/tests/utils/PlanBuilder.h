@@ -380,9 +380,11 @@ class PlanBuilder {
     common::SubfieldFilters subfieldFiltersMap_;
   };
 
-  /// Start a TableScanBuilder.
-  TableScanBuilder& startTableScan() {
+  /// Start a TableScanBuilder using the specified connector.
+  TableScanBuilder& startTableScan(
+      std::string connectorId = std::string(kHiveDefaultConnectorId)) {
     tableScanBuilder_.reset(new TableScanBuilder(*this));
+    tableScanBuilder_->connectorId(std::move(connectorId));
     return *tableScanBuilder_;
   }
 
@@ -449,6 +451,16 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param forwardedProbeColumns Probe-side column names the operator
+    /// should include in the connector's lookup input even when no join key
+    /// or join condition references them. See IndexLookupJoinNode for the
+    /// full contract.
+    IndexLookupJoinBuilder& forwardedProbeColumns(
+        std::vector<std::string> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
+      return *this;
+    }
+
     /// Stop the IndexLookupJoinBuilder.
     PlanBuilder& endIndexLookupJoin() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -469,6 +481,7 @@ class PlanBuilder {
     std::vector<std::string> outputLayout_;
     core::JoinType joinType_{core::JoinType::kInner};
     std::optional<bool> splitOutput_;
+    std::vector<std::string> forwardedProbeColumns_;
   };
 
   /// Start an IndexLookupJoinBuilder.
@@ -1170,12 +1183,7 @@ class PlanBuilder {
   ///
   /// @param idName The name of output column that contains the unique ID.
   /// Column type is assumed as BIGINT.
-  /// @param taskUniqueId ID of the Task that will be used to run the query
-  /// plan. The ID must be unique across all the tasks of a single query. Tasks
-  /// may possibly run on different machines.
-  PlanBuilder& assignUniqueId(
-      const std::string& idName = "unique",
-      const int32_t taskUniqueId = 1);
+  PlanBuilder& assignUniqueId(const std::string& idName = "unique");
 
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.

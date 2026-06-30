@@ -75,6 +75,14 @@ void StreamingAggregation::initialize() {
     groupingKeyTypes.push_back(inputType->childAt(channel));
   }
 
+  // Grouping keys pass through unchanged to the output: output channel 'i' is
+  // input channel 'groupingKeys_[i]'. Exposing them as identity projections
+  // lets dynamic filters on grouping keys be pushed down through this operator
+  // to the source.
+  for (column_index_t i = 0; i < groupingKeys_.size(); ++i) {
+    identityProjections_.emplace_back(groupingKeys_[i], i);
+  }
+
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
   aggregates_ = toAggregateInfo(
       *aggregationNode_, *operatorCtx_, numKeys, expressionEvaluator, true);
@@ -118,6 +126,11 @@ void StreamingAggregation::close() {
 }
 
 void StreamingAggregation::addInput(RowVectorPtr input) {
+  // needsInput() returns false while input_ is set, so the driver must drain
+  // the previous batch via getOutput() before feeding another. Fail loudly if
+  // that contract is violated rather than silently overwriting and dropping
+  // input_.
+  VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
 }
 

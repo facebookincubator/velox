@@ -818,10 +818,6 @@ bool GroupingSet::getOutput(
     return getGlobalAggregationOutput(iterator, result);
   }
 
-  if (hasDefaultGlobalGroupingSetOutput()) {
-    return getDefaultGlobalGroupingSetOutput(iterator, result);
-  }
-
   if (hasSpilled()) {
     return getOutputWithSpill(maxOutputRows, maxOutputBytes, result);
   }
