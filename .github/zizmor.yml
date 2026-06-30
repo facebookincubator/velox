@@ -23,3 +23,5 @@ rules:
       - detect-force-full.yml
       - rerun-on-force-full.yml
       - force-full-on-comment.yml
+      - require-fbcode-import.yml
+      - detect-approval.yml
