@@ -44,8 +44,8 @@ bool isSupplementaryLead(const unsigned char* p, const unsigned char* end) {
       (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80;
 }
 
-} // namespace
-
+// Counts the supplementary-plane characters (4-byte UTF-8 sequences) in `raw`,
+// to pick the fast path (none) and to size the escape buffer exactly.
 size_t countSupplementaryCharacters(std::string_view raw) {
   size_t count = 0;
   const auto* p = reinterpret_cast<const unsigned char*>(raw.data());
@@ -61,6 +61,9 @@ size_t countSupplementaryCharacters(std::string_view raw) {
   return count;
 }
 
+// Copies `raw` into `out`, rewriting each supplementary-plane character into a
+// '\uXXXX\uXXXX' surrogate-pair escape and copying every other byte verbatim in
+// bulk runs.
 void escapeSupplementaryCharacters(std::string_view raw, std::string& out) {
   const auto* const base = reinterpret_cast<const unsigned char*>(raw.data());
   const auto* const end = base + raw.size();
@@ -92,6 +95,26 @@ void escapeSupplementaryCharacters(std::string_view raw, std::string& out) {
         reinterpret_cast<const char*>(runStart),
         static_cast<size_t>(p - runStart));
   }
+}
+
+} // namespace
+
+void appendWithSupplementaryEscapes(
+    std::string_view raw,
+    exec::StringWriter& out) {
+  const size_t supplementaryCount = countSupplementaryCharacters(raw);
+  if (supplementaryCount == 0) {
+    // Fast path: no supplementary-plane characters, so the raw slice already
+    // matches Spark. Append it directly, no allocation.
+    out.append(raw);
+    return;
+  }
+  // Each 4-byte sequence (1 char) becomes a 12-byte surrogate-pair escape
+  // ('\uXXXX\uXXXX'), i.e. 8 bytes larger than the raw 4.
+  std::string escaped;
+  escaped.reserve(raw.size() + 8 * supplementaryCount);
+  escapeSupplementaryCharacters(raw, escaped);
+  out.append(escaped);
 }
 
 } // namespace facebook::velox::functions::sparksql::detail
