@@ -5012,21 +5012,6 @@ class AssignUniqueIdNode : public PlanNode {
       const std::string& idName,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  // Legacy constructor for read-only synced consumers that still pass
-  // taskUniqueId on the node. The value is not serialized; it is consumed at
-  // execution as the fallback for an unset PlanFragment::taskUniqueId.
-  AssignUniqueIdNode(
-      const PlanNodeId& id,
-      const std::string& idName,
-      int32_t taskUniqueId,
-      PlanNodePtr source)
-      : PlanNode(id),
-        taskUniqueId_(taskUniqueId),
-        sources_{std::move(source)},
-        outputType_(makeOutputType(sources_[0], idName)) {}
-#endif
-
   bool supportsBarrier() const override {
     return true;
   }
