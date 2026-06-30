@@ -217,8 +217,11 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
         std::move(writeFile), filePath->getPath());
     auto writerPool =
         rootPool_->addAggregateChild("TableScanTest.ParquetWriter");
-    parquet::WriterOptions options;
-    options.enableStoreDecimalAsInteger = true;
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+    parquetOptions->enableStoreDecimalAsInteger = true;
+    options.formatSpecificOptions = std::move(parquetOptions);
     parquet::Writer writer(std::move(sink), options, writerPool, rowType);
     writer.write(vector);
     writer.close();
