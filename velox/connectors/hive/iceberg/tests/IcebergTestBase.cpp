@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
 
@@ -563,6 +564,73 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
   }
 
   return assignments;
+}
+
+RowTypePtr IcebergTestBase::makeChangelogOutputType(
+    const RowTypePtr& dataType) {
+  return ROW(
+      {"operation", "ordinal", "snapshotid", "rowdata"},
+      {VARCHAR(), BIGINT(), BIGINT(), dataType});
+}
+
+ColumnHandleMap IcebergTestBase::makeChangelogColumnHandles(
+    const RowTypePtr& dataType) {
+  ColumnHandleMap handles;
+  handles["operation"] = std::make_shared<IcebergColumnHandle>(
+      "operation",
+      IcebergColumnHandle::ColumnType::kRegular,
+      VARCHAR(),
+      parquet::ParquetFieldId{1});
+  handles["ordinal"] = std::make_shared<IcebergColumnHandle>(
+      "ordinal",
+      IcebergColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      parquet::ParquetFieldId{2});
+  handles["snapshotid"] = std::make_shared<IcebergColumnHandle>(
+      "snapshotid",
+      IcebergColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      parquet::ParquetFieldId{3});
+  handles["rowdata"] = std::make_shared<IcebergColumnHandle>(
+      "rowdata",
+      IcebergColumnHandle::ColumnType::kRegular,
+      dataType,
+      parquet::ParquetFieldId{4});
+  return handles;
+}
+
+std::unordered_map<std::string, IcebergColumnHandlePtr>
+IcebergTestBase::makeDataColumnHandles(const RowTypePtr& dataType) {
+  std::unordered_map<std::string, IcebergColumnHandlePtr> handles;
+  int32_t fieldId = 1;
+  for (size_t i = 0; i < dataType->size(); ++i) {
+    const auto& name = dataType->nameOf(i);
+    const auto& type = dataType->childAt(i);
+    handles[name] = std::make_shared<IcebergColumnHandle>(
+        name,
+        IcebergColumnHandle::ColumnType::kRegular,
+        type,
+        parquet::ParquetFieldId{fieldId++});
+  }
+  return handles;
+}
+
+std::shared_ptr<IcebergTableHandle> IcebergTestBase::makeChangelogTableHandle(
+    const RowTypePtr& dataType) {
+  return std::make_shared<IcebergTableHandle>(
+      kIcebergConnectorId,
+      "test_table",
+      common::SubfieldFilters{},
+      nullptr,
+      dataType,
+      std::vector<std::string>{},
+      std::unordered_map<std::string, std::string>{},
+      std::vector<IcebergColumnHandlePtr>{},
+      1.0,
+      "",
+      std::vector<int32_t>{},
+      true,
+      makeDataColumnHandles(dataType));
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test
