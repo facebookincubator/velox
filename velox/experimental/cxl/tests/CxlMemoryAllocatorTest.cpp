@@ -19,8 +19,11 @@
 #include <numa.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 
 #include <gtest/gtest.h>
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::cxl {
 namespace {
@@ -33,8 +36,16 @@ int32_t outOfRangeNode() {
   return numa_max_node() + 1;
 }
 
+// Injection point that treats the bound node as CPU-less, so the allocator can
+// be built on a DRAM node on CXL-less hosts.
+const char* const kCheckNodeIsCxl = "facebook::velox::cxl::checkNodeIsCxl";
+
 class CxlMemoryAllocatorTest : public testing::Test {
  protected:
+  static void SetUpTestCase() {
+    TestValue::enable();
+  }
+
   // Options sized small enough to keep the test cheap; node 0 always exists on
   // a NUMA-capable host.
   static MemoryAllocator::Options options() {
@@ -44,13 +55,20 @@ class CxlMemoryAllocatorTest : public testing::Test {
   }
 };
 
-TEST_F(CxlMemoryAllocatorTest, numaNodeAccessor) {
+// Real CXL hardware is absent on CI, so node 0 is bound as if it were CXL.
+DEBUG_ONLY_TEST_F(CxlMemoryAllocatorTest, numaNodeAccessor) {
+  SCOPED_TESTVALUE_SET(
+      kCheckNodeIsCxl,
+      std::function<void(bool*)>([](bool* hasCpus) { *hasCpus = false; }));
   CxlMemoryAllocator allocator(options(), 0);
   EXPECT_EQ(allocator.numaNode(), 0);
   EXPECT_EQ(allocator.kind(), MemoryAllocator::Kind::kMmap);
 }
 
-TEST_F(CxlMemoryAllocatorTest, allocateFreeRoundTrip) {
+DEBUG_ONLY_TEST_F(CxlMemoryAllocatorTest, allocateFreeRoundTrip) {
+  SCOPED_TESTVALUE_SET(
+      kCheckNodeIsCxl,
+      std::function<void(bool*)>([](bool* hasCpus) { *hasCpus = false; }));
   CxlMemoryAllocator allocator(options(), 0);
   ASSERT_EQ(allocator.numAllocated(), 0);
 
@@ -83,6 +101,14 @@ TEST_F(CxlMemoryAllocatorTest, invalidNodeThrows) {
   VELOX_ASSERT_THROW(
       CxlMemoryAllocator(options(), outOfRangeNode()),
       "CXL NUMA node is out of range");
+}
+
+TEST_F(CxlMemoryAllocatorTest, rejectsNonCxlNode) {
+  // The node hosting CPU 0 is guaranteed to have CPUs, so it is DRAM, not a
+  // CXL device, and binding the allocator there must fail.
+  const int32_t cpuNode = numa_node_of_cpu(0);
+  VELOX_ASSERT_USER_THROW(
+      CxlMemoryAllocator(options(), cpuNode), "requires a CPU-less NUMA node");
 }
 
 } // namespace
