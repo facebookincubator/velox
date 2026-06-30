@@ -30,6 +30,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -145,6 +146,25 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   ColumnHandleMap makeColumnHandles(
       const RowTypePtr& rowType,
       const std::unordered_set<int>& partitionIndices = {});
+
+  /// Returns the changelog output ROW type:
+  /// {operation:VARCHAR, ordinal:BIGINT, snapshotid:BIGINT, rowdata:dataType}.
+  RowTypePtr makeChangelogOutputType(const RowTypePtr& dataType);
+
+  /// Creates changelog scan assignments (operation/ordinal/snapshotid/rowdata)
+  /// as IcebergColumnHandles with synthetic field IDs.
+  ColumnHandleMap makeChangelogColumnHandles(const RowTypePtr& dataType);
+
+  /// Creates data column handles for a changelog base-table scan, keyed by
+  /// column name, with field IDs matching the IcebergTestBase write path
+  /// (1-based sequential).
+  std::unordered_map<std::string, IcebergColumnHandlePtr> makeDataColumnHandles(
+      const RowTypePtr& dataType);
+
+  /// Builds an IcebergTableHandle configured for a changelog query over
+  /// 'dataType'.
+  std::shared_ptr<IcebergTableHandle> makeChangelogTableHandle(
+      const RowTypePtr& dataType);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
