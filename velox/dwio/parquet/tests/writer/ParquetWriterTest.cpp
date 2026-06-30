@@ -1352,7 +1352,10 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
   }
 
   ParquetWriterOptions writerOptions;
-  auto* sinkPtr = write(batches, writerOptions);
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.schema = schema;
+  auto* sinkPtr = write(batches, options, writerOptions);
 
   auto reader = createReaderInMemory(*sinkPtr);
   ASSERT_EQ(
@@ -1904,6 +1907,94 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+}
+
+/// Verifies that close() without any prior write() does not crash.
+TEST_F(ParquetWriterTest, closeWithoutWrite) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+  writer->close();
+}
+
+/// Verifies that flush() with no accumulated data is a no-op.
+TEST_F(ParquetWriterTest, flushWithNoData) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+  writer->flush();
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(100, [](auto row) { return row; })});
+  writer->write(data);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), 100);
+}
+
+/// Verifies that multiple consecutive flush() calls are idempotent.
+TEST_F(ParquetWriterTest, consecutiveFlushCalls) {
+  auto schema = ROW({"c0"}, {INTEGER()});
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(100, [](auto row) { return row; })});
+  writer->write(data);
+  writer->flush();
+  writer->flush();
+  writer->flush();
+
+  writer->write(data);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), 200);
+}
+
+/// Verifies that a single large batch exceeding maxRowGroupLength is correctly
+/// split into multiple row groups by writeRecordBatch.
+TEST_F(ParquetWriterTest, batchExceedingRowGroupSize) {
+  constexpr vector_size_t kSize = 1'000;
+  constexpr int kRowsPerGroup = 100;
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(kSize, [](auto row) { return row; })});
+  auto schema = asRowType(data->type());
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = [kRowsPerGroup]() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/kRowsPerGroup,
+        /*bytesInRowGroup=*/512 * 1'024 * 1'024);
+  };
+  auto* sinkPtr = write(data, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kSize);
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), kSize / kRowsPerGroup);
 }
 
 } // namespace
