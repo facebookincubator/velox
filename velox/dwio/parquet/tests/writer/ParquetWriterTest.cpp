@@ -2085,6 +2085,98 @@ TEST_F(ParquetWriterTest, parallelColumnWriteMultiBatch) {
   ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
 }
 
+/// Verifies that the flush policy uses actual retained size, not flat estimate,
+/// for dictionary columns. With estimateFlatSize() the 100K-row dictionary
+/// column would appear to be ~6MB (100K * 60-byte strings), exceeding a 2MB
+/// bytesInRowGroup threshold and causing multiple row groups. With
+/// retainedSize() the actual footprint is ~500KB (dictionary + indices),
+/// fitting in a single row group.
+TEST_F(ParquetWriterTest, flushEstimationDictionaryAware) {
+  constexpr vector_size_t kSize = 100'000;
+  constexpr int kDictSize = 10;
+
+  // Dictionary of 10 strings, each ~60 bytes. estimateFlatSize would report
+  // 100K * 60 = 6MB. retainedSize reports ~600 bytes + 400KB indices = ~400KB.
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] =
+        fmt::format("this_is_a_longer_dictionary_value_for_testing_{:04d}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    rawIndices[i] = i % kDictSize;
+  }
+  auto dictVector = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), indices, kSize, dictionary);
+
+  auto data = makeRowVector({dictVector});
+  auto schema = asRowType(data->type());
+
+  // Set bytesInRowGroup to 2MB. With estimateFlatSize (~6MB), this would
+  // produce multiple row groups. With retainedSize (~400KB), it fits in one.
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1'000'000,
+        /*bytesInRowGroup=*/2 * 1'024 * 1'024);
+  };
+  auto* sinkPtr = write(data, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kSize);
+  // Should be a single row group because the actual data size is well under
+  // the 2MB threshold.
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), 1);
+}
+
+/// Verifies that flat columns still trigger flush at the correct threshold.
+/// This ensures retainedSize() doesn't under-report for non-dictionary data.
+TEST_F(ParquetWriterTest, flushEstimationFlatColumns) {
+  // Write 50K rows of int32 (200KB) + 50K rows of int64 (400KB) = 600KB.
+  // With bytesInRowGroup=500KB, the first batch should trigger a flush before
+  // the second batch.
+  constexpr vector_size_t kBatchSize = 50'000;
+
+  auto batch = makeRowVector({
+      makeFlatVector<int32_t>(kBatchSize, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(
+          kBatchSize, [](auto row) { return static_cast<int64_t>(row); }),
+  });
+  auto schema = asRowType(batch->type());
+
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1'000'000,
+        /*bytesInRowGroup=*/500 * 1'024);
+  };
+  auto parquetOpts = std::make_shared<ParquetWriterOptions>();
+  options.formatSpecificOptions = parquetOpts;
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+
+  writer->write(batch);
+  writer->write(batch);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kBatchSize * 2);
+  // The second write triggers a flush because the first batch (~600KB)
+  // exceeds the 500KB threshold.
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
