@@ -37,7 +37,8 @@
 #   * issue_comment -- reacts to the import comment; base-repo context, write token.
 #   * workflow_run (from "Detect Approval") -- reacts to approval/dismissal, which
 #     pull_request_review cannot publish from directly (read-only token on forks).
-#     Identity is re-derived from the GitHub-set workflow_run head SHA.
+#     Identity comes from GitHub-assigned workflow_run metadata, with a head-SHA
+#     scan only as a compatibility fallback.
 
 name: Require fbcode Import
 
@@ -47,7 +48,8 @@ name: Require fbcode Import
 # pull-request-provided code, and does not interpolate untrusted pull-request
 # fields into the shell, so the privilege-escalation ("pwn request") risk does
 # not apply. The workflow_run input is the trivial Detect Approval workflow; the
-# pull request identity is re-derived from the GitHub-set workflow_run head SHA.
+# pull request identity comes from GitHub-assigned metadata, not fork-controlled
+# input.
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, labeled, unlabeled]
@@ -82,10 +84,12 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           # PR number is present on pull_request_target and issue_comment events;
-          # workflow_run carries none, so it is derived below from the head SHA.
+          # workflow_run PR identity is resolved below from GitHub metadata.
           ENV_PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          ENV_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WORKFLOW_RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          WORKFLOW_RUN_DISPLAY_TITLE: ${{ github.event.workflow_run.display_title }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           # The GitHub App account that Meta CodeSync comments as on import.
           CODESYNC_BOT: meta-codesync[bot]
           # The label Meta CodeSync applies to fbcode-originated (exported) PRs.
@@ -93,49 +97,99 @@ jobs:
           # The status context enforced by branch protection.
           CONTEXT: gate
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
-          # Resolve the PR number. For the workflow_run hop the event carries no
-          # PR number, so derive it from the GitHub-set head SHA.
+          publish_status() {
+            local target_sha="$1"
+            local state="$2"
+            local description="$3"
+
+            if [ -z "${target_sha}" ] || [ "${target_sha}" = "null" ]; then
+              echo "::error::Cannot publish ${CONTEXT}: target SHA is missing."
+              return 1
+            fi
+
+            if gh api -X POST "repos/${REPO}/statuses/${target_sha}" \
+              -f state="${state}" \
+              -f context="${CONTEXT}" \
+              -f description="${description}" >/dev/null; then
+              echo "${CONTEXT} -> ${state} on ${target_sha}: ${description}"
+              return 0
+            fi
+
+            echo "::error::Failed to publish ${CONTEXT}=${state} on ${target_sha}"
+            return 1
+          }
+
+          # Resolve the PR number. For the workflow_run approval hop, prefer
+          # GitHub-assigned PR metadata and the Detect Approval run name. The
+          # head-SHA scan is only a compatibility fallback.
           PR_NUMBER="${ENV_PR_NUMBER}"
           if [ "${EVENT_NAME}" = "workflow_run" ]; then
-            if [ "${WORKFLOW_RUN_CONCLUSION}" != "success" ]; then
-              echo "::notice::Detect Approval run did not succeed; nothing to do."
-              exit 0
+            PR_NUMBER="${WORKFLOW_RUN_PR_NUMBER}"
+            if [ -z "${PR_NUMBER}" ] || [ "${PR_NUMBER}" = "null" ]; then
+              PR_NUMBER="$(printf '%s' "${WORKFLOW_RUN_DISPLAY_TITLE}" | sed -n 's/^Detect Approval PR \([0-9][0-9]*\)$/\1/p')"
             fi
-            PR_NUMBER="$(gh api "repos/${REPO}/commits/${WORKFLOW_RUN_HEAD_SHA}/pulls" \
-              --jq '[.[] | select(.state=="open")][0].number' 2>/dev/null || echo '')"
+            if [ -z "${PR_NUMBER}" ] || [ "${PR_NUMBER}" = "null" ]; then
+              # commits/{sha}/pulls does NOT resolve a fork PR's head commit, so
+              # scan open PRs for the one whose head matches the GitHub-set
+              # workflow_run head SHA. --paginate walks every page; capture into
+              # a variable first so the paginated gh call is never SIGPIPE-truncated.
+              MATCHES="$(gh api "repos/${REPO}/pulls?state=open&per_page=100" --paginate \
+                --jq ".[] | select(.head.sha==\"${WORKFLOW_RUN_HEAD_SHA}\") | .number" 2>/dev/null || true)"
+              MATCH_COUNT="$(printf '%s\n' "${MATCHES}" | sed '/^$/d' | wc -l | tr -d ' ')"
+              if [ "${MATCH_COUNT}" -eq 1 ]; then
+                PR_NUMBER="$(printf '%s\n' "${MATCHES}" | sed -n '1p')"
+              elif [ "${MATCH_COUNT}" -gt 1 ]; then
+                publish_status "${WORKFLOW_RUN_HEAD_SHA}" "failure" "Could not disambiguate approval PR"
+                exit 0
+              fi
+            fi
           fi
           if [ -z "${PR_NUMBER}" ] || [ "${PR_NUMBER}" = "null" ]; then
-            echo "::notice::No pull request resolved for this event; nothing to do."
+            if [ "${EVENT_NAME}" = "workflow_run" ]; then
+              publish_status "${WORKFLOW_RUN_HEAD_SHA}" "failure" "Could not resolve approval PR"
+            else
+              echo "::notice::No pull request resolved for this event; nothing to do."
+            fi
             exit 0
           fi
 
-          PR_JSON="$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid,reviewDecision,labels)"
-          HEAD_SHA="$(printf '%s' "${PR_JSON}" | jq -r '.headRefOid')"
-          DECISION="$(printf '%s' "${PR_JSON}" | jq -r '.reviewDecision // ""')"
-          LABELS="$(printf '%s' "${PR_JSON}" | jq -r '[.labels[].name] | join(",")')"
+          PR_JSON="$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid,reviewDecision,labels 2>/dev/null || true)"
+          HEAD_SHA="$(printf '%s' "${PR_JSON}" | jq -r '.headRefOid // ""' 2>/dev/null || true)"
+          DECISION="$(printf '%s' "${PR_JSON}" | jq -r '.reviewDecision // ""' 2>/dev/null || true)"
+          LABELS="$(printf '%s' "${PR_JSON}" | jq -r '[.labels[].name] | join(",")' 2>/dev/null || true)"
+          HAS_EXPORTED_LABEL="$(printf '%s' "${PR_JSON}" | jq -r --arg label "${EXPORTED_LABEL}" '[.labels[].name] | index($label) != null' 2>/dev/null || echo false)"
           echo "PR #${PR_NUMBER} head=${HEAD_SHA} reviewDecision=${DECISION:-<none>} labels=[${LABELS}] event=${EVENT_NAME}"
 
-          # Could not resolve the head: leave the gate unset (fail closed -- a
-          # required check stays unsatisfied rather than going green on error).
-          if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
-            echo "::notice::Could not resolve PR head SHA; nothing published."
-            exit 0
+          FALLBACK_HEAD_SHA="${ENV_HEAD_SHA}"
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then
+            FALLBACK_HEAD_SHA="${WORKFLOW_RUN_HEAD_SHA}"
           fi
 
-          has_label() { printf ',%s,' "${LABELS}" | grep -q ",$1,"; }
+          # Could not resolve the head: publish failure where the event provides
+          # the head SHA, otherwise fail the workflow rather than silently keeping
+          # a stale status.
+          if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
+            if [ -n "${FALLBACK_HEAD_SHA}" ] && [ "${FALLBACK_HEAD_SHA}" != "null" ]; then
+              publish_status "${FALLBACK_HEAD_SHA}" "failure" "Could not resolve pull request head"
+              exit 0
+            fi
+            echo "::error::Could not resolve PR head SHA."
+            exit 1
+          fi
+
+          if [ "${HAS_EXPORTED_LABEL}" != "true" ] && [ "${HAS_EXPORTED_LABEL}" != "false" ]; then
+            publish_status "${HEAD_SHA}" "failure" "Could not verify fbcode-export label"
+            exit 0
+          fi
 
           # Publish the gate result as a commit status on the PR head. A status is
           # deduplicated by context, so the latest one always wins. pull_request_target
           # and workflow_run run against the base SHA, so the head SHA must be
           # targeted explicitly.
           publish() {
-            gh api -X POST "repos/${REPO}/statuses/${HEAD_SHA}" \
-              -f state="$1" \
-              -f context="${CONTEXT}" \
-              -f description="$2" >/dev/null
-            echo "${CONTEXT} -> $1 on ${HEAD_SHA}: $2"
+            publish_status "${HEAD_SHA}" "$1" "$2"
           }
 
           # Before approval the gate is not applicable.
@@ -146,7 +200,7 @@ jobs:
 
           # fbcode-originated: the bot applies the meta-exported label on export.
           # Non-forgeable (a fork cannot add labels to a base-repo PR).
-          if has_label "${EXPORTED_LABEL}"; then
+          if [ "${HAS_EXPORTED_LABEL}" = "true" ]; then
             publish "success" "fbcode-originated; already in fbcode"
             exit 0
           fi
@@ -156,7 +210,7 @@ jobs:
           # new commit re-blocks the gate.
           BOT_TSV="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
             --jq ".[] | select(.user.login==\"${CODESYNC_BOT}\") | [.created_at, (.body | gsub(\"[\\n\\r]\"; \" \"))] | @tsv" 2>/dev/null || true)"
-          IMPORT_TS="$(printf '%s\n' "${BOT_TSV}" | grep -E 'you can view this in \[D[0-9]+\]' | cut -f1 | sort | tail -1)"
+          IMPORT_TS="$(printf '%s\n' "${BOT_TSV}" | grep -E 'you can view this in \[D[0-9]+\]' | cut -f1 | sort | tail -1 || true)"
 
           if [ -n "${IMPORT_TS}" ]; then
             HEAD_TS="$(gh api "repos/${REPO}/commits/${HEAD_SHA}" --jq '.commit.committer.date' 2>/dev/null || echo '')"
