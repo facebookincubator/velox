@@ -191,9 +191,6 @@ class Writer : public dwio::common::Writer {
 
   void flush() override;
 
-  // Forces a row group boundary before the data added by next write().
-  void newRowGroup(int32_t numRows);
-
   bool finish() override {
     return true;
   }

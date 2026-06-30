@@ -546,10 +546,6 @@ bool Writer::isCodecAvailable(common::CompressionKind compression) {
       getArrowParquetCompression(compression));
 }
 
-void Writer::newRowGroup(int32_t numRows) {
-  PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
-}
-
 std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
