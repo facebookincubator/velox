@@ -32,14 +32,12 @@
 #endif
 
 #include <cudf/column/column.hpp>
-#include <cudf/column/column_factories.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/lists/lists_column_view.hpp>
-#include <cudf/null_mask.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
@@ -67,77 +65,80 @@ bool isAbfsPath([[maybe_unused]] const std::string_view path) {
 #endif
 }
 
-// Returns true if the column has a decimal type mismatch that requires casting.
-bool needsDecimalCast(cudf::column_view const& col, const TypePtr& veloxType) {
+// Rebuilds a struct/list column in-place after possibly transforming (e.g.,
+// decimal-casting) its children.
+template <typename TransformChildrenFn>
+std::unique_ptr<cudf::column> rebuildWithTransformedChildren(
+    std::unique_ptr<cudf::column> col,
+    TransformChildrenFn&& transformFn) {
+  auto const type = col->type();
+  auto const size = col->size();
+  auto const nullCount = col->null_count();
+  auto contents = col->release();
+  transformFn(contents.children);
+  return std::make_unique<cudf::column>(
+      type,
+      size,
+      std::move(*contents.data),
+      std::move(*contents.null_mask),
+      nullCount,
+      std::move(contents.children));
+}
+
+// Recursively casts columns to the expected Velox type iff the column is:
+//  - Decimal type but not the expected Velox type.
+//  - Struct type: with any of its children being decimal type but not the
+//  expected Velox type. Rebuilt in place with the casted children.
+//  - List type: with its `child` being decimal type but not the expected Velox
+//  type. Rebuilt in place with the casted children.
+std::unique_ptr<cudf::column> castDecimalColumns(
+    std::unique_ptr<cudf::column> col,
+    const TypePtr& veloxType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Decimal type (base case)
   if (veloxType->isDecimal()) {
-    return col.type() != veloxToCudfDataType(veloxType);
-  } else if (veloxType->kind() == TypeKind::ROW) {
+    auto const targetType = veloxToCudfDataType(veloxType);
+    if (col->type() != targetType) {
+      return cudf::cast(col->view(), targetType, stream, mr);
+    }
+    return col;
+  }
+
+  // Struct type
+  if (veloxType->kind() == TypeKind::ROW) {
     auto const& rowType = veloxType->asRow();
-    auto numChildren = static_cast<size_t>(col.num_children());
+    auto const numChildren = static_cast<size_t>(col->num_children());
     VELOX_CHECK_EQ(
         numChildren,
         rowType.size(),
         "Scanned STRUCT column has {} fields but the expected schema has {}.",
         numChildren,
         rowType.size());
-    return std::ranges::any_of(
-        std::views::iota(size_t{0}, numChildren), [&](size_t i) {
-          return needsDecimalCast(col.child(i), rowType.childAt(i));
-        });
-  } else if (veloxType->kind() == TypeKind::ARRAY) {
-    auto numChildren = static_cast<size_t>(col.num_children());
-    VELOX_CHECK_EQ(
-        numChildren,
-        2,
-        "Scanned LIST column has {} fields, expected 2.",
-        numChildren);
-    auto listView = cudf::lists_column_view(col);
-    return needsDecimalCast(listView.child(), veloxType->childAt(0));
+    return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
+      for (size_t i = 0; i < numChildren; ++i) {
+        children[i] = castDecimalColumns(
+            std::move(children[i]), rowType.childAt(i), stream, mr);
+      }
+    });
   }
-  return false;
-}
 
-// Casts decimal columns from the physical type read by cuDF (e.g. DECIMAL32)
-// to the type expected by Velox (e.g. DECIMAL64), recursing into nested types.
-std::unique_ptr<cudf::column> castDecimalColumn(
-    cudf::column_view const& col,
-    const TypePtr& veloxType,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  if (veloxType->isDecimal()) {
-    return cudf::cast(col, veloxToCudfDataType(veloxType), stream, mr);
-  } else if (veloxType->kind() == TypeKind::ROW) {
-    auto const& rowType = veloxType->asRow();
-    auto numChildren = static_cast<size_t>(col.num_children());
-    std::vector<std::unique_ptr<cudf::column>> children(numChildren);
-    std::ranges::transform(
-        std::views::iota(size_t{0}, numChildren),
-        children.begin(),
-        [&](size_t i) {
-          return castDecimalColumn(
-              col.child(i), rowType.childAt(i), stream, mr);
-        });
-    return cudf::make_structs_column(
-        col.size(),
-        std::move(children),
-        col.null_count(),
-        cudf::copy_bitmask(col, stream, mr),
-        stream,
-        mr);
-  } else if (veloxType->kind() == TypeKind::ARRAY) {
-    auto listView = cudf::lists_column_view(col);
-    auto offsets =
-        std::make_unique<cudf::column>(listView.offsets(), stream, mr);
-    auto child =
-        castDecimalColumn(listView.child(), veloxType->childAt(0), stream, mr);
-    return cudf::make_lists_column(
-        col.size(),
-        std::move(offsets),
-        std::move(child),
-        col.null_count(),
-        cudf::copy_bitmask(col, stream, mr));
+  // List type
+  if (veloxType->kind() == TypeKind::ARRAY) {
+    // A LIST column stores [offsets, child]; only the child may hold decimal
+    // data.
+    VELOX_CHECK_EQ(
+        col->num_children(),
+        2,
+        "LIST column must have exactly 2 children: [offsets, child]");
+    return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
+      auto const childIdx = cudf::lists_column_view::child_column_index;
+      children[childIdx] = castDecimalColumns(
+          std::move(children[childIdx]), veloxType->childAt(0), stream, mr);
+    });
   }
-  VELOX_UNREACHABLE("Unsupported type: {}.", veloxType->toString());
+
+  return col;
 }
 
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
@@ -149,10 +150,8 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
       std::min<size_t>(table->view().num_columns(), rowType->size());
   auto columns = table->release();
   for (size_t i = 0; i < numColumns; ++i) {
-    auto&& col = columns[i];
-    if (needsDecimalCast(col->view(), rowType->childAt(i))) {
-      col = castDecimalColumn(col->view(), rowType->childAt(i), stream, mr);
-    }
+    columns[i] = castDecimalColumns(
+        std::move(columns[i]), rowType->childAt(i), stream, mr);
   }
   return std::make_unique<cudf::table>(std::move(columns));
 }
