@@ -67,10 +67,10 @@
 #include <cudf/unary.hpp>
 #include <cudf/utilities/traits.hpp>
 
-#include <cmath>
 #include <rmm/device_uvector.hpp>
 
 #include <cctype>
+#include <cmath>
 #include <memory>
 
 namespace facebook::velox::cudf_velox {
@@ -428,9 +428,7 @@ class RoundFunction : public CudfFunction {
     factorScalar_ = std::unique_ptr<cudf::numeric_scalar<double>>(
         static_cast<cudf::numeric_scalar<double>*>(
             makeScalarFromValue<double>(
-                DOUBLE(),
-                std::pow(10.0, static_cast<double>(scale_)),
-                false)
+                DOUBLE(), std::pow(10.0, static_cast<double>(scale_)), false)
                 .release()));
   }
 

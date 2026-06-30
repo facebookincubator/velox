@@ -2463,25 +2463,8 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
              .project({"round(c0) as c1"})
              .planNode();
   expected = makeRowVector({makeFlatVector<double>({
-      3.0,
-      4.0,
-      -3.0,
-      -4.0,
-      3.0,
-      0.0,
-      0.0,
-      1.0,
-      1.0,
-      0.0,
-      1.0,
-      -1.0,
-      -2.0,
-      -3.0,
-      -2.0,
-      -2.0,
-      0.0,
-      0.0,
-      1e15,
+      3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
+      1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
 
