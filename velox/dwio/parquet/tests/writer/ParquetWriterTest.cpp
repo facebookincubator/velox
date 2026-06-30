@@ -1997,6 +1997,94 @@ TEST_F(ParquetWriterTest, batchExceedingRowGroupSize) {
   ASSERT_EQ(reader->fileMetaData().numRowGroups(), kSize / kRowsPerGroup);
 }
 
+/// Verifies that parallel column writing produces correct results by
+/// round-tripping data through write and read with enableParallelWrite=true.
+TEST_F(ParquetWriterTest, parallelColumnWriteCorrectness) {
+  constexpr vector_size_t kSize = 10'000;
+  constexpr int kDictSize = 20;
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("str_{}", i);
+  }
+  auto dictVarchar = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+  BufferPtr idx =
+      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
+  auto rawIdx = idx->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    rawIdx[i] = i % kDictSize;
+  }
+  auto col0 =
+      BaseVector::wrapInDictionary(BufferPtr(nullptr), idx, kSize, dictVarchar);
+
+  auto col1 = makeFlatVector<int64_t>(
+      kSize, [](auto row) { return static_cast<int64_t>(row) * 1'000; });
+  auto col2 =
+      makeFlatVector<double>(kSize, [](auto row) { return row * 3.14; });
+  auto col3 = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+
+  auto data = makeRowVector({col0, col1, col2, col3});
+  auto schema = asRowType(data->type());
+
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.compressionKind = common::CompressionKind_ZSTD;
+  auto parquetOpts = std::make_shared<ParquetWriterOptions>();
+  parquetOpts->enableParallelWrite = true;
+  options.formatSpecificOptions = parquetOpts;
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+  writer->write(data);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kSize);
+
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  VectorPtr flatCol0 = col0;
+  BaseVector::flattenVector(flatCol0);
+  auto expected = makeRowVector({flatCol0, col1, col2, col3});
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
+/// Verifies parallel writing with multiple batches and flush between them.
+TEST_F(ParquetWriterTest, parallelColumnWriteMultiBatch) {
+  constexpr vector_size_t kBatchSize = 5'000;
+
+  auto batch = makeRowVector({
+      makeFlatVector<int32_t>(kBatchSize, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(
+          kBatchSize, [](auto row) { return static_cast<int64_t>(row) * 7; }),
+  });
+  auto schema = asRowType(batch->type());
+
+  auto sink = std::make_unique<dwio::common::MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  auto parquetOpts = std::make_shared<ParquetWriterOptions>();
+  parquetOpts->enableParallelWrite = true;
+  options.formatSpecificOptions = parquetOpts;
+  auto writer =
+      std::make_unique<parquet::Writer>(std::move(sink), options, schema);
+
+  writer->write(batch);
+  writer->flush();
+  writer->write(batch);
+  writer->close();
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kBatchSize * 2);
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
