@@ -167,6 +167,17 @@ void CastExpr::applyCastKernel(
         wrapException);
   };
 
+  auto castOverflowErrorMessage = [](const std::string& value,
+                                     const std::string& sourceTypeName,
+                                     const std::string& targetTypeName) {
+    return fmt::format(
+        "The value {} of the type \"{}\" cannot be cast to \"{}\" due to an "
+        "overflow. Use `try_cast` to tolerate overflow and return NULL instead.",
+        value,
+        sourceTypeName,
+        targetTypeName);
+  };
+
   try {
     auto inputRowValue = input->valueAt(row);
 
@@ -192,8 +203,43 @@ void CastExpr::applyCastKernel(
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
       const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      setResultOrStatus(castResult, row);
-      return;
+      if (ToKind == TypeKind::BIGINT) {
+        result->set(row, castResult.value());
+        return;
+      }
+      if (ToKind == TypeKind::INTEGER) {
+        if (castResult.value() == static_cast<int>(castResult.value())) {
+          result->set(row, castResult.value());
+        } else {
+          setError(castOverflowErrorMessage(
+              std::to_string(castResult.value()),
+              input->type()->toString(),
+              result->type()->toString()));
+        }
+        return;
+      }
+      if (ToKind == TypeKind::SMALLINT) {
+        if (castResult.value() == static_cast<int16_t>(castResult.value())) {
+          result->set(row, castResult.value());
+        } else {
+          setError(castOverflowErrorMessage(
+              std::to_string(castResult.value()),
+              input->type()->toString(),
+              result->type()->toString()));
+        }
+        return;
+      }
+      if (ToKind == TypeKind::TINYINT) {
+        if (castResult.value() == static_cast<int8_t>(castResult.value())) {
+          result->set(row, castResult.value());
+        } else {
+          setError(castOverflowErrorMessage(
+              std::to_string(castResult.value()),
+              input->type()->toString(),
+              result->type()->toString()));
+        }
+        return;
+      }
     }
 
     if constexpr (
