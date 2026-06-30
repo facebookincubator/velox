@@ -12,8 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# CXL experimental memory subsystem.
-# This validates that libnuma is discoverable when VELOX_ENABLE_CXL is enabled.
+# Provides the libnuma-backed allocator and resource that register the CXL
+# memory tier on top of the core CustomMemoryResource framework.
 find_package(Numa REQUIRED)
 
-velox_add_library(velox_experimental_cxl INTERFACE HEADERS CxlMemoryResource.h)
+velox_add_library(
+  velox_experimental_cxl
+  CxlMemoryAllocator.cpp
+  CxlMemoryResource.cpp
+  HEADERS
+  CxlMemoryAllocator.h
+  CxlMemoryResource.h
+)
+
+# Route the numa link through velox_link_libraries: with VELOX_MONO_LIBRARY the
+# velox_experimental_cxl target is an alias to velox, on which a raw
+# target_link_libraries() is rejected.
+velox_link_libraries(velox_experimental_cxl velox_memory Numa::numa)
+
+if(VELOX_BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
