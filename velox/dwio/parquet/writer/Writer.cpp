@@ -592,12 +592,32 @@ bool Writer::needFlatten(const VectorPtr& data) const {
 
   const auto& children = rowVector->children();
   return std::any_of(children.begin(), children.end(), [](const auto& child) {
-    bool isNestedWrapped =
-        (child->encoding() == VectorEncoding::Simple::DICTIONARY ||
-         child->encoding() == VectorEncoding::Simple::CONSTANT) &&
-        child->valueVector() && !child->wrappedVector()->isFlatEncoding();
-    bool isComplex = !child->isScalar();
-    return isNestedWrapped || isComplex;
+    auto encoding = child->encoding();
+    if (encoding == VectorEncoding::Simple::DICTIONARY) {
+      auto* innerVector = child->valueVector().get();
+      if (innerVector != nullptr) {
+        // Flatten dictionary wrapping a complex (non-primitive) type. The Arrow
+        // Parquet writer only supports dictionary passthrough for binary-like
+        // scalar types, and updateFieldNameAndIdRecursive cannot traverse
+        // DictionaryType wrapping complex Arrow types.
+        if (!innerVector->type()->isPrimitiveType()) {
+          return true;
+        }
+        // Flatten nested wrapping (e.g., dictionary-of-dictionary,
+        // dictionary-of-constant). Only a dictionary directly wrapping a flat
+        // vector can be exported as an Arrow DictionaryArray.
+        if (!innerVector->isFlatEncoding()) {
+          return true;
+        }
+      }
+    } else if (encoding == VectorEncoding::Simple::CONSTANT) {
+      // Flatten constant wrapping a non-flat inner vector
+      // (e.g., constant-of-dictionary).
+      if (child->valueVector() && !child->wrappedVector()->isFlatEncoding()) {
+        return true;
+      }
+    }
+    return false;
   });
 }
 

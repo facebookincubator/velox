@@ -204,9 +204,13 @@ class Writer : public dwio::common::Writer {
   // Sets the memory reclaimers for all the memory pools used by this writer.
   void setMemoryReclaimers();
 
-  // Checks if the input data contains a nested wrapped vector or complex
-  // vector. If so, flatten the input to make it compatible with
-  // 'exportFlattenedVector' in Arrow export.
+  // Checks if the input data requires flattening before Arrow export.
+  // Returns true for:
+  //  - Dictionary wrapping a complex (non-primitive) type.
+  //  - Dictionary wrapping a non-flat inner vector (e.g., dict-of-dict).
+  //  - Constant wrapping a non-flat inner vector (e.g., constant-of-dict).
+  // Returns false for scalar dictionary vectors (passthrough to Arrow Parquet
+  // writer) and flat complex types (handled natively by the Arrow bridge).
   bool needFlatten(const VectorPtr& data) const;
 
   // Pool for 'stream_'.
@@ -225,7 +229,7 @@ class Writer : public dwio::common::Writer {
 
   const RowTypePtr schema_;
 
-  ArrowOptions options_{.flattenDictionary = true, .flattenConstant = true};
+  ArrowOptions options_{.flattenDictionary = false, .flattenConstant = true};
 
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;
