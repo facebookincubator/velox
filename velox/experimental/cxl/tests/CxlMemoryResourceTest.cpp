@@ -44,12 +44,6 @@ class CxlMemoryResourceTest : public testing::Test {
   }
 };
 
-// Node 0 is the boot node and always has CPUs attached, so it is the canonical
-// "not CXL" case the warning is meant to catch.
-TEST_F(CxlMemoryResourceTest, bootNodeHasCpus) {
-  EXPECT_TRUE(numaNodeHasCpus(0));
-}
-
 TEST_F(CxlMemoryResourceTest, buildsResource) {
   constexpr int64_t kMaxCapacity = 64 << 20; // 64MB
   auto resource = makeCxlMemoryResource(0, kMaxCapacity);

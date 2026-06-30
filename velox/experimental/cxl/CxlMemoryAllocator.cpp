@@ -16,33 +16,23 @@
 
 #include "velox/experimental/cxl/CxlMemoryAllocator.h"
 
-#ifdef __linux__
 #include <numa.h>
-#endif
 
 namespace facebook::velox::cxl {
 namespace {
 
 // Validates 'numaNode', returning it unchanged.
 int32_t validateNumaNode(int32_t numaNode) {
-#ifdef __linux__
   VELOX_CHECK_GE(numa_available(), 0, "NUMA is not available on this host");
   VELOX_CHECK_GE(numaNode, 0, "Invalid CXL NUMA node: {}", numaNode);
   VELOX_CHECK_LE(
       numaNode, numa_max_node(), "CXL NUMA node is out of range: {}", numaNode);
-#endif
   return numaNode;
 }
 
 // Binds [address, address + bytes) to 'numaNode'.
 void bindToNumaNode(void* address, size_t bytes, int32_t numaNode) {
-#ifdef __linux__
   numa_tonode_memory(address, bytes, numaNode);
-#else
-  (void)address;
-  (void)bytes;
-  (void)numaNode;
-#endif
 }
 
 // Returns 'options' with an onMap hook binding to 'numaNode'.

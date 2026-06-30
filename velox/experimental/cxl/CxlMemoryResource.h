@@ -41,12 +41,4 @@ std::shared_ptr<memory::CustomMemoryResource> makeCxlMemoryResource(
     int32_t numaNode,
     int64_t maxCapacity = std::numeric_limits<int64_t>::max());
 
-/// Returns true if 'numaNode' has CPUs attached. CXL memory expanders surface
-/// to Linux as CPU-less (memory-only) NUMA nodes, so a node with CPUs is most
-/// likely regular DRAM rather than a CXL device. makeCxlMemoryResource uses
-/// this to warn on a likely-misconfigured node. Best-effort, not proof:
-/// userspace cannot reliably confirm a node is CXL-backed. Always returns false
-/// off Linux or when NUMA is unavailable.
-bool numaNodeHasCpus(int32_t numaNode);
-
 } // namespace facebook::velox::cxl

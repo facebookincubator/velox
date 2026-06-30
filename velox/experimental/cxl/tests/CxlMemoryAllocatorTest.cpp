@@ -84,8 +84,11 @@ TEST_F(CxlMemoryAllocatorTest, allocateFreeRoundTrip) {
 }
 
 TEST_F(CxlMemoryAllocatorTest, invalidNodeThrows) {
-  VELOX_ASSERT_THROW(CxlMemoryAllocator(options(), -1), "");
-  VELOX_ASSERT_THROW(CxlMemoryAllocator(options(), outOfRangeNode()), "");
+  VELOX_ASSERT_THROW(
+      CxlMemoryAllocator(options(), -1), "Invalid CXL NUMA node");
+  VELOX_ASSERT_THROW(
+      CxlMemoryAllocator(options(), outOfRangeNode()),
+      "CXL NUMA node is out of range");
 }
 
 } // namespace

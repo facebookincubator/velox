@@ -16,9 +16,7 @@
 
 #include "velox/experimental/cxl/CxlMemoryResource.h"
 
-#ifdef __linux__
 #include <numa.h>
-#endif
 
 #include <glog/logging.h>
 
@@ -27,9 +25,7 @@
 #include "velox/experimental/cxl/CxlMemoryAllocator.h"
 
 namespace facebook::velox::cxl {
-
 bool numaNodeHasCpus(int32_t numaNode) {
-#ifdef __linux__
   if (numa_available() < 0) {
     return false;
   }
@@ -41,13 +37,8 @@ bool numaNodeHasCpus(int32_t numaNode) {
       numa_node_to_cpus(numaNode, cpus) == 0 && numa_bitmask_weight(cpus) > 0;
   numa_free_cpumask(cpus);
   return hasCpus;
-#else
-  (void)numaNode;
-  return false;
-#endif
 }
 
-namespace {
 // Warns when binding to a node that has CPUs attached: CXL "allocations" there
 // would silently land on regular DRAM. See numaNodeHasCpus for why this is a
 // heuristic rather than a hard check.
@@ -57,7 +48,6 @@ void warnIfNodeUnlikelyCxl(int32_t numaNode) {
                  << " has CPUs; it may be DRAM, not a CXL device.";
   }
 }
-} // namespace
 
 std::shared_ptr<memory::CustomMemoryResource> makeCxlMemoryResource(
     int32_t numaNode,
