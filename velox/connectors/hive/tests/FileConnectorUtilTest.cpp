@@ -318,6 +318,53 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   EXPECT_EQ(rowReaderOptions.length(), std::numeric_limits<uint64_t>::max());
 }
 
+TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleDictVectorFlags) {
+  auto fileConfig = makeFileConfig();
+  auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  // Both session flags enabled => both RowReaderOptions flags true.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
+         {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"}});
+    dwio::common::RowReaderOptions rowReaderOptions;
+    hive::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+
+    EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+  }
+
+  // Keys absent => both flags fall back to their default (false).
+  {
+    auto holder = makeConnectorQueryCtx();
+    dwio::common::RowReaderOptions rowReaderOptions;
+    hive::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+
+    EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+  }
+}
+
 TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
