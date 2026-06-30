@@ -38,6 +38,7 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/lists/lists_column_view.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
@@ -90,7 +91,8 @@ bool needsDecimalCast(cudf::column_view const& col, const TypePtr& veloxType) {
         2,
         "Scanned LIST column has {} fields, expected 2.",
         numChildren);
-    return needsDecimalCast(col.child(1), veloxType->childAt(0));
+    auto listView = cudf::lists_column_view(col);
+    return needsDecimalCast(listView.child(), veloxType->childAt(0));
   }
   return false;
 }
@@ -123,9 +125,11 @@ std::unique_ptr<cudf::column> castDecimalColumn(
         stream,
         mr);
   } else if (veloxType->kind() == TypeKind::ARRAY) {
-    auto offsets = std::make_unique<cudf::column>(col.child(0), stream, mr);
+    auto listView = cudf::lists_column_view(col);
+    auto offsets =
+        std::make_unique<cudf::column>(listView.offsets(), stream, mr);
     auto child =
-        castDecimalColumn(col.child(1), veloxType->childAt(0), stream, mr);
+        castDecimalColumn(listView.child(), veloxType->childAt(0), stream, mr);
     return cudf::make_lists_column(
         col.size(),
         std::move(offsets),
