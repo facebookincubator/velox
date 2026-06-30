@@ -467,10 +467,7 @@ void Writer::write(const VectorPtr& data) {
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
 
-  VectorPtr exportData = data;
-  if (needFlatten(exportData)) {
-    BaseVector::flattenVector(exportData);
-  }
+  VectorPtr exportData = flattenIfNeeded(data);
 
   ArrowArray array;
   exportToArrow(exportData, array, generalPool_.get(), options_);
@@ -585,40 +582,75 @@ void Writer::setMemoryReclaimers() {
   generalPool_->setReclaimer(exec::MemoryReclaimer::create());
 }
 
-bool Writer::needFlatten(const VectorPtr& data) const {
+namespace {
+
+/// Returns true if a single column requires flattening before Arrow export.
+bool childNeedsFlatten(const VectorPtr& child) {
+  auto encoding = child->encoding();
+  if (encoding == VectorEncoding::Simple::DICTIONARY) {
+    auto* innerVector = child->valueVector().get();
+    if (innerVector != nullptr) {
+      // Flatten dictionary wrapping a complex (non-primitive) type. The Arrow
+      // Parquet writer only supports dictionary passthrough for binary-like
+      // scalar types, and updateFieldNameAndIdRecursive cannot traverse
+      // DictionaryType wrapping complex Arrow types.
+      if (!innerVector->type()->isPrimitiveType()) {
+        return true;
+      }
+      // Flatten nested wrapping (e.g., dictionary-of-dictionary,
+      // dictionary-of-constant). Only a dictionary directly wrapping a flat
+      // vector can be exported as an Arrow DictionaryArray.
+      if (!innerVector->isFlatEncoding()) {
+        return true;
+      }
+    }
+  } else if (encoding == VectorEncoding::Simple::CONSTANT) {
+    // Flatten constant wrapping a non-flat inner vector
+    // (e.g., constant-of-dictionary).
+    if (child->valueVector() && !child->wrappedVector()->isFlatEncoding()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
   auto rowVector = std::dynamic_pointer_cast<RowVector>(data);
   VELOX_CHECK_NOT_NULL(
       rowVector, "Arrow export expects a RowVector as input data.");
 
   const auto& children = rowVector->children();
-  return std::any_of(children.begin(), children.end(), [](const auto& child) {
-    auto encoding = child->encoding();
-    if (encoding == VectorEncoding::Simple::DICTIONARY) {
-      auto* innerVector = child->valueVector().get();
-      if (innerVector != nullptr) {
-        // Flatten dictionary wrapping a complex (non-primitive) type. The Arrow
-        // Parquet writer only supports dictionary passthrough for binary-like
-        // scalar types, and updateFieldNameAndIdRecursive cannot traverse
-        // DictionaryType wrapping complex Arrow types.
-        if (!innerVector->type()->isPrimitiveType()) {
-          return true;
-        }
-        // Flatten nested wrapping (e.g., dictionary-of-dictionary,
-        // dictionary-of-constant). Only a dictionary directly wrapping a flat
-        // vector can be exported as an Arrow DictionaryArray.
-        if (!innerVector->isFlatEncoding()) {
-          return true;
-        }
-      }
-    } else if (encoding == VectorEncoding::Simple::CONSTANT) {
-      // Flatten constant wrapping a non-flat inner vector
-      // (e.g., constant-of-dictionary).
-      if (child->valueVector() && !child->wrappedVector()->isFlatEncoding()) {
-        return true;
-      }
+  bool anyNeedsFlatten = false;
+  for (const auto& child : children) {
+    if (childNeedsFlatten(child)) {
+      anyNeedsFlatten = true;
+      break;
     }
-    return false;
-  });
+  }
+
+  if (!anyNeedsFlatten) {
+    return data;
+  }
+
+  // Selectively flatten only the columns that need it.
+  std::vector<VectorPtr> newChildren(children.size());
+  for (size_t i = 0; i < children.size(); ++i) {
+    if (childNeedsFlatten(children[i])) {
+      newChildren[i] = children[i];
+      BaseVector::flattenVector(newChildren[i]);
+    } else {
+      newChildren[i] = children[i];
+    }
+  }
+
+  return std::make_shared<RowVector>(
+      rowVector->pool(),
+      rowVector->type(),
+      rowVector->nulls(),
+      rowVector->size(),
+      std::move(newChildren));
 }
 
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(

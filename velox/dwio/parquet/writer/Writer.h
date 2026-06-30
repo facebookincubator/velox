@@ -211,7 +211,11 @@ class Writer : public dwio::common::Writer {
   //  - Constant wrapping a non-flat inner vector (e.g., constant-of-dict).
   // Returns false for scalar dictionary vectors (passthrough to Arrow Parquet
   // writer) and flat complex types (handled natively by the Arrow bridge).
-  bool needFlatten(const VectorPtr& data) const;
+  //
+  // When flattening is needed, only the columns that require it are flattened.
+  // Columns that can be passed through (e.g., scalar dictionaries) are left
+  // unchanged, avoiding unnecessary materialization.
+  VectorPtr flattenIfNeeded(const VectorPtr& data) const;
 
   // Pool for 'stream_'.
   std::shared_ptr<memory::MemoryPool> pool_;

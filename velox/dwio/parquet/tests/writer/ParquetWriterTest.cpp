@@ -1817,6 +1817,69 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughOtherPrimitiveTypes) {
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
+/// Verifies selective per-column flattening: a dict-of-dict column (must
+/// flatten) alongside a passthrough dictionary column (must NOT flatten).
+/// With blanket flattening, both would be materialized. With selective
+/// flattening, only the nested-dict column is flattened while the simple
+/// dictionary passes through to Arrow.
+TEST_F(ParquetWriterTest, selectiveFlatteningMixedEncodings) {
+  constexpr vector_size_t kSize = 2'000;
+
+  // Column 0: simple dictionary VARCHAR (should pass through).
+  constexpr int kDictSize = 10;
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("pass_{}", i);
+  }
+  auto dict = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+  BufferPtr idx =
+      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
+  auto rawIdx = idx->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    rawIdx[i] = i % kDictSize;
+  }
+  auto passthroughCol =
+      BaseVector::wrapInDictionary(BufferPtr(nullptr), idx, kSize, dict);
+
+  // Column 1: dict-of-dict INTEGER (must flatten).
+  constexpr int kInnerDictSize = 20;
+  auto innerDict =
+      makeFlatVector<int32_t>(kInnerDictSize, [](auto row) { return row * 5; });
+  BufferPtr innerIdx =
+      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
+  auto rawInner = innerIdx->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    rawInner[i] = i % kInnerDictSize;
+  }
+  auto innerDictVec = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), innerIdx, kSize, innerDict);
+  BufferPtr outerIdx =
+      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
+  auto rawOuter = outerIdx->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    rawOuter[i] = i;
+  }
+  auto nestedDictCol = BaseVector::wrapInDictionary(
+      BufferPtr(nullptr), outerIdx, kSize, innerDictVec);
+
+  auto data = makeRowVector({passthroughCol, nestedDictCol});
+  auto schema = asRowType(data->type());
+
+  auto* sinkPtr = write(data, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), kSize);
+
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  VectorPtr flatPassthrough = passthroughCol;
+  BaseVector::flattenVector(flatPassthrough);
+  VectorPtr flatNested = nestedDictCol;
+  BaseVector::flattenVector(flatNested);
+  auto expected = makeRowVector({flatPassthrough, flatNested});
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetWriterTest, allNulls) {
   auto schema = ROW({"c0"}, {INTEGER()});
   const int64_t kRows = 4096;
