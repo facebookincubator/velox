@@ -253,7 +253,6 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
     /// If set, invoked with the address and byte length of each region
     /// MmapAllocator maps, before its pages are faulted in.
-    /// Not supported with 'useMmapArena'.
     std::function<void(void* address, size_t bytes)> onMap{nullptr};
   };
 

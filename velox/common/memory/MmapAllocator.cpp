@@ -54,7 +54,8 @@ MmapAllocator::MmapAllocator(const Options& options)
         AllocationTraits::pageBytes(capacity_) / options.mmapArenaCapacityRatio,
         AllocationTraits::kPageSize);
     managedArenas_ = std::make_unique<ManagedMmapArenas>(
-        std::max<uint64_t>(arenaSizeBytes, MmapArena::kMinCapacityBytes));
+        std::max<uint64_t>(arenaSizeBytes, MmapArena::kMinCapacityBytes),
+        onMap_);
   }
 }
 
@@ -363,7 +364,9 @@ bool MmapAllocator::allocateContiguousImpl(
     rollbackAllocation(numToMap);
     return false;
   }
-  if (onMap_) {
+  // Arena-backed allocations are already bound when their arena region is
+  // mapped; only direct mmap allocations bind here.
+  if (onMap_ && !useMmapArena_) {
     onMap_(data, AllocationTraits::pageBytes(maxPages));
   }
   allocation.set(
