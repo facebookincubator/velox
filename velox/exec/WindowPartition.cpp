@@ -55,6 +55,17 @@ WindowPartition::WindowPartition(
     const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo)
     : WindowPartition(data, {}, inputMapping, sortKeyInfo, true, false) {}
 
+WindowPartition::WindowPartition(
+    const std::vector<column_index_t>& inputMapping,
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& sortKeyInfo,
+    bool partial)
+    : partial_(partial),
+      data_(nullptr),
+      partition_(),
+      complete_(!partial),
+      inputMapping_(inputMapping),
+      sortKeyInfo_(sortKeyInfo) {}
+
 void WindowPartition::addRows(const std::vector<char*>& rows) {
   checkPartial();
   rows_.insert(rows_.end(), rows.begin(), rows.end());

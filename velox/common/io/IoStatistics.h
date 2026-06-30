@@ -50,6 +50,8 @@ class IoStatistics {
   uint64_t outputBatchSize() const;
   uint64_t totalScanTimeNs() const;
   uint64_t writeIOTimeUs() const;
+  uint64_t duplicateReadRegions() const;
+  uint64_t duplicateReadBytes() const;
 
   uint64_t incRawBytesRead(int64_t);
   uint64_t incRawOverreadBytes(int64_t);
@@ -58,6 +60,7 @@ class IoStatistics {
   uint64_t incOutputBatchSize(int64_t);
   uint64_t incTotalScanTimeNs(int64_t);
   uint64_t incWriteIOTimeUs(int64_t);
+  void incDuplicateRead(int64_t regions, int64_t bytes);
 
   IoCounter& prefetch() {
     return prefetch_;
@@ -128,13 +131,15 @@ class IoStatistics {
   folly::dynamic getOperationStatsSnapshot() const;
 
  private:
-  std::atomic<uint64_t> rawBytesRead_{0};
-  std::atomic<uint64_t> rawBytesWritten_{0};
-  std::atomic<uint64_t> inputBatchSize_{0};
-  std::atomic<uint64_t> outputBatchSize_{0};
-  std::atomic<uint64_t> rawOverreadBytes_{0};
-  std::atomic<uint64_t> totalScanTimeNs_{0};
-  std::atomic<uint64_t> writeIOTimeUs_{0};
+  std::atomic_uint64_t rawBytesRead_{0};
+  std::atomic_uint64_t rawBytesWritten_{0};
+  std::atomic_uint64_t inputBatchSize_{0};
+  std::atomic_uint64_t outputBatchSize_{0};
+  std::atomic_uint64_t rawOverreadBytes_{0};
+  std::atomic_uint64_t totalScanTimeNs_{0};
+  std::atomic_uint64_t writeIOTimeUs_{0};
+  std::atomic_uint64_t duplicateReadRegions_{0};
+  std::atomic_uint64_t duplicateReadBytes_{0};
 
   // Planned read from storage or SSD.
   IoCounter prefetch_;

@@ -57,6 +57,19 @@ class IcebergSplitReader : public FileSplitReader {
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
  private:
+  // Configures the base reader options. For DWRF/ORC Iceberg reads, selects
+  // ColumnMappingMode::kFieldId and populates ReaderOptions::fieldIds() from
+  // the Iceberg column handles so the reader resolves columns by field id,
+  // enabling schema evolution (rename, reorder, delete, drop + re-add with same
+  // name).
+  void configureBaseReaderOptions() override;
+
+  // Builds the requested-schema field-id trees, one per top-level column,
+  // aligned to tableHandle_->dataColumns(). Data columns without an Iceberg
+  // handle (e.g. unprojected) get a negative sentinel id that matches no
+  // physical field. Returns empty when no Iceberg handles are available.
+  std::vector<dwio::common::ParquetFieldId> buildFieldIds() const;
+
   /// Adapts the data file schema to match the table schema expected by the
   /// query.
   ///

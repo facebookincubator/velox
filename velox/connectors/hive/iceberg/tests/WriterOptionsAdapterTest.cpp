@@ -19,7 +19,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/parquet/writer/WriterConfig.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
@@ -75,9 +75,8 @@ TEST(WriterOptionsAdapterTest, toManifestFormatString) {
 }
 
 // Verifies the Parquet adapter's pre-config hook installs the Iceberg-spec
-// timestamp serdeParameters. These values must be set before
-// processConfigs() runs because the Parquet writer reads them from
-// serdeParameters during config processing.
+// timestamp serdeParameters. These values stay in common writer options until
+// the Parquet writer constructor reads them.
 TEST(WriterOptionsAdapterTest, parquetPreConfigsSetsTimestampSerdeParameters) {
   auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::PARQUET);
   ASSERT_NE(adapter, nullptr);
@@ -86,20 +85,19 @@ TEST(WriterOptionsAdapterTest, parquetPreConfigsSetsTimestampSerdeParameters) {
   adapter->applyPreConfigs(options);
 
   EXPECT_EQ(
-      options
-          .serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit],
+      options.serdeParameters[std::string(
+          parquet::ParquetConfig::kWriterSerdeTimestampUnit)],
       "6");
   EXPECT_EQ(
-      options.serdeParameters
-          [parquet::WriterConfig::kParquetSerdeTimestampTimezone],
+      options.serdeParameters[std::string(
+          parquet::ParquetConfig::kWriterSerdeTimestampTimezone)],
       "");
 }
 
 // Verifies the DWRF adapter's post-config hook overrides timestamp settings
-// regardless of what processConfigs() left in place. The Iceberg spec
-// requires timestamps NOT be adjusted to UTC; if the DataSink stops calling
-// applyPostConfigs after processConfigs, this test still locks the adapter's
-// override contract — IcebergDataSink::createWriterOptions must use it.
+// regardless of what config processing left in place. The Iceberg spec
+// requires timestamps NOT be adjusted to UTC;
+// IcebergDataSink::createWriterOptions must use this adapter contract.
 TEST(WriterOptionsAdapterTest, dwrfPostConfigsOverridesTimestampFields) {
   auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::DWRF);
   ASSERT_NE(adapter, nullptr);

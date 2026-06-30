@@ -183,7 +183,7 @@ void CachedBufferedInput::preload() {
     if (preloadPin_.empty()) {
       uint64_t waitUs{0};
       {
-        MicrosecondTimer timer(&waitUs);
+        MicrosecondWallTimer timer(&waitUs);
         std::move(waitFuture).wait();
       }
       ioStatistics_->queryThreadIoLatencyUs().increment(waitUs);
@@ -207,7 +207,7 @@ void CachedBufferedInput::preload() {
   auto ranges = entry->dataRanges(fileSize_);
   uint64_t storageReadUs{0};
   {
-    MicrosecondTimer timer(&storageReadUs);
+    MicrosecondWallTimer timer(&storageReadUs);
     input_->read(ranges, 0, LogType::FILE);
   }
   ioStatistics_->read().increment(fileSize_);
@@ -301,34 +301,34 @@ std::vector<int32_t> CachedBufferedInput::groupRequests(
   std::vector<int32_t> ends;
   ends.reserve(requests.size());
   std::vector<char> ranges;
-  const auto stats =
-      coalesceIo<CacheRequest*, char, /*coalesceDuplicateRanges=*/false>(
-          requests,
-          maxDistance,
-          std::numeric_limits<int32_t>::max(),
-          [&](int32_t index) { return getOffset<kSsd>(*requests[index]); },
-          [&](int32_t index) {
-            const auto size = requests[index]->size;
-            coalescedBytes += size;
-            return size;
-          },
-          [&](int32_t index) {
-            if (coalescedBytes > options_.maxCoalesceBytes()) {
-              coalescedBytes = 0;
-              return kNoCoalesce;
-            }
-            return requests[index]->coalesces ? 1 : kNoCoalesce;
-          },
-          [&](CacheRequest* /*request*/, std::vector<char>& ranges) {
-            ranges.push_back(0);
-          },
-          [&](int32_t /*gap*/, std::vector<char> /*ranges*/) { /*no op*/ },
-          [&](const std::vector<CacheRequest*>& /*requests*/,
-              int32_t /*begin*/,
-              int32_t end,
-              uint64_t /*offset*/,
-              const std::vector<char>& /*ranges*/) { ends.push_back(end); });
+  const auto stats = coalesceIo<CacheRequest*, char>(
+      requests,
+      maxDistance,
+      std::numeric_limits<int32_t>::max(),
+      [&](int32_t index) { return getOffset<kSsd>(*requests[index]); },
+      [&](int32_t index) {
+        const auto size = requests[index]->size;
+        coalescedBytes += size;
+        return size;
+      },
+      [&](int32_t index) {
+        if (coalescedBytes > options_.maxCoalesceBytes()) {
+          coalescedBytes = 0;
+          return kNoCoalesce;
+        }
+        return requests[index]->coalesces ? 1 : kNoCoalesce;
+      },
+      [&](CacheRequest* /*request*/, std::vector<char>& ranges) {
+        ranges.push_back(0);
+      },
+      [&](int32_t /*gap*/, std::vector<char> /*ranges*/) { /*no op*/ },
+      [&](const std::vector<CacheRequest*>& /*requests*/,
+          int32_t /*begin*/,
+          int32_t end,
+          uint64_t /*offset*/,
+          const std::vector<char>& /*ranges*/) { ends.push_back(end); });
   ioStatistics_->readGap().merge(stats.gaps);
+  ioStatistics_->incDuplicateRead(stats.duplicateRegions, stats.duplicateBytes);
   return ends;
 }
 
@@ -743,7 +743,7 @@ std::optional<CachedRegion> CachedBufferedInput::findCachedRegion(
     // Entry is exclusive — wait for it to become shared, then retry.
     uint64_t waitUs{0};
     {
-      MicrosecondTimer timer(&waitUs);
+      MicrosecondWallTimer timer(&waitUs);
       std::move(waitFuture)
           .via(&folly::QueuedImmediateExecutor::instance())
           .wait();

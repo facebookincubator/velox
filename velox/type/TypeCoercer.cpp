@@ -30,6 +30,22 @@ int64_t Coercion::overallCost(const std::vector<Coercion>& coercions) {
   return cost;
 }
 
+bool Coercion::isUnknownOnlyCoercion(
+    const std::vector<Coercion>& coercions,
+    const std::vector<TypePtr>& argTypes) {
+  VELOX_DCHECK_EQ(coercions.size(), argTypes.size());
+  bool hasCoercion{false};
+  for (auto i = 0; i < coercions.size(); ++i) {
+    if (coercions[i].type != nullptr) {
+      if (!argTypes[i]->isUnknown()) {
+        return false;
+      }
+      hasCoercion = true;
+    }
+  }
+  return hasCoercion;
+}
+
 namespace {
 
 std::vector<CoercionEntry> defaultRules() {
@@ -69,6 +85,9 @@ std::vector<CoercionEntry> defaultRules() {
 TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
   // Tracks costs already used for a given source type to enforce uniqueness.
   std::unordered_map<std::string, std::unordered_set<int32_t>> costsByFrom;
+
+  // Highest UNKNOWN->scalar cost in this rule set.
+  int32_t maxUnknownCost{0};
 
   for (const auto& entry : rules) {
     VELOX_CHECK_NOT_NULL(entry.from, "CoercionEntry.from must not be null");
@@ -129,6 +148,10 @@ TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
         entry.cost,
         entry.from->name());
 
+    if (entry.from->isUnknown() && entry.cost > maxUnknownCost) {
+      maxUnknownCost = entry.cost;
+    }
+
     // Reject duplicate (fromName, toName) pairs. This guards in particular
     // against the common DECIMAL footgun: all decimals share the same name,
     // so multiple {SOURCE, DECIMAL(p, s), cost} entries with different
@@ -143,12 +166,41 @@ TypeCoercer::TypeCoercer(const std::vector<CoercionEntry>& rules) {
         entry.from->name(),
         entry.to->name());
   }
+
+  unknownFallbackCost_ = maxUnknownCost + 1;
 }
 
 // static
 const TypeCoercer& TypeCoercer::defaults() {
   static const TypeCoercer instance{defaultRules()};
   return instance;
+}
+
+std::optional<Coercion> TypeCoercer::coerce(
+    const TypePtr& fromType,
+    const TypePtr& toType) const {
+  if (fromType->size() == 0 && toType->size() == 0) {
+    if (auto coercion = coerceTypeBase(fromType, toType)) {
+      return coercion;
+    }
+  } else if (
+      fromType->name() == toType->name() &&
+      fromType->size() == toType->size()) {
+    int32_t totalCost = 0;
+    for (auto i = 0; i < fromType->size(); ++i) {
+      const auto child = coerce(fromType->childAt(i), toType->childAt(i));
+      if (!child) {
+        return std::nullopt;
+      }
+      totalCost += child->cost;
+    }
+    return Coercion{.type = toType, .cost = totalCost};
+  }
+
+  if (fromType->isUnknown() && !toType->isUnknown()) {
+    return Coercion{.type = toType, .cost = unknownFallbackCost_};
+  }
+  return std::nullopt;
 }
 
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
@@ -184,73 +236,6 @@ std::optional<Coercion> TypeCoercer::coerceTypeBase(
   }
 
   return std::nullopt;
-}
-
-std::optional<Coercion> TypeCoercer::coerceTypeBase(
-    const TypePtr& fromType,
-    const std::string& toTypeName) const {
-  if (fromType->name() == toTypeName) {
-    return Coercion{.type = fromType, .cost = 0};
-  }
-
-  // Check this coercer's rule set first.
-  auto it = rules_.find({fromType->name(), toTypeName});
-  if (it != rules_.end()) {
-    return it->second;
-  }
-
-  // Fall back to CastRulesRegistry for custom type coercions. Skip
-  // parameterized types -- we cannot construct the target type without knowing
-  // its type parameters.
-  // getCustomType() returns nullptr for built-in types. Callers must not
-  // pass parametric custom type names (e.g., "BIGINT_ENUM") because their
-  // factories throw when called with empty parameters. SignatureBinder
-  // guards against this by checking typeSignature.parameters().empty().
-  if (fromType->size() == 0 && fromType->parameters().empty()) {
-    if (auto toType = getCustomType(toTypeName, {})) {
-      if (auto cost =
-              CastRulesRegistry::instance().canCoerce(fromType, toType)) {
-        return Coercion{.type = std::move(toType), .cost = *cost};
-      }
-    }
-  }
-
-  return std::nullopt;
-}
-
-std::optional<int32_t> TypeCoercer::coercible(
-    const TypePtr& fromType,
-    const TypePtr& toType) const {
-  if (fromType->isUnknown()) {
-    if (toType->isUnknown()) {
-      return 0;
-    }
-    return 1;
-  }
-
-  if (fromType->size() == 0) {
-    if (auto coercion = coerceTypeBase(fromType, toType)) {
-      return coercion->cost;
-    }
-
-    return std::nullopt;
-  }
-
-  if (fromType->name() != toType->name() ||
-      fromType->size() != toType->size()) {
-    return std::nullopt;
-  }
-
-  int32_t totalCost = 0;
-  for (auto i = 0; i < fromType->size(); i++) {
-    if (auto cost = coercible(fromType->childAt(i), toType->childAt(i))) {
-      totalCost += cost.value();
-    } else {
-      return std::nullopt;
-    }
-  }
-
-  return totalCost;
 }
 
 namespace {

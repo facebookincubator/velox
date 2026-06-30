@@ -317,6 +317,19 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
           RuntimeCounter(
               stats.compressionTimeNs, RuntimeCounter::Unit::kNanos));
     }
+    for (const auto& [name, metric] : stats.writerRuntimeStats) {
+      lockedStats->setRuntimeStat(name, metric);
+    }
+    const auto backgroundTimingStat =
+        stats.writerRuntimeStats.find(std::string{kBackgroundCpuTimeNanos});
+    if (backgroundTimingStat != stats.writerRuntimeStats.end()) {
+      lockedStats->backgroundTiming.clear();
+      lockedStats->backgroundTiming.add(
+          CpuWallTiming{
+              backgroundTimingStat->second.count,
+              0,
+              static_cast<uint64_t>(backgroundTimingStat->second.sum)});
+    }
     lockedStats->addRuntimeStat(
         kRunningWallNanos,
         RuntimeCounter(

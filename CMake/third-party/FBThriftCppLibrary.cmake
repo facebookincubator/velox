@@ -44,7 +44,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   # Generate relative paths in #includes
   file(
     RELATIVE_PATH include_prefix
-    "${CMAKE_SOURCE_DIR}"
+    "${PROJECT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/${THRIFT_FILE}"
   )
   get_filename_component(include_prefix ${include_prefix} DIRECTORY)
@@ -114,6 +114,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     COMMAND
       "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
     COMMAND
+      "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$ENV{LD_LIBRARY_PATH}"
       "${FBTHRIFT_COMPILER}"
       --legacy-strict
       --gen "mstch_cpp2:${GEN_ARG_STR}"
@@ -122,7 +123,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       -o "${output_dir}"
       "${CMAKE_CURRENT_SOURCE_DIR}/${THRIFT_FILE}"
     WORKING_DIRECTORY
-      "${CMAKE_BINARY_DIR}"
+      "${PROJECT_BINARY_DIR}"
     MAIN_DEPENDENCY
       "${THRIFT_FILE}"
     DEPENDS
@@ -130,22 +131,12 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       "${FBTHRIFT_COMPILER}"
   )
 
-  # Now emit the library rule to compile the sources
-  if (BUILD_SHARED_LIBS)
-    set(LIB_TYPE SHARED)
-  else ()
-    set(LIB_TYPE STATIC)
-  endif ()
-
-  add_library(
-    "${LIB_NAME}" ${LIB_TYPE}
-    ${generated_sources}
-  )
+  add_library("${LIB_NAME}" STATIC ${generated_sources})
 
   target_include_directories(
     "${LIB_NAME}"
     PUBLIC
-      "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>"
+      "$<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>"
       "$<INSTALL_INTERFACE:${ARG_INCLUDE_DIR}>"
       ${Xxhash_INCLUDE_DIR}
   )
@@ -182,7 +173,7 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
   target_include_directories(
     "${LIB_NAME}.thrift_includes"
     INTERFACE
-      "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>"
       "$<INSTALL_INTERFACE:${ARG_THRIFT_INCLUDE_DIR}>"
   )
   foreach(dep IN LISTS ARG_DEPENDS)

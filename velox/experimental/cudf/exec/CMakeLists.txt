@@ -33,6 +33,9 @@ add_library(
   CudfReduce.cpp
   CudfTopN.cpp
   DebugUtil.cpp
+  DecimalAggregationDevice.cu
+  DecimalAggregationHostOps.cpp
+  DecimalAggregationState.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
@@ -55,6 +58,7 @@ target_link_libraries(
     velox_cudf_vector
     velox_exception
     velox_exec
+    velox_test_util
 )
 
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

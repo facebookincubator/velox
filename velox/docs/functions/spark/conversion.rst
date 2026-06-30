@@ -5,8 +5,10 @@ Conversion Functions
 .. spark:function:: cast(value AS type) -> type
 
     Explicitly cast a ``value`` to a specified ``type``.
-    Follows the behavior when Spark ANSI mode is disabled, and does not support
-    the behavior when ANSI is turned on:
+    For cast pairs with Velox Spark ANSI support, behavior follows Spark ANSI
+    mode. Currently, ANSI mode is supported for casting from string to boolean,
+    integral, and date types. Other cast pairs follow the behavior used when
+    Spark ANSI mode is disabled:
 
     * If the ``value`` exceeds the range of the ``type``, no error is raised.
       Instead, the ``value`` is "wrapped" around.
@@ -30,6 +32,16 @@ Conversion Functions
         SELECT try_cast(128 as tinyint); -- NULL
         SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint); -- NULL
         SELECT try_cast(1e12 as int); -- NULL
+
+Expression-level cast modes
+---------------------------
+
+``spark_ansi_cast`` and ``spark_legacy_cast`` are internal special form names
+registered with Spark SQL functions to preserve Spark's per-expression cast
+mode. These are not Spark SQL functions. ``spark_ansi_cast`` applies ANSI
+behavior for supported cast pairs regardless of the session ANSI setting.
+``spark_legacy_cast`` applies non-ANSI Spark cast behavior regardless of the
+session ANSI setting.
 
 Cast from UNKNOWN Type
 ----------------------
@@ -243,6 +255,26 @@ Valid examples
   SELECT cast(cast('10000-02-01 16:00:00.000' as timestamp) as string); -- '+10000-02-01 16:00:00'
   SELECT cast(cast('0384-01-01 08:00:00.000' as timestamp) as string); -- '0384-01-01 08:00:00'
   SELECT cast(cast('-0010-02-01 10:00:00.000' as timestamp) as string); -- '-0010-02-01 10:00:00'
+
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a timestamp_utc to a string uses the same ISO 8601 format as TIMESTAMP,
+but is not subject to session timezone adjustment.
+The conversion precision is microsecond, and trailing zeros are not appended.
+When the year exceeds 9999, a positive sign is added.
+
+Valid examples
+
+::
+
+  SELECT cast(TIMESTAMP_NTZ '1970-01-01 00:00:00' as string); -- '1970-01-01 00:00:00'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.129' as string); -- '2000-01-01 12:21:56.129'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.100000' as string); -- '2000-01-01 12:21:56.1'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.129900' as string); -- '2000-01-01 12:21:56.1299'
+  SELECT cast(TIMESTAMP_NTZ '10000-02-01 16:00:00.000' as string); -- '+10000-02-01 16:00:00'
+  SELECT cast(TIMESTAMP_NTZ '0384-01-01 08:00:00.000' as string); -- '0384-01-01 08:00:00'
+  SELECT cast(TIMESTAMP_NTZ '-0010-02-01 10:00:00.000' as string); -- '-0010-02-01 10:00:00'
 
 Cast to Date
 ------------

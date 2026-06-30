@@ -30,12 +30,12 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 8718418 from 2026-06-03
+# rmm commit f3310cb from 2026-06-04
 set(VELOX_rmm_VERSION 26.06)
-set(VELOX_rmm_COMMIT 871841839b94c67a61c8ed0d31feecfd92a07156)
+set(VELOX_rmm_COMMIT f3310cb85b3fe15fd21f550adbbf7eeb1e374588)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  a7050545e84629d51f88c17bf1ba72d4ea4e69caa0285f46b2af8cd41b1fd186
+  d2d78501e54e17119f4f0c4028e90684f356be557ee06bdb73bad75a3bb3ffeb
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
@@ -62,6 +62,30 @@ set(
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
+
+# Probe for a system UCX install. The variables are used only to gate ucxx
+# fetching below; nothing in Velox links against UCX directly yet.
+find_library(UCX_LIBRARY NAMES ucp)
+find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
+if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+  set(UCX_FOUND TRUE)
+else()
+  set(UCX_FOUND FALSE)
+endif()
+if(UCX_FOUND)
+  message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
+  # ucxx commit dc57333 from 2026-06-09 (release/0.50 branch)
+  set(VELOX_ucxx_VERSION 0.50)
+  set(VELOX_ucxx_COMMIT dc573338cdc651ed520bd4f3de8b350462c20bed)
+  set(
+    VELOX_ucxx_BUILD_SHA256_CHECKSUM
+    0f9ab9f4124766259f3ab06dc5fad0e5fe100724390eaba17112afc75444af68
+  )
+  set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
+  velox_resolve_dependency_url(ucxx)
+else()
+  message(STATUS "UCX not found -- ucxx will not be fetched")
+endif()
 
 # Use block so we don't leak variables
 block(SCOPE_FOR VARIABLES)
@@ -115,7 +139,22 @@ block(SCOPE_FOR VARIABLES)
     UPDATE_DISCONNECTED 1
   )
 
+  if(UCX_FOUND)
+    FetchContent_Declare(
+      ucxx
+      URL ${VELOX_ucxx_SOURCE_URL}
+      URL_HASH ${VELOX_ucxx_BUILD_SHA256_CHECKSUM}
+      SOURCE_SUBDIR
+      cpp
+      UPDATE_DISCONNECTED 1
+    )
+  endif()
+
   FetchContent_MakeAvailable(cudf)
+
+  if(UCX_FOUND)
+    FetchContent_MakeAvailable(ucxx)
+  endif()
 
   # cudf sets all warnings as errors, and therefore fails to compile with velox
   # expanded set of warnings. We selectively disable problematic warnings just for

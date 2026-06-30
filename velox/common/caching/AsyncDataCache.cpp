@@ -157,11 +157,12 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
       cache->incrementCachedPages(memory::AllocationTraits::numPages(size_));
       return;
     }
+    const auto failedSize = size_;
     release();
     VELOX_CACHE_ERROR(
         fmt::format(
             "Failed to allocate {} for contiguous cache: {}",
-            succinctBytes(size_),
+            succinctBytes(failedSize),
             cache->allocator()->getAndClearFailureMessage()));
   }
 
@@ -171,11 +172,12 @@ void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
     cache->incrementCachedPages(nonContiguousData().numPages());
     return;
   }
+  const auto failedPages = sizePages;
   release();
   VELOX_CACHE_ERROR(
       fmt::format(
           "Failed to allocate {} pages for cache: {}",
-          sizePages,
+          failedPages,
           cache->allocator()->getAndClearFailureMessage()));
 }
 
@@ -990,7 +992,7 @@ bool AsyncDataCache::makeSpace(
     }
   }
   memory::setCacheFailureMessage(
-      fmt::format("Failed to evict from cache state: {}", toString(false)));
+      fmt::format("Failed to evict from cache state: {}", toString(true)));
   return false;
 }
 
@@ -1004,7 +1006,7 @@ uint64_t AsyncDataCache::shrink(uint64_t targetBytes) {
   uint64_t evictedBytes{0};
   uint64_t shrinkTimeUs{0};
   {
-    MicrosecondTimer timer(&shrinkTimeUs);
+    MicrosecondWallTimer timer(&shrinkTimeUs);
     for (int shard = 0; shard < shards_.size(); ++shard) {
       AcquiredMemory acquired;
       evictedBytes += shards_[shardCounter_++ & shardMask_]->evict(
@@ -1203,10 +1205,7 @@ CoalesceIoStats readPins(
         int32_t end,
         uint64_t offset,
         const std::vector<folly::Range<char*>>& buffers)> readFunc) {
-  return coalesceIo<
-      CachePin,
-      folly::Range<char*>,
-      /*coalesceDuplicateRanges=*/false>(
+  return coalesceIo<CachePin, folly::Range<char*>>(
       pins,
       maxGap,
       rangesPerIo,
