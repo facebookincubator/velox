@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -113,6 +114,22 @@ class RPCState {
     /// Round-trip latency (nanos) from dispatch to completion, used as the
     /// gradient congestion signal on success.
     int64_t rttNs{0};
+  };
+
+  /// Snapshot of all operator-visible state at close() time, captured under a
+  /// single lock acquisition for consistency.
+  struct OperatorSnapshot {
+    // Congestion controller.
+    int64_t windowLimit{0};
+    int64_t baselineRttNs{0};
+    int64_t numShrinks{0};
+    int64_t peakInFlight{0};
+    // Transport RTT.
+    int64_t rttMinNs{0};
+    int64_t rttMaxNs{0};
+    int64_t numRttSamples{0};
+    // Streaming mode.
+    RPCStreamingMode streamingMode{RPCStreamingMode::kPerRow};
   };
 
   RPCState() = default;
@@ -273,6 +290,10 @@ class RPCState {
   /// Thread-safe.
   void onUnitSamples(const std::vector<int64_t>& rttNsList);
 
+  /// Return a consistent snapshot of all operator-visible state under a single
+  /// lock acquisition. Thread-safe.
+  OperatorSnapshot operatorSnapshot() const;
+
  private:
   /// Move a completed row into readyRows_ and notify waiters.
   /// Called from the RPC completion callback (runs on executor thread).
@@ -314,6 +335,14 @@ class RPCState {
   // so exactly one dispatch path feeds this counter. Backpressure compares it
   // against window_.limit().
   int64_t inFlight_{0};
+
+  // High-water mark of inFlight_ across the lifetime of this RPCState.
+  int64_t peakInFlight_{0};
+
+  // Accumulated RTT measurements across all completed units.
+  int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};
+  int64_t rttMaxNs_{0};
+  int64_t numRttSamples_{0};
 
   // Latency-gradient concurrency window, fed RTT via onUnitSample(). Both modes
   // use the same learner; setStreamingMode() only picks the (start, max) pair:

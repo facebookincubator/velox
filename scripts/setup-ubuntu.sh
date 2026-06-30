@@ -229,6 +229,10 @@ function install_faiss_deps {
   ${SUDO} apt-get install -y libopenblas-dev libomp-dev
 }
 
+function install_cxl_deps {
+  ${SUDO} apt install -y libnuma-dev
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
