@@ -19,15 +19,16 @@
 # workflow_run that the require-fbcode-import gate consumes in the base-repo
 # context (full token) to re-evaluate and publish the status. pull_request_review
 # runs the workflow file from the default branch, so this is not
-# fork-controllable, and it emits no pull-request-controlled output -- the gate
-# re-derives the pull request identity from the GitHub-set workflow_run head SHA.
+# fork-controllable, and the run name includes only the GitHub-assigned pull
+# request number so the gate can re-evaluate the exact pull request.
 
 name: Detect Approval
+run-name: Detect Approval PR ${{ github.event.pull_request.number }}
 
 # zizmor:disable:dangerous-triggers -- pull_request_review runs in fork context
 # with a read-only token; no pull-request-provided code is executed. This
-# workflow only fires a workflow_run for the gate, which re-derives identity from
-# the GitHub-set workflow_run head SHA, not from anything emitted here.
+# workflow only fires a workflow_run for the gate, which uses GitHub-assigned
+# pull request identity, not pull-request-controlled input.
 on:
   pull_request_review:
     types: [submitted, dismissed]
