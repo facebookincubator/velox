@@ -93,15 +93,33 @@ exec::BlockingReason TaskQueue::enqueue(
     bool drained,
     velox::ContinueFuture& future) {
   if (!vector) {
-    std::lock_guard<std::mutex> l(mutex_);
-    if (drained) {
-      ++numDrainedProducers_;
-    } else {
-      ++producersFinished_;
+    // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
+    // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
+    ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      if (drained) {
+        ++numDrainedProducers_;
+      } else {
+        ++producersFinished_;
+      }
+      // Only wake a blocked consumer once all producers have finished or all
+      // have drained. A producer-done signal from just one of several producers
+      // leaves data still potentially arriving from the others, so waking here
+      // would hand the consumer an empty queue and force it to re-wait. Data
+      // enqueues wake the consumer on their own. When the consumer is blocked,
+      // numProducers_ is already set (dequeue runs after start()'s
+      // setNumProducers()), so a missing count cannot hide this signal.
+      const bool allFinishedOrDrained = numProducers_.has_value() &&
+          (producersFinished_ == numProducers_.value() ||
+           numDrainedProducers_ == numProducers_.value());
+      if (consumerBlocked_ && allFinishedOrDrained) {
+        consumerBlocked_ = false;
+        wakeConsumer = std::move(consumerPromise_);
+      }
     }
-    if (consumerBlocked_) {
-      consumerBlocked_ = false;
-      consumerPromise_.setValue();
+    if (wakeConsumer.valid()) {
+      wakeConsumer.setValue();
     }
     return exec::BlockingReason::kNotBlocked;
   }
@@ -109,25 +127,33 @@ exec::BlockingReason TaskQueue::enqueue(
   auto bytes = vector->retainedSize();
   TaskQueueEntry entry{std::move(vector), bytes};
 
-  std::lock_guard<std::mutex> l(mutex_);
-  // Check inside 'mutex_'
-  if (closed_) {
-    throw std::runtime_error("Consumer cursor is closed");
+  // Fulfilled after releasing 'mutex_' for the same reason as above.
+  ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+  exec::BlockingReason reason{exec::BlockingReason::kNotBlocked};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    // Check inside 'mutex_'
+    if (closed_) {
+      throw std::runtime_error("Consumer cursor is closed");
+    }
+    queue_.push_back(std::move(entry));
+    totalBytes_ += bytes;
+    if (consumerBlocked_) {
+      consumerBlocked_ = false;
+      wakeConsumer = std::move(consumerPromise_);
+    }
+    if (totalBytes_ > maxBytes_) {
+      auto [unblockPromise, unblockFuture] =
+          makeVeloxContinuePromiseContract("TaskQueue::enqueue");
+      producerUnblockPromises_.emplace_back(std::move(unblockPromise));
+      future = std::move(unblockFuture);
+      reason = exec::BlockingReason::kWaitForConsumer;
+    }
   }
-  queue_.push_back(std::move(entry));
-  totalBytes_ += bytes;
-  if (consumerBlocked_) {
-    consumerBlocked_ = false;
-    consumerPromise_.setValue();
+  if (wakeConsumer.valid()) {
+    wakeConsumer.setValue();
   }
-  if (totalBytes_ > maxBytes_) {
-    auto [unblockPromise, unblockFuture] =
-        makeVeloxContinuePromiseContract("TaskQueue::enqueue");
-    producerUnblockPromises_.emplace_back(std::move(unblockPromise));
-    future = std::move(unblockFuture);
-    return exec::BlockingReason::kWaitForConsumer;
-  }
-  return exec::BlockingReason::kNotBlocked;
+  return reason;
 }
 
 RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
@@ -174,18 +200,26 @@ RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
 }
 
 void TaskQueue::close() {
-  std::lock_guard<std::mutex> l(mutex_);
-  closed_ = true;
-  // Unblock producers.
-  for (auto& promise : producerUnblockPromises_) {
-    promise.setValue();
-  }
-  producerUnblockPromises_.clear();
+  // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
+  // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
+  ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    closed_ = true;
+    // Unblock producers.
+    for (auto& promise : producerUnblockPromises_) {
+      promise.setValue();
+    }
+    producerUnblockPromises_.clear();
 
-  // Unblock consumers.
-  if (consumerBlocked_) {
-    consumerBlocked_ = false;
-    consumerPromise_.setValue();
+    // Unblock the consumer.
+    if (consumerBlocked_) {
+      consumerBlocked_ = false;
+      wakeConsumer = std::move(consumerPromise_);
+    }
+  }
+  if (wakeConsumer.valid()) {
+    wakeConsumer.setValue();
   }
 }
 
