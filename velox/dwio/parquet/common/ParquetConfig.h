@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "velox/common/config/Config.h"
-#include "velox/common/config/ConfigProperty.h"
+#include "velox/dwio/common/FormatConfig.h"
 
 namespace facebook::velox::parquet {
 
@@ -193,26 +193,26 @@ class ParquetConfig {
   static void registerProperties(
       std::vector<config::ConfigProperty>& properties,
       std::string_view sessionPrefix) {
-    config::registerConfigProperty<kAllowInt32NarrowingSessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
+        kAllowInt32NarrowingSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
         kFooterMemoryTrackingThresholdSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<kWriterTimestampUnitSessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<kWriterEnableDictionarySessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
+        kWriterTimestampUnitSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kWriterEnableDictionarySessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
         kWriterEnableStoreDecimalAsIntegerSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
         kWriterDictionaryPageSizeLimitSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<kWriterDataPageVersionSessionProperty>(
+    dwio::common::registerFormatConfigProperty<
+        kWriterDataPageVersionSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<kWriterPageSizeSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<kWriterPageSizeSessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<kWriterBatchSizeSessionProperty>(
+    dwio::common::registerFormatConfigProperty<kWriterBatchSizeSessionProperty>(
         properties, sessionPrefix);
   }
 };

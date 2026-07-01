@@ -25,7 +25,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/config/Config.h"
-#include "velox/common/config/ConfigProperty.h"
+#include "velox/dwio/common/FormatConfig.h"
 #include "velox/dwio/dwrf/common/Common.h"
 
 namespace facebook::velox::dwrf {
@@ -178,24 +178,24 @@ class Config : public config::ConfigBase {
   static void registerProperties(
       std::vector<config::ConfigProperty>& properties,
       std::string_view sessionPrefix) {
-    config::registerConfigProperty<kOrcMaxCoalesceDistanceSessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<kOrcWriterMaxStripeSizeSessionProperty>(
-        properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
+        kOrcMaxCoalesceDistanceSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kOrcWriterMaxStripeSizeSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
         kOrcWriterMaxDictionaryMemorySessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
         kOrcWriterIntegerDictionaryEncodingEnabledSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
         kOrcWriterStringDictionaryEncodingEnabledSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<
+    dwio::common::registerFormatConfigProperty<
         kOrcWriterLinearStripeSizeHeuristicsSessionProperty>(
         properties, sessionPrefix);
-    config::registerConfigProperty<kOrcWriterMinCompressionSizeSessionProperty>(
-        properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kOrcWriterMinCompressionSizeSessionProperty>(properties, sessionPrefix);
     properties.push_back({
         std::string(sessionPrefix) + kOrcWriterCompressionLevelSession,
         config::ConfigPropertyType::kInteger,
