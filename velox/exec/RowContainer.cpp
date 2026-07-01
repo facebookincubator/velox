@@ -16,6 +16,8 @@
 
 #include "velox/exec/RowContainer.h"
 
+#include <algorithm>
+
 #include "velox/common/memory/RawVector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
@@ -988,6 +990,88 @@ void RowContainer::clear() {
 
   rowColumnsStats_.clear();
   rowColumnsStats_.resize(types_.size());
+}
+
+void RowContainer::mergeColumnStats(const RowContainer& source) {
+  // Merge (rather than assign) so repeated migrations into the same destination
+  // accumulate.
+  if (rowColumnsStats_.empty() || source.rowColumnsStats_.empty()) {
+    return;
+  }
+  VELOX_CHECK_EQ(rowColumnsStats_.size(), source.rowColumnsStats_.size());
+  for (auto i = 0; i < rowColumnsStats_.size(); ++i) {
+    rowColumnsStats_[i] = RowColumn::Stats::merge(
+        {rowColumnsStats_[i], source.rowColumnsStats_[i]});
+  }
+}
+
+std::unique_ptr<RowContainer> RowContainer::cloneEmpty(
+    memory::MemoryPool* pool) const {
+  // 'types_' holds the keys first, then the dependent columns; accumulators are
+  // separate. Slice off the key prefix to recover the dependent types. A
+  // non-zero flag offset implies its flag is set.
+  std::vector<TypePtr> dependentTypes(
+      types_.begin() + keyTypes_.size(), types_.end());
+  return std::make_unique<RowContainer>(
+      keyTypes_,
+      nullableKeys_,
+      accumulators_,
+      dependentTypes,
+      /*hasNext=*/nextOffset_ != 0,
+      isJoinBuild_,
+      /*hasProbedFlag=*/probedFlagOffset_ != 0,
+      /*hasCountFlag=*/countOffset_ != 0,
+      hasNormalizedKeys_,
+      useListRowIndex_,
+      pool);
+}
+
+std::vector<memory::AllocationPool::Relocation> RowContainer::relocateRunsTo(
+    RowContainer& dest) {
+  VELOX_CHECK(
+      !usesExternalMemory_ && !dest.usesExternalMemory_,
+      "relocateRunsTo supports only fixed-size rows without external memory");
+  VELOX_CHECK_EQ(
+      fixedRowSize(),
+      dest.fixedRowSize(),
+      "relocateRunsTo requires an identical row layout");
+  VELOX_CHECK_EQ(
+      normalizedKeySize_,
+      dest.normalizedKeySize_,
+      "relocateRunsTo requires an identical normalized-key size");
+  VELOX_CHECK_EQ(
+      nextOffset(), 0, "relocateRunsTo does not support duplicate-row links");
+  VELOX_CHECK_EQ(
+      numFreeRows_, 0, "relocateRunsTo does not support a free-row list");
+  VELOX_CHECK_EQ(
+      dest.numRows_, 0, "relocateRunsTo requires an empty destination");
+
+  // Clone the backing allocation runs byte for byte; within each run every row
+  // shifts by a constant delta, so one affine piece per run translates the
+  // index. Reads run metadata only -- never walks individual rows.
+  auto runs = dest.rows_.clone(rows_);
+  for (const auto& run : runs) {
+    // A hash table stores row pointers in 48-bit bucket slots, so the relocated
+    // run must fit in 48 bits.
+    VELOX_CHECK_EQ(
+        reinterpret_cast<uintptr_t>(
+            run.sourceBegin + run.delta + run.numBytes) >>
+            48,
+        0,
+        "Relocated row address does not fit in a 48-bit hash table slot");
+  }
+
+  // The byte copy carries null flags but not the row count, normalized-key
+  // bookkeeping or per-column stats; mirror them so a migrated null key is not
+  // read back via the no-nulls fast path.
+  dest.numRows_ = numRows_;
+  dest.numRowsWithNormalizedKey_ = numRowsWithNormalizedKey_;
+  dest.mergeColumnStats(*this);
+
+  // Empties 'this' so new groups land here again. The caller restores any
+  // mode-specific normalized-key state (clear() resets it to the original).
+  clear();
+  return runs;
 }
 
 void RowContainer::setProbedFlag(char** rows, int32_t numRows) {

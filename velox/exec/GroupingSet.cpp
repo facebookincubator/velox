@@ -823,21 +823,33 @@ bool GroupingSet::getOutput(
   }
   VELOX_CHECK(!isDistinct());
 
-  // @lint-ignore CLANGTIDY
-  std::vector<char*> groups(maxOutputRows);
-  const int32_t numGroups = table_
-      ? table_->rows()->listRows(
-            &iterator, maxOutputRows, maxOutputBytes, groups.data())
-      : 0;
-  if (numGroups == 0) {
-    if (table_ != nullptr) {
-      table_->clear(/*freeTable=*/true);
-    }
+  if (table_ == nullptr) {
     return false;
   }
-  extractGroups(
-      table_->rows(), folly::Range<char**>(groups.data(), numGroups), result);
-  return true;
+
+  // Drain every container from allRows() in order. clear() spans all of them,
+  // so defer it until the last drains -- clearing on the first empty container
+  // would drop rows in later (relocated) containers.
+  // @lint-ignore CLANGTIDY
+  std::vector<char*> groups(maxOutputRows);
+  const auto containers = table_->allRows();
+  while (outputRowContainer_ < static_cast<int32_t>(containers.size())) {
+    auto* rowContainer = containers[outputRowContainer_];
+    const int32_t numGroups = rowContainer->listRows(
+        &iterator, maxOutputRows, maxOutputBytes, groups.data());
+    if (numGroups > 0) {
+      extractGroups(
+          rowContainer, folly::Range<char**>(groups.data(), numGroups), result);
+      return true;
+    }
+    ++outputRowContainer_;
+    iterator = RowContainerIterator{};
+  }
+  // Reset so a subsequent output cycle (e.g. a barrier flush that rebuilds the
+  // table) drains from the first container again.
+  outputRowContainer_ = 0;
+  table_->clear(/*freeTable=*/true);
+  return false;
 }
 
 void GroupingSet::extractGroups(
@@ -963,15 +975,15 @@ const HashLookup& GroupingSet::hashLookup() const {
 }
 
 void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
-  // Spilling is considered if this is a final or single aggregation and
-  // spillPath is set.
+  // Reclaim (disk spill, or relocation to a memory tier in its place) is
+  // considered if this is a final or single aggregation and spill is enabled.
   if (isPartial_ || spillConfig_ == nullptr) {
     return;
   }
 
   const auto numDistinct = table_->numDistinct();
   if (numDistinct == 0) {
-    // Table is empty. Nothing to spill.
+    // Table is empty. Nothing to reclaim.
     return;
   }
 
@@ -1184,6 +1196,21 @@ void GroupingSet::spill(const RowContainerIterator& rowIterator) {
   rows->stringAllocator().freezeAndExecute(
       [&]() { outputSpiller_->spill(rowIterator); });
   table_->clear(/*freeTable=*/true);
+}
+
+void GroupingSet::relocate(memory::MemoryPool* pool) {
+  TestValue::adjust("facebook::velox::exec::GroupingSet::relocate", this);
+  VELOX_CHECK_NOT_NULL(pool, "relocate() requires a memory tier pool");
+  // Relocation and disk spill are mutually exclusive on a query: a later disk
+  // spill would only see the DRAM container and silently drop the relocated
+  // rows.
+  VELOX_CHECK(!hasSpilled());
+  // The arbitrator may trigger reclaim before any input, leaving 'table_'
+  // uninitialized; or the DRAM rows may already be drained.
+  if (table_ == nullptr || table_->numDistinct() == 0) {
+    return;
+  }
+  table_->relocatePayload(pool);
 }
 
 bool GroupingSet::getOutputWithSpill(

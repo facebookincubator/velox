@@ -154,3 +154,71 @@ DEBUG_ONLY_TEST_F(AllocationPoolTest, oomCleanUp) {
   // allocateFixed).
   test(2);
 }
+
+TEST_F(AllocationPoolTest, clone) {
+  auto source = std::make_unique<memory::AllocationPool>(pool_.get());
+  // Force a switch to huge-page runs early so the payload spans both small and
+  // large allocation runs, exercising both branches of clone().
+  source->setHugePageThreshold(128 << 10);
+
+  // Allocate a long run of fixed chunks, stamping each with its index so we can
+  // check both content fidelity and address translation after the clone.
+  constexpr int32_t kChunkBytes = 512;
+  constexpr int32_t kNumChunks = 20'000; // ~10MB, well past the threshold.
+  std::vector<char*> chunks;
+  chunks.reserve(kNumChunks);
+  for (int64_t i = 0; i < kNumChunks; ++i) {
+    char* chunk = source->allocateFixed(kChunkBytes, 8);
+    *reinterpret_cast<int64_t*>(chunk) = i;
+    chunks.push_back(chunk);
+  }
+  const auto numRanges = source->numRanges();
+  ASSERT_GT(numRanges, 1) << "test must span multiple runs";
+
+  auto destPool = root_->addLeafChild("clone-dest");
+  memory::AllocationPool dest(destPool.get());
+  const auto relocations = dest.clone(*source);
+
+  // The destination mirrors the source's run structure.
+  EXPECT_EQ(dest.numRanges(), numRanges);
+  EXPECT_EQ(dest.allocatedBytes(), source->allocatedBytes());
+
+  // Relocations are sorted by source address and disjoint.
+  for (size_t i = 1; i < relocations.size(); ++i) {
+    EXPECT_LE(
+        relocations[i - 1].sourceBegin + relocations[i - 1].numBytes,
+        relocations[i].sourceBegin);
+  }
+
+  // Every chunk maps into the destination through exactly one relocation, lands
+  // at a new address, and keeps its content.
+  auto translate = [&](char* from) -> char* {
+    for (const auto& run : relocations) {
+      if (from >= run.sourceBegin && from < run.sourceBegin + run.numBytes) {
+        return from + run.delta;
+      }
+    }
+    return nullptr;
+  };
+  for (int64_t i = 0; i < kNumChunks; ++i) {
+    char* moved = translate(chunks[i]);
+    ASSERT_NE(moved, nullptr)
+        << "chunk " << i << " not covered by a relocation";
+    EXPECT_NE(moved, chunks[i]);
+    EXPECT_EQ(*reinterpret_cast<int64_t*>(moved), i);
+  }
+}
+
+TEST_F(AllocationPoolTest, cloneEmptyAndPreconditions) {
+  memory::AllocationPool empty(pool_.get());
+
+  auto destPool = root_->addLeafChild("clone-empty-dest");
+  memory::AllocationPool dest(destPool.get());
+  EXPECT_TRUE(dest.clone(empty).empty());
+  EXPECT_EQ(dest.numRanges(), 0);
+
+  // A non-empty destination is rejected.
+  dest.allocateFixed(64, 8);
+  VELOX_ASSERT_THROW(
+      dest.clone(empty), "clone requires an empty destination pool");
+}

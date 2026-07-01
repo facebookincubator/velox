@@ -15,6 +15,9 @@
  */
 
 #include "velox/common/memory/AllocationPool.h"
+
+#include <algorithm>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryAllocator.h"
@@ -46,6 +49,73 @@ void AllocationPool::clear() {
   bytesInRun_ = 0;
   currentOffset_ = 0;
   usedBytes_ = 0;
+}
+
+std::vector<AllocationPool::Relocation> AllocationPool::clone(
+    const AllocationPool& src) {
+  VELOX_CHECK(
+      allocations_.empty() && largeAllocations_.empty(),
+      "clone requires an empty destination pool");
+  const auto numSmall = static_cast<int32_t>(src.allocations_.size());
+  const auto numRanges = src.numRanges();
+  std::vector<Relocation> relocations;
+  relocations.reserve(numRanges);
+  // rangeAt() lists the small runs first, then the large ones, in allocation
+  // order, so the source's current run (startOfRun_) is the last range; its
+  // used extent is 'currentOffset_', every earlier run is full.
+  for (auto i = 0; i < numRanges; ++i) {
+    const auto srcRange = src.rangeAt(i);
+    char* const srcBegin = srcRange.data();
+    const int64_t used = srcRange.size();
+    const bool isLast = srcBegin == src.startOfRun_;
+    char* destBegin;
+    if (i < numSmall) {
+      // Small non-contiguous run: the same page count reproduces the byte size.
+      const auto numPages = src.allocations_[i].numPages();
+      Allocation allocation;
+      pool_->allocateNonContiguous(numPages, allocation, numPages);
+      VELOX_CHECK_EQ(allocation.numRuns(), 1);
+      const auto run = allocation.runAt(0);
+      VELOX_CHECK(
+          isLast || run.numBytes() == src.allocations_[i].runAt(0).numBytes(),
+          "Cloned run size does not match the source run");
+      destBegin = run.data<char>();
+      startOfRun_ = destBegin;
+      bytesInRun_ = run.numBytes();
+      usedBytes_ += bytesInRun_;
+      allocations_.push_back(std::move(allocation));
+    } else {
+      // Large contiguous run: reproduce the committed and reserved sizes so the
+      // hugePageRange() the row iterator spans matches.
+      const auto& srcLarge = src.largeAllocations_[i - numSmall];
+      ContiguousAllocation allocation;
+      pool_->allocateContiguous(
+          AllocationTraits::numPages(srcLarge.size()),
+          allocation,
+          AllocationTraits::numPages(srcLarge.maxSize()));
+      const auto range = allocation.hugePageRange().value();
+      VELOX_CHECK(
+          isLast || range.size() == srcRange.size(),
+          "Cloned huge-page run size does not match the source run");
+      destBegin = range.data();
+      startOfRun_ = destBegin;
+      bytesInRun_ = range.size();
+      usedBytes_ += srcLarge.size();
+      largeAllocations_.push_back(std::move(allocation));
+    }
+    ::memcpy(destBegin, srcBegin, used);
+    // The last range becomes the destination's current run; its used extent is
+    // the live write offset for any future allocation.
+    currentOffset_ = used;
+    relocations.push_back(Relocation{srcBegin, used, destBegin - srcBegin});
+  }
+  std::sort(
+      relocations.begin(),
+      relocations.end(),
+      [](const Relocation& a, const Relocation& b) {
+        return a.sourceBegin < b.sourceBegin;
+      });
+  return relocations;
 }
 
 char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {

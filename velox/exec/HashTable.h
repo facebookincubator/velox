@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/Function.h>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/OneWayStatusFlag.h"
@@ -460,6 +462,15 @@ class BaseHashTable {
   /// join use.
   virtual std::vector<RowContainer*> allRows() const = 0;
 
+  /// Relocates the payload rows of 'rows()' into a container allocated from
+  /// 'pool', repointing the index in place (no rehash), and returns the
+  /// destination container. Repeated calls append into the same destination.
+  /// Only supported for fixed-width, no-duplicate, no-external-memory tables
+  /// (e.g. a group-by aggregation payload), where it lets a tiering layer keep
+  /// overflow in another memory pool while the index stays live; throws
+  /// otherwise.
+  virtual RowContainer* relocatePayload(memory::MemoryPool* pool);
+
   /// Static functions for processing internals. Public because used in
   /// structs that define probe and insert algorithms.
 
@@ -681,7 +692,7 @@ class HashTable : public BaseHashTable {
   }
 
   int32_t numRowContainers() const override {
-    return otherTables_.size() + 1;
+    return otherTables_.size() + otherRowContainers_.size() + 1;
   }
 
   HashTableStats stats() const override {
@@ -773,6 +784,8 @@ class HashTable : public BaseHashTable {
 
   std::vector<RowContainer*> allRows() const override;
 
+  RowContainer* relocatePayload(memory::MemoryPool* pool) override;
+
   std::string toString() override;
 
   /// Returns the details of the range of buckets. The range starts from
@@ -814,6 +827,18 @@ class HashTable : public BaseHashTable {
   }
 
  private:
+  // Takes ownership of a payload row container indexed alongside 'rows_'; it is
+  // reindexed by rehash() and spanned by allRows(), numRowContainers(),
+  // listRows() and clear(). 'container' must share this table's row layout.
+  // Returns a borrowed pointer to the registered container.
+  RowContainer* addOtherRowContainer(std::unique_ptr<RowContainer> container);
+
+  // Rewrites every live row pointer in the index by passing it through 'map'
+  // and storing the result, leaving tags and slot positions unchanged. 'map'
+  // must return a valid row pointer for every input and the identity for rows
+  // that did not move; in bucketed mode the result must fit in 48 bits.
+  void remapRowPointers(folly::FunctionRef<char*(char*)> map);
+
   // Enables debug stats for collisions for debug build.
 #ifdef NDEBUG
   static constexpr bool kTrackLoads = false;
@@ -1232,6 +1257,11 @@ class HashTable : public BaseHashTable {
   // Owns the memory of multiple build side hash join tables that are
   // combined into a single probe hash table.
   std::vector<std::unique_ptr<HashTable<ignoreNullKeys>>> otherTables_;
+
+  // Payload row containers registered via addOtherRowContainer(), owned by and
+  // indexed alongside 'rows_'. Used by a memory-tiering layer to hold rows
+  // relocated out of 'rows_'.
+  std::vector<std::unique_ptr<RowContainer>> otherRowContainers_;
   // Statistics maintained if kTrackLoads is set.
 
   // Flags indicate whether the same column in all build-side join hash tables

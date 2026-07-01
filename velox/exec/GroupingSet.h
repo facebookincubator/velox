@@ -146,6 +146,11 @@ class GroupingSet {
   /// when no spill has occurred previously.
   void spill(const RowContainerIterator& rowIterator);
 
+  /// Relocates the in-memory payload into the memory tier 'pool' instead of
+  /// spilling to disk, repointing the hash index without a rehash. Mutually
+  /// exclusive with disk spill; a no-op if the table is empty.
+  void relocate(memory::MemoryPool* pool);
+
   /// Returns the spiller stats including total bytes and rows spilled so far.
   std::optional<exec::SpillStats> spilledStats() const;
 
@@ -206,6 +211,15 @@ class GroupingSet {
     return aggregates_.empty();
   }
 
+  // Copies the grouping keys and aggregates for 'groups', read from
+  // 'container', into 'result'. Extracts the intermediate type for a partial
+  // aggregation, the final result otherwise. 'container' supplies the row
+  // layout; the group pointers may live in any container that shares it.
+  void extractGroups(
+      RowContainer* container,
+      folly::Range<char**> groups,
+      const RowVectorPtr& result);
+
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
 
   void addRemainingInput();
@@ -253,14 +267,6 @@ class GroupingSet {
   // Reserves memory for output processing. If reservation cannot be increased,
   // spills enough to make output fit.
   void ensureOutputFits();
-
-  // Copies the grouping keys and aggregates for 'groups' into 'result' If
-  // partial output, extracts the intermediate type for aggregates, final result
-  // otherwise.
-  void extractGroups(
-      RowContainer* container,
-      folly::Range<char**> groups,
-      const RowVectorPtr& result);
 
   // Produces output in if spilling has occurred. First produces data
   // from non-spilled partitions, then merges spill runs and unspilled data
@@ -386,6 +392,7 @@ class GroupingSet {
 
   // Place for the arguments of the aggregate being updated.
   std::vector<VectorPtr> tempVectors_;
+
   std::unique_ptr<BaseHashTable> table_;
   std::unique_ptr<HashLookup> lookup_;
   SelectivityVector activeRows_;
@@ -429,6 +436,10 @@ class GroupingSet {
   std::unique_ptr<AggregationInputSpiller> inputSpiller_;
 
   std::unique_ptr<AggregationOutputSpiller> outputSpiller_;
+
+  // Index into table_->allRows() of the row container getOutput() is currently
+  // draining (0 = DRAM 'rows_', then any relocated tier containers).
+  int32_t outputRowContainer_{0};
 
   // The current spill partition in producing spill output. If it is -1, then we
   // haven't started yet.

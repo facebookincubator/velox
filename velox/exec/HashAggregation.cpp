@@ -16,6 +16,7 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
@@ -62,6 +63,37 @@ HashAggregation::HashAggregation(
           driverCtx->queryConfig().abandonPartialAggregationMinPct()),
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
+
+memory::MemoryPool* HashAggregation::relocationPoolForAggregation(
+    const std::vector<std::unique_ptr<VectorHasher>>& hashers,
+    const std::vector<AggregateInfo>& aggregateInfos) const {
+  // Relocation reuses the spill reclaim machinery (reservation window and
+  // arbitration trigger), swapping disk for the tier as the destination, so it
+  // is only available when spill is enabled. The destination tier is the custom
+  // memory resource named by the 'relocation_resource_tag' query config; an
+  // empty tag disables relocation.
+  const std::string tag =
+      operatorCtx_->driverCtx()->queryConfig().relocationResourceTag();
+  if (tag.empty() || !canSpill()) {
+    return nullptr;
+  }
+  auto* tierPool = customPool(tag);
+  if (tierPool == nullptr || isGlobal_ || isDistinct_ || isPartialOutput_ ||
+      aggregationNode_->ignoreNullKeys()) {
+    return nullptr;
+  }
+  for (const auto& hasher : hashers) {
+    if (!hasher->type()->isFixedWidth()) {
+      return nullptr;
+    }
+  }
+  for (const auto& info : aggregateInfos) {
+    if (info.function->accumulatorUsesExternalMemory()) {
+      return nullptr;
+    }
+  }
+  return tierPool;
+}
 
 void HashAggregation::initialize() {
   Operator::initialize();
@@ -111,6 +143,8 @@ void HashAggregation::initialize() {
         aggregationNode_->groupId().value()->name());
     VELOX_CHECK(groupIdChannel.has_value());
   }
+
+  relocationPool_ = relocationPoolForAggregation(hashers, aggregateInfos);
 
   groupingSet_ = std::make_unique<GroupingSet>(
       inputType,
@@ -582,6 +616,25 @@ void HashAggregation::reclaim(
         return;
       }
     }
+  }
+
+  if (relocationPool_ != nullptr) {
+    // Relocate to the memory tier instead of disk spilling. Skip during output
+    // draining: moving rows would re-emit already-output groups.
+    if (!noMoreInput_) {
+      // Disk-spill fallback on tier exhaustion is not implemented.
+      if (!relocationPool_->maybeReserve(targetBytes)) {
+        VELOX_NYI(
+            "Disk-spill fallback on memory-tier exhaustion is not implemented; "
+            "size the tier and DRAM so the relocated rows fit");
+      }
+      memory::recordRelocatedBytes(pool(), [&] {
+        groupingSet_->relocate(relocationPool_);
+        pool()->release();
+      });
+      relocationPool_->release();
+    }
+    return;
   }
 
   if (!canSpill()) {

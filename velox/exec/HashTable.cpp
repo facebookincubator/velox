@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/HashTable.h"
+
+#include <algorithm>
+
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Portability.h"
@@ -42,6 +45,11 @@ std::string BaseHashTable::modeString(HashMode mode) {
       return fmt::format(
           "Unknown HashTable mode:{}", static_cast<int32_t>(mode));
   }
+}
+
+RowContainer* BaseHashTable::relocatePayload(memory::MemoryPool* /*pool*/) {
+  VELOX_UNSUPPORTED(
+      "relocatePayload is only supported for aggregation hash tables");
 }
 
 template <bool ignoreNullKeys>
@@ -1593,6 +1601,22 @@ void HashTable<ignoreNullKeys>::rehash(
       }
     } while (numGroups > 0);
   }
+  // Replay rows relocated out of 'rows_' into registered payload containers
+  // (e.g. a far-memory tier). They share this table's layout; bloom filters are
+  // join-only and not rebuilt here.
+  for (auto& extra : otherRowContainers_) {
+    RowContainerIterator iterator;
+    int32_t numGroups;
+    do {
+      numGroups = extra->listRows(&iterator, kHashBatchSize, groups);
+      if (!insertBatch(
+              groups, numGroups, hashes, /*initNormalizedKeys=*/true)) {
+        VELOX_CHECK_NE(hashMode_, HashMode::kHash);
+        setHashMode(HashMode::kHash, 0, spillInputStartPartitionBit);
+        return;
+      }
+    } while (numGroups > 0);
+  }
 }
 
 template <bool ignoreNullKeys>
@@ -1841,12 +1865,119 @@ void HashTable<ignoreNullKeys>::decideHashMode(
 template <bool ignoreNullKeys>
 std::vector<RowContainer*> HashTable<ignoreNullKeys>::allRows() const {
   std::vector<RowContainer*> rowContainers;
-  rowContainers.reserve(otherTables_.size() + 1);
+  rowContainers.reserve(otherTables_.size() + otherRowContainers_.size() + 1);
   rowContainers.push_back(rows_.get());
   for (auto& other : otherTables_) {
     rowContainers.push_back(other->rows_.get());
   }
+  for (auto& other : otherRowContainers_) {
+    rowContainers.push_back(other.get());
+  }
   return rowContainers;
+}
+
+template <bool ignoreNullKeys>
+RowContainer* HashTable<ignoreNullKeys>::addOtherRowContainer(
+    std::unique_ptr<RowContainer> container) {
+  VELOX_CHECK_NOT_NULL(container);
+  VELOX_CHECK_EQ(
+      container->fixedRowSize(),
+      rows_->fixedRowSize(),
+      "A registered row container must share the table's row layout");
+  otherRowContainers_.push_back(std::move(container));
+  return otherRowContainers_.back().get();
+}
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::remapRowPointers(
+    folly::FunctionRef<char*(char*)> map) {
+  if (table_ == nullptr) {
+    return;
+  }
+  if (hashMode_ == HashMode::kArray) {
+    // Flat array indexed by the normalized key; each non-null slot holds a full
+    // row pointer.
+    for (int64_t i = 0; i < capacity_; ++i) {
+      if (table_[i] != nullptr) {
+        table_[i] = map(table_[i]);
+      }
+    }
+    return;
+  }
+  // Bucketed layout: 16 (tag, 48-bit pointer) slots per bucket. Skip empty and
+  // tombstone slots; remap the rest in place.
+  for (int64_t bucketOffset = 0; bucketOffset < sizeMask_;
+       bucketOffset += kBucketSize) {
+    auto* bucket = bucketAt(bucketOffset);
+    for (auto slot = 0; slot < sizeof(TagVector); ++slot) {
+      const auto tag = bucket->tagAt(slot);
+      if (tag == ProbeState::kEmptyTag || tag == ProbeState::kTombstoneTag) {
+        continue;
+      }
+      bucket->setPointer(slot, map(bucket->pointerAt(slot)));
+    }
+  }
+}
+
+namespace {
+// Translates a row address moved by RowContainer::relocateRunsTo() to its new
+// address, or returns it unchanged. Holds one affine piece per relocated
+// allocation run (sorted by source address), so the lookup is O(log runs) and
+// the storage O(runs), not O(rows).
+class RelocationMap {
+ public:
+  explicit RelocationMap(std::vector<memory::AllocationPool::Relocation> runs)
+      : runs_(std::move(runs)) {}
+
+  bool empty() const {
+    return runs_.empty();
+  }
+
+  char* translate(char* from) const {
+    auto it = std::upper_bound(
+        runs_.begin(),
+        runs_.end(),
+        from,
+        [](char* key, const memory::AllocationPool::Relocation& run) {
+          return key < run.sourceBegin;
+        });
+    if (it != runs_.begin()) {
+      --it;
+      if (from < it->sourceBegin + it->numBytes) {
+        return from + it->delta;
+      }
+    }
+    return from;
+  }
+
+ private:
+  std::vector<memory::AllocationPool::Relocation> runs_;
+};
+} // namespace
+
+template <bool ignoreNullKeys>
+RowContainer* HashTable<ignoreNullKeys>::relocatePayload(
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(pool);
+  // Each relocation clones whole runs into a fresh container indexed alongside
+  // 'rows_'.
+  auto dest = rows_->cloneEmpty(pool);
+  // In kHash mode 'rows_' has normalized keys disabled at runtime; match the
+  // destination so the equal-layout check passes and listRows reads the same
+  // prefixes back.
+  if (hashMode_ == HashMode::kHash) {
+    dest->disableNormalizedKeys();
+  }
+  const RelocationMap map(rows_->relocateRunsTo(*dest));
+  if (!map.empty()) {
+    remapRowPointers([&map](char* from) { return map.translate(from); });
+  }
+  // relocateRunsTo() cleared 'rows_', which restored its normalized-key size;
+  // re-disable so new groups in kHash mode land without a prefix.
+  if (hashMode_ == HashMode::kHash) {
+    rows_->disableNormalizedKeys();
+  }
+  return addOtherRowContainer(std::move(dest));
 }
 
 template <bool ignoreNullKeys>
@@ -2275,9 +2406,17 @@ int32_t HashTable<ignoreNullKeys>::listRows(
     int32_t maxRows,
     uint64_t maxBytes,
     char** rows) {
-  const auto& rowContainer = rowContainerId == 0
-      ? rows_.get()
-      : otherTables_[rowContainerId - 1]->rows();
+  // Index space: 'rows_' at 0, then the join sub-tables, then the containers
+  // registered with addOtherRowContainer().
+  RowContainer* rowContainer;
+  if (rowContainerId == 0) {
+    rowContainer = rows_.get();
+  } else if (rowContainerId <= static_cast<int>(otherTables_.size())) {
+    rowContainer = otherTables_[rowContainerId - 1]->rows();
+  } else {
+    rowContainer =
+        otherRowContainers_[rowContainerId - 1 - otherTables_.size()].get();
+  }
   const auto numRows = rowContainer->template listRows<probeType>(
       &rowContainerIt, maxRows, maxBytes, rows);
   return numRows;

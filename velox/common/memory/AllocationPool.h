@@ -28,6 +28,15 @@ class AllocationPool {
  public:
   static constexpr int32_t kMinPages = 16;
 
+  /// One cloned run: the source bytes [sourceBegin, sourceBegin + numBytes)
+  /// were copied to a destination run, every address shifted by 'delta' (new ==
+  /// old + delta). Returned by clone().
+  struct Relocation {
+    char* sourceBegin;
+    int64_t numBytes;
+    int64_t delta;
+  };
+
   explicit AllocationPool(memory::MemoryPool* pool) : pool_(pool) {}
 
   ~AllocationPool() {
@@ -35,6 +44,14 @@ class AllocationPool {
   }
 
   void clear();
+
+  /// Clones every run of 'src' into 'this' (allocated from this pool's own
+  /// MemoryPool), byte for byte, reproducing each run's size so 'this' iterates
+  /// identically to 'src'. 'this' must be empty. Returns one Relocation per
+  /// run, sorted by source address, so a caller holding pointers into 'src' can
+  /// repoint them. Used to relocate a fixed-width payload into another memory
+  /// pool (e.g. a far-memory tier) without rebuilding it row by row.
+  std::vector<Relocation> clone(const AllocationPool& src);
 
   // Allocate a buffer from this pool, optionally aligned.  The alignment can
   // only be power of 2.
