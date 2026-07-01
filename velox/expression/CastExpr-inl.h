@@ -167,17 +167,6 @@ void CastExpr::applyCastKernel(
         wrapException);
   };
 
-  auto castOverflowErrorMessage = [](const std::string& value,
-                                     const std::string& sourceTypeName,
-                                     const std::string& targetTypeName) {
-    return fmt::format(
-        "The value {} of the type \"{}\" cannot be cast to \"{}\" due to an "
-        "overflow. Use `try_cast` to tolerate overflow and return NULL instead.",
-        value,
-        sourceTypeName,
-        targetTypeName);
-  };
-
   try {
     auto inputRowValue = input->valueAt(row);
 
@@ -203,16 +192,13 @@ void CastExpr::applyCastKernel(
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
       using To = typename TypeTraits<ToKind>::NativeType;
-      const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      const auto value = castResult.value();
-      if (value == static_cast<To>(value)) {
-        result->set(row, static_cast<To>(value));
-      } else {
-        setError(castOverflowErrorMessage(
-            std::to_string(value),
-            input->type()->toString(),
-            result->type()->toString()));
-      }
+      // The hook returns the converted value as int64_t and reports overflow
+      // against the target type 'To' as an error. setResultOrStatus then either
+      // throws (ANSI) or sets NULL (try_cast), and narrows the value to 'To'
+      // when writing to the result vector.
+      const auto castResult =
+          hooks_->template castTimestampToInt<To>(inputRowValue);
+      setResultOrStatus(castResult, row);
       return;
     }
 
