@@ -80,13 +80,19 @@ DecimalSumStateColumns deserializeDecimalSumState(
 
   cudf::strings_column_view strings(stateCol);
 
+  auto const nullCount = stateCol.nullable() ? stateCol.null_count() : 0;
   auto const payloadSize = strings.chars_size(stream);
-  auto const expectedPayloadSize =
+  // serializeDecimalSumState writes 32 bytes for every row (including nulls),
+  // but an Arrow round-trip compacts null rows to 0 bytes. Accept both.
+  auto const fullPayloadSize =
       static_cast<int64_t>(numRows) * detail::kDecimalSumStateSize;
+  auto const compactPayloadSize =
+      static_cast<int64_t>(numRows - nullCount) * detail::kDecimalSumStateSize;
   VELOX_CHECK(
-      payloadSize == expectedPayloadSize,
-      "Decimal sum state requires payload size {} (got {})",
-      expectedPayloadSize,
+      payloadSize == fullPayloadSize || payloadSize == compactPayloadSize,
+      "Decimal sum state requires payload size {} or {} (got {})",
+      fullPayloadSize,
+      compactPayloadSize,
       payloadSize);
 
   auto offsetsView = strings.offsets();
