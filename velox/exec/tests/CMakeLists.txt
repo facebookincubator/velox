@@ -462,4 +462,20 @@ add_test(
 )
 target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
 
+# End-to-end test for the memory-tier relocate reclaim path: runs a real
+# aggregation through the stock exec stack with a "cxl"-tagged tier pool. The
+# core relocate path is always compiled; this test references the experimental
+# CxlMemoryResource (its kTag), which is built only under VELOX_ENABLE_CXL, so
+# gate it the same way. It uses an emulated MallocAllocator-backed tier pool, so
+# it needs no libnuma.
+if(VELOX_ENABLE_CXL)
+  add_executable(velox_exec_cxl_aggregation_relocate_test CxlAggregationRelocateTest.cpp Main.cpp)
+  add_test(
+    NAME velox_exec_cxl_aggregation_relocate_test
+    COMMAND velox_exec_cxl_aggregation_relocate_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_link_libraries(velox_exec_cxl_aggregation_relocate_test ${VELOX_EXEC_TEST_DEPS})
+endif()
+
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)
