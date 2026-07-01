@@ -110,7 +110,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Classifies each output column into one of:
   //
   // 1. Info columns:
-  //    Column is a synthesized using a constant value (e.g., $file_size) from
+  //    Column is synthesized using a constant value (e.g., $file_size) from
   //    the split metadata. Recorded for post-read injection as a constant.
   //
   // 2. Regular columns present in file:
@@ -120,7 +120,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   //
   // 3. Columns missing from file:
   //    a) Partition columns (Hive-migrated tables):
-  //       Column is a partition key in  the Iceberg split.
+  //       Column is a partition key in the Iceberg split.
   //       In Hive-written Iceberg tables, partition column values are stored
   //       in partition metadata, not in the data file itself. Value is read
   //       from partition metadata and set as a constant.
