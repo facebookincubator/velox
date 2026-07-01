@@ -20,6 +20,8 @@
 #include <string>
 #include <string_view>
 
+#include "velox/functions/lib/Utf8Utils.h"
+
 namespace facebook::velox::functions::sparksql::detail {
 
 namespace {
@@ -35,13 +37,30 @@ void appendUtf16Hex(char16_t value, std::string& out) {
   out.push_back(kHexDigits[value & 0x0F]);
 }
 
-// Returns whether `p` begins a valid 4-byte UTF-8 sequence (a supplementary
-// plane code point, >= U+10000) within [p, end). 1-/2-/3-byte sequences encode
-// BMP code points (<= U+FFFF), which Spark leaves literal.
-bool isSupplementaryLead(const unsigned char* p, const unsigned char* end) {
-  // Lead byte 11110xxx, followed by three 10xxxxxx continuation bytes.
-  return (*p & 0xF8) == 0xF0 && end - p >= 4 && (p[1] & 0xC0) == 0x80 &&
-      (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80;
+// Returns the byte length of the UTF-8 character at [p, end) and, when it is a
+// supplementary-plane character (code point >= U+10000, i.e. a 4-byte
+// sequence), sets `isSupplementary` and fills `codePoint`. For BMP characters
+// (<= U+FFFF, which Spark leaves literal) and for invalid sequences, advances
+// by the reported length without setting `isSupplementary`; the caller copies
+// those bytes verbatim.
+size_t nextCharLength(
+    const unsigned char* p,
+    const unsigned char* end,
+    bool& isSupplementary,
+    char32_t& codePoint) {
+  isSupplementary = false;
+  int32_t decoded;
+  const int32_t length = tryGetUtf8CharLength(
+      reinterpret_cast<const char*>(p), static_cast<int64_t>(end - p), decoded);
+  if (length < 0) {
+    // Invalid sequence; copy its bytes verbatim.
+    return static_cast<size_t>(-length);
+  }
+  if (length == 4) {
+    isSupplementary = true;
+    codePoint = static_cast<char32_t>(decoded);
+  }
+  return static_cast<size_t>(length);
 }
 
 // Counts the supplementary-plane characters (4-byte UTF-8 sequences) in `raw`,
@@ -51,11 +70,11 @@ size_t countSupplementaryCharacters(std::string_view raw) {
   const auto* p = reinterpret_cast<const unsigned char*>(raw.data());
   const auto* end = p + raw.size();
   while (p < end) {
-    if (isSupplementaryLead(p, end)) {
+    bool isSupplementary;
+    char32_t codePoint;
+    p += nextCharLength(p, end, isSupplementary, codePoint);
+    if (isSupplementary) {
       ++count;
-      p += 4;
-    } else {
-      ++p;
     }
   }
   return count;
@@ -70,24 +89,23 @@ void escapeSupplementaryCharacters(std::string_view raw, std::string& out) {
   const auto* p = base;
   const auto* runStart = base;
   while (p < end) {
-    if (isSupplementaryLead(p, end)) {
+    bool isSupplementary;
+    char32_t codePoint;
+    const size_t length = nextCharLength(p, end, isSupplementary, codePoint);
+    if (isSupplementary) {
       // Flush the verbatim run accumulated before this sequence in one copy.
       if (p > runStart) {
         out.append(
             reinterpret_cast<const char*>(runStart),
             static_cast<size_t>(p - runStart));
       }
-      const char32_t codePoint = (*p & 0x07) << 18 | (p[1] & 0x3F) << 12 |
-          (p[2] & 0x3F) << 6 | (p[3] & 0x3F);
       const char32_t v = codePoint - 0x10000u;
       appendUtf16Hex(
           static_cast<char16_t>(0xD800u + ((v >> 10) & 0x3FFu)), out);
       appendUtf16Hex(static_cast<char16_t>(0xDC00u + (v & 0x3FFu)), out);
-      p += 4;
-      runStart = p;
-    } else {
-      ++p;
+      runStart = p + length;
     }
+    p += length;
   }
   // Flush the trailing verbatim run.
   if (p > runStart) {
