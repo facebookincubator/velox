@@ -202,44 +202,18 @@ void CastExpr::applyCastKernel(
         (ToKind == TypeKind::TINYINT || ToKind == TypeKind::SMALLINT ||
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
+      using To = typename TypeTraits<ToKind>::NativeType;
       const auto castResult = hooks_->castTimestampToInt(inputRowValue);
-      if (ToKind == TypeKind::BIGINT) {
-        result->set(row, castResult.value());
-        return;
+      const auto value = castResult.value();
+      if (value == static_cast<To>(value)) {
+        result->set(row, static_cast<To>(value));
+      } else {
+        setError(castOverflowErrorMessage(
+            std::to_string(value),
+            input->type()->toString(),
+            result->type()->toString()));
       }
-      if (ToKind == TypeKind::INTEGER) {
-        if (castResult.value() == static_cast<int>(castResult.value())) {
-          result->set(row, castResult.value());
-        } else {
-          setError(castOverflowErrorMessage(
-              std::to_string(castResult.value()),
-              input->type()->toString(),
-              result->type()->toString()));
-        }
-        return;
-      }
-      if (ToKind == TypeKind::SMALLINT) {
-        if (castResult.value() == static_cast<int16_t>(castResult.value())) {
-          result->set(row, castResult.value());
-        } else {
-          setError(castOverflowErrorMessage(
-              std::to_string(castResult.value()),
-              input->type()->toString(),
-              result->type()->toString()));
-        }
-        return;
-      }
-      if (ToKind == TypeKind::TINYINT) {
-        if (castResult.value() == static_cast<int8_t>(castResult.value())) {
-          result->set(row, castResult.value());
-        } else {
-          setError(castOverflowErrorMessage(
-              std::to_string(castResult.value()),
-              input->type()->toString(),
-              result->type()->toString()));
-        }
-        return;
-      }
+      return;
     }
 
     if constexpr (
