@@ -17,8 +17,11 @@
 #include "velox/functions/sparksql/GetJsonObject.h"
 
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <string_view>
+
+#include "folly/Unicode.h"
 
 #include "velox/functions/lib/Utf8Utils.h"
 
@@ -26,93 +29,57 @@ namespace facebook::velox::functions::sparksql::detail {
 
 namespace {
 
-// Appends `value` as a 4-hex-digit '\uXXXX' escape (uppercase) to `out`.
-void appendUtf16Hex(char16_t value, std::string& out) {
-  static constexpr char kHexDigits[] = "0123456789ABCDEF";
-  out.push_back('\\');
-  out.push_back('u');
-  out.push_back(kHexDigits[(value >> 12) & 0x0F]);
-  out.push_back(kHexDigits[(value >> 8) & 0x0F]);
-  out.push_back(kHexDigits[(value >> 4) & 0x0F]);
-  out.push_back(kHexDigits[value & 0x0F]);
-}
-
-// Returns the byte length of the UTF-8 character at [p, end) and, when it is a
-// supplementary-plane character (code point >= U+10000, i.e. a 4-byte
-// sequence), sets `isSupplementary` and fills `codePoint`. For BMP characters
-// (<= U+FFFF, which Spark leaves literal) and for invalid sequences, advances
-// by the reported length without setting `isSupplementary`; the caller copies
-// those bytes verbatim.
-size_t nextCharLength(
-    const unsigned char* p,
-    const unsigned char* end,
-    bool& isSupplementary,
-    char32_t& codePoint) {
-  isSupplementary = false;
-  int32_t decoded;
-  const int32_t length = tryGetUtf8CharLength(
-      reinterpret_cast<const char*>(p), static_cast<int64_t>(end - p), decoded);
-  if (length < 0) {
-    // Invalid sequence; copy its bytes verbatim.
-    return static_cast<size_t>(-length);
-  }
-  if (length == 4) {
-    isSupplementary = true;
-    codePoint = static_cast<char32_t>(decoded);
-  }
-  return static_cast<size_t>(length);
-}
-
 // Counts the supplementary-plane characters (4-byte UTF-8 sequences) in `raw`,
 // to pick the fast path (none) and to size the escape buffer exactly.
 size_t countSupplementaryCharacters(std::string_view raw) {
   size_t count = 0;
   const auto* p = reinterpret_cast<const unsigned char*>(raw.data());
-  const auto* end = p + raw.size();
+  const auto* const end = p + raw.size();
   while (p < end) {
-    bool isSupplementary;
-    char32_t codePoint;
-    p += nextCharLength(p, end, isSupplementary, codePoint);
-    if (isSupplementary) {
+    const int length = validateAndGetNextUtf8Length(p, end);
+    // A 4-byte sequence is a supplementary-plane code point; shorter sequences
+    // are BMP (left literal) and a negative length marks invalid bytes.
+    if (length == 4) {
       ++count;
     }
+    p += length > 0 ? length : 1;
   }
   return count;
 }
 
 // Copies `raw` into `out`, rewriting each supplementary-plane character into a
 // '\uXXXX\uXXXX' surrogate-pair escape and copying every other byte verbatim in
-// bulk runs.
-void escapeSupplementaryCharacters(std::string_view raw, std::string& out) {
+// bulk runs. `out` must have room for the escaped result (see
+// countSupplementaryCharacters for sizing); returns the past-the-end write
+// position.
+char* escapeSupplementaryCharacters(std::string_view raw, char* out) {
   const auto* const base = reinterpret_cast<const unsigned char*>(raw.data());
   const auto* const end = base + raw.size();
   const auto* p = base;
   const auto* runStart = base;
   while (p < end) {
-    bool isSupplementary;
-    char32_t codePoint;
-    const size_t length = nextCharLength(p, end, isSupplementary, codePoint);
-    if (isSupplementary) {
+    const int length = validateAndGetNextUtf8Length(p, end);
+    if (length == 4) {
       // Flush the verbatim run accumulated before this sequence in one copy.
       if (p > runStart) {
-        out.append(
-            reinterpret_cast<const char*>(runStart),
-            static_cast<size_t>(p - runStart));
+        const auto runSize = static_cast<size_t>(p - runStart);
+        std::memcpy(out, runStart, runSize);
+        out += runSize;
       }
-      const char32_t v = codePoint - 0x10000u;
-      appendUtf16Hex(
-          static_cast<char16_t>(0xD800u + ((v >> 10) & 0x3FFu)), out);
-      appendUtf16Hex(static_cast<char16_t>(0xDC00u + (v & 0x3FFu)), out);
-      runStart = p + length;
+      // folly::utf8ToCodePoint advances `p` past the 4-byte sequence.
+      encodeUtf16Hex(folly::utf8ToCodePoint(p, end, true), out);
+      runStart = p;
+    } else {
+      p += length > 0 ? length : 1;
     }
-    p += length;
   }
   // Flush the trailing verbatim run.
   if (p > runStart) {
-    out.append(
-        reinterpret_cast<const char*>(runStart),
-        static_cast<size_t>(p - runStart));
+    const auto runSize = static_cast<size_t>(p - runStart);
+    std::memcpy(out, runStart, runSize);
+    out += runSize;
   }
+  return out;
 }
 
 } // namespace
@@ -130,8 +97,10 @@ void appendWithSupplementaryEscapes(
   // Each 4-byte sequence (1 char) becomes a 12-byte surrogate-pair escape
   // ('\uXXXX\uXXXX'), i.e. 8 bytes larger than the raw 4.
   std::string escaped;
-  escaped.reserve(raw.size() + 8 * supplementaryCount);
-  escapeSupplementaryCharacters(raw, escaped);
+  escaped.resize(raw.size() + 8 * supplementaryCount);
+  char* const begin = escaped.data();
+  const char* const written = escapeSupplementaryCharacters(raw, begin);
+  escaped.resize(static_cast<size_t>(written - begin));
   out.append(escaped);
 }
 
