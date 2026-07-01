@@ -43,6 +43,7 @@ class GroupingSet {
       const std::vector<vector_size_t>& globalGroupingSets,
       const std::optional<column_index_t>& groupIdChannel,
       const common::SpillConfig* spillConfig,
+      memory::MemoryPool* relocationPool,
       tsan_atomic<bool>* nonReclaimableSection,
       const core::QueryConfig* queryConfig,
       memory::MemoryPool* pool,
@@ -156,6 +157,12 @@ class GroupingSet {
 
   /// Returns true if spilling has triggered on this grouping set.
   bool hasSpilled() const;
+
+  // True when memory can be reclaimed from this grouping set, either by disk
+  // spill or by relocating the payload to a memory tier.
+  bool reclaimEnabled() const {
+    return spillConfig_ != nullptr || relocationPool_ != nullptr;
+  }
 
   /// Performs lightweight memory compaction across all aggregates before
   /// spilling. Iterates over all groups and calls Aggregate::compact() on each
@@ -356,6 +363,11 @@ class GroupingSet {
   tsan_atomic<bool>* const nonReclaimableSection_;
 
   const common::SpillConfig* const spillConfig_;
+
+  // Memory tier pool that reclaim relocates the payload into in place of disk
+  // spill, or nullptr when relocation is not enabled.
+  memory::MemoryPool* const relocationPool_;
+
   const core::QueryConfig* const queryConfig_;
   memory::MemoryPool* const pool_;
   exec::SpillStats* const spillStats_;

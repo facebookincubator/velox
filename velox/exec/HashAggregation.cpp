@@ -67,19 +67,20 @@ HashAggregation::HashAggregation(
 memory::MemoryPool* HashAggregation::relocationPoolForAggregation(
     const std::vector<std::unique_ptr<VectorHasher>>& hashers,
     const std::vector<AggregateInfo>& aggregateInfos) const {
-  // Relocation reuses the spill reclaim machinery (reservation window and
-  // arbitration trigger), swapping disk for the tier as the destination, so it
-  // is only available when spill is enabled. The destination tier is the custom
-  // memory resource named by the 'relocation_resource_tag' query config; an
-  // empty tag disables relocation.
+  // The destination tier is the custom memory resource named by the
+  // 'relocation_resource_tag' query config; an empty tag disables relocation.
   const std::string tag =
       operatorCtx_->driverCtx()->queryConfig().relocationResourceTag();
-  if (tag.empty() || !canSpill()) {
+  if (tag.empty()) {
     return nullptr;
   }
   auto* tierPool = customPool(tag);
+  // Byte-copy relocation needs a fixed row layout and a complete reclaim point.
+  // Pre-grouped keys are excluded: their mid-stream flush holds raw row
+  // pointers that would dangle once the container moves.
   if (tierPool == nullptr || isGlobal_ || isDistinct_ || isPartialOutput_ ||
-      aggregationNode_->ignoreNullKeys()) {
+      aggregationNode_->ignoreNullKeys() ||
+      !aggregationNode_->preGroupedKeys().empty()) {
     return nullptr;
   }
   for (const auto& hasher : hashers) {
@@ -158,6 +159,7 @@ void HashAggregation::initialize() {
       aggregationNode_->globalGroupingSets(),
       groupIdChannel,
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
+      relocationPool_,
       &nonReclaimableSection_,
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),

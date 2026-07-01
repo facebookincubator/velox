@@ -61,12 +61,12 @@ class HashAggregation : public Operator {
 
   bool isFinished() override;
 
-  /// HashAggregation can reclaim memory via lightweight compaction even when
-  /// spilling is not enabled. Relocation to a memory tier rides on the spill
-  /// reclaim path, so 'canSpill()' already covers it.
+  /// HashAggregation can reclaim memory via lightweight compaction, disk spill,
+  /// or relocation to a memory tier; any of these being enabled makes it
+  /// reclaimable.
   bool canReclaim() const override {
     return (memoryCompactionEnabled_ && hasCompactableAggregates_) ||
-        canSpill();
+        canSpill() || relocationPool_ != nullptr;
   }
 
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)

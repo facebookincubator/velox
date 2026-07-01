@@ -411,7 +411,7 @@ Spilling
    * - relocation_resource_tag
      - string
      -
-     - Tag of a custom memory resource pool that a grouped aggregation relocates its payload into during reclaim instead of spilling to disk. Empty (default) disables relocation. Requires `spill_enabled`. The tag must be registered with the query via CustomMemoryResourceRegistry.
+     - Tag of a custom memory resource pool that a grouped aggregation relocates its payload into during reclaim instead of spilling to disk. Empty (default) disables relocation. The tag must be registered with the query via CustomMemoryResourceRegistry.
    * - join_spill_enabled
      - boolean
      - true

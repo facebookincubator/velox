@@ -54,6 +54,7 @@ GroupingSet::GroupingSet(
     const std::vector<vector_size_t>& globalGroupingSets,
     const std::optional<column_index_t>& groupIdChannel,
     const common::SpillConfig* spillConfig,
+    memory::MemoryPool* relocationPool,
     tsan_atomic<bool>* nonReclaimableSection,
     const core::QueryConfig* queryConfig,
     memory::MemoryPool* pool,
@@ -67,6 +68,7 @@ GroupingSet::GroupingSet(
       globalGroupingSets_(globalGroupingSets),
       nonReclaimableSection_(nonReclaimableSection),
       spillConfig_(spillConfig),
+      relocationPool_(relocationPool),
       queryConfig_(queryConfig),
       pool_(pool),
       spillStats_(spillStats),
@@ -156,6 +158,7 @@ std::unique_ptr<GroupingSet> GroupingSet::createForDistinct(
       /*globalGroupingSets=*/std::vector<vector_size_t>{},
       /*groupIdColumn=*/std::nullopt,
       /*spillConfig=*/nullptr,
+      /*relocationPool=*/nullptr,
       nonReclaimableSection,
       &operatorCtx->driverCtx()->queryConfig(),
       operatorCtx->pool(),
@@ -976,8 +979,8 @@ const HashLookup& GroupingSet::hashLookup() const {
 
 void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   // Reclaim (disk spill, or relocation to a memory tier in its place) is
-  // considered if this is a final or single aggregation and spill is enabled.
-  if (isPartial_ || spillConfig_ == nullptr) {
+  // considered if this is a final or single aggregation and reclaim is enabled.
+  if (isPartial_ || !reclaimEnabled()) {
     return;
   }
 
@@ -1002,7 +1005,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
 
   const auto currentUsage = pool_->usedBytes();
   const auto minReservationBytes =
-      currentUsage * spillConfig_->minSpillableReservationPct / 100;
+      currentUsage * queryConfig_->minSpillableReservationPct() / 100;
   const auto availableReservationBytes = pool_->availableReservation();
   const auto tableIncrementBytes = table_->hashTableSizeIncrease(input->size());
   const auto incrementBytes =
@@ -1037,7 +1040,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
   // of the current memory usage.
   const auto targetIncrementBytes = std::max<int64_t>(
       incrementBytes * 2,
-      currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
+      currentUsage * queryConfig_->spillableReservationGrowthPct() / 100);
   {
     memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_->maybeReserve(targetIncrementBytes)) {
@@ -1058,8 +1061,8 @@ void GroupingSet::ensureOutputFits() {
   // to reserve memory for the output as we can't reclaim much memory from this
   // operator itself. The output processing can reclaim memory from the other
   // operator or query through memory arbitration.
-  if (isPartial_ || spillConfig_ == nullptr || hasSpilled() ||
-      table_ == nullptr || table_->numDistinct() == 0) {
+  if (isPartial_ || !reclaimEnabled() || hasSpilled() || table_ == nullptr ||
+      table_->numDistinct() == 0) {
     return;
   }
 

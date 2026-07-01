@@ -156,6 +156,44 @@ TEST_F(CxlAggregationRelocateTest, relocatesToTierUnderArbitration) {
   }
 }
 
+// Relocation does not depend on disk spill. With only 'relocation_resource_tag'
+// set -- spill disabled, no spill directory -- memory arbitration still
+// reclaims by relocating the payload to the tier.
+TEST_F(CxlAggregationRelocateTest, relocatesWithoutSpillEnabled) {
+  constexpr int32_t kFirstBatchRows = 200'000;
+  auto firstBatch = makeRowVector({
+      makeFlatVector<int64_t>(
+          kFirstBatchRows, [](auto row) { return static_cast<int64_t>(row); }),
+      makeFlatVector<int64_t>(kFirstBatchRows, [](auto row) { return row; }),
+  });
+  auto secondBatch = makeRowVector({
+      makeFlatVector<int64_t>(
+          8, [](auto row) { return kFirstBatchRows + row; }),
+      makeFlatVector<int64_t>(8, [](auto row) { return row; }),
+  });
+  std::vector<RowVectorPtr> batches{firstBatch, secondBatch};
+  createDuckDbTable(batches);
+
+  exec::TestScopedSpillInjection injectSpill(
+      /*spillPct=*/100, /*poolRegExp=*/".*", /*maxInjections=*/1);
+
+  exec::CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .values(batches)
+                        .singleAggregation({"c0"}, {"sum(c1)"})
+                        .planNode();
+  params.queryCtx = makeQueryCtxWithTier("cxl-agg-no-spill");
+  // Only relocation is configured; disk spill is left disabled.
+  params.queryConfigs[core::QueryConfig::kRelocationResourceTag] =
+      std::string{CxlMemoryResource::kTag};
+  auto task = assertQuery(params, "SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_GT(relocatedBytes(task), 0);
+  for (const auto& [_, nodeStats] : exec::toPlanStats(task->taskStats())) {
+    EXPECT_EQ(nodeStats.spilledBytes, 0);
+  }
+}
+
 // A varchar grouping key uses external (out-of-line) memory, so its rows cannot
 // be byte-relocated. The gate must exclude it: even with spill enabled and a
 // tier configured, reclaim falls back to disk spill (which would otherwise
@@ -210,6 +248,46 @@ TEST_F(CxlAggregationRelocateTest, partialAggregationDoesNotRelocate) {
 
   // The partial stage never relocates; the final stage relocates only under
   // pressure, which this unpressured run does not create.
+  EXPECT_EQ(relocatedBytes(task), 0);
+}
+
+// A pre-grouped (partially streaming) aggregation holds raw row pointers into
+// the container across mid-stream flushes, so its payload cannot be relocated.
+// The gate excludes it and reclaim spills to disk instead.
+TEST_F(CxlAggregationRelocateTest, preGroupedKeyDoesNotRelocate) {
+  // Input is clustered on c0 (runs of 100 equal values), so c0 can be
+  // pre-grouped while c1 is not.
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row / 100; }),
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row % 7; }),
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
+  });
+  createDuckDbTable({data});
+
+  exec::TestScopedSpillInjection injectSpill(
+      /*spillPct=*/100, /*poolRegExp=*/".*", /*maxInjections=*/1);
+
+  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  exec::CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .values({data})
+                        .aggregation(
+                            /*groupingKeys=*/{"c0", "c1"},
+                            /*preGroupedKeys=*/{"c0"},
+                            /*aggregates=*/{"sum(c2)"},
+                            /*masks=*/{},
+                            core::AggregationNode::Step::kSingle,
+                            /*ignoreNullKeys=*/false)
+                        .planNode();
+  params.queryCtx = makeQueryCtxWithTier("cxl-agg-pregrouped");
+  params.spillDirectory = spillDirectory->getPath();
+  params.queryConfigs[core::QueryConfig::kSpillEnabled] = "true";
+  params.queryConfigs[core::QueryConfig::kAggregationSpillEnabled] = "true";
+  params.queryConfigs[core::QueryConfig::kRelocationResourceTag] =
+      std::string{CxlMemoryResource::kTag};
+  auto task =
+      assertQuery(params, "SELECT c0, c1, sum(c2) FROM tmp GROUP BY c0, c1");
+
   EXPECT_EQ(relocatedBytes(task), 0);
 }
 

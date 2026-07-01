@@ -145,6 +145,7 @@ void ColumnStatsCollector::createGroupingSet() {
       /*globalGroupingSets=*/std::vector<vector_size_t>{},
       /*groupIdChannel=*/std::nullopt,
       /*spillConfig=*/nullptr,
+      /*relocationPool=*/nullptr,
       nonReclaimableSection_,
       queryConfig_,
       pool_,

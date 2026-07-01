@@ -579,8 +579,8 @@ class QueryConfig {
 
   /// Tag of a custom memory resource pool that a grouped aggregation relocates
   /// its payload into during reclaim instead of spilling to disk. Empty
-  /// (default) disables relocation. Requires spill_enabled. The tag must be
-  /// registered with the query via CustomMemoryResourceRegistry.
+  /// (default) disables relocation. The tag must be registered with the query
+  /// via CustomMemoryResourceRegistry.
   VELOX_QUERY_CONFIG(
       kRelocationResourceTag,
       relocationResourceTag,
@@ -589,7 +589,7 @@ class QueryConfig {
       "",
       "Tag of a custom memory resource pool that a grouped aggregation "
       "relocates its payload into during reclaim instead of spilling to disk. "
-      "Empty (default) disables relocation. Requires spill_enabled.")
+      "Empty (default) disables relocation.")
 
   /// Join spilling flag, only applies if "spill_enabled" flag is set.
   VELOX_QUERY_CONFIG(
