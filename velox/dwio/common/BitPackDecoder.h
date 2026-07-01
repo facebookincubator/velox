@@ -669,11 +669,7 @@ inline void unpack<uint8_t>(
 
     numValues = writeEndOffset - result;
     unpackNaive(
-        inputBits,
-        (bitWidth * numValues + 7) / 8,
-        numValues,
-        bitWidth,
-        result);
+        inputBits, (bitWidth * numValues + 7) / 8, numValues, bitWidth, result);
   } else {
     // Shift+mask fallback: fast on AMD Zen1/2/3 where PDEP is microcoded.
     // Extracts 8 values at a time from 64-bit loads (vs byte-at-a-time in
@@ -695,11 +691,7 @@ inline void unpack<uint8_t>(
     }
     numValues = writeEndOffset - result;
     unpackNaive(
-        inputBits,
-        (bitWidth * numValues + 7) / 8,
-        numValues,
-        bitWidth,
-        result);
+        inputBits, (bitWidth * numValues + 7) / 8, numValues, bitWidth, result);
   }
 
 #else
@@ -836,32 +828,23 @@ inline void unpack<uint32_t>(
 #else
 
   // Fast shift+mask fallback for non-AVX2 platforms (ARM, x86 without AVX2).
-  // Processes values from 64-bit word loads with shift+mask extraction,
-  // ~4-8x faster than unpackNaive's byte-at-a-time loop.
-  if (bitWidth <= 16) {
-    // For bitWidth <= 16: a 64-bit word holds at least 4 values.
-    // Process 4 values per iteration.
-    uint64_t valueMask = (1ULL << bitWidth) - 1;
+  // Processes 4 values per iteration from 64-bit word loads with shift+mask
+  // extraction.
+  if (bitWidth <= 16 && (bitWidth % 2 == 0)) {
+    // For even bitWidth <= 16: a 64-bit word holds at least 4 values and
+    // 4*bitWidth is always byte-aligned, so pointer advancement is exact.
+    const uint64_t valueMask = (1ULL << bitWidth) - 1;
+    const uint8_t* inputEnd = inputBits + inputBufferLen;
     auto writeEnd = result + numValues;
-    while (result + 4 <= writeEnd) {
-      uint64_t val = *reinterpret_cast<const uint64_t*>(inputBits);
-      uint64_t bitOffset =
-          (reinterpret_cast<uintptr_t>(inputBits) * 8) % 8;
-      // We're always byte-aligned here since we advance by
-      // (4 * bitWidth) / 8 bytes which may not be integral.
-      // Use a simpler approach: track bit offset explicitly.
+    while (result + 4 <= writeEnd && inputBits + sizeof(uint64_t) <= inputEnd) {
+      uint64_t val;
+      std::memcpy(&val, inputBits, sizeof(uint64_t));
       result[0] = static_cast<uint32_t>(val & valueMask);
       result[1] = static_cast<uint32_t>((val >> bitWidth) & valueMask);
       result[2] = static_cast<uint32_t>((val >> (2 * bitWidth)) & valueMask);
       result[3] = static_cast<uint32_t>((val >> (3 * bitWidth)) & valueMask);
       inputBits += (4 * bitWidth) / 8;
       result += 4;
-      // Handle non-byte-aligned advancement by adjusting next read.
-      uint32_t bitsConsumed = 4 * bitWidth;
-      if (bitsConsumed % 8 != 0) {
-        // Partial byte consumed: fall back to naive for remaining.
-        break;
-      }
     }
     numValues = writeEnd - result;
     if (numValues > 0) {
