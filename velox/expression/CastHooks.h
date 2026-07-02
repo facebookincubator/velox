@@ -52,6 +52,9 @@ class CastHooks {
   virtual Expected<int64_t> castTimestampToBigint(
       Timestamp timestamp) const = 0;
 
+  // Returns the converted value as int64_t and reports overflow against the
+  // target type 'To' as an error. setResultOrStatus then either throws (ANSI)
+  // or sets NULL (try_cast) for the overflow case.
   template <typename T>
   Expected<int64_t> castTimestampToInt(Timestamp timestamp) const {
     auto result = castTimestampToBigint(timestamp);

@@ -192,10 +192,6 @@ void CastExpr::applyCastKernel(
          ToKind == TypeKind::INTEGER || ToKind == TypeKind::BIGINT) &&
         FromKind == TypeKind::TIMESTAMP) {
       using To = typename TypeTraits<ToKind>::NativeType;
-      // The hook returns the converted value as int64_t and reports overflow
-      // against the target type 'To' as an error. setResultOrStatus then either
-      // throws (ANSI) or sets NULL (try_cast), and narrows the value to 'To'
-      // when writing to the result vector.
       const auto castResult =
           hooks_->template castTimestampToInt<To>(inputRowValue);
       setResultOrStatus(castResult, row);
