@@ -18,7 +18,6 @@
 
 #include <cstddef>
 #include <cstring>
-#include <string>
 #include <string_view>
 
 #include "folly/Unicode.h"
@@ -95,13 +94,15 @@ void appendWithSupplementaryEscapes(
     return;
   }
   // Each 4-byte sequence (1 char) becomes a 12-byte surrogate-pair escape
-  // ('\uXXXX\uXXXX'), i.e. 8 bytes larger than the raw 4.
-  std::string escaped;
-  escaped.resize(raw.size() + 8 * supplementaryCount);
-  char* const begin = escaped.data();
+  // ('\uXXXX\uXXXX'), i.e. 8 bytes larger than the raw 4. Escape directly into
+  // `out`'s buffer -- reserve the exact worst case, write in place, then resize
+  // down to what was actually written, avoiding an intermediate string + copy.
+  const size_t oldSize = out.size();
+  const size_t maxSize = oldSize + raw.size() + 8 * supplementaryCount;
+  out.reserve(maxSize);
+  char* const begin = out.data() + oldSize;
   const char* const written = escapeSupplementaryCharacters(raw, begin);
-  escaped.resize(static_cast<size_t>(written - begin));
-  out.append(escaped);
+  out.resize(oldSize + static_cast<size_t>(written - begin));
 }
 
 } // namespace facebook::velox::functions::sparksql::detail
