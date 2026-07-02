@@ -259,6 +259,10 @@ inline uint64_t ExtractBitsSoftware(uint64_t bitmap, uint64_t selectBitmap) {
 }
 
 using extractBitmapT = uint64_t;
+// Hardware PEXT dispatch for bit extraction in level conversion.
+// Enabled at compile time by __BMI2__, at runtime by FLAGS_bmi2=true (default).
+// On AMD Zen1/2 where PEXT is microcoded, set --bmi2=false to use the
+// software lookup table fallback (ExtractBitsSoftware).
 inline extractBitmapT ExtractBits(
     extractBitmapT bitmap,
     extractBitmapT selectBitmap) {

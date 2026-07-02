@@ -641,6 +641,23 @@ static inline void unpack32(
 
 #endif
 
+// Bit-unpack optimizations and how they are enabled:
+//
+// 1. PDEP-based unpack (unpack<uint8_t>, unpack<uint16_t>):
+//    - Compile: requires XSIMD_WITH_AVX2 (x86 builds with -mavx2)
+//    - Runtime: used when FLAGS_bmi2=true (default). On AMD Zen1/2/3 where
+//      PDEP is microcoded (~18 cycles), set --bmi2=false to use the faster
+//      shift+mask fallback instead.
+//
+// 2. Shift+mask unpack for non-AVX2 (unpack<uint32_t> #else branch):
+//    - Compile: active when XSIMD_WITH_AVX2 is NOT defined (ARM, non-AVX2 x86)
+//    - Runtime: always used on those platforms, no flag needed.
+//
+// 3. Hardware PEXT for level conversion (ExtractBits in LevelConversionUtil.h):
+//    - Compile: requires __BMI2__ (x86 builds with -mbmi2)
+//    - Runtime: used when FLAGS_bmi2=true (default). Falls back to a 5-bit
+//      lookup table on AMD Zen1/2 or when --bmi2=false.
+
 template <>
 inline void unpack<uint8_t>(
     const uint8_t* FOLLY_NONNULL& inputBits,
