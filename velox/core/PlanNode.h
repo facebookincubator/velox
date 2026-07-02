@@ -1422,23 +1422,7 @@ using AggregationNodePtr = std::shared_ptr<const AggregationNode>;
 inline std::ostream& operator<<(
     std::ostream& out,
     const AggregationNode::Step& step) {
-  switch (step) {
-    case AggregationNode::Step::kFinal:
-      return out << "FINAL";
-    case AggregationNode::Step::kIntermediate:
-      return out << "INTERMEDIATE";
-    case AggregationNode::Step::kPartial:
-      return out << "PARTIAL";
-    case AggregationNode::Step::kSingle:
-      return out << "SINGLE";
-  }
-  VELOX_UNREACHABLE();
-}
-
-inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
-  std::stringstream ss;
-  ss << step;
-  return ss.str();
+  return out << AggregationNode::toName(step);
 }
 
 /// Specify the column stats collection by aggregation. This is used by table
@@ -3309,7 +3293,8 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr right,
       RowTypePtr outputType,
       bool useHashTableCache = false,
-      bool nullAsValue = false)
+      bool nullAsValue = false,
+      std::optional<std::string> cacheKey = std::nullopt)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3321,12 +3306,19 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(outputType)),
         nullAware_{nullAware},
         nullAsValue_{nullAsValue},
-        useHashTableCache_{useHashTableCache} {
+        useHashTableCache_{useHashTableCache},
+        cacheKey_{std::move(cacheKey)} {
     validate();
 
     VELOX_USER_CHECK(
         !nullAware || !nullAsValue,
         "nullAware and nullAsValue are mutually exclusive");
+    VELOX_USER_CHECK(
+        !cacheKey_.has_value() || useHashTableCache_,
+        "cacheKey can only be set when useHashTableCache is enabled");
+    VELOX_USER_CHECK(
+        !cacheKey_.has_value() || !cacheKey_->empty(),
+        "cacheKey must be non-empty if set");
 
     if (isCountingJoin()) {
       VELOX_USER_CHECK(
@@ -3358,6 +3350,7 @@ class HashJoinNode : public AbstractJoinNode {
       nullAware_ = other.isNullAware();
       nullAsValue_ = other.isNullAsValue();
       useHashTableCache_ = other.useHashTableCache();
+      cacheKey_ = other.cacheKey();
     }
 
     Builder& nullAware(bool value) {
@@ -3372,6 +3365,11 @@ class HashJoinNode : public AbstractJoinNode {
 
     Builder& useHashTableCache(bool value) {
       useHashTableCache_ = value;
+      return *this;
+    }
+
+    Builder& cacheKey(std::optional<std::string> value) {
+      cacheKey_ = std::move(value);
       return *this;
     }
 
@@ -3403,13 +3401,15 @@ class HashJoinNode : public AbstractJoinNode {
           right_.value(),
           outputType_.value(),
           useHashTableCache_.value_or(false),
-          nullAsValue_.value_or(false));
+          nullAsValue_.value_or(false),
+          cacheKey_);
     }
 
    private:
     std::optional<bool> nullAware_;
     std::optional<bool> nullAsValue_;
     std::optional<bool> useHashTableCache_;
+    std::optional<std::string> cacheKey_;
   };
 
   std::string_view name() const override {
@@ -3449,6 +3449,10 @@ class HashJoinNode : public AbstractJoinNode {
     return useHashTableCache_;
   }
 
+  const std::optional<std::string>& cacheKey() const {
+    return cacheKey_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3459,6 +3463,7 @@ class HashJoinNode : public AbstractJoinNode {
   const bool nullAware_;
   const bool nullAsValue_;
   const bool useHashTableCache_;
+  const std::optional<std::string> cacheKey_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;
@@ -3701,6 +3706,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// @param hasMarker if true, the output type includes a boolean
   /// column at the end to indicate if a join output row has a match or not.
   /// This only applies for left join.
+  /// @param forwardedProbeColumns Probe-side columns that the operator must
+  /// include in the connector's lookup input vector even when no join key or
+  /// join condition references them. Connectors that need per-row probe
+  /// values (e.g. cumulative-weight caps fetched per probe) use this to
+  /// declare which columns they expect to find in the request input. Defaults
+  /// to empty, in which case behavior is unchanged. A forwarded column may
+  /// not overlap with any column already referenced by leftKeys or by a join
+  /// condition.
   IndexLookupJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
@@ -3712,7 +3725,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       PlanNodePtr left,
       TableScanNodePtr right,
       RowTypePtr outputType,
-      std::optional<bool> splitOutput = std::nullopt);
+      std::optional<bool> splitOutput = std::nullopt,
+      std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns = {});
 
   /// @param splitOutput Optional flag to control whether the operator should
   /// split output batches if they are too large. If true, output is split into
@@ -3731,7 +3745,8 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       std::optional<bool> splitOutput,
       PlanNodePtr left,
       TableScanNodePtr right,
-      RowTypePtr outputType);
+      RowTypePtr outputType,
+      std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns = {});
 
   class Builder
       : public AbstractJoinNode::Builder<IndexLookupJoinNode, Builder> {
@@ -3744,6 +3759,7 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       filter_ = other.filter();
       hasMarker_ = other.hasMarker();
       splitOutput_ = other.splitOutput();
+      forwardedProbeColumns_ = other.forwardedProbeColumns();
     }
 
     /// Set lookup conditions for index lookup that can't be converted into
@@ -3773,6 +3789,15 @@ class IndexLookupJoinNode : public AbstractJoinNode {
       return *this;
     }
 
+    /// Set probe-side columns that should be forwarded to the connector's
+    /// lookup input even though no join key or join condition references
+    /// them. See the IndexLookupJoinNode constructor for the contract.
+    Builder& forwardedProbeColumns(
+        std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
+      return *this;
+    }
+
     std::shared_ptr<IndexLookupJoinNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "IndexLookupJoinNode id is not set");
       VELOX_USER_CHECK(
@@ -3799,13 +3824,15 @@ class IndexLookupJoinNode : public AbstractJoinNode {
           splitOutput_,
           left_.value(),
           std::dynamic_pointer_cast<const TableScanNode>(right_.value()),
-          outputType_.value());
+          outputType_.value(),
+          forwardedProbeColumns_);
     }
 
    private:
     std::vector<IndexLookupConditionPtr> joinConditions_;
     bool hasMarker_{false};
     std::optional<bool> splitOutput_;
+    std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns_;
   };
 
   bool supportsBarrier() const override {
@@ -3824,6 +3851,14 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// simple equality join conditions.
   const std::vector<IndexLookupConditionPtr>& joinConditions() const {
     return joinConditions_;
+  }
+
+  /// Probe-side columns the operator forwards into the connector's lookup
+  /// input vector beyond what leftKeys and joinConditions reference. Connectors
+  /// that need per-row probe values (e.g. cumulative-weight caps) declare
+  /// them here. Empty by default.
+  const std::vector<FieldAccessTypedExprPtr>& forwardedProbeColumns() const {
+    return forwardedProbeColumns_;
   }
 
   std::string_view name() const override {
@@ -3866,6 +3901,12 @@ class IndexLookupJoinNode : public AbstractJoinNode {
   /// Optional flag to control whether to split output batches. When set,
   /// overrides the index_lookup_join_split_output QueryConfig.
   const std::optional<bool> splitOutput_;
+
+  /// Probe-side columns to forward to the connector's lookup input even if
+  /// they are not referenced by leftKeys or joinConditions. Validated in the
+  /// constructor to be present in the probe input type and to not overlap
+  /// with leftKeys or joinCondition-referenced columns.
+  const std::vector<FieldAccessTypedExprPtr> forwardedProbeColumns_;
 };
 
 using IndexLookupJoinNodePtr = std::shared_ptr<const IndexLookupJoinNode>;
@@ -4942,18 +4983,17 @@ using EnforceSingleRowNodePtr = std::shared_ptr<const EnforceSingleRowNode>;
 /// with unique int64_t value per input row.
 ///
 /// 64-bit unique id is built in following way:
-///  - first 24 bits - task unique id
-///  - next 40 bits - operator counter value
+///  - high 24 bits - task unique id
+///  - low 40 bits - operator counter value
 ///
-/// The task unique id is added to ensure the generated id is unique
-/// across all the nodes executing the same query stage in a distributed
-/// query execution.
+/// The task unique id ensures the generated id is unique across all the tasks
+/// executing the same query stage in a distributed query. It is supplied by the
+/// executing Task via PlanFragment::taskUniqueId.
 class AssignUniqueIdNode : public PlanNode {
  public:
   AssignUniqueIdNode(
       const PlanNodeId& id,
       const std::string& idName,
-      const int32_t taskUniqueId,
       PlanNodePtr source);
 
   bool supportsBarrier() const override {
@@ -4967,7 +5007,6 @@ class AssignUniqueIdNode : public PlanNode {
     explicit Builder(const AssignUniqueIdNode& other) {
       id_ = other.id();
       idName_ = other.outputType()->names().back();
-      taskUniqueId_ = other.taskUniqueId();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -4982,11 +5021,6 @@ class AssignUniqueIdNode : public PlanNode {
       return *this;
     }
 
-    Builder& taskUniqueId(int32_t taskUniqueId) {
-      taskUniqueId_ = taskUniqueId;
-      return *this;
-    }
-
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -4997,18 +5031,15 @@ class AssignUniqueIdNode : public PlanNode {
       VELOX_USER_CHECK(
           idName_.has_value(), "AssignUniqueIdNode idName not set");
       VELOX_USER_CHECK(
-          taskUniqueId_.has_value(), "AssignUniqueIdNode taskUniqueId not set");
-      VELOX_USER_CHECK(
           source_.has_value(), "AssignUniqueIdNode source is not set");
 
       return std::make_shared<AssignUniqueIdNode>(
-          id_.value(), idName_.value(), taskUniqueId_.value(), source_.value());
+          id_.value(), idName_.value(), source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<std::string> idName_;
-    std::optional<int32_t> taskUniqueId_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -5031,21 +5062,22 @@ class AssignUniqueIdNode : public PlanNode {
     return taskUniqueId_;
   }
 
-  const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
-    return uniqueIdCounter_;
-  }
-
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  // Builds the output row type: the source columns followed by the BIGINT id
+  // column named 'idName'.
+  static RowTypePtr makeOutputType(
+      const PlanNodePtr& source,
+      const std::string& idName);
+
   void addDetails(std::stringstream& stream) const override;
 
   const int32_t taskUniqueId_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
-  std::shared_ptr<std::atomic_int64_t> uniqueIdCounter_;
 };
 
 using AssignUniqueIdNodePtr = std::shared_ptr<const AssignUniqueIdNode>;

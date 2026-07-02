@@ -17,7 +17,6 @@
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/Executor.h"
-#include "velox/experimental/torchwave/GraphOptimizer.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
@@ -44,9 +43,23 @@ DEFINE_bool(
     compile_meter,
     false,
     "Compile each case of a composite kernel individually to measure per-case nvrtc time");
+
+// Forward declaration of the CUDA runtime call used to synchronize the default
+// stream. This translation unit is built in a CPU-configured target without the
+// CUDA headers; the symbol resolves from the CUDA runtime linked into the final
+// binary. PyTorch dispatches eager standalone ops to the default stream.
+extern "C" int cudaStreamSynchronize(void* stream);
+
 namespace torch::wave {
 
 namespace {
+
+// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
+// ops are dispatched. Used to order them against wave-stream work before a
+// composite invocation returns.
+void syncTorchDefaultStream() {
+  cudaStreamSynchronize(nullptr);
+}
 
 facebook::velox::wave::CompiledKernel& patchOpcodesKernel() {
   static std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
@@ -97,6 +110,10 @@ void setOpCodes(
   kernel.launch(0, numBlocks, numThreads, 0, stream, args);
 }
 
+void fillEmptyTensorParam(void* dest) {
+  memset(dest, 0, sizeof(Tensor));
+}
+
 void fillShapeOnlyTensorParam(const at::Tensor& tensor, void* dest) {
   TORCH_CHECK(
       tensor.dim() <= kMaxDims,
@@ -107,7 +124,7 @@ void fillShapeOnlyTensorParam(const at::Tensor& tensor, void* dest) {
   auto* t = reinterpret_cast<Tensor*>(dest);
   t->storage = nullptr;
   t->rank = static_cast<int8_t>(tensor.dim());
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < kMaxDims; ++i) {
     t->dims[i] = i < tensor.dim() ? static_cast<int32_t>(tensor.size(i)) : 0;
     t->strides[i] = 0;
   }
@@ -117,15 +134,17 @@ void fillShapeOnlyTensorParam(const at::Tensor& tensor, void* dest) {
 
 void fillTensorParam(const at::Tensor& tensor, void* dest) {
   TORCH_CHECK(
-      tensor.dim() <= 3,
-      "Tensors with more than 3 dims not supported, got ",
+      tensor.dim() <= kMaxDims,
+      "Tensors with more than ",
+      kMaxDims,
+      " dims not supported, got ",
       tensor.dim());
   auto* t = reinterpret_cast<Tensor*>(dest);
   t->storage = tensor.data_ptr();
   t->rank = static_cast<int8_t>(tensor.dim());
   t->elementSize = tensor.element_size();
   t->elementType = static_cast<uint8_t>(tensor.scalar_type());
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < kMaxDims; ++i) {
     t->dims[i] = i < tensor.dim() ? static_cast<int32_t>(tensor.size(i)) : 0;
     t->strides[i] = i < tensor.dim()
         ? (tensor.size(i) == 1 ? 0 : static_cast<int32_t>(tensor.stride(i)))
@@ -183,16 +202,28 @@ std::string dumpOpParams(const KernelOperation& op, uint8_t* paramBase) {
   return ss.str();
 }
 
-void fillScalarParam(const c10::IValue& ivalue, void* dest) {
+void fillScalarParam(
+    const c10::IValue& ivalue,
+    void* dest,
+    nativert::ValueId valueId) {
   if (ivalue.isInt()) {
     *reinterpret_cast<int64_t*>(dest) = ivalue.toInt();
   } else if (ivalue.isDouble()) {
     *reinterpret_cast<double*>(dest) = ivalue.toDouble();
   } else if (ivalue.isBool()) {
     *reinterpret_cast<int64_t*>(dest) = ivalue.toBool() ? 1 : 0;
+  } else if (ivalue.isNone()) {
+    *reinterpret_cast<int64_t*>(dest) = 0;
   } else {
+    // A None here usually means the value's producer (e.g. a view/slice fed
+    // into a prim.ListPack) was never executed, so its scalar (e.g. sym_size)
+    // was never set in the frame. Report the value id to trace the producer.
     TORCH_CHECK(
-        false, "Unsupported IValue type for kernel param: ", ivalue.tagKind());
+        false,
+        "Unsupported IValue type for kernel param: ",
+        ivalue.tagKind(),
+        " for value %",
+        valueId);
   }
 }
 
@@ -336,8 +367,36 @@ std::vector<std::vector<Dim>> elementwiseInputShape(
   return {std::vector<Dim>(bestShape.begin(), bestShape.end())};
 }
 
-// Launching a block for fewer elements per thread is counter-productive.
-constexpr int32_t kMinElementsPerThread = 4;
+// Elements processed per thread for a cheap op: a block covers
+// kMaxElementsPerThread * blockSize inputs, which caps the number of blocks so
+// cheap ops do not pay launch overhead for tiny per-block work. Expensive ops
+// drop toward one element per thread (more blocks, more parallelism) -- see
+// elementsPerThreadForCost.
+constexpr int32_t kMaxElementsPerThread = 4;
+
+// Adjusted per-input cost (unitCost * costAdjustFactor) at and below which a
+// block covers kMaxElementsPerThread elements per thread, and at and above
+// which it covers exactly one. Between the two it interpolates linearly.
+constexpr float kLowCostPerInput = 100.0f;
+constexpr float kHighCostPerInput = 500.0f;
+
+// Elements per thread for an op with the given adjusted per-input cost. Falls
+// from kMaxElementsPerThread (cheap) to 1 (expensive) as the cost rises from
+// kLowCostPerInput to kHighCostPerInput, then stays at 1. A higher cost thus
+// allows more blocks (up to numElements / blockSize) for more parallelism.
+int32_t elementsPerThreadForCost(float costPerInput) {
+  if (costPerInput <= kLowCostPerInput) {
+    return kMaxElementsPerThread;
+  }
+  if (costPerInput >= kHighCostPerInput) {
+    return 1;
+  }
+  float frac = (costPerInput - kLowCostPerInput) /
+      (kHighCostPerInput - kLowCostPerInput);
+  int32_t ept = kMaxElementsPerThread -
+      static_cast<int32_t>(frac * (kMaxElementsPerThread - 1) + 0.5f);
+  return ept < 1 ? 1 : ept;
+}
 
 // Default SM count when device info is unavailable.
 constexpr int32_t kDefaultNumSMs = 100;
@@ -362,9 +421,11 @@ int32_t makeGrid(
     totalCost += sv.costs[i];
   }
 
-  // Max blocks each launch could use.
+  // Max blocks each launch could use. The block's elements-per-thread shrinks
+  // from kMaxElementsPerThread to 1 as the op's per-input cost rises, so an
+  // expensive op may use up to numElements / blockSize blocks while a cheap one
+  // is capped at numElements / (kMaxElementsPerThread * blockSize).
   sv.maxBlocks.resize(launches.size());
-  const int32_t elementsPerBlock = blockSize * kMinElementsPerThread;
   for (size_t i = 0; i < launches.size(); ++i) {
     // alwaysSingleBlock ops fold their cross-block barriers into __syncthreads
     // and are only correct when run as a single block. Cap maxBlocks at 1 so
@@ -374,6 +435,11 @@ int32_t makeGrid(
       sv.maxBlocks[i] = 1;
       continue;
     }
+    float adjust =
+        launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
+    float costPerInput = launches[i].launch->op->unitCost() * adjust;
+    int32_t elementsPerBlock =
+        blockSize * elementsPerThreadForCost(costPerInput);
     sv.maxBlocks[i] = static_cast<int32_t>(
         (launches[i].numElements + elementsPerBlock - 1) / elementsPerBlock);
     if (sv.maxBlocks[i] < 1) {
@@ -418,7 +484,8 @@ int32_t makeGrid(
     // elements.
     if (assigned > 1) {
       auto elemsPerBlock = (launches[i].numElements + assigned - 1) / assigned;
-      auto alignedElems = roundUp(elemsPerBlock, elementsPerBlock);
+      auto alignedElems =
+          roundUp(elemsPerBlock, static_cast<int64_t>(blockSize));
       assigned = std::max(
           1,
           static_cast<int32_t>(
@@ -539,12 +606,54 @@ int32_t makeGrid(
 
 // --- Launch ---
 
+namespace {
+// Maps a metadata-only standalone op's target to its host-side shortcut.
+StandaloneShortcut standaloneShortcutForTarget(std::string_view target) {
+  if (target == "prim.ListPack") {
+    return StandaloneShortcut::kListPack;
+  }
+  if (target == "torch.ops.aten.view.default") {
+    return StandaloneShortcut::kView;
+  }
+  if (target == "torch.ops.aten.slice.Tensor") {
+    return StandaloneShortcut::kSlice;
+  }
+  if (target == "torch.ops.aten.select.int") {
+    return StandaloneShortcut::kSelectInt;
+  }
+  if (target == "torch.ops.aten.unsqueeze.default") {
+    return StandaloneShortcut::kUnsqueeze;
+  }
+  if (target == "torch.ops.aten.transpose.int") {
+    return StandaloneShortcut::kTranspose;
+  }
+  if (target == "torch.ops.aten.narrow.default") {
+    return StandaloneShortcut::kNarrow;
+  }
+  return StandaloneShortcut::kNone;
+}
+} // namespace
+
 Launch::Launch(
     NodeCP standaloneNode,
     const ValueTypes& types,
     WaveGraph& waveGraph)
     : standalone(standaloneNode) {
+  standaloneShortcut = standaloneShortcutForTarget(standaloneNode->target());
+  // prim.ListPack is metadata-only only when it builds a TensorList; a SymInt /
+  // int list packs scalars, which the kListPack shortcut cannot handle, so
+  // leave those on the generic path.
+  if (standaloneShortcut == StandaloneShortcut::kListPack &&
+      (standaloneNode->outputs().empty() ||
+       standaloneNode->outputs()[0]->type().kind() !=
+           nativert::Type::Kind::TensorList)) {
+    standaloneShortcut = StandaloneShortcut::kNone;
+  }
   auto* meta = Registry::metadata(standaloneNode->target());
+  // prim.ListPack has no registry entry but is metadata-only by definition;
+  // every other op's metadata-only status comes from its Metadata.
+  metadataOnly =
+      meta ? meta->metadataOnly : (standaloneNode->target() == "prim.ListPack");
   if (!meta || meta->argumentMeta.empty()) {
     return;
   }
@@ -592,11 +701,13 @@ CompositeInvocation::CompositeInvocation(
     std::unique_ptr<CompositeKernel> kernel,
     std::vector<OpInvocation> ops,
     std::deque<c10::IValue> ivalueStorage,
-    int32_t sequenceNumber)
+    int32_t sequenceNumber,
+    std::vector<Launch> prePassStandalones)
     : kernel_(std::move(kernel)),
       ops_(std::move(ops)),
       ivalueStorage_(std::move(ivalueStorage)),
-      sequenceNumber_(sequenceNumber) {}
+      sequenceNumber_(sequenceNumber),
+      prePassStandalones_(std::move(prePassStandalones)) {}
 
 namespace {
 
@@ -800,14 +911,55 @@ LaunchData::LaunchData(
   if (!launch.op) {
     // Standalone: translate node via nodeMap, inputs and outputs via bindings.
     auto nodeIt = op.nodeMap().find(launch.standalone);
-    TORCH_CHECK(
-        nodeIt != op.nodeMap().end(), "Standalone node not found in nodeMap");
-    standalone = nodeIt->second;
+    standalone =
+        nodeIt != op.nodeMap().end() ? nodeIt->second : launch.standalone;
     for (auto& input : launch.standalone->inputs()) {
       actualInputs.push_back(translateId(input.value));
     }
     for (auto* output : launch.standalone->outputs()) {
       actualOutputs.push_back(translateId(output));
+    }
+    // For a metadata-only shortcut op, collect its operands from the actual
+    // node in c10 schema order (first-to-last for prim.ListPack, which has no
+    // schema). A value operand goes in args; an integer constant goes in
+    // intArgs at the same position with a nullptr in args; an all-integer list
+    // operand (e.g. aten.view size) goes in intList for direct pass-through.
+    if (launch.standaloneShortcut != StandaloneShortcut::kNone) {
+      auto pushValue = [&](ValueCP v) {
+        args.push_back(v);
+        intArgs.push_back(0);
+      };
+      auto pushInt = [&](int64_t c) {
+        args.push_back(nullptr);
+        intArgs.push_back(c);
+      };
+      const auto* meta = Registry::metadata(standalone->target());
+      if (meta != nullptr && meta->functionSchema != nullptr) {
+        for (const auto& arg : meta->functionSchema->arguments()) {
+          if (const auto* in = standalone->tryGetInput(arg.name())) {
+            pushValue(in->value);
+          } else if (
+              const auto* attr = standalone->tryGetAttribute(arg.name())) {
+            if (std::holds_alternative<int64_t>(attr->value)) {
+              pushInt(std::get<int64_t>(attr->value));
+            } else if (std::holds_alternative<std::vector<int64_t>>(
+                           attr->value)) {
+              const auto& vec = std::get<std::vector<int64_t>>(attr->value);
+              intList.assign(vec.begin(), vec.end());
+              pushValue(nullptr);
+            } else {
+              pushValue(nullptr);
+            }
+          } else {
+            pushValue(nullptr);
+          }
+        }
+      } else {
+        // prim.ListPack and other schemaless ops: every input is a value.
+        for (auto& input : standalone->inputs()) {
+          pushValue(input.value);
+        }
+      }
     }
   } else {
     // Kernel op: translate sizeExpr, inputs, outputs, and output descs.
@@ -833,6 +985,11 @@ LaunchData::LaunchData(
         TORCH_CHECK(
             viewIt != op.nodeMap().end(), "View node not found in nodeMap");
         actualDesc.viewNode = viewIt->second;
+      }
+      if (desc.aliasSelfId) {
+        auto it = bindings.find(*desc.aliasSelfId);
+        actualDesc.aliasSelfId =
+            it != bindings.end() ? it->second : *desc.aliasSelfId;
       }
       // Non-tensor outputs (scalars, SymInt, etc.) must be read back to host.
       auto outputValueId = actualOutputs[i];
@@ -1075,7 +1232,12 @@ CompositeKernel::CompositeKernel(
     }
   }
 
-  // Only compile the kernel if a GPU is available.
+  // Only compile the kernel if a GPU is available. The one-time
+  // NVRTC/system-header initialization (CompiledKernel::initialize()) is run
+  // eagerly on the main thread by torch::wave::initialize() before any kernel
+  // is compiled, so the async compile enqueued below never triggers it lazily
+  // on a Wave compile-pool thread (which deadlocks warmup() in heavyweight
+  // NCCL/Thrift/folly hosts -- T275179010).
   if (facebook::velox::wave::currentDevice()) {
     auto genFunc = [code = std::move(code),
                     entryPoint,
@@ -1262,7 +1424,11 @@ void fillLaunchParams(
     for (size_t i = 0; i < launch.scalarsInFrame.size(); ++i) {
       fillScalarParam(
           frame.getIValue(launch.scalarsInFrame[i]),
-          paramBase + launch.scalarOffsets[i]);
+          paramBase + launch.scalarOffsets[i],
+          launch.scalarsInFrame[i]);
+    }
+    for (auto offset : launch.scalarOutputOffsets) {
+      *reinterpret_cast<int64_t*>(paramBase + offset) = 0;
     }
     for (auto offset : launch.launch->op->barrierCounters()) {
       *reinterpret_cast<int32_t*>(paramBase + offset) = 0;
@@ -1307,13 +1473,18 @@ void fillLaunchParams(
     auto offset = kernelOp->paramOffset(formalValue);
     auto* dest = paramBase + offset;
     auto actualId = launch.actualInputs.at(i);
-    const auto& ivalue = frame.getIValue(actualId);
+    auto& ivalue = frame.getIValue(actualId);
     if (ivalue.isTensor()) {
       fillTensorParam(ivalue.toTensor(), dest);
       launch.tensorsInFrame.push_back(actualId);
       launch.tensorOffsets.push_back(offset);
+    } else if (
+        ivalue.isNone() &&
+        formalValue->type().kind() == nativert::Type::Kind::Tensor) {
+      fillEmptyTensorParam(dest);
+      launch.numElements = 0;
     } else {
-      fillScalarParam(ivalue, dest);
+      fillScalarParam(ivalue, dest, actualId);
       launch.scalarsInFrame.push_back(actualId);
       launch.scalarOffsets.push_back(offset);
     }
@@ -1365,7 +1536,21 @@ void fillLaunchParams(
         launch.actualOutputTypes[i] == nativert::Type::Kind::Tensor;
     if (isTensorOutput) {
       const auto& ivalue = frame.getIValue(actualId);
-      TORCH_CHECK(ivalue.isTensor(), "Expected tensor for output param");
+      if (ivalue.isNone()) {
+        launch.numElements = 0;
+        fillEmptyTensorParam(dest);
+        continue;
+      }
+      TORCH_CHECK(
+          ivalue.isTensor(),
+          "Expected tensor for output param: value %",
+          actualId,
+          " opCode ",
+          kernelOp->opCode(),
+          " output index ",
+          i,
+          " isNone ",
+          ivalue.isNone());
       bool isShapeOnly = i < launch.actualOutputDescs.size() &&
           launch.actualOutputDescs[i].shapeOnly;
       if (isShapeOnly) {
@@ -1377,10 +1562,11 @@ void fillLaunchParams(
       launch.tensorsInFrame.push_back(actualId);
       launch.tensorOffsets.push_back(offset);
     } else {
-      // Non-tensor output: write a 64-bit zero placeholder.
+      // Non-tensor output: write a 64-bit zero placeholder. The kernel writes
+      // the real value; record the offset so the cached path re-zeroes it
+      // rather than (incorrectly) filling it from the frame as if an input.
       *reinterpret_cast<int64_t*>(dest) = 0;
-      launch.scalarsInFrame.push_back(actualId);
-      launch.scalarOffsets.push_back(offset);
+      launch.scalarOutputOffsets.push_back(offset);
     }
     trackReturnValue(
         actualId,
@@ -1397,7 +1583,8 @@ void fillLaunchParams(
   const auto& opConstants = launch.invocation->constants();
   for (auto idx : launch.launch->constantIndices) {
     auto* dest = paramBase + constantOffset;
-    fillScalarParam(*opConstants[idx], dest);
+    // Constants carry no Value id; pass -1.
+    fillScalarParam(*opConstants[idx], dest, -1);
     constantOffset += 8;
   }
 
@@ -1484,6 +1671,15 @@ void allocateLaunchOutputs(
         continue;
       }
       auto actualId = actualOutputs[i];
+      if (descs[i].aliasSelfId) {
+        auto& selfIv = frame.getIValue(*descs[i].aliasSelfId);
+        if (selfIv.isTensor()) {
+          // In-place op output: a view sharing self's storage (see general
+          // path below).
+          frame.setIValue(actualId, selfIv.toTensor().alias());
+          continue;
+        }
+      }
       ensureCudaTensor(frame, types, actualId, dims);
     }
     return;
@@ -1504,13 +1700,27 @@ void allocateLaunchOutputs(
           it != kernelMap->end(),
           "No kernel for view node ",
           descs[i].viewNode->target());
-      executeNode(descs[i].viewNode, it->second, frame);
+      try {
+        executeNode(descs[i].viewNode, it->second, frame);
+      } catch (...) {
+      }
       continue;
     }
     if (descs[i].delegated) {
       continue;
     }
     auto actualId = actualOutputs[i];
+
+    // In-place op output (Tensor(a!)): reserve as a view sharing the mutated
+    // self's storage, so the returned tensor aliases self and reflects later
+    // in-place mutations, rather than being a fresh copy.
+    if (descs[i].aliasSelfId) {
+      auto& selfIv = frame.getIValue(*descs[i].aliasSelfId);
+      if (selfIv.isTensor()) {
+        frame.setIValue(actualId, selfIv.toTensor().alias());
+        continue;
+      }
+    }
 
     // TensorList output: expand to component Values and allocate each.
     if (i < outputTypes.size() &&
@@ -1687,8 +1897,10 @@ void CompositeInvocation::gatherLaunches(
   const auto& idToValue = state.waveGraph->idToValue();
   int32_t kernelIdx = 0;
   int32_t standaloneIdx = 0;
+  int32_t shortcutIdx = 0;
   sv.gridChanged = false;
   sv.isCgGrid = false;
+  sv.hasGpuStandalones = false;
   for (size_t i = 0; i < ops_.size(); ++i) {
     auto* grid = grids.at(i).grid;
     if (stepIdx >= static_cast<int32_t>(grid->size())) {
@@ -1754,6 +1966,9 @@ void CompositeInvocation::gatherLaunches(
           }
         }
 
+        // Check if any viewNode output descs have unavailable inputs.
+        // If so, skip allocateLaunchOutputs — the viewNode would
+        // crash on None inputs from a later PN.
         allocateLaunchOutputs(
             data,
             *state.frame,
@@ -1761,13 +1976,54 @@ void CompositeInvocation::gatherLaunches(
             largestId,
             state.kernelMap,
             idToValue);
+        // If any tensor input or output is None, skip this kernel
+        // (set numElements=0 so makeGrid assigns 0 blocks).
+        for (auto inputId : data.actualInputs) {
+          auto& iv = state.frame->getIValue(inputId);
+          if (iv.isNone()) {
+            data.numElements = 0;
+            break;
+          }
+        }
+        if (data.numElements > 0) {
+          for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
+            if (oi < data.actualOutputTypes.size() &&
+                data.actualOutputTypes[oi] == nativert::Type::Kind::Tensor) {
+              const auto& oiv = state.frame->getIValue(data.actualOutputs[oi]);
+              // A None output comes from a later PN.  An empty (0-element)
+              // output means there is nothing to compute and its storage (and
+              // that of any broadcast-to-empty input) may be null -- launching
+              // would fault.  numElements from a kMax sizeExpr ignores the
+              // empty (broadcast-to-0) dimension, so guard on the allocated
+              // output extent explicitly here.
+              if (oiv.isNone() ||
+                  (oiv.isTensor() && oiv.toTensor().numel() == 0)) {
+                data.numElements = 0;
+                break;
+              }
+            }
+          }
+        }
         if (!launch.op->barrierCounters().empty()) {
           sv.isCgGrid = true;
         }
         ++kernelIdx;
+      } else if (launch.standaloneShortcut != StandaloneShortcut::kNone) {
+        // Metadata-only shortcut op: separate list, tight switch loop, no sync.
+        if (shortcutIdx >=
+            static_cast<int32_t>(sv.shortcutStandalones.size())) {
+          sv.shortcutStandalones.emplace_back(launch, ops_[i], idToValue);
+        }
+        ++shortcutIdx;
       } else {
         if (standaloneIdx >= static_cast<int32_t>(sv.standalones.size())) {
           sv.standalones.emplace_back(launch, ops_[i], idToValue);
+        }
+        // A standalone that does real device work needs the wave stream synced
+        // before it (and before this step's fused kernel). Metadata-only ops
+        // (host-only, e.g. a SymInt-list prim.ListPack) need no sync.
+        if (!launch.metadataOnly) {
+          sv.hasGpuStandalones = true;
         }
         ++standaloneIdx;
       }
@@ -1815,6 +2071,20 @@ void verifyAgainstReference(
   if (!ref) {
     return;
   }
+  // This checks both fused outputs (produced on the wave stream) and standalone
+  // outputs (produced by eager ops on the default stream), so sync both: the
+  // wave stream and the default stream where eager standalones run.
+  state.stream->wait();
+  syncTorchDefaultStream();
+  // The reference stores scalars and scalar lists as 1-D tensors; fold the
+  // actual frame value into a tensor the same way so it can be compared
+  // element-wise against the recorded tensor.
+  auto asTensor = [](const c10::IValue& iv) -> std::optional<at::Tensor> {
+    if (iv.isTensor()) {
+      return iv.toTensor();
+    }
+    return scalarLikeToTensor(iv);
+  };
   int32_t numMismatches = 0;
   std::string passedIds;
   int32_t numPassed = 0;
@@ -1825,11 +2095,14 @@ void verifyAgainstReference(
       if (refIt == ref->end()) {
         continue;
       }
-      const auto& actual = frame.getIValue(actualId);
-      if (!actual.isTensor() || !refIt->second.isTensor()) {
+      if (!refIt->second.isTensor()) {
         continue;
       }
-      const auto& actualTensor = actual.toTensor();
+      auto actualOpt = asTensor(frame.getIValue(actualId));
+      if (!actualOpt) {
+        continue;
+      }
+      const at::Tensor& actualTensor = *actualOpt;
       const auto& refTensor = refIt->second.toTensor();
       if (actualTensor.numel() == 0) {
         continue;
@@ -1864,9 +2137,8 @@ void verifyAgainstReference(
       for (auto actualId : data.actualOutputs) {
         auto refIt = ref->find(actualId);
         if (refIt != ref->end() && refIt->second.isTensor()) {
-          const auto& actual = frame.getIValue(actualId);
-          if (actual.isTensor() &&
-              tensorsMatch(actual.toTensor(), refIt->second.toTensor())) {
+          auto actualOpt = asTensor(frame.getIValue(actualId));
+          if (actualOpt && tensorsMatch(*actualOpt, refIt->second.toTensor())) {
             state.verifiedIds.push_back(actualId);
           }
         }
@@ -1884,21 +2156,21 @@ void verifyAgainstReference(
         if (refIt == ref->end() || !refIt->second.isTensor()) {
           continue;
         }
-        const auto& actual = frame.getIValue(actualId);
-        if (!actual.isTensor()) {
+        auto actualOpt = asTensor(frame.getIValue(actualId));
+        if (!actualOpt) {
           continue;
         }
-        if (!tensorsMatch(actual.toTensor(), refIt->second.toTensor())) {
+        const at::Tensor& actualTensor = *actualOpt;
+        if (!tensorsMatch(actualTensor, refIt->second.toTensor())) {
           ++numCorrupted;
           auto limit = WaveConfig::get().tensorPrintElementLimit;
           LOG(ERROR) << "INPUT CORRUPTION: value %" << actualId
                      << " no longer matches reference\n  "
-                     << firstDifference(
-                            actual.toTensor(), refIt->second.toTensor())
+                     << firstDifference(actualTensor, refIt->second.toTensor())
                      << "\n  expected: "
                      << tensorDebugString(refIt->second.toTensor(), limit)
                      << "\n  actual:   "
-                     << tensorDebugString(actual.toTensor(), limit);
+                     << tensorDebugString(actualTensor, limit);
         }
       }
     }
@@ -1908,21 +2180,21 @@ void verifyAgainstReference(
       if (refIt == ref->end() || !refIt->second.isTensor()) {
         continue;
       }
-      const auto& actual = frame.getIValue(prevId);
-      if (!actual.isTensor()) {
+      auto actualOpt = asTensor(frame.getIValue(prevId));
+      if (!actualOpt) {
         continue;
       }
-      if (!tensorsMatch(actual.toTensor(), refIt->second.toTensor())) {
+      const at::Tensor& actualTensor = *actualOpt;
+      if (!tensorsMatch(actualTensor, refIt->second.toTensor())) {
         ++numCorrupted;
         auto limit = WaveConfig::get().tensorPrintElementLimit;
         LOG(ERROR) << "CORRUPTION: previously passed value %" << prevId
                    << " no longer matches reference\n  "
-                   << firstDifference(
-                          actual.toTensor(), refIt->second.toTensor())
+                   << firstDifference(actualTensor, refIt->second.toTensor())
                    << "\n  expected: "
                    << tensorDebugString(refIt->second.toTensor(), limit)
                    << "\n  actual:   "
-                   << tensorDebugString(actual.toTensor(), limit);
+                   << tensorDebugString(actualTensor, limit);
       }
     }
   }
@@ -2056,6 +2328,47 @@ void CompositeInvocation::execute(ExecutionState& state) {
     std::cout << "==== Node " << sequenceNumber_ << std::endl;
   }
 
+  // Run pre-pass standalone ops whose inputs are all available.
+  // Iterate until no more progress: each round may produce values
+  // that unblock subsequent standalones.
+  if (!prePassStandalones_.empty()) {
+    std::vector<bool> executed(prePassStandalones_.size(), false);
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      for (size_t k = 0; k < prePassStandalones_.size(); ++k) {
+        if (executed[k]) {
+          continue;
+        }
+        auto& launch = prePassStandalones_[k];
+        auto kernelIt = state.kernelMap->find(launch.standalone);
+        if (kernelIt == state.kernelMap->end()) {
+          executed[k] = true;
+          continue;
+        }
+        // Skip if already computed (e.g. by an earlier composite or
+        // runReadyGraphNodes); see nodeOutputsComputed.  Matches the guards in
+        // the post-step and deferred pre-pass loops below.
+        if (nodeOutputsComputed(launch.standalone, frame)) {
+          executed[k] = true;
+          continue;
+        }
+        bool allInputsReady = true;
+        for (const auto& input : launch.standalone->inputs()) {
+          if (isUnreadyNoneDependency(input.value, frame)) {
+            allInputsReady = false;
+            break;
+          }
+        }
+        if (allInputsReady) {
+          executeNode(launch.standalone, kernelIt->second, frame);
+          executed[k] = true;
+          progress = true;
+        }
+      }
+    }
+  }
+
   auto& sv0 = getStepVectors(state.stepVectors, sequenceNumber_, 0);
   auto& gridChoices = sv0.gridChoices;
   if (gridChoices.empty()) {
@@ -2073,6 +2386,12 @@ void CompositeInvocation::execute(ExecutionState& state) {
         .count();
   };
 
+  // Track eager standalone execution so the default CUDA stream can be
+  // synchronized before this invocation returns. Eager standalone ops run on
+  // the default stream while wave kernels run on the wave stream, and the two
+  // are otherwise unordered, so a final default-stream sync is needed.
+  bool ranStandalones = false;
+
   int32_t blockSize;
   for (int32_t stepIdx = 0;; ++stepIdx) {
     auto& sv = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
@@ -2087,6 +2406,10 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.gatherUs = elapsed(t0);
       }
     }
+    // StepVectors are pooled and reused across executions; reset the
+    // accumulated ref-check time so it reflects only this run (other timing
+    // fields are overwritten with '=' at their measurement point).
+    sv.refCheckUs = 0;
     if (sv.gridChanged) {
       invalidateReusedState(
           state.stepVectors[sequenceNumber_],
@@ -2094,7 +2417,8 @@ void CompositeInvocation::execute(ExecutionState& state) {
           sequenceNumber_,
           stepIdx);
     }
-    if (sv.kernels.empty() && sv.standalones.empty()) {
+    if (sv.kernels.empty() && sv.standalones.empty() &&
+        sv.shortcutStandalones.empty()) {
       break;
     }
 
@@ -2103,19 +2427,49 @@ void CompositeInvocation::execute(ExecutionState& state) {
           (WaveConfig::kNodes | WaveConfig::kLaunches)) {
         traceStep(stepIdx, sv, currentGridChoices);
       }
-      auto tStandalone = Clock::now();
+      // Metadata-only shortcut standalones are host-only and need no
+      // wave-stream sync; run them first in their tight, batch-timed loop.
+      runShortcutStandalones(
+          sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
+      // Wait for the wave stream before running eager standalone ops only when
+      // a standalone does device-side work. Such ops run on the default stream
+      // and read inputs produced by wave kernels; without this wait the eager
+      // op can read a wave-stream buffer whose producing kernel (or a pending
+      // arena recycle) has not completed, since the two streams are otherwise
+      // unordered. Shortcut ops only touch host-side tensor metadata, so they
+      // need no sync.
+      if (sv.hasGpuStandalones) {
+        state.stream->wait();
+      }
+      auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
       runStandalones(
           sv.standalones,
           state,
           *state.kernelMap,
           *state.standaloneIndices,
-          *state.standaloneStats);
+          *state.standaloneStats,
+          doTiming);
       if (doTiming) {
         sv.standaloneUs = elapsed(tStandalone);
       }
+      ranStandalones = true;
       state.launchDebugInfos.push_back(
           {nullptr, nullptr, 0, sequenceNumber_, stepIdx});
-      verifyAgainstReference(sv.standalones, frame, state);
+      {
+        // Drain streams outside the timed region (real standalone/GPU work
+        // belongs in e2e); time only the device-to-host copy and comparison.
+        bool timeRefCheck = doTiming && WaveConfig::get().referenceFrame;
+        if (timeRefCheck) {
+          state.stream->wait();
+          syncTorchDefaultStream();
+        }
+        auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
+        verifyAgainstReference(sv.shortcutStandalones, frame, state);
+        verifyAgainstReference(sv.standalones, frame, state);
+        if (timeRefCheck) {
+          sv.refCheckUs += elapsed(tRefCheck);
+        }
+      }
       continue;
     }
 
@@ -2264,19 +2618,36 @@ void CompositeInvocation::execute(ExecutionState& state) {
 
     int64_t standaloneElapsed = 0;
     auto runStepStandalones = [&]() {
+      // Metadata-only shortcut ops: host-only, tight batch-timed loop, no sync.
+      if (!sv.shortcutStandalones.empty()) {
+        runShortcutStandalones(
+            sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
+      }
       if (!sv.standalones.empty()) {
-        auto tStandalone = Clock::now();
+        auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
         runStandalones(
             sv.standalones,
             state,
             *state.kernelMap,
             *state.standaloneIndices,
-            *state.standaloneStats);
+            *state.standaloneStats,
+            doTiming);
         if (doTiming) {
           standaloneElapsed = elapsed(tStandalone);
         }
+        ranStandalones = true;
       }
     };
+
+    // If this step has device-side standalones, wait for the wave stream before
+    // the fused kernel launch. Such standalones run on the default stream and
+    // may read results of prior wave fused kernels; without this wait those
+    // results may not be complete, since the two streams are otherwise
+    // unordered. Shortcut standalones only touch host-side tensor metadata, so
+    // they need no sync.
+    if (sv.hasGpuStandalones) {
+      state.stream->wait();
+    }
 
     {
       auto tLaunch = Clock::now();
@@ -2314,8 +2685,101 @@ void CompositeInvocation::execute(ExecutionState& state) {
       }
     }
 
-    verifyAgainstReference(sv.standalones, frame, state);
-    verifyAgainstReference(sv.kernels, frame, state);
+    {
+      // Reference-frame checking does an extra device-to-host copy and a
+      // host-side comparison. This is debug-only overhead that inflates the
+      // measured wall time, so time it separately when it is on so the report
+      // can subtract it from the e2e time. Drain the wave and default streams
+      // first, OUTSIDE the timed region: that wait is for real GPU/standalone
+      // work that belongs in the e2e time, not the checking overhead. The waits
+      // inside verifyAgainstReference are then no-ops, so the timed span covers
+      // only the device-to-host copy and comparison.
+      bool timeRefCheck = doTiming && WaveConfig::get().referenceFrame;
+      if (timeRefCheck) {
+        state.stream->wait();
+        syncTorchDefaultStream();
+      }
+      auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
+      verifyAgainstReference(sv.shortcutStandalones, frame, state);
+      verifyAgainstReference(sv.standalones, frame, state);
+      verifyAgainstReference(sv.kernels, frame, state);
+      if (timeRefCheck) {
+        sv.refCheckUs += elapsed(tRefCheck);
+      }
+    }
+  }
+
+  // Run remaining pre-pass standalones that couldn't execute before
+  // the step loop (their inputs were produced by kernels).
+  if (!prePassStandalones_.empty()) {
+    for (auto& launch : prePassStandalones_) {
+      auto kernelIt = state.kernelMap->find(launch.standalone);
+      if (kernelIt == state.kernelMap->end()) {
+        continue;
+      }
+      if (nodeOutputsComputed(launch.standalone, frame)) {
+        continue;
+      }
+      bool allInputsReady = true;
+      for (const auto& input : launch.standalone->inputs()) {
+        if (isUnreadyNoneDependency(input.value, frame)) {
+          allInputsReady = false;
+          break;
+        }
+      }
+      if (allInputsReady) {
+        executeNode(launch.standalone, kernelIt->second, frame);
+      }
+    }
+  }
+
+  // If any eager standalone op ran, synchronize the default CUDA stream before
+  // returning. The eager ops run on the default stream and are otherwise
+  // unordered against wave-stream kernels of later invocations, which can
+  // recycle arena buffers an eager op still reads. This sync follows any
+  // wave-stream sync already done above (e.g. a device-to-host transfer).
+  if (ranStandalones) {
+    // Each step's standaloneUs already covers its eager ops (the per-op
+    // default- stream sync in runStandalones drains them at their own step), so
+    // this final sync is only for correctness -- it must not be folded back
+    // into any step's standalone time, which previously charged the whole-graph
+    // async tail to the first standalone step and over-reported standalone time
+    // past e2e.
+    syncTorchDefaultStream();
+  }
+}
+
+void CompositeInvocation::runDeferredStandalones(ExecutionState& state) {
+  if (prePassStandalones_.empty()) {
+    return;
+  }
+  auto& frame = *state.frame;
+  bool progress = true;
+  while (progress) {
+    progress = false;
+    for (auto& launch : prePassStandalones_) {
+      if (!launch.standalone) {
+        continue;
+      }
+      if (nodeOutputsComputed(launch.standalone, frame)) {
+        continue;
+      }
+      auto kernelIt = state.kernelMap->find(launch.standalone);
+      if (kernelIt == state.kernelMap->end()) {
+        continue;
+      }
+      bool allInputsReady = true;
+      for (const auto& input : launch.standalone->inputs()) {
+        if (isUnreadyNoneDependency(input.value, frame)) {
+          allInputsReady = false;
+          break;
+        }
+      }
+      if (allInputsReady) {
+        executeNode(launch.standalone, kernelIt->second, frame);
+        progress = true;
+      }
+    }
   }
 }
 
@@ -2355,6 +2819,9 @@ void CompositeInvocation::launch(
     // blocks of the same project op launched together with cooperative launch.
     folly::F14FastSet<uintptr_t> launched;
     for (int32_t active = 0; active < numBlocks; ++active) {
+      // launchIndices has one entry per block; guard the access so a short
+      // vector fails loudly instead of reading out of bounds.
+      TORCH_CHECK(active < static_cast<int32_t>(sv.launchIndices.size()));
       auto launchIdx = sv.launchIndices[active];
       bool hasBarriers = launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
           sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op &&
@@ -2488,6 +2955,12 @@ void CompositeInvocation::traceStep(
               << standaloneToString(launch.standalone);
   }
 
+  for (const auto& launch : sv.shortcutStandalones) {
+    auto opIdx = opInvocationIndex[launch.invocation];
+    std::cout << sequenceNumber_ << "." << opIdx << " shortcut "
+              << standaloneToString(launch.standalone);
+  }
+
   for (size_t i = 0; i < sv.kernels.size(); ++i) {
     const auto& launch = sv.kernels[i];
     auto opIdx = opInvocationIndex[launch.invocation];
@@ -2552,6 +3025,10 @@ std::string CompositeInvocation::toString(Listing mode, int32_t ordinal) const {
 
 void CompiledNode::execute(ExecutionState& state) {
   kernels_->execute(state);
+}
+
+void CompiledNode::runDeferredStandalones(ExecutionState& state) {
+  kernels_->runDeferredStandalones(state);
 }
 
 std::string CompiledNode::toString(Listing mode, int32_t ordinal) const {

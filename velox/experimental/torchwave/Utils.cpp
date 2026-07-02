@@ -18,11 +18,19 @@
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
-#include <type_traits>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
+#include <cstring>
 #include <fstream>
+#include <memory>
+#include <type_traits>
+#include <vector>
 
 #include <ATen/ATen.h>
+#include <ATen/Parallel.h>
 #include <ATen/core/dispatch/Dispatcher.h>
 #include <c10/util/StringUtil.h>
 #include <fmt/format.h>
@@ -300,6 +308,18 @@ std::string traceIValue(const c10::IValue& value) {
       s += std::to_string(t.size(d));
     }
     s += "]";
+    // For non-contiguous tensors also show the strides, since shape alone does
+    // not capture the layout.
+    if (t.defined() && !t.is_contiguous()) {
+      s += " strides[";
+      for (int64_t d = 0; d < t.dim(); ++d) {
+        if (d > 0) {
+          s += ", ";
+        }
+        s += std::to_string(t.stride(d));
+      }
+      s += "]";
+    }
     return s;
   }
   if (value.isList()) {
@@ -328,6 +348,43 @@ void setGraphDevice(nativert::Graph* graph, bool isCuda) {
       : c10::Device(c10::kCPU);
   nativert::Placement placement(target);
   graph->applyDevicePlacement(placement);
+
+  if (!isCuda) {
+    return;
+  }
+  // Factory ops (zeros, ones, full, empty, arange, ...) with a `device` schema
+  // parameter but no device attribute default to CPU.  applyDevicePlacement
+  // only rewrites existing device attributes, so their outputs would land on
+  // CPU and trip device-mismatch checks when combined with GPU tensors.  Inject
+  // device=target for any such node so the whole graph runs on the GPU.
+  for (auto& node : graph->nodes()) {
+    auto nodeTarget = node.target();
+    std::vector<std::string_view> atoms = c10::split(nodeTarget, '.');
+    if (atoms.size() < 3 || atoms[0] != "torch" || atoms[1] != "ops") {
+      continue;
+    }
+    if (node.tryGetAttribute("device") != nullptr ||
+        node.tryGetInput("device") != nullptr) {
+      continue;
+    }
+    auto schema = c10::Dispatcher::singleton().findSchema(
+        {fmt::format(
+             "{}::{}", atoms[atoms.size() - 3], atoms[atoms.size() - 2]),
+         std::string(atoms[atoms.size() - 1])});
+    if (!schema) {
+      continue;
+    }
+    bool hasDeviceArg = false;
+    for (const auto& arg : schema->schema().arguments()) {
+      if (arg.name() == "device") {
+        hasDeviceArg = true;
+        break;
+      }
+    }
+    if (hasDeviceArg) {
+      node.addAttribute(nativert::Attribute{"device", target});
+    }
+  }
 }
 
 namespace {
@@ -410,7 +467,13 @@ std::string tensorDebugString(const at::Tensor& t, int32_t maxElements) {
   auto limit = maxElements > 0 ? std::min<int64_t>(flat.numel(), maxElements)
                                : flat.numel();
   std::stringstream ss;
-  ss << "shape=" << t.sizes() << " dtype=" << t.dtype() << " [";
+  ss << "shape=" << t.sizes() << " dtype=" << t.dtype();
+  // For non-contiguous tensors also show the strides, since shape alone does
+  // not capture the layout.
+  if (t.defined() && !t.is_contiguous()) {
+    ss << " strides=" << t.strides();
+  }
+  ss << " [";
   for (int64_t i = 0; i < limit; ++i) {
     if (i > 0) {
       ss << ", ";
@@ -563,6 +626,39 @@ bool tensorsMatch(const at::Tensor& actual, const at::Tensor& expected) {
   return actual.cpu().equal(expected.cpu());
 }
 
+std::optional<at::Tensor> scalarLikeToTensor(const c10::IValue& iv) {
+  auto longOpts = at::TensorOptions().dtype(at::kLong).device(at::kCPU);
+  auto doubleOpts = at::TensorOptions().dtype(at::kDouble).device(at::kCPU);
+  if (iv.isInt()) {
+    return at::tensor(std::vector<int64_t>{iv.toInt()}, longOpts);
+  }
+  if (iv.isDouble()) {
+    return at::tensor(std::vector<double>{iv.toDouble()}, doubleOpts);
+  }
+  if (iv.isBool()) {
+    return at::tensor(std::vector<int64_t>{iv.toBool() ? 1 : 0}, longOpts)
+        .to(at::kBool);
+  }
+  if (iv.isIntList()) {
+    const auto& l = iv.toIntList();
+    return at::tensor(std::vector<int64_t>(l.begin(), l.end()), longOpts);
+  }
+  if (iv.isDoubleList()) {
+    const auto& l = iv.toDoubleList();
+    return at::tensor(std::vector<double>(l.begin(), l.end()), doubleOpts);
+  }
+  if (iv.isBoolList()) {
+    const auto& l = iv.toBoolList();
+    std::vector<int64_t> v;
+    v.reserve(l.size());
+    for (bool b : l) {
+      v.push_back(b ? 1 : 0);
+    }
+    return at::tensor(v, longOpts).to(at::kBool);
+  }
+  return std::nullopt;
+}
+
 std::string tensorToString(const at::Tensor& t) {
   auto cpu = t.cpu().contiguous();
   auto flat = cpu.flatten();
@@ -575,59 +671,163 @@ std::string tensorToString(const at::Tensor& t) {
   return ss.str();
 }
 
-void saveReferenceFrame(
-    const nativert::ExecutionFrame& frame,
-    const nativert::Graph& graph,
-    const std::string& path) {
-  c10::impl::GenericDict dict(c10::IntType::get(), c10::AnyType::get());
-  for (const auto* value : graph.values()) {
-    if (!value) {
-      continue;
-    }
-    auto id = value->id();
-    const auto& iv = frame.getIValue(id);
-    if (iv.isNone()) {
-      continue;
-    }
-    if (iv.isTensor()) {
-      const auto& t = iv.toTensor();
-      if (t.numel() > 0) {
-        dict.insert(static_cast<int64_t>(id), c10::IValue(t.cpu()));
-      }
-    } else if (iv.isInt() || iv.isDouble() || iv.isBool()) {
-      dict.insert(static_cast<int64_t>(id), iv);
-    }
-  }
-  auto data = torch::jit::pickle_save(c10::IValue(dict));
-  std::ofstream out(path, std::ios::binary);
-  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+// Reference-frame binary format ("TWREF\0\0\1").
+//
+// The reference frame is a {valueId -> tensor|scalar} map that can be very
+// large (10K+ tensors, multiple GB). The flat-pickle format (torch::jit::
+// pickle_save) inlines every tensor's bytes in one stream, so loading it
+// requires reading the whole file and then memcpy-ing every tensor into a
+// freshly allocated storage, all single-threaded.
+//
+// This format stores each tensor's raw bytes as a separately addressable,
+// 64-byte-aligned region after a small header. Loading mmaps the file and
+// constructs each tensor as a zero-copy view (at::from_blob) over the mapping,
+// in parallel. No per-tensor allocation or copy happens. The mmap is kept
+// alive for the lifetime of the returned tensors via a shared_ptr captured in
+// each tensor's deleter. Endianness is host-native (internal tool).
+namespace {
+
+constexpr char kRefMagic[8] = {'T', 'W', 'R', 'E', 'F', '\0', '\0', '1'};
+
+enum RefKind : int32_t {
+  kRefTensor = 0,
+  kRefInt = 1,
+  kRefDouble = 2,
+  kRefBool = 3,
+};
+
+uint64_t roundUp64(uint64_t x) {
+  return (x + 63) & ~static_cast<uint64_t>(63);
 }
 
-void saveReferenceFrame(
-    const nativert::ExecutionFrame& frame,
-    int32_t numValues,
-    const std::string& path) {
-  c10::impl::GenericDict dict(c10::IntType::get(), c10::AnyType::get());
-  for (int32_t id = 0; id < numValues; ++id) {
-    const auto& iv = frame.getIValue(id);
-    if (iv.isNone()) {
-      continue;
-    }
-    if (iv.isTensor()) {
-      const auto& t = iv.toTensor();
-      if (t.numel() > 0) {
-        dict.insert(static_cast<int64_t>(id), c10::IValue(t.cpu()));
-      }
-    } else if (iv.isInt() || iv.isDouble() || iv.isBool()) {
-      dict.insert(static_cast<int64_t>(id), iv);
+struct RefEntry {
+  int32_t id{0};
+  int32_t kind{0};
+  int32_t scalarType{0}; // tensor only
+  std::vector<int64_t> dims; // tensor only
+  uint64_t offset{0}; // tensor: byte offset of blob; scalar: raw value bits
+  uint64_t length{0}; // tensor: blob byte length; scalar: 0
+};
+
+// RAII holder for an mmap region, shared across all tensors that view it.
+// Non-copyable so the mapping is unmapped exactly once, when the last tensor
+// viewing it is destroyed.
+struct MmapHolder {
+  void* addr;
+  size_t size;
+  MmapHolder(void* a, size_t s) : addr(a), size(s) {}
+  MmapHolder(const MmapHolder&) = delete;
+  MmapHolder& operator=(const MmapHolder&) = delete;
+  MmapHolder(MmapHolder&&) = delete;
+  MmapHolder& operator=(MmapHolder&&) = delete;
+  ~MmapHolder() {
+    if (addr != nullptr && addr != MAP_FAILED) {
+      ::munmap(addr, size);
     }
   }
-  auto data = torch::jit::pickle_save(c10::IValue(dict));
-  std::ofstream out(path, std::ios::binary);
-  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+};
+
+template <typename T>
+void appendPod(std::vector<char>& buf, const T& v) {
+  const char* p = reinterpret_cast<const char*>(&v);
+  buf.insert(buf.end(), p, p + sizeof(T));
 }
 
-std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(
+// Serializes a list of (id, IValue) entries to the TWREF format.
+void serializeReferenceFrame(
+    const std::vector<std::pair<int32_t, c10::IValue>>& items,
+    const std::string& path) {
+  // Hold contiguous CPU copies of tensors alive until they are written.
+  std::vector<at::Tensor> heldTensors;
+  std::vector<RefEntry> entries;
+  std::vector<const void*> blobs;
+  entries.reserve(items.size());
+  blobs.reserve(items.size());
+
+  for (const auto& [id, iv] : items) {
+    RefEntry e{};
+    e.id = id;
+    // Tensors are stored as-is; scalars and scalar lists are wrapped into a 1-D
+    // tensor of the matching dtype so they live on the same (kRefTensor) path
+    // and can be compared element-wise at check time.
+    at::Tensor t;
+    if (iv.isTensor()) {
+      t = iv.toTensor();
+    } else if (auto st = scalarLikeToTensor(iv)) {
+      t = *st;
+    } else {
+      continue;
+    }
+    t = t.cpu().contiguous();
+    heldTensors.push_back(t);
+    e.kind = kRefTensor;
+    e.scalarType = static_cast<int32_t>(t.scalar_type());
+    e.dims = t.sizes().vec();
+    e.length = static_cast<uint64_t>(t.nbytes());
+    blobs.push_back(t.data_ptr());
+    entries.push_back(std::move(e));
+  }
+
+  // Compute header size and per-tensor blob offsets.
+  uint64_t headerSize = sizeof(kRefMagic) + sizeof(uint32_t);
+  for (const auto& e : entries) {
+    headerSize += 4 + 4 + 4 + 4; // id, kind, scalarType, ndim
+    headerSize += sizeof(int64_t) * e.dims.size(); // dims
+    headerSize += 8 + 8; // offset, length
+  }
+  uint64_t dataStart = roundUp64(headerSize);
+  uint64_t cursor = dataStart;
+  for (auto& e : entries) {
+    if (e.kind == kRefTensor) {
+      e.offset = cursor;
+      cursor += roundUp64(e.length);
+    }
+  }
+
+  // Build the header buffer.
+  std::vector<char> header;
+  header.reserve(headerSize);
+  header.insert(header.end(), kRefMagic, kRefMagic + sizeof(kRefMagic));
+  appendPod(header, static_cast<uint32_t>(entries.size()));
+  for (const auto& e : entries) {
+    appendPod(header, e.id);
+    appendPod(header, e.kind);
+    appendPod(header, e.scalarType);
+    appendPod(header, static_cast<int32_t>(e.dims.size()));
+    for (int64_t d : e.dims) {
+      appendPod(header, d);
+    }
+    appendPod(header, e.offset);
+    appendPod(header, e.length);
+  }
+
+  std::ofstream out(path, std::ios::binary);
+  TORCH_CHECK(out.good(), "Cannot open reference frame for write: ", path);
+  out.write(header.data(), static_cast<std::streamsize>(header.size()));
+  // Pad to dataStart.
+  static const char zeros[64] = {0};
+  uint64_t pad = dataStart - header.size();
+  out.write(zeros, static_cast<std::streamsize>(pad));
+  // Write each tensor blob, 64-byte padded.
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const auto& e = entries[i];
+    if (e.kind != kRefTensor) {
+      continue;
+    }
+    out.write(
+        reinterpret_cast<const char*>(blobs[i]),
+        static_cast<std::streamsize>(e.length));
+    uint64_t bpad = roundUp64(e.length) - e.length;
+    while (bpad > 0) {
+      auto n = std::min<uint64_t>(bpad, sizeof(zeros));
+      out.write(zeros, static_cast<std::streamsize>(n));
+      bpad -= n;
+    }
+  }
+}
+
+// Fallback loader for the legacy flat-pickle format.
+std::unordered_map<int32_t, c10::IValue> loadReferenceFramePickle(
     const std::string& path) {
   std::ifstream in(path, std::ios::binary | std::ios::ate);
   TORCH_CHECK(in.good(), "Cannot open reference frame: ", path);
@@ -640,6 +840,229 @@ std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(
   std::unordered_map<int32_t, c10::IValue> result;
   for (const auto& entry : ivalue.toGenericDict()) {
     result[static_cast<int32_t>(entry.key().toInt())] = entry.value();
+  }
+  return result;
+}
+
+} // namespace
+
+void saveReferenceFrame(
+    const nativert::ExecutionFrame& frame,
+    const nativert::Graph& graph,
+    const std::string& path) {
+  std::vector<std::pair<int32_t, c10::IValue>> items;
+  for (const auto* value : graph.values()) {
+    if (!value) {
+      continue;
+    }
+    auto id = value->id();
+    const auto& iv = frame.getIValue(id);
+    if (iv.isNone()) {
+      continue;
+    }
+    if (iv.isTensor()) {
+      if (iv.toTensor().numel() > 0) {
+        items.emplace_back(static_cast<int32_t>(id), iv);
+      }
+    } else if (
+        iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
+      items.emplace_back(static_cast<int32_t>(id), iv);
+    }
+  }
+  serializeReferenceFrame(items, path);
+}
+
+void saveReferenceFrame(
+    const nativert::ExecutionFrame& frame,
+    int32_t numValues,
+    const std::string& path) {
+  std::vector<std::pair<int32_t, c10::IValue>> items;
+  for (int32_t id = 0; id < numValues; ++id) {
+    const auto& iv = frame.getIValue(id);
+    if (iv.isNone()) {
+      continue;
+    }
+    if (iv.isTensor()) {
+      if (iv.toTensor().numel() > 0) {
+        items.emplace_back(id, iv);
+      }
+    } else if (
+        iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
+      items.emplace_back(id, iv);
+    }
+  }
+  serializeReferenceFrame(items, path);
+}
+
+void saveReferenceFrame(
+    const nativert::ExecutionFrame& frame,
+    const nativert::Graph& graph,
+    const std::unordered_map<int64_t, at::Tensor>& capturedTensors,
+    const std::string& path) {
+  std::vector<std::pair<int32_t, c10::IValue>> items;
+  for (const auto* value : graph.values()) {
+    if (!value) {
+      continue;
+    }
+    auto id = static_cast<int64_t>(value->id());
+    // Prefer the copy captured the instant the node ran; it cannot have been
+    // corrupted by a later in-place write.
+    auto it = capturedTensors.find(id);
+    if (it != capturedTensors.end()) {
+      if (it->second.numel() > 0) {
+        items.emplace_back(static_cast<int32_t>(id), c10::IValue(it->second));
+      }
+      continue;
+    }
+    const auto& iv = frame.getIValue(value->id());
+    if (iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
+      items.emplace_back(static_cast<int32_t>(id), iv);
+    }
+  }
+  serializeReferenceFrame(items, path);
+}
+
+void saveTensorList(
+    const std::vector<at::Tensor>& tensors,
+    const std::string& path) {
+  c10::List<at::Tensor> list;
+  for (const auto& t : tensors) {
+    if (t.defined()) {
+      list.push_back(t.cpu());
+    }
+  }
+  auto data = torch::jit::pickle_save(c10::IValue(list));
+  std::ofstream out(path, std::ios::binary);
+  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
+std::vector<at::Tensor> loadTensorList(const std::string& path) {
+  std::ifstream in(path, std::ios::binary | std::ios::ate);
+  if (!in.good()) {
+    return {};
+  }
+  auto size = in.tellg();
+  in.seekg(0);
+  std::vector<char> data(size);
+  in.read(data.data(), size);
+  auto ivalue = torch::jit::pickle_load(data);
+  TORCH_CHECK(ivalue.isList(), "Expected list in tensor list file");
+  std::vector<at::Tensor> result;
+  for (const auto& element : ivalue.toListRef()) {
+    result.push_back(element.toTensor());
+  }
+  return result;
+}
+
+std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(
+    const std::string& path) {
+  int fd = ::open(path.c_str(), O_RDONLY);
+  TORCH_CHECK(fd >= 0, "Cannot open reference frame: ", path);
+  struct stat st{};
+  TORCH_CHECK(::fstat(fd, &st) == 0, "fstat failed: ", path);
+  size_t fileSize = static_cast<size_t>(st.st_size);
+
+  // Detect the format from the magic header; fall back to flat pickle.
+  bool isTwref = false;
+  if (fileSize >= sizeof(kRefMagic)) {
+    char magic[sizeof(kRefMagic)];
+    isTwref = (::pread(fd, magic, sizeof(magic), 0) ==
+               static_cast<ssize_t>(sizeof(magic))) &&
+        std::memcmp(magic, kRefMagic, sizeof(kRefMagic)) == 0;
+  }
+  if (!isTwref) {
+    ::close(fd);
+    return loadReferenceFramePickle(path);
+  }
+
+  void* addr = ::mmap(nullptr, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+  ::close(fd);
+  TORCH_CHECK(addr != MAP_FAILED, "mmap failed: ", path);
+  ::madvise(addr, fileSize, MADV_WILLNEED);
+  auto holder = std::make_shared<MmapHolder>(addr, fileSize);
+  const char* base = static_cast<const char*>(addr);
+
+  // Parse the (small) header sequentially.
+  size_t cursor = sizeof(kRefMagic);
+  uint32_t count = 0;
+  std::memcpy(&count, base + cursor, sizeof(count));
+  cursor += sizeof(count);
+
+  std::vector<RefEntry> entries(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    RefEntry& e = entries[i];
+    std::memcpy(&e.id, base + cursor, 4);
+    cursor += 4;
+    std::memcpy(&e.kind, base + cursor, 4);
+    cursor += 4;
+    std::memcpy(&e.scalarType, base + cursor, 4);
+    cursor += 4;
+    int32_t ndim = 0;
+    std::memcpy(&ndim, base + cursor, 4);
+    cursor += 4;
+    e.dims.resize(ndim);
+    for (int32_t d = 0; d < ndim; ++d) {
+      std::memcpy(&e.dims[d], base + cursor, sizeof(int64_t));
+      cursor += sizeof(int64_t);
+    }
+    std::memcpy(&e.offset, base + cursor, 8);
+    cursor += 8;
+    std::memcpy(&e.length, base + cursor, 8);
+    cursor += 8;
+  }
+
+  // Build the IValues in parallel: tensors are zero-copy views over the mmap.
+  std::vector<c10::IValue> values(count);
+  at::parallel_for(
+      0, count, /*grain_size=*/64, [&](int64_t begin, int64_t end) {
+        for (int64_t i = begin; i < end; ++i) {
+          const RefEntry& e = entries[i];
+          switch (e.kind) {
+            case kRefTensor: {
+              auto options =
+                  at::TensorOptions()
+                      .dtype(static_cast<at::ScalarType>(e.scalarType))
+                      .device(at::kCPU);
+              void* data =
+                  const_cast<void*>(static_cast<const void*>(base + e.offset));
+              values[i] = c10::IValue(
+                  at::from_blob(
+                      data,
+                      e.dims,
+                      [holder](
+                          void*) { /* mapping freed when last tensor dies */ },
+                      options));
+              break;
+            }
+            case kRefInt: {
+              int64_t v = 0;
+              std::memcpy(&v, &e.offset, sizeof(int64_t));
+              values[i] = c10::IValue(v);
+              break;
+            }
+            case kRefDouble: {
+              double v = 0;
+              std::memcpy(&v, &e.offset, sizeof(double));
+              values[i] = c10::IValue(v);
+              break;
+            }
+            case kRefBool: {
+              values[i] = c10::IValue(e.offset != 0);
+              break;
+            }
+            default:
+              break;
+          }
+        }
+      });
+
+  std::unordered_map<int32_t, c10::IValue> result;
+  result.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    result.emplace(entries[i].id, std::move(values[i]));
   }
   return result;
 }
@@ -688,6 +1111,158 @@ bool isInPlaceMutation(NodeCP node, ValueCP value) {
   auto target = std::string(node->target());
   return target.find("_.") != std::string::npos ||
       (target.size() > 1 && target.back() == '_');
+}
+
+namespace {
+// True if two alias annotations name a common alias set (i.e. the values share
+// storage), e.g. self Tensor(a!) and return Tensor(a!) on add_.
+bool aliasSetsIntersect(const c10::AliasInfo& a, const c10::AliasInfo& b) {
+  for (const auto& sym : a.beforeSets()) {
+    if (b.beforeSets().count(sym) != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
+ValueCP viewStorageBase(ValueCP value) {
+  // Follow storage-aliasing edges from a value to its base. Two kinds of edge
+  // alias an output to an input: a view (output is a view of input 'viewOfArg')
+  // and an in-place op (the FunctionSchema gives the output and the mutated
+  // self the same alias set, e.g. add_/clamp_ Tensor(a!) -> Tensor(a!)). Both
+  // must be followed so that a, a.view(), and a.add_(...) all resolve to the
+  // same base. Bounded by the graph's acyclicity.
+  while (value != nullptr) {
+    auto* producer = value->producer();
+    if (producer == nullptr) {
+      break;
+    }
+    ValueCP next = nullptr;
+
+    // 1. torchwave view metadata (static op property, no thread WaveGraph
+    // needed, so this works in GraphTool too).
+    const auto* meta = Registry::metadata(producer->target());
+    if (meta != nullptr && meta->viewOfArg.has_value()) {
+      auto ordinal = *meta->viewOfArg;
+      if (ordinal >= 0 &&
+          static_cast<size_t>(ordinal) < producer->inputs().size()) {
+        next = producer->inputs()[ordinal].value;
+      }
+    }
+
+    // 2. Schema alias: the output 'value' shares an alias set with an input.
+    if (next == nullptr) {
+      const auto* schema = findFunctionSchema(producer->target());
+      if (schema != nullptr) {
+        const auto& outputs = producer->outputs();
+        int32_t outIdx = -1;
+        for (size_t i = 0; i < outputs.size(); ++i) {
+          if (outputs[i] == value) {
+            outIdx = static_cast<int32_t>(i);
+            break;
+          }
+        }
+        if (outIdx >= 0 &&
+            static_cast<size_t>(outIdx) < schema->returns().size()) {
+          const auto* outAlias = schema->returns()[outIdx].alias_info();
+          if (outAlias != nullptr) {
+            const auto& args = schema->arguments();
+            const auto& inputs = producer->inputs();
+            for (size_t j = 0; j < inputs.size() && j < args.size(); ++j) {
+              const auto* inAlias = args[j].alias_info();
+              if (inAlias != nullptr &&
+                  aliasSetsIntersect(*inAlias, *outAlias)) {
+                next = inputs[j].value;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (next == nullptr || next == value) {
+      break;
+    }
+    value = next;
+  }
+  return value;
+}
+
+std::vector<ValueCP> dataMutatedInputs(NodeCP node) {
+  std::vector<ValueCP> result;
+  auto target = node->target();
+  // detach_/lift_fresh_ carry a write-alias annotation but do not change tensor
+  // data (autograd bookkeeping only); ignore them for data dependencies.
+  if (target.find("detach") != std::string_view::npos ||
+      target.find("lift_fresh") != std::string_view::npos) {
+    return result;
+  }
+  const auto* schema = findFunctionSchema(target);
+  if (schema == nullptr) {
+    // No schema: fall back to the trailing-underscore convention used by
+    // isInPlaceMutation, assuming the first input is the mutated self.
+    bool inPlace = target.find("_.") != std::string_view::npos ||
+        (!target.empty() && target.back() == '_');
+    if (inPlace && !node->inputs().empty() && node->inputs()[0].value) {
+      result.push_back(node->inputs()[0].value);
+    }
+    return result;
+  }
+  const auto& inputs = node->inputs();
+  const auto& args = schema->arguments();
+  for (size_t i = 0; i < inputs.size() && i < args.size(); ++i) {
+    const auto* aliasInfo = args[i].alias_info();
+    if (aliasInfo != nullptr && aliasInfo->isWrite() && inputs[i].value) {
+      result.push_back(inputs[i].value);
+    }
+  }
+  return result;
+}
+
+bool baseMutatedAfter(
+    const nativert::Graph& graph,
+    NodeCP afterNode,
+    ValueCP value) {
+  auto* base = viewStorageBase(value);
+  bool seenAfter = false;
+  for (const auto& node : graph.nodes()) {
+    if (!seenAfter) {
+      if (&node == afterNode) {
+        seenAfter = true;
+      }
+      continue;
+    }
+    for (auto* mutated : dataMutatedInputs(&node)) {
+      if (viewStorageBase(mutated) == base) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool isUnreadyNoneDependency(ValueCP value, nativert::ExecutionFrame& frame) {
+  // A value whose static type is None (an `asNone` optional argument) is
+  // legitimately None and will never be produced -- it must not block its
+  // consumer.  Only a runtime-None value with a non-None static type is an
+  // unready dependency awaiting a producer.
+  return value->type().kind() != nativert::Type::Kind::None &&
+      frame.getIValue(value->id()).isNone();
+}
+
+bool nodeOutputsComputed(NodeCP node, nativert::ExecutionFrame& frame) {
+  const auto& outputs = node->outputs();
+  if (outputs.empty()) {
+    return false;
+  }
+  for (auto* output : outputs) {
+    if (frame.getIValue(output->id()).isNone()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 TraceState parseTraceValues(const std::string& csv) {

@@ -256,6 +256,10 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Mark sorted.
     VELOX_REGISTER_QUERY_CONFIG(kMarkSortedZeroCopyThreshold);
 
+    // RPC congestion.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMinWindow);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionStepCoef);
+
 #undef VELOX_REGISTER_QUERY_CONFIG
 
     return properties;

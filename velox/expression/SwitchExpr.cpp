@@ -268,9 +268,9 @@ TypePtr resolveTypeInt(
         "Condition of  SWITCH statement is not bool");
 
     if (*thenType != *resultType) {
-      if (allowedCoercions && coercer.coercible(thenType, resultType)) {
+      if (allowedCoercions && coercer.coerce(thenType, resultType)) {
         coercions[i * 2 + 1] = resultType;
-      } else if (allowedCoercions && coercer.coercible(resultType, thenType)) {
+      } else if (allowedCoercions && coercer.coerce(resultType, thenType)) {
         resultType = thenType;
         setCoercionsUpTo(i * 2 - 1, resultType);
       } else {
@@ -288,9 +288,9 @@ TypePtr resolveTypeInt(
     const auto& elseType = argTypes.back();
 
     if (*elseType != *resultType) {
-      if (allowedCoercions && coercer.coercible(elseType, resultType)) {
+      if (allowedCoercions && coercer.coerce(elseType, resultType)) {
         coercions.back() = resultType;
-      } else if (allowedCoercions && coercer.coercible(resultType, elseType)) {
+      } else if (allowedCoercions && coercer.coerce(resultType, elseType)) {
         resultType = elseType;
         setCoercionsUpTo(numArgs - 2, resultType);
       } else {

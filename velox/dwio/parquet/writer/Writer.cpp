@@ -22,10 +22,11 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include "velox/common/Casts.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/core/QueryConfig.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/dwio/parquet/writer/arrow/ArrowSchema.h"
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
 #include "velox/dwio/parquet/writer/arrow/Writer.h"
@@ -131,16 +132,45 @@ Compression::type getArrowParquetCompression(
 
 namespace {
 
+std::optional<TimestampPrecision> toTimestampPrecision(
+    std::optional<uint8_t> unit) {
+  if (!unit) {
+    return std::nullopt;
+  }
+  VELOX_CHECK(
+      *unit == 3 /*milli*/ || *unit == 6 /*micro*/ || *unit == 9 /*nano*/,
+      "Invalid timestamp unit: {}",
+      *unit);
+  return static_cast<TimestampPrecision>(*unit);
+}
+
+// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
+// "6" (micro), or "9" (nano).
+TimestampPrecision stringToTimestampPrecision(const std::string& value) {
+  return toTimestampPrecision(std::optional{folly::to<uint8_t>(value)}).value();
+}
+
+const ParquetWriterOptions& getFormatOptions(
+    const dwio::common::WriterOptions& options) {
+  static const ParquetWriterOptions kDefaultOptions;
+  if (!options.formatSpecificOptions) {
+    return kDefaultOptions;
+  }
+  return *checkedPointerCast<ParquetWriterOptions>(
+      options.formatSpecificOptions);
+}
+
 std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
-    const parquet::WriterOptions& options,
+    const dwio::common::WriterOptions& options,
+    const ParquetWriterOptions& parquetOptions,
     const std::unique_ptr<DefaultFlushPolicy>& flushPolicy) {
   auto builder = WriterProperties::Builder();
   WriterProperties::Builder* properties = &builder;
-  if (options.enableDictionary.value_or(
+  if (parquetOptions.enableDictionary.value_or(
           facebook::velox::parquet::arrow::DEFAULT_IS_DICTIONARY_ENABLED)) {
     properties = properties->enableDictionary();
     properties = properties->dictionaryPagesizeLimit(
-        options.dictionaryPageSizeLimit.value_or(
+        parquetOptions.dictionaryPageSizeLimit.value_or(
             facebook::velox::parquet::arrow::
                 DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT));
   } else {
@@ -148,31 +178,32 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   }
   properties = properties->compression(getArrowParquetCompression(
       options.compressionKind.value_or(common::CompressionKind_NONE)));
-  for (const auto& columnCompressionValues : options.columnCompressionsMap) {
+  for (const auto& columnCompressionValues :
+       parquetOptions.columnCompressionsMap) {
     properties->compression(
         columnCompressionValues.first,
         getArrowParquetCompression(columnCompressionValues.second));
   }
-  properties = properties->encoding(options.encoding);
-  properties = properties->dataPagesize(options.dataPageSize.value_or(
+  properties = properties->encoding(parquetOptions.encoding);
+  properties = properties->dataPagesize(parquetOptions.dataPageSize.value_or(
       facebook::velox::parquet::arrow::kDefaultDataPageSize));
-  properties = properties->writeBatchSize(options.batchSize.value_or(
+  properties = properties->writeBatchSize(parquetOptions.batchSize.value_or(
       facebook::velox::parquet::arrow::DEFAULT_WRITE_BATCH_SIZE));
   properties = properties->maxRowGroupLength(
       static_cast<int64_t>(flushPolicy->rowsInRowGroup()));
-  properties = properties->codecOptions(options.codecOptions);
-  if (options.enableStoreDecimalAsInteger.value_or(true)) {
+  properties = properties->codecOptions(parquetOptions.codecOptions);
+  if (parquetOptions.enableStoreDecimalAsInteger.value_or(true)) {
     properties = properties->enableStoreDecimalAsInteger();
   } else {
     properties = properties->disableStoreDecimalAsInteger();
   }
-  if (options.useParquetDataPageV2.value_or(false)) {
+  if (parquetOptions.useParquetDataPageV2.value_or(false)) {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V2);
   } else {
     properties = properties->dataPageVersion(arrow::ParquetDataPageVersion::V1);
   }
-  if (options.createdBy.has_value()) {
-    properties = properties->createdBy(options.createdBy.value());
+  if (parquetOptions.createdBy.has_value()) {
+    properties = properties->createdBy(parquetOptions.createdBy.value());
   }
   return properties->build();
 }
@@ -290,24 +321,6 @@ std::shared_ptr<::arrow::Field> updateFieldNameAndIdRecursive(
   return newField;
 }
 
-std::optional<TimestampPrecision> toTimestampPrecision(
-    std::optional<uint8_t> unit) {
-  if (!unit) {
-    return std::nullopt;
-  }
-  VELOX_CHECK(
-      *unit == 3 /*milli*/ || *unit == 6 /*micro*/ || *unit == 9 /*nano*/,
-      "Invalid timestamp unit: {}",
-      *unit);
-  return static_cast<TimestampPrecision>(*unit);
-}
-
-// Converts a string to TimestampPrecision. Accepts numeric values "3" (milli),
-// "6" (micro), or "9" (nano).
-TimestampPrecision stringToTimestampPrecision(const std::string& value) {
-  return toTimestampPrecision(std::optional{folly::to<uint8_t>(value)}).value();
-}
-
 std::optional<bool> isParquetV2(std::optional<std::string> version) {
   if (!version) {
     return std::nullopt;
@@ -358,7 +371,7 @@ std::optional<int64_t> toParquetBatchSize(
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options,
+    const dwio::common::WriterOptions& options,
     std::shared_ptr<memory::MemoryPool> pool,
     RowTypePtr schema)
     : pool_(std::move(pool)),
@@ -367,33 +380,60 @@ Writer::Writer(
           std::make_shared<ArrowDataBufferSink>(
               std::move(sink),
               *generalPool_,
-              options.bufferGrowRatio)),
+              getFormatOptions(options).bufferGrowRatio)),
       arrowContext_(std::make_shared<ArrowContext>()),
       schema_(std::move(schema)) {
-  validateSchemaRecursive(schema_, options.parquetFieldIds);
+  const auto& parquetWriterOptions = getFormatOptions(options);
+  validateSchemaRecursive(schema_, parquetWriterOptions.parquetFieldIds);
+  auto parquetWriteTimestampUnit =
+      parquetWriterOptions.parquetWriteTimestampUnit;
+  if (const auto serdeTimestampUnitIt = options.serdeParameters.find(
+          std::string(ParquetConfig::kWriterSerdeTimestampUnit));
+      serdeTimestampUnitIt != options.serdeParameters.end()) {
+    parquetWriteTimestampUnit =
+        stringToTimestampPrecision(serdeTimestampUnitIt->second);
+  }
+  auto parquetWriteTimestampTimeZone =
+      parquetWriterOptions.parquetWriteTimestampTimeZone;
+  if (const auto serdeTimestampTimezoneIt = options.serdeParameters.find(
+          std::string(ParquetConfig::kWriterSerdeTimestampTimezone));
+      serdeTimestampTimezoneIt != options.serdeParameters.end()) {
+    parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second.empty()
+        ? std::optional<std::string>{std::nullopt}
+        : std::optional<std::string>{serdeTimestampTimezoneIt->second};
+  } else if (
+      !parquetWriteTimestampTimeZone.has_value() &&
+      !options.sessionTimezoneName.empty()) {
+    parquetWriteTimestampTimeZone = options.sessionTimezoneName;
+  }
 
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
+  } else if (options.maxTargetFileSizeBytes > 0) {
+    auto bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
+        DefaultFlushPolicy::kDefaultBytesInRowGroup,
+        options.maxTargetFileSizeBytes));
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
+        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
   } else {
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
   }
-  options_.timestampUnit =
-      static_cast<TimestampUnit>(options.parquetWriteTimestampUnit.value_or(
-          TimestampPrecision::kNanoseconds));
-  options_.timestampTimeZone = options.parquetWriteTimestampTimeZone;
+  options_.timestampUnit = static_cast<TimestampUnit>(
+      parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
+  options_.timestampTimeZone = parquetWriteTimestampTimeZone;
   common::testutil::TestValue::adjust(
       "facebook::velox::parquet::Writer::Writer", &options_);
   arrowContext_->properties =
-      getArrowParquetWriterOptions(options, flushPolicy_);
+      getArrowParquetWriterOptions(options, parquetWriterOptions, flushPolicy_);
   setMemoryReclaimers();
-  writeInt96AsTimestamp_ = options.writeInt96AsTimestamp;
-  arrowMemoryPool_ = options.arrowMemoryPool;
-  parquetFieldIds_ = std::move(options.parquetFieldIds);
+  writeInt96AsTimestamp_ = parquetWriterOptions.writeInt96AsTimestamp;
+  arrowMemoryPool_ = parquetWriterOptions.arrowMemoryPool;
+  parquetFieldIds_ = parquetWriterOptions.parquetFieldIds;
 }
 
 Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
-    const WriterOptions& options,
+    const dwio::common::WriterOptions& options,
     RowTypePtr schema)
     : Writer{
           std::move(sink),
@@ -590,111 +630,39 @@ bool Writer::needFlatten(const VectorPtr& data) const {
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
     const std::shared_ptr<dwio::common::WriterOptions>& options) {
-  auto parquetOptions =
-      std::dynamic_pointer_cast<parquet::WriterOptions>(options);
-  VELOX_CHECK_NOT_NULL(
-      parquetOptions,
-      "Parquet writer factory expected a Parquet WriterOptions object.");
   return std::make_unique<Writer>(
-      std::move(sink), *parquetOptions, asRowType(options->schema));
+      std::move(sink), *options, asRowType(options->schema));
 }
 
 std::unique_ptr<dwio::common::WriterOptions>
 ParquetWriterFactory::createWriterOptions() {
-  return std::make_unique<parquet::WriterOptions>();
+  return std::make_unique<dwio::common::WriterOptions>();
 }
 
-void WriterOptions::processConfigs(
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+ParquetWriterFactory::createFormatOptions(
     const config::ConfigBase& connectorConfig,
-    const config::ConfigBase& session) {
-  auto parquetWriterOptions = dynamic_cast<WriterOptions*>(this);
-  VELOX_CHECK_NOT_NULL(
-      parquetWriterOptions, "Expected a Parquet WriterOptions object.");
-
-  // Check serdeParameters for timestamp settings first (highest priority).
-  auto serdeTimestampUnitIt =
-      serdeParameters.find(WriterConfig::kParquetSerdeTimestampUnit);
-  if (serdeTimestampUnitIt != serdeParameters.end()) {
-    parquetWriteTimestampUnit =
-        stringToTimestampPrecision(serdeTimestampUnitIt->second);
-  }
-
-  auto serdeTimestampTimezoneIt =
-      serdeParameters.find(WriterConfig::kParquetSerdeTimestampTimezone);
-  if (serdeTimestampTimezoneIt != serdeParameters.end()) {
-    // Empty string means no timezone conversion (nullopt).
-    if (serdeTimestampTimezoneIt->second.empty()) {
-      parquetWriteTimestampTimeZone = std::nullopt;
-    } else {
-      parquetWriteTimestampTimeZone = serdeTimestampTimezoneIt->second;
-    }
-  }
-
-  if (!parquetWriteTimestampUnit) {
-    parquetWriteTimestampUnit =
-        toTimestampPrecision(session.getWithFallback<uint8_t>(
-            WriterConfig::kParquetSessionWriteTimestampUnit, connectorConfig));
-  }
-  if (!parquetWriteTimestampTimeZone) {
-    parquetWriteTimestampTimeZone = parquetWriterOptions->sessionTimezoneName;
-  }
-
-  if (!enableDictionary) {
-    enableDictionary = toBoolConfigValue(
-        session.getWithFallback<std::string>(
-            WriterConfig::kParquetSessionEnableDictionary, connectorConfig),
-        "enable dictionary");
-  }
-
-  if (!enableStoreDecimalAsInteger) {
-    enableStoreDecimalAsInteger = toBoolConfigValue(
-        session.getWithFallback<std::string>(
-            WriterConfig::kParquetSessionEnableStoreDecimalAsInteger,
-            connectorConfig),
-        "enable store decimal as integer");
-  }
-
-  if (!dictionaryPageSizeLimit) {
-    dictionaryPageSizeLimit =
-        toParquetPageSize(session.getWithFallback<std::string>(
-            WriterConfig::kParquetSessionDictionaryPageSizeLimit,
-            connectorConfig));
-  }
-
-  if (!useParquetDataPageV2) {
-    useParquetDataPageV2 = isParquetV2(session.getWithFallback<std::string>(
-        WriterConfig::kParquetSessionDataPageVersion, connectorConfig));
-  }
-
-  if (!dataPageSize) {
-    dataPageSize = toParquetPageSize(session.getWithFallback<std::string>(
-        WriterConfig::kParquetSessionWritePageSize, connectorConfig));
-  }
-
-  if (!batchSize) {
-    batchSize = toParquetBatchSize(session.getWithFallback<std::string>(
-        WriterConfig::kParquetSessionWriteBatchSize, connectorConfig));
-  }
-
-  if (!createdBy) {
-    createdBy = session.getWithFallback<std::string>(
-        WriterConfig::kParquetHiveConnectorCreatedBy, connectorConfig);
-  }
-
-  // Parquet only updates ioStats_->rawBytesWritten() when a row group is
-  // flushed. With the default flush policy (1M rows / 128MB), small
-  // maxTargetFileSizeBytes would never trigger rotation because
-  // rawBytesWritten() stays at 0 while data is buffered. To honor
-  // maxTargetFileSizeBytes, cap the row group byte threshold so we flush
-  // earlier and rawBytesWritten() grows during writes.
-  if (maxTargetFileSizeBytes > 0 && !flushPolicyFactory) {
-    auto bytesInRowGroup = static_cast<int64_t>(std::min<uint64_t>(
-        DefaultFlushPolicy::kDefaultBytesInRowGroup, maxTargetFileSizeBytes));
-    flushPolicyFactory = [bytesInRowGroup]() {
-      return std::make_unique<DefaultFlushPolicy>(
-          DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
-    };
-  }
+    const config::ConfigBase& session) const {
+  auto parquetOptions = std::make_shared<ParquetWriterOptions>();
+  parquetOptions->parquetWriteTimestampUnit = toTimestampPrecision(
+      ParquetConfig::writerTimestampUnit(connectorConfig, session));
+  parquetOptions->enableDictionary = toBoolConfigValue(
+      ParquetConfig::writerEnableDictionary(connectorConfig, session),
+      "enable dictionary");
+  parquetOptions->enableStoreDecimalAsInteger = toBoolConfigValue(
+      ParquetConfig::writerEnableStoreDecimalAsInteger(
+          connectorConfig, session),
+      "enable store decimal as integer");
+  parquetOptions->dictionaryPageSizeLimit = toParquetPageSize(
+      ParquetConfig::writerDictionaryPageSizeLimit(connectorConfig, session));
+  parquetOptions->useParquetDataPageV2 = isParquetV2(
+      ParquetConfig::writerDataPageVersion(connectorConfig, session));
+  parquetOptions->dataPageSize = toParquetPageSize(
+      ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->batchSize = toParquetBatchSize(
+      ParquetConfig::writerBatchSize(connectorConfig, session));
+  parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
+  return parquetOptions;
 }
 
 } // namespace facebook::velox::parquet

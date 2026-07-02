@@ -493,9 +493,9 @@ TypePtr CaseCallToSpecialForm::resolveTypeWithCoercions(
   for (size_t i = 0; i < numCases; i++) {
     const auto& thenType = argTypes[2 * i + 2];
     if (*thenType != *resultType) {
-      if (coercer.coercible(thenType, resultType)) {
+      if (coercer.coerce(thenType, resultType)) {
         coercions[2 * i + 2] = resultType;
-      } else if (coercer.coercible(resultType, thenType)) {
+      } else if (coercer.coerce(resultType, thenType)) {
         resultType = thenType;
         for (size_t j = 0; j < i; j++) {
           coercions[2 * j + 2] = resultType;
@@ -513,9 +513,9 @@ TypePtr CaseCallToSpecialForm::resolveTypeWithCoercions(
   if (hasElse) {
     const auto& elseType = argTypes.back();
     if (*elseType != *resultType) {
-      if (coercer.coercible(elseType, resultType)) {
+      if (coercer.coerce(elseType, resultType)) {
         coercions.back() = resultType;
-      } else if (coercer.coercible(resultType, elseType)) {
+      } else if (coercer.coerce(resultType, elseType)) {
         resultType = elseType;
         for (size_t i = 0; i < numCases; i++) {
           coercions[2 * i + 2] = resultType;

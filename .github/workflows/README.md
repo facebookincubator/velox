@@ -18,13 +18,19 @@ For current build times and performance trends, see the [CI performance metrics]
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
-| Linux Build using GCC | `linux-build.yml` + `linux-build-base.yml` | push to main, PRs | Main build & test (3 configs) |
+| Linux Build using GCC | `linux-build.yml` + `linux-build-base.yml` | push to main, PRs | Main build & test (3 configs); selective by default, full on push / sticky-approval |
+| Detect Force-Full Trigger | `detect-force-full.yml` | PR approving review | Step 1 of the approval-path chain: trivial trigger for the workflow_run hand-off (needed because fork PR reviews get a read-only token) |
+| Rerun Linux Build on Force-Full Trigger | `rerun-on-force-full.yml` | workflow_run (after Detect Force-Full Trigger) | Step 2 of the approval-path chain: BASE-context, dedups, calls the `rerun-linux-build` composite action |
+| Force-Full Build on /full-build Comment | `force-full-on-comment.yml` | PR comment containing `/full-build` | Direct (no workflow_run hop): dedups, calls the `rerun-linux-build` composite action |
+| Selective Build Comment | `selective-build-comment.yml` | workflow_run (after Linux Build) | Post selective build plan as PR comment |
 | macOS Build | `macos.yml` | push, PRs | Compilation check (debug + release) |
 | Breeze Linux Build | `breeze.yml` | push to main, PRs | Tracing module with sanitizers |
 | Fuzzer Jobs | `scheduled.yml` | PRs, push to main, daily cron, manual | Randomized correctness testing |
 | Run Checks | `preliminary_checks.yml` | PRs | Formatting, linting, PR title |
-| Build Impact Analysis | `build-impact.yml` + `build-impact-comment.yml` | push to main, PRs | CMake dependency impact |
-| CI Failure Comment | `ci-failure-comment.yml` | workflow_run (on Linux Build / Fuzzer failure) | AI-powered failure analysis on PRs |
+| Require fbcode Import | `require-fbcode-import.yml` | PR approving review | Blocks merging an approved PR until the change has been imported |
+| Dependency Graph | `dependency-graph.yml` | push to main | Cache CMake dependency graph artifact |
+| Selective Build Plan | `selective-build-plan.yml` (reusable) | called by Linux Build using GCC | Decide full vs targeted build per PR; uploads plan-comment artifact consumed by Selective Build Comment |
+| CI Failure Comment | `ci-failure-comment.yml` | workflow_run (on Linux Build using GCC / Fuzzer failure) | AI-powered failure analysis on PRs |
 | Claude PR Assistants | `claude.yml` + `claude-review.yml` | PR comments (`@claude`) | AI code review |
 | Build Pyvelox Wheels | `build_pyvelox.yml` | manual | Python wheel packaging |
 | Docker Images | `docker.yml` | push to main, manual | Multi-arch Docker images |
@@ -37,11 +43,14 @@ For current build times and performance trends, see the [CI performance metrics]
 
 ### Linux Build using GCC (`linux-build.yml` + `linux-build-base.yml`)
 
-The main CI workflow for Velox. Triggered on pushes to `main` and on pull requests when relevant files change (source code, CMake files, setup scripts, or the workflow files themselves). The entry point `linux-build.yml` delegates to the reusable `linux-build-base.yml` template, which builds and tests three configurations in parallel on 32-core Ubuntu runners:
+The main CI workflow for Velox. Triggered on pushes to `main` and on pull request `opened`/`synchronize`/`reopened` events. The entry point `linux-build.yml` first calls the `selective-build-plan.yml` reusable workflow to decide the build mode (see [Selective Build Plan](#selective-build-plan-selective-build-planyml)), then delegates to `linux-build-base.yml` which can build and test up to four configurations in parallel on 32-core Ubuntu runners:
 
-- **Linux adapters release** — Release build using the `velox-dev:adapters` Docker image. Enables cloud storage adapters (S3, GCS, ABFS, HDFS), Parquet, Arrow, geospatial functions, and GPU support (WAVE, cuDF). Tests run with `ctest -j 24` and a 900-second timeout. When cuDF-related files change, a separate cuDF test job runs on a `4-core-ubuntu-gpu-t4` GPU runner.
-- **Ubuntu debug** — Debug build using the `velox-dev:ubuntu-22.04` Docker image. Enables benchmarks, examples, Arrow, geospatial, Parquet, shared library (`VELOX_BUILD_SHARED=ON`), and mono library modes. Tests run with `ctest -j 24` and a 1800-second timeout.
-- **Fedora debug** — Debug build using the `velox-dev:fedora` Docker image. Validates compilation compatibility with Fedora's system packages including system-provided gRPC and Arrow/Thrift shared libraries. This configuration focuses on compiler and OS compatibility rather than test coverage — it does not have a separate test status job.
+- **Linux adapters release** — Release build using the `velox-dev:adapters` Docker image. Enables cloud storage adapters (S3, GCS, ABFS, HDFS), Parquet, Arrow, geospatial functions, and GPU support (WAVE, cuDF). Tests run with `ctest -j 24` and a 900-second timeout. When cuDF-related files change, a separate cuDF test job runs on a `4-core-ubuntu-gpu-t4` GPU runner. **Always runs**: full build in full mode (push to main, sticky-approved PR), targeted build (only the cmake targets affected by the PR) in selective mode. The mode and target list come from the selective-build plan. The same cmake configure runs in both modes — and notably, `VELOX_MONO_LIBRARY=OFF` is in effect here (selective mode needs per-target leaf libraries so build skipping is actually meaningful; mono lib collapses everything into one artifact and no work can be skipped). This is a deliberate flip from the historical `MONO=ON` for adapters; latent symbol-visibility or static-init bugs that `MONO=ON` masked may surface. Post-approval re-runs are largely incremental on top of pre-approval work via ccache.
+- **Ubuntu debug** — Debug build using the `velox-dev:ubuntu-22.04` Docker image. Enables benchmarks, examples, Arrow, geospatial, Parquet, shared library (`VELOX_BUILD_SHARED=ON`), and mono library modes. Tests run with `ctest -j 24` and a 1800-second timeout. **Only runs in full mode** (push to main, sticky-approved PR). Catches debug-only assertions and validates against system Ubuntu deps.
+- **Fedora debug** — Debug build using the `velox-dev:fedora` Docker image. Validates compilation compatibility with Fedora's system packages including system-provided gRPC and Arrow/Thrift shared libraries. This configuration focuses on compiler and OS compatibility rather than test coverage — it does not have a separate test status job. **Only runs in full mode**.
+- **Linux ASAN/UBSAN with system dependencies** — Debug-plus-`-O1` build using the `velox-dev:adapters` Docker image with `VELOX_ENABLE_ASAN_UBSAN_SANITIZERS=ON`. Catches memory-safety and undefined-behavior bugs that the release build masks. Tests run with `ctest -j 24` and a 1800-second timeout. **Only runs in full mode**.
+
+In selective mode (PR without an approving review or a `/full-build` comment), only the `Linux release with adapters` job runs in targeted mode; `Ubuntu debug`, `Fedora debug`, and `Linux ASAN/UBSAN` show as "Skipped" in the checks list — this is expected. Either an approving review or commenting `/full-build` on the PR escalates to a full build via the [Auto-trigger full build](#auto-trigger-full-build-detect-force-fullyml--rerun-on-force-fullyml) chain.
 
 All configurations use ccache for build acceleration (persisted via Apache infrastructure stash). The adapters and ubuntu-debug configurations include a flaky test retry mechanism: if any tests fail on the first run, they are automatically retried with `ctest --rerun-failed`. If the retry passes, the tests are marked as flaky; if it fails again, the specific failed test case names are extracted and reported.
 
@@ -89,9 +98,52 @@ The workflow also includes bias fuzzers that focus specifically on newly added o
 
 Runs early validation on pull requests before the heavier build workflows. Executes `pre-commit run --all-files` to check code formatting (clang-format), linting (yamllint, zizmor), license headers, and other code quality rules. Also validates the PR title against the conventional commits format (`type(scope): description`), which is required for all PRs.
 
-### Build Impact Analysis (`build-impact.yml` + `build-impact-comment.yml`)
+### Require fbcode Import (`require-fbcode-import.yml`)
 
-Analyzes which build targets are affected by the files changed in a PR using the CMake dependency graph. On pushes to `main`, the workflow generates and caches a fresh dependency graph. On PRs, it uses a two-path strategy: a fast path that reuses the cached graph from `main`, and a slow path that regenerates the graph when CMake files change. The companion `build-impact-comment.yml` workflow posts the analysis results as a PR comment, updating the existing comment if one already exists.
+Blocks merging an approved pull request until the change has been imported. The check applies only after approval; before approval it passes. A pull request that has not yet been imported reports a failure, with guidance in the run summary.
+
+### Dependency Graph (`dependency-graph.yml`)
+
+Generates the cached `dependency-graph` artifact on every push to `main` (90-day retention). Consumed by `selective-build-plan.yml` to compute targeted PR builds without re-running cmake configure.
+
+### Selective Build Plan (`selective-build-plan.yml`)
+
+Reusable workflow called by `linux-build.yml` to decide whether the build runs in **full** mode (all jobs, mono on) or **targeted** mode (only the cmake targets affected by the change):
+
+- Push to `main` → full
+- PR with a standing approving review **from an eligible reviewer** on the current head SHA → full
+- PR where an **eligible commenter** has posted `/full-build` → full
+- Otherwise → targeted (fast path: cached graph; slow path: regenerate when CMake files change; falls back to full for `velox/experimental/` or `velox/external/` changes)
+
+"Eligible" here means `author_association` of `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`. `CONTRIBUTOR` is included because GitHub reports many active Velox maintainers as `CONTRIBUTOR` rather than `MEMBER` when their owning-org membership is private — without it, the gate would exclude the majority of real reviewer activity. Approvals and `/full-build` comments from authors outside this allowlist (e.g. `NONE`, `FIRST_TIME_CONTRIBUTOR`) are recorded by GitHub but do not escalate the build, capping CI-minutes exposure from drive-by activity on fork PRs.
+
+The plan uploads a `selective-build-comment` artifact containing the comment markdown, which `selective-build-comment.yml` posts to the PR after the upstream workflow finishes.
+
+### Auto-trigger full build (approval + `/full-build` comment)
+
+Two events escalate an in-flight selective build to a full build, even for fork PRs:
+
+- **An approving review from an eligible reviewer** — typically the final gate before merging.
+- **An eligible commenter posting `/full-build` as a PR comment** — for forcing full coverage *before* approving, or when the path-based heuristics underestimate impact.
+
+Both signals are restricted to authors with `author_association` of `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`. `CONTRIBUTOR` is included because GitHub reports many active Velox maintainers as `CONTRIBUTOR` rather than `MEMBER` when their owning-org membership is private; restricting to push-access-only buckets would exclude the majority of real reviewer activity. The same filter is applied at three points (escalation gate, escalation dedup, sticky re-evaluation in the plan workflow) so an out-of-allowlist drive-by approval or `/full-build` comment is consistently ignored everywhere.
+
+Both signals are sticky: every subsequent push on the PR also runs in full mode while the approval stands or the `/full-build` comment exists. Deleting the comment or having the approval dismissed is a no-op for the in-flight build — symmetric in both directions.
+
+The two events take different routes because they get different fork-PR token treatment:
+
+- **Approval path** (`detect-force-full.yml` → `rerun-on-force-full.yml`) — `pull_request_review` from a fork gets a read-only `GITHUB_TOKEN` (it counts as a pull request event for the fork-PR restriction). Cancel and re-run need `actions: write`, which only the BASE-context `workflow_run` chain can provide. Step 1 (`detect-force-full.yml`) is intentionally trivial; step 2 (`rerun-on-force-full.yml`) re-derives PR identity from `workflow_run.id` (GitHub-set, not forgeable), dedups on approval count, and hands off to the shared composite action.
+- **Comment path** (`force-full-on-comment.yml`) — `issue_comment` runs with the workflow YAML loaded from the default branch (BASE) and a full `GITHUB_TOKEN` even when the comment author is from a fork (the fork-PR restriction targets pull_request* events only). The workflow does the rerun inline, reading the PR number directly from `github.event.issue.number` and dedupping on `/full-build` comment count.
+
+Both paths share the **`.github/actions/rerun-linux-build`** composite action: find the most recent `Linux Build using GCC` run on the PR head SHA, force-cancel it if still in flight, then re-run via `POST /actions/runs/{id}/rerun`.
+
+A re-run preserves the original `pull_request` event's `github.sha`, so the new check_runs land on the PR head SHA and are visible to reviewers and respected by branch protection. The re-run also re-enters `selective-build-plan.yml`, where `Check standing approval` and `Check /full-build comment` OR-combine into `is_force_full` → full mode.
+
+### Selective Build Comment (`selective-build-comment.yml`)
+
+Posts the `## Selective Build Plan` PR comment from the artifact uploaded by `selective-build-plan.yml`. `workflow_run`-triggered on `Linux Build using GCC` completion (success or failure). Matcher accepts the legacy `## Build Impact Analysis` marker so existing comments are updated, not duplicated.
+
+Uses the `workflow_run` pattern because fork PRs have read-only tokens and cannot post comments directly from a `pull_request`-triggered workflow.
 
 ### CI Failure Comment (`ci-failure-comment.yml`)
 
@@ -137,11 +189,13 @@ Tests that Velox can be built entirely from source on a plain Ubuntu system with
 
 ### Fork PR Permissions
 
-GitHub restricts fork PR tokens to read-only for security. Workflows that need to post PR comments use the **`workflow_run` pattern**: the main workflow uploads results as artifacts, and a separate `workflow_run`-triggered workflow downloads them and posts comments using the base repo's write permissions.
+GitHub restricts fork PR tokens to read-only for security. Two patterns are used to work around this:
 
-This pattern is used by:
-- `build-impact-comment.yml` (posts build impact analysis)
-- `ci-failure-comment.yml` (posts CI failure analysis)
+- **`workflow_run` pattern**: the upstream workflow uploads results as artifacts, and a separate `workflow_run`-triggered workflow downloads them in BASE context (with secrets and write `GITHUB_TOKEN`) to do the privileged work. Used by:
+  - `selective-build-comment.yml` (posts the selective build plan)
+  - `ci-failure-comment.yml` (posts AI-generated CI failure analysis)
+  - `rerun-on-force-full.yml` (chained from `detect-force-full.yml`; cancels and re-runs the in-flight `Linux Build using GCC` run on first approval, escalating it from selective to full). The `/full-build` comment path doesn't need this hop — `issue_comment` already runs in BASE context with a full token, so `force-full-on-comment.yml` does the rerun inline.
+- **API re-run from privileged context**: both `rerun-on-force-full.yml` (workflow_run-chained) and `force-full-on-comment.yml` (direct) use `POST /actions/runs/{id}/rerun` via the shared `.github/actions/rerun-linux-build` composite action instead of dispatching a fresh build. A re-run preserves the original `pull_request` event's context, including `github.sha = PR head SHA`, so check_runs land on the PR — visible to reviewers and respected by branch protection — without needing an external identity or `workflow_dispatch`/`workflow_call` plumbing.
 
 ### Build Caching
 

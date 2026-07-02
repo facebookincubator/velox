@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <span>
+
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/ITypedExpr.h"
@@ -545,6 +547,17 @@ class ExprToSubfieldFilterParser {
   // Creates an in subfield filter against the given vector.
   static std::unique_ptr<common::Filter> makeInFilter(
       const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator* evaluator,
+      bool negated);
+
+  // Creates an in subfield filter from the varargs form
+  // `in(col, a, b, c, ...)` where 'valueExprs' are the list elements (each a
+  // constant of the column type). Counterpart to makeInFilter, which handles
+  // the `in(col, <constant array>)` form. Returns nullptr if an element is not
+  // constant-foldable. The caller guarantees the element type has a subfield
+  // IN filter.
+  static std::unique_ptr<common::Filter> makeVarargsInFilter(
+      std::span<const core::TypedExprPtr> valueExprs,
       core::ExpressionEvaluator* evaluator,
       bool negated);
 

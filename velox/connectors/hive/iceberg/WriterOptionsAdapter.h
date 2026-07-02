@@ -24,10 +24,9 @@
 namespace facebook::velox::connector::hive::iceberg {
 
 /// Format-specific adapter for an Iceberg-bound WriterOptions instance.
-/// Encapsulates the per-file-format behavior (manifest format string,
-/// pre/post-processConfigs hooks on the writer options) behind a virtual
-/// interface. Dispatched at runtime via createWriterOptionsAdapter() based
-/// on the table's storage format.
+/// Encapsulates the per-file-format behavior (manifest format string and
+/// writer option overrides) behind a virtual interface. Dispatched at runtime
+/// via createWriterOptionsAdapter() based on the table's storage format.
 class WriterOptionsAdapter {
  public:
   virtual ~WriterOptionsAdapter() = default;
@@ -38,13 +37,13 @@ class WriterOptionsAdapter {
   /// (Presto coordinator, catalog) can interpret the commit message.
   virtual std::string manifestFormatString() const = 0;
 
-  /// Hook applied to WriterOptions BEFORE processConfigs() runs. Used for
-  /// settings that flow through serdeParameters.
+  /// Hook applied before format-specific writers consume the common writer
+  /// options. Used for settings that flow through common WriterOptions fields.
   virtual void applyPreConfigs(dwio::common::WriterOptions& /*options*/) const {
   }
 
-  /// Hook applied to WriterOptions AFTER processConfigs() runs. Used for
-  /// direct field assignments that must not be overwritten by
+  /// Hook applied after HiveDataSink creates and configures WriterOptions.
+  /// Used for direct field assignments that must not be overwritten by
   /// config-driven processing.
   virtual void applyPostConfigs(
       dwio::common::WriterOptions& /*options*/) const {}

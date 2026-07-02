@@ -116,7 +116,9 @@ void CudfIcebergTestBase::writeDeleteFile(
   if (format == DeleteFileFormat::PARQUET) {
     auto childPool =
         rootPool_->addAggregateChild("CudfIcebergTestBase.ParquetWriter");
-    velox::parquet::WriterOptions options;
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<velox::parquet::ParquetWriterOptions>();
     writer = std::make_unique<velox::parquet::Writer>(
         std::move(sink),
         options,

@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -144,6 +145,58 @@ inline bool isSkippedAttribute(const std::string& name, const Metadata* meta) {
 /// non-null if it is an attribute.
 template <typename Func>
 void forArguments(const Metadata& meta, NodeCP node, Func&& func) {
+  // Schema-less scalar ops (isScalarElementwise, e.g. _operator.*) carry no
+  // FunctionSchema. Their operands are split across the node: symbolic operands
+  // are NamedArguments in inputs() (name + Value), while constant operands are
+  // attributes() (name + Constant). Neither container alone preserves the
+  // original positional order -- only the argument names ("a", "b", ...) do, so
+  // bind each position to the operand carrying meta.argumentNames[i], looking
+  // it up in inputs() then attributes() (the same name-driven lookup the
+  // schema-backed path below uses). A registered name absent from the node, or
+  // an operand the node carries that is not a registered name, is fatal: an op
+  // whose serialized argument names differ from those registered then errors
+  // here rather than silently miscomputing.
+  if (!meta.functionSchema && meta.isScalarElementwise) {
+    TORCH_CHECK(
+        !meta.argumentNames.empty(),
+        "Schema-less scalar op ",
+        node->target(),
+        " has no registered argumentNames");
+    TORCH_CHECK(
+        node->inputs().size() + node->attributes().size() ==
+            meta.argumentNames.size(),
+        "Schema-less scalar op ",
+        node->target(),
+        " has ",
+        node->inputs().size() + node->attributes().size(),
+        " operands but ",
+        meta.argumentNames.size(),
+        " argument names are registered");
+    for (size_t i = 0; i < meta.argumentNames.size(); ++i) {
+      const auto& argName = meta.argumentNames[i];
+      ValueCP value = nullptr;
+      for (const auto& input : node->inputs()) {
+        if (input.name == argName) {
+          value = input.value;
+          break;
+        }
+      }
+      if (value) {
+        func(i, value, static_cast<const nativert::Attribute*>(nullptr));
+        continue;
+      }
+      const auto* attr = node->tryGetAttribute(argName);
+      TORCH_CHECK(
+          attr,
+          "Schema-less scalar op ",
+          node->target(),
+          " argument '",
+          argName,
+          "' not found in inputs or attributes");
+      func(i, static_cast<ValueCP>(nullptr), attr);
+    }
+    return;
+  }
   TORCH_CHECK(
       meta.functionSchema, "forArguments requires functionSchema on metadata");
   const auto& schemaArgs = meta.functionSchema->arguments();
@@ -209,6 +262,16 @@ void forEachSortedAttribute(NodeCP node, Func&& func) {
   for (const auto& attr : attrs) {
     if (std::holds_alternative<std::string>(attr.value) ||
         std::holds_alternative<c10::Device>(attr.value)) {
+      continue;
+    }
+    // SymIntList (vector<int64_t>) constants (e.g. aten.view's "size") are not
+    // scalar constants: a fused op materializes them inline via
+    // emitScalarListSetup (literal values placed in an allocAltParam region),
+    // so they must not occupy a slot in the scalar constant area / attribute
+    // declarations / constant indices. Every consumer of this iteration treats
+    // attributes as 8-byte scalars, so excluding lists here keeps all of those
+    // offsets aligned.
+    if (std::holds_alternative<std::vector<int64_t>>(attr.value)) {
       continue;
     }
     if (isSkippedAttribute(attr.name, meta)) {
@@ -299,6 +362,45 @@ std::string standaloneToString(NodeCP node);
 /// 'value'. Falls back to checking for "_." in the target name.
 bool isInPlaceMutation(NodeCP node, ValueCP value);
 
+/// Resolves 'value' to its underlying storage base by following view chains
+/// (the viewOfArg metadata). Views-on-views collapse to the ultimate base; a
+/// value with no view producer is its own base.
+ValueCP viewStorageBase(ValueCP value);
+
+/// Returns the input values that 'node' mutates in place (writes their
+/// storage), per the c10 FunctionSchema write-alias annotations (Tensor(a!)).
+/// Pure-aliasing no-ops that do not change data (e.g. detach_) are excluded so
+/// callers can use this for data-dependency analysis. Empty for non-mutating
+/// ops.
+std::vector<ValueCP> dataMutatedInputs(NodeCP node);
+
+/// Returns true if any node after 'afterNode' in 'graph' program order mutates
+/// the storage base of 'value' (per dataMutatedInputs). Used to keep clone()
+/// from being eliminated when its source is mutated later (the clone is a
+/// required snapshot).
+bool baseMutatedAfter(
+    const nativert::Graph& graph,
+    NodeCP afterNode,
+    ValueCP value);
+/// Returns true if 'value' is None in 'frame' AND is statically expected to
+/// hold a real value (its type is not None), i.e. an unready dependency that a
+/// not-yet-executed producer will fill.  A statically-None value -- an `asNone`
+/// optional argument such as bincount's `weights=None` -- is always None and is
+/// NOT an unready dependency; treating it as one defers its consumer forever
+/// (the optional never becomes non-None), leaving the consumer's output
+/// unproduced.  Use this in place of a bare `getIValue(...).isNone()` check
+/// when deciding whether to run or defer an op based on input readiness.
+bool isUnreadyNoneDependency(ValueCP value, nativert::ExecutionFrame& frame);
+
+/// Returns true if all of 'node's outputs are already materialized (non-None)
+/// in 'frame', i.e. the node has already been executed.  Use this to avoid
+/// re-running a standalone op that another execution path (e.g.
+/// runReadyGraphNodes, or an earlier composite) already computed: re-executing
+/// would re-read inputs whose intermediate buffers may have been recycled after
+/// their last legitimate use, overwriting a correct result with garbage.
+/// Returns false for a node with no outputs (nothing to skip on).
+bool nodeOutputsComputed(NodeCP node, nativert::ExecutionFrame& frame);
+
 /// Returns a debug string showing up to 'maxElements' elements of a tensor
 /// after flattening to 1-D, plus the shape and dtype. 0 means no limit.
 std::string tensorDebugString(const at::Tensor& t, int32_t maxElements = 0);
@@ -317,6 +419,14 @@ bool tensorsMatch(const at::Tensor& actual, const at::Tensor& expected);
 /// Returns a full string representation of a tensor's contents.
 std::string tensorToString(const at::Tensor& t);
 
+/// If 'iv' is a scalar (int/double/bool) or a scalar list (int[]/double[]/
+/// bool[]), returns it as a 1-D CPU tensor of the matching dtype (Long/Double/
+/// Bool); a scalar becomes a length-1 tensor and a list a length-N tensor.
+/// Returns nullopt for any other IValue kind. Used to fold scalars and scalar
+/// lists into the tensor path for reference-frame recording and checking, so
+/// they can be compared element-wise against the recorded tensor.
+std::optional<at::Tensor> scalarLikeToTensor(const c10::IValue& iv);
+
 /// Saves all non-empty tensor and scalar slots from an execution frame
 /// as a map from ValueId to IValue. TensorList values are skipped but their
 /// tensor contents are included.
@@ -331,6 +441,26 @@ void saveReferenceFrame(
     const nativert::ExecutionFrame& frame,
     int32_t numValues,
     const std::string& path);
+
+/// Saves a reference frame using tensor values captured the instant each node
+/// ran ('capturedTensors', keyed by ValueId), falling back to the frame for
+/// scalar slots. Using captured copies makes the saved reference immune to a
+/// later in-place overwrite of a value's storage during the reference run.
+void saveReferenceFrame(
+    const nativert::ExecutionFrame& frame,
+    const nativert::Graph& graph,
+    const std::unordered_map<int64_t, at::Tensor>& capturedTensors,
+    const std::string& path);
+
+/// Saves a list of CPU tensors to a .pt file (pickled list). Used to store the
+/// reference run's final model outputs.
+void saveTensorList(
+    const std::vector<at::Tensor>& tensors,
+    const std::string& path);
+
+/// Loads a list of tensors saved by saveTensorList. Returns an empty vector if
+/// the file does not exist.
+std::vector<at::Tensor> loadTensorList(const std::string& path);
 
 /// Loads a reference frame from a .pt file into a map keyed by ValueId.
 std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(

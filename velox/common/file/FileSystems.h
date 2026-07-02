@@ -66,6 +66,10 @@ struct FileOptions {
   /// IO mode if set.
   bool bufferIo{true};
 
+  /// Whether to use io_uring for direct-I/O positioned read batches. Only
+  /// interpreted by the local filesystem and valid when bufferIo is false.
+  bool useIoUring{false};
+
   /// Property bag to set onto files/directories. Think something similar to
   /// ioctl(2). For other remote filesystems, this can be PutObjectTagging in
   /// S3.
