@@ -63,7 +63,7 @@ FOLLY_ALWAYS_INLINE void encodeAscii(int8_t value, char*& out) {
     *out++ = '\\';
     *out++ = char(escapeCode);
   } else {
-    writeHex(value, out);
+    writeUtf16Escape(value, out);
   }
 }
 
@@ -117,14 +117,14 @@ void normalizeForJsonCast(const char* input, size_t length, char* output) {
       case 4: {
         char32_t codePoint = folly::utf8ToCodePoint(start, end, true);
         if (codePoint == U'\ufffd') {
-          writeHex(0xFFFDu, pos);
+          writeUtf16Escape(0xFFFDu, pos);
           continue;
         }
         encodeUtf16Hex(codePoint, pos);
         continue;
       }
       default: {
-        writeHex(0xFFFDu, pos);
+        writeUtf16Escape(0xFFFDu, pos);
         start++;
       }
     }
@@ -133,7 +133,7 @@ void normalizeForJsonCast(const char* input, size_t length, char* output) {
 }
 
 size_t normalizedSizeForJsonCast(const char* input, size_t length) {
-  // 6 chars that is returned by `writeHex`.
+  // 6 chars that is returned by `writeUtf16Escape`.
   constexpr size_t kEncodedHexSize = 6;
 
   size_t outSize = 0;
@@ -375,7 +375,7 @@ size_t normalizeForJsonParse(const char* input, size_t length, char* output) {
       }
       case 4: {
         if (codePoint == U'\ufffd') {
-          writeHex(0xFFFDu, pos);
+          writeUtf16Escape(0xFFFDu, pos);
         } else {
           encodeUtf16Hex(codePoint, pos);
         }

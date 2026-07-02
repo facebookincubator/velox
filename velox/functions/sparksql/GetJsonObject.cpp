@@ -28,16 +28,13 @@ namespace facebook::velox::functions::sparksql::detail {
 
 namespace {
 
-// Counts the supplementary-plane characters (4-byte UTF-8 sequences) in `raw`,
-// to pick the fast path (none) and to size the escape buffer exactly.
+// Counts the supplementary-plane characters (4-byte UTF-8 sequences) in `raw`.
 size_t countSupplementaryCharacters(std::string_view raw) {
   size_t count = 0;
   const auto* p = reinterpret_cast<const unsigned char*>(raw.data());
   const auto* const end = p + raw.size();
   while (p < end) {
     const int length = validateAndGetNextUtf8Length(p, end);
-    // A 4-byte sequence is a supplementary-plane code point; shorter sequences
-    // are BMP (left literal) and a negative length marks invalid bytes.
     if (length == 4) {
       ++count;
     }
@@ -46,9 +43,8 @@ size_t countSupplementaryCharacters(std::string_view raw) {
   return count;
 }
 
-// Copies `raw` into `out`, rewriting each supplementary-plane character into a
-// '\uXXXX\uXXXX' surrogate-pair escape and copying every other byte verbatim in
-// bulk runs. `out` must have room for the escaped result (see
+// Writes `raw` to `out`, applying the escaping described on
+// appendWithSupplementaryEscapes. `out` must have room for the result (see
 // countSupplementaryCharacters for sizing); returns the past-the-end write
 // position.
 char* escapeSupplementaryCharacters(std::string_view raw, char* out) {
@@ -88,8 +84,7 @@ void appendWithSupplementaryEscapes(
     exec::StringWriter& out) {
   const size_t supplementaryCount = countSupplementaryCharacters(raw);
   if (supplementaryCount == 0) {
-    // Fast path: no supplementary-plane characters, so the raw slice already
-    // matches Spark. Append it directly, no allocation.
+    // Fast path: nothing to escape, the raw slice already matches Spark.
     out.append(raw);
     return;
   }

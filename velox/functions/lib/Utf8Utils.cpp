@@ -62,7 +62,7 @@ FOLLY_ALWAYS_INLINE char hexDigit(uint8_t c) {
 }
 } // namespace
 
-void writeHex(char16_t value, char*& out) {
+void writeUtf16Escape(char16_t value, char*& out) {
   *out++ = '\\';
   *out++ = 'u';
   *out++ = hexDigit((value >> 12) & 0x0F);
@@ -76,11 +76,12 @@ void encodeUtf16Hex(char32_t codePoint, char*& out) {
   if (codePoint >= 0x10000u) {
     // Supplementary plane: split into a UTF-16 surrogate pair.
     const char32_t v = codePoint - 0x10000u;
-    writeHex(static_cast<char16_t>(0xD800u + ((v >> 10) & 0x3FFu)), out);
-    writeHex(static_cast<char16_t>(0xDC00u + (v & 0x3FFu)), out);
+    writeUtf16Escape(
+        static_cast<char16_t>(0xD800u + ((v >> 10) & 0x3FFu)), out);
+    writeUtf16Escape(static_cast<char16_t>(0xDC00u + (v & 0x3FFu)), out);
     return;
   }
-  writeHex(static_cast<char16_t>(codePoint), out);
+  writeUtf16Escape(static_cast<char16_t>(codePoint), out);
 }
 
 int32_t

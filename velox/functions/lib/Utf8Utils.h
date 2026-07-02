@@ -91,7 +91,7 @@ int firstByteCharLength(const char* u_input);
 /// Writes `value` as a '\uXXXX' escape (backslash, 'u', then 4 uppercase hex
 /// digits) and advances `out` past the 6 written bytes. The caller must ensure
 /// `out` has room for 6 bytes.
-void writeHex(char16_t value, char*& out);
+void writeUtf16Escape(char16_t value, char*& out);
 
 /// Encodes `codePoint` as a JSON '\u' escape and advances `out`: a single
 /// '\uXXXX' for a Basic Multilingual Plane code point, or a '\uXXXX\uXXXX'
