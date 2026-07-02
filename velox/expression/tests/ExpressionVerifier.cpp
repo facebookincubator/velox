@@ -504,10 +504,16 @@ ExpressionVerifier::verify(
     } else {
       VLOG(1) << "Execute with simplified expression eval path.";
       try {
+        // Normalize the input for the simplified path: deep-copy produces a
+        // flat vector with contiguous array/map elements and no garbage behind
+        // nulls, so the common-vs-simplified comparison also flags any result
+        // that depends on the input's physical layout.
+        RowVectorPtr simplifiedInput =
+            std::static_pointer_cast<RowVector>(BaseVector::copy(*rowVector));
         exec::EvalCtx evalCtxSimplified(
-            execCtx_, &exprSetSimplified, rowVector.get());
+            execCtx_, &exprSetSimplified, simplifiedInput.get());
 
-        auto copy = BaseVector::copy(*rowVector);
+        auto copy = BaseVector::copy(*simplifiedInput);
         exprSetSimplified.eval(
             0,
             exprSetSimplified.size(),
@@ -520,7 +526,7 @@ ExpressionVerifier::verify(
         // nested.
         fuzzer::compareVectors(
             copy,
-            BaseVector::copy(*rowVector),
+            BaseVector::copy(*simplifiedInput),
             "Copy of original input",
             "Input after simplified",
             rows);
