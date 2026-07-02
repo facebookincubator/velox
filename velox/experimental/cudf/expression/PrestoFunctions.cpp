@@ -67,6 +67,8 @@ void registerPrestoFunctions(const std::string& prefix) {
            .argumentType("date")
            .argumentType("interval day to second")
            .build()});
+
+  registerPrestoDateAddFunction(prefix);
 }
 
 } // namespace facebook::velox::cudf_velox
