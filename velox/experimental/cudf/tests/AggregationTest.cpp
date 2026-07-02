@@ -1646,6 +1646,44 @@ TEST_F(
 
 TEST_F(
     StreamingGroupbyApiAggregationTest,
+    streamingGroupbyApiOrdersStateAcrossRebuildStreams) {
+  constexpr int32_t kBatchRows = 4'096;
+  constexpr int32_t kNumBatches = 16;
+  constexpr int32_t kTotalRows = kBatchRows * kNumBatches;
+  setBatchSizeMaxThreshold(kTotalRows);
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    auto const offset = static_cast<int64_t>(batch) * kBatchRows;
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [offset](auto row) { return offset + row; }),
+        makeFlatVector<int64_t>(kBatchRows, [](auto /*row*/) { return 1; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
+  ASSERT_GE(streamingGroupbyApiRebuilds(task, finalAggId), 3);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
     streamingGroupbyApiFailsWhenBatchExceedsCeiling) {
   setBatchSizeMaxThreshold(4);
   auto vectors = {makeRowVector({

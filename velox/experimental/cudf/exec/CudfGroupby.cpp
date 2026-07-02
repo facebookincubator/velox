@@ -37,6 +37,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <limits>
 #include <string_view>
 
@@ -894,11 +895,37 @@ class StreamingGroupbyLeafState final : public BufferedState {
       : owner_(owner),
         rowWidthBytes_(estimateStreamingRowWidth(owner.bufferedResultType_)) {}
 
+  ~StreamingGroupbyLeafState() override {
+    if (!groupby_ || !lastStream_.has_value()) {
+      return;
+    }
+
+    // Persistent streaming_groupby allocations retain the stream on which they
+    // were created. The final operation may have consumed them on another
+    // stream, so order every allocation stream after that work before member
+    // destruction queues the corresponding stream-ordered frees.
+    try {
+      orderStateDeallocationsAfter(*lastStream_);
+    } catch (const std::exception& e) {
+      // Destructors must not turn an existing query/CUDA failure into
+      // terminate.
+      LOG(ERROR) << "Failed to order streaming_groupby state deallocation: "
+                 << e.what();
+    } catch (...) {
+      LOG(ERROR) << "Failed to order streaming_groupby state deallocation";
+    }
+  }
+
   void addChunk(InputChunk input) {
     if (input.empty()) {
       return;
     }
 
+    waitForPreviousState(input.stream);
+    // Track the consumer stream before invoking cuDF so unwinding after a
+    // partially launched operation still orders persistent-state destruction
+    // after that stream.
+    rememberStateStream(input.stream);
     lastStream_ = input.stream;
     auto const inputRows = input.size();
     auto const inputFlatSize =
@@ -931,10 +958,50 @@ class StreamingGroupbyLeafState final : public BufferedState {
     if (!groupby_) {
       return nullptr;
     }
-    return owner_.materializeStreamingBufferedOutput(*groupby_, lastStream_);
+    VELOX_CHECK(lastStream_.has_value());
+    return owner_.materializeStreamingBufferedOutput(*groupby_, *lastStream_);
   }
 
  private:
+  CudaEvent& stateEvent() {
+    if (!stateEvent_) {
+      stateEvent_ = std::make_unique<CudaEvent>(cudaEventDisableTiming);
+    }
+    return *stateEvent_;
+  }
+
+  void waitForPreviousState(rmm::cuda_stream_view stream) {
+    if (!lastStream_.has_value() || lastStream_->value() == stream.value()) {
+      return;
+    }
+
+    // aggregate(), merge(), and finalize() leave work queued after their
+    // internal synchronizing operations. Serialize access to the persistent
+    // hash table, compacted keys, key locations, and aggregation results when
+    // consecutive input batches arrive on different streams.
+    stateEvent().recordFrom(*lastStream_).waitOn(stream);
+  }
+
+  void rememberStateStream(rmm::cuda_stream_view stream) {
+    auto const alreadyTracked = std::any_of(
+        stateStreams_.begin(), stateStreams_.end(), [&](auto tracked) {
+          return tracked.value() == stream.value();
+        });
+    if (!alreadyTracked) {
+      stateStreams_.push_back(stream);
+    }
+  }
+
+  void orderStateDeallocationsAfter(rmm::cuda_stream_view stream) {
+    auto const needsOrdering = std::any_of(
+        stateStreams_.begin(), stateStreams_.end(), [&](auto tracked) {
+          return tracked.value() != stream.value();
+        });
+    if (needsOrdering) {
+      streamsWaitForStream(stateEvent(), stateStreams_, stream);
+    }
+  }
+
   size_t distinctKeys() const {
     if (!groupby_) {
       return 0;
@@ -1035,7 +1102,15 @@ class StreamingGroupbyLeafState final : public BufferedState {
         if (groupby_) {
           rebuilt->merge(*groupby_, input.stream);
         }
+
+        // merge() returns with the aggregation merge kernel still queued on
+        // input.stream. The old streaming_groupby owns buffers allocated on
+        // every stream used by prior batches. Make those streams wait before
+        // move-assignment destroys the old object and frees its buffers.
+        orderStateDeallocationsAfter(input.stream);
         groupby_ = std::move(rebuilt);
+        stateStreams_.clear();
+        rememberStateStream(input.stream);
         currentCapacity_ = capacity;
         {
           auto lockedStats = owner_.stats_.wlock();
@@ -1062,11 +1137,13 @@ class StreamingGroupbyLeafState final : public BufferedState {
 
   CudfGroupby& owner_;
   const uint64_t rowWidthBytes_;
+  std::unique_ptr<CudaEvent> stateEvent_;
+  std::vector<rmm::cuda_stream_view> stateStreams_;
   std::unique_ptr<cudf::groupby::streaming_groupby> groupby_;
   size_t currentCapacity_{0};
   size_t totalRows_{0};
   uint64_t estimatedFlatSize_{0};
-  rmm::cuda_stream_view lastStream_{rmm::cuda_stream_default};
+  std::optional<rmm::cuda_stream_view> lastStream_;
 };
 
 class BufferedGroupbyStateOps final : public BufferedStateOps {
