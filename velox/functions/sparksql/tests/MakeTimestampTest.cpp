@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
@@ -177,10 +178,14 @@ TEST_F(MakeTimestampTest, errors) {
   testInvalidSeconds(999999999);
   testInvalidSeconds(60007000);
 
-  // Throw if data type for microseconds is invalid.
+  // Throw if data type for microseconds is invalid. Seconds must be a short
+  // decimal (precision <= 18) with scale 6; both a too-large precision and a
+  // wrong scale fail signature resolution rather than a runtime check.
   VELOX_ASSERT_THROW(
       testInvalidArguments(1e6, DECIMAL(20, 6)),
-      "Seconds must be short decimal type but got DECIMAL(20, 6)");
+      "Scalar function signature is not supported: "
+      "make_timestamp(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
+      "DECIMAL(20, 6)).");
   VELOX_ASSERT_THROW(
       testInvalidArguments(1e6, DECIMAL(16, 8)),
       "Scalar function signature is not supported: "
@@ -318,6 +323,137 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
   VELOX_ASSERT_USER_THROW(
       evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones),
       "Unknown time zone: 'Invalid'");
+}
+
+TEST_F(MakeTimestampTest, makeTimestampNtz) {
+  const auto microsType = DECIMAL(16, 6);
+  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021, 2021});
+  const auto month = makeFlatVector<int32_t>({7, 7, 7, 7});
+  const auto day = makeFlatVector<int32_t>({11, 11, 11, 11});
+  const auto hour = makeFlatVector<int32_t>({6, 6, 6, 6});
+  const auto minute = makeFlatVector<int32_t>({30, 30, 30, 30});
+  const auto micros = makeFlatVector<int64_t>(
+      {45'678'000, 1'000'000, 60'000'000, 59'999'999}, microsType);
+  auto data = makeRowVector({year, month, day, hour, minute, micros});
+  auto expected = makeNullableFlatVector<Timestamp>(
+      {parseTimestamp("2021-07-11 06:30:45.678"),
+       parseTimestamp("2021-07-11 06:30:01"),
+       parseTimestamp("2021-07-11 06:31:00"),
+       parseTimestamp("2021-07-11 06:30:59.999999")},
+      TIMESTAMP_UTC());
+
+  auto result = evaluate("make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data);
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  SCOPE_EXIT {
+    setQueryTimeZone("");
+  };
+  setQueryTimeZone("America/Los_Angeles");
+  result = evaluate("make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data);
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  setQueryTimeZone("Asia/Riyadh");
+  result = evaluate("make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data);
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(MakeTimestampTest, makeTimestampNtzErrors) {
+  const auto microsType = DECIMAL(16, 6);
+  std::optional<int32_t> one = 1;
+
+  EXPECT_NO_THROW(
+      evaluateOnce<Timestamp>(
+          "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)",
+          {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+          one,
+          one,
+          one,
+          one,
+          one,
+          std::optional<int64_t>(45'678'000)));
+
+  const auto testInvalidSeconds = [&](std::optional<int64_t> microsec) {
+    auto result = evaluateOnce<Timestamp>(
+        "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)",
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+        one,
+        one,
+        one,
+        one,
+        one,
+        microsec);
+    EXPECT_EQ(result, std::nullopt);
+  };
+  testInvalidSeconds(61'000'000);
+  testInvalidSeconds(60'007'000);
+
+  // Throw if data type for microseconds is invalid, same as make_timestamp.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<Timestamp>(
+          "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)",
+          {INTEGER(),
+           INTEGER(),
+           INTEGER(),
+           INTEGER(),
+           INTEGER(),
+           DECIMAL(20, 6)},
+          one,
+          one,
+          one,
+          one,
+          one,
+          std::optional<int64_t>(1'000'000)),
+      "Scalar function signature is not supported: "
+      "make_timestamp_ntz(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
+      "DECIMAL(20, 6)).");
+}
+
+TEST_F(MakeTimestampTest, tryMakeTimestampNtz) {
+  const auto microsType = DECIMAL(16, 6);
+  std::optional<int32_t> one = 1;
+
+  // try_make_timestamp_ntz returns NULL under ANSI mode.
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  };
+  queryCtx_->testingOverrideConfigUnsafe({
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
+
+  VELOX_ASSERT_USER_THROW(
+      evaluateOnce<Timestamp>(
+          "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)",
+          {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+          one,
+          one,
+          one,
+          one,
+          one,
+          std::optional<int64_t>(61'000'000)),
+      "Invalid value for second");
+
+  auto result = evaluateOnce<Timestamp>(
+      "try_make_timestamp_ntz(c0, c1, c2, c3, c4, c5)",
+      {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+      one,
+      one,
+      one,
+      one,
+      one,
+      std::optional<int64_t>(61'000'000));
+  EXPECT_EQ(result, std::nullopt);
+
+  result = evaluateOnce<Timestamp>(
+      "try_make_timestamp_ntz(c0, c1, c2, c3, c4, c5)",
+      {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+      std::optional<int32_t>(2021),
+      std::optional<int32_t>(7),
+      std::optional<int32_t>(11),
+      std::optional<int32_t>(6),
+      std::optional<int32_t>(30),
+      std::optional<int64_t>(45'678'000));
+  EXPECT_EQ(result, parseTimestamp("2021-07-11 06:30:45.678"));
 }
 
 } // namespace
