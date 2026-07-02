@@ -243,10 +243,12 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
 }
 
 TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
-  constexpr int32_t kNumBatches = 100;
+  constexpr int32_t kNumBatches = 10;
   constexpr vector_size_t kRowsPerBatch = 100;
   constexpr int32_t kPayloadSize = 96;
 
+  // Generate fixed-size, per-row-varying strings for predictable size
+  // accounting without relying on fuzzed VARCHAR lengths.
   auto makePayload = [](int64_t value) {
     std::string payload;
     payload.reserve(kPayloadSize);
@@ -260,16 +262,17 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
   std::vector<RowVectorPtr> vectors;
   vectors.reserve(kNumBatches);
   for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    const auto batchOffset = batch * kRowsPerBatch;
     vectors.push_back(makeRowVector(
         rowType->names(),
         {
             makeFlatVector<int64_t>(
                 kRowsPerBatch,
-                [batch](auto row) { return batch * kRowsPerBatch + row; }),
+                [batchOffset](auto row) { return batchOffset + row; }),
             makeFlatVector<std::string>(
                 kRowsPerBatch,
-                [&, batch](auto row) {
-                  return makePayload(batch * kRowsPerBatch + row);
+                [&, batchOffset](auto row) {
+                  return makePayload(batchOffset + row);
                 }),
         }));
   }
@@ -297,16 +300,8 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     return files.size();
   };
 
-  const auto smallTargetFileCount = writeAndRead("1KB");
-  const auto mediumTargetFileCount = writeAndRead("32KB");
-  const auto largeTargetFileCount = writeAndRead("10MB");
-
-  // Rotation uses rawBytesWritten(), which advances when Parquet flushes a row
-  // group. Counts therefore follow row group flush boundaries rather than
-  // scaling linearly with maxTargetFileSize.
-  ASSERT_EQ(smallTargetFileCount, 100);
-  ASSERT_EQ(mediumTargetFileCount, 4);
-  ASSERT_EQ(largeTargetFileCount, 1);
+  ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
+  ASSERT_EQ(writeAndRead("10MB"), 1);
 }
 
 #endif

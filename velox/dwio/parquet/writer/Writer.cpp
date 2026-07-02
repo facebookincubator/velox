@@ -549,10 +549,6 @@ void Writer::write(const VectorPtr& data) {
 
   auto bytes = data->estimateFlatSize();
   auto numRows = data->size();
-  if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
-    flush();
-  }
 
   for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
     arrowContext_->stagingChunks.at(colIdx).push_back(
