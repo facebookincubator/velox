@@ -201,6 +201,10 @@ void configureRowReaderOptions(
         fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setStringDecoderZeroCopy(
+        fileConfig->nimbleStringDecoderZeroCopy(sessionProperties));
+    rowReaderOptions.setNimblePreserveDictionaryEncoding(
+        fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
   }
 }
 
