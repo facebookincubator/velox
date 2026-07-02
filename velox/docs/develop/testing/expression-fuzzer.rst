@@ -150,6 +150,8 @@ Expression Fuzzer supports a number of powerful command line arguments.
 
 * ``--null_ratio``: Chance of adding a null constant to the plan, or null value in a vector (expressed as double from 0 to 1). Default is 0.1.
 
+* ``--velox_fuzzer_non_contiguous_elements``: Lay out array/map elements non-contiguously, leaving random gaps of unreferenced elements between containers, so that expressions/UDFs which ignore offsets/sizes and read the raw elements buffer are caught. Default is false.
+
 * ``--max_num_varargs``: The maximum number of variadic arguments fuzzer will generate for functions that accept variadic arguments. Fuzzer will generate up to max_num_varargs arguments for the variadic list in addition to the required arguments by the function. Default is 10.
 
 * ``--retry_with_try``: Retry failed expressions by wrapping it using a try() statement. Default is false.

@@ -227,7 +227,7 @@ struct CoercionEntry {
 /// Container types (ARRAY, MAP, ROW) and FUNCTION/OPAQUE are not
 /// customizable directly -- coercibility for those is structural (names and
 /// arities must match, children are recursed element-wise, see
-/// coercible()), so a dialect controls their behavior only indirectly via
+/// coerce()), so a dialect controls their behavior only indirectly via
 /// element-type rules.
 ///
 /// Custom types (e.g. JSON, TIMESTAMP WITH TIME ZONE) are out of scope for
@@ -245,50 +245,12 @@ class TypeCoercer {
   /// Used by callers that have not selected a dialect-specific coercer.
   static const TypeCoercer& defaults();
 
-  /// Returns the coercion from 'fromType' to 'toType', or std::nullopt. A bare
-  /// UNKNOWN coerces to any complex target at a cost above every
-  /// UNKNOWN->scalar coercion; all other cases defer to coerceTypeBase().
+  /// Returns the coercion from 'fromType' to 'toType', or std::nullopt.
+  /// Scalars resolve via a single rule lookup; containers match on name and
+  /// arity, then recurse element-wise. A bare UNKNOWN coerces to any resolved
+  /// target, ranked above every UNKNOWN->scalar rule.
   std::optional<Coercion> coerce(const TypePtr& fromType, const TypePtr& toType)
       const;
-
-  /// Checks if 'fromType' can be implicitly converted to 'toType' via a
-  /// single rule lookup. Does NOT recurse into container children -- for
-  /// container coercibility (e.g., ARRAY<INT> vs ARRAY<BIGINT>), use
-  /// coercible() instead.
-  ///
-  /// Prefer this over the string overload when the target type is available,
-  /// as it avoids reconstructing the type from a name (which can throw for
-  /// parametric custom types like BigintEnum).
-  ///
-  /// For DECIMAL targets, the rule's stored type is the minimum-width
-  /// decimal for the source. If 'toType' is a wider DECIMAL that the
-  /// minimum can be coerced to (per ShortDecimalType / LongDecimalType
-  /// isCoercibleTo), the returned Coercion carries 'toType' and the rule's
-  /// cost. If 'toType' is too narrow, returns nullopt.
-  ///
-  /// @return "to" type and cost if conversion is possible.
-  std::optional<Coercion> coerceTypeBase(
-      const TypePtr& fromType,
-      const TypePtr& toType) const;
-
-  /// Checks if the base of 'fromType' can be implicitly converted to a type
-  /// with the given name. Used by SignatureBinder which only has a type name.
-  ///
-  /// @return "to" type and cost if conversion is possible.
-  std::optional<Coercion> coerceTypeBase(
-      const TypePtr& fromType,
-      const std::string& toTypeName) const;
-
-  /// Checks if 'fromType' can be implicitly converted to 'toType', recursing
-  /// into container children. For primitives this delegates to
-  /// coerceTypeBase(); for containers (ARRAY, MAP, ROW, FUNCTION) the names
-  /// and arities must match, then each child must be element-wise coercible.
-  ///
-  /// @return Total cost (sum of child costs for containers) if possible.
-  /// std::nullopt otherwise.
-  std::optional<int32_t> coercible(
-      const TypePtr& fromType,
-      const TypePtr& toType) const;
 
   /// Returns least common type for 'a' and 'b', i.e. a type that both 'a' and
   /// 'b' are coercible to. Returns nullptr if no such type exists.
@@ -299,6 +261,12 @@ class TypeCoercer {
   TypePtr leastCommonSuperType(const TypePtr& a, const TypePtr& b) const;
 
  private:
+  // Returns the coercion from scalar 'fromType' to 'toType' via a single rule
+  // lookup, or std::nullopt.
+  std::optional<Coercion> coerceTypeBase(
+      const TypePtr& fromType,
+      const TypePtr& toType) const;
+
   struct PairHash {
     size_t operator()(const std::pair<std::string, std::string>& p) const {
       return folly::hash::hash_combine(
@@ -312,7 +280,7 @@ class TypeCoercer {
       rules_;
 
   // Derived from the rule set at construction (max UNKNOWN->scalar cost + 1).
-  int32_t unknownToComplexCost_{1};
+  int32_t unknownFallbackCost_{1};
 };
 
 } // namespace facebook::velox

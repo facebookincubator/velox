@@ -16,7 +16,7 @@
 
 velox_add_library(velox_rpc_error_classification HEADERS RpcErrorClassification.h)
 
-velox_link_libraries(velox_rpc_error_classification Folly::folly)
+velox_link_libraries(velox_rpc_error_classification Folly::folly FBThrift::thriftcpp2)
 
 velox_add_library(
   velox_rpc_state

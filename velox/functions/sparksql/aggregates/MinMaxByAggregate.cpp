@@ -125,7 +125,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(
         const std::string errorMessage = fmt::format(
             "Unknown input types for {} ({}) aggregation: {}",
             name,
-            mapAggregationStepToName(step),
+            core::AggregationNode::toName(step),
             toString(argTypes));
 
         if (isRawInput) {
