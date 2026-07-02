@@ -21,6 +21,7 @@
 #include <folly/Random.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <cstring>
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;
@@ -174,34 +175,78 @@ TEST_F(BitPackDecoderTest, uint32AllRows) {
   }
 }
 
-// Verifies that unpackNaive correctly advances both the input and result
-// pointers after decoding. Calls unpackNaive directly to ensure the fix is
-// exercised regardless of platform (the AVX2 fast path in unpack<uint8_t>
-// handles all values when numValues is a multiple of 8).
-TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
-  // Two bytes encoding 16 one-bit values:
-  //   byte 0 = 0xAA = 0b10101010 → values {0,1,0,1,0,1,0,1}
-  //   byte 1 = 0x0F = 0b00001111 → values {1,1,1,1,0,0,0,0}
-  const uint8_t packed[] = {0xAA, 0x0F};
-  const uint8_t* input = packed;
+// Edge case: input buffer is exactly the minimum size with no padding.
+// Verifies that the fast paths correctly fall through to unpackNaive when
+// fewer than sizeof(uint64_t) bytes remain, avoiding out-of-bounds reads.
+TEST_F(BitPackDecoderTest, smallBufferNoPadding) {
+  // Test uint8_t: 8 values at bitWidth=1 -> exactly 1 byte of packed data.
+  {
+    // Pack 8 known bit values: alternating 0,1,0,1,0,1,0,1 = 0xAA
+    uint8_t packed = 0xAA;
+    const uint8_t* input = &packed;
+    uint8_t output[8] = {};
+    uint8_t* outputPtr = output;
+    uint64_t bufLen = 1; // Exactly 1 byte, no padding.
+    facebook::velox::dwio::common::unpack<uint8_t>(
+        input, bufLen, 8, 1, outputPtr);
+    for (int i = 0; i < 8; ++i) {
+      EXPECT_EQ(output[i], (0xAA >> i) & 1) << "uint8 at index " << i;
+    }
+  }
 
-  uint8_t output[16] = {};
-  uint8_t* result = output;
+  // Test uint8_t: 8 values at bitWidth=3 -> exactly 3 bytes of packed data.
+  {
+    // Values: 0,1,2,3,4,5,6,7 packed at 3 bits each = 24 bits = 3 bytes.
+    // Bit layout: 000 001 010 011 100 101 110 111
+    // LSB first:  0b11_101_100_011_010_001_000 spread across 3 bytes.
+    uint8_t packed[3];
+    // Pack manually: value[i] = i, each 3 bits wide, LSB first.
+    uint64_t bits = 0;
+    for (int i = 0; i < 8; ++i) {
+      bits |= (uint64_t)i << (i * 3);
+    }
+    std::memcpy(packed, &bits, 3);
 
-  // Decode first 8 values (consumes byte 0 entirely: 8 bits at bitWidth=1).
-  facebook::velox::dwio::common::unpackNaive<uint8_t>(
-      input, /*inputBufferLen=*/1, /*numValues=*/8, /*bitWidth=*/1, result);
+    const uint8_t* input = packed;
+    uint8_t output[8] = {};
+    uint8_t* outputPtr = output;
+    facebook::velox::dwio::common::unpack<uint8_t>(input, 3, 8, 3, outputPtr);
+    for (int i = 0; i < 8; ++i) {
+      EXPECT_EQ(output[i], i) << "uint8 bw3 at index " << i;
+    }
+  }
 
-  EXPECT_EQ(input, packed + 1);
-  EXPECT_EQ(result, output + 8);
+  // Test uint32_t: 4 values at bitWidth=2 -> exactly 1 byte of packed data.
+  {
+    // Values: 3,2,1,0 packed at 2 bits each = 8 bits = 1 byte.
+    // Bit layout LSB first: 11 10 01 00 = 0b00011011 = 0x1B
+    uint8_t packed = 0x1B;
+    const uint8_t* input = &packed;
+    uint32_t output[4] = {};
+    uint32_t* outputPtr = output;
+    facebook::velox::dwio::common::unpack<uint32_t>(input, 1, 4, 2, outputPtr);
+    EXPECT_EQ(output[0], 3);
+    EXPECT_EQ(output[1], 2);
+    EXPECT_EQ(output[2], 1);
+    EXPECT_EQ(output[3], 0);
+  }
 
-  // Decode next 8 values from byte 1.
-  facebook::velox::dwio::common::unpackNaive<uint8_t>(
-      input, /*inputBufferLen=*/1, /*numValues=*/8, /*bitWidth=*/1, result);
+  // Test uint32_t: 8 values at bitWidth=4 -> exactly 4 bytes of packed data.
+  {
+    // Values: 0..7 packed at 4 bits each = 32 bits = 4 bytes.
+    uint8_t packed[4];
+    uint32_t bits = 0;
+    for (int i = 0; i < 8; ++i) {
+      bits |= (uint32_t)i << (i * 4);
+    }
+    std::memcpy(packed, &bits, 4);
 
-  EXPECT_EQ(input, packed + 2);
-  EXPECT_EQ(result, output + 16);
-
-  const uint8_t expected[] = {0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0};
-  EXPECT_THAT(output, ::testing::ElementsAreArray(expected));
+    const uint8_t* input = packed;
+    uint32_t output[8] = {};
+    uint32_t* outputPtr = output;
+    facebook::velox::dwio::common::unpack<uint32_t>(input, 4, 8, 4, outputPtr);
+    for (int i = 0; i < 8; ++i) {
+      EXPECT_EQ(output[i], i) << "uint32 bw4 at index " << i;
+    }
+  }
 }

@@ -23,6 +23,8 @@
 
 #include <folly/Range.h>
 #include <xsimd/config/xsimd_config.hpp>
+#include <algorithm>
+#include <cstring>
 
 namespace facebook::velox::dwio::common {
 
@@ -645,9 +647,9 @@ static inline void unpack32(
 //
 // 1. PDEP-based unpack (unpack<uint8_t>, unpack<uint16_t>):
 //    - Compile: requires XSIMD_WITH_AVX2 (x86 builds with -mavx2)
-//    - Runtime: used when FLAGS_bmi2=true (default). On AMD Zen1/2/3 where
+//    - Runtime: used when FLAGS_bmi2=true (default). On AMD Zen1/2 where
 //      PDEP is microcoded (~18 cycles), set --bmi2=false to use the faster
-//      shift+mask fallback instead.
+//      shift+mask fallback instead. Zen3+ has native PDEP (1 cycle).
 //
 // 2. Shift+mask unpack for non-AVX2 (unpack<uint32_t> #else branch):
 //    - Compile: active when XSIMD_WITH_AVX2 is NOT defined (ARM, non-AVX2 x86)
@@ -672,28 +674,39 @@ inline void unpack<uint8_t>(
 
   if (FOLLY_LIKELY(process::hasBmi2())) {
     uint64_t mask = kPdepMask8[bitWidth];
-    auto writeEndOffset = result + numValues;
+    // Precompute how many 8-value iterations can safely read 8 bytes.
+    // At iteration i, we read 8 bytes starting at inputBits + i*bitWidth.
+    // Last byte accessed: (iterations-1)*bitWidth + 7 < inputBufferLen.
+    uint64_t maxByOutput = numValues / 8;
+    uint64_t maxByInput = inputBufferLen >= sizeof(uint64_t)
+        ? (inputBufferLen - sizeof(uint64_t)) / bitWidth + 1
+        : 0;
+    uint64_t iterations = std::min(maxByOutput, maxByInput);
 
-    // Process bitWidth bytes (8 values) a time. Note that for bitWidth 8, the
-    // performance of direct memcpy is about the same as this solution.
-    while (result + 8 <= writeEndOffset) {
-      // Using memcpy() here may result in non-optimized loops by clong.
+    // Process bitWidth bytes (8 values) at a time. Note that for bitWidth 8,
+    // the performance of direct memcpy is about the same as this solution.
+    for (uint64_t i = 0; i < iterations; ++i) {
       uint64_t val = *reinterpret_cast<const uint64_t*>(inputBits);
       *(reinterpret_cast<uint64_t*>(result)) = _pdep_u64(val, mask);
       inputBits += bitWidth;
       result += 8;
     }
 
-    numValues = writeEndOffset - result;
+    numValues -= iterations * 8;
     unpackNaive(
         inputBits, (bitWidth * numValues + 7) / 8, numValues, bitWidth, result);
   } else {
-    // Shift+mask fallback: fast on AMD Zen1/2/3 where PDEP is microcoded.
+    // Shift+mask fallback: fast on AMD Zen1/2 where PDEP is microcoded.
     // Extracts 8 values at a time from 64-bit loads (vs byte-at-a-time in
     // unpackNaive). Set FLAGS_bmi2=false to use this path.
     uint64_t valueMask = (1ULL << bitWidth) - 1;
-    auto writeEndOffset = result + numValues;
-    while (result + 8 <= writeEndOffset) {
+    uint64_t maxByOutput = numValues / 8;
+    uint64_t maxByInput = inputBufferLen >= sizeof(uint64_t)
+        ? (inputBufferLen - sizeof(uint64_t)) / bitWidth + 1
+        : 0;
+    uint64_t iterations = std::min(maxByOutput, maxByInput);
+
+    for (uint64_t i = 0; i < iterations; ++i) {
       uint64_t val = *reinterpret_cast<const uint64_t*>(inputBits);
       result[0] = static_cast<uint8_t>(val & valueMask);
       result[1] = static_cast<uint8_t>((val >> bitWidth) & valueMask);
@@ -706,7 +719,7 @@ inline void unpack<uint8_t>(
       inputBits += bitWidth;
       result += 8;
     }
-    numValues = writeEndOffset - result;
+    numValues -= iterations * 8;
     unpackNaive(
         inputBits, (bitWidth * numValues + 7) / 8, numValues, bitWidth, result);
   }
@@ -853,7 +866,8 @@ inline void unpack<uint32_t>(
     const uint64_t valueMask = (1ULL << bitWidth) - 1;
     const uint8_t* inputEnd = inputBits + inputBufferLen;
     auto writeEnd = result + numValues;
-    while (result + 4 <= writeEnd && inputBits + sizeof(uint64_t) <= inputEnd) {
+    while (writeEnd - result >= 4 &&
+           inputEnd - inputBits >= (int64_t)sizeof(uint64_t)) {
       uint64_t val;
       std::memcpy(&val, inputBits, sizeof(uint64_t));
       result[0] = static_cast<uint32_t>(val & valueMask);
