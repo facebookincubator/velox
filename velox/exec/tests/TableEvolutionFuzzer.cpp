@@ -1004,7 +1004,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     FuzzerGenerator& rng,
     bool enableFlatMap,
     folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
-    std::vector<int>& globallyCompatibleFlatmapColumns) {
+    std::vector<int>& globallyCompatibleFlatmapColumns,
+    const std::unordered_map<std::string, std::string>& extraSerdeParams) {
   auto builder = PlanBuilder().values({data});
 
   // Create serdeParameters using proper dwrf::Config for flatmap configuration
@@ -1112,6 +1113,11 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
       auto configParams = config->toSerdeParams();
       serdeParameters.insert(configParams.begin(), configParams.end());
     }
+  }
+
+  // Driver-injected, format-specific overrides win over the defaults above.
+  for (const auto& [key, value] : extraSerdeParams) {
+    serdeParameters.insert_or_assign(key, value);
   }
 
   if (bucketColumnIndices.empty()) {
@@ -1374,7 +1380,10 @@ void TableEvolutionFuzzer::createWriteTasks(
         rng_,
         true,
         globalMapColumnKeys,
-        globallyConsistentColumnIndexVector);
+        globallyConsistentColumnIndexVector,
+        config_.extraWriteSerdeParams
+            ? config_.extraWriteSerdeParams(testSetups[i].fileFormat, rng_)
+            : std::unordered_map<std::string, std::string>{});
 
     if (i == config_.evolutionCount - 1) {
       finalExpectedData = std::move(data);
@@ -1393,7 +1402,10 @@ void TableEvolutionFuzzer::createWriteTasks(
         rng_,
         true,
         globalMapColumnKeys,
-        globallyConsistentColumnIndexVector);
+        globallyConsistentColumnIndexVector,
+        config_.extraWriteSerdeParams
+            ? config_.extraWriteSerdeParams(testSetups.back().fileFormat, rng_)
+            : std::unordered_map<std::string, std::string>{});
   }
 }
 
