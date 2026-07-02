@@ -36,8 +36,8 @@ DATA_PATH="${VELOX_TPCH_DATA_PATH:-${REPO_ROOT}/velox-tpch-sf10-data}"
 
 cudf_chunk_read_limit=$((1024 * 1024 * 1024 * 1))
 cudf_pass_read_limit=0
-VELOX_CUDF_MEMORY_RESOURCE="async"
-VELOX_CUDF_MEMORY_PERCENT=0
+VELOX_CUDF_MEMORY_RESOURCE="${VELOX_CUDF_MEMORY_RESOURCE:-async}"
+VELOX_CUDF_MEMORY_PERCENT="${VELOX_CUDF_MEMORY_PERCENT:-0}"
 
 for query_number in ${queries}; do
   printf -v query_number '%02d' "${query_number}"
@@ -53,6 +53,10 @@ for query_number in ${queries}; do
       BENCHMARK_EXECUTABLE="${REPO_ROOT}/_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark"
       CUDF_FLAGS="--velox_cudf_table_scan=true --cudf_chunk_read_limit=${cudf_chunk_read_limit} --cudf_pass_read_limit=${cudf_pass_read_limit}"
       ;;
+    *)
+      echo "Unsupported device: ${device}. Expected cpu or gpu." >&2
+      exit 1
+      ;;
     esac
     echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
     # The benchmarks segfault after reporting results, so we disable errors
@@ -66,7 +70,6 @@ for query_number in ${queries}; do
       fi
     fi
 
-    set +e -x
     if [[ ${device} == "gpu" ]]; then
       VELOX_CUDF_PROPERTIES_FILE="$(mktemp "${TMPDIR:-/tmp}/velox-cudf.XXXXXX.properties")"
       printf '%s\n' \
@@ -75,6 +78,7 @@ for query_number in ${queries}; do
         >"${VELOX_CUDF_PROPERTIES_FILE}"
       CUDF_FLAGS="${CUDF_FLAGS} --cudf_properties=${VELOX_CUDF_PROPERTIES_FILE}"
     fi
+    set +e -x
     ${PROFILE_CMD} \
       ${BENCHMARK_EXECUTABLE} \
       --data_path="${DATA_PATH}" \
@@ -84,7 +88,9 @@ for query_number in ${queries}; do
       --num_drivers=${num_drivers} \
       ${CUDF_FLAGS} 2>&1 |
       tee benchmark_results/q${query_number}_${device}_${num_drivers}_drivers
-    rm -f "${VELOX_CUDF_PROPERTIES_FILE:-}"
+    if [[ ${device} == "gpu" ]]; then
+      rm -f "${VELOX_CUDF_PROPERTIES_FILE}"
+    fi
     { set -e +x; } &>/dev/null
   done
 done
