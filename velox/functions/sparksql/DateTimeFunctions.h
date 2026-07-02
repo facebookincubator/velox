@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
@@ -973,6 +974,196 @@ struct MakeYMIntervalFunction {
         year,
         month);
     result = totalMonths;
+  }
+};
+
+namespace detail {
+std::optional<Timestamp> buildTimestampFromFields(
+    int32_t year,
+    int32_t month,
+    int32_t day,
+    int32_t hour,
+    int32_t minute,
+    int64_t micros,
+    bool ansiEnabled) {
+  if (hour < 0 || hour >= 24) {
+    return nullOrUserFail(
+        ansiEnabled, "Invalid value for hour, must be in [0, 24): {}", hour);
+  }
+  if (minute < 0 || minute >= 60) {
+    return nullOrUserFail(
+        ansiEnabled,
+        "Invalid value for minute, must be in [0, 60): {}",
+        minute);
+  }
+  if (micros < 0) {
+    return nullOrUserFail(
+        ansiEnabled,
+        "Invalid value for second microseconds, must be non-negative: {}",
+        micros);
+  }
+  auto seconds = micros / util::kMicrosPerSec;
+  if (micros > 60 * util::kMicrosPerSec) {
+    return nullOrUserFail(
+        ansiEnabled,
+        "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: {}.{:06d}",
+        seconds,
+        micros % util::kMicrosPerSec);
+  }
+
+  Expected<int64_t> daysSinceEpoch =
+      util::daysSinceEpochFromDate(year, month, day);
+  if (daysSinceEpoch.hasError()) {
+    VELOX_DCHECK(daysSinceEpoch.error().isUserError());
+    return nullOrUserFail(ansiEnabled, "{}", daysSinceEpoch.error().message());
+  }
+
+  // seconds <= 60 and fracMicros < 1e6, so both fit in int32_t.
+  const auto fracMicros = static_cast<int32_t>(micros % util::kMicrosPerSec);
+  const auto localMicros =
+      util::fromTime(hour, minute, static_cast<int32_t>(seconds), fracMicros);
+  return util::fromDatetime(daysSinceEpoch.value(), localMicros);
+}
+} // namespace detail
+
+// make_timestamp / make_timestamp_ntz. The 7-argument (explicit timezone)
+// overload is only registered for TTimestamp == Timestamp.
+template <typename T, typename TTimestamp>
+struct MakeTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*year*/,
+      const int32_t* /*month*/,
+      const int32_t* /*day*/,
+      const int32_t* /*hour*/,
+      const int32_t* /*minute*/,
+      const int64_t* /*seconds*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+    if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      // TIMESTAMP UTC represents a timestamp in UTC, not subject to session
+      // timezone adjustment.
+      sessionTimeZone_ = nullptr;
+    } else {
+      const auto sessionTzName = config.sessionTimezone();
+      VELOX_USER_CHECK(
+          !sessionTzName.empty(),
+          "make_timestamp requires session time zone to be set.");
+      sessionTimeZone_ = tz::locateZone(sessionTzName);
+    }
+  }
+
+  // Caches the timezone once when it's constant; null means it varies per
+  // row, resolved in call() instead.
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*year*/,
+      const int32_t* /*month*/,
+      const int32_t* /*day*/,
+      const int32_t* /*hour*/,
+      const int32_t* /*minute*/,
+      const int64_t* /*seconds*/,
+      const arg_type<Varchar>* timezone) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+    // Required even though this path doesn't use the session timezone,
+    // matching the 6-argument form.
+    VELOX_USER_CHECK(
+        !config.sessionTimezone().empty(),
+        "make_timestamp requires session time zone to be set.");
+    if (timezone != nullptr) {
+      constantTimeZoneName_ = std::string(*timezone);
+      constantTimeZone_ = tz::locateZone(
+          std::string_view(constantTimeZoneName_), /*failOnError=*/false);
+      hasConstantTimeZone_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<TTimestamp>& result,
+      int32_t year,
+      int32_t month,
+      int32_t day,
+      int32_t hour,
+      int32_t minute,
+      int64_t seconds) {
+    auto timestamp = detail::buildTimestampFromFields(
+        year, month, day, hour, minute, seconds, ansiEnabled_);
+    if (!timestamp.has_value()) {
+      return false;
+    }
+    if constexpr (!std::is_same_v<TTimestamp, TimestampUtc>) {
+      toGMTWithGapCorrection(*timestamp, *sessionTimeZone_);
+    }
+    result = *timestamp;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Timestamp>& result,
+      int32_t year,
+      int32_t month,
+      int32_t day,
+      int32_t hour,
+      int32_t minute,
+      int64_t seconds,
+      const arg_type<Varchar>& timezone) {
+    auto timestamp = detail::buildTimestampFromFields(
+        year, month, day, hour, minute, seconds, ansiEnabled_);
+    if (!timestamp.has_value()) {
+      return false;
+    }
+    const tz::TimeZone* zone;
+    std::string_view zoneName;
+    if (hasConstantTimeZone_) {
+      zone = constantTimeZone_;
+      zoneName = constantTimeZoneName_;
+    } else {
+      zoneName = std::string_view(timezone);
+      zone = tz::locateZone(zoneName, /*failOnError=*/false);
+    }
+    if (zone == nullptr) {
+      nullOrUserFail(ansiEnabled_, "Unknown time zone: '{}'", zoneName);
+      return false;
+    }
+    toGMTWithGapCorrection(*timestamp, *zone);
+    result = *timestamp;
+    return true;
+  }
+
+ private:
+  bool ansiEnabled_{false};
+  // Null when TTimestamp == TimestampUtc.
+  const tz::TimeZone* sessionTimeZone_{nullptr};
+  // Set when the 7-argument form's timezone is constant.
+  bool hasConstantTimeZone_{false};
+  std::string constantTimeZoneName_;
+  const tz::TimeZone* constantTimeZone_{nullptr};
+};
+
+// Same as MakeTimestampFunction<T, TimestampUtc>, but always returns NULL
+// on invalid input, regardless of ANSI mode.
+template <typename T>
+struct TryMakeTimestampNtzFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<TimestampUtc>& result,
+      int32_t year,
+      int32_t month,
+      int32_t day,
+      int32_t hour,
+      int32_t minute,
+      int64_t seconds) {
+    auto timestamp = detail::buildTimestampFromFields(
+        year, month, day, hour, minute, seconds, /*ansiEnabled=*/false);
+    if (!timestamp.has_value()) {
+      return false;
+    }
+    result = *timestamp;
+    return true;
   }
 };
 

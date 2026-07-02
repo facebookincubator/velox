@@ -246,6 +246,31 @@ These functions support TIMESTAMP and DATE input types.
         SELECT make_timestamp(2014, 12, 28, 6, 30, 60.000001); -- NULL (ANSI OFF) / ERROR (ANSI ON)
         SELECT make_timestamp(2014, 13, 28, 6, 30, 45.887); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
+.. spark:function:: make_timestamp_ntz(year, month, day, hour, minute, second) -> timestamp_utc
+
+    *(ANSI compliant)*
+
+    Create timestamp from ``year``, ``month``, ``day``, ``hour``, ``minute`` and ``second`` fields.
+    The result is not subject to the session timezone.
+    See :spark:func:`make_timestamp` for argument semantics.
+    When ``spark.ansi_enabled`` is true, invalid (non-NULL) inputs throw an
+    error; otherwise the function returns NULL. NULL inputs always return
+    NULL regardless of ANSI mode. ::
+
+        SELECT make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
+        SELECT make_timestamp_ntz(2019, 6, 30, 23, 59, 60); -- 2019-07-01 00:00:00
+        SELECT make_timestamp_ntz(null, 7, 22, 15, 30, 0); -- NULL
+        SELECT make_timestamp_ntz(2014, 12, 28, 6, 30, 60.000001); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+        SELECT make_timestamp_ntz(2014, 13, 28, 6, 30, 45.887); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+
+.. spark:function:: try_make_timestamp_ntz(year, month, day, hour, minute, second) -> timestamp_utc
+
+    Same semantics as :spark:func:`make_timestamp_ntz`, but always returns NULL on
+    invalid input regardless of ANSI mode. ::
+
+        SELECT try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887); -- 2014-12-28 06:30:45.887
+        SELECT try_make_timestamp_ntz(2014, 13, 28, 6, 30, 45.887); -- NULL
+
 .. spark:function:: make_ym_interval([years[, months]]) -> interval year to month
 
     Make year-month interval from ``years`` and ``months`` fields.
