@@ -342,6 +342,66 @@ TEST_F(E2EWriterTest, FieldIdMappingRenameReorderDrop) {
   EXPECT_EQ(rowType->nameOf(2), "c2");
 }
 
+// Writes a DWRF file with 'fileSchema', opens it with ColumnMappingMode::kName
+// against 'tableSchema', and returns the reader's row type.
+RowTypePtr readWithColumnNames(
+    memory::MemoryPool* rootPool,
+    memory::MemoryPool* leafPool,
+    const RowTypePtr& fileSchema,
+    const RowTypePtr& tableSchema) {
+  auto sink = std::make_unique<MemorySink>(
+      16 * 1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool});
+  auto* sinkPtr = sink.get();
+
+  dwrf::WriterOptions options;
+  options.config = std::make_shared<dwrf::Config>();
+  options.schema = fileSchema;
+  options.memoryPool = rootPool;
+  dwrf::Writer writer{std::move(sink), options};
+  writer.write(BatchMaker::createBatch(fileSchema, 10, *leafPool, nullptr, 0));
+  writer.close();
+
+  dwio::common::ReaderOptions readerOpts(leafPool);
+  readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
+  readerOpts.setFileSchema(tableSchema);
+  std::string_view data(sinkPtr->data(), sinkPtr->size());
+  auto reader = std::make_unique<dwrf::DwrfReader>(
+      readerOpts,
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(data), readerOpts.memoryPool()));
+  return reader->rowType();
+}
+
+TEST_F(E2EWriterTest, NameMappingPositionalFallbackForHivePlaceholders) {
+  // A file written by old Hive carries only placeholder names (_col0, _col1).
+  // Even in kName mode the reader must map by position, taking the real names
+  // from the table schema -- otherwise name matching finds nothing and every
+  // column reads back as null. Mirrors Spark OrcUtils.requestedColumnIds.
+  auto fileSchema = ROW({"_col0", "_col1"}, {INTEGER(), VARCHAR()});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto rowType = readWithColumnNames(
+      rootPool_.get(), leafPool_.get(), fileSchema, tableSchema);
+
+  // File columns were renamed to the table names by position.
+  ASSERT_EQ(rowType->size(), 2);
+  EXPECT_EQ(rowType->nameOf(0), "id");
+  EXPECT_EQ(rowType->nameOf(1), "name");
+}
+
+TEST_F(E2EWriterTest, NameMappingRealNamesNoPositionalFallback) {
+  // A file with real column names must stay in name mode: no positional rename,
+  // even when the file order differs from the requested table order.
+  auto fileSchema = ROW({"x", "y"}, {INTEGER(), VARCHAR()});
+  auto tableSchema = ROW({"y", "x"}, {VARCHAR(), INTEGER()});
+  auto rowType = readWithColumnNames(
+      rootPool_.get(), leafPool_.get(), fileSchema, tableSchema);
+
+  // Names are untouched (the file schema is preserved); mapping stays by name.
+  ASSERT_EQ(rowType->size(), 2);
+  EXPECT_EQ(rowType->nameOf(0), "x");
+  EXPECT_EQ(rowType->nameOf(1), "y");
+}
+
 TEST_F(E2EWriterTest, FieldIdMappingDropReaddSameName) {
   // File has column c with field id 5; the table dropped it and re-added a new
   // column c with field id 9. The stale file column must NOT bind to the new c.
