@@ -1652,8 +1652,9 @@ INSTANTIATE_TEST_SUITE_P(
             {DecimalUtil::kPowersOfTen[19]},
             {DecimalUtil::kPowersOfTen[19]},
             "Decimal overflow in multiply"},
-        // Raw int128 wrap (not just a precision violation): 9e37 + 9e37 = 1.8e38
-        // exceeds the int128 max (~1.7e38), so the checked add itself overflows.
+        // Raw int128 wrap (not just a precision violation): 9e37 + 9e37
+        // = 1.8e38 exceeds the int128 max (~1.7e38), so the checked add itself
+        // overflows.
         DecimalOverflowParam{
             "addInt128Wrap",
             "a + b",
@@ -1692,7 +1693,8 @@ INSTANTIATE_TEST_SUITE_P(
             "Decimal overflow in divide"},
         // Precision path for divide: the rescaled dividend fits int128
         // (1.5e36 * 1e2 = 1.5e38 < int128 max) but the quotient 1.5e36 / 0.01 =
-        // 1.5e38 (raw, scale 2) needs 39 digits and exceeds output precision 38.
+        // 1.5e38 (raw, scale 2) needs 39 digits and exceeds output
+        // precision 38.
         DecimalOverflowParam{
             "dividePrecision",
             "a / b",
@@ -1802,7 +1804,8 @@ TEST_F(CudfDecimalTest, decimalMultiplyNoFalseOverflowAtBoundary) {
 // Exercises the int64 -> int128 promotion path: two DECIMAL64 (int64-backed)
 // inputs whose product needs precision 36 and is promoted to DECIMAL128. The
 // operands (9e17) fit int64, but the raw int64 product would wrap; promotion to
-// int128 must hold the true value 8.1e35 without a false overflow, matching CPU.
+// int128 must hold the true value 8.1e35 without a false overflow, matching
+// CPU.
 TEST_F(CudfDecimalTest, decimalMultiplyInt64ToInt128PromotionAtBoundary) {
   auto input = makeRowVector(
       {"a", "b"},
@@ -1884,7 +1887,7 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
           exec::test::PlanBuilder()
               .values(vectors)
               .project({"a + CAST('20000000000000000000000000000000000000' "
-                         "AS DECIMAL(38, 0)) AS result"})
+                        "AS DECIMAL(38, 0)) AS result"})
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in add");
@@ -1894,7 +1897,7 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
           exec::test::PlanBuilder()
               .values(vectors)
               .project({"CAST('20000000000000000000000000000000000000' "
-                         "AS DECIMAL(38, 0)) + a AS result"})
+                        "AS DECIMAL(38, 0)) + a AS result"})
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in add");
@@ -1904,7 +1907,7 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
           exec::test::PlanBuilder()
               .values(vectors)
               .project({"a - CAST('-20000000000000000000000000000000000000' "
-                         "AS DECIMAL(38, 0)) AS result"})
+                        "AS DECIMAL(38, 0)) AS result"})
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in subtract");
@@ -1915,15 +1918,14 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
           exec::test::PlanBuilder()
               .values(vectors)
               .project({"CAST('-20000000000000000000000000000000000000' "
-                         "AS DECIMAL(38, 0)) - a AS result"})
+                        "AS DECIMAL(38, 0)) - a AS result"})
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in subtract");
 
   // 1e19 * 1e19 = 1e38 needs 39 digits, exceeding output precision 38.
   auto mulInput = makeRowVector(
-      {"a"},
-      {makeFlatVector<int128_t>({nineteenE18}, DECIMAL(38, 0))});
+      {"a"}, {makeFlatVector<int128_t>({nineteenE18}, DECIMAL(38, 0))});
   std::vector<RowVectorPtr> mulVectors = {mulInput};
 
   VELOX_ASSERT_THROW(
@@ -1948,33 +1950,29 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
 
   // Divide rhs-scalar: dividend rescale overflows int128 (9e37 * 1e6).
   auto divRescaleInput = makeRowVector(
-      {"a"},
-      {makeFlatVector<int128_t>({nineE37}, DECIMAL(38, 6))});
+      {"a"}, {makeFlatVector<int128_t>({nineE37}, DECIMAL(38, 6))});
   std::vector<RowVectorPtr> divRescaleVectors = {divRescaleInput};
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
           exec::test::PlanBuilder()
               .values(divRescaleVectors)
-              .project(
-                  {"a / CAST('1.000000' AS DECIMAL(38, 6)) AS result"})
+              .project({"a / CAST('1.000000' AS DECIMAL(38, 6)) AS result"})
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in divide");
 
   // Divide lhs-scalar: quotient exceeds output precision 38.
-  auto divPrecisionInput = makeRowVector(
-      {"a"},
-      {makeFlatVector<int128_t>({1}, DECIMAL(38, 2))});
+  auto divPrecisionInput =
+      makeRowVector({"a"}, {makeFlatVector<int128_t>({1}, DECIMAL(38, 2))});
   std::vector<RowVectorPtr> divPrecisionVectors = {divPrecisionInput};
 
   VELOX_ASSERT_THROW(
       facebook::velox::exec::test::AssertQueryBuilder(
           exec::test::PlanBuilder()
               .values(divPrecisionVectors)
-              .project(
-                  {"CAST('150000000000000000000000000000000000.00' "
-                   "AS DECIMAL(38, 2)) / a AS result"})
+              .project({"CAST('150000000000000000000000000000000000.00' "
+                        "AS DECIMAL(38, 2)) / a AS result"})
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in divide");
