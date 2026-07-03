@@ -37,7 +37,6 @@
 
 #include <fmt/format.h>
 
-#include <algorithm>
 #include <limits>
 #include <string_view>
 
@@ -895,51 +894,41 @@ class StreamingGroupbyLeafState final : public BufferedState {
       : owner_(owner),
         rowWidthBytes_(estimateStreamingRowWidth(owner.bufferedResultType_)) {}
 
-  ~StreamingGroupbyLeafState() override {
-    if (!groupby_ || !lastStream_.has_value()) {
-      return;
-    }
-
-    // Persistent streaming_groupby allocations retain the stream on which they
-    // were created. The final operation may have consumed them on another
-    // stream, so order every allocation stream after that work before member
-    // destruction queues the corresponding stream-ordered frees.
-    try {
-      orderStateDeallocationsAfter(*lastStream_);
-    } catch (const std::exception& e) {
-      // Destructors must not turn an existing query/CUDA failure into
-      // terminate.
-      LOG(ERROR) << "Failed to order streaming_groupby state deallocation: "
-                 << e.what();
-    } catch (...) {
-      LOG(ERROR) << "Failed to order streaming_groupby state deallocation";
-    }
-  }
-
   void addChunk(InputChunk input) {
     if (input.empty()) {
       return;
     }
 
-    waitForPreviousState(input.stream);
-    // Track the consumer stream before invoking cuDF so unwinding after a
-    // partially launched operation still orders persistent-state destruction
-    // after that stream.
-    rememberStateStream(input.stream);
-    lastStream_ = input.stream;
+    auto const stream = prepareInput(input.stream);
     auto const inputRows = input.size();
     auto const inputFlatSize =
         input.owner ? input.owner->estimateFlatSize() : 0;
 
-    if (!groupby_) {
-      currentCapacity_ = initialCapacity(inputRows);
-      groupby_ = owner_.createStreamingGroupby(currentCapacity_);
-      groupby_->aggregate(input.view, input.stream);
-    } else if (mustRebuildBeforeAggregate(inputRows)) {
-      rebuildAndAggregate(input);
-    } else {
-      groupby_->aggregate(input.view, input.stream);
+    try {
+      if (!groupby_) {
+        currentCapacity_ = initialCapacity(inputRows);
+        groupby_ = owner_.createStreamingGroupby(currentCapacity_);
+        groupby_->aggregate(input.view, stream);
+      } else if (mustRebuildBeforeAggregate(inputRows)) {
+        rebuildAndAggregate(input, stream);
+      } else {
+        groupby_->aggregate(input.view, stream);
+      }
+    } catch (...) {
+      // aggregate() and merge() can throw after launching asynchronous work.
+      // Preserve the original exception while still trying to keep input
+      // deallocation behind that work.
+      try {
+        orderInputDeallocationAfterState(input.stream);
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "Failed to order streaming_groupby input deallocation: "
+                   << e.what();
+      } catch (...) {
+        LOG(ERROR) << "Failed to order streaming_groupby input deallocation";
+      }
+      throw;
     }
+    orderInputDeallocationAfterState(input.stream);
 
     totalRows_ += inputRows;
     estimatedFlatSize_ = std::max<uint64_t>(
@@ -958,8 +947,8 @@ class StreamingGroupbyLeafState final : public BufferedState {
     if (!groupby_) {
       return nullptr;
     }
-    VELOX_CHECK(lastStream_.has_value());
-    return owner_.materializeStreamingBufferedOutput(*groupby_, *lastStream_);
+    VELOX_CHECK(stateStream_.has_value());
+    return owner_.materializeStreamingBufferedOutput(*groupby_, *stateStream_);
   }
 
  private:
@@ -970,35 +959,26 @@ class StreamingGroupbyLeafState final : public BufferedState {
     return *stateEvent_;
   }
 
-  void waitForPreviousState(rmm::cuda_stream_view stream) {
-    if (!lastStream_.has_value() || lastStream_->value() == stream.value()) {
-      return;
+  rmm::cuda_stream_view prepareInput(rmm::cuda_stream_view inputStream) {
+    if (!stateStream_.has_value()) {
+      stateStream_ = inputStream;
+    } else if (stateStream_->value() != inputStream.value()) {
+      // Keep every operation and allocation owned by streaming_groupby on one
+      // stream for the lifetime of the leaf. This avoids depending on all of
+      // cuDF's internal persistent allocations correctly retaining and using
+      // their individual creation streams.
+      stateEvent().recordFrom(inputStream).waitOn(*stateStream_);
     }
-
-    // aggregate(), merge(), and finalize() leave work queued after their
-    // internal synchronizing operations. Serialize access to the persistent
-    // hash table, compacted keys, key locations, and aggregation results when
-    // consecutive input batches arrive on different streams.
-    stateEvent().recordFrom(*lastStream_).waitOn(stream);
+    return *stateStream_;
   }
 
-  void rememberStateStream(rmm::cuda_stream_view stream) {
-    auto const alreadyTracked = std::any_of(
-        stateStreams_.begin(), stateStreams_.end(), [&](auto tracked) {
-          return tracked.value() == stream.value();
-        });
-    if (!alreadyTracked) {
-      stateStreams_.push_back(stream);
-    }
-  }
-
-  void orderStateDeallocationsAfter(rmm::cuda_stream_view stream) {
-    auto const needsOrdering = std::any_of(
-        stateStreams_.begin(), stateStreams_.end(), [&](auto tracked) {
-          return tracked.value() != stream.value();
-        });
-    if (needsOrdering) {
-      streamsWaitForStream(stateEvent(), stateStreams_, stream);
+  void orderInputDeallocationAfterState(rmm::cuda_stream_view inputStream) {
+    VELOX_CHECK(stateStream_.has_value());
+    if (stateStream_->value() != inputStream.value()) {
+      // InputChunk destruction frees its buffers on inputStream. aggregate()
+      // reads those buffers asynchronously on stateStream_, so make the input
+      // stream wait before addChunk() releases the owner.
+      stateEvent().recordFrom(*stateStream_).waitOn(inputStream);
     }
   }
 
@@ -1093,24 +1073,21 @@ class StreamingGroupbyLeafState final : public BufferedState {
         saturatingAdd(currentAttempt, std::max<size_t>(currentAttempt / 2, 1)));
   }
 
-  void rebuildAndAggregate(const InputChunk& input) {
+  void rebuildAndAggregate(
+      const InputChunk& input,
+      rmm::cuda_stream_view stream) {
     auto capacity = rebuildCapacity(input.size());
     for (;;) {
       auto rebuilt = owner_.createStreamingGroupby(capacity);
       try {
-        rebuilt->aggregate(input.view, input.stream);
+        rebuilt->aggregate(input.view, stream);
         if (groupby_) {
-          rebuilt->merge(*groupby_, input.stream);
+          rebuilt->merge(*groupby_, stream);
         }
 
-        // merge() returns with the aggregation merge kernel still queued on
-        // input.stream. The old streaming_groupby owns buffers allocated on
-        // every stream used by prior batches. Make those streams wait before
-        // move-assignment destroys the old object and frees its buffers.
-        orderStateDeallocationsAfter(input.stream);
+        // All old and new state was allocated and consumed on stream, so
+        // move-assignment queues old-state deallocation behind merge().
         groupby_ = std::move(rebuilt);
-        stateStreams_.clear();
-        rememberStateStream(input.stream);
         currentCapacity_ = capacity;
         {
           auto lockedStats = owner_.stats_.wlock();
@@ -1138,12 +1115,11 @@ class StreamingGroupbyLeafState final : public BufferedState {
   CudfGroupby& owner_;
   const uint64_t rowWidthBytes_;
   std::unique_ptr<CudaEvent> stateEvent_;
-  std::vector<rmm::cuda_stream_view> stateStreams_;
   std::unique_ptr<cudf::groupby::streaming_groupby> groupby_;
   size_t currentCapacity_{0};
   size_t totalRows_{0};
   uint64_t estimatedFlatSize_{0};
-  std::optional<rmm::cuda_stream_view> lastStream_;
+  std::optional<rmm::cuda_stream_view> stateStream_;
 };
 
 class BufferedGroupbyStateOps final : public BufferedStateOps {

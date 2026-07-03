@@ -1684,6 +1684,50 @@ TEST_F(
 
 TEST_F(
     StreamingGroupbyApiAggregationTest,
+    streamingGroupbyApiOrdersExchangedInputsAcrossRebuildStreams) {
+  constexpr int32_t kBatchRows = 4'096;
+  constexpr int32_t kNumBatches = 16;
+  constexpr int32_t kTotalRows = kBatchRows * kNumBatches;
+  setBatchSizeMaxThreshold(kTotalRows);
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    auto const offset = static_cast<int64_t>(batch) * kBatchRows;
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [offset](auto row) { return offset + row; }),
+        makeFlatVector<int64_t>(kBatchRows, [](auto /*row*/) { return 1; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  // Parallel Values gives the full input to each producer driver. This makes
+  // four different producer streams send the same keys through the exchange.
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .maxDrivers(4)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .config(QueryConfig::kMaxLocalExchangePartitionCount, "4")
+          .plan(
+              PlanBuilder()
+                  .values(vectors, true)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .localPartition({"c0"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .localPartition({"c0"})
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) * 4 FROM tmp GROUP BY c0");
+
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
+  ASSERT_GE(streamingGroupbyApiRebuilds(task, finalAggId), 3);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
     streamingGroupbyApiFailsWhenBatchExceedsCeiling) {
   setBatchSizeMaxThreshold(4);
   auto vectors = {makeRowVector({
