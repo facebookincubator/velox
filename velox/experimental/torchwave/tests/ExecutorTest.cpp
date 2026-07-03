@@ -29,6 +29,21 @@ DEFINE_string(
     custom,
     "",
     "Custom test model base name (without .pt2/.pt extension)");
+DEFINE_string(
+    save_model,
+    "",
+    "With --custom: save the graph as <save_model>.pt2 and a synthetic-data "
+    "spec as <save_model>.spec");
+DEFINE_string(
+    run_synthetic,
+    "",
+    "Load the graph from <run_synthetic>.pt2 and the spec from "
+    "<run_synthetic>.spec, generate synthetic data, and run nativert-GPU "
+    "reference vs wave");
+DEFINE_int64(
+    synthetic_seed,
+    0,
+    "Seed for --run_synthetic data generation (deterministic)");
 DECLARE_string(reference_frame);
 
 namespace torch::wave {
@@ -453,6 +468,34 @@ TEST_F(ExecutorTest, custom) {
     return;
   }
   runTest(FLAGS_custom + ".pt2", FLAGS_custom + "_results.pt");
+}
+
+// Saves the --custom graph as <save_model>.pt2 and a synthetic-data spec as
+// <save_model>.spec. The spec is analyzed from the model's sample inputs and
+// weights so a later --run_synthetic can reproduce a same-shape dataset.
+TEST_F(ExecutorTest, saveModel) {
+  if (FLAGS_save_model.empty()) {
+    return;
+  }
+  ASSERT_FALSE(FLAGS_custom.empty()) << "--save_model requires --custom";
+  auto pt2Path = FLAGS_custom.front() == '/'
+      ? FLAGS_custom + ".pt2"
+      : getDataFilePath(dataDir(), FLAGS_custom + ".pt2");
+  auto fixture = ModelFixture::load(pt2Path);
+  ASSERT_NE(fixture, nullptr);
+  auto inputs = loadSampleInputs(*fixture);
+  saveSyntheticModel(*fixture, inputs, FLAGS_save_model);
+}
+
+// Loads a saved graph + spec, generates synthetic data, and checks wave against
+// the nativert-GPU reference (outputs and reference frame).
+TEST_F(ExecutorTest, runSynthetic) {
+  if (FLAGS_run_synthetic.empty()) {
+    return;
+  }
+  runSynthetic(
+      FLAGS_run_synthetic,
+      std::optional<uint64_t>(static_cast<uint64_t>(FLAGS_synthetic_seed)));
 }
 
 // Per-fix isolating tests for the ads-preproc torchwave fixes (each fails when
