@@ -777,6 +777,30 @@ void registerBuiltins() {
       .costFunction(divCost)
       .registerOp();
 
+  // In-place (Tensor, Scalar). Same __*_ device functions; the scalar operand
+  // is cast to self's dtype via normalize, and no arithmeticPromotion so the
+  // result keeps self's dtype.
+  MetadataBuilder("torch.ops.aten.add_.Scalar")
+      .elementwiseFunc("__add_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Scalar")
+      .elementwiseFunc("__sub_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Scalar")
+      .elementwiseFunc("__mul_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Scalar")
+      .elementwiseFunc("__div_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(divCost)
+      .registerOp();
+
   // Binary arithmetic (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.add.Scalar")
       .elementwiseFunc("__add")
