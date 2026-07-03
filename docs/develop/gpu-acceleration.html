@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>GPU Acceleration &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css?v=0f882399" />
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Memory Management" href="memory.html" />
+    <link rel="prev" title="SIMD Usage in Velox" href="simd.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="memory.html" title="Memory Management"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="simd.html" title="SIMD Usage in Velox"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">GPU Acceleration</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="gpu-acceleration">
+<h1>GPU Acceleration<a class="headerlink" href="#gpu-acceleration" title="Link to this heading">¶</a></h1>
+<p>Velox includes several <strong>experimental</strong> components for executing query plans on
+GPUs. They live under <code class="docutils literal notranslate"><span class="pre">velox/experimental/</span></code> and fall into three groups:</p>
+<ul class="simple">
+<li><p><strong>Execution backends</strong> that run Velox operators on the GPU — <a class="reference internal" href="#gpu-wave"><span class="std std-ref">Wave</span></a> and <a class="reference internal" href="#gpu-cudf"><span class="std std-ref">cuDF</span></a>.</p></li>
+<li><p>A <strong>portable primitives library</strong> — <a class="reference internal" href="#gpu-breeze"><span class="std std-ref">Breeze</span></a> — that provides
+the data-parallel building blocks (reduce, scan, sort, …) used to build GPU
+kernels.</p></li>
+<li><p>A <strong>GPU-to-GPU data exchange</strong> — the <a class="reference internal" href="#gpu-ucx"><span class="std std-ref">UCX exchange</span></a> — that
+shuffles data between workers without staging through host memory.</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Everything described here is experimental. Operator, type, and function
+coverage is still evolving, the components require a CUDA toolchain (and, to
+run, a GPU), and APIs may change. Operators that a backend does not support
+fall back to CPU execution.</p>
+</div>
+<p>Both execution backends plug into Velox through the same extension point — the
+<code class="docutils literal notranslate"><span class="pre">DriverAdapter</span></code> interface (see <a class="reference internal" href="task.html"><span class="doc">What’s in the Task?</span></a>) — which rewrites a query plan to
+replace CPU operators with GPU operators. Because the rewrite happens at the
+operator boundary, the algorithm and plan above it are unchanged; only the
+backend that executes the operators differs. The two backends take opposite
+approaches: Wave fuses a run of operators into generated kernels, while cuDF
+swaps operators one-to-one for library calls.</p>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 16.0%" />
+<col style="width: 30.0%" />
+<col style="width: 30.0%" />
+<col style="width: 24.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Component</p></th>
+<th class="head"><p>Role</p></th>
+<th class="head"><p>How it integrates</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Wave</p></td>
+<td><p>Whole-pipeline execution backend</p></td>
+<td><p>JIT-compiles a contiguous run of operators into CUDA kernels</p></td>
+<td><p>Highest fusion potential; early-stage coverage</p></td>
+</tr>
+<tr class="row-odd"><td><p>cuDF</p></td>
+<td><p>Operator-level execution backend</p></td>
+<td><p>One-to-one operator replacement backed by NVIDIA libcudf</p></td>
+<td><p>Broad relational coverage; single-node, single-GPU</p></td>
+</tr>
+<tr class="row-even"><td><p>Breeze</p></td>
+<td><p>Portable primitives library</p></td>
+<td><p>Building blocks (reduce/scan/sort) used by GPU kernels</p></td>
+<td><p>Not an operator backend; multi-platform</p></td>
+</tr>
+<tr class="row-odd"><td><p>UCX exchange</p></td>
+<td><p>GPU-to-GPU shuffle transport</p></td>
+<td><p>Replaces the inter-worker exchange; selected per plan node</p></td>
+<td><p>Engine-agnostic; complements either backend</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="wave">
+<span id="gpu-wave"></span><h2>Wave<a class="headerlink" href="#wave" title="Link to this heading">¶</a></h2>
+<p><a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/experimental/wave">Wave</a>
+(<code class="docutils literal notranslate"><span class="pre">velox/experimental/wave</span></code>) is a whole-pipeline GPU backend. A <code class="docutils literal notranslate"><span class="pre">DriverAdapter</span></code>
+inspects a Driver’s operators, lowers a contiguous run of supported operators
+into an intermediate representation, generates CUDA C++ from it, compiles that at
+query time with NVRTC, and replaces the original operators with a single source
+operator that launches the generated kernels and streams results back to the
+host. Generated modules are cached and compiled in the background; operators
+that are not (yet) supported terminate the offloaded run and execute on CPU.</p>
+<p>Key characteristics:</p>
+<ul class="simple">
+<li><p><strong>Kernel fusion.</strong> A run such as scan → filter → project → aggregate is fused
+into a small number of generated kernels, minimizing materialization between
+operators.</p></li>
+<li><p><strong>On-GPU decode.</strong> Wave includes a GPU columnar-decode path, so a table scan
+can decode encoded columns (including dictionary encoding) on the device
+rather than decoding on the CPU and copying decoded values across PCIe.</p></li>
+<li><p><strong>Built on Breeze.</strong> Wave’s kernels build on the platform/atomics/primitive
+layer provided by <a class="reference internal" href="#gpu-breeze"><span class="std std-ref">Breeze</span></a>.</p></li>
+</ul>
+<p>Wave is built when <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_WAVE</span></code> is set. Several targets link the CUDA
+driver; they can be built without a GPU using the CUDA “stub” packages, but the
+resulting binaries only run on a machine with a real CUDA driver.</p>
+<p>Wave is at an early stage: the set of supported operators, scalar functions,
+aggregates, and column types is still narrow, and distributed exchange is not
+yet offloaded to the GPU. It is the direction for full-pipeline GPU offload, not
+a drop-in replacement for the CPU engine today.</p>
+</section>
+<section id="cudf">
+<span id="gpu-cudf"></span><h2>cuDF<a class="headerlink" href="#cudf" title="Link to this heading">¶</a></h2>
+<p>The <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/experimental/cudf">cuDF backend</a>
+(<code class="docutils literal notranslate"><span class="pre">velox/experimental/cudf</span></code>) executes Velox plans using NVIDIA’s
+<a class="reference external" href="https://github.com/rapidsai/cudf">RAPIDS libcudf</a>, the CUDA C++ core of cuDF.
+libcudf uses Arrow-compatible data layouts and provides single-node, single-GPU
+algorithms for data processing.</p>
+<p><code class="docutils literal notranslate"><span class="pre">CudfDriverAdapter</span></code> rewrites a plan to run on the GPU, <strong>generally replacing
+operators one-to-one</strong> with libcudf-backed equivalents and inserting conversions
+at GPU/CPU boundaries (with CPU fallback where an operator is unsupported). For
+end-to-end GPU execution, cuDF relies on Velox’s pipeline-based execution model
+(see <a class="reference internal" href="task.html"><span class="doc">What’s in the Task?</span></a>) to separate stages, partition work across drivers, and schedule
+concurrent work on the GPU.</p>
+<p>Compared with Wave, cuDF offers broader relational coverage today (filter and
+project, hash and streaming aggregation, hash and nested-loop joins, order by,
+top-n, limit, and common aggregates/expressions) because it reuses a mature,
+externally maintained library. The trade-off is that the one-to-one model does
+less cross-operator fusion than Wave’s generated kernels.</p>
+<p>Building and configuration:</p>
+<ul class="simple">
+<li><p>The backend is included when <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_CUDF</span></code> is set. cuDF supports Linux
+and WSL2 (not Windows or macOS) and has minimum CUDA, driver, and GPU
+architecture requirements (see the <a class="reference external" href="https://docs.rapids.ai/install/">RAPIDS Installation Guide</a>). The <code class="docutils literal notranslate"><span class="pre">adapters-cuda</span></code> Docker image in the
+Velox repository is a convenient starting point.</p></li>
+<li><p>cuDF-specific runtime properties (GPU execution behavior, memory management,
+debugging) are documented in the cuDF-specific configuration section of the
+<a class="reference internal" href="../configs.html"><span class="doc">configuration guide</span></a>.</p></li>
+</ul>
+<p>For a deeper walk-through, see the blog post <a class="reference external" href="https://velox-lib.io/blog/extending-velox-with-cudf">Extending Velox — GPU Acceleration
+with cuDF</a> and the module
+<code class="docutils literal notranslate"><span class="pre">README</span></code>.</p>
+</section>
+<section id="breeze">
+<span id="gpu-breeze"></span><h2>Breeze<a class="headerlink" href="#breeze" title="Link to this heading">¶</a></h2>
+<p><a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/experimental/breeze">Breeze</a>
+(<code class="docutils literal notranslate"><span class="pre">velox/experimental/breeze</span></code>) is a standalone, portable library of
+data-parallel primitives — block- and device-level <code class="docutils literal notranslate"><span class="pre">load</span></code>/<code class="docutils literal notranslate"><span class="pre">store</span></code>,
+<code class="docutils literal notranslate"><span class="pre">reduce</span></code>, <code class="docutils literal notranslate"><span class="pre">scan</span></code> (decoupled look-back), and radix <code class="docutils literal notranslate"><span class="pre">sort</span></code>. A single source
+implementation maps onto multiple backends — CUDA, HIP, OpenCL, SYCL, Metal, and
+OpenMP — through a thin platform-abstraction layer, so the same primitive can run
+across heterogeneous hardware.</p>
+<p>Breeze is <strong>not</strong> an operator backend and is not selected directly by a query
+plan. It has no dependency on Velox (and does not wrap CUB, Thrust, or libcudf),
+so it can be built and tested on its own. Within Velox it provides the low-level
+building blocks that GPU kernels are written against; Wave builds on it. Breeze
+is compiled together with the GPU backends (<code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_WAVE</span></code> or
+<code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_CUDF</span></code>).</p>
+</section>
+<section id="ucx-exchange">
+<span id="gpu-ucx"></span><h2>UCX Exchange<a class="headerlink" href="#ucx-exchange" title="Link to this heading">¶</a></h2>
+<p>The <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/experimental/ucx-exchange">UCX exchange</a>
+(<code class="docutils literal notranslate"><span class="pre">velox/experimental/ucx-exchange</span></code>) is a GPU-aware replacement for Velox’s
+inter-worker exchange — the data movement between a task that ends in a
+<code class="docutils literal notranslate"><span class="pre">PartitionedOutput</span></code> operator and a task whose source is an <code class="docutils literal notranslate"><span class="pre">Exchange</span></code>
+operator. Using <a class="reference external" href="https://openucx.org/">UCX</a> (via UCXX), it transfers device
+buffers <strong>directly GPU-to-GPU</strong>, avoiding the round trip through host memory that
+a host-staged shuffle would incur.</p>
+<p>The transport is engine-agnostic: it moves GPU column buffers regardless of which
+backend produced them, so the same exchange serves both Wave and cuDF. Transport
+is chosen per plan node — <code class="docutils literal notranslate"><span class="pre">TransportKind::kUcx</span></code> versus <code class="docutils literal notranslate"><span class="pre">kHttp</span></code> — and nodes
+default to the standard HTTP path (the regular serializer over host memory)
+unless explicitly opted into UCX, so it can be adopted incrementally.</p>
+<p>The UCX exchange is experimental and is built separately from the core library
+(it requires a system UCX installation and benefits from GPUDirect/RDMA-capable
+hardware).</p>
+</section>
+<section id="choosing-an-approach">
+<h2>Choosing an approach<a class="headerlink" href="#choosing-an-approach" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>cuDF</strong> is the most complete option today for general relational SQL on a
+single GPU, reusing a mature external library.</p></li>
+<li><p><strong>Wave</strong> targets the highest performance ceiling through whole-pipeline kernel
+fusion and on-GPU decode, but its coverage is still early.</p></li>
+<li><p><strong>Breeze</strong> is a foundation, not an alternative — choose it when implementing
+new portable GPU primitives rather than as a way to run a plan.</p></li>
+<li><p><strong>The UCX exchange</strong> is orthogonal to the compute backend: it addresses data
+movement between workers and can be combined with either Wave or cuDF when
+shuffle cost dominates.</p></li>
+</ul>
+<p>Because all of these are experimental, validate coverage and correctness for
+your specific plans (CPU fallback makes partial support transparent but can mask
+where execution actually runs), and expect APIs and capabilities to evolve.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">GPU Acceleration</a><ul>
+<li><a class="reference internal" href="#overview">Overview</a></li>
+<li><a class="reference internal" href="#wave">Wave</a></li>
+<li><a class="reference internal" href="#cudf">cuDF</a></li>
+<li><a class="reference internal" href="#breeze">Breeze</a></li>
+<li><a class="reference internal" href="#ucx-exchange">UCX Exchange</a></li>
+<li><a class="reference internal" href="#choosing-an-approach">Choosing an approach</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="simd.html"
+                          title="previous chapter">SIMD Usage in Velox</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="memory.html"
+                          title="next chapter">Memory Management</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/gpu-acceleration.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="memory.html" title="Memory Management"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="simd.html" title="SIMD Usage in Velox"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">GPU Acceleration</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>
