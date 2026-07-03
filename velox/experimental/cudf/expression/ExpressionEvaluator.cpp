@@ -210,10 +210,9 @@ int32_t getDecimalPrecision(const TypePtr& type) {
 }
 
 bool isCheckedDecimalArithmeticOp(cudf::binary_operator op) {
-  return op == cudf::binary_operator::ADD ||
-      op == cudf::binary_operator::SUB ||
-      op == cudf::binary_operator::MUL ||
-      op == cudf::binary_operator::MOD;
+  return op == cudf::binary_operator::ADD || op == cudf::binary_operator::SUB ||
+      op == cudf::binary_operator::MUL || op == cudf::binary_operator::MOD ||
+      op == cudf::binary_operator::DIV;
 }
 
 struct CudfExpressionEvaluatorEntry {
@@ -463,9 +462,7 @@ class BinaryFunction : public CudfFunction {
       const std::shared_ptr<velox::exec::Expr>& expr,
       cudf::binary_operator op)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
-    if (cudf::is_fixed_point(type_) &&
-        (isCheckedDecimalArithmeticOp(op_) ||
-         op_ == cudf::binary_operator::DIV)) {
+    if (cudf::is_fixed_point(type_) && isCheckedDecimalArithmeticOp(op_)) {
       decimalPrecision_ = getDecimalPrecision(expr->type());
     }
     VELOX_CHECK_EQ(

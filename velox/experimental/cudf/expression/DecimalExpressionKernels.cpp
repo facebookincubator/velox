@@ -22,6 +22,8 @@
 #include <cudf/copying.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 
+#include <type_traits>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -38,23 +40,16 @@ const char* decimalOverflowMessage(cudf::binary_operator op) {
     case cudf::binary_operator::MOD:
       return "Decimal overflow in modulo";
     default:
-      return "Decimal overflow";
-  }
-}
-
-// Fail-fast on overflow, matching Presto / Velox CPU semantics: the kernel
-// reports a single batch-wide flag and we fail the whole expression if set.
-void throwIfDecimalOverflow(bool didOverflow, cudf::binary_operator op) {
-  if (didOverflow) {
-    VELOX_USER_FAIL("{}", decimalOverflowMessage(op));
+      VELOX_UNREACHABLE("BAD OPERATOR: {}", static_cast<int>(op));
   }
 }
 
 } // namespace
 
+template <typename Lhs, typename Rhs>
 std::unique_ptr<cudf::column> decimalBinaryOperation(
-    const cudf::column_view& lhs,
-    const cudf::column_view& rhs,
+    const Lhs& lhs,
+    const Rhs& rhs,
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
@@ -62,41 +57,43 @@ std::unique_ptr<cudf::column> decimalBinaryOperation(
     rmm::device_async_resource_ref mr) {
   auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
       lhs, rhs, op, outputType, outputPrecision, stream, mr);
-  throwIfDecimalOverflow(didOverflow, op);
+  if (didOverflow) {
+    VELOX_USER_FAIL("{}", decimalOverflowMessage(op));
+  }
   return std::move(result);
 }
 
-std::unique_ptr<cudf::column> decimalBinaryOperation(
-    const cudf::column_view& lhs,
-    const cudf::scalar& rhs,
-    cudf::binary_operator op,
-    cudf::data_type outputType,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
-      lhs, rhs, op, outputType, outputPrecision, stream, mr);
-  throwIfDecimalOverflow(didOverflow, op);
-  return std::move(result);
-}
+template std::unique_ptr<cudf::column> decimalBinaryOperation(
+    const cudf::column_view&,
+    const cudf::column_view&,
+    cudf::binary_operator,
+    cudf::data_type,
+    int32_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
 
-std::unique_ptr<cudf::column> decimalBinaryOperation(
-    const cudf::scalar& lhs,
-    const cudf::column_view& rhs,
-    cudf::binary_operator op,
-    cudf::data_type outputType,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto [result, didOverflow] = decimalBinaryOperationWithOverflow(
-      lhs, rhs, op, outputType, outputPrecision, stream, mr);
-  throwIfDecimalOverflow(didOverflow, op);
-  return std::move(result);
-}
+template std::unique_ptr<cudf::column> decimalBinaryOperation(
+    const cudf::column_view&,
+    const cudf::scalar&,
+    cudf::binary_operator,
+    cudf::data_type,
+    int32_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
 
+template std::unique_ptr<cudf::column> decimalBinaryOperation(
+    const cudf::scalar&,
+    const cudf::column_view&,
+    cudf::binary_operator,
+    cudf::data_type,
+    int32_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
+
+template <typename Lhs, typename Rhs>
 std::unique_ptr<cudf::column> decimalDivide(
-    const cudf::column_view& lhs,
-    const cudf::column_view& rhs,
+    const Lhs& lhs,
+    const Rhs& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
     int32_t outputPrecision,
@@ -104,37 +101,41 @@ std::unique_ptr<cudf::column> decimalDivide(
     rmm::device_async_resource_ref mr) {
   auto [result, didOverflow] = decimalDivideWithOverflow(
       lhs, rhs, outputType, aRescale, outputPrecision, stream, mr);
-  throwIfDecimalOverflow(didOverflow, cudf::binary_operator::DIV);
-  return scatterNullsAtZeroDivisor(std::move(result), rhs, stream, mr);
-}
-
-std::unique_ptr<cudf::column> decimalDivide(
-    const cudf::column_view& lhs,
-    const cudf::scalar& rhs,
-    cudf::data_type outputType,
-    int32_t aRescale,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto [result, didOverflow] = decimalDivideWithOverflow(
-      lhs, rhs, outputType, aRescale, outputPrecision, stream, mr);
-  throwIfDecimalOverflow(didOverflow, cudf::binary_operator::DIV);
+  if (didOverflow) {
+    VELOX_USER_FAIL("{}", decimalOverflowMessage(cudf::binary_operator::DIV));
+  }
+  if constexpr (std::is_same_v<Rhs, cudf::column_view>) {
+    return scatterNullsAtZeroDivisor(std::move(result), rhs, stream, mr);
+  }
   return std::move(result);
 }
 
-std::unique_ptr<cudf::column> decimalDivide(
-    const cudf::scalar& lhs,
-    const cudf::column_view& rhs,
-    cudf::data_type outputType,
-    int32_t aRescale,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  auto [result, didOverflow] = decimalDivideWithOverflow(
-      lhs, rhs, outputType, aRescale, outputPrecision, stream, mr);
-  throwIfDecimalOverflow(didOverflow, cudf::binary_operator::DIV);
-  return scatterNullsAtZeroDivisor(std::move(result), rhs, stream, mr);
-}
+template std::unique_ptr<cudf::column> decimalDivide(
+    const cudf::column_view&,
+    const cudf::column_view&,
+    cudf::data_type,
+    int32_t,
+    int32_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
+
+template std::unique_ptr<cudf::column> decimalDivide(
+    const cudf::column_view&,
+    const cudf::scalar&,
+    cudf::data_type,
+    int32_t,
+    int32_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
+
+template std::unique_ptr<cudf::column> decimalDivide(
+    const cudf::scalar&,
+    const cudf::column_view&,
+    cudf::data_type,
+    int32_t,
+    int32_t,
+    rmm::cuda_stream_view,
+    rmm::device_async_resource_ref);
 
 // Scatters null values to positions where the divisor is zero.
 // Returns a new column with nulls at zero-divisor positions.

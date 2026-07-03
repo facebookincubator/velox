@@ -28,54 +28,20 @@
 
 namespace facebook::velox::cudf_velox {
 
+template <typename Lhs, typename Rhs>
 std::unique_ptr<cudf::column> decimalDivide(
-    const cudf::column_view& lhs,
-    const cudf::column_view& rhs,
+    const Lhs& lhs,
+    const Rhs& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
     int32_t outputPrecision,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-std::unique_ptr<cudf::column> decimalDivide(
-    const cudf::column_view& lhs,
-    const cudf::scalar& rhs,
-    cudf::data_type outputType,
-    int32_t aRescale,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
-std::unique_ptr<cudf::column> decimalDivide(
-    const cudf::scalar& lhs,
-    const cudf::column_view& rhs,
-    cudf::data_type outputType,
-    int32_t aRescale,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
+template <typename Lhs, typename Rhs>
 std::unique_ptr<cudf::column> decimalBinaryOperation(
-    const cudf::column_view& lhs,
-    const cudf::column_view& rhs,
-    cudf::binary_operator op,
-    cudf::data_type outputType,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
-std::unique_ptr<cudf::column> decimalBinaryOperation(
-    const cudf::column_view& lhs,
-    const cudf::scalar& rhs,
-    cudf::binary_operator op,
-    cudf::data_type outputType,
-    int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
-std::unique_ptr<cudf::column> decimalBinaryOperation(
-    const cudf::scalar& lhs,
-    const cudf::column_view& rhs,
+    const Lhs& lhs,
+    const Rhs& rhs,
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
@@ -94,7 +60,8 @@ std::unique_ptr<cudf::column> scatterNullsAtZeroDivisor(
 // with a single device-side flag (set via atomicOr by any overflowing row),
 // matching the fail-fast semantics of Presto / Velox CPU decimal arithmetic;
 // no per-row (O(n)) overflow column is allocated.
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflow(
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::binary_operator op,
@@ -103,7 +70,8 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflo
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflow(
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::binary_operator op,
@@ -112,7 +80,8 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflo
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflow(
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::binary_operator op,

@@ -33,11 +33,11 @@
 #include <rmm/device_scalar.hpp>
 
 #include <cub/device/device_for.cuh>
+#include <cuda/std/limits>
 #include <thrust/iterator/counting_iterator.h>
 
-#include <cuda/std/limits>
-
 #include <cstdint>
+#include <type_traits>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -50,6 +50,11 @@ using errc = cudf::errc;
 // No per-row (O(n)) overflow column is required.
 __device__ inline void flagOverflow(int32_t* overflowFlag) {
   atomicOr(overflowFlag, 1);
+}
+
+__device__ inline bool
+isRowActive(cudf::bitmask_type const* nullMask, bool hasNullMask, int32_t idx) {
+  return !hasNullMask || cudf::bit_is_set(nullMask, idx);
 }
 
 template <typename Rep>
@@ -150,7 +155,7 @@ struct DecimalBinaryColColFunctor {
   bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = !hasNullMask || cudf::bit_is_set(nullMask, idx);
+    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
     if (!rowActive) {
       return;
     }
@@ -181,7 +186,7 @@ struct DecimalBinaryLhsScalarFunctor {
   bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = !hasNullMask || cudf::bit_is_set(nullMask, idx);
+    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
     if (!rowActive) {
       return;
     }
@@ -212,7 +217,7 @@ struct DecimalBinaryRhsScalarFunctor {
   bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = !hasNullMask || cudf::bit_is_set(nullMask, idx);
+    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
     if (!rowActive) {
       return;
     }
@@ -490,7 +495,7 @@ struct DivideFunctor {
   bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = !hasNullMask || cudf::bit_is_set(nullMask, idx);
+    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
     if (!rowActive) {
       return;
     }
@@ -519,7 +524,7 @@ struct DivideLhsScalarFunctor {
   bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = !hasNullMask || cudf::bit_is_set(nullMask, idx);
+    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
     if (!rowActive) {
       return;
     }
@@ -548,7 +553,7 @@ struct DivideRhsScalarFunctor {
   bool hasNullMask;
 
   __device__ void operator()(int32_t idx) const {
-    bool const rowActive = !hasNullMask || cudf::bit_is_set(nullMask, idx);
+    bool const rowActive = isRowActive(nullMask, hasNullMask, idx);
     if (!rowActive) {
       return;
     }
@@ -693,7 +698,8 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
 
 } // namespace
 
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflow(
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::binary_operator op,
@@ -706,7 +712,8 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflo
       lhs, rhs, op, outputType, outputPrecision, stream, mr);
 }
 
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflow(
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::binary_operator op,
@@ -717,7 +724,12 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflo
   validateDecimalBinaryOp(op);
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
   auto result = makeResultColumn(
-      lhs.size(), outputType, std::move(nullMask), lhs.null_count(), stream, mr);
+      lhs.size(),
+      outputType,
+      std::move(nullMask),
+      lhs.null_count(),
+      stream,
+      mr);
   rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
 
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
@@ -760,7 +772,8 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflo
   return {std::move(result), didOverflow};
 }
 
-std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflow(
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::binary_operator op,
@@ -771,7 +784,12 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationWithOverflo
   validateDecimalBinaryOp(op);
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto result = makeResultColumn(
-      rhs.size(), outputType, std::move(nullMask), rhs.null_count(), stream, mr);
+      rhs.size(),
+      outputType,
+      std::move(nullMask),
+      rhs.null_count(),
+      stream,
+      mr);
   rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
 
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
@@ -881,12 +899,18 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalDivideWithOverflow(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
   if (!rhs.is_valid(stream)) {
-    return {makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr), false};
+    return {
+        makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr), false};
   }
 
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
   auto result = makeResultColumn(
-      lhs.size(), outputType, std::move(nullMask), lhs.null_count(), stream, mr);
+      lhs.size(),
+      outputType,
+      std::move(nullMask),
+      lhs.null_count(),
+      stream,
+      mr);
   rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
   auto rhsValue = getDecimalScalarValue(rhs, stream);
 
@@ -936,12 +960,18 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalDivideWithOverflow(
       aRescale >= 0, "Decimal divide requires non-negative rescale factor");
 
   if (!lhs.is_valid(stream)) {
-    return {makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr), false};
+    return {
+        makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr), false};
   }
 
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto result = makeResultColumn(
-      rhs.size(), outputType, std::move(nullMask), rhs.null_count(), stream, mr);
+      rhs.size(),
+      outputType,
+      std::move(nullMask),
+      rhs.null_count(),
+      stream,
+      mr);
   rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
   auto lhsValue = getDecimalScalarValue(lhs, stream);
 
