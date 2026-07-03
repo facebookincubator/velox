@@ -18,6 +18,7 @@
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ProbeOperatorState.h"
+#include "velox/exec/UnorderedStreamReader.h"
 
 namespace facebook::velox::exec {
 
@@ -31,8 +32,8 @@ namespace facebook::velox::exec {
 /// nullptr.
 ///
 /// The output follows the order of the probe side rows (for inner and left
-/// joins). All build vectors are materialized upfront (check buildVectors_),
-/// but probe batches are processed one-by-one as a stream.
+/// joins). Build data is either kept in buildVectors_ or replayed from spill
+/// files, while probe batches are processed one-by-one as a stream.
 ///
 /// To produce output, the operator processes each probe record from probe
 /// input, using the following steps:
@@ -91,6 +92,10 @@ class NestedLoopJoinProbe : public Operator {
     return state_ == ProbeOperatorState::kFinish;
   }
 
+  bool canReclaim() const override {
+    return false;
+  }
+
   void close() override;
 
  private:
@@ -101,10 +106,9 @@ class NestedLoopJoinProbe : public Operator {
       const RowTypePtr& leftType,
       const RowTypePtr& rightType);
 
-  // Materializes build data from nested loop join bridge into `buildVectors_`.
-  // Returns whether the data has been materialized and is ready for use. Nested
-  // loop join requires all build data to be materialized and available in
-  // `buildVectors_` before it can produce output.
+  // Gets build data from nested loop join bridge. Returns whether the data is
+  // ready for use. Nested loop join requires the build side to be complete
+  // before it can produce output.
   bool getBuildData(ContinueFuture* future);
 
   // Generates output from join matches between probe and build sides, as well
@@ -257,17 +261,17 @@ class NestedLoopJoinProbe : public Operator {
         noMoreInput_;
   }
 
+  bool isBuildDataSpilled() const {
+    return buildData_ != nullptr && buildData_->spilled;
+  }
+
   // Whether we have processed all build data for the current probe row (based
   // on buildIndex_'s value).
-  bool hasProbedAllBuildData() const {
-    return (buildIndex_ >= buildVectors_.value().size());
-  }
+  bool hasProbedAllBuildData() const;
 
   // Whether processing last batch of build data or processed all build data for
   // the current probe row (based on buildIndex_'s value).
-  bool isLastBuildIndex() const {
-    return buildIndex_ + 1 >= buildVectors_.value().size();
-  }
+  bool isLastBuildIndex() const;
 
   // Cross joins are translated into NLJ's without a join conditition.
   bool isCrossJoin() const {
@@ -278,13 +282,14 @@ class NestedLoopJoinProbe : public Operator {
   // dictionaries and produce as many combinations of probe and build rows,
   // until `numOutputRows_` is filled.
   bool isSingleBuildVector() const {
+    if (isBuildDataSpilled()) {
+      return false;
+    }
     return buildVectors_->size() == 1;
   }
 
   // If there are no incoming records in the build side.
-  bool isBuildSideEmpty() const {
-    return buildVectors_->empty();
-  }
+  bool isBuildSideEmpty() const;
 
   // If build has a single row, we can simply add it as a constant to probe
   // batches.
@@ -299,6 +304,24 @@ class NestedLoopJoinProbe : public Operator {
 
   // Handles LeftSemiProjectJoin with no join condition
   void handleLeftSemiProjectNoCondition();
+
+  const RowVectorPtr& currentBuildVector() const;
+
+  void advanceBuildVector();
+
+  void resetBuildCursor();
+
+  void clearBuildCursor();
+
+  bool loadNextSpilledBuildVector();
+
+  void finishBuildCursor();
+
+  SelectivityVector& buildMatched(vector_size_t size);
+
+  const SelectivityVector& buildMatchedForOutput(const RowVectorPtr& data);
+
+  void mergeBuildMatched(const NestedLoopJoinProbe& peer);
 
   // Wraps rows of 'data' that are not selected in 'matched' and projects
   // to the output according to 'projections'. 'nullProjections' is used to
@@ -385,8 +408,14 @@ class NestedLoopJoinProbe : public Operator {
 
   // Build side state.
 
+  std::shared_ptr<const NestedLoopJoinBuildData> buildData_;
+
   // Stores the data for build vectors (right side of the join).
   std::optional<std::vector<RowVectorPtr>> buildVectors_;
+
+  std::unique_ptr<UnorderedStreamReader<BatchStream>> spillReader_;
+
+  RowVectorPtr spilledBuildVector_;
 
   // Index into `buildVectors_` for the build vector being currently processed.
   size_t buildIndex_{0};
