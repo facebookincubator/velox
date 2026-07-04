@@ -250,3 +250,50 @@ TEST_F(BitPackDecoderTest, smallBufferNoPadding) {
     }
   }
 }
+
+// Verifies that unpack correctly advances both the input and result pointers
+// when the naive fallback handles all values (buffer too small for fast path).
+TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
+  // First byte: 0,1,0,1,0,1,0,1.
+  // Second byte: 1,1,1,1,0,0,0,0.
+  const uint8_t packed[] = {0xAA, 0x0F};
+  const uint8_t* input = packed;
+  const uint8_t* inputEnd = packed + sizeof(packed);
+
+  uint8_t output[16] = {};
+  uint8_t* result = output;
+
+  facebook::velox::dwio::common::unpack<uint8_t>(
+      input, inputEnd - input, 8, 1, result);
+
+  EXPECT_EQ(input, packed + 1);
+  EXPECT_EQ(result, output + 8);
+
+  facebook::velox::dwio::common::unpack<uint8_t>(
+      input, inputEnd - input, 8, 1, result);
+
+  EXPECT_EQ(input, inputEnd);
+  EXPECT_EQ(result, output + 16);
+
+  const uint8_t expected[] = {
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+  };
+  for (int32_t i = 0; i < 16; ++i) {
+    EXPECT_EQ(output[i], expected[i]) << "index " << i;
+  }
+}

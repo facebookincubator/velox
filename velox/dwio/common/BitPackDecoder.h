@@ -686,8 +686,10 @@ inline void unpack<uint8_t>(
     // Process bitWidth bytes (8 values) at a time. Note that for bitWidth 8,
     // the performance of direct memcpy is about the same as this solution.
     for (uint64_t i = 0; i < iterations; ++i) {
-      uint64_t val = *reinterpret_cast<const uint64_t*>(inputBits);
-      *(reinterpret_cast<uint64_t*>(result)) = _pdep_u64(val, mask);
+      uint64_t val;
+      std::memcpy(&val, inputBits, sizeof(uint64_t));
+      uint64_t expanded = _pdep_u64(val, mask);
+      std::memcpy(result, &expanded, sizeof(uint64_t));
       inputBits += bitWidth;
       result += 8;
     }
@@ -707,7 +709,8 @@ inline void unpack<uint8_t>(
     uint64_t iterations = std::min(maxByOutput, maxByInput);
 
     for (uint64_t i = 0; i < iterations; ++i) {
-      uint64_t val = *reinterpret_cast<const uint64_t*>(inputBits);
+      uint64_t val;
+      std::memcpy(&val, inputBits, sizeof(uint64_t));
       result[0] = static_cast<uint8_t>(val & valueMask);
       result[1] = static_cast<uint8_t>((val >> bitWidth) & valueMask);
       result[2] = static_cast<uint8_t>((val >> (2 * bitWidth)) & valueMask);
