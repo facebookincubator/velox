@@ -245,6 +245,10 @@ class DwrfWriterFactory : public dwio::common::WriterFactory {
       const std::shared_ptr<dwio::common::WriterOptions>& options) override;
 
   std::unique_ptr<dwio::common::WriterOptions> createWriterOptions() override;
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 } // namespace facebook::velox::dwrf

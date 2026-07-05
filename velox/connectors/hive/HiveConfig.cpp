@@ -19,6 +19,7 @@
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -51,10 +52,6 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetUseColumnNamesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterSpeculativeIoSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kAllowInt32NarrowingSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetFooterMemoryTrackingThresholdSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
     VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
     VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
@@ -68,6 +65,10 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
 
 #undef VELOX_HIVE_CONFIG_REGISTER
 
+    parquet::ParquetConfig::registerProperties(
+        properties,
+        dwio::common::formatConfigPrefix(
+            dwio::common::FileFormat::PARQUET, "_"));
     return properties;
   }();
   return kProperties;

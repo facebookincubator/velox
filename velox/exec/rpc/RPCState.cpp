@@ -16,6 +16,8 @@
 
 #include "velox/exec/rpc/RPCState.h"
 
+#include <chrono>
+
 #include <folly/executors/InlineExecutor.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -25,26 +27,57 @@
 
 namespace facebook::velox::exec::rpc {
 
+namespace {
+// Safety ceiling for the BATCH latency-gradient window. The gradient backs off
+// as soon as queueing lifts RTT, well before this bound, so it caps
+// pathological growth rather than tuning throughput.
+constexpr int64_t kBatchMaxWindow = 256;
+
+// Monotonic now() in nanos for RTT measurement. steady_clock (not wall-clock)
+// so NTP/clock adjustments between dispatch and completion can't inject a bogus
+// round-trip time that would skew the gradient.
+int64_t steadyNowNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+} // namespace
+
 // ===== Configuration =====
 // These setters are called during RPCOperator construction, before any
 // concurrent access. No lock needed — avoids lock-order-inversion with the
 // Task mutex (TSAN: M0→M1→M0 cycle).
 
-void RPCState::setStreamingMode(RPCStreamingMode mode) {
+void RPCState::setStreamingMode(
+    RPCStreamingMode mode,
+    int64_t minWindow,
+    double stepCoef) {
   streamingMode_ = mode;
+  if (mode == RPCStreamingMode::kBatch) {
+    // BATCH: the gradient window starts at 2 (the previously hand-tuned value)
+    // and learns the in-flight-batch sweet spot from per-batch RTT, bounded
+    // only by a large safety ceiling so it never leaves throughput on the
+    // table.
+    window_ = CongestionController{/*startWindow*/ 2,
+                                   /*maxWindow*/ kBatchMaxWindow,
+                                   minWindow,
+                                   stepCoef};
+  } else {
+    // PER_ROW: per-row parallelism is bounded by the transport thread pool, so
+    // the window starts non-binding at 100 (start == max). The same gradient
+    // learner still shrinks it under sustained overload and recovers it back
+    // toward 100; growth above 100 is unnecessary and capped off.
+    window_ = CongestionController{
+        /*startWindow*/ 100, /*maxWindow*/ 100, minWindow, stepCoef};
+  }
 }
 
 RPCStreamingMode RPCState::streamingMode() const {
   return streamingMode_;
 }
 
-void RPCState::setMaxPendingRows(int64_t maxPendingRows) {
-  maxPendingRows_ = maxPendingRows;
-}
-
-void RPCState::setMaxPendingBatches(int64_t maxPendingBatches) {
-  maxPendingBatches_ = maxPendingBatches;
-  effectiveMaxPendingBatches_ = maxPendingBatches;
+void RPCState::setMaxWindow(int64_t maxWindow) {
+  window_ = CongestionController{maxWindow, maxWindow};
 }
 
 // ===== Input batch storage =====
@@ -106,49 +139,68 @@ void RPCState::addPendingRow(
     int64_t rowId,
     RowLocation location,
     folly::SemiFuture<RPCResponse> future) {
+  auto dispatchTimeNs = steadyNowNs();
   {
     std::lock_guard<std::mutex> l(mutex_);
-    numPendingRows_++;
+    inFlight_++;
+    peakInFlight_ = std::max(peakInFlight_, inFlight_);
     RPC_STATE_VLOG(2) << "addPendingRow: rowId=" << rowId
-                      << ", pendingCount=" << numPendingRows_;
+                      << ", inFlight=" << inFlight_;
   }
 
-  // Attach completion callbacks that delegate to completeRow().
-  // We capture selfPtr to keep this RPCState alive until the callback fires.
+  // Attach completion callbacks that delegate to completeRow(). The dispatch
+  // timestamp is captured so completion derives the round-trip latency for the
+  // gradient window. We capture selfPtr to keep this RPCState alive until the
+  // callback fires.
   auto stateForError = selfPtr;
   folly::futures::detachOn(
       folly::getKeepAliveToken(folly::InlineExecutor::instance()),
       std::move(future)
-          .deferValue([state = std::move(selfPtr), rowId, location](
-                          RPCResponse response) mutable {
-            state->completeRow(rowId, location, std::move(response));
-          })
-          .deferError([state = std::move(stateForError), rowId, location](
-                          const folly::exception_wrapper& ew) mutable {
-            RPC_STATE_LOG(ERROR)
-                << "RPC failed for rowId=" << rowId << ": " << ew.what();
-            RPCResponse errorResponse;
-            errorResponse.rowId = rowId;
-            errorResponse.error = ew.what().toStdString();
-            state->completeRow(rowId, location, std::move(errorResponse));
-          }));
+          .deferValue(
+              [state = std::move(selfPtr), rowId, location, dispatchTimeNs](
+                  RPCResponse response) mutable {
+                const auto rttNs = steadyNowNs() - dispatchTimeNs;
+                state->completeRow(rowId, location, std::move(response), rttNs);
+              })
+          .deferError(
+              [state = std::move(stateForError),
+               rowId,
+               location,
+               dispatchTimeNs](const folly::exception_wrapper& ew) mutable {
+                RPC_STATE_LOG(ERROR)
+                    << "RPC failed for rowId=" << rowId << ": " << ew.what();
+                RPCResponse errorResponse;
+                errorResponse.rowId = rowId;
+                errorResponse.error = ew.what().toStdString();
+                const auto rttNs = steadyNowNs() - dispatchTimeNs;
+                state->completeRow(
+                    rowId, location, std::move(errorResponse), rttNs);
+              }));
 }
 
 void RPCState::completeRow(
     int64_t rowId,
     RowLocation location,
-    RPCResponse response) {
+    RPCResponse response,
+    int64_t rttNs) {
   std::lock_guard<std::mutex> l(mutex_);
   readyRows_.push_back(
       ReadyRow{
           .rowId = rowId,
           .location = location,
-          .response = std::move(response)});
-  numPendingRows_--;
+          .response = std::move(response),
+          .rttNs = rttNs});
+  inFlight_--;
+
+  if (rttNs > 0) {
+    rttMinNs_ = std::min(rttMinNs_, rttNs);
+    rttMaxNs_ = std::max(rttMaxNs_, rttNs);
+    ++numRttSamples_;
+  }
 
   RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
                     << ", readyRows=" << readyRows_.size()
-                    << ", pendingCount=" << numPendingRows_;
+                    << ", inFlight=" << inFlight_;
 
   notifyWaitersLocked();
 }
@@ -169,14 +221,14 @@ RPCState::ClaimResult RPCState::tryClaimOrWait(
   }
 
   // Step 2: Check finish condition.
-  if (noMoreInput_ && numPendingRows_ == 0) {
+  if (noMoreInput_ && inFlight_ == 0) {
     RPC_STATE_VLOG(1) << "tryClaimOrWait: finish condition met";
     return ClaimResult::kFinished;
   }
 
   // Step 3: Must wait — create a promise under the same lock to prevent
   // TOCTOU races (no completion can slip between the check and wait).
-  RPC_STATE_VLOG(2) << "tryClaimOrWait: must wait (pending=" << numPendingRows_
+  RPC_STATE_VLOG(2) << "tryClaimOrWait: must wait (inFlight=" << inFlight_
                     << ")";
   promises_.emplace_back("RPCState::tryClaimOrWait");
   *future = promises_.back().getSemiFuture();
@@ -203,9 +255,9 @@ void RPCState::drainReadyRows(std::vector<ReadyRow>& out, int32_t maxRows) {
   }
 }
 
-int64_t RPCState::numPendingRows() {
+int64_t RPCState::numInFlight() const {
   std::lock_guard<std::mutex> l(mutex_);
-  return numPendingRows_;
+  return inFlight_;
 }
 
 // ===== BATCH mode API =====
@@ -214,16 +266,29 @@ void RPCState::addPendingBatch(
     std::shared_ptr<RPCState> selfPtr,
     folly::SemiFuture<std::vector<RPCResponse>> future,
     std::vector<RowLocation> rowLocations) {
-  std::lock_guard<std::mutex> l(mutex_);
+  // Build the callback chain OUTSIDE the lock. .via(InlineExecutor) may drive
+  // the chain inline if the future is already resolved, and the
+  // thenValue/thenError callbacks acquire mutex_ to notify waiters — holding
+  // mutex_ here would self-deadlock. RPCState is per-driver (owned by
+  // RPCOperator, never shared), so if the chain completes inline before the
+  // batch is inserted below, promises_ is empty and the notify is a harmless
+  // no-op; the batch is found ready by the next tryPollBatchOrWait.
+  //
+  // Capture the dispatch time BEFORE attaching the callback so an already-ready
+  // future driven inline cannot stamp completion ahead of dispatch (which would
+  // yield a negative RTT the gradient then drops).
+  auto dispatchTimeNs = steadyNowNs();
 
-  int64_t batchId = nextBatchId_++;
-
-  // Attach a completion callback that notifies waiters when the batch
-  // completes. We use .via().thenValue() to run the callback eagerly.
+  // Shared cell the completion callback stamps with the monotonic completion
+  // time, so the poll path measures dispatch->completion RTT rather than
+  // dispatch->poll (which would fold in-operator queueing into the sample).
+  auto completionTimeNs = std::make_shared<std::atomic<int64_t>>(0);
   auto callbackFuture =
       std::move(future)
           .via(folly::getKeepAliveToken(folly::InlineExecutor::instance()))
-          .thenValue([state = selfPtr](std::vector<RPCResponse> responses) {
+          .thenValue([state = selfPtr,
+                      completionTimeNs](std::vector<RPCResponse> responses) {
+            completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_VLOG(1)
                 << "Batch completed with " << responses.size() << " responses";
             {
@@ -232,7 +297,9 @@ void RPCState::addPendingBatch(
             }
             return responses;
           })
-          .thenError([state = selfPtr](folly::exception_wrapper ew) {
+          .thenError([state = selfPtr,
+                      completionTimeNs](folly::exception_wrapper ew) {
+            completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_LOG(ERROR) << "Batch failed: " << ew.what();
             {
               std::lock_guard<std::mutex> l(state->mutex_);
@@ -243,14 +310,60 @@ void RPCState::addPendingBatch(
           })
           .semi();
 
-  pendingBatches_.push_back(
-      PendingBatch{
-          .batchId = batchId,
-          .future = std::move(callbackFuture),
-          .rowLocations = std::move(rowLocations)});
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto batchId = nextBatchId_++;
+    inFlight_++;
+    peakInFlight_ = std::max(peakInFlight_, inFlight_);
+    pendingBatches_.push_back(
+        PendingBatch{
+            .batchId = batchId,
+            .future = std::move(callbackFuture),
+            .rowLocations = std::move(rowLocations),
+            .dispatchTimeNs = dispatchTimeNs,
+            .completionTimeNs = std::move(completionTimeNs)});
 
-  RPC_STATE_VLOG(1) << "addPendingBatch: batchId=" << batchId
-                    << ", totalPending=" << pendingBatches_.size();
+    RPC_STATE_VLOG(1) << "addPendingBatch: batchId=" << batchId
+                      << ", totalPending=" << pendingBatches_.size();
+  }
+}
+
+RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
+    const std::deque<PendingBatch>::iterator& it) {
+  ReadyBatch result;
+  result.batchId = it->batchId;
+  result.rowLocations = std::move(it->rowLocations);
+  // Latency stamped at completion (in the future callback), not now, so
+  // in-operator poll delay between completion and this drain is not folded in.
+  // The relaxed load is safe: we only reach here after future.isReady(), and
+  // the completion callback stored completionTimeNs before fulfilling the
+  // future, so its value is published to this thread by that happens-before
+  // edge. A not-yet-stamped 0 would yield a negative rttNs, which onSample
+  // drops — never a torn read.
+  result.rttNs = it->completionTimeNs->load(std::memory_order_relaxed) -
+      it->dispatchTimeNs;
+
+  try {
+    result.responses = std::move(it->future).get();
+    RPC_STATE_VLOG(1) << "extractReadyBatchLocked: batchId=" << result.batchId
+                      << " ready with " << result.responses.size()
+                      << " responses";
+  } catch (const std::exception& e) {
+    result.error = e.what();
+    result.responses = {};
+    RPC_STATE_LOG(ERROR) << "extractReadyBatchLocked: batchId="
+                         << result.batchId << " failed: " << e.what();
+  }
+
+  if (result.rttNs > 0) {
+    rttMinNs_ = std::min(rttMinNs_, result.rttNs);
+    rttMaxNs_ = std::max(rttMaxNs_, result.rttNs);
+    ++numRttSamples_;
+  }
+
+  pendingBatches_.erase(it);
+  inFlight_--;
+  return result;
 }
 
 RPCState::BatchPollResult RPCState::tryPollBatchOrWait(
@@ -261,24 +374,7 @@ RPCState::BatchPollResult RPCState::tryPollBatchOrWait(
   // Step 1: Check for a ready batch (out-of-order: first ready wins).
   for (auto it = pendingBatches_.begin(); it != pendingBatches_.end(); ++it) {
     if (it->future.isReady()) {
-      ReadyBatch result;
-      result.batchId = it->batchId;
-      result.rowLocations = std::move(it->rowLocations);
-
-      try {
-        result.responses = std::move(it->future).get();
-        RPC_STATE_VLOG(1) << "tryPollBatchOrWait: batchId=" << result.batchId
-                          << " ready with " << result.responses.size()
-                          << " responses";
-      } catch (const std::exception& e) {
-        result.error = e.what();
-        result.responses = {};
-        RPC_STATE_LOG(ERROR) << "tryPollBatchOrWait: batchId=" << result.batchId
-                             << " failed: " << e.what();
-      }
-
-      pendingBatches_.erase(it);
-      *readyBatch = std::move(result);
+      *readyBatch = extractReadyBatchLocked(it);
       return BatchPollResult::kGotBatch;
     }
   }
@@ -300,22 +396,7 @@ std::optional<RPCState::ReadyBatch> RPCState::tryPollReady() {
   std::lock_guard<std::mutex> l(mutex_);
   for (auto it = pendingBatches_.begin(); it != pendingBatches_.end(); ++it) {
     if (it->future.isReady()) {
-      ReadyBatch result;
-      result.batchId = it->batchId;
-      result.rowLocations = std::move(it->rowLocations);
-      try {
-        result.responses = std::move(it->future).get();
-        RPC_STATE_VLOG(1) << "tryPollReady: batchId=" << result.batchId
-                          << " ready with " << result.responses.size()
-                          << " responses";
-      } catch (const std::exception& e) {
-        result.error = e.what();
-        result.responses = {};
-        RPC_STATE_LOG(ERROR) << "tryPollReady: batchId=" << result.batchId
-                             << " failed: " << e.what();
-      }
-      pendingBatches_.erase(it);
-      return result;
+      return extractReadyBatchLocked(it);
     }
   }
   return std::nullopt;
@@ -326,7 +407,7 @@ std::optional<RPCState::ReadyBatch> RPCState::tryPollReady() {
 void RPCState::setNoMoreInput() {
   std::lock_guard<std::mutex> l(mutex_);
   noMoreInput_ = true;
-  RPC_STATE_VLOG(1) << "setNoMoreInput: pendingRows=" << numPendingRows_
+  RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
                     << ", pendingBatches=" << pendingBatches_.size()
                     << ", readyRows=" << readyRows_.size();
   notifyWaitersLocked();
@@ -334,39 +415,48 @@ void RPCState::setNoMoreInput() {
 
 bool RPCState::isFinished() {
   std::lock_guard<std::mutex> l(mutex_);
-  return noMoreInput_ && numPendingRows_ == 0 && readyRows_.empty() &&
-      pendingBatches_.empty();
+  // inFlight_ == 0 covers both pending rows and pending batches; readyRows_ is
+  // PER_ROW-only and always empty in BATCH.
+  return noMoreInput_ && inFlight_ == 0 && readyRows_.empty();
 }
 
 bool RPCState::isUnderBackpressure() {
   std::lock_guard<std::mutex> l(mutex_);
-  if (streamingMode_ == RPCStreamingMode::kBatch) {
-    return static_cast<int64_t>(pendingBatches_.size()) >=
-        effectiveMaxPendingBatches_;
-  }
-  return numPendingRows_ >= maxPendingRows_;
+  // Unified across modes: inFlight_ counts the active mode's units (rows for
+  // PER_ROW, batches for BATCH) and window_ carries the gradient limit.
+  return inFlight_ >= window_.limit();
 }
 
-void RPCState::onBatchSuccess(int64_t increment) {
+void RPCState::onUnitError() {
   std::lock_guard<std::mutex> l(mutex_);
-  if (effectiveMaxPendingBatches_ < maxPendingBatches_) {
-    effectiveMaxPendingBatches_ =
-        std::min(effectiveMaxPendingBatches_ + increment, maxPendingBatches_);
-    RPC_STATE_LOG(INFO) << "RPC congestion: batch success, window increased to "
-                        << effectiveMaxPendingBatches_ << "/"
-                        << maxPendingBatches_;
+  const auto prev = window_.limit();
+  window_.onError();
+  if (window_.limit() != prev) {
+    RPC_STATE_LOG(WARNING) << "RPC congestion: overload, window " << prev
+                           << " -> " << window_.limit();
   }
 }
 
-void RPCState::onBatchError() {
+void RPCState::onUnitSample(int64_t rttNs) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto prev = effectiveMaxPendingBatches_;
-  effectiveMaxPendingBatches_ =
-      std::max<int64_t>(effectiveMaxPendingBatches_ / 2, 1);
-  if (effectiveMaxPendingBatches_ < prev) {
-    RPC_STATE_LOG(WARNING)
-        << "RPC congestion: batch error, window decreased from " << prev
-        << " to " << effectiveMaxPendingBatches_;
+  const auto prev = window_.limit();
+  window_.onSample(rttNs);
+  if (window_.limit() != prev) {
+    RPC_STATE_LOG(INFO) << "RPC congestion: gradient sample rtt=" << rttNs
+                        << "ns, window " << prev << " -> " << window_.limit();
+  }
+}
+
+void RPCState::onUnitSamples(const std::vector<int64_t>& rttNsList) {
+  std::lock_guard<std::mutex> l(mutex_);
+  const auto prev = window_.limit();
+  for (auto rttNs : rttNsList) {
+    window_.onSample(rttNs);
+  }
+  if (window_.limit() != prev) {
+    RPC_STATE_LOG(INFO) << "RPC congestion: " << rttNsList.size()
+                        << " gradient samples, window " << prev << " -> "
+                        << window_.limit();
   }
 }
 
@@ -377,6 +467,20 @@ void RPCState::notifyWaitersLocked() {
     promise.setValue();
   }
   promises_.clear();
+}
+
+RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return OperatorSnapshot{
+      .windowLimit = window_.limit(),
+      .baselineRttNs = window_.baselineRttNs(),
+      .numShrinks = window_.numShrinks(),
+      .peakInFlight = peakInFlight_,
+      .rttMinNs = numRttSamples_ > 0 ? rttMinNs_ : 0,
+      .rttMaxNs = rttMaxNs_,
+      .numRttSamples = numRttSamples_,
+      .streamingMode = streamingMode_,
+  };
 }
 
 } // namespace facebook::velox::exec::rpc

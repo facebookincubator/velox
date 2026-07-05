@@ -27,6 +27,7 @@ For current build times and performance trends, see the [CI performance metrics]
 | Breeze Linux Build | `breeze.yml` | push to main, PRs | Tracing module with sanitizers |
 | Fuzzer Jobs | `scheduled.yml` | PRs, push to main, daily cron, manual | Randomized correctness testing |
 | Run Checks | `preliminary_checks.yml` | PRs | Formatting, linting, PR title |
+| Require fbcode Import | `require-fbcode-import.yml` | PR approving review | Blocks merging an approved PR until the change has been imported |
 | Dependency Graph | `dependency-graph.yml` | push to main | Cache CMake dependency graph artifact |
 | Selective Build Plan | `selective-build-plan.yml` (reusable) | called by Linux Build using GCC | Decide full vs targeted build per PR; uploads plan-comment artifact consumed by Selective Build Comment |
 | CI Failure Comment | `ci-failure-comment.yml` | workflow_run (on Linux Build using GCC / Fuzzer failure) | AI-powered failure analysis on PRs |
@@ -96,6 +97,10 @@ The workflow also includes bias fuzzers that focus specifically on newly added o
 ### Run Checks (`preliminary_checks.yml`)
 
 Runs early validation on pull requests before the heavier build workflows. Executes `pre-commit run --all-files` to check code formatting (clang-format), linting (yamllint, zizmor), license headers, and other code quality rules. Also validates the PR title against the conventional commits format (`type(scope): description`), which is required for all PRs.
+
+### Require fbcode Import (`require-fbcode-import.yml`)
+
+Blocks merging an approved pull request until the change has been imported. The check applies only after approval; before approval it passes. A pull request that has not yet been imported reports a failure, with guidance in the run summary.
 
 ### Dependency Graph (`dependency-graph.yml`)
 

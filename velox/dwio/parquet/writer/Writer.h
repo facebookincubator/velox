@@ -27,7 +27,6 @@
 #include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
-#include "velox/dwio/parquet/writer/WriterConfig.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
@@ -110,7 +109,7 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
   std::function<bool()> lambda_;
 };
 
-struct WriterOptions : public dwio::common::WriterOptions {
+struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -150,30 +149,24 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// If not provided, the field_id will be -1.
   /// The structure should match the schema hierarchy with nested children.
   std::vector<ParquetFieldId> parquetFieldIds;
-
-  // Process hive connector and session configs.
-  void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) override;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
 class Writer : public dwio::common::Writer {
  public:
-  // Constructs a writer with output to 'sink'. A new row group is
-  // started every 'rowsInRowGroup' top level rows. 'pool' is used for
-  // temporary memory. 'properties' specifies Parquet-specific
-  // options. 'schema' specifies the file's overall schema, and it is always
+  // Constructs a writer with output to 'sink'. 'options' carries common writer
+  // options and Parquet-specific format options. 'pool' is used for temporary
+  // memory. 'schema' specifies the file's overall schema, and it is always
   // non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       std::shared_ptr<memory::MemoryPool> pool,
       RowTypePtr schema);
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       RowTypePtr schema);
 
   ~Writer() override = default;
@@ -240,6 +233,10 @@ class ParquetWriterFactory : public dwio::common::WriterFactory {
       const std::shared_ptr<dwio::common::WriterOptions>& options) override;
 
   std::unique_ptr<dwio::common::WriterOptions> createWriterOptions() override;
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 } // namespace facebook::velox::parquet

@@ -21,10 +21,15 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TestValue.h"
 
 #include <fcntl.h>
+#include <atomic>
+#include <thread>
+
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
+#include <folly/synchronization/Baton.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <re2/re2.h>
@@ -54,6 +59,7 @@ class SsdFileTest : public testing::Test {
   static constexpr int64_t kMB = 1 << 20;
 
   void SetUp() override {
+    TestValue::enable();
     filesystems::registerLocalFileSystem();
     registerFaultyFileSystem();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -402,6 +408,89 @@ TEST_F(SsdFileTest, writeAndRead) {
     readAndCheckPins(pins);
     pins.clear();
   }
+}
+
+// Reproduces the race between a write and region eviction. The disk write in
+// SsdFile::write() runs outside of 'mutex_'. Without the region pinning in
+// getSpace(), a concurrent writer can pick the in-flight region as an
+// eviction candidate, clear it and write its own data into the same byte
+// range, so the entries registered by one of the writers point at bytes
+// overwritten by the other. The first writer is blocked between getSpace()
+// and its disk write, while a second writer fails to fit in the region and
+// triggers eviction. Checksum read verification turns the clobbered reads
+// into errors.
+DEBUG_ONLY_TEST_F(SsdFileTest, writeRacingWithEviction) {
+  // A single region so that the second write can only proceed by evicting
+  // the region the first write is using.
+  constexpr int64_t kSsdSize = SsdFile::kRegionSize;
+  initializeCache(
+      kSsdSize,
+      0,
+      /*checksumEnabled=*/true,
+      /*checksumReadVerificationEnabled=*/true);
+
+  folly::Baton<> writerReached;
+  folly::Baton<> evictionDone;
+  std::atomic<bool> hookFired{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cache::SsdFile::write",
+      std::function<void(const SsdFile*)>([&](const SsdFile*) {
+        // Block only the first writer; the second write call must proceed.
+        if (hookFired.exchange(true)) {
+          return;
+        }
+        writerReached.post();
+        evictionDone.wait();
+      }));
+
+  // The first batch nearly fills the region, leaving less space than the
+  // second batch's smallest entry.
+  auto firstPins = makePins(fileName_.id(), 0, 4096, 2048 * 1025, 62 * kMB);
+  std::thread firstWriter([&]() { ssdFile_->write(firstPins); });
+  writerReached.wait();
+
+  // The first writer is now blocked after reserving space, before its disk
+  // write. This batch does not fit in the region's remaining space, so the
+  // write can only proceed by evicting the region under write.
+  auto secondPins =
+      makePins(fileName_.id(), 1024 * kMB, 4 * kMB, 4 * kMB, 8 * kMB);
+  ssdFile_->write(secondPins);
+  evictionDone.post();
+  firstWriter.join();
+
+  // Read back every entry that was registered on SSD. Without the region
+  // pinning, the second batch's entries point at bytes overwritten by the
+  // first writer and fail checksum verification.
+  int32_t numCorruptions = 0;
+  auto verifyPins = [&](std::vector<CachePin>& pins) {
+    for (auto& pin : pins) {
+      if (pin.entry()->ssdFile() == nullptr) {
+        continue;
+      }
+      auto ssdPin = ssdFile_->find(
+          RawFileCacheKey{
+              pin.entry()->key().fileNum.id(), pin.entry()->key().offset});
+      if (ssdPin.empty()) {
+        continue;
+      }
+      std::vector<SsdPin> ssdPins;
+      ssdPins.push_back(std::move(ssdPin));
+      std::vector<CachePin> cachePins;
+      cachePins.push_back(std::move(pin));
+      try {
+        ssdFile_->load(ssdPins, cachePins);
+      } catch (const VeloxException&) {
+        ++numCorruptions;
+      }
+    }
+  };
+  verifyPins(firstPins);
+  verifyPins(secondPins);
+
+  EXPECT_EQ(numCorruptions, 0);
+  SsdCacheStats stats;
+  ssdFile_->updateStats(stats);
+  EXPECT_EQ(stats.readSsdCorruptions, 0);
 }
 
 TEST_F(SsdFileTest, checkpoint) {

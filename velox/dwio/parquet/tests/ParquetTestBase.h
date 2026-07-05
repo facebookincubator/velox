@@ -213,7 +213,13 @@ class ParquetTestBase : public testing::Test,
 
   dwio::common::MemorySink* write(
       const RowVectorPtr& data,
-      const WriterOptions& writerOptions,
+      const ParquetWriterOptions& writerOptions,
+      const RowTypePtr& rowType = nullptr);
+
+  dwio::common::MemorySink* write(
+      const RowVectorPtr& data,
+      const dwio::common::WriterOptions& options,
+      const ParquetWriterOptions& writerOptions,
       const RowTypePtr& rowType = nullptr);
 
   /// Writes batches data into Parquet file.
@@ -223,7 +229,7 @@ class ParquetTestBase : public testing::Test,
   /// further by the writer.
   dwio::common::MemorySink* write(
       const std::vector<RowVectorPtr>& batches,
-      const WriterOptions& writerOptions,
+      const ParquetWriterOptions& writerOptions,
       bool flushEachBatch = true);
 
   dwio::common::MemorySink* write(

@@ -84,27 +84,17 @@ folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
   return child->asChecked<SimpleVector<Timestamp>>()->valueAt(row).toMicros();
 }
 
-class IcebergFileNameGenerator : public FileNameGenerator {
- public:
-  std::pair<std::string, std::string> gen(
-      std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx,
-      bool commitRequired) const override;
-
-  folly::dynamic serialize() const override;
-
-  std::string toString() const override;
-};
-
 std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
+
+} // namespace
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
+    uint32_t /* maxNumBuckets */,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   if (targetFileName.empty()) {
@@ -126,7 +116,17 @@ std::string IcebergFileNameGenerator::toString() const {
   return "IcebergFileNameGenerator";
 }
 
-} // namespace
+std::shared_ptr<IcebergFileNameGenerator> IcebergFileNameGenerator::deserialize(
+    const folly::dynamic& /* obj */,
+    void* /* context */) {
+  return std::make_shared<IcebergFileNameGenerator>();
+}
+
+void IcebergFileNameGenerator::registerSerDe() {
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+  registry.Register(
+      "IcebergFileNameGenerator", IcebergFileNameGenerator::deserialize);
+}
 
 IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<IcebergColumnHandlePtr> inputColumns,
@@ -135,7 +135,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     IcebergPartitionSpecPtr partitionSpec,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    WriteKind writeKind)
+    WriteKind writeKind,
+    std::shared_ptr<const FileNameGenerator> fileNameGenerator)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -147,7 +148,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           serdeParameters,
           nullptr,
           false,
-          std::make_shared<const HiveInsertFileNameGenerator>()),
+          std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
       writeKind_(writeKind) {
   // Data-file writes and merge writes both require the input row type to
@@ -465,9 +466,6 @@ IcebergDataSink::createWriterOptions(size_t writerIndex) const {
   if (statsCollector_ != nullptr) {
     statsCollector_->configureWriterOptions(*options);
   }
-
-  options->processConfigs(
-      *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
 
   if (adapter != nullptr) {
     adapter->applyPostConfigs(*options);

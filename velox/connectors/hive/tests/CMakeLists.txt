@@ -15,6 +15,7 @@ add_executable(
   velox_hive_connector_test
   FileColumnHandleTest.cpp
   FileConfigTest.cpp
+  HiveIndexSourceUtilsTest.cpp
   FileConnectorSplitTest.cpp
   FileConnectorUtilTest.cpp
   FileHandleTest.cpp

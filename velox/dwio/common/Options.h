@@ -1039,6 +1039,7 @@ struct WriterOptions {
 
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};
+  std::shared_ptr<FormatSpecificOptions> formatSpecificOptions;
 
   // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.

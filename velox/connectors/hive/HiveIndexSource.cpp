@@ -26,133 +26,13 @@
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/hive/HiveIndexSourceUtils.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
-
-// Extracts a constant value from a point lookup filter (single value equality).
-// Returns nullopt if the filter is not a point lookup or cannot be converted.
-std::optional<variant> extractPointLookupValue(const common::Filter* filter) {
-  VELOX_CHECK_NOT_NULL(filter);
-
-  switch (filter->kind()) {
-    case common::FilterKind::kBigintRange: {
-      const auto* range = filter->as<common::BigintRange>();
-      if (range->isSingleValue()) {
-        return variant(range->lower());
-      }
-      return std::nullopt;
-    }
-    case common::FilterKind::kDoubleRange: {
-      const auto* range = filter->as<common::DoubleRange>();
-      if (!range->lowerUnbounded() && !range->upperUnbounded() &&
-          range->lower() == range->upper() && !range->lowerExclusive() &&
-          !range->upperExclusive()) {
-        return variant(range->lower());
-      }
-      return std::nullopt;
-    }
-    case common::FilterKind::kFloatRange: {
-      const auto* range = filter->as<common::FloatRange>();
-      if (!range->lowerUnbounded() && !range->upperUnbounded() &&
-          range->lower() == range->upper() && !range->lowerExclusive() &&
-          !range->upperExclusive()) {
-        return variant(range->lower());
-      }
-      return std::nullopt;
-    }
-    case common::FilterKind::kBytesRange: {
-      const auto* range = filter->as<common::BytesRange>();
-      if (range->isSingleValue()) {
-        return variant(range->lower());
-      }
-      return std::nullopt;
-    }
-    case common::FilterKind::kBytesValues: {
-      const auto* values = filter->as<common::BytesValues>();
-      if (values->values().size() == 1) {
-        return variant(*values->values().begin());
-      }
-      return std::nullopt;
-    }
-    case common::FilterKind::kBoolValue: {
-      const auto* boolFilter = filter->as<common::BoolValue>();
-      // BoolValue doesn't expose value() getter - use testBool to determine the
-      // value
-      return variant(boolFilter->testBool(true));
-    }
-    default:
-      return std::nullopt;
-  }
-}
-
-// Extracts range bounds from a range filter.
-// Returns a pair of (lower, upper) variants. If a bound is unbounded, the
-// corresponding variant will be null.
-// Returns nullopt if the filter is not a range filter or cannot be converted.
-std::optional<std::pair<variant, variant>> extractRangeBounds(
-    const common::Filter* filter) {
-  VELOX_CHECK_NOT_NULL(filter);
-
-  switch (filter->kind()) {
-    case common::FilterKind::kBigintRange: {
-      const auto* range = filter->as<common::BigintRange>();
-      return std::make_pair(variant(range->lower()), variant(range->upper()));
-    }
-    case common::FilterKind::kDoubleRange: {
-      const auto* range = filter->as<common::DoubleRange>();
-      if (range->lowerUnbounded() || range->upperUnbounded()) {
-        // Cannot convert unbounded ranges to BetweenCondition.
-        return std::nullopt;
-      }
-      return std::make_pair(variant(range->lower()), variant(range->upper()));
-    }
-    case common::FilterKind::kFloatRange: {
-      const auto* range = filter->as<common::FloatRange>();
-      if (range->lowerUnbounded() || range->upperUnbounded()) {
-        return std::nullopt;
-      }
-      return std::make_pair(variant(range->lower()), variant(range->upper()));
-    }
-    case common::FilterKind::kBytesRange: {
-      const auto* range = filter->as<common::BytesRange>();
-      if (!range->isSingleValue()) {
-        // Only convert bounded range filters.
-        return std::make_pair(variant(range->lower()), variant(range->upper()));
-      }
-      return std::nullopt;
-    }
-    default:
-      return std::nullopt;
-  }
-}
-
-// Creates an EqualIndexLookupCondition with a constant value.
-core::IndexLookupConditionPtr createEqualConditionWithConstant(
-    const std::string& columnName,
-    const TypePtr& type,
-    const variant& value) {
-  auto keyExpr = std::make_shared<core::FieldAccessTypedExpr>(type, columnName);
-  auto constantExpr = std::make_shared<core::ConstantTypedExpr>(type, value);
-  return std::make_shared<core::EqualIndexLookupCondition>(
-      std::move(keyExpr), std::move(constantExpr));
-}
-
-// Creates a BetweenIndexLookupCondition with constant bounds.
-core::IndexLookupConditionPtr createBetweenConditionWithConstants(
-    const std::string& columnName,
-    const TypePtr& type,
-    const variant& lowerValue,
-    const variant& upperValue) {
-  auto keyExpr = std::make_shared<core::FieldAccessTypedExpr>(type, columnName);
-  auto lowerExpr = std::make_shared<core::ConstantTypedExpr>(type, lowerValue);
-  auto upperExpr = std::make_shared<core::ConstantTypedExpr>(type, upperValue);
-  return std::make_shared<core::BetweenIndexLookupCondition>(
-      std::move(keyExpr), std::move(lowerExpr), std::move(upperExpr));
-}
 
 // Checks that a HiveColumnHandle is a regular column type.
 void checkColumnHandleIsRegular(const FileColumnHandle& handle) {
@@ -1567,7 +1447,7 @@ vector_size_t HiveIndexSource::evaluateRemainingFilter(
   uint64_t filterTimeNs{0};
   vector_size_t numRemainingRows{0};
   {
-    NanosecondTimer timer(&filterTimeNs);
+    NanosecondWallTimer timer(&filterTimeNs);
     expressionEvaluator_->evaluate(
         remainingFilterExprSet_.get(),
         remainingFilterRows_,

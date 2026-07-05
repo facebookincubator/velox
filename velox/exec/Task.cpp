@@ -546,7 +546,11 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
 
   taskStats_.executionStartTimeMs = getCurrentTimeMs();
   LocalPlanner::plan(
-      planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
+      planFragment_,
+      /*consumerSupplier=*/nullptr,
+      &driverFactories_,
+      queryCtx_->queryConfig(),
+      /*maxDrivers=*/1);
   exchangeClients_.resize(driverFactories_.size());
 
   // In Task::next() we always assume ungrouped execution.
@@ -976,7 +980,11 @@ bool Task::supportSerialExecutionMode() const {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories;
   LocalPlanner::plan(
-      planFragment_, nullptr, &driverFactories, queryCtx_->queryConfig(), 1);
+      planFragment_,
+      /*consumerSupplier=*/nullptr,
+      &driverFactories,
+      queryCtx_->queryConfig(),
+      /*maxDrivers=*/1);
 
   for (const auto& factory : driverFactories) {
     if (!factory->supportsSerialExecution()) {
@@ -3801,7 +3809,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
   uint64_t reclaimWaitTimeUs{0};
   uint64_t reclaimedBytes{0};
   {
-    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     reclaimedBytes = reclaimTask(task, targetBytes, maxWaitMs, stats);
   }
   ++task->taskStats_.memoryReclaimCount;
@@ -3826,7 +3834,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   uint64_t reclaimWaitTimeUs{0};
   bool paused{true};
   {
-    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     if (maxWaitMs == 0) {
       task->requestPause().wait();
     } else {
@@ -3857,7 +3865,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   try {
     uint64_t reclaimExecTimeUs{0};
     {
-      MicrosecondTimer timer{&reclaimExecTimeUs};
+      MicrosecondWallTimer timer{&reclaimExecTimeUs};
       reclaimedBytes = memory::MemoryReclaimer::reclaim(
           task->pool(), targetBytes, maxWaitMs, stats);
     }

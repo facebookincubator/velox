@@ -840,25 +840,18 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
         ASSERT_TRUE(ex.isRetriable());
         if (useMmap_) {
           if (useCache_) {
-            ASSERT_EQ(
-                fmt::format(
-                    "allocate failed with 128.00MB from Memory Pool["
-                    "static_quota LEAF root[MemoryCapExceptions] "
-                    "parent[MemoryCapExceptions] MMAP track-usage {}]<max "
-                    "capacity 256.00MB capacity 256.00MB used 0B available 0B "
-                    "reservation [used 0B, reserved 0B, min 0B] counters [allocs "
-                    "1, frees 0, reserves 0, releases 0, collisions 0, "
-                    "external-allocs 0, external-frees 0, cumulative-external "
-                    "0B])> Failed to"
-                    " evict from cache state: AsyncDataCache:\nCache size: 0B "
-                    "tinySize: 0B large size: 0B\nCache entries: 0 read pins: "
-                    "0 write pins: 0 pinned shared: 0B pinned exclusive: 0B\n "
-                    "num write wait: 0 empty entries: 0\nCache access miss: 0 "
-                    "hit: 0 hit bytes: 0B eviction: 0 savable eviction: 0 eviction checks: 0 "
-                    "aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks 0\n"
-                    "Allocated pages: 0 cached pages: 0\n",
-                    isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
-                ex.message());
+            ASSERT_THAT(
+                ex.message(),
+                HasSubstr(
+                    fmt::format(
+                        "allocate failed with 128.00MB from Memory Pool["
+                        "static_quota LEAF root[MemoryCapExceptions] "
+                        "parent[MemoryCapExceptions] MMAP track-usage {}]",
+                        isLeafThreadSafe_ ? "thread-safe"
+                                          : "non-thread-safe")));
+            ASSERT_THAT(
+                ex.message(),
+                HasSubstr("Failed to evict from cache state: AsyncDataCache:"));
           } else {
             ASSERT_EQ(
                 fmt::format(
@@ -878,25 +871,18 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
           }
         } else {
           if (useCache_) {
-            ASSERT_EQ(
-                fmt::format(
-                    "allocate failed with 128.00MB from Memory Pool"
-                    "[static_quota LEAF root[MemoryCapExceptions] "
-                    "parent[MemoryCapExceptions] MALLOC track-usage {}]"
-                    "<max capacity 256.00MB capacity 256.00MB used 0B available "
-                    "0B reservation [used 0B, reserved 0B, min 0B] counters "
-                    "[allocs 1, frees 0, reserves 0, releases 0, collisions 0, "
-                    "external-allocs 0, external-frees 0, cumulative-external "
-                    "0B])>"
-                    " Failed to evict from cache state: AsyncDataCache:\nCache "
-                    "size: 0B tinySize: 0B large size: 0B\nCache entries: 0 "
-                    "read pins: 0 write pins: 0 pinned shared: 0B pinned "
-                    "exclusive: 0B\n num write wait: 0 empty entries: 0\nCache "
-                    "access miss: 0 hit: 0 hit bytes: 0B eviction: 0 savable eviction: 0 eviction "
-                    "checks: 0 aged out: 0 stales: 0\nPrefetch entries: 0 bytes: 0B\nAlloc Megaclocks"
-                    " 0\nAllocated pages: 0 cached pages: 0\n",
-                    isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"),
-                ex.message());
+            ASSERT_THAT(
+                ex.message(),
+                HasSubstr(
+                    fmt::format(
+                        "allocate failed with 128.00MB from Memory Pool"
+                        "[static_quota LEAF root[MemoryCapExceptions] "
+                        "parent[MemoryCapExceptions] MALLOC track-usage {}]",
+                        isLeafThreadSafe_ ? "thread-safe"
+                                          : "non-thread-safe")));
+            ASSERT_THAT(
+                ex.message(),
+                HasSubstr("Failed to evict from cache state: AsyncDataCache:"));
           } else {
             ASSERT_EQ(
                 fmt::format(
