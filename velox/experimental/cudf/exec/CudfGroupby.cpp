@@ -36,6 +36,7 @@
 #include <cudf/copying.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/reduction.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
 namespace {
@@ -542,20 +543,9 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf_velox::veloxToCudfDataType(resultType),
             stream,
             mr);
-        // Set result to NULL where count == 0 (avg of empty group is NULL,
-        // not NaN from 0/0 division).
-        cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
-        auto validMask = cudf::binary_operation(
-            count->view(),
-            zero,
-            cudf::binary_operator::NOT_EQUAL,
-            cudf::data_type{cudf::type_id::BOOL8},
-            stream,
-            get_temp_mr());
-        cudf::numeric_scalar<double> nullDouble(
-            0.0, false, stream, get_temp_mr());
-        return cudf::copy_if_else(
-            *avg, nullDouble, *validMask, stream, mr);
+        // Replace NaN with NULL: avg of an empty group (0/0) produces NaN,
+        // but SQL semantics require NULL.
+        return cudf::column_nans_to_nulls(*avg, stream, mr);
       }
       default:
         VELOX_NYI("Unsupported aggregation step for mean");

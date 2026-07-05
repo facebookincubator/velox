@@ -1702,4 +1702,56 @@ TEST_F(AggregationTest, stddevSampAllNulls) {
   assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
 }
 
+// Test avg with all NULL input (should return NULL, not NaN)
+TEST_F(AggregationTest, avgAllNulls) {
+  // Group 0: all NULLs -> avg should return NULL
+  // Group 1: has values -> should compute normally
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1}),
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 4, 6}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt, 4.0, 6.0}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c0"}, {"avg(c1)"})
+                .planNode();
+
+  assertQuery(op, "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .singleAggregation({"c0"}, {"avg(c2)"})
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, avg(c2) FROM tmp GROUP BY c0");
+}
+
+// Test avg with all NULL input using partial + final (distributed) aggregation
+TEST_F(AggregationTest, avgAllNullsPartialFinal) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1}),
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 4, 6}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt, 4.0, 6.0}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .partialAggregation({"c0"}, {"avg(c1)"})
+                .finalAggregation()
+                .planNode();
+
+  assertQuery(op, "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+
+  auto op2 = PlanBuilder()
+                 .values({data})
+                 .partialAggregation({"c0"}, {"avg(c2)"})
+                 .finalAggregation()
+                 .planNode();
+
+  assertQuery(op2, "SELECT c0, avg(c2) FROM tmp GROUP BY c0");
+}
+
 } // namespace facebook::velox::exec::test
