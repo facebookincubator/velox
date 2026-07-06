@@ -160,7 +160,10 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   if (input->childrenSize() == 0) {
     auto emptyTable = std::make_unique<cudf::table>();
     return std::make_shared<CudfVector>(
-        input->pool(), outputType_, input->size(), std::move(emptyTable),
+        input->pool(),
+        outputType_,
+        input->size(),
+        std::move(emptyTable),
         stream);
   }
 
