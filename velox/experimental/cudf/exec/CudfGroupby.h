@@ -248,6 +248,8 @@ class CudfGroupby : public CudfOperatorBase {
   std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
   size_t maxBufferedRows_{
       static_cast<size_t>(std::numeric_limits<cudf::size_type>::max())};
+  uint64_t diagnosticInputBatchCount_{0};
+  uint64_t diagnosticPartialOutputBatchCount_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

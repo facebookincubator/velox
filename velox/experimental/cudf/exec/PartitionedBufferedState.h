@@ -173,6 +173,10 @@ class PartitionedBufferedState {
 
   bool empty() const;
 
+  uint64_t diagnosticId() const {
+    return diagnosticId_;
+  }
+
  private:
   void insert(Node& node, InputChunk bufferedInput);
 
@@ -194,6 +198,9 @@ class PartitionedBufferedState {
   const size_t maxRowsPerLeaf_;
   std::unique_ptr<Node> root_;
   uint32_t nextHashSeed_;
+  uint64_t diagnosticId_{0};
+  uint64_t inputBatchCount_{0};
+  uint64_t outputBatchCount_{0};
 };
 
 // Owns one active leaf for operators that may flush early instead of

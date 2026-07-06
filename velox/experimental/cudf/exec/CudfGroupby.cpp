@@ -37,7 +37,10 @@
 
 #include <fmt/format.h>
 
+#include <atomic>
+#include <cstdlib>
 #include <limits>
+#include <sstream>
 #include <string_view>
 
 namespace {
@@ -527,6 +530,160 @@ constexpr std::string_view kStreamingGroupbyApiUsedStat{
     "streamingGroupbyApiUsed"};
 constexpr std::string_view kStreamingGroupbyApiRebuildsStat{
     "streamingGroupbyApiRebuilds"};
+constexpr std::string_view kStreamingGroupbyApiRepartitionsStat{
+    "streamingGroupbyApiRepartitions"};
+
+constexpr std::string_view kStreamingGroupbyDiagnosticEnv{
+    "VELOX_CUDF_STREAMING_GROUPBY_DIAGNOSTICS"};
+constexpr std::string_view kStreamingGroupbyDiagnosticSyncEnv{
+    "VELOX_CUDF_STREAMING_GROUPBY_DIAGNOSTICS_SYNC"};
+
+std::atomic<uint64_t> nextStreamingLeafDiagnosticId{1};
+
+bool environmentFlagEnabled(std::string_view name) {
+  const auto* value = std::getenv(std::string{name}.c_str());
+  return value != nullptr && std::string_view{value} != "0" &&
+      std::string_view{value} != "false";
+}
+
+bool streamingGroupbyDiagnosticsEnabled() {
+  static const bool enabled =
+      environmentFlagEnabled(kStreamingGroupbyDiagnosticEnv);
+  return enabled;
+}
+
+bool streamingGroupbyDiagnosticSyncEnabled() {
+  static const bool enabled =
+      environmentFlagEnabled(kStreamingGroupbyDiagnosticSyncEnv);
+  return enabled;
+}
+
+std::string streamingGroupbyOperatorContext(const CudfGroupby& owner) {
+  const auto* driver = owner.operatorCtx()->driverCtx();
+  return fmt::format(
+      "task={} planNode={} operator={} operatorType={} pipeline={} driver={} "
+      "partition={} splitGroup={}",
+      owner.taskId(),
+      owner.planNodeId(),
+      owner.operatorId(),
+      owner.operatorType(),
+      driver->pipelineId,
+      driver->driverId,
+      driver->partitionId,
+      driver->splitGroupId);
+}
+
+void appendColumnDescription(
+    std::ostringstream& out,
+    const cudf::column_view& column,
+    int depth) {
+  out << "{type=" << static_cast<int>(column.type().id())
+      << ",size=" << column.size() << ",offset=" << column.offset()
+      << ",nullCount=" << column.null_count()
+      << ",nullable=" << column.nullable() << ",data=" << column.head()
+      << ",mask=" << column.null_mask()
+      << ",children=" << column.num_children();
+  if (depth > 0 && column.num_children() > 0) {
+    out << ",childViews=[";
+    for (cudf::size_type i = 0; i < column.num_children(); ++i) {
+      if (i != 0) {
+        out << ',';
+      }
+      appendColumnDescription(out, column.child(i), depth - 1);
+    }
+    out << ']';
+  }
+  out << '}';
+}
+
+std::string tableDescription(const cudf::table_view& table) {
+  std::ostringstream out;
+  out << "rows=" << table.num_rows() << " columns=" << table.num_columns()
+      << " columnViews=[";
+  for (cudf::size_type i = 0; i < table.num_columns(); ++i) {
+    if (i != 0) {
+      out << ',';
+    }
+    out << i << ':';
+    appendColumnDescription(out, table.column(i), 2);
+  }
+  out << ']';
+  return out.str();
+}
+
+template <typename T>
+std::string indicesDescription(const std::vector<T>& indices) {
+  std::ostringstream out;
+  out << '[';
+  for (size_t i = 0; i < indices.size(); ++i) {
+    if (i != 0) {
+      out << ',';
+    }
+    out << indices[i];
+  }
+  out << ']';
+  return out.str();
+}
+
+void emitStreamingGroupbyDiagnostic(
+    const CudfGroupby& owner,
+    std::string_view event,
+    std::string_view details) {
+  LOG(ERROR) << "[SG_DIAG] " << streamingGroupbyOperatorContext(owner)
+               << " event=" << event << (details.empty() ? "" : " ") << details;
+}
+
+// Keep all diagnostic argument construction, including table/schema strings,
+// out of the normal execution path when diagnostics are disabled.
+#define logStreamingGroupbyDiagnostic(owner, event, details)       \
+  do {                                                             \
+    if (streamingGroupbyDiagnosticsEnabled()) {                    \
+      emitStreamingGroupbyDiagnostic((owner), (event), (details)); \
+    }                                                              \
+  } while (false)
+
+void streamingGroupbyCudaCheckpoint(
+    const CudfGroupby& owner,
+    std::string_view stage,
+    rmm::cuda_stream_view stream) {
+  if (!streamingGroupbyDiagnosticsEnabled()) {
+    return;
+  }
+
+  const auto pendingStatus = cudaPeekAtLastError();
+  auto syncStatus = cudaSuccess;
+  if (streamingGroupbyDiagnosticSyncEnabled()) {
+    syncStatus = cudaStreamSynchronize(stream.value());
+  }
+  size_t freeBytes = 0;
+  size_t totalBytes = 0;
+  const auto memoryStatus = cudaMemGetInfo(&freeBytes, &totalBytes);
+
+  LOG(ERROR) << "[SG_DIAG] " << streamingGroupbyOperatorContext(owner)
+               << " event=cuda_checkpoint stage=" << stage
+               << " stream=" << stream.value()
+               << " syncEnabled=" << streamingGroupbyDiagnosticSyncEnabled()
+               << " pendingStatus=" << static_cast<int>(pendingStatus)
+               << " pendingError=" << cudaGetErrorString(pendingStatus)
+               << " syncStatus=" << static_cast<int>(syncStatus)
+               << " syncError=" << cudaGetErrorString(syncStatus)
+               << " memoryStatus=" << static_cast<int>(memoryStatus)
+               << " memoryError=" << cudaGetErrorString(memoryStatus)
+               << " freeBytes=" << freeBytes << " totalBytes=" << totalBytes;
+
+  if (streamingGroupbyDiagnosticSyncEnabled() &&
+      (pendingStatus != cudaSuccess || syncStatus != cudaSuccess)) {
+    const auto failureStatus =
+        pendingStatus != cudaSuccess ? pendingStatus : syncStatus;
+    VELOX_FAIL(
+        "streaming_groupby CUDA diagnostic checkpoint '{}' failed on stream "
+        "{}: {} ({})",
+        stage,
+        reinterpret_cast<uintptr_t>(stream.value()),
+        cudaGetErrorString(failureStatus),
+        static_cast<int>(failureStatus));
+  }
+}
 
 struct GroupbyLeafState final : public BufferedState {
   explicit GroupbyLeafState(InputChunk chunk) : chunk(std::move(chunk)) {}
@@ -892,7 +1049,40 @@ class StreamingGroupbyLeafState final : public BufferedState {
  public:
   explicit StreamingGroupbyLeafState(CudfGroupby& owner)
       : owner_(owner),
-        rowWidthBytes_(estimateStreamingRowWidth(owner.bufferedResultType_)) {}
+        rowWidthBytes_(estimateStreamingRowWidth(owner.bufferedResultType_)),
+        diagnosticId_(nextStreamingLeafDiagnosticId.fetch_add(
+            1,
+            std::memory_order_relaxed)) {
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "leaf_create",
+        fmt::format("leaf={} rowWidthBytes={}", diagnosticId_, rowWidthBytes_));
+  }
+
+  ~StreamingGroupbyLeafState() override {
+    if (streamingGroupbyDiagnosticsEnabled()) {
+      size_t distinct = 0;
+      try {
+        distinct = distinctKeys();
+      } catch (...) {
+      }
+      logStreamingGroupbyDiagnostic(
+          owner_,
+          "leaf_destroy",
+          fmt::format(
+              "leaf={} chunks={} totalRows={} distinct={} capacity={} "
+              "estimatedFlatSize={} stateStream={}",
+              diagnosticId_,
+              chunkCount_,
+              totalRows_,
+              distinct,
+              currentCapacity_,
+              estimatedFlatSize_,
+              stateStream_.has_value()
+                  ? reinterpret_cast<uintptr_t>(stateStream_->value())
+                  : 0));
+    }
+  }
 
   void addChunk(InputChunk input) {
     if (input.empty()) {
@@ -903,18 +1093,98 @@ class StreamingGroupbyLeafState final : public BufferedState {
     auto const inputRows = input.size();
     auto const inputFlatSize =
         input.owner ? input.owner->estimateFlatSize() : 0;
+    auto const chunk = ++chunkCount_;
+    auto const distinctBefore = distinctKeys();
+    auto const rebuildRequired = groupby_ &&
+        (saturatingAdd(distinctBefore, inputRows) > currentCapacity_ ||
+         currentCapacity_ > maxCapacityForBatch(inputRows));
+
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "add_chunk_begin",
+        fmt::format(
+            "leaf={} chunk={} inputRows={} totalRowsBefore={} "
+            "distinctBefore={} capacity={} first={} rebuildRequired={} "
+            "inputStream={} stateStream={} inputFlatSize={} table={}",
+            diagnosticId_,
+            chunk,
+            inputRows,
+            totalRows_,
+            distinctBefore,
+            currentCapacity_,
+            groupby_ == nullptr,
+            rebuildRequired,
+            reinterpret_cast<uintptr_t>(input.stream.value()),
+            reinterpret_cast<uintptr_t>(stream.value()),
+            inputFlatSize,
+            tableDescription(input.view)));
+    streamingGroupbyCudaCheckpoint(owner_, "before_add_chunk", stream);
 
     try {
       if (!groupby_) {
         currentCapacity_ = initialCapacity(inputRows);
+        logStreamingGroupbyDiagnostic(
+            owner_,
+            "initial_state_begin",
+            fmt::format(
+                "leaf={} chunk={} inputRows={} capacity={} maxAllowed={}",
+                diagnosticId_,
+                chunk,
+                inputRows,
+                currentCapacity_,
+                maxAllowedCapacity(inputRows)));
         groupby_ = owner_.createStreamingGroupby(currentCapacity_);
+        streamingGroupbyCudaCheckpoint(
+            owner_, "after_initial_state_create", stream);
         groupby_->aggregate(input.view, stream);
-      } else if (mustRebuildBeforeAggregate(inputRows)) {
+        streamingGroupbyCudaCheckpoint(
+            owner_, "after_initial_state_aggregate", stream);
+      } else if (rebuildRequired) {
         rebuildAndAggregate(input, stream);
       } else {
         groupby_->aggregate(input.view, stream);
+        streamingGroupbyCudaCheckpoint(
+            owner_, "after_subsequent_aggregate", stream);
       }
+    } catch (const std::exception& e) {
+      logStreamingGroupbyDiagnostic(
+          owner_,
+          "add_chunk_exception",
+          fmt::format(
+              "leaf={} chunk={} inputRows={} totalRowsBefore={} "
+              "distinctBefore={} capacity={} what={}",
+              diagnosticId_,
+              chunk,
+              inputRows,
+              totalRows_,
+              distinctBefore,
+              currentCapacity_,
+              e.what()));
+      // aggregate() and merge() can throw after launching asynchronous work.
+      // Preserve the original exception while still trying to keep input
+      // deallocation behind that work.
+      try {
+        orderInputDeallocationAfterState(input.stream);
+      } catch (const std::exception& cleanupError) {
+        LOG(ERROR) << "Failed to order streaming_groupby input deallocation: "
+                   << cleanupError.what();
+      } catch (...) {
+        LOG(ERROR) << "Failed to order streaming_groupby input deallocation";
+      }
+      throw;
     } catch (...) {
+      logStreamingGroupbyDiagnostic(
+          owner_,
+          "add_chunk_unknown_exception",
+          fmt::format(
+              "leaf={} chunk={} inputRows={} totalRowsBefore={} "
+              "distinctBefore={} capacity={}",
+              diagnosticId_,
+              chunk,
+              inputRows,
+              totalRows_,
+              distinctBefore,
+              currentCapacity_));
       // aggregate() and merge() can throw after launching asynchronous work.
       // Preserve the original exception while still trying to keep input
       // deallocation behind that work.
@@ -933,6 +1203,19 @@ class StreamingGroupbyLeafState final : public BufferedState {
     totalRows_ += inputRows;
     estimatedFlatSize_ = std::max<uint64_t>(
         estimatedFlatSize_ + inputFlatSize, currentCapacity_ * rowWidthBytes_);
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "add_chunk_end",
+        fmt::format(
+            "leaf={} chunk={} inputRows={} totalRowsAfter={} distinctAfter={} "
+            "capacity={} estimatedFlatSize={}",
+            diagnosticId_,
+            chunk,
+            inputRows,
+            totalRows_,
+            distinctKeys(),
+            currentCapacity_,
+            estimatedFlatSize_));
   }
 
   size_t totalRows() const {
@@ -943,12 +1226,51 @@ class StreamingGroupbyLeafState final : public BufferedState {
     return estimatedFlatSize_;
   }
 
+  uint64_t diagnosticId() const {
+    return diagnosticId_;
+  }
+
+  size_t capacity() const {
+    return currentCapacity_;
+  }
+
+  size_t diagnosticDistinctKeys() const {
+    return distinctKeys();
+  }
+
   CudfVectorPtr finalizeBuffered() const {
     if (!groupby_) {
       return nullptr;
     }
     VELOX_CHECK(stateStream_.has_value());
-    return owner_.materializeStreamingBufferedOutput(*groupby_, *stateStream_);
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "finalize_buffered_begin",
+        fmt::format(
+            "leaf={} chunks={} totalRows={} distinct={} capacity={} "
+            "estimatedFlatSize={} stateStream={}",
+            diagnosticId_,
+            chunkCount_,
+            totalRows_,
+            distinctKeys(),
+            currentCapacity_,
+            estimatedFlatSize_,
+            reinterpret_cast<uintptr_t>(stateStream_->value())));
+    streamingGroupbyCudaCheckpoint(
+        owner_, "before_finalize_buffered", *stateStream_);
+    auto output =
+        owner_.materializeStreamingBufferedOutput(*groupby_, *stateStream_);
+    streamingGroupbyCudaCheckpoint(
+        owner_, "after_finalize_buffered", *stateStream_);
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "finalize_buffered_end",
+        fmt::format(
+            "leaf={} outputRows={} output={}",
+            diagnosticId_,
+            output ? output->size() : 0,
+            output ? tableDescription(output->getTableView()) : "null"));
+    return output;
   }
 
  private:
@@ -1031,11 +1353,6 @@ class StreamingGroupbyLeafState final : public BufferedState {
     return capacity;
   }
 
-  bool mustRebuildBeforeAggregate(size_t inputRows) const {
-    return saturatingAdd(distinctKeys(), inputRows) > currentCapacity_ ||
-        currentCapacity_ > maxCapacityForBatch(inputRows);
-  }
-
   size_t rebuildCapacity(size_t inputRows) const {
     auto const currentDistinctKeys = distinctKeys();
     auto const maxAllowed = maxAllowedCapacity(inputRows);
@@ -1077,18 +1394,64 @@ class StreamingGroupbyLeafState final : public BufferedState {
       const InputChunk& input,
       rmm::cuda_stream_view stream) {
     auto capacity = rebuildCapacity(input.size());
+    auto const oldDistinct = distinctKeys();
+    auto const oldCapacity = currentCapacity_;
+    auto attempt = uint32_t{0};
     for (;;) {
+      ++attempt;
+      logStreamingGroupbyDiagnostic(
+          owner_,
+          "rebuild_attempt_begin",
+          fmt::format(
+              "leaf={} attempt={} inputRows={} oldDistinct={} oldCapacity={} "
+              "requestedCapacity={} maxAllowed={} requiredWorstCase={}",
+              diagnosticId_,
+              attempt,
+              input.size(),
+              oldDistinct,
+              oldCapacity,
+              capacity,
+              maxAllowedCapacity(input.size()),
+              saturatingAdd(oldDistinct, input.size())));
       auto rebuilt = owner_.createStreamingGroupby(capacity);
+      streamingGroupbyCudaCheckpoint(owner_, "after_rebuild_create", stream);
       try {
         rebuilt->aggregate(input.view, stream);
+        streamingGroupbyCudaCheckpoint(
+            owner_, "after_rebuild_new_input_aggregate", stream);
+        const auto newInputDistinct = rebuilt->distinct_keys();
+        logStreamingGroupbyDiagnostic(
+            owner_,
+            "rebuild_before_merge",
+            fmt::format(
+                "leaf={} attempt={} newInputDistinct={} oldDistinct={} "
+                "sumDistinctUpperBound={} requestedCapacity={}",
+                diagnosticId_,
+                attempt,
+                newInputDistinct,
+                oldDistinct,
+                saturatingAdd(
+                    static_cast<size_t>(newInputDistinct), oldDistinct),
+                capacity));
         if (groupby_) {
           rebuilt->merge(*groupby_, stream);
+          streamingGroupbyCudaCheckpoint(
+              owner_, "after_rebuild_old_state_merge", stream);
         }
 
         // All old and new state was allocated and consumed on stream, so
         // move-assignment queues old-state deallocation behind merge().
         groupby_ = std::move(rebuilt);
         currentCapacity_ = capacity;
+        logStreamingGroupbyDiagnostic(
+            owner_,
+            "rebuild_attempt_success",
+            fmt::format(
+                "leaf={} attempt={} capacity={} distinctAfter={}",
+                diagnosticId_,
+                attempt,
+                currentCapacity_,
+                distinctKeys()));
         {
           auto lockedStats = owner_.stats_.wlock();
           lockedStats->addRuntimeStat(
@@ -1096,6 +1459,18 @@ class StreamingGroupbyLeafState final : public BufferedState {
         }
         return;
       } catch (const std::exception& e) {
+        logStreamingGroupbyDiagnostic(
+            owner_,
+            "rebuild_attempt_exception",
+            fmt::format(
+                "leaf={} attempt={} requestedCapacity={} inputRows={} "
+                "oldDistinct={} what={}",
+                diagnosticId_,
+                attempt,
+                capacity,
+                input.size(),
+                oldDistinct,
+                e.what()));
         if (!isStreamingGroupbyCapacityError(e)) {
           throw;
         }
@@ -1120,6 +1495,8 @@ class StreamingGroupbyLeafState final : public BufferedState {
   size_t totalRows_{0};
   uint64_t estimatedFlatSize_{0};
   std::optional<rmm::cuda_stream_view> stateStream_;
+  const uint64_t diagnosticId_;
+  uint64_t chunkCount_{0};
 };
 
 class BufferedGroupbyStateOps final : public BufferedStateOps {
@@ -1307,8 +1684,7 @@ class BufferedGroupbyStateOps final : public BufferedStateOps {
       cudf::table_view view,
       rmm::cuda_stream_view stream,
       std::shared_ptr<cudf::table> tableOwner) const {
-    return InputChunk{
-        pool, type, view, stream, nullptr, std::move(tableOwner)};
+    return InputChunk{pool, type, view, stream, nullptr, std::move(tableOwner)};
   }
 
   InputChunk mergeChunks(InputChunk left, InputChunk right) const {
@@ -1347,8 +1723,33 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
   }
 
   InputChunk prepareInput(CudfVectorPtr rawInput) override {
-    auto preparedView =
-        owner_.makeStreamingPreparedInputView(rawInput->getTableView());
+    VELOX_CHECK_NOT_NULL(rawInput);
+    auto rawView = rawInput->getTableView();
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "prepare_input_begin",
+        fmt::format(
+            "rawRows={} rawStream={} rawType={} rawTable={}",
+            rawInput->size(),
+            reinterpret_cast<uintptr_t>(rawInput->stream().value()),
+            rawInput->type()->toString(),
+            tableDescription(rawView)));
+    auto preparedView = owner_.makeStreamingPreparedInputView(rawView);
+    VELOX_CHECK_EQ(
+        preparedView.num_rows(),
+        rawView.num_rows(),
+        "streaming_groupby prepared input row count changed");
+    VELOX_CHECK_EQ(
+        preparedView.num_columns(),
+        owner_.streamingPreparedColumns_.size(),
+        "streaming_groupby prepared input column count mismatch");
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "prepare_input_end",
+        fmt::format(
+            "preparedType={} preparedTable={}",
+            owner_.streamingPreparedType_->toString(),
+            tableDescription(preparedView)));
     return makeBorrowedChunk(
         std::move(rawInput), owner_.streamingPreparedType_, preparedView);
   }
@@ -1384,6 +1785,21 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
       return std::vector<InputChunk>(spec.numPartitions);
     }
 
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "partition_input_begin",
+        fmt::format(
+            "inputRows={} inputColumns={} stream={} partitions={} seed={} "
+            "keyIndices={} table={}",
+            input.size(),
+            input.view.num_columns(),
+            reinterpret_cast<uintptr_t>(input.stream.value()),
+            spec.numPartitions,
+            spec.seed,
+            indicesDescription(spec.keyIndices),
+            tableDescription(input.view)));
+    streamingGroupbyCudaCheckpoint(
+        owner_, "before_partition_input", input.stream);
     auto partitions = hashPartitionTable(
         input.view,
         input.pool,
@@ -1394,22 +1810,63 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
         spec.hashId,
         spec.seed,
         input.stream);
+    streamingGroupbyCudaCheckpoint(
+        owner_, "after_partition_input", input.stream);
 
     std::vector<InputChunk> chunks(spec.numPartitions);
+    std::ostringstream partitionRows;
+    partitionRows << '[';
     for (int32_t i = 0; i < spec.numPartitions; ++i) {
+      if (i != 0) {
+        partitionRows << ',';
+      }
+      partitionRows << (partitions[i] ? partitions[i]->size() : 0);
       if (partitions[i]) {
         chunks[i] = makeOwnedChunk(
             std::move(partitions[i]), owner_.streamingPreparedType_);
       }
     }
+    partitionRows << ']';
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "partition_input_end",
+        fmt::format(
+            "inputRows={} partitions={} seed={} partitionRows={}",
+            input.size(),
+            spec.numPartitions,
+            spec.seed,
+            partitionRows.str()));
     return chunks;
   }
 
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
       const BufferedState& leaf,
       const PartitionSpec& spec) override {
-    auto buffered = asLeafState(leaf).finalizeBuffered();
+    auto const& streamingLeaf = asLeafState(leaf);
+    {
+      auto lockedStats = owner_.stats_.wlock();
+      lockedStats->addRuntimeStat(
+          std::string{kStreamingGroupbyApiRepartitionsStat}, RuntimeCounter(1));
+    }
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "repartition_leaf_begin",
+        fmt::format(
+            "leaf={} totalRows={} distinct={} capacity={} partitions={} "
+            "seed={} keyIndices={}",
+            streamingLeaf.diagnosticId(),
+            streamingLeaf.totalRows(),
+            streamingLeaf.diagnosticDistinctKeys(),
+            streamingLeaf.capacity(),
+            spec.numPartitions,
+            spec.seed,
+            indicesDescription(spec.keyIndices)));
+    auto buffered = streamingLeaf.finalizeBuffered();
     if (!buffered) {
+      logStreamingGroupbyDiagnostic(
+          owner_,
+          "repartition_leaf_empty",
+          fmt::format("leaf={}", streamingLeaf.diagnosticId()));
       return std::vector<std::unique_ptr<BufferedState>>(spec.numPartitions);
     }
 
@@ -1420,6 +1877,17 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
         buffered->stream(),
         std::move(buffered)};
 
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "repartition_buffered_begin",
+        fmt::format(
+            "leaf={} bufferedRows={} stream={} table={}",
+            streamingLeaf.diagnosticId(),
+            bufferedChunk.size(),
+            reinterpret_cast<uintptr_t>(bufferedChunk.stream.value()),
+            tableDescription(bufferedChunk.view)));
+    streamingGroupbyCudaCheckpoint(
+        owner_, "before_repartition_buffered", bufferedChunk.stream);
     auto partitions = hashPartitionTable(
         bufferedChunk.view,
         bufferedChunk.pool,
@@ -1430,9 +1898,17 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
         spec.hashId,
         spec.seed,
         bufferedChunk.stream);
+    streamingGroupbyCudaCheckpoint(
+        owner_, "after_repartition_buffered", bufferedChunk.stream);
 
     std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
+    std::ostringstream partitionRows;
+    partitionRows << '[';
     for (int32_t i = 0; i < spec.numPartitions; ++i) {
+      if (i != 0) {
+        partitionRows << ',';
+      }
+      partitionRows << (partitions[i] ? partitions[i]->size() : 0);
       if (!partitions[i]) {
         continue;
       }
@@ -1441,17 +1917,54 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
         leaves[i] = createLeaf(std::move(prepared));
       }
     }
+    partitionRows << ']';
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "repartition_leaf_end",
+        fmt::format(
+            "leaf={} bufferedRows={} partitions={} seed={} partitionRows={}",
+            streamingLeaf.diagnosticId(),
+            bufferedChunk.size(),
+            spec.numPartitions,
+            spec.seed,
+            partitionRows.str()));
     return leaves;
   }
 
   CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) override {
     auto streamingLeaf = std::unique_ptr<StreamingGroupbyLeafState>(
         static_cast<StreamingGroupbyLeafState*>(leaf.release()));
+    auto const leafId = streamingLeaf->diagnosticId();
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "finalize_leaf_begin",
+        fmt::format(
+            "leaf={} totalRows={} distinct={} capacity={}",
+            leafId,
+            streamingLeaf->totalRows(),
+            streamingLeaf->diagnosticDistinctKeys(),
+            streamingLeaf->capacity()));
     auto buffered = streamingLeaf->finalizeBuffered();
     if (owner_.isPartialOutput_) {
+      logStreamingGroupbyDiagnostic(
+          owner_,
+          "finalize_leaf_end",
+          fmt::format(
+              "leaf={} partial=true outputRows={}",
+              leafId,
+              buffered ? buffered->size() : 0));
       return buffered;
     }
-    return owner_.finalizeStreamingBufferedOutput(std::move(buffered));
+    auto output = owner_.finalizeStreamingBufferedOutput(std::move(buffered));
+    logStreamingGroupbyDiagnostic(
+        owner_,
+        "finalize_leaf_end",
+        fmt::format(
+            "leaf={} partial=false outputRows={} output={}",
+            leafId,
+            output ? output->size() : 0,
+            output ? tableDescription(output->getTableView()) : "null"));
+    return output;
   }
 
   const std::vector<cudf::size_type>& keyIndices() const override {
@@ -1681,11 +2194,42 @@ cudf::table_view CudfGroupby::makeStreamingPreparedInputView(
     cudf::table_view rawInputView) const {
   std::vector<cudf::column_view> columns;
   columns.reserve(streamingPreparedColumns_.size());
-  for (const auto& column : streamingPreparedColumns_) {
+  for (size_t preparedIndex = 0;
+       preparedIndex < streamingPreparedColumns_.size();
+       ++preparedIndex) {
+    const auto& column = streamingPreparedColumns_[preparedIndex];
+    VELOX_CHECK_LT(
+        column.inputIndex,
+        rawInputView.num_columns(),
+        "streaming_groupby prepared column {} refers to input column {}, but "
+        "the input only has {} columns",
+        preparedIndex,
+        column.inputIndex,
+        rawInputView.num_columns());
     auto view = rawInputView.column(column.inputIndex);
     if (column.childIndex.has_value()) {
+      VELOX_CHECK_LT(
+          *column.childIndex,
+          view.num_children(),
+          "streaming_groupby prepared column {} refers to child {} of input "
+          "column {}, but it only has {} children",
+          preparedIndex,
+          *column.childIndex,
+          column.inputIndex,
+          view.num_children());
       view = view.child(*column.childIndex);
     }
+    VELOX_CHECK_EQ(
+        view.size(),
+        rawInputView.num_rows(),
+        "streaming_groupby prepared column {} has {} rows, expected {}. "
+        "inputColumn={}, childIndex={}",
+        preparedIndex,
+        view.size(),
+        rawInputView.num_rows(),
+        column.inputIndex,
+        column.childIndex.has_value() ? static_cast<int64_t>(*column.childIndex)
+                                      : int64_t{-1});
     columns.push_back(view);
   }
   return cudf::table_view(columns);
@@ -1719,7 +2263,23 @@ CudfGroupby::createStreamingGroupby(size_t maxGroups) const {
 CudfVectorPtr CudfGroupby::materializeStreamingBufferedOutput(
     const cudf::groupby::streaming_groupby& groupby,
     rmm::cuda_stream_view stream) const {
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "cudf_finalize_begin",
+      fmt::format(
+          "distinct={} stream={}",
+          groupby.distinct_keys(),
+          reinterpret_cast<uintptr_t>(stream.value())));
   auto [groupKeys, results] = groupby.finalize(stream, get_output_mr());
+  streamingGroupbyCudaCheckpoint(*this, "after_cudf_finalize", stream);
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "cudf_finalize_result",
+      fmt::format(
+          "groupKeyRows={} groupKeyColumns={} resultRequests={}",
+          groupKeys->num_rows(),
+          groupKeys->num_columns(),
+          results.size()));
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
 
   auto groupKeysColumns = groupKeys->release();
@@ -1734,6 +2294,8 @@ CudfVectorPtr CudfGroupby::materializeStreamingBufferedOutput(
     resultColumns.push_back(
         aggregator->makeBufferedOutputColumn(results, stream));
   }
+  streamingGroupbyCudaCheckpoint(
+      *this, "after_buffered_result_columns", stream);
 
   auto resultTable = std::make_unique<cudf::table>(std::move(resultColumns));
   auto numRows = resultTable->num_rows();
@@ -1742,8 +2304,17 @@ CudfVectorPtr CudfGroupby::materializeStreamingBufferedOutput(
   }
 
   auto outputType = isPartialOutput_ ? outputType_ : bufferedResultType_;
-  return std::make_shared<cudf_velox::CudfVector>(
+  auto output = std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType, numRows, std::move(resultTable), stream);
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "cudf_finalize_end",
+      fmt::format(
+          "outputRows={} outputType={} output={}",
+          output->size(),
+          outputType->toString(),
+          tableDescription(output->getTableView())));
+  return output;
 }
 
 CudfVectorPtr CudfGroupby::finalizeStreamingBufferedOutput(
@@ -1754,6 +2325,17 @@ CudfVectorPtr CudfGroupby::finalizeStreamingBufferedOutput(
 
   auto stream = bufferedOutput->stream();
   auto bufferedView = bufferedOutput->getTableView();
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "final_output_conversion_begin",
+      fmt::format(
+          "bufferedType={} outputType={} stream={} buffered={}",
+          bufferedOutput->type()->toString(),
+          outputType_->toString(),
+          reinterpret_cast<uintptr_t>(stream.value()),
+          tableDescription(bufferedView)));
+  streamingGroupbyCudaCheckpoint(
+      *this, "before_final_output_conversion", stream);
   std::vector<std::unique_ptr<cudf::column>> outputColumns;
   outputColumns.reserve(outputType_->size());
 
@@ -1769,6 +2351,7 @@ CudfVectorPtr CudfGroupby::finalizeStreamingBufferedOutput(
         streamingGroupbyAggregators_[i]->makeFinalOutputColumn(
             bufferedView.column(bufferedIndex), stream));
   }
+  streamingGroupbyCudaCheckpoint(*this, "after_final_output_columns", stream);
 
   auto resultTable = std::make_unique<cudf::table>(std::move(outputColumns));
   auto numRows = resultTable->num_rows();
@@ -1776,8 +2359,16 @@ CudfVectorPtr CudfGroupby::finalizeStreamingBufferedOutput(
     return nullptr;
   }
 
-  return std::make_shared<cudf_velox::CudfVector>(
+  auto output = std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType_, numRows, std::move(resultTable), stream);
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "final_output_conversion_end",
+      fmt::format(
+          "outputRows={} output={}",
+          output->size(),
+          tableDescription(output->getTableView())));
+  return output;
 }
 
 CudfGroupby::CudfGroupby(
@@ -1940,11 +2531,65 @@ void CudfGroupby::initialize() {
 
   // TODO: Add support for grouping sets and group ids.
 
+  if (streamingGroupbyDiagnosticsEnabled()) {
+    std::ostringstream preparedColumns;
+    preparedColumns << '[';
+    for (size_t i = 0; i < streamingPreparedColumns_.size(); ++i) {
+      if (i != 0) {
+        preparedColumns << ',';
+      }
+      const auto& column = streamingPreparedColumns_[i];
+      preparedColumns << i << ":name=" << column.name
+                      << "/input=" << column.inputIndex << "/child=";
+      if (column.childIndex.has_value()) {
+        preparedColumns << *column.childIndex;
+      } else {
+        preparedColumns << "none";
+      }
+      preparedColumns << "/type=" << column.type->toString();
+    }
+    preparedColumns << ']';
+
+    logStreamingGroupbyDiagnostic(
+        *this,
+        "initialize",
+        fmt::format(
+            "streamingEnabled={} streamingApiEnabled={} partialOutput={} "
+            "singleStep={} ignoreNullKeys={} maxBufferedRows={} "
+            "cudfSizeTypeMax={} pbsState={} diagnosticSync={} inputType={} "
+            "outputType={} bufferedType={} preparedType={} groupingKeyInputs={} "
+            "groupingKeyOutputs={} aggregationInputs={} preparedColumns={}",
+            streamingEnabled_,
+            streamingGroupbyApiEnabled_,
+            isPartialOutput_,
+            isSingleStep_,
+            ignoreNullKeys_,
+            maxBufferedRows_,
+            cudfSizeTypeMaxRows(),
+            partitionedBufferedState_
+                ? partitionedBufferedState_->diagnosticId()
+                : 0,
+            streamingGroupbyDiagnosticSyncEnabled(),
+            inputType_->toString(),
+            outputType_->toString(),
+            bufferedResultType_ ? bufferedResultType_->toString() : "null",
+            streamingPreparedType_ ? streamingPreparedType_->toString()
+                                   : "null",
+            indicesDescription(groupingKeyInputChannels_),
+            indicesDescription(groupingKeyOutputChannels_),
+            indicesDescription(aggregationInputChannels_),
+            preparedColumns.str()));
+  }
+
   aggregationNode_.reset();
 }
 
 void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
   if (!streamingGroupbyApiEnabled_) {
+    logStreamingGroupbyDiagnostic(
+        *this,
+        "partial_buffer_input",
+        fmt::format("inputRows={} apiEnabled=false", tbl->size()));
     flushableBufferedState_->addInput(std::move(tbl));
     return;
   }
@@ -1953,6 +2598,14 @@ void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
   auto stream = tbl->stream();
   auto permutedInputView = tbl->getTableView().select(
       aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "partial_groupby_begin",
+      fmt::format(
+          "inputRows={} stream={} permuted={}",
+          inputRows,
+          reinterpret_cast<uintptr_t>(stream.value()),
+          tableDescription(permutedInputView)));
   auto output = doGroupByAggregation(
       permutedInputView,
       groupingKeyOutputChannels_,
@@ -1960,7 +2613,20 @@ void CudfGroupby::computePartialGroupbyStreaming(CudfVectorPtr tbl) {
       outputType_,
       stream);
   if (output) {
+    logStreamingGroupbyDiagnostic(
+        *this,
+        "partial_groupby_buffered_output",
+        fmt::format(
+            "inputRows={} outputRows={} table={}",
+            inputRows,
+            output->size(),
+            tableDescription(output->getTableView())));
     pendingPartialOutputs_.emplace_back(std::move(output), inputRows);
+  } else {
+    logStreamingGroupbyDiagnostic(
+        *this,
+        "partial_groupby_empty_output",
+        fmt::format("inputRows={}", inputRows));
   }
 }
 
@@ -1980,18 +2646,57 @@ void CudfGroupby::doAddInput(RowVectorPtr input) {
   auto cudfInput = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput);
 
+  const auto batch = ++diagnosticInputBatchCount_;
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "operator_add_input_begin",
+      fmt::format(
+          "batch={} rows={} stream={} streamingEnabled={} apiEnabled={} "
+          "partialOutput={} singleStep={} type={} table={}",
+          batch,
+          cudfInput->size(),
+          reinterpret_cast<uintptr_t>(cudfInput->stream().value()),
+          streamingEnabled_,
+          streamingGroupbyApiEnabled_,
+          isPartialOutput_,
+          isSingleStep_,
+          cudfInput->type()->toString(),
+          tableDescription(cudfInput->getTableView())));
+  streamingGroupbyCudaCheckpoint(
+      *this, "operator_add_input_entry", cudfInput->stream());
+
   if (streamingEnabled_) {
     if (isPartialOutput_) {
       if (!streamingGroupbyApiEnabled_) {
         numInputRows_ += input->size();
       }
       computePartialGroupbyStreaming(cudfInput);
+      streamingGroupbyCudaCheckpoint(
+          *this, "operator_add_input_after_partial", cudfInput->stream());
+      logStreamingGroupbyDiagnostic(
+          *this,
+          "operator_add_input_end",
+          fmt::format("batch={} path=partial", batch));
       return;
     } else if (isSingleStep_) {
+      auto stream = cudfInput->stream();
       computeSingleGroupbyStreaming(cudfInput);
+      streamingGroupbyCudaCheckpoint(
+          *this, "operator_add_input_after_single", stream);
+      logStreamingGroupbyDiagnostic(
+          *this,
+          "operator_add_input_end",
+          fmt::format("batch={} path=single", batch));
       return;
     } else {
+      auto stream = cudfInput->stream();
       computeFinalGroupbyStreaming(cudfInput);
+      streamingGroupbyCudaCheckpoint(
+          *this, "operator_add_input_after_final", stream);
+      logStreamingGroupbyDiagnostic(
+          *this,
+          "operator_add_input_end",
+          fmt::format("batch={} path=final", batch));
       return;
     }
   }
@@ -2012,6 +2717,19 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
   auto groupbyKeyView =
       tableView.select(groupByKeys.begin(), groupByKeys.end());
 
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "legacy_groupby_begin",
+      fmt::format(
+          "rows={} columns={} groupByKeys={} aggregators={} stream={} table={}",
+          tableView.num_rows(),
+          tableView.num_columns(),
+          indicesDescription(groupByKeys),
+          aggregators.size(),
+          reinterpret_cast<uintptr_t>(stream.value()),
+          tableDescription(tableView)));
+  streamingGroupbyCudaCheckpoint(*this, "before_legacy_groupby", stream);
+
   // TODO: All other args to groupby are related to sort groupby. We don't
   // support optimizations related to it yet.
   cudf::groupby::groupby groupByOwner(
@@ -2026,6 +2744,7 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
 
   auto [groupKeys, results] =
       groupByOwner.aggregate(requests, stream, get_output_mr());
+  streamingGroupbyCudaCheckpoint(*this, "after_legacy_groupby", stream);
   // flatten the results
   std::vector<std::unique_ptr<cudf::column>> resultColumns;
 
@@ -2048,17 +2767,28 @@ CudfVectorPtr CudfGroupby::doGroupByAggregation(
 
   // velox expects nullptr instead of a table with 0 rows
   if (numRows == 0) {
+    logStreamingGroupbyDiagnostic(*this, "legacy_groupby_end", "outputRows=0");
     return nullptr;
   }
 
-  return std::make_shared<cudf_velox::CudfVector>(
+  auto output = std::make_shared<cudf_velox::CudfVector>(
       pool(), outputType, numRows, std::move(resultTable), stream);
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "legacy_groupby_end",
+      fmt::format(
+          "outputRows={} outputType={} output={}",
+          output->size(),
+          outputType->toString(),
+          tableDescription(output->getTableView())));
+  return output;
 }
 
 CudfVectorPtr CudfGroupby::releasePartialOutput(
     CudfVectorPtr output,
     int64_t inputRows) {
   auto numOutputRows = output->size();
+  const auto batch = ++diagnosticPartialOutputBatchCount_;
   const double aggregationPct =
       inputRows == 0 ? 0 : (numOutputRows * 1.0) / inputRows * 100;
   {
@@ -2072,6 +2802,18 @@ CudfVectorPtr CudfGroupby::releasePartialOutput(
         std::string(exec::HashAggregation::kPartialAggregationPct),
         RuntimeCounter(aggregationPct));
   }
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "partial_output_release",
+      fmt::format(
+          "outputBatch={} inputRows={} outputRows={} aggregationPct={} "
+          "stream={} table={}",
+          batch,
+          inputRows,
+          numOutputRows,
+          aggregationPct,
+          reinterpret_cast<uintptr_t>(output->stream().value()),
+          tableDescription(output->getTableView())));
   return output;
 }
 
@@ -2161,6 +2903,16 @@ RowVectorPtr CudfGroupby::doGetOutput() {
 }
 
 void CudfGroupby::doNoMoreInput() {
+  logStreamingGroupbyDiagnostic(
+      *this,
+      "no_more_input",
+      fmt::format(
+          "inputBatches={} partialOutputBatches={} streamingEnabled={} "
+          "apiEnabled={}",
+          diagnosticInputBatchCount_,
+          diagnosticPartialOutputBatchCount_,
+          streamingEnabled_,
+          streamingGroupbyApiEnabled_));
   Operator::noMoreInput();
   if (isPartialOutput_ && !streamingEnabled_ && inputs_.empty()) {
     finished_ = true;
@@ -2170,5 +2922,7 @@ void CudfGroupby::doNoMoreInput() {
 bool CudfGroupby::isFinished() {
   return finished_;
 }
+
+#undef logStreamingGroupbyDiagnostic
 
 } // namespace facebook::velox::cudf_velox

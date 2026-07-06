@@ -278,6 +278,18 @@ int64_t streamingGroupbyApiRebuilds(
   return stat == it->second.customStats.end() ? 0 : stat->second.sum;
 }
 
+int64_t streamingGroupbyApiRepartitions(
+    const std::shared_ptr<exec::Task>& task,
+    const core::PlanNodeId& planNodeId) {
+  auto const planStats = toPlanStats(task->taskStats());
+  auto it = planStats.find(planNodeId);
+  if (it == planStats.end()) {
+    return 0;
+  }
+  auto stat = it->second.customStats.find("streamingGroupbyApiRepartitions");
+  return stat == it->second.customStats.end() ? 0 : stat->second.sum;
+}
+
 TEST_F(AggregationTest, global) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -1642,6 +1654,43 @@ TEST_F(
 
   ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
   ASSERT_GT(streamingGroupbyApiRebuilds(task, finalAggId), 0);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
+    streamingGroupbyApiRepartitionsAfterLeafRowLimit) {
+  constexpr int32_t kBatchRows = 4;
+  constexpr int32_t kNumBatches = 8;
+  setBatchSizeMaxThreshold(16);
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    auto const offset = static_cast<int64_t>(batch) * kBatchRows;
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [offset](auto row) { return offset + row; }),
+        makeFlatVector<int64_t>(kBatchRows, [](auto /*row*/) { return 1; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
+  ASSERT_GT(streamingGroupbyApiRepartitions(task, finalAggId), 0);
 }
 
 TEST_F(
