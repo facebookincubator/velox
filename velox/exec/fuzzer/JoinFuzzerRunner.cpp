@@ -19,6 +19,8 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/dwio/dwrf/RegisterDwrfReader.h"
+#include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/JoinFuzzer.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -97,10 +99,8 @@ int main(int argc, char** argv) {
       rootPool.get(), FLAGS_presto_url, "join_fuzzer", FLAGS_req_timeout_ms);
   const size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 
+  // Register serializers.
   facebook::velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  facebook::velox::filesystems::registerLocalFileSystem();
-  facebook::velox::functions::prestosql::registerAllScalarFunctions();
-  facebook::velox::parse::registerTypeResolver();
   if (!facebook::velox::isRegisteredNamedVectorSerde("Presto")) {
     facebook::velox::serializer::presto::PrestoVectorSerde::
         registerNamedVectorSerde();
@@ -113,5 +113,16 @@ int main(int argc, char** argv) {
     facebook::velox::serializer::spark::UnsafeRowVectorSerde::
         registerNamedVectorSerde();
   }
+
+  // Register filesystems, connectors, and readers/writers.
+  facebook::velox::filesystems::registerLocalFileSystem();
+  test::registerHiveConnector({});
+  facebook::velox::dwrf::registerDwrfReaderFactory();
+  facebook::velox::dwrf::registerDwrfWriterFactory();
+
+  // Register functions and type resolver.
+  facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::parse::registerTypeResolver();
+
   joinFuzzer(initialSeed, std::move(referenceQueryRunner));
 }

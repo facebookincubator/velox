@@ -193,17 +193,27 @@ add_executable(velox_mark_distinct_fuzzer MarkDistinctFuzzerRunner.cpp)
 
 target_link_libraries(velox_mark_distinct_fuzzer velox_mark_distinct_fuzzer_lib velox_aggregates)
 
-# Join Fuzzer.
-add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp JoinFuzzer.cpp JoinMaker.cpp)
-velox_add_test_headers(velox_join_fuzzer JoinFuzzer.h JoinMaker.h)
+# Join Fuzzer library (shared between CPU and other executor runners).
+add_library(velox_join_fuzzer_lib JoinFuzzer.cpp JoinMaker.cpp)
+velox_add_test_headers(velox_join_fuzzer_lib JoinFuzzer.h JoinMaker.h)
 
 target_link_libraries(
-  velox_join_fuzzer
+  velox_join_fuzzer_lib
   velox_type
   velox_vector_fuzzer
   velox_fuzzer_util
   velox_exec_test_lib
   velox_expression_test_utility
+)
+
+# Join Fuzzer (CPU runner).
+add_executable(velox_join_fuzzer JoinFuzzerRunner.cpp)
+
+target_link_libraries(
+  velox_join_fuzzer
+  velox_join_fuzzer_lib
+  velox_dwio_dwrf_reader
+  velox_dwio_dwrf_writer
 )
 
 # Spatial Join Fuzzer.
