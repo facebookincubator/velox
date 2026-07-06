@@ -107,23 +107,6 @@ class ParquetWriterTest : public ParquetTestBase {
     return pageReader->readPageHeader();
   }
 
-  MemorySink* writeBatches(
-      const std::vector<RowVectorPtr>& batches,
-      const facebook::velox::parquet::WriterOptions& writerOptions) {
-    VELOX_CHECK(!batches.empty());
-    auto sink = std::make_unique<MemorySink>(
-        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-    auto* sinkPtr = sink.get();
-    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), writerOptions, batches[0]->rowType());
-    for (const auto& batch : batches) {
-      writer->write(batch);
-    }
-    writer->close();
-    writers_.push_back(std::move(writer));
-    return sinkPtr;
-  }
-
   inline static const std::string kHiveConnectorId = "test-hive";
   dwio::common::ColumnReaderStatistics stats;
 };
@@ -787,10 +770,11 @@ TEST_F(ParquetWriterTest, writerMagic) {
 TEST_F(ParquetWriterTest, flushByAccumulatedBytes) {
   constexpr int64_t kNumRows = 200;
 
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
   writerOptions.enableDictionary = false;
-  writerOptions.flushPolicyFactory =
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory =
       []() -> std::unique_ptr<dwio::common::FlushPolicy> {
     return std::make_unique<DefaultFlushPolicy>(
         /*rowsInRowGroup=*/1,
@@ -801,8 +785,10 @@ TEST_F(ParquetWriterTest, flushByAccumulatedBytes) {
   auto sink = std::make_unique<MemorySink>(
       200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
   auto* sinkPtr = sink.get();
+  options.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(writerOptions);
   auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), writerOptions, schema);
+      std::move(sink), options, schema);
   const auto data = makeRowVector(
       {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
 
@@ -819,9 +805,10 @@ TEST_F(ParquetWriterTest, flushByAccumulatedBytes) {
 }
 
 TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
-  writerOptions.flushPolicyFactory = []() {
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
     return std::make_unique<DefaultFlushPolicy>(
         /*rowsInRowGroup=*/10'000,
         /*bytesInRowGroup=*/200);
@@ -836,7 +823,7 @@ TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
               makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
         }
 
-        const auto* sinkPtr = write(batches, writerOptions, false);
+        const auto* sinkPtr = write(batches, options, writerOptions, false);
         const auto reader = createReaderInMemory(*sinkPtr);
         EXPECT_EQ(expectedNumRowGroups, reader->fileMetaData().numRowGroups());
         EXPECT_EQ(expectedNumRows, reader->numberOfRows());
@@ -847,9 +834,10 @@ TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
 }
 
 TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
-  writerOptions.flushPolicyFactory = []() {
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
     return std::make_unique<DefaultFlushPolicy>(
         /*rowsInRowGroup=*/50,
         /*bytesInRowGroup=*/128 * 1'024 * 1'024);
@@ -861,7 +849,7 @@ TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
         makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
   }
 
-  const auto* sinkPtr = write(batches, writerOptions, false);
+  const auto* sinkPtr = write(batches, options, writerOptions, false);
   const auto reader = createReaderInMemory(*sinkPtr);
   EXPECT_EQ(1, reader->fileMetaData().numRowGroups());
   EXPECT_EQ(50, reader->numberOfRows());

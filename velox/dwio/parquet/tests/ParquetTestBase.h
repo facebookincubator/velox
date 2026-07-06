@@ -229,6 +229,7 @@ class ParquetTestBase : public testing::Test,
   /// further by the writer.
   dwio::common::MemorySink* write(
       const std::vector<RowVectorPtr>& batches,
+      const dwio::common::WriterOptions& options,
       const ParquetWriterOptions& writerOptions,
       bool flushEachBatch = true);
 

@@ -265,6 +265,7 @@ dwio::common::MemorySink* ParquetTestBase::write(
 
 dwio::common::MemorySink* ParquetTestBase::write(
     const std::vector<RowVectorPtr>& batches,
+    const dwio::common::WriterOptions& options,
     const ParquetWriterOptions& writerOptions,
     bool flushEachBatch) {
   VELOX_CHECK(!batches.empty());
@@ -272,12 +273,11 @@ dwio::common::MemorySink* ParquetTestBase::write(
       200 * 1024 * 1024,
       dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto* sinkPtr = sink.get();
-  dwio::common::WriterOptions options;
-  options.memoryPool = rootPool_.get();
-  options.formatSpecificOptions =
+  auto writerOptionsBase = options;
+  writerOptionsBase.formatSpecificOptions =
       std::make_shared<ParquetWriterOptions>(writerOptions);
-  auto writer =
-      std::make_unique<Writer>(std::move(sink), options, batches[0]->rowType());
+  auto writer = std::make_unique<Writer>(
+      std::move(sink), writerOptionsBase, batches[0]->rowType());
   for (size_t i = 0; i < batches.size(); ++i) {
     writer->write(batches[i]);
     if (flushEachBatch && i + 1 < batches.size()) {
