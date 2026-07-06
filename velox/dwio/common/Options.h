@@ -743,6 +743,18 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// When true, ORC/DWRF files are mapped to the requested (table) schema by
+  /// physical position even in ColumnMappingMode::kName. This mirrors vanilla
+  /// Spark's OrcUtils.requestedColumnIds, where
+  /// `orc.force.positional.evolution=true` forces positional mapping (used when
+  /// columns were renamed so the file's physical names no longer match the
+  /// table schema). Files whose physical schema is all Hive placeholder names
+  /// (_col0, _col1, ...) are also mapped positionally regardless of this flag.
+  ReaderOptions& setForcePositionalEvolution(bool flag) {
+    forcePositionalEvolution_ = flag;
+    return *this;
+  }
+
   /// Sets the requested (table) schema field ids for
   /// ColumnMappingMode::kFieldId, one ParquetFieldId tree per top-level column,
   /// aligned to fileSchema().
@@ -844,6 +856,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   ColumnMappingMode columnMappingMode() const {
     return columnMappingMode_;
+  }
+
+  bool forcePositionalEvolution() const {
+    return forcePositionalEvolution_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -1027,6 +1043,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+  bool forcePositionalEvolution_{false};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};

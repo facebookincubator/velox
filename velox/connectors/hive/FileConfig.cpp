@@ -27,6 +27,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
   config::registerConfigProperty<FileConfig::constName##Property>(properties)
 
     VELOX_HIVE_CONFIG_REGISTER(kOrcUseColumnNamesSession);
+    VELOX_HIVE_CONFIG_REGISTER(kOrcForcePositionalEvolutionSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
     VELOX_HIVE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
     VELOX_HIVE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);

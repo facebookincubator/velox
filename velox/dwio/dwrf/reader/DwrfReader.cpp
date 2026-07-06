@@ -867,6 +867,27 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   return estimatedRowSize_;
 }
 
+namespace {
+// Returns true when every top-level field of the file's physical schema is a
+// Hive placeholder name (_col0, _col1, ...). Such files were written by old
+// Hive with no real column names in the footer, so they must be mapped to the
+// requested (table) schema by position rather than by name. Mirrors vanilla
+// Spark's `orcFieldNames.forall(_.startsWith("_col"))` check in
+// OrcUtils.requestedColumnIds. An empty schema returns false (nothing to map
+// positionally, matching Spark's `orcFieldNames.isEmpty` early-out).
+bool isAllHivePlaceholderNames(const std::shared_ptr<const RowType>& schema) {
+  if (schema == nullptr || schema->size() == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < schema->size(); ++i) {
+    if (schema->nameOf(i).rfind("_col", 0) != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
 DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
@@ -888,6 +909,18 @@ DwrfReader::DwrfReader(
     if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
     } else if (columnMappingMode != dwio::common::ColumnMappingMode::kName) {
+      updateColumnNamesFromTableSchema();
+    } else if (
+        readerBase_->readerOptions().forcePositionalEvolution() ||
+        isAllHivePlaceholderNames(readerBase_->schema())) {
+      // Even in name-based mapping, a file must be mapped by position when
+      // `orc.force.positional.evolution=true` (columns were renamed so the
+      // physical names no longer match the table schema), or when the file's
+      // physical schema is made entirely of Hive placeholder names (_col0,
+      // _col1, ...) written by old Hive with no real field names. This mirrors
+      // vanilla Spark's per-file decision in OrcUtils.requestedColumnIds
+      // (`forcePositionalEvolution ||
+      // orcFieldNames.forall(_.startsWith("_col"))`).
       updateColumnNamesFromTableSchema();
     }
   }
