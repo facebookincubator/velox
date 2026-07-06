@@ -1170,7 +1170,6 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
       strings.chars_size(stream),
       static_cast<int64_t>(sums.size()) * 32); // 32 == kDecimalSumStateSize
 
-  // This is the call that would fail without the fix.
   auto result = deserializeDecimalSumState(compactStateView, 2, stream);
 
   auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
