@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -2870,6 +2871,23 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   ensureBuiltinExpressionEvaluatorsRegistered();
+
+  // Multi-column hash_with_seed runs on GPU via cuDF murmurhash3_x86_32, which
+  // combines columns with a constant seed (hash_combine) instead of Spark's
+  // iterative seed-chaining (rapidsai/cudf#21720). Only safe in pure-GPU mode;
+  // force multi-column hashes to CPU when CPU fallback is enabled.
+  {
+    constexpr std::string_view kHashWithSeed{"hash_with_seed"};
+    const auto& functionName = expr->name();
+    const bool isHashWithSeed = functionName.size() >= kHashWithSeed.size() &&
+        functionName.compare(functionName.size() - kHashWithSeed.size(),
+            kHashWithSeed.size(), kHashWithSeed) == 0;
+    if (isHashWithSeed && expr->inputs().size() > 2 &&
+        CudfConfig::getInstance().allowCpuFallback) {
+      LOG_FALLBACK(expr->toString());
+      return false;
+    }
+  }
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
