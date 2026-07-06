@@ -26,6 +26,7 @@
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 #include <list>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -87,13 +88,13 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // passed to delete file readers for stats accumulation.
   void setupDeleteFileReaders(dwio::common::RuntimeStatistics& runtimeStats);
 
-  // Apply deletion vector (V3) to the input cudf table.
-  void applyDeletionVector(cudf::table_view input);
+  // Apply deletion vector (V3).
+  void applyDeletionVector(std::size_t numRows);
 
-  // Apply positional deletes (V2) to the input cudf table.
-  void applyPositionalDeletes(cudf::table_view input);
+  // Apply positional deletes (V2).
+  void applyPositionalDeletes(std::size_t numRows);
 
-  // Apply equality deletes (V2) to the input cudf table.
+  // Apply equality deletes (V2).
   void applyEqualityDeletes(cudf::table_view input);
 
   // Setup column projection to include any equality delete key columns
@@ -131,17 +132,28 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   //       schema.
   void adaptColumns();
 
-  // Assemble the final output table. Reorder read columns, inject
-  // info/partition constants, fill typed NULL columns for schema-evolution
-  // columns and drop equality delete key columns.
+  // Assemble the final output table.
+  //
+  // Reorder read columns, inject info/partition constants, fill typed NULL
+  // columns for schema-evolution columns, drop equality delete key columns and
+  // finally append remaining filter-only columns.
+  // @param table Input table
+  // @param mr Memory resource to allocate injected columns
+  // @param rowCountOverride Override row count if input table has no columns
+  // (all injected constants and typed NULLs)
   std::unique_ptr<cudf::table> buildOutputTable(
       std::unique_ptr<cudf::table>&& table,
-      rmm::device_async_resource_ref mr);
+      rmm::device_async_resource_ref mr,
+      std::optional<cudf::size_type> rowCountOverride);
 
   // Lazily builds `fileColumnNames_` and `fileColumnIndex_` from the cuDF
   // table's schema info for reuse across chunks
   void ensureFileColumnIndex(
       const std::vector<cudf::io::column_name_info>& schemaInfo);
+
+  // Returns the total number of rows in the data file using the parquet footer.
+  // Used when all projected columns missing.
+  std::size_t fileRowCount();
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
@@ -166,13 +178,20 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // column or a Hive-migrated partition column) and is injected as a constant
   // after reading the table.
   struct InjectedColumn {
-    std::string value; // info-column / partition-key string value
+    std::optional<std::string> value; // info-column / partition-key value.
+    // `nullopt` denotes a NULL partition (schema evolution)
     TypePtr veloxType;
   };
 
-  // Columns to inject after reading, keyed by output column name.
+  // Columns to inject after reading, keyed by physical column name.
   // This is populated by `adaptColumns()`.
   std::unordered_map<std::string, InjectedColumn> injectedColumns_;
+
+  // Physical column name for each output column
+  std::vector<std::string> physicalNames_;
+
+  // Cached total rows in the data file
+  std::optional<std::size_t> fileRowCount_;
 
   // Column names from the cudf reader, in reader order, and a name ->
   // position lookup over them.
