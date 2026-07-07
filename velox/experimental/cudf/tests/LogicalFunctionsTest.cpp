@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/file/FileSystems.h"
@@ -49,8 +50,8 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
 
-    // Overwrite the AST registration with priority 0 so any expression that
-    // FunctionExpression can also evaluate routes through the Function path.
+    // Overwrite AST and JIT registrations with priority 0 so any expression
+    // that FunctionExpression can also evaluate routes through that path.
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kAstEvaluatorName,
         /*priority=*/0,
@@ -59,6 +60,18 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
         },
         [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
           return std::make_shared<cudf_velox::ASTExpression>(
+              std::move(expr), row);
+        },
+        /*overwrite=*/true);
+
+    cudf_velox::registerCudfExpressionEvaluator(
+        cudf_velox::kJitEvaluatorName,
+        /*priority=*/0,
+        [](std::shared_ptr<exec::Expr> expr) {
+          return cudf_velox::JitExpression::canEvaluate(expr);
+        },
+        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
+          return std::make_shared<cudf_velox::JitExpression>(
               std::move(expr), row);
         },
         /*overwrite=*/true);
