@@ -687,6 +687,43 @@ TEST_F(CudfIcebergReadTest, partitionOnlyProjection) {
   AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
       .assertResults({expected});
+
+  // A non-matching subfield filter on the (injected) partition column must
+  // produce an empty result. Because no columns are read from the data file,
+  // the cuDF reader is bypassed; the filter must still be applied to the
+  // synthesized constant column. Previously the filter was dropped and this
+  // returned three "US" rows.
+  auto filteredNoMatchPlan = PlanBuilder()
+                                 .startTableScan()
+                                 .connectorId(kCudfIcebergConnectorId)
+                                 .outputType(outputType)
+                                 .dataColumns(tableType)
+                                 .assignments(assignments)
+                                 .subfieldFilter("country = 'CA'")
+                                 .endTableScan()
+                                 .planNode();
+
+  auto emptyExpected =
+      makeRowVector({"country"}, {makeFlatVector<std::string>({})});
+
+  AssertQueryBuilder(filteredNoMatchPlan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults({emptyExpected});
+
+  // A matching subfield filter keeps all rows.
+  auto filteredMatchPlan = PlanBuilder()
+                               .startTableScan()
+                               .connectorId(kCudfIcebergConnectorId)
+                               .outputType(outputType)
+                               .dataColumns(tableType)
+                               .assignments(assignments)
+                               .subfieldFilter("country = 'US'")
+                               .endTableScan()
+                               .planNode();
+
+  AssertQueryBuilder(filteredMatchPlan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults({expected});
 }
 
 /// A remaining filter on an unprojected column (`c1`) adds `c1` to the
@@ -1246,6 +1283,74 @@ TEST_F(CudfIcebergReadTest, subfieldFilterWithSkippedPositionalDelete) {
                   .planNode();
 
   // The delete is skipped, so `c0 < 4` simply keeps {0, 1, 2, 3}.
+  auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3})});
+  AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+// A subfield filter combined with a positional delete file that applies only to
+// a different data file must not be rejected.
+TEST_F(
+    CudfIcebergReadTest,
+    DISABLED_subfieldFilterWithPositionalDeleteForDifferentFile) {
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})})});
+
+  auto baseFilePath = dataFilePath->getPath();
+  auto otherDataFilePath = TempFilePath::create();
+
+  // The delete file's positions reference a different data file, so its
+  // file_path column statistics exclude `baseFilePath` and `testFilters` prunes
+  // the reader during construction.
+  auto deleteFilePath = TempFilePath::create();
+  writeDeleteFile(
+      DeleteFileFormat::DWRF,
+      deleteFilePath->getPath(),
+      {makeRowVector(
+          {pathColumn->name, posColumn->name},
+          {
+              makeFlatVector<std::string>(
+                  2,
+                  [&](vector_size_t) { return otherDataFilePath->getPath(); }),
+              makeFlatVector<int64_t>({1, 3}),
+          })});
+
+  // Equal sequence numbers make the positional delete applicable, ensuring it
+  // reaches file-path pruning inside `PositionalDeleteFileReader`.
+  IcebergDeleteFile deleteFile(
+      FileContent::kPositionalDeletes,
+      deleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(deleteFilePath->getPath()),
+      {},
+      {},
+      {},
+      /*dataSequenceNumber=*/10);
+
+  auto splits = makeIcebergSplits(
+      baseFilePath,
+      {deleteFile},
+      {},
+      1,
+      /*dataSequenceNumber=*/10);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .subfieldFilter("c0 < 4")
+                  .endTableScan()
+                  .planNode();
+
+  // The positional delete file contains no entries for this data file, so
+  // `c0 < 4` simply keeps {0, 1, 2, 3}.
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3})});
   AssertQueryBuilder(plan).splits(splits).assertResults({expected});
 }
