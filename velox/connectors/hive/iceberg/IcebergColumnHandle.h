@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
@@ -34,9 +35,16 @@ class IcebergColumnHandle : public HiveColumnHandle {
       TypePtr dataType,
       parquet::ParquetFieldId icebergField,
       std::vector<common::Subfield> requiredSubfields = {},
-      std::optional<std::string> initialDefaultValue = std::nullopt);
+      std::optional<std::string> initialDefaultValue = std::nullopt,
+      IcebergFieldMetadata icebergMetadata = {});
 
   const parquet::ParquetFieldId& field() const;
+
+  /// Iceberg V3 type-disambiguation attributes for this column, parallel to
+  /// field(). Empty for callers that do not supply V3 metadata.
+  const IcebergFieldMetadata& icebergMetadata() const {
+    return icebergMetadata_;
+  }
 
   const std::optional<std::string>& initialDefaultValue() const {
     return initialDefaultValue_;
@@ -45,6 +53,7 @@ class IcebergColumnHandle : public HiveColumnHandle {
  private:
   const parquet::ParquetFieldId field_;
   const std::optional<std::string> initialDefaultValue_;
+  const IcebergFieldMetadata icebergMetadata_;
 };
 
 using IcebergColumnHandlePtr = std::shared_ptr<const IcebergColumnHandle>;
