@@ -23,8 +23,6 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
-#include <algorithm>
-
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace velox_connector = ::facebook::velox::connector;
@@ -59,23 +57,6 @@ void CudfIcebergDataSource::convertSplit(
   VELOX_CHECK(
       icebergSplit_->start == 0,
       "Sub-splits are not yet supported in CudfIcebergDataSource");
-
-  // Subfield filters are not supported when positional deletes are present as
-  // the row positions may have been altered.
-  // TODO(mh): Re-enable when https://github.com/rapidsai/cudf/pull/23077 merges
-  if (subfieldFilterExpr_ != nullptr and
-      std::any_of(
-          icebergSplit_->deleteFiles.begin(),
-          icebergSplit_->deleteFiles.end(),
-          [](const auto& deleteFile) {
-            return deleteFile.content ==
-                velox_iceberg::FileContent::kPositionalDeletes or
-                deleteFile.content ==
-                velox_iceberg::FileContent::kDeletionVector;
-          })) {
-    VELOX_NYI(
-        "cuDF Iceberg reader does not yet support subfield filters when positional deletes are present");
-  }
 
   // Convert `ConnectorSplit` to `CudfHiveConnectorSplit`
   CudfHiveDataSource::convertSplit(split);

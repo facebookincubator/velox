@@ -190,6 +190,14 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Physical column name for each output column
   std::vector<std::string> physicalNames_;
 
+  // True when every output column is injected (info/partition), so no columns
+  // are read from the data file
+  bool noColumnsToRead_{false};
+
+  // Ensures we only produce a single synthetic table when `noColumnsToRead_` is
+  // true.
+  bool syntheticTableProduced_{false};
+
   // Cached total rows in the data file
   std::optional<std::size_t> fileRowCount_;
 

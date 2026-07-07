@@ -318,6 +318,10 @@ void CudfSplitReader::setupCudfDataSource() {
       std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
 }
 
+bool CudfSplitReader::hasSubfieldFilter() const {
+  return subfieldFilterExpr_ != nullptr;
+}
+
 void CudfSplitReader::setupReaderOptions() {
   VELOX_CHECK_NOT_NULL(
       dataSource_,
