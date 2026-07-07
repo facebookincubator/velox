@@ -280,15 +280,23 @@ CudfIcebergSplitReader::readNextChunk(
   // tables so post-delete empty chunks still have the expected number and order
   // of output columns.
 
-  // Compute the row count override if all projected columns are missing
-  auto rowCountOverride = (allColumnsMissing and isApplyingDeletes)
-      ? std::optional<cudf::size_type>(
-            numRows - countDeletedRows(deleteMaskView_, stream_, get_temp_mr()))
-      : std::nullopt;
-  VELOX_CHECK(
-      not rowCountOverride.has_value() or rowCountOverride.value() >= 0,
-      "Encountered a negative row count override for the synthetic table: {}",
-      rowCountOverride.value());
+  // Compute the row count override if all projected columns are missing.
+  std::optional<cudf::size_type> rowCountOverride = std::nullopt;
+  if (allColumnsMissing) {
+    if (isApplyingDeletes) {
+      const auto deletedRows = static_cast<std::size_t>(
+          countDeletedRows(deleteMaskView_, stream_, get_temp_mr()));
+      VELOX_CHECK_LE(
+          deletedRows,
+          numRows,
+          "Deleted rows exceed input rows for synthetic table. numRows={}, deletedRows={}",
+          numRows,
+          deletedRows);
+      rowCountOverride = numRows - deletedRows;
+    } else {
+      rowCountOverride = numRows;
+    }
+  }
 
   // Build the output table with an optional row count override indicating if
   // all projected columns are missing
