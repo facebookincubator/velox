@@ -21,13 +21,10 @@
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 
-#include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/copying.hpp>
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
-#include <cudf/table/table_view.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -77,51 +74,18 @@ void checkDecimalDivideTypes(
   }
 }
 
-} // namespace
-
-// Scatters null values to positions where the divisor is zero.
-// Returns a new column with nulls at zero-divisor positions.
-std::unique_ptr<cudf::column> scatterNullsAtZeroDivisor(
-    std::unique_ptr<cudf::column> result,
-    const cudf::column_view& divisor,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Create zero scalar for comparison and null scalar for scattering.
-  std::unique_ptr<cudf::scalar> zeroScalar;
-  std::unique_ptr<cudf::scalar> nullScalar;
-  auto divisorScale = numeric::scale_type{divisor.type().scale()};
-  auto outputScale = numeric::scale_type{result->type().scale()};
-
-  if (divisor.type().id() == cudf::type_id::DECIMAL64) {
-    zeroScalar = cudf::make_fixed_point_scalar<numeric::decimal64>(
-        0, divisorScale, stream, mr);
-    nullScalar = cudf::make_fixed_point_scalar<numeric::decimal64>(
-        0, outputScale, stream, mr);
-  } else if (divisor.type().id() == cudf::type_id::DECIMAL128) {
-    zeroScalar = cudf::make_fixed_point_scalar<numeric::decimal128>(
-        0, divisorScale, stream, mr);
-    nullScalar = cudf::make_fixed_point_scalar<numeric::decimal128>(
-        0, outputScale, stream, mr);
-  } else {
-    VELOX_FAIL(
-        "Unsupported decimal type {} for division",
-        cudf::ast::type_id_to_string(divisor.type().id()));
+void finalizeDivideOutputNullCount(
+    cudf::column& out,
+    rmm::cuda_stream_view stream) {
+  if (out.size() == 0) {
+    return;
   }
-  nullScalar->set_valid_async(false, stream);
-
-  // Create boolean column: TRUE where divisor == 0, FALSE otherwise.
-  auto divisorIsZero = cudf::binary_operation(
-      divisor,
-      *zeroScalar,
-      cudf::binary_operator::EQUAL,
-      cudf::data_type{cudf::type_id::BOOL8},
-      stream,
-      mr);
-
-  // Scatter nulls where divisor is zero.
-  return cudf::copy_if_else(
-      *nullScalar, *result, divisorIsZero->view(), stream, mr);
+  auto const nullCount =
+      cudf::null_count(out.view().null_mask(), 0, out.size(), stream);
+  out.set_null_count(nullCount);
 }
+
+} // namespace
 
 std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
@@ -147,13 +111,8 @@ std::unique_ptr<cudf::column> decimalDivide(
   const auto outType = outputType.id();
   checkDecimalDivideTypes(inType, outType);
 
-  // Combine input null masks (lhs and rhs nulls).
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
-
-  // Create output column with input null mask and perform division.
   auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
+      outputType, lhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
   VELOX_USER_CHECK(
@@ -167,8 +126,8 @@ std::unique_ptr<cudf::column> decimalDivide(
           stream),
       "Decimal overflow");
 
-  // Scatter nulls where divisor is zero.
-  return scatterNullsAtZeroDivisor(std::move(out), rhs, stream, mr);
+  finalizeDivideOutputNullCount(*out, stream);
+  return out;
 }
 
 std::unique_ptr<cudf::column> decimalDivide(
@@ -189,10 +148,8 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
   }
 
-  auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
-  auto nullCount = lhs.null_count();
   auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
+      outputType, lhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
 
   auto rhsValue = getDecimalScalarValue(rhs, stream);
 
@@ -211,6 +168,7 @@ std::unique_ptr<cudf::column> decimalDivide(
           stream),
       "Decimal overflow");
 
+  finalizeDivideOutputNullCount(*out, stream);
   return out;
 }
 
@@ -232,13 +190,8 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
   }
 
-  // Copy rhs null mask.
-  auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
-  auto nullCount = rhs.null_count();
-
-  // Create output column and perform division.
   auto out = cudf::make_fixed_width_column(
-      outputType, rhs.size(), std::move(nullMask), nullCount, stream, mr);
+      outputType, rhs.size(), cudf::mask_state::ALL_VALID, stream, mr);
 
   auto lhsValue = getDecimalScalarValue(lhs, stream);
 
@@ -258,8 +211,8 @@ std::unique_ptr<cudf::column> decimalDivide(
           stream),
       "Decimal overflow");
 
-  // Scatter nulls where divisor is zero.
-  return scatterNullsAtZeroDivisor(std::move(out), rhs, stream, mr);
+  finalizeDivideOutputNullCount(*out, stream);
+  return out;
 }
 
 } // namespace facebook::velox::cudf_velox

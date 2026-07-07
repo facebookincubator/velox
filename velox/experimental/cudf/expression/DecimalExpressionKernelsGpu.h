@@ -28,8 +28,8 @@ namespace facebook::velox::cudf_velox::detail {
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
  *
  * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
- * remainder, writing into out. Zero divisors produce a numeric zero in out
- * (callers patch nulls).
+ * remainder, writing into out. Input nulls and zero divisors are written as
+ * null in the output null mask.
  *
  * @param inType DECIMAL64 or DECIMAL128 input storage width selector.
  * @param outType DECIMAL64 or DECIMAL128 output storage width selector.

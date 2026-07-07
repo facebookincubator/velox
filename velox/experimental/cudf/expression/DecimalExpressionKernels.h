@@ -29,9 +29,8 @@ namespace facebook::velox::cudf_velox {
 /**
  * @brief Element-wise decimal division of two columns.
  *
- * Builds the output null mask as the bitwise AND of lhs and rhs validity, runs
- * the GPU divide into outputType, and applies scatterNullsAtZeroDivisor so
- * rows with a zero divisor are null.
+ * Runs the GPU divide into outputType. The kernel propagates input nulls and
+ * nulls rows where the divisor is zero.
  *
  * @param lhs Left-hand decimal operand column (DECIMAL64 or DECIMAL128).
  * @param rhs Right-hand decimal operand column (same type as lhs).
@@ -54,8 +53,8 @@ std::unique_ptr<cudf::column> decimalDivide(
  * @brief Element-wise decimal division of a column by a scalar.
  *
  * If the scalar is invalid, returns an all-null column of outputType;
- * otherwise copies lhs nulls and divides without zero-divisor scattering (rhs
- * is not per-row).
+ * otherwise the kernel propagates lhs nulls and nulls rows when dividing by
+ * zero.
  *
  * @param lhs Left-hand decimal operand column.
  * @param rhs Right-hand decimal operand scalar.
@@ -77,9 +76,8 @@ std::unique_ptr<cudf::column> decimalDivide(
 /**
  * @brief Element-wise decimal division of a scalar by a column.
  *
- * Invalid lhs yields all-null output; otherwise rhs nulls are propagated, then
- * divide and scatterNullsAtZeroDivisor on rhs so division-by-zero rows are
- * null.
+ * Invalid lhs yields all-null output; otherwise the kernel propagates rhs
+ * nulls and nulls rows where the divisor is zero.
  *
  * @param lhs Left-hand decimal operand scalar.
  * @param rhs Right-hand decimal operand column.
@@ -95,26 +93,6 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
-/**
- * @brief Nulls output rows where the divisor column equals zero.
- *
- * After a decimal divide, forces output rows to null where the divisor column
- * compares equal to zero (DECIMAL64 or DECIMAL128), using copy_if_else. Kept in
- * the .cpp translation unit so it can use Velox checks alongside cuDF APIs
- * without pulling those into CUDA compilation units.
- *
- * @param result Column produced by decimal division.
- * @param divisor Per-row divisor column used to detect division by zero.
- * @param stream CUDA stream for GPU execution.
- * @param mr Memory resource for output allocation.
- * @return Column with nulls scattered at zero-divisor rows.
- */
-std::unique_ptr<cudf::column> scatterNullsAtZeroDivisor(
-    std::unique_ptr<cudf::column> result,
-    const cudf::column_view& divisor,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
