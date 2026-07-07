@@ -555,13 +555,13 @@ TEST_F(ArrayIntersectTest, complexTypeRowNestedArrays) {
 
 // When one of the arrays is constant.
 TEST_F(ArrayIntersectTest, constant) {
-  auto array1 = makeNullableArrayVector<int32_t>({
+  auto array1 = makeNullableArrayVector<int64_t>({
       {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
       {1, 2, -2, 1},
       {3, 8, std::nullopt},
       {1, 1, -2, -2, -2, 4, 8},
   });
-  auto expected = makeNullableArrayVector<int32_t>({
+  auto expected = makeNullableArrayVector<int64_t>({
       {1, -2, 4},
       {1, -2},
       {},
@@ -573,7 +573,7 @@ TEST_F(ArrayIntersectTest, constant) {
       expected, "array_intersect(ARRAY[1,1,-2,1,-2,4,1,4,4], C0)", {array1});
 
   // Array containing NULLs.
-  expected = makeNullableArrayVector<int32_t>({
+  expected = makeNullableArrayVector<int64_t>({
       {1, std::nullopt, 4},
       {1},
       {std::nullopt},
@@ -586,17 +586,17 @@ TEST_F(ArrayIntersectTest, constant) {
 // Check that results are deterministic regardless of the encoding; literals
 // (constant exprs) and regular columns should always return the same results.
 TEST_F(ArrayIntersectTest, deterministic) {
-  auto c0 = makeNullableArrayVector<int32_t>({
+  auto c0 = makeNullableArrayVector<int64_t>({
       {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
       {4, -2, 6, std::nullopt, 1},
   });
-  auto c1 = makeNullableArrayVector<int32_t>({
+  auto c1 = makeNullableArrayVector<int64_t>({
       {1, 4, -2},
       {1, 4, -2},
   });
 
   // C0 then C1.
-  auto expectedC0C1 = makeNullableArrayVector<int32_t>({
+  auto expectedC0C1 = makeNullableArrayVector<int64_t>({
       {1, -2, 4},
       {4, -2, 1},
   });
@@ -604,7 +604,7 @@ TEST_F(ArrayIntersectTest, deterministic) {
   testExpr(expectedC0C1, "array_intersect(C0, C1)", {c0, c1});
 
   // C1 then C0.
-  auto expectedC1C0 = makeNullableArrayVector<int32_t>({
+  auto expectedC1C0 = makeNullableArrayVector<int64_t>({
       {1, 4, -2},
       {1, 4, -2},
   });
@@ -618,8 +618,8 @@ TEST_F(ArrayIntersectTest, dictionaryEncodedElementsInConstant) {
       test::TestingDictionaryArrayElementsFunction::signatures(),
       std::make_unique<test::TestingDictionaryArrayElementsFunction>());
 
-  auto array = makeArrayVector<int32_t>({{1, 3}, {2, 5}, {0, 6}});
-  auto expected = makeArrayVector<int32_t>({{1, 3}, {2}, {}});
+  auto array = makeArrayVector<int64_t>({{1, 3}, {2, 5}, {0, 6}});
+  auto expected = makeArrayVector<int64_t>({{1, 3}, {2}, {}});
   testExpr(
       expected,
       "array_intersect(c0, testing_dictionary_array_elements(ARRAY [2, 2, 3, 1, 2, 2]))",

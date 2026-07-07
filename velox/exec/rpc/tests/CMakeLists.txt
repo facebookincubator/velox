@@ -37,6 +37,18 @@ target_link_libraries(
 
 add_test(NAME velox_rpc_state_test COMMAND velox_rpc_state_test)
 
+add_executable(velox_congestion_controller_test CongestionControllerTest.cpp)
+
+target_link_libraries(
+  velox_congestion_controller_test
+  velox_rpc_state
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+)
+
+add_test(NAME velox_congestion_controller_test COMMAND velox_congestion_controller_test)
+
 add_executable(velox_rpc_node_test RPCNodeTest.cpp)
 
 target_link_libraries(
@@ -75,14 +87,28 @@ target_link_libraries(
   velox_rpc_rate_limiter
   GTest::gtest
   GTest::gtest_main
+  Folly::folly
 )
 
 add_test(NAME velox_rpc_rate_limiter_test COMMAND velox_rpc_rate_limiter_test)
+
+add_executable(velox_rpc_error_classification_test RpcErrorClassificationTest.cpp)
+
+target_link_libraries(
+  velox_rpc_error_classification_test
+  velox_rpc_error_classification
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+)
+
+add_test(NAME velox_rpc_error_classification_test COMMAND velox_rpc_error_classification_test)
 
 add_executable(velox_rpc_operator_test RPCOperatorTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_operator_test
+  velox_demo_batch_rpc_function
   velox_demo_rpc_function
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry

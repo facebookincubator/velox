@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/HashBuild.h"
+#include <fmt/format.h>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
@@ -142,8 +143,17 @@ bool HashBuild::setupCachedHashTable() {
     return false;
   }
 
-  const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
-  cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+  if (joinNode_->cacheKey().has_value()) {
+    cacheKey_ = joinNode_->cacheKey().value();
+  } else {
+    const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
+    cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+  }
+
+  VELOX_CHECK(
+      !cacheKey_.empty(),
+      "Hash table cache requires a non-empty cache key when "
+      "useHashTableCache is enabled");
 
   // Get or create the cache entry (which includes the pool).
   // If another task is already building, future_ will be set.
@@ -206,11 +216,20 @@ bool HashBuild::receivedCachedHashTable() {
   if (!useHashTableCache() || future_.valid()) {
     return false;
   }
+  // Builder task drivers coordinate via allPeersFinished and should fall
+  // through to the kWaitForProbe path in isBlocked(). Only waiter task
+  // drivers (different taskId than the builder) should enter here.
+  VELOX_CHECK_NOT_NULL(cacheEntry_);
+  if (hashTableCacheBuilderTask()) {
+    return false;
+  }
   // We were waiting on cached table from another task.
   // Ensure that table is ready.
   VELOX_CHECK(
       cacheEntry_->buildComplete,
-      "Signalled that cache table is ready but it is not built yet.");
+      "Hash table cache build failed for key '{}'. "
+      "The builder task may have encountered an error (e.g., OOM).",
+      cacheKey_);
   // Proceed through normal noMoreInput flow which will use the cache.
   setRunning();
   noMoreInput();
@@ -812,7 +831,19 @@ bool HashBuild::finishHashBuild() {
   // build pipeline.
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
-    setState(State::kWaitForBuild);
+    if (useHashTableCache() && !hashTableCacheBuilderTask()) {
+      // Waiter task non-last driver: no partial table was built (we used the
+      // cached table). Nothing to contribute — finish immediately. Clear the
+      // future since allPeersFinished() set it but we don't need to wait.
+      VELOX_CHECK_NULL(
+          table_, "Waiter task should not have built a partial hash table");
+      future_ = folly::SemiFuture<folly::Unit>::makeEmpty();
+      setState(State::kFinish);
+    } else {
+      // Builder task non-last driver: the last driver needs our partial
+      // table. Wait in kWaitForBuild until it has moved our table out.
+      setState(State::kWaitForBuild);
+    }
     return false;
   }
 
@@ -906,8 +937,6 @@ bool HashBuild::finishHashBuild() {
     pool()->release();
   };
 
-  // TODO: Re-enable parallel join build with spilling triggered after
-  //  https://github.com/facebookincubator/velox/issues/3567 is fixed.
   CpuWallTiming timing;
   {
     CpuWallTimer cpuWallTimer{timing};
@@ -1406,6 +1435,11 @@ bool HashBuild::nonReclaimableState() const {
 
 void HashBuild::close() {
   Operator::close();
+
+  if (useHashTableCache() && cacheEntry_ != nullptr &&
+      !cacheEntry_->buildComplete && hashTableCacheBuilderTask()) {
+    HashTableCache::instance()->drop(cacheKey_);
+  }
 
   {
     // Free up major memory usage. Gate access to them as they can be accessed

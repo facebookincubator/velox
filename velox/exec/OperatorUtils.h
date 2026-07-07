@@ -161,6 +161,12 @@ void addOperatorRuntimeStats(
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
+/// Sets a runtime metric on operator 'stats', overriding any existing value.
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& stats);
+
 /// Aggregates runtime metrics we want to see per operator rather than per
 /// event.
 void aggregateOperatorRuntimeStats(
@@ -322,6 +328,7 @@ class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
     const std::string& kind,
-    std::optional<float> minCompressionRatio = std::nullopt);
+    std::optional<float> minCompressionRatio = std::nullopt,
+    int32_t minCompressionPageSizeBytes = 0);
 
 } // namespace facebook::velox::exec

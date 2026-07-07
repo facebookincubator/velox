@@ -98,6 +98,10 @@ function install_faiss_deps {
   dnf_install openblas-devel libomp
 }
 
+function install_cxl_deps {
+  dnf_install numactl-devel
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_conda
@@ -115,7 +119,6 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_xsimd
   run_and_time install_simdjson

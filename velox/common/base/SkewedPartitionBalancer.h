@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/SharedMutex.h>
+
 #include "velox/common/base/IndexedPriorityQueue.h"
 
 namespace facebook::velox::common {

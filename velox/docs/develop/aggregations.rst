@@ -364,5 +364,6 @@ accumulators.
 Many aggregate functions implement toIntermediate() fast path. Some examples include:
 :func:`min`, :func:`max`, :func:`array_agg`, :func:`set_agg`, :func:`map_agg`, :func:`map_union`.
 
-One can use runtime statistic `abandonedPartialAggregation` to tell whether
-partial aggregation was abandoned.
+Runtime statistic `abandonedPartialAggregationRows` counts rows that bypassed
+partial aggregation after it was abandoned. A value greater than 0 indicates
+that partial aggregation was abandoned.

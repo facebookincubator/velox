@@ -589,9 +589,16 @@ class EvalCtx {
     return execCtx_->optimizationParams().maxSharedSubexprResultsCached;
   }
 
-  /// Returns true if peeling is enabled.
-  bool peelingEnabled() const {
-    return execCtx_->optimizationParams().peelingEnabled;
+  /// Returns true if peeling is enabled for the given rows. Peeling is
+  /// disabled globally via OptimizationParams::peelingEnabled, or suppressed
+  /// for small batches when the number of selected rows is below
+  /// OptimizationParams::minRowsForPeeling, since for small batches the cost
+  /// of wrapping inputs in dictionary vectors and materializing them outweighs
+  /// the benefit of peeling.
+  bool peelingEnabled(const SelectivityVector& rows) const {
+    const auto& params = execCtx_->optimizationParams();
+    return params.peelingEnabled &&
+        rows.countSelected() >= params.minRowsForPeeling;
   }
 
   /// Returns true if shared subexpression reuse is enabled.

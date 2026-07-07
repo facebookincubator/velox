@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "velox/type/Type.h"
+#include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox::exec {
 
@@ -44,10 +45,12 @@ TypePtr resolveResultType(
 /// resolve a function successfully. Contains one entry per argument. The entry
 /// is null if no coercion is required for that argument. The entry is not null
 /// if coercion is necessary.
+/// @param coercer Coercion rule set to use when resolving type coercions.
 TypePtr resolveResultTypeWithCoercions(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Given a name of aggregate function and argument types, returns the
 /// intermediate type if the function exists. Throws if function doesn't exist

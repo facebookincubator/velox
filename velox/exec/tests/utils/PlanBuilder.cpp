@@ -942,8 +942,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->ignoreNullKeys(),
       partialAggNode->noGroupsSpanBatches(),
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   return aggregationNode;
 }
 
@@ -1112,6 +1111,22 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
   return {aggs, names};
 }
 
+namespace {
+// Returns the GroupIdNode at 'planNode', or under a single-source local
+// partition, or nullptr.
+const core::GroupIdNode* findGroupIdNode(const core::PlanNode* planNode) {
+  if (auto* groupId = dynamic_cast<const core::GroupIdNode*>(planNode)) {
+    return groupId;
+  }
+  if (auto* partition =
+          dynamic_cast<const core::LocalPartitionNode*>(planNode)) {
+    return dynamic_cast<const core::GroupIdNode*>(
+        partition->sources()[0].get());
+  }
+  return nullptr;
+}
+} // namespace
+
 PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& preGroupedKeys,
@@ -1127,8 +1142,7 @@ PlanBuilder& PlanBuilder::aggregation(
   // need to be populated.
   std::vector<vector_size_t> globalGroupingSets;
   std::optional<core::FieldAccessTypedExprPtr> groupId;
-  if (auto groupIdNode =
-          dynamic_cast<const core::GroupIdNode*>(planNode_.get())) {
+  if (auto* groupIdNode = findGroupIdNode(planNode_.get())) {
     for (auto i = 0; i < groupIdNode->groupingSets().size(); i++) {
       if (groupIdNode->groupingSets().at(i).empty()) {
         globalGroupingSets.push_back(i);
@@ -1153,8 +1167,7 @@ PlanBuilder& PlanBuilder::aggregation(
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1178,8 +1191,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       ignoreNullKeys,
       noGroupsSpanBatches,
       planNode_);
-  VELOX_CHECK_EQ(
-      aggregationNode->supportsBarrier(), aggregationNode->isPreGrouped());
+  VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
   return *this;
 }
@@ -1353,17 +1365,97 @@ PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count, bool isPartial) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    std::vector<core::PlanNodePtr> plans,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(plans),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry));
+  return *this;
+}
+
+namespace {
+// Resolves the implicit output state entry: the name of the last
+// VectorStateDeclaration in 'declarations'.  Used when fixedPoint() is called
+// without an explicit outputStateEntry.
+std::string defaultOutputStateEntry(
+    const std::vector<core::StateDeclarationPtr>& declarations) {
+  for (auto it = declarations.rbegin(); it != declarations.rend(); ++it) {
+    if (auto vector =
+            std::dynamic_pointer_cast<const core::VectorStateDeclaration>(
+                *it)) {
+      return vector->name();
+    }
+  }
+  VELOX_USER_FAIL(
+      "fixedPoint requires at least one VectorStateDeclaration to use as the "
+      "output state entry");
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    const PlanBuilder& body,
+    core::ConvergenceConfig convergenceConfig,
+    std::optional<std::string> outputStateEntry) {
+  auto entry = outputStateEntry.has_value()
+      ? std::move(outputStateEntry).value()
+      : defaultOutputStateEntry(stateDeclarations);
+  return fixedPoint(
+      std::move(stateDeclarations),
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      std::move(convergenceConfig),
+      std::move(entry));
+}
+
+PlanBuilder& PlanBuilder::fixedPoint(
+    core::StateDeclarationPtr stateDeclaration,
+    const PlanBuilder& body,
+    core::ConvergenceConfig convergenceConfig,
+    std::optional<std::string> outputStateEntry) {
+  return fixedPoint(
+      std::vector<core::StateDeclarationPtr>{std::move(stateDeclaration)},
+      body,
+      std::move(convergenceConfig),
+      std::move(outputStateEntry));
+}
+
+PlanBuilder& PlanBuilder::stateSource(
+    const std::string& stateName,
+    const RowTypePtr& outputType,
+    bool delta) {
+  VELOX_CHECK_NULL(planNode_, "StateSource must be the source node");
+  planNode_ = std::make_shared<core::StateSourceNode>(
+      nextPlanNodeId(), stateName, outputType, delta);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::stateHashJoin(
+    const std::string& stateName,
+    std::vector<std::string> probeKeys,
+    const RowTypePtr& outputType) {
+  VELOX_CHECK_NOT_NULL(planNode_, "StateHashJoin cannot be the source node");
+  planNode_ = std::make_shared<core::StateHashJoinNode>(
+      nextPlanNodeId(), stateName, std::move(probeKeys), outputType, planNode_);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::enforceSingleRow() {
   planNode_ =
       std::make_shared<core::EnforceSingleRowNode>(nextPlanNodeId(), planNode_);
   return *this;
 }
 
-PlanBuilder& PlanBuilder::assignUniqueId(
-    const std::string& idName,
-    const int32_t taskUniqueId) {
+PlanBuilder& PlanBuilder::assignUniqueId(const std::string& idName) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
-      nextPlanNodeId(), idName, taskUniqueId, planNode_);
+      nextPlanNodeId(), idName, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
   return *this;
 }
@@ -2206,7 +2298,8 @@ TypePtr resolveWindowType(
     bool nullOnFailure) {
   if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
     for (const auto& signature : signatures.value()) {
-      exec::SignatureBinder binder(*signature, inputTypes);
+      exec::SignatureBinder binder(
+          *signature, inputTypes, TypeCoercer::defaults());
       if (binder.tryBind()) {
         return binder.tryResolveType(signature->returnType());
       }
@@ -2530,13 +2623,33 @@ PlanBuilder& PlanBuilder::topNRowNumber(
 }
 
 PlanBuilder& PlanBuilder::markDistinct(
-    std::string markerKey,
+    std::string markerName,
     const std::vector<std::string>& distinctKeys) {
   VELOX_CHECK_NOT_NULL(planNode_, "MarkDistinct cannot be the source node");
   planNode_ = std::make_shared<core::MarkDistinctNode>(
       nextPlanNodeId(),
-      std::move(markerKey),
+      std::move(markerName),
       fields(planNode_->outputType(), distinctKeys),
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::markDistinct(
+    std::vector<std::string> markerNames,
+    const std::vector<std::string>& distinctKeys,
+    const std::vector<std::string>& maskNames) {
+  VELOX_CHECK_NOT_NULL(planNode_, "MarkDistinct cannot be the source node");
+  VELOX_CHECK_EQ(
+      markerNames.size(),
+      maskNames.size() + 1,
+      "Number of marker names must be one more than mask names");
+  auto inputType = planNode_->outputType();
+  planNode_ = std::make_shared<core::MarkDistinctNode>(
+      nextPlanNodeId(),
+      std::move(markerNames),
+      fields(inputType, distinctKeys),
+      fields(inputType, maskNames),
       planNode_);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
@@ -2719,6 +2832,9 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
         filter_, inputType, planBuilder_.options_, planBuilder_.pool_);
   }
 
+  auto forwardedProbeColumnFields = PlanBuilder::fields(
+      planBuilder_.planNode_->outputType(), forwardedProbeColumns_);
+
   return std::make_shared<core::IndexLookupJoinNode>(
       id,
       joinType_,
@@ -2727,8 +2843,10 @@ core::PlanNodePtr PlanBuilder::IndexLookupJoinBuilder::build(
       std::move(joinConditionPtrs),
       filterExpr,
       hasMarker_,
+      splitOutput_,
       std::move(planBuilder_.planNode_),
       indexSource_,
-      std::move(outputType));
+      std::move(outputType),
+      std::move(forwardedProbeColumnFields));
 }
 } // namespace facebook::velox::exec::test

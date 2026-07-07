@@ -56,5 +56,11 @@ block()
 
   FetchContent_MakeAvailable(s2geometry)
 
+  # Clang does not enable C++14 sized deallocation by default, unlike GCC.
+  # s2geometry's port.h uses ::operator delete(ptr, size) which requires it.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(s2 PRIVATE -fsized-deallocation)
+  endif()
+
   add_library(s2::s2 ALIAS s2)
 endblock()

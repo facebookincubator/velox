@@ -16,6 +16,8 @@
 
 #include "velox/connectors/Connector.h"
 
+#include "velox/common/EnumDefine.h"
+
 #include <memory>
 #include <string>
 
@@ -51,7 +53,8 @@ bool hasConnector(const std::string& connectorId) {
 }
 
 bool DataSink::Stats::empty() const {
-  return numWrittenBytes == 0 && numWrittenFiles == 0 && spillStats.empty();
+  return numWrittenBytes == 0 && numWrittenFiles == 0 &&
+      writerRuntimeStats.empty() && spillStats.empty();
 }
 
 std::string DataSink::Stats::toString() const {

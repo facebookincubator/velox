@@ -86,7 +86,17 @@ CudfFromVelox::CudfFromVelox(
           std::nullopt,
           std::nullopt),
       timestampTimeZone_(driverCtx->queryConfig().get<std::string>(
-          facebook::velox::core::QueryConfig::kSessionTimezone)) {}
+          facebook::velox::core::QueryConfig::kSessionTimezone)) {
+  auto parentId = planNodeId.substr(0, planNodeId.find("-from-velox"));
+  stats_.withWLock([&](auto& stats) {
+    stats.setStatSplitter(
+        [parentId = std::move(parentId)](const auto& combinedStats) {
+          auto result = combinedStats;
+          result.planNodeId = parentId;
+          return std::vector<exec::OperatorStats>{std::move(result)};
+        });
+  });
+}
 
 void CudfFromVelox::doAddInput(RowVectorPtr input) {
   if (input->size() > 0) {
@@ -143,6 +153,20 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   // Get a stream from the global stream pool
   auto stream = cudfGlobalStreamPool().get_stream();
 
+  // cuDF tables with zero columns cannot represent a row count, so we
+  // create a CudfVector directly with an empty table, preserving the
+  // logical row count. This mirrors the zero-column handling in
+  // CudfToVelox::doGetOutput().
+  if (input->childrenSize() == 0) {
+    auto emptyTable = std::make_unique<cudf::table>();
+    return std::make_shared<CudfVector>(
+        input->pool(),
+        outputType_,
+        input->size(),
+        std::move(emptyTable),
+        stream);
+  }
+
   // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
   // internally before releasing Arrow host buffers, so no additional sync
   // is needed here.
@@ -153,6 +177,7 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
 
   // Return a CudfVector that owns the cudf table
   const auto size = tbl->num_rows();
+
   return std::make_shared<CudfVector>(
       input->pool(), outputType_, size, std::move(tbl), stream);
 }
@@ -178,7 +203,17 @@ CudfToVelox::CudfToVelox(
           nvtx3::rgb{148, 0, 211}, // Purple
           NvtxMethodFlag::kAll,
           std::nullopt,
-          std::nullopt) {}
+          std::nullopt) {
+  auto parentId = planNodeId.substr(0, planNodeId.find("-to-velox"));
+  stats_.withWLock([&](auto& stats) {
+    stats.setStatSplitter(
+        [parentId = std::move(parentId)](const auto& combinedStats) {
+          auto result = combinedStats;
+          result.planNodeId = parentId;
+          return std::vector<exec::OperatorStats>{std::move(result)};
+        });
+  });
+}
 
 bool CudfToVelox::isPassthroughMode() const {
   return operatorCtx_->driverCtx()->queryConfig().get<bool>(

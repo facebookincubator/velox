@@ -16,6 +16,8 @@
 
 #include <boost/algorithm/string.hpp>
 #include <string>
+#include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions::prestosql {
@@ -180,12 +182,14 @@ TypePtr getEnumType(
     const std::string& enumName,
     const std::string& valuesMap) {
   std::vector<TypeParameter> params;
-  if (enumType == "BigintEnum") {
+  if (boost::iequals(enumType, BigintEnumType::kKind)) {
     LongEnumParameter longEnumParameter(
         enumName, parseMapFromString<int64_t>(valuesMap));
     params.emplace_back(TypeParameter(longEnumParameter));
     return getType("BIGINT_ENUM", params);
-  } else if (enumType == "VarcharEnum") {
+  }
+
+  if (boost::iequals(enumType, VarcharEnumType::kKind)) {
     VarcharEnumParameter varcharEnumParameter(
         enumName, parseMapFromString<std::string>(valuesMap));
     params.emplace_back(TypeParameter(varcharEnumParameter));
@@ -193,6 +197,9 @@ TypePtr getEnumType(
   }
 
   VELOX_UNREACHABLE(
-      "Invalid type {}, expected BigintEnum or VarcharEnum", enumType);
+      "Invalid type {}, expected {} or {}",
+      enumType,
+      BigintEnumType::kKind,
+      VarcharEnumType::kKind);
 }
 } // namespace facebook::velox::functions::prestosql

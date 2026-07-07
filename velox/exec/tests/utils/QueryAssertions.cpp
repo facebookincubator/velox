@@ -840,6 +840,13 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
   return rows;
 }
 
+::duckdb::DuckDB& DuckDbQueryRunner::database() {
+  if (db_ == nullptr) {
+    db_ = std::make_shared<::duckdb::DuckDB>(nullptr);
+  }
+  return *db_;
+}
+
 void DuckDbQueryRunner::createTable(
     const std::string& name,
     const std::vector<RowVectorPtr>& data) {
@@ -847,7 +854,7 @@ void DuckDbQueryRunner::createTable(
   execute(query);
 
   auto& rowType = data[0]->type()->as<TypeKind::ROW>();
-  ::duckdb::Connection con(db_);
+  ::duckdb::Connection con(database());
   auto sql = duckdb::makeCreateTableSql(name, rowType);
   auto res = con.Query(sql);
   verifyDuckDBResult(res, sql);
@@ -888,7 +895,7 @@ void DuckDbQueryRunner::createTable(
 }
 
 DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
-  ::duckdb::Connection con(db_);
+  ::duckdb::Connection con(database());
   // Changing the default null order of NULLS FIRST used by DuckDB. Velox uses
   // NULLS LAST.
   con.Query("PRAGMA default_null_order='NULLS LAST'");

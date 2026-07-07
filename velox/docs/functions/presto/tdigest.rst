@@ -48,12 +48,12 @@ Functions
     * ``sum`` - sum of all values
     * ``count`` - total count of values
 
-.. function:: destructure_tdigest(digest: tdigest<double>) -> row(means array<double>, counts array<integer>, compression double, min double, max double, sum double, count bigint)
+.. function:: destructure_tdigest(digest: tdigest<double>) -> row(centroid_means array<double>, centroid_weights array<integer>, compression double, min double, max double, sum double, count bigint)
 
     Destructures a T-digest into its component parts, returning a row containing:
 
-    * ``means`` - array of centroid means
-    * ``counts`` - array of centroid counts
+    * ``centroid_means`` - array of centroid means
+    * ``centroid_weights`` - array of centroid counts (weights)
     * ``compression`` - compression factor
     * ``min`` - minimum value
     * ``max`` - maximum value
@@ -61,6 +61,7 @@ Functions
     * ``count`` - total count of values
 
 .. function:: merge(tdigest<double>) -> tdigest<double>
+   :noindex:
 
     Merges all input ``tdigest``\ s into a single ``tdigest``.
 
@@ -155,11 +156,13 @@ Functions
     means more accuracy at the cost of more memory.
 
 .. function:: value_at_quantile(digest: tdigest<double>, quantile: double) -> double
+   :noindex:
 
     Returns the approximate percentile value from the T-digest ``digest`` at the given ``quantile``.
     The ``quantile`` must be between zero and one (inclusive).
 
 .. function:: values_at_quantiles(digest: tdigest<double>, quantiles: array<double>) -> array<double>
+   :noindex:
 
     Returns the approximate percentile values as an array from the T-digest ``digest`` at each of the specified quantiles given in the ``quantiles`` array.
     All quantile values must be between zero and one (inclusive).

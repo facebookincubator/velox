@@ -137,7 +137,14 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "ssdCacheReadWallNanos",
       "cacheWaitWallNanos",
       "coalescedSsdLoadWallNanos",
-      "coalescedStorageLoadWallNanos"};
+      "coalescedStorageLoadWallNanos",
+      "rpcCongestionWindowFinal",
+      "rpcPeakInFlight",
+      "rpcBaselineRttNanos",
+      "rpcRttMinWallNanos",
+      "rpcRttMaxWallNanos",
+      "rpcStreamingMode",
+  };
   if (metricNames.contains(name)) {
     return true;
   }
@@ -490,6 +497,13 @@ void addOperatorRuntimeStats(
   statIt->second.addValue(value.value);
 }
 
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats.insert_or_assign(std::string(name), metric);
+}
+
 void aggregateOperatorRuntimeStats(
     std::unordered_map<std::string, RuntimeMetric>& stats) {
   for (auto& runtimeMetric : stats) {
@@ -586,7 +600,8 @@ std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
     const std::string& kind,
-    std::optional<float> minCompressionRatio) {
+    std::optional<float> minCompressionRatio,
+    int32_t minCompressionPageSizeBytes) {
   std::unique_ptr<VectorSerde::Options> options = kind == "Presto"
       ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
       : std::make_unique<VectorSerde::Options>();
@@ -594,6 +609,7 @@ std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
   if (minCompressionRatio.has_value()) {
     options->minCompressionRatio = minCompressionRatio.value();
   }
+  options->minCompressionPageSizeBytes = minCompressionPageSizeBytes;
   return options;
 }
 

@@ -84,6 +84,7 @@ function install_build_prerequisites {
     ninja-build \
     checkinstall \
     git \
+    patch \
     pkg-config \
     libtool \
     wget
@@ -228,6 +229,10 @@ function install_faiss_deps {
   ${SUDO} apt-get install -y libopenblas-dev libomp-dev
 }
 
+function install_cxl_deps {
+  ${SUDO} apt install -y libnuma-dev
+}
+
 function install_velox_deps {
   run_and_time install_velox_deps_from_apt
   run_and_time install_fmt
@@ -243,7 +248,6 @@ function install_velox_deps {
   run_and_time install_conda
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_xsimd
   run_and_time install_simdjson

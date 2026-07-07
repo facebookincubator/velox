@@ -15,14 +15,15 @@
  */
 #pragma once
 
-#include <iomanip>
-#include <sstream>
+#include <ostream>
 #include <string>
-
-#include <folly/dynamic.h>
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/type/StringView.h"
+
+namespace folly {
+struct dynamic;
+}
 
 namespace facebook::velox {
 
@@ -125,11 +126,7 @@ struct Timestamp {
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
 
-  static Timestamp create(const folly::dynamic& obj) {
-    auto seconds = obj["seconds"].asInt();
-    auto nanos = obj["nanos"].asInt();
-    return Timestamp(seconds, nanos);
-  }
+  static Timestamp create(const folly::dynamic& obj);
 
   int64_t getSeconds() const {
     return seconds_;
@@ -428,16 +425,9 @@ struct Timestamp {
     return toString();
   }
 
-  operator folly::dynamic() const {
-    return folly::dynamic(seconds_);
-  }
+  operator folly::dynamic() const;
 
-  folly::dynamic serialize() const {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["seconds"] = seconds_;
-    obj["nanos"] = nanos_;
-    return obj;
-  }
+  folly::dynamic serialize() const;
 
   // Pretty printer for gtest.
   friend void PrintTo(const Timestamp& timestamp, std::ostream* os) {

@@ -838,100 +838,6 @@ class QueryConfig {
       96L << 20,
       "Minimum memory footprint to reclaim from a file writer by flushing.")
 
-  /// If true, array_agg() aggregation function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kPrestoArrayAggIgnoreNulls,
-      prestoArrayAggIgnoreNulls,
-      "presto.array_agg.ignore_nulls",
-      bool,
-      false,
-      "If true, array_agg() ignores nulls in the input.")
-
-  /// If true, Spark function's behavior is ANSI-compliant.
-  VELOX_QUERY_CONFIG(
-      kSparkAnsiEnabled,
-      sparkAnsiEnabled,
-      "spark.ansi_enabled",
-      bool,
-      false,
-      "Enable ANSI-compliant behavior for Spark functions.")
-
-  /// The default number of expected items for the bloomfilter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterExpectedNumItems,
-      sparkBloomFilterExpectedNumItems,
-      "spark.bloom_filter.expected_num_items",
-      int64_t,
-      1'000'000L,
-      "Default number of expected items for the Spark bloom filter.")
-
-  /// The default number of bits to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterNumBits,
-      sparkBloomFilterNumBits,
-      "spark.bloom_filter.num_bits",
-      int64_t,
-      8'388'608L,
-      "Default number of bits for the Spark bloom filter.")
-
-  /// The max number of bits to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterMaxNumBits,
-      sparkBloomFilterMaxNumBits,
-      "spark.bloom_filter.max_num_bits",
-      int64_t,
-      67'108'864,
-      "Maximum number of bits for the Spark bloom filter.")
-
-  /// The max number of items to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterMaxNumItems,
-      sparkBloomFilterMaxNumItems,
-      "spark.bloom_filter.max_num_items",
-      int64_t,
-      4'000'000L,
-      "Maximum number of items for the Spark bloom filter.")
-
-  /// The current spark partition id. No default (throws if not set).
-  static constexpr const char* kSparkPartitionId = "spark.partition_id";
-
-  /// If true, simple date formatter is used for time formatting and parsing.
-  VELOX_QUERY_CONFIG(
-      kSparkLegacyDateFormatter,
-      sparkLegacyDateFormatter,
-      "spark.legacy_date_formatter",
-      bool,
-      false,
-      "Use simple date formatter instead of Joda for Spark.")
-
-  /// If true, Spark statistical aggregation functions return NaN instead of
-  /// NULL when dividing by zero.
-  VELOX_QUERY_CONFIG(
-      kSparkLegacyStatisticalAggregate,
-      sparkLegacyStatisticalAggregate,
-      "spark.legacy_statistical_aggregate",
-      bool,
-      false,
-      "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
-
-  /// If true, ignore null fields when generating JSON string.
-  VELOX_QUERY_CONFIG(
-      kSparkJsonIgnoreNullFields,
-      sparkJsonIgnoreNullFields,
-      "spark.json_ignore_null_fields",
-      bool,
-      true,
-      "Ignore null fields when generating JSON string in Spark.")
-
-  /// If true, collect_list aggregate function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kSparkCollectListIgnoreNulls,
-      sparkCollectListIgnoreNulls,
-      "spark.collect_list.ignore_nulls",
-      bool,
-      true,
-      "If true, Spark collect_list() ignores nulls in the input.")
-
   /// The number of local parallel table writer operators per task.
   VELOX_QUERY_CONFIG(
       kTaskWriterCount,
@@ -1151,6 +1057,17 @@ class QueryConfig {
       false,
       "Disable dictionary peeling optimization in expression evaluation.")
 
+  /// Minimum number of rows in the selectivity vector for peeling to be
+  /// applied during expression evaluation. For small batches, the overhead of
+  /// peeling can outweigh the benefits.
+  VELOX_QUERY_CONFIG(
+      kMinRowsForPeeling,
+      minRowsForPeeling,
+      "expression.min_rows_for_peeling",
+      int32_t,
+      0,
+      "Minimum number of rows to process for peeling optimization in expression evaluation to be active.");
+
   /// Disable optimization in expression evaluation to re-use cached results for
   /// common sub-expressions.
   VELOX_QUERY_CONFIG(
@@ -1222,7 +1139,8 @@ class QueryConfig {
       7,
       "Maximum zoom level difference for bing_tile_children.")
 
-  /// Temporary flag to control whether selective Nimble reader should be used.
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
+  /// Kept for backward compatibility with Presto session properties.
   VELOX_QUERY_CONFIG(
       kSelectiveNimbleReaderEnabled,
       selectiveNimbleReaderEnabled,
@@ -1296,6 +1214,15 @@ class QueryConfig {
       "none",
       "Compression codec for shuffle data.")
 
+  /// Minimum serialized page size in bytes to attempt shuffle compression.
+  VELOX_QUERY_CONFIG(
+      kMinShuffleCompressionPageSizeBytes,
+      minShuffleCompressionPageSizeBytes,
+      "min_shuffle_compression_page_size_bytes",
+      int32_t,
+      0,
+      "Minimum serialized page size in bytes to attempt shuffle compression.")
+
   /// When true, throw exception on duplicate map key.
   VELOX_QUERY_CONFIG(
       kThrowExceptionOnDuplicateMapKeys,
@@ -1314,7 +1241,9 @@ class QueryConfig {
       0,
       "Maximum input batches to prefetch for index lookup. 0 disables.")
 
-  /// If true, index join operator may split output per input batch.
+  /// If true, index join operator may split output per input batch. This can be
+  /// overridden on a per operator basis by the splitOutput parameter in the
+  /// IndexLookupJoinNode.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinSplitOutput,
       indexLookupJoinSplitOutput,
@@ -1469,6 +1398,29 @@ class QueryConfig {
       1000,
       "Batch size threshold for zero-copy in MarkSorted operator.")
 
+  /// Floor the RPC congestion window may shrink to under overload
+  /// (RPCOperator).
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionMinWindow,
+      rpcCongestionMinWindow,
+      "rpc.congestion.min_window",
+      int64_t,
+      1,
+      "Floor the RPC flow-control congestion window may shrink to under "
+      "overload. Default 1 (never fully stalls dispatch). Clamped to "
+      "[1, maxWindow] by the controller.")
+
+  /// Multiplier on the RPC congestion window's sqrt additive-increase headroom.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionStepCoef,
+      rpcCongestionStepCoef,
+      "rpc.congestion.step_coef",
+      double,
+      1.0,
+      "Multiplier on the RPC congestion window's sqrt(window) additive-increase "
+      "headroom. Default 1.0 (plain sqrt headroom); lower converges tighter. "
+      "Clamped to >= 0 by the controller.")
+
   // --- Hand-written accessors for properties that need custom logic ---
 
   // Generated by VELOX_QUERY_CONFIG for simple properties above.
@@ -1510,14 +1462,6 @@ class QueryConfig {
     constexpr uint8_t kMaxBits = 3;
     return std::min(
         kMaxBits, get<uint8_t>(kSpillNumPartitionBits, kDefaultBits));
-  }
-
-  int32_t sparkPartitionId() const {
-    auto id = get<int32_t>(kSparkPartitionId);
-    VELOX_CHECK(id.has_value(), "Spark partition id is not set.");
-    auto value = id.value();
-    VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
-    return value;
   }
 
   uint32_t taskPartitionedWriterCount() const {
