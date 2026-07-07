@@ -2251,8 +2251,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   registerCudfFunction(
       "not",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<UnaryFunction>(
-            expr, cudf::unary_operator::NOT);
+        return std::make_shared<UnaryFunction>(expr, cudf::unary_operator::NOT);
       },
       {FunctionSignatureBuilder()
            .returnType("boolean")

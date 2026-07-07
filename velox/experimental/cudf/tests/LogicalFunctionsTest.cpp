@@ -92,8 +92,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     ASSERT_TRUE(cudf_velox::canBeEvaluatedByCudf(expr, /*deep=*/false));
     auto cudfExpr = cudf_velox::createCudfExpression(expr, inputRowType);
     ASSERT_NE(
-        dynamic_cast<cudf_velox::FunctionExpression*>(cudfExpr.get()),
-        nullptr)
+        dynamic_cast<cudf_velox::FunctionExpression*>(cudfExpr.get()), nullptr)
         << expr->toString();
   }
 
@@ -105,8 +104,7 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     ASSERT_FALSE(input.empty());
     assertUsesFunctionEvaluator(input[0]->rowType(), expression);
     createDuckDbTable(input);
-    auto plan =
-        PlanBuilder().values(input).project({projection}).planNode();
+    auto plan = PlanBuilder().values(input).project({projection}).planNode();
     assertQuery(plan, sql);
   }
 
@@ -116,16 +114,15 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
 
 // UnaryFunction: negation of a boolean column. Base column-only path.
 TEST_F(CudfLogicalFunctionsTest, notColumn) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<bool>({true, false, true, false})});
+  auto data =
+      makeRowVector({"a"}, {makeFlatVector<bool>({true, false, true, false})});
   runProject({data}, "NOT a", "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
 // Negation of a comparison. Velox rewrites NOT(equalto(...)) to neq(...),
 // so this also exercises the comparison FunctionExpression path.
 TEST_F(CudfLogicalFunctionsTest, notComparison) {
-  auto data = makeRowVector(
-      {"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
   runProject(
       {data},
       "NOT (c0 = 3)",
@@ -147,8 +144,7 @@ TEST_F(CudfLogicalFunctionsTest, notWithNullRows) {
 TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
   auto data = makeRowVector(
       {"c0"},
-      {makeNullableFlatVector<int32_t>(
-          {1, std::nullopt, 3, std::nullopt, 5})});
+      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
   runProject(
       {data},
       "c0 IS NULL",
@@ -171,8 +167,7 @@ TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
 
 // IsNullFunction: column with no nulls. Result is all false.
 TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
-  auto data = makeRowVector(
-      {"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
   runProject(
       {data},
       "c0 IS NULL",
@@ -184,8 +179,7 @@ TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
 TEST_F(CudfLogicalFunctionsTest, isNotNullInteger) {
   auto data = makeRowVector(
       {"c0"},
-      {makeNullableFlatVector<int32_t>(
-          {1, std::nullopt, 3, std::nullopt, 5})});
+      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
   runProject(
       {data},
       "c0 IS NOT NULL",
@@ -211,8 +205,7 @@ TEST_F(CudfLogicalFunctionsTest, isNotNullVarchar) {
 TEST_F(CudfLogicalFunctionsTest, notOfIsNull) {
   auto data = makeRowVector(
       {"c0"},
-      {makeNullableFlatVector<int32_t>(
-          {1, std::nullopt, 3, std::nullopt, 5})});
+      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
   runProject(
       {data},
       "NOT (c0 IS NULL)",
