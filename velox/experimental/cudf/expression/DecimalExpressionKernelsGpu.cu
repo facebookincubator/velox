@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/expression/DecimalExpressionKernelsGpu.h"
 
+#include <cudf/column/column_device_view.cuh>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
@@ -101,10 +102,6 @@ __device__ OutT decimalDivideImpl(
     __int128_t denom,
     __int128_t rescaleFactor,
     int32_t* overflowFlag) {
-  if (denom == 0) {
-    return OutT{0};
-  }
-
   bool negative = false;
   unsigned __int128 const uNum = absToUnsigned(numerator, negative);
   unsigned __int128 const uDenom = absToUnsigned(denom, negative);
@@ -151,43 +148,58 @@ __device__ OutT decimalDivideImpl(
 
 template <typename InT, typename OutT>
 struct DivideFunctor {
-  const InT* lhs;
-  const InT* rhs;
-  OutT* out;
+  cudf::column_device_view lhs;
+  cudf::column_device_view rhs;
+  cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
-    out[idx] = decimalDivideImpl<OutT>(
-        lhs[idx], rhs[idx], rescaleFactor, overflowFlag);
+    if (lhs.is_null(idx) || rhs.is_null(idx) || rhs.element<InT>(idx) == 0) {
+      out.set_null(idx);
+      return;
+    }
+    out.element<OutT>(idx) = decimalDivideImpl<OutT>(
+        lhs.element<InT>(idx),
+        rhs.element<InT>(idx),
+        rescaleFactor,
+        overflowFlag);
   }
 };
 
 template <typename InColT, typename OutT>
 struct DivideLhsScalarFunctor {
   __int128_t lhsValue;
-  const InColT* rhs;
-  OutT* out;
+  cudf::column_device_view rhs;
+  cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
-    out[idx] = decimalDivideImpl<OutT>(
-        lhsValue, rhs[idx], rescaleFactor, overflowFlag);
+    if (rhs.is_null(idx) || rhs.element<InColT>(idx) == 0) {
+      out.set_null(idx);
+      return;
+    }
+    out.element<OutT>(idx) = decimalDivideImpl<OutT>(
+        lhsValue, rhs.element<InColT>(idx), rescaleFactor, overflowFlag);
   }
 };
 
 template <typename InColT, typename OutT>
 struct DivideRhsScalarFunctor {
-  const InColT* lhs;
+  cudf::column_device_view lhs;
   __int128_t rhsValue;
-  OutT* out;
+  cudf::mutable_column_device_view out;
   __int128_t rescaleFactor;
   int32_t* overflowFlag;
 
   __device__ void operator()(cudf::size_type idx) const {
-    out[idx] = decimalDivideImpl<OutT>(
-        lhs[idx], rhsValue, rescaleFactor, overflowFlag);
+    if (lhs.is_null(idx) || rhsValue == 0) {
+      out.set_null(idx);
+      return;
+    }
+    out.element<OutT>(idx) = decimalDivideImpl<OutT>(
+        lhs.element<InColT>(idx), rhsValue, rescaleFactor, overflowFlag);
   }
 };
 
@@ -228,15 +240,14 @@ struct divideColumnColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   bool operator()() const {
+    auto lhsDev = cudf::column_device_view::create(lhs, stream);
+    auto rhsDev = cudf::column_device_view::create(rhs, stream);
+    auto outDev = cudf::mutable_column_device_view::create(out, stream);
     return launchDecimalDivide(
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideFunctor<InT, OutT>{
-              lhs.data<InT>(),
-              rhs.data<InT>(),
-              out.data<OutT>(),
-              rescaleFactor,
-              overflowFlag};
+              *lhsDev, *rhsDev, *outDev, rescaleFactor, overflowFlag};
         },
         stream);
   }
@@ -259,15 +270,13 @@ struct divideColumnScalarKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   bool operator()() const {
+    auto lhsDev = cudf::column_device_view::create(lhs, stream);
+    auto outDev = cudf::mutable_column_device_view::create(out, stream);
     return launchDecimalDivide(
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideRhsScalarFunctor<InT, OutT>{
-              lhs.data<InT>(),
-              rhsValue,
-              out.data<OutT>(),
-              rescaleFactor,
-              overflowFlag};
+              *lhsDev, rhsValue, *outDev, rescaleFactor, overflowFlag};
         },
         stream);
   }
@@ -290,15 +299,13 @@ struct divideScalarColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   bool operator()() const {
+    auto rhsDev = cudf::column_device_view::create(rhs, stream);
+    auto outDev = cudf::mutable_column_device_view::create(out, stream);
     return launchDecimalDivide(
         rhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideLhsScalarFunctor<InT, OutT>{
-              lhsValue,
-              rhs.data<InT>(),
-              out.data<OutT>(),
-              rescaleFactor,
-              overflowFlag};
+              lhsValue, *rhsDev, *outDev, rescaleFactor, overflowFlag};
         },
         stream);
   }
