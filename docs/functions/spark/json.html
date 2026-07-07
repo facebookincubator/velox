@@ -116,6 +116,16 @@ SELECT get_json_object(&#39;{&quot;a&quot;:3}&#39;&#39;, &#39;.a&#39;); -- NULL 
 </ul>
 </dd>
 </dl>
+<p>When <code class="docutils literal notranslate"><span class="pre">path</span></code> resolves to an object or array, characters in the Unicode
+supplementary planes (code points &gt;= U+10000, e.g. emoji) are escaped as
+<code class="docutils literal notranslate"><span class="pre">\uXXXX\uXXXX</span></code> UTF-16 surrogate pairs, while Basic Multilingual Plane
+(BMP) characters (e.g. Chinese/Japanese/Korean, CJK) are left literal.
+Scalar string results are returned literal.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">get_json_object</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:{&quot;n&quot;:&quot;🧧会员&quot;}}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.a&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;{&quot;n&quot;:&quot;</span><span class="se">\uD83E\uDDE7</span><span class="s1">会员&quot;}&#39;</span>
+<span class="n">SELECT</span> <span class="n">get_json_object</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:[&quot;🥇&quot;]}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.a&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;[&quot;</span><span class="se">\uD83E\uDD47</span><span class="s1">&quot;]&#39;</span>
+<span class="n">SELECT</span> <span class="n">get_json_object</span><span class="p">(</span><span class="s1">&#39;{&quot;a&quot;:&quot;🥇&quot;}&#39;</span><span class="p">,</span> <span class="s1">&#39;$.a&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;🥇&#39;</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="spark function">
