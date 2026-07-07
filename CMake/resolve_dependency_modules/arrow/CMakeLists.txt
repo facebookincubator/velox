@@ -28,6 +28,7 @@ if(VELOX_ENABLE_ARROW)
   endif()
   message(STATUS "Using BOOST_ROOT: ${BOOST_ROOT}")
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
+  set(VELOX_ARROW_CXXFLAGS "-Wno-documentation ${SCRIPT_CXX_FLAGS}")
   set(
     ARROW_CMAKE_ARGS
     -DARROW_PARQUET=OFF
@@ -50,7 +51,7 @@ if(VELOX_ENABLE_ARROW)
     -DBoost_NO_BOOST_CMAKE=TRUE
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     # Remove with Arrow upgrade to Arrow 20.
-    -DARROW_CXXFLAGS=-Wno-documentation
+    -DARROW_CXXFLAGS=${VELOX_ARROW_CXXFLAGS}
     # Arrow inherits the CMake build type from Velox. So a Debug build turns
     # on additional warnings that can cause the build to fail
     # (e.g. deprecated-literal-operator in Apple Clang 21).
