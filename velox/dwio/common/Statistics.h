@@ -682,6 +682,13 @@ struct ColumnReaderStatistics {
   // Total time spent in loading pages, in nanoseconds.
   io::IoCounter pageLoadTimeNs;
 
+  // Number of pages skipped (only page header read, compressed data never
+  // fetched or decompressed).
+  int64_t skippedPages{0};
+
+  // Number of pages processed (compressed data fetched and decompressed).
+  int64_t processedPages{0};
+
   // Per-column decoding statistics. Only populated when decoding stats
   // collection is enabled.
   std::optional<DecodingStatsSet> decodingStatsSet;
@@ -702,6 +709,8 @@ struct ColumnReaderStatistics {
   void mergeFrom(const ColumnReaderStatistics& other) {
     flattenStringDictionaryValues += other.flattenStringDictionaryValues;
     pageLoadTimeNs.merge(other.pageLoadTimeNs);
+    skippedPages += other.skippedPages;
+    processedPages += other.processedPages;
     if (other.decodingStatsSet) {
       if (!decodingStatsSet) {
         decodingStatsSet.emplace();
@@ -727,6 +736,12 @@ struct ColumnReaderStatistics {
               pageLoadTimeNs.min(),
               pageLoadTimeNs.max(),
               RuntimeCounter::Unit::kNanos));
+    }
+    if (skippedPages > 0) {
+      result.emplace("skippedPages", RuntimeMetric(skippedPages));
+    }
+    if (processedPages > 0) {
+      result.emplace("processedPages", RuntimeMetric(processedPages));
     }
     if (decodingStatsSet) {
       decodingStatsSet->toRuntimeMetrics(result);

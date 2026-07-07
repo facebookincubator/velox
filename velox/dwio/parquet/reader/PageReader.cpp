@@ -73,9 +73,11 @@ void PageReader::seekToPage(int64_t row) {
               inputStream_.get(),
               bufferStart_,
               bufferEnd_);
+          ++stats_.skippedPages;
           continue;
         }
         prepareDictionary(pageHeader);
+        ++stats_.processedPages;
         continue;
       default:
         break; // ignore INDEX page type and any other custom extensions
@@ -271,6 +273,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
         bufferStart_,
         bufferEnd_);
 
+    ++stats_.skippedPages;
     return;
   }
   pageData_ = readBytes(*pageHeader.compressed_page_size(), pageBuffer_);
@@ -336,6 +339,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
 
   if (row != kRepDefOnly) {
     makeDecoder();
+    ++stats_.processedPages;
   }
 }
 
@@ -350,6 +354,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
         inputStream_.get(),
         bufferStart_,
         bufferEnd_);
+    ++stats_.skippedPages;
     return;
   }
 
@@ -415,6 +420,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
   if (row != kRepDefOnly) {
     makeDecoder();
+    ++stats_.processedPages;
   }
 }
 

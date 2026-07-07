@@ -22,6 +22,7 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/Filter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -2034,4 +2035,108 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, pageSkipStats) {
+  constexpr int kNumWrittenRows = 100'000;
+  constexpr int kNumResultRows = 200;
+
+  auto rowType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+
+  auto a = makeFlatVector<int64_t>(kNumWrittenRows, [](auto i) { return i; });
+  auto b = makeFlatVector<int64_t>(
+      kNumWrittenRows, [](auto i) { return (i * 7919) % kNumWrittenRows; });
+  auto data = makeRowVector({"a", "b"}, {a, b});
+
+  // Force small data pages within a single row group, giving the reader pages
+  // to skip when the filter on 'a' removes the leading rows before lazy loading
+  // column 'b'.
+  ParquetWriterOptions writerOptions;
+  writerOptions.dataPageSize = 256;
+  writerOptions.enableDictionary = false;
+
+  auto* sink = write(data, writerOptions);
+  auto reader = createReaderInMemory(*sink);
+
+  FilterMap filters;
+  filters.emplace(
+      "a",
+      std::make_unique<BigintRange>(
+          kNumWrittenRows - kNumResultRows, kNumWrittenRows - 1, false));
+
+  auto scanSpec = makeScanSpec(rowType);
+  for (auto& [col, f] : filters) {
+    scanSpec->getOrCreateChild(Subfield(col))->setFilter(std::move(f));
+  }
+  auto rowReaderOpts = makeRowReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  uint64_t totalRows = 0;
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  while (rowReader->next(1000, result)) {
+    totalRows += result->size();
+    LazyVector::ensureLoadedRows(result, SelectivityVector(result->size()));
+  }
+  EXPECT_EQ(totalRows, kNumResultRows);
+  RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.columnReaderStats.processedPages, 0);
+  EXPECT_GT(stats.columnReaderStats.skippedPages, 0);
+}
+
+TEST_F(ParquetReaderTest, pageSkipStatsRemainingFilter) {
+  constexpr int kNumWrittenRows = 100'000;
+  constexpr int kNumResultRows = 200;
+
+  auto rowType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+
+  auto a = makeFlatVector<int64_t>(kNumWrittenRows, [](auto i) { return i; });
+  auto b = makeFlatVector<int64_t>(
+      kNumWrittenRows, [](auto i) { return (i * 7919) % kNumWrittenRows; });
+  auto data = makeRowVector({"a", "b"}, {a, b});
+
+  // Force small data pages within a single row group, giving lazy loading of
+  // column 'b' pages to skip after the remaining-filter input 'a' is evaluated.
+  ParquetWriterOptions writerOptions;
+  writerOptions.dataPageSize = 256;
+  writerOptions.enableDictionary = false;
+
+  auto* sink = write(data, writerOptions);
+  auto reader = createReaderInMemory(*sink);
+
+  auto rowReaderOpts = makeRowReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  rowReaderOpts.setRemainingFilterColumns({"a"});
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  uint64_t totalRows = 0;
+  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+  while (rowReader->next(1000, result)) {
+    auto* rowResult = result->as<RowVector>();
+    auto& aResult = rowResult->childAt(0);
+    auto& bResult = rowResult->childAt(1);
+
+    const SelectivityVector allRows(result->size());
+    LazyVector::ensureLoadedRows(aResult, allRows);
+
+    auto loadedA = BaseVector::loadedVectorShared(aResult);
+    auto* aValues = loadedA->as<FlatVector<int64_t>>();
+    SelectivityVector remainingFilterRows(result->size(), false);
+    for (auto i = 0; i < result->size(); ++i) {
+      if (aValues->valueAt(i) >= kNumWrittenRows - kNumResultRows) {
+        remainingFilterRows.setValid(i, true);
+        ++totalRows;
+      }
+    }
+    remainingFilterRows.updateBounds();
+    if (remainingFilterRows.hasSelections()) {
+      LazyVector::ensureLoadedRows(bResult, remainingFilterRows);
+    }
+  }
+  EXPECT_EQ(totalRows, kNumResultRows);
+  RuntimeStatistics stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_GT(stats.columnReaderStats.processedPages, 0);
+  EXPECT_GT(stats.columnReaderStats.skippedPages, 0);
 }
