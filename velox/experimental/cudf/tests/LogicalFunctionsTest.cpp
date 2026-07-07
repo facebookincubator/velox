@@ -93,7 +93,8 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     auto cudfExpr = cudf_velox::createCudfExpression(expr, inputRowType);
     ASSERT_NE(
         dynamic_cast<cudf_velox::FunctionExpression*>(cudfExpr.get()),
-        nullptr);
+        nullptr)
+        << expr->toString();
   }
 
   void runProject(
@@ -124,7 +125,7 @@ TEST_F(CudfLogicalFunctionsTest, notColumn) {
 // comparison result, which itself comes from a nested FunctionExpression path.
 TEST_F(CudfLogicalFunctionsTest, notComparison) {
   auto data = makeRowVector(
-      {"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+      {"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
   runProject(
       {data},
       "NOT (c0 = 3)",
