@@ -131,7 +131,6 @@ class CudfWindow : public CudfOperatorBase {
   // with frame bounds from the WindowNode.
   std::unique_ptr<cudf::column> computeAggregateColumn(
       const cudf::table_view& partKeys,
-      const cudf::table_view& sortedView,
       cudf::column_view inputCol,
       const core::WindowNode::Function& func,
       const std::string& baseName,
