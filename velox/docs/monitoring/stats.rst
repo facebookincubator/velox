@@ -560,6 +560,17 @@ reported per column using ``column_<nodeId>`` and the column type. For example,
      - nanos
      - The time spent loading Parquet pages. Reported across all columns and
        by column.
+   * - | parquet.processedPages
+       | parquet.column_<nodeId>.<type>.processedPages
+     -
+     - The number of Parquet pages whose data was read and processed. Reported
+       across all columns and by column.
+   * - | parquet.skippedPages
+       | parquet.column_<nodeId>.<type>.skippedPages
+     -
+     - The number of Parquet pages skipped after reading the page header,
+       without reading or decompressing the page data. Reported across all
+       columns and by column.
    * - | <format>.decompressCPUTimeNanos
        | <format>.column_<nodeId>.<type>.decompressCPUTimeNanos
      - nanos
