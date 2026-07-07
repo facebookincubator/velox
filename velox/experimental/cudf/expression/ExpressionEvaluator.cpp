@@ -2880,8 +2880,10 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
     constexpr std::string_view kHashWithSeed{"hash_with_seed"};
     const auto& functionName = expr->name();
     const bool isHashWithSeed = functionName.size() >= kHashWithSeed.size() &&
-        functionName.compare(functionName.size() - kHashWithSeed.size(),
-            kHashWithSeed.size(), kHashWithSeed) == 0;
+        functionName.compare(
+            functionName.size() - kHashWithSeed.size(),
+            kHashWithSeed.size(),
+            kHashWithSeed) == 0;
     if (isHashWithSeed && expr->inputs().size() > 2 &&
         CudfConfig::getInstance().allowCpuFallback) {
       LOG_FALLBACK(expr->toString());
