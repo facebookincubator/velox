@@ -13,8 +13,13 @@
 # limitations under the License.
 
 velox_add_library(
-  velox_dwio_text_reader TextReader.cpp TextFieldParser.cpp HEADERS
-  TextReader.h TextFieldParser.h)
+  velox_dwio_text_reader
+  TextReader.cpp
+  TextFieldParser.cpp
+  HEADERS
+  TextReader.h
+  TextFieldParser.h
+)
 
 velox_link_libraries(
   velox_dwio_text_reader
