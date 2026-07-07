@@ -797,8 +797,7 @@ void CudfWindow::computeRankColumnsBatch(
   for (size_t i = 0; i < pendingRanks.size(); ++i) {
     const auto& [funcIndex, baseName] = pendingRanks[i];
     if (sortKeyIndices_.empty() && baseName != "row_number") {
-      windowResultCols[funcIndex] =
-          makeConstantOnesColumn(numRows, stream, mr);
+      windowResultCols[funcIndex] = makeConstantOnesColumn(numRows, stream, mr);
       continue;
     }
 
