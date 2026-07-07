@@ -67,10 +67,10 @@ DateTruncFunction::DateTruncFunction(
   VELOX_CHECK(
       unitString.has_value(), "date_trunc unit must be a non-null constant");
   auto inputType = expr->inputs()[1]->type();
-  isTimestamp_ = inputType->isTimestamp();
-  isDate_ = inputType->isDate();
+  const bool isTimestamp = inputType->isTimestamp();
+  const bool isDate = inputType->isDate();
   VELOX_CHECK(
-      isTimestamp_ || isDate_,
+      isTimestamp || isDate,
       "date_trunc only supports date or timestamp inputs");
   auto parsed = functions::fromDateTimeUnitString(*unitString, true);
   VELOX_CHECK(parsed.has_value(), "Invalid date_trunc unit: {}", *unitString);
@@ -80,7 +80,7 @@ DateTruncFunction::DateTruncFunction(
   if (unit_ == DateTimeUnit::kSecond || unit_ == DateTimeUnit::kMinute ||
       unit_ == DateTimeUnit::kHour) {
     VELOX_CHECK(
-        isTimestamp_, "date_trunc {} requires timestamp input", *unitString);
+        isTimestamp, "date_trunc {} requires timestamp input", *unitString);
   }
 }
 
@@ -125,10 +125,11 @@ ColumnOrView DateTruncFunction::eval(
     case DateTimeUnit::kHour:
       return cudf::datetime::floor_datetimes(
           inputCol, cudf::datetime::rounding_frequency::HOUR, stream, mr);
-    case DateTimeUnit::kDay: {
-      auto dayCol = castToDay(inputCol);
-      return castDaysToOutput(std::move(dayCol));
-    }
+    case DateTimeUnit::kDay:
+      if (inputCol.type() == dayType) {
+        return inputCol;
+      }
+      return castDaysToOutput(castToDay(inputCol));
     case DateTimeUnit::kWeek: {
       auto dayCol = castToDay(inputCol);
       auto dowCol = cudf::datetime::extract_datetime_component(
@@ -202,24 +203,10 @@ ColumnOrView DateTruncFunction::eval(
         monthsToSubtract = std::move(monthIndex);
       } else {
         auto threeScalar = makeScalar(3);
-        auto quarterIndex = cudf::binary_operation(
-            monthIndex->view(),
-            threeScalar,
-            cudf::binary_operator::FLOOR_DIV,
-            intType,
-            stream,
-            mr);
-        auto quarterStart = cudf::binary_operation(
-            quarterIndex->view(),
-            threeScalar,
-            cudf::binary_operator::MUL,
-            intType,
-            stream,
-            mr);
         monthsToSubtract = cudf::binary_operation(
             monthIndex->view(),
-            quarterStart->view(),
-            cudf::binary_operator::SUB,
+            threeScalar,
+            cudf::binary_operator::MOD,
             intType,
             stream,
             mr);

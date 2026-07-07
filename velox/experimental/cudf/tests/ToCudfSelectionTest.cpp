@@ -194,6 +194,81 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('hour', event_ts) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(
+    ToCudfSelectionTest,
+    nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('hour', event_ts) = "
+                            "TIMESTAMP '2026-01-02 00:00:00' AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> cudfTask;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(cudfTask);
+  ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
+
+  std::shared_ptr<Task> fallbackTask;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(fallbackTask);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+}
+
+TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
+  auto input = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {DATE()->toDays("2026-01-02"), DATE()->toDays("2026-01-03")},
+          DATE())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_trunc('day', event_date) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
 // Test supported aggregation should use CUDF
 TEST_F(ToCudfSelectionTest, supportedAggregationUsesCudf) {
   auto vectors = makeVectors(rowType_, 10, 100);

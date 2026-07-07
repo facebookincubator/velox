@@ -18,10 +18,13 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -48,6 +51,31 @@ void debugPrintTree(
   for (auto& input : expr->inputs()) {
     debugPrintTree(input, indent + 2, os);
   }
+}
+
+bool isTimezoneSensitiveDateTrunc(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (!DateTruncFunction::canEvaluate(expr) ||
+      !expr->inputs()[1]->type()->isTimestamp()) {
+    return false;
+  }
+
+  auto cudfFunction = createCudfFunction(expr->name(), expr);
+  return std::dynamic_pointer_cast<DateTruncFunction>(cudfFunction) != nullptr;
+}
+
+bool containsTimezoneSensitiveDateTrunc(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (isTimezoneSensitiveDateTrunc(expr)) {
+    return true;
+  }
+
+  for (const auto& input : expr->inputs()) {
+    if (containsTimezoneSensitiveDateTrunc(input)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool checkAddIdentityProjection(
@@ -120,7 +148,19 @@ bool canBeEvaluatedByCudf(
   std::unique_ptr<exec::ExprSet> exprSet = exec::makeExprSetFromFlag(
       std::move(exprsCopy), &precompileCtx, lazyDereference);
 
+  const core::QueryConfig defaultQueryConfig = core::QueryConfig({});
+  const core::QueryConfig& queryConfig =
+      queryCtx ? queryCtx->queryConfig() : defaultQueryConfig;
+  const bool adjustTimestampToTimezone =
+      queryConfig.adjustTimestampToTimezone();
+
   for (const auto& e : exprSet->exprs()) {
+    if (adjustTimestampToTimezone && containsTimezoneSensitiveDateTrunc(e)) {
+      LOG_FALLBACK(
+          "date_trunc(timestamp) requires CPU evaluation when "
+          "adjust_timestamp_to_session_timezone is enabled");
+      return false;
+    }
     if (!canBeEvaluatedByCudf(e)) {
       return false;
     }

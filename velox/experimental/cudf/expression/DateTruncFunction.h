@@ -37,8 +37,6 @@ class DateTruncFunction : public CudfFunction {
 
  private:
   functions::DateTimeUnit unit_;
-  bool isTimestamp_{false};
-  bool isDate_{false};
 };
 
 } // namespace facebook::velox::cudf_velox
