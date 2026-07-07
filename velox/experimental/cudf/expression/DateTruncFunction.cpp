@@ -127,7 +127,7 @@ ColumnOrView DateTruncFunction::eval(
           inputCol, cudf::datetime::rounding_frequency::HOUR, stream, mr);
     case DateTimeUnit::kDay:
       if (inputCol.type() == dayType) {
-        return inputCol;
+        return std::make_unique<cudf::column>(inputCol, stream, mr);
       }
       return castDaysToOutput(castToDay(inputCol));
     case DateTimeUnit::kWeek: {
