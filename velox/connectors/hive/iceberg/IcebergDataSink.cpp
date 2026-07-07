@@ -31,6 +31,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldId.h"
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -452,11 +453,48 @@ std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions(size_t writerIndex) const {
   auto options = HiveDataSink::createWriterOptions(writerIndex);
 
+  // Build a synthetic top-level IcebergFieldId tree from inputColumns_ to
+  // carry per-column Iceberg field IDs across the adapter boundary. This
+  // matches IcebergParquetStatsCollector's parquetFieldIds() shape: a
+  // root container whose `children` are one entry per input column. The
+  // tree is consumed by the format-specific adapter (NIMBLE today;
+  // others can opt in by overriding applyPostConfigs in their adapter).
+  IcebergFieldId icebergFieldIds{};
+  icebergFieldIds.children.reserve(
+      icebergInsertTableHandle_->inputColumns().size());
+  // Parallel Iceberg V3 type-attribute tree, one child per input column,
+  // drawn from each IcebergColumnHandle::icebergMetadata(). Walked in
+  // lockstep with icebergFieldIds by the NIMBLE adapter.
+  IcebergFieldMetadata icebergMetadata;
+  icebergMetadata.children.reserve(
+      icebergInsertTableHandle_->inputColumns().size());
+  for (const auto& column : icebergInsertTableHandle_->inputColumns()) {
+    const auto& icebergColumn =
+        checkedPointerCast<const IcebergColumnHandle>(column);
+    const auto& srcField = icebergColumn->field();
+    // Convert dwio ParquetFieldId to connector-local IcebergFieldId at
+    // boundary.
+    std::function<IcebergFieldId(const dwio::common::ParquetFieldId&)> convert =
+        [&](const dwio::common::ParquetFieldId& src) -> IcebergFieldId {
+      IcebergFieldId dst{};
+      dst.fieldId = src.fieldId;
+      dst.children.reserve(src.children.size());
+      for (const auto& child : src.children) {
+        dst.children.emplace_back(convert(child));
+      }
+      return dst;
+    };
+    icebergFieldIds.children.emplace_back(convert(srcField));
+    icebergMetadata.children.emplace_back(icebergColumn->icebergMetadata());
+  }
+
   // Dispatch format-specific Iceberg overrides through the adapter so each
   // supported format (Parquet, DWRF, Nimble) gets its pre/post-processConfigs
   // hooks applied uniformly.
-  const auto adapter =
-      createWriterOptionsAdapter(icebergInsertTableHandle_->storageFormat());
+  const auto adapter = createWriterOptionsAdapter(
+      icebergInsertTableHandle_->storageFormat(),
+      std::move(icebergFieldIds),
+      std::move(icebergMetadata));
   if (adapter != nullptr) {
     adapter->applyPreConfigs(*options);
   }
