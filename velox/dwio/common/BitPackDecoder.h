@@ -392,19 +392,24 @@ static inline void unpack16(
   outputBuffer += numBytes;
 }
 
-// Unpack numValues number of uint32_t values with bitWidth in [5, 8] range.
+// Unpack numValues number of uint32_t values with bitWidth in [1, 7] range.
 static inline void unpack1to7(
     uint8_t bitWidth,
     const uint8_t* FOLLY_NONNULL& inputBuffer,
+    uint64_t inputBufferLen,
     uint64_t numValues,
     uint32_t* FOLLY_NONNULL& outputBuffer) {
   uint64_t pdepMask = kPdepMask8[bitWidth];
 
   auto writeEndOffset = outputBuffer + numValues;
+  const uint8_t* inputEnd = inputBuffer + inputBufferLen;
 
-  // Process bitWidth bytes (8 values) a time.
-  while (outputBuffer + 8 <= writeEndOffset) {
-    uint64_t val = *reinterpret_cast<const uint64_t*>(inputBuffer);
+  // Process bitWidth bytes (8 values) a time. Requires at least 8 bytes
+  // available for the memcpy load.
+  while (outputBuffer + 8 <= writeEndOffset &&
+         inputEnd - inputBuffer >= (int64_t)sizeof(uint64_t)) {
+    uint64_t val;
+    std::memcpy(&val, inputBuffer, sizeof(uint64_t));
 
     uint64_t intermediateVal = _pdep_u64(val, pdepMask);
     __m256i result = _mm256_cvtepu8_epi32(
@@ -424,20 +429,25 @@ static inline void unpack1to7(
       outputBuffer);
 }
 
-// Unpack numValues number of uint32_t values with bitWidth in [5, 8] range.
+// Unpack numValues number of uint32_t values with bitWidth in [1, 7] range
+// (shuffle variant, currently unused).
 static inline void unpack1to7_shuffle(
     uint8_t bitWidth,
     const uint8_t* FOLLY_NONNULL& inputBuffer,
+    uint64_t inputBufferLen,
     uint64_t numValues,
     uint32_t* FOLLY_NONNULL& outputBuffer) {
   uint64_t pdepMask = kPdepMask8[bitWidth];
 
   auto writeEndOffset = outputBuffer + numValues;
+  const uint8_t* inputEnd = inputBuffer + inputBufferLen;
   __m256i mask = _mm256_set_epi32(0, 1, 2, 3, 0, 1, 2, 3);
 
   // Process bitWidth bytes (8 values) a time.
-  while (outputBuffer + 8 <= writeEndOffset) {
-    uint64_t val = *reinterpret_cast<const uint64_t*>(inputBuffer);
+  while (outputBuffer + 8 <= writeEndOffset &&
+         inputEnd - inputBuffer >= (int64_t)sizeof(uint64_t)) {
+    uint64_t val;
+    std::memcpy(&val, inputBuffer, sizeof(uint64_t));
 
     uint64_t intermediateVal = _pdep_u64(val, pdepMask);
 
@@ -815,7 +825,7 @@ inline void unpack<uint32_t>(
     case 5:
     case 6:
     case 7:
-      unpack1to7(bitWidth, inputBits, numValues, result);
+      unpack1to7(bitWidth, inputBits, inputBufferLen, numValues, result);
       break;
     case 8:
       unpack8(inputBits, numValues, result);
