@@ -59,7 +59,7 @@ Expected<Timestamp> PrestoCastHooks::castIntToTimestamp(
       Status::UserError("Conversion to Timestamp is not supported"));
 }
 
-Expected<int64_t> PrestoCastHooks::castTimestampToInt(
+Expected<int64_t> PrestoCastHooks::castTimestampToBigint(
     Timestamp /*timestamp*/) const {
   return folly::makeUnexpected(
       Status::UserError("Conversion from Timestamp to Int is not supported"));
