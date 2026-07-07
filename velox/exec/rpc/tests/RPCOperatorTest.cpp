@@ -421,10 +421,12 @@ TEST_F(RPCOperatorTest, batchPipelinedDispatch) {
   }
 }
 
-/// PER_ROW congestion path: responses classified as overload drive the
-/// operator's evaluateCongestion() -> onUnitError() wiring. Verifies the
-/// query still completes correctly through that path. The window adjustment
-/// itself is unit-tested in RPCStateTest / CongestionControllerTest; here we
+/// PER_ROW congestion path. On the function's overload verdict
+/// (evaluateCongestion -> kError) both AIMD controllers back off: the
+/// per-driver window (onUnitError) and the process-global rate limiter
+/// (onRateLimited); on kSuccess the window's latency gradient is fed. Verifies
+/// the query still completes correctly through that path. The controllers'
+/// adjustments are unit-tested in RPCStateTest / RPCRateLimiterTest; here we
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {
