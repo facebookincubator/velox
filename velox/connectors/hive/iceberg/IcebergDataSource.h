@@ -17,6 +17,8 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
+#include <unordered_map>
+
 namespace facebook::velox::connector::hive::iceberg {
 
 /// Iceberg-specific data source that extends HiveDataSource.
@@ -48,6 +50,7 @@ class IcebergDataSource : public HiveDataSource {
  private:
   /// Column handles map for accessing column metadata.
   std::shared_ptr<ColumnHandleMap> columnHandles_;
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

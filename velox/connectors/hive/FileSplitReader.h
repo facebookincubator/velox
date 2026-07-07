@@ -135,6 +135,10 @@ class FileSplitReader {
     return readerOutputType_;
   }
 
+  void setNameToFieldId(std::unordered_map<std::string, int32_t> mapping) {
+    nameToFieldId_ = std::move(mapping);
+  }
+
   std::string toString() const;
 
  protected:
@@ -242,6 +246,7 @@ class FileSplitReader {
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
   bool emptySplit_;
 };
 

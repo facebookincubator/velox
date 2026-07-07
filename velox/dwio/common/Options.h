@@ -738,8 +738,19 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  ReaderOptions& setUseColumnNamesForColumnMapping(bool flag) {
+    useColumnNamesForColumnMapping_ = flag;
+    return *this;
+  }
+
   ReaderOptions& setColumnMappingMode(ColumnMappingMode mode) {
     columnMappingMode_ = mode;
+    return *this;
+  }
+
+  ReaderOptions& setNameToFieldId(
+      std::unordered_map<std::string, int32_t> mapping) {
+    nameToFieldId_ = std::move(mapping);
     return *this;
   }
 
@@ -842,8 +853,16 @@ class ReaderOptions : public io::ReaderOptions {
     return fileColumnNamesReadAsLowerCase_;
   }
 
+  bool useColumnNamesForColumnMapping() const {
+    return useColumnNamesForColumnMapping_;
+  }
+
   ColumnMappingMode columnMappingMode() const {
     return columnMappingMode_;
+  }
+
+  const std::unordered_map<std::string, int32_t>& nameToFieldId() const {
+    return nameToFieldId_;
   }
 
   const std::shared_ptr<random::RandomSkipTracker>& randomSkip() const {
@@ -1014,7 +1033,9 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
+  bool useColumnNamesForColumnMapping_{false};
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
@@ -1070,6 +1091,8 @@ struct WriterOptions {
 struct ColumnReaderOptions {
   /// How to map table fields to file fields.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
+  bool useColumnNamesForColumnMapping_{false};
+  std::unordered_map<std::string, int32_t> nameToFieldId_;
 };
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options);

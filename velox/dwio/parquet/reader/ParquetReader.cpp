@@ -491,6 +491,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   auto& schema = *fileMetaData_->schema();
   uint32_t curSchemaIdx = schemaIdx;
   auto& schemaElement = schema[curSchemaIdx];
+  std::optional<int32_t> fieldId = schemaElement.field_id().to_optional();
   bool isRepeated = false;
   bool isOptional = false;
 
@@ -516,7 +517,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
   }
 
   if (parquetReaderOptions_.columnMappingMode != ColumnMappingMode::kName &&
-      options_.fileSchema()) {
+      !options_.useColumnNamesForColumnMapping() && options_.fileSchema()) {
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
     }
@@ -563,10 +564,35 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
 
         if (requestedRowType) {
           if (parquetReaderOptions_.columnMappingMode ==
-              ColumnMappingMode::kName) {
-            auto fileTypeIdx = requestedRowType->getChildIdxIfExists(childName);
-            if (fileTypeIdx.has_value()) {
-              childRequestedType = requestedRowType->childAt(*fileTypeIdx);
+                  ColumnMappingMode::kName ||
+              options_.useColumnNamesForColumnMapping()) {
+            std::optional<uint32_t> requestedChildIndex;
+            if (auto childFieldId =
+                    schema[schemaIdx].field_id().to_optional()) {
+              const auto& nameToFieldId = options_.nameToFieldId();
+              if (!nameToFieldId.empty()) {
+                for (uint32_t j = 0; j < requestedRowType->size(); ++j) {
+                  std::string lookup = requestedRowType->nameOf(j);
+                  folly::toLowerAscii(lookup);
+                  auto it = nameToFieldId.find(lookup);
+                  if (it != nameToFieldId.end() &&
+                      it->second == *childFieldId) {
+                    requestedChildIndex = j;
+                    break;
+                  }
+                }
+                if (!requestedChildIndex.has_value()) {
+                  followChild = false;
+                }
+              }
+            }
+            if (!requestedChildIndex.has_value()) {
+              requestedChildIndex =
+                  requestedRowType->getChildIdxIfExists(childName);
+            }
+            if (requestedChildIndex.has_value()) {
+              childRequestedType =
+                  requestedRowType->childAt(*requestedChildIndex);
             }
           } else {
             // Handle schema evolution.
@@ -636,7 +662,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat + 1,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
           }
           // Only special case list of map and list of list is handled here,
           // other generic case is handled with case MAP
@@ -673,7 +703,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
           }
 
           // For backward-compatibility, a group annotated with MAP_KEY_VALUE
@@ -704,7 +738,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat + 1,
               maxDefine,
               isOptional,
-              isRepeated);
+              isRepeated,
+              0,
+              0,
+              0,
+              fieldId);
         }
 
         default:
@@ -742,7 +780,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
           } else {
             // According to the spec of list backward compatibility
             // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
@@ -774,7 +816,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                     maxRepeat,
                     maxDefine,
                     isOptional,
-                    isRepeated));
+                    isRepeated,
+                    0,
+                    0,
+                    0,
+                    std::nullopt));
             auto res = std::make_unique<ParquetTypeWithId>(
                 TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
                 std::move(rowChildren),
@@ -788,7 +834,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                 maxRepeat,
                 maxDefine,
                 isOptional,
-                isRepeated);
+                isRepeated,
+                0,
+                0,
+                0,
+                fieldId);
             return res;
           }
         } else if (
@@ -812,7 +862,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat,
               maxDefine,
               isOptional,
-              isRepeated);
+              isRepeated,
+              0,
+              0,
+              0,
+              fieldId);
         } else {
           // Row type
           // To support list backward compatibility, need create a new row type
@@ -838,7 +892,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                   maxRepeat,
                   maxDefine,
                   isOptional,
-                  isRepeated));
+                  isRepeated,
+                  0,
+                  0,
+                  0,
+                  std::nullopt));
           return std::make_unique<ParquetTypeWithId>(
               TypeFactory<TypeKind::ARRAY>::create(childrenRowType),
               std::move(rowChildren),
@@ -852,7 +910,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               maxRepeat,
               maxDefine,
               isOptional,
-              isRepeated);
+              isRepeated,
+              0,
+              0,
+              0,
+              fieldId);
         }
       } else {
         // Row type
@@ -870,7 +932,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             maxRepeat,
             maxDefine,
             isOptional,
-            isRepeated);
+            isRepeated,
+            0,
+            0,
+            0,
+            fieldId);
       }
     }
   } else { // leaf node
@@ -901,7 +967,8 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         isRepeated,
         precision,
         scale,
-        typeLength);
+        typeLength,
+        fieldId);
 
     if (apache::thrift::can_throw(*schemaElement.repetition_type()) ==
         thrift::FieldRepetitionType::REPEATED) {
@@ -922,7 +989,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           maxRepeat,
           maxDefine - 1,
           isOptional,
-          isRepeated);
+          isRepeated,
+          0,
+          0,
+          0,
+          fieldId);
     }
     return leafTypePtr;
   }
@@ -1428,6 +1499,8 @@ class ParquetRowReader::Impl {
         options_.timestampPrecision());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
+    columnReaderOptions_ =
+        dwio::common::makeColumnReaderOptions(readerBase_->options());
     columnReader_ = ParquetColumnReader::build(
         columnReaderOptions_,
         requestedType_,
@@ -1443,9 +1516,6 @@ class ParquetRowReader::Impl {
       // table scan.
       advanceToNextRowGroup();
     }
-
-    columnReaderOptions_ =
-        dwio::common::makeColumnReaderOptions(readerBase_->options());
   }
 
   void filterRowGroups() {
