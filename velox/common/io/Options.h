@@ -71,32 +71,21 @@ class ReaderOptions {
     VELOX_CHECK_NOT_NULL(pool_);
   }
 
-  // Deprecated: use pool-only constructor + setDataIoStats/setMetadataIoStats.
-  ReaderOptions(
-      velox::memory::MemoryPool* pool,
-      IoStatistics* dataIoStats,
-      IoStatistics* metadataIoStats)
-      : pool_{pool},
-        dataIoStats_{dataIoStats},
-        metadataIoStats_{metadataIoStats} {
-    VELOX_CHECK_NOT_NULL(pool_);
-  }
-
-  ReaderOptions& setDataIoStats(IoStatistics* stats) {
+  ReaderOptions& setDataIoStats(std::shared_ptr<IoStatistics> stats) {
     VELOX_CHECK_NULL(dataIoStats_, "dataIoStats already set");
-    dataIoStats_ = stats;
+    dataIoStats_ = std::move(stats);
     return *this;
   }
 
-  ReaderOptions& setMetadataIoStats(IoStatistics* stats) {
+  ReaderOptions& setMetadataIoStats(std::shared_ptr<IoStatistics> stats) {
     VELOX_CHECK_NULL(metadataIoStats_, "metadataIoStats already set");
-    metadataIoStats_ = stats;
+    metadataIoStats_ = std::move(stats);
     return *this;
   }
 
-  ReaderOptions& setIndexIoStats(IoStatistics* stats) {
+  ReaderOptions& setIndexIoStats(std::shared_ptr<IoStatistics> stats) {
     VELOX_CHECK_NULL(indexIoStats_, "indexIoStats already set");
-    indexIoStats_ = stats;
+    indexIoStats_ = std::move(stats);
     return *this;
   }
 
@@ -183,25 +172,25 @@ class ReaderOptions {
 
   /// IO statistics for tracking storage reads, SSD reads, RAM cache hits,
   /// and overread bytes for data stream IO.
-  IoStatistics* dataIoStats() const {
+  const std::shared_ptr<IoStatistics>& dataIoStats() const {
     return dataIoStats_;
   }
 
   /// IO statistics for tracking storage reads, SSD reads, RAM cache hits,
   /// and overread bytes for metadata IO (footer, stripe groups, index).
-  IoStatistics* metadataIoStats() const {
+  const std::shared_ptr<IoStatistics>& metadataIoStats() const {
     return metadataIoStats_;
   }
 
-  IoStatistics* indexIoStats() const {
+  const std::shared_ptr<IoStatistics>& indexIoStats() const {
     return indexIoStats_;
   }
 
  protected:
   velox::memory::MemoryPool* pool_;
-  IoStatistics* dataIoStats_{nullptr};
-  IoStatistics* metadataIoStats_{nullptr};
-  IoStatistics* indexIoStats_{nullptr};
+  std::shared_ptr<IoStatistics> dataIoStats_;
+  std::shared_ptr<IoStatistics> metadataIoStats_;
+  std::shared_ptr<IoStatistics> indexIoStats_;
 
   std::shared_ptr<folly::Executor> ioExecutor_;
 

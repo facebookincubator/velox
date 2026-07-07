@@ -111,8 +111,8 @@ class E2EWriterTest : public testing::Test {
     writer.close();
 
     dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_.get());
-    readerOpts.setMetadataIoStats(metadataIoStats_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -175,8 +175,8 @@ class E2EWriterTest : public testing::Test {
     writer.close();
 
     dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_.get());
-    readerOpts.setMetadataIoStats(metadataIoStats_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -280,6 +280,110 @@ class E2EWriterTest : public testing::Test {
   std::shared_ptr<MemoryPool> rootPool_;
   std::shared_ptr<MemoryPool> leafPool_;
 };
+
+// Writes a DWRF file with 'fileSchema' and per-node iceberg.id attributes, then
+// opens it with ColumnMappingMode::kFieldId against 'tableSchema'/'fieldIds'
+// and returns the reader's (field-id-renamed) row type.
+RowTypePtr readWithFieldIds(
+    memory::MemoryPool* rootPool,
+    memory::MemoryPool* leafPool,
+    const RowTypePtr& fileSchema,
+    const std::unordered_map<
+        uint32_t,
+        std::vector<std::pair<std::string, std::string>>>& schemaAttributes,
+    const RowTypePtr& tableSchema,
+    const std::vector<dwio::common::ParquetFieldId>& fieldIds) {
+  auto sink = std::make_unique<MemorySink>(
+      16 * 1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool});
+  auto* sinkPtr = sink.get();
+
+  dwrf::WriterOptions options;
+  options.config = std::make_shared<dwrf::Config>();
+  options.schema = fileSchema;
+  options.memoryPool = rootPool;
+  options.schemaAttributes = schemaAttributes;
+  dwrf::Writer writer{std::move(sink), options};
+  writer.write(BatchMaker::createBatch(fileSchema, 10, *leafPool, nullptr, 0));
+  writer.close();
+
+  dwio::common::ReaderOptions readerOpts(leafPool);
+  readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
+  readerOpts.setFileSchema(tableSchema);
+  readerOpts.setFieldIds(fieldIds);
+  std::string_view data(sinkPtr->data(), sinkPtr->size());
+  auto reader = std::make_unique<dwrf::DwrfReader>(
+      readerOpts,
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(data), readerOpts.memoryPool()));
+  return reader->rowType();
+}
+
+TEST_F(E2EWriterTest, FieldIdMappingRenameReorderDrop) {
+  // File node ids: 0=root, 1=a, 2=b, 3=c.
+  auto fileSchema = ROW({"a", "b", "c"}, {INTEGER(), BIGINT(), VARCHAR()});
+  // Requested: c renamed to c2 (id 3, reordered first), a kept (id 1), b
+  // dropped (id 2 absent), d added (id 9 absent from file).
+  auto tableSchema = ROW({"c2", "a", "d"}, {VARCHAR(), INTEGER(), INTEGER()});
+  auto rowType = readWithFieldIds(
+      rootPool_.get(),
+      leafPool_.get(),
+      fileSchema,
+      {{1, {{"iceberg.id", "1"}}},
+       {2, {{"iceberg.id", "2"}}},
+       {3, {{"iceberg.id", "3"}}}},
+      tableSchema,
+      {{3, {}}, {1, {}}, {9, {}}});
+
+  // File order is preserved; matched columns take the requested name, the
+  // dropped column (id 2) gets a non-colliding sentinel name.
+  ASSERT_EQ(rowType->size(), 3);
+  EXPECT_EQ(rowType->nameOf(0), "a");
+  EXPECT_EQ(rowType->nameOf(1), "$dwrf_unmatched_2");
+  EXPECT_EQ(rowType->nameOf(2), "c2");
+}
+
+TEST_F(E2EWriterTest, FieldIdMappingDropReaddSameName) {
+  // File has column c with field id 5; the table dropped it and re-added a new
+  // column c with field id 9. The stale file column must NOT bind to the new c.
+  auto fileSchema = ROW({"c"}, {INTEGER()});
+  auto tableSchema = ROW({"c"}, {INTEGER()});
+  auto rowType = readWithFieldIds(
+      rootPool_.get(),
+      leafPool_.get(),
+      fileSchema,
+      {{1, {{"iceberg.id", "5"}}}},
+      tableSchema,
+      {{9, {}}});
+
+  ASSERT_EQ(rowType->size(), 1);
+  EXPECT_EQ(rowType->nameOf(0), "$dwrf_unmatched_1");
+}
+
+TEST_F(E2EWriterTest, FieldIdMappingNestedStruct) {
+  // File node ids: 0=root, 1=s, 2=s.x, 3=s.y.
+  auto fileSchema = ROW({"s"}, {ROW({"x", "y"}, {INTEGER(), INTEGER()})});
+  // Requested struct reorders children and renames y->y2; ids: s=10, x=11,
+  // y=12.
+  auto tableSchema = ROW({"s"}, {ROW({"y2", "x"}, {INTEGER(), INTEGER()})});
+  std::vector<dwio::common::ParquetFieldId> fieldIds{
+      {10, {{12, {}}, {11, {}}}}};
+  auto rowType = readWithFieldIds(
+      rootPool_.get(),
+      leafPool_.get(),
+      fileSchema,
+      {{1, {{"iceberg.id", "10"}}},
+       {2, {{"iceberg.id", "11"}}},
+       {3, {{"iceberg.id", "12"}}}},
+      tableSchema,
+      fieldIds);
+
+  // Nested children keep file order but take the requested names matched by id.
+  ASSERT_EQ(rowType->size(), 1);
+  auto& nested = rowType->childAt(0)->asRow();
+  ASSERT_EQ(nested.size(), 2);
+  EXPECT_EQ(nested.nameOf(0), "x");
+  EXPECT_EQ(nested.nameOf(1), "y2");
+}
 
 // This test can be run to generate test files. Run it with following command
 // buck test velox/dwio/dwrf/test:velox_dwrf_e2e_writer_tests --
@@ -579,8 +683,8 @@ TEST_F(E2EWriterTest, PresentStreamIsSuppressedOnFlatMap) {
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
   dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -953,8 +1057,8 @@ TEST_F(E2EWriterTest, PartialStride) {
   writer.close();
 
   dwio::common::ReaderOptions readerOpts(leafPool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   ASSERT_EQ(
@@ -1155,8 +1259,8 @@ class E2EEncryptionTest : public E2EWriterTest {
 
     // read it back for compare
     dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setDataIoStats(dataIoStats_.get());
-    readerOpts.setMetadataIoStats(metadataIoStats_.get());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
     readerOpts.setDecrypterFactory(decrypterFactory);
     return createReader(*sink_, readerOpts);
   }

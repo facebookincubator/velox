@@ -56,11 +56,11 @@ PyType PyFile::getSchema() {
                         ->openFileForRead(filePath_);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::shared_ptr<ReadFile>(std::move(readFile)), *leafPool);
-    io::IoStatistics dataIoStats;
-    io::IoStatistics metadataIoStats;
+    auto dataIoStats = std::make_shared<io::IoStatistics>();
+    auto metadataIoStats = std::make_shared<io::IoStatistics>();
     dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setDataIoStats(&dataIoStats);
-    readerOptions.setMetadataIoStats(&metadataIoStats);
+    readerOptions.setDataIoStats(dataIoStats);
+    readerOptions.setMetadataIoStats(metadataIoStats);
     auto reader = dwio::common::getReaderFactory(fileFormat_)
                       ->createReader(std::move(input), readerOptions);
     fileSchema_ = reader->rowType();

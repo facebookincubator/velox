@@ -52,8 +52,9 @@ inline std::string getExamplesFilePath(const std::string& fileName) {
 TEST_F(OrcReaderTest, testOrcReaderSimple) {
   const std::string simpleTest(
       getExamplesFilePath("TestStringDictionary.testRowIndex.orc"));
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
@@ -90,8 +91,9 @@ TEST_F(OrcReaderTest, testOrcReaderComplexTypes) {
          g:map<string,struct<\
            h:struct<\
              i:array<double>>>>>>"));
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
       createFileBufferedInput(icebergOrc, readerOpts.memoryPool()), readerOpts);
@@ -110,8 +112,9 @@ TEST_F(OrcReaderTest, testOrcReaderComplexTypes) {
 
 TEST_F(OrcReaderTest, testOrcReaderVarchar) {
   const std::string varcharOrc(getExamplesFilePath("orc_index_int_string.orc"));
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
       createFileBufferedInput(varcharOrc, readerOpts.memoryPool()), readerOpts);
@@ -142,8 +145,9 @@ TEST_F(OrcReaderTest, testOrcReaderVarchar) {
 TEST_F(OrcReaderTest, testOrcReaderDate) {
   const std::string dateOrc(
       getExamplesFilePath("TestOrcFile.testDate1900.orc"));
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
@@ -188,8 +192,9 @@ TEST_F(OrcReaderTest, testOrcReaderDate) {
 // ) with (format = 'ORC');
 TEST_F(OrcReaderTest, testOrcReadAllType) {
   const std::string dateOrc(getExamplesFilePath("orc_all_type.orc"));
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
@@ -266,8 +271,9 @@ TEST_F(OrcReaderTest, testOrcRlev2) {
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
 
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setScanSpec(spec);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
 
@@ -384,8 +390,9 @@ TEST_P(
     OrcReaderTestP,
     DwrfReader_FetchesOrcMetadata_ExpectCorrectFooterAndMetadata) {
   const std::string dateOrc(getFilename());
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
@@ -426,8 +433,9 @@ TEST_P(OrcReaderTestP, DwrfRowReader_ReadAllColumnTypes_ExpectedRowDataRead) {
   scanSpec->addAllChildFields(*schema);
 
   const std::string dateOrc(getFilename());
-  dwio::common::ReaderOptions readerOpts{
-      pool(), dataIoStats_.get(), metadataIoStats_.get()};
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   readerOpts.setScanSpec(scanSpec);
 

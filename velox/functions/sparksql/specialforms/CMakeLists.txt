@@ -40,6 +40,7 @@ velox_link_libraries(
   fmt::fmt
   FastFloat::fast_float
   velox_dwio_text_reader
+  velox_spark_query_config
   velox_functions_lib
   velox_functions_json
   velox_expression

@@ -1062,6 +1062,33 @@ RowVectorPtr HashProbe::getOutput() {
   return getOutputInternal(/*toSpillOutput=*/false);
 }
 
+void HashProbe::processRightSemiNoFilter(bool emptyBuildSide) {
+  if (emptyBuildSide) {
+    input_ = nullptr;
+    return;
+  }
+
+  auto* rows = table_->rows();
+  const int32_t nextOffset = rows->nextOffset();
+  for (const auto probeRow : lookup_->rows) {
+    char* hit = lookup_->hits[probeRow];
+    while (hit != nullptr) {
+      // Duplicate build rows are linked by nextOffset. The first probe that
+      // reaches a key marks the whole chain. If the head row is already
+      // marked, all duplicates for this key have already been marked.
+      if (!rows->testAndSetProbedFlag(hit)) {
+        break;
+      }
+      if (nextOffset == 0) {
+        break;
+      }
+      hit = *reinterpret_cast<char**>(hit + nextOffset);
+    }
+  }
+
+  input_ = nullptr;
+}
+
 RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   if (isFinished()) {
     return nullptr;
@@ -1150,8 +1177,15 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   const bool isLeftSemiOrAntiJoinNoFilter = !filter_ &&
       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
        isAntiJoin(joinType_) || isCountingJoin(joinType_));
+  const bool isRightSemiFilterJoinNoFilter =
+      !filter_ && isRightSemiFilterJoin(joinType_);
 
   const bool emptyBuildSide = (table_->numDistinct() == 0);
+
+  if (isRightSemiFilterJoinNoFilter) {
+    processRightSemiNoFilter(emptyBuildSide);
+    return nullptr;
+  }
 
   // Left semi and anti joins are always cardinality reducing, e.g. for a
   // given row of input they produce zero or 1 row of output. Therefore, if

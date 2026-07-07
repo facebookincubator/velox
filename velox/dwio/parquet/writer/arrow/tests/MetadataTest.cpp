@@ -291,8 +291,8 @@ TEST(Metadata, TestBuildAccess) {
     ASSERT_EQ(2, rg2Column1->encodingStats().size());
     ASSERT_EQ(3, rg2Column2->encodingStats().size());
 
-    // Test FileMetaData::set_file_path.
-    ASSERT_TRUE(rg2Column1->filePath().empty());
+    // Test FileMetaData::set_file_path
+    ASSERT_FALSE(rg2Column1->has_file_path());
     fAccessors[loopIndex]->setFilePath("/foo/bar/bar.parquet");
     ASSERT_EQ("/foo/bar/bar.parquet", rg2Column1->filePath());
   }
@@ -418,8 +418,8 @@ TEST(Metadata, TestAddKeyValueMetadata) {
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
   dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats.get());
-  readerOptions.setMetadataIoStats(metadataIoStats.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());
@@ -541,8 +541,8 @@ TEST(Metadata, TestSortingColumns) {
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
   dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats.get());
-  readerOptions.setMetadataIoStats(metadataIoStats.get());
+  readerOptions.setDataIoStats(dataIoStats);
+  readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
       readerOptions.memoryPool());

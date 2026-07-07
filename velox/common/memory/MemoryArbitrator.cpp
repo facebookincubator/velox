@@ -191,7 +191,7 @@ uint64_t MemoryReclaimer::run(
   uint64_t execTimeUs{0};
   int64_t reclaimedBytes{0};
   {
-    MicrosecondTimer timer{&execTimeUs};
+    MicrosecondWallTimer timer{&execTimeUs};
     reclaimedBytes = func();
   }
   VELOX_CHECK_GE(reclaimedBytes, 0);

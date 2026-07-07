@@ -49,8 +49,7 @@ TEST_P(ParquetWriterFieldIdTest, fieldIds) {
        makeMapVectorFromJson<std::string, int32_t>(
            std::vector<std::string>(kRows, R"({"k": 4})"))});
 
-  parquet::WriterOptions writerOptions;
-  writerOptions.memoryPool = rootPool_.get();
+  ParquetWriterOptions writerOptions;
 
   if (GetParam()) {
     // Provide Parquet field IDs aligned with the Velox schema tree.
@@ -68,10 +67,7 @@ TEST_P(ParquetWriterFieldIdTest, fieldIds) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setDataIoStats(dataIoStats_.get());
-  readerOptions.setMetadataIoStats(metadataIoStats_.get());
-  auto parquetReader = createReaderInMemory(*sinkPtr, readerOptions);
+  auto parquetReader = createReaderInMemory(*sinkPtr);
   EXPECT_EQ(parquetReader->numberOfRows(), kRows);
   auto veloxRowType = parquetReader->rowType();
   EXPECT_EQ(*veloxRowType, *schema);

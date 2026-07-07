@@ -78,6 +78,11 @@ maintainers of that component.
 #### Parquet
 
 * Deepak Majeti - [majetideepak](https://github.com/majetideepak) / deepak.majeti@ibm.com
+* Ping Liu - [PingLiuPing](https://github.com/PingLiuPing) / ping.liu.ping@gmail.com
+
+#### Iceberg
+
+* Ping Liu - [PingLiuPing](https://github.com/PingLiuPing) / ping.liu.ping@gmail.com
 
 #### ORC, DWRF, and Nimble
 

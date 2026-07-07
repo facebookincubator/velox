@@ -77,6 +77,33 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     EXPECT_EQ(nullptr, arrowArray.private_data);
   }
 
+  void testFlatTimestampType(const TypePtr& type) {
+    for (TimestampUnit unit :
+         {TimestampUnit::kSecond,
+          TimestampUnit::kMilli,
+          TimestampUnit::kMicro,
+          TimestampUnit::kNano}) {
+      options_.timestampUnit = unit;
+      testFlatVector<Timestamp>(
+          {
+              Timestamp(0, 0),
+              std::nullopt,
+              Timestamp(1699300965, 12'349),
+              Timestamp(-2208960000, 0), // 1900-01-01
+              Timestamp(3155788800, 999'999'999),
+              std::nullopt,
+          },
+          type);
+    }
+
+    // Out of range. If nanosecond precision is represented in Arrow,
+    // timestamps starting around 2263-01-01 should overflow and throw a user
+    // exception.
+    EXPECT_THROW(
+        testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, type),
+        VeloxUserError);
+  }
+
   // Construct and test a constant vector based on a scalar value.
   template <typename T>
   void testConstant(
@@ -533,29 +560,11 @@ TEST_F(ArrowBridgeArrayExportTest, flatDate) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatTimestamp) {
-  for (TimestampUnit unit :
-       {TimestampUnit::kSecond,
-        TimestampUnit::kMilli,
-        TimestampUnit::kMicro,
-        TimestampUnit::kNano}) {
-    options_.timestampUnit = unit;
-    testFlatVector<Timestamp>(
-        {
-            Timestamp(0, 0),
-            std::nullopt,
-            Timestamp(1699300965, 12'349),
-            Timestamp(-2208960000, 0), // 1900-01-01
-            Timestamp(3155788800, 999'999'999),
-            std::nullopt,
-        },
-        TIMESTAMP());
-  }
+  testFlatTimestampType(TIMESTAMP());
+}
 
-  // Out of range. If nanosecond precision is represented in Arrow, timestamps
-  // starting around 2263-01-01 should overflow and throw a user exception.
-  EXPECT_THROW(
-      testFlatVector<Timestamp>({Timestamp(9246211200, 0)}, TIMESTAMP()),
-      VeloxUserError);
+TEST_F(ArrowBridgeArrayExportTest, flatTimestampUtc) {
+  testFlatTimestampType(TIMESTAMP_UTC());
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatTime) {
@@ -1394,6 +1403,64 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
          std::nullopt});
   }
 
+  void testTimestampUtcRoundtrip() {
+    auto roundtripVector = [&](const VectorPtr& input) {
+      ArrowSchema schema;
+      ArrowArray data;
+      velox::exportToArrow(input, schema, options_);
+      velox::exportToArrow(input, data, pool_.get(), options_);
+
+      auto output = importFromArrow(schema, data, pool_.get());
+      facebook::velox::test::assertEqualVectors(input, output);
+
+      if (isViewer()) {
+        schema.release(&schema);
+        data.release(&data);
+      } else {
+        EXPECT_EQ(nullptr, schema.release);
+        EXPECT_EQ(nullptr, data.release);
+      }
+    };
+
+    auto flatVector = vectorMaker_.flatVectorNullable<Timestamp>(
+        {
+            Timestamp(0, 0),
+            std::nullopt,
+            Timestamp(1699300965, 12'349),
+            Timestamp(-2208960000, 0),
+            Timestamp(3155788800, 999'999'999),
+        },
+        TIMESTAMP_UTC());
+    roundtripVector(flatVector);
+
+    auto dictionaryValues = vectorMaker_.flatVector<Timestamp>(
+        {
+            Timestamp(0, 0),
+            Timestamp(1699300965, 12'349),
+            Timestamp(3155788800, 999'999'999),
+        },
+        TIMESTAMP_UTC());
+    auto dictionaryVector = BaseVector::wrapInDictionary(
+        nullptr, makeIndicesInReverse(3, pool_.get()), 3, dictionaryValues);
+    roundtripVector(dictionaryVector);
+
+    using NullableTimestampArray =
+        std::optional<std::vector<std::optional<Timestamp>>>;
+    std::vector<NullableTimestampArray> nestedValues = {
+        std::vector<std::optional<Timestamp>>{
+            Timestamp(0, 0),
+            std::nullopt,
+            Timestamp(2, 200),
+        },
+        std::nullopt,
+        std::vector<std::optional<Timestamp>>{Timestamp(-2208960000, 0)},
+        std::vector<std::optional<Timestamp>>{},
+    };
+    auto nestedVector = vectorMaker_.arrayVectorNullable<Timestamp>(
+        nestedValues, ARRAY(TIMESTAMP_UTC()));
+    roundtripVector(nestedVector);
+  }
+
   template <typename TOutput, typename TInput>
   void testImportWithoutNullsBuffer(
       std::vector<std::optional<TInput>> inputValues,
@@ -1511,6 +1578,45 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
             "vector",
             std::nullopt,
         });
+  }
+
+  void testImportNullType(int64_t nullCount) {
+    ArrowSchema arrowSchema = makeArrowSchema("n");
+    ArrowArray arrowArray = makeArrowArray(nullptr, 0, 4, nullCount);
+
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    EXPECT_TRUE(output->type()->kindEquals(UNKNOWN()));
+    EXPECT_EQ(4, output->size());
+    ASSERT_TRUE(output->mayHaveNulls());
+    EXPECT_EQ(4, *output->getNullCount());
+    for (vector_size_t i = 0; i < output->size(); ++i) {
+      EXPECT_TRUE(output->isNullAt(i));
+    }
+  }
+
+  void testImportDictionaryEncodedNullType() {
+    const int32_t indices[] = {0, 0, 0, 0};
+    const void* buffers[] = {nullptr, indices};
+
+    ArrowSchema arrowSchema = makeArrowSchema("i");
+    ArrowSchema dictionarySchema = makeArrowSchema("n");
+    arrowSchema.dictionary = &dictionarySchema;
+
+    ArrowArray arrowArray = makeArrowArray(buffers, 2, 4, 0);
+    ArrowArray dictionaryArray = makeArrowArray(nullptr, 0, 1, 1);
+    arrowArray.dictionary = &dictionaryArray;
+
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    ASSERT_EQ(*UNKNOWN(), *output->type());
+    EXPECT_EQ(4, output->size());
+
+    DecodedVector decoded(*output);
+    EXPECT_TRUE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < output->size(); ++i) {
+      EXPECT_TRUE(decoded.isNullAt(i));
+    }
   }
 
  private:
@@ -2024,6 +2130,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
+  testTimestampUtcRoundtrip();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, without_nulls_buffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
@@ -2042,6 +2152,11 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
   testImportStringView();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
+  testImportNullType(4);
+  testImportNullType(-1);
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, row) {
   testImportRow();
 }
@@ -2056,6 +2171,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, map) {
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
   testImportDictionary();
+}
+
+TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionaryEncodedNullType) {
+  testImportDictionaryEncodedNullType();
 }
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, ree) {
@@ -2130,6 +2249,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
+  testTimestampUtcRoundtrip();
+}
+
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, without_nulls_buffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
@@ -2148,6 +2271,11 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
   testImportStringView();
 }
 
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {
+  testImportNullType(4);
+  testImportNullType(-1);
+}
+
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, row) {
   testImportRow();
 }
@@ -2162,6 +2290,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {
   testImportDictionary();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionaryEncodedNullType) {
+  testImportDictionaryEncodedNullType();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, ree) {

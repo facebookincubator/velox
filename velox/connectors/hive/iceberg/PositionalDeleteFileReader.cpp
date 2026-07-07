@@ -82,8 +82,9 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // Create the Reader and RowReader
 
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
-  deleteReaderOpts.setDataIoStats(ioStatistics_.get());
-  deleteReaderOpts.setMetadataIoStats(ioStatistics_.get());
+  // TODO: Use separate IoStatistics for data and metadata.
+  deleteReaderOpts.setDataIoStats(ioStatistics_);
+  deleteReaderOpts.setMetadataIoStats(ioStatistics_);
   configureReaderOptions(
       fileConfig_,
       connectorQueryCtx,

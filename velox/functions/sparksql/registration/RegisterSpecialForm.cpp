@@ -37,9 +37,7 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   exec::registerFunctionCallToSpecialForm(
       MakeDecimalCallToSpecialForm::kMakeDecimal,
       std::make_unique<MakeDecimalCallToSpecialForm>());
-  exec::registerFunctionCallToSpecialForm(
-      DecimalRoundCallToSpecialForm::kRoundDecimal,
-      std::make_unique<DecimalRoundCallToSpecialForm>());
+  registerDecimalRoundingForms();
   exec::registerFunctionCallToSpecialForm(
       AtLeastNNonNullsCallToSpecialForm::kAtLeastNNonNulls,
       std::make_unique<AtLeastNNonNullsCallToSpecialForm>());
@@ -48,6 +46,7 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
       expression::kCast, std::make_unique<SparkCastCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
       expression::kTryCast, std::make_unique<SparkTryCastCallToSpecialForm>());
+  registerSparkCastModeSpecialForms();
   exec::registerFunctionCallToSpecialForm(
       FromCsvCallToSpecialForm::kFromCsv,
       std::make_unique<FromCsvCallToSpecialForm>());

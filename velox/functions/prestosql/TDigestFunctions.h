@@ -174,53 +174,6 @@ struct ConstructTDigestFunction {
 };
 
 template <typename T>
-struct DestructureTDigestFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<
-          Row<Array<double>,
-              Array<int32_t>,
-              double,
-              double,
-              double,
-              double,
-              int64_t>>& result,
-      const arg_type<SimpleTDigest<double>>& input) {
-    // Deserialize the TDigest
-    auto digest = TDigest<>::fromSerialized(input.data());
-    // Extract the components
-    double min = digest.min();
-    double max = digest.max();
-    double sum = digest.sum();
-    double compression = digest.compression();
-    int64_t count = 0;
-    // Get the centroids from the TDigest
-    std::vector<double> means;
-    std::vector<int32_t> weights;
-    const double* tDigestWeights = digest.weights();
-    const double* tDigestMeans = digest.means();
-    size_t numCentroids = digest.size();
-    for (int i = 0; i < numCentroids; i++) {
-      means.push_back(tDigestMeans[i]);
-      weights.push_back(static_cast<int32_t>(tDigestWeights[i]));
-      count += tDigestWeights[i];
-    }
-    // Create the result row
-    result.copy_from(
-        std::make_tuple(
-            std::move(means),
-            std::move(weights),
-            compression,
-            min,
-            max,
-            sum,
-            count));
-
-    return true;
-  }
-};
-
-template <typename T>
 struct TrimmedMeanFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   FOLLY_ALWAYS_INLINE bool call(

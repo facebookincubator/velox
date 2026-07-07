@@ -28,14 +28,14 @@ bool VectorHasher::tryMapToRangeSimd(
   constexpr int kWidth = xsimd::batch<T>::size;
   for (; row + kWidth <= rows.end(); row += kWidth) {
     auto data = xsimd::load_unaligned(values + row);
-    int32_t gtMax = simd::toBitMask(data > allHigh);
-    int32_t ltMin = simd::toBitMask(data < allLow);
+    bool gtMax = simd::any(data > allHigh);
+    bool ltMin = simd::any(data < allLow);
     // value - (low - 1) doesn't work when low is the lowest possible (e.g.
     // std::numeric_limits<int64_t>::min())
     if constexpr (sizeof(T) == sizeof(uint64_t)) {
       (data - allLow + allOne).store_unaligned(result + row);
     }
-    if ((gtMax | ltMin) != 0) {
+    if (gtMax || ltMin) {
       inRange = false;
       break;
     }

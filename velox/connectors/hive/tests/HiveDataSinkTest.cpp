@@ -19,6 +19,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
+#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <re2/re2.h>
@@ -30,9 +31,11 @@
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/tests/utils/RuntimeStatsInjectingWriter.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/Operator.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -51,6 +54,7 @@ namespace {
 using namespace facebook::velox::common;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::dwio::common::test;
 
 class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
  protected:
@@ -692,7 +696,7 @@ DEBUG_ONLY_TEST_F(HiveDataSinkTest, memoryReclaim) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, writerFlushThreshold: {}, expectedWriterReclaimEnabled: {}, expectedWriterReclaimed: {}",
-          dwio::common::toString(format),
+          dwio::common::FileFormatName::toName(format),
           sortWriter,
           writerSpillEnabled,
           succinctBytes(writerFlushThreshold),
@@ -842,7 +846,7 @@ TEST_F(HiveDataSinkTest, memoryReclaimAfterClose) {
     std::string debugString() const {
       return fmt::format(
           "format: {}, sortWriter: {}, writerSpillEnabled: {}, close: {}, expectedWriterReclaimEnabled: {}",
-          dwio::common::toString(format),
+          dwio::common::FileFormatName::toName(format),
           sortWriter,
           writerSpillEnabled,
           close,
@@ -1158,7 +1162,7 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   auto flushPolicyFactory = []() {
     return std::make_unique<parquet::DefaultFlushPolicy>(1234, 0);
   };
-  auto writeOptions = std::make_shared<parquet::WriterOptions>();
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
   writeOptions->flushPolicyFactory = flushPolicyFactory;
   auto dataSink = createDataSink(
       rowType_,
@@ -1177,8 +1181,8 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   dataSink->close();
 
   dwio::common::ReaderOptions readerOpts(pool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
@@ -1217,8 +1221,8 @@ TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {
   dataSink->close();
 
   dwio::common::ReaderOptions readerOpts(pool_.get());
-  readerOpts.setDataIoStats(dataIoStats_.get());
-  readerOpts.setMetadataIoStats(metadataIoStats_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::vector<std::string> filePaths =
       listFiles(outputDirectory->getPath());
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
@@ -1334,7 +1338,7 @@ TEST_F(HiveDataSinkTest, fileRotationBasic) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "1MB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "1MB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "256KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1375,7 +1379,7 @@ TEST_F(HiveDataSinkTest, fileRotationNoEmptyTrailingFile) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "1KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "1KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "1KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1409,7 +1413,7 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledForBucketedTables) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "100KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "100KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
 
@@ -1456,7 +1460,7 @@ TEST_F(HiveDataSinkTest, fileRotationDisabledForBucketedTables) {
 TEST_F(HiveDataSinkTest, fileRotationDisabledByDefault) {
   const auto outputDirectory = TempDirectoryPath::create();
 
-  // Don't set max-target-file-size (use default which is disabled)
+  // Don't set max target file size (use default which is disabled)
   auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
 
   // Write a lot of data
@@ -1517,7 +1521,7 @@ TEST_F(HiveDataSinkTest, fileRotationIoStatsAccumulation) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "1MB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "1MB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "256KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1572,7 +1576,7 @@ TEST_F(HiveDataSinkTest, fileRotationFileInfoConsistency) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "500KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "500KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "128KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1649,7 +1653,7 @@ TEST_F(HiveDataSinkTest, fileRotationStatsProgressDuringWrite) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "256KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "256KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "64KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1689,7 +1693,7 @@ TEST_F(HiveDataSinkTest, fileRotationWithPartitionedTable) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "256KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "256KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "64KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1757,7 +1761,7 @@ TEST_F(HiveDataSinkTest, fileRotationWriteIOTimeAccumulation) {
   const auto outputDirectory = TempDirectoryPath::create();
 
   std::unordered_map<std::string, std::string> connectorConfig;
-  connectorConfig.emplace("max-target-file-size", "512KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "512KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "128KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1785,6 +1789,98 @@ TEST_F(HiveDataSinkTest, fileRotationWriteIOTimeAccumulation) {
   verifyWrittenData(outputDirectory->getPath(), stats.numWrittenFiles);
 }
 
+TEST_F(HiveDataSinkTest, writerRuntimeStatsPropagation) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  folly::F14FastMap<std::string, RuntimeMetric> injectedStats;
+  injectedStats.emplace(
+      std::string{exec::Operator::kBackgroundCpuTimeNanos},
+      RuntimeMetric(42'000'000, RuntimeCounter::Unit::kNanos));
+
+  auto originalFactory =
+      dwio::common::getWriterFactory(dwio::common::FileFormat::DWRF);
+  auto injectingFactory = std::make_shared<RuntimeStatsInjectingWriterFactory>(
+      originalFactory, injectedStats);
+  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+  dwio::common::registerWriterFactory(injectingFactory);
+  auto restoreFactory = folly::makeGuard([&]() {
+    dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+    dwio::common::registerWriterFactory(originalFactory);
+  });
+
+  auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
+
+  const auto vectors = createVectors(500, 10);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+  const auto stats = dataSink->stats();
+
+  ASSERT_EQ(
+      stats.writerRuntimeStats.count(
+          std::string{exec::Operator::kBackgroundCpuTimeNanos}),
+      1);
+  const auto& metric = stats.writerRuntimeStats.at(
+      std::string{exec::Operator::kBackgroundCpuTimeNanos});
+  ASSERT_EQ(metric.unit, RuntimeCounter::Unit::kNanos);
+  ASSERT_EQ(metric.sum, 42'000'000);
+}
+
+TEST_F(HiveDataSinkTest, writerRuntimeStatsAccumulatedAcrossRotation) {
+  const auto outputDirectory = TempDirectoryPath::create();
+
+  folly::F14FastMap<std::string, RuntimeMetric> injectedStats;
+  injectedStats.emplace(
+      std::string{exec::Operator::kBackgroundCpuTimeNanos},
+      RuntimeMetric(10'000'000, RuntimeCounter::Unit::kNanos));
+
+  auto originalFactory =
+      dwio::common::getWriterFactory(dwio::common::FileFormat::DWRF);
+  auto injectingFactory = std::make_shared<RuntimeStatsInjectingWriterFactory>(
+      originalFactory, injectedStats);
+  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+  dwio::common::registerWriterFactory(injectingFactory);
+  auto restoreFactory = folly::makeGuard([&]() {
+    dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+    dwio::common::registerWriterFactory(originalFactory);
+  });
+
+  std::unordered_map<std::string, std::string> connectorConfig;
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "512KB");
+  connectorConfig.emplace("hive.orc.writer.stripe-max-size", "128KB");
+  connectorConfig_ = std::make_shared<HiveConfig>(
+      std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
+
+  auto dataSink = createDataSink(rowType_, outputDirectory->getPath());
+
+  const int numBatches = 60;
+  const auto vectors = createVectors(500, numBatches);
+  for (const auto& vector : vectors) {
+    dataSink->appendData(vector);
+  }
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+  const auto stats = dataSink->stats();
+
+  ASSERT_GT(stats.numWrittenFiles, 1)
+      << "Rotation must occur for this test to be meaningful";
+  ASSERT_EQ(
+      stats.writerRuntimeStats.count(
+          std::string{exec::Operator::kBackgroundCpuTimeNanos}),
+      1);
+  const auto& metric = stats.writerRuntimeStats.at(
+      std::string{exec::Operator::kBackgroundCpuTimeNanos});
+  ASSERT_EQ(metric.unit, RuntimeCounter::Unit::kNanos);
+  ASSERT_EQ(
+      metric.sum, 10'000'000 * static_cast<int64_t>(stats.numWrittenFiles));
+  ASSERT_EQ(metric.count, stats.numWrittenFiles);
+
+  createDuckDbTable(vectors);
+  verifyWrittenData(outputDirectory->getPath(), stats.numWrittenFiles);
+}
+
 TEST_F(HiveDataSinkTest, fileRotationWithMemoryReclaim) {
   // Tests that file rotation works correctly when memory reclamation is
   // enabled. This verifies the single ioStats approach - we reuse the same
@@ -1794,7 +1890,7 @@ TEST_F(HiveDataSinkTest, fileRotationWithMemoryReclaim) {
 
   std::unordered_map<std::string, std::string> connectorConfig;
   // Use small file size to trigger multiple rotations
-  connectorConfig.emplace("max-target-file-size", "256KB");
+  connectorConfig.emplace(HiveConfig::kOrcMaxTargetFileSize, "256KB");
   connectorConfig.emplace("hive.orc.writer.stripe-max-size", "64KB");
   connectorConfig_ = std::make_shared<HiveConfig>(
       std::make_shared<config::ConfigBase>(std::move(connectorConfig)));
@@ -1949,6 +2045,45 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
   createDuckDbTable(vectors);
   verifyWrittenData(
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
+}
+
+DEBUG_ONLY_TEST_F(HiveDataSinkTest, perWriterMemoryPool) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto writerOptions = std::make_shared<dwrf::WriterOptions>();
+
+  const auto rowType = ROW({"c0", "p0"}, {BIGINT(), VARCHAR()});
+  auto dataSink = createDataSink(
+      rowType,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"p0"},
+      nullptr,
+      writerOptions);
+
+  std::set<std::string> writerPoolNames;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::dwrf::Writer::write",
+      std::function<void(dwrf::Writer*)>([&](dwrf::Writer* writer) {
+        // Memory pool hierarchy:
+        // Hive writer pool -> DWRF writer pool -> DWRF category leaf pools.
+        auto* innerPool = writer->getContext()
+                              .getMemoryPool(dwrf::MemoryUsageCategory::GENERAL)
+                              .parent();
+        ASSERT_NE(innerPool, nullptr);
+        auto* writerPool = innerPool->parent();
+        ASSERT_NE(writerPool, nullptr);
+        writerPoolNames.insert(writerPool->name());
+      }));
+
+  dataSink->appendData(makeRowVector({
+      makeFlatVector<int64_t>(200, folly::identity),
+      makeFlatVector<StringView>(
+          200, [](auto row) { return row % 2 == 0 ? "part_0" : "part_1"; }),
+  }));
+
+  ASSERT_EQ(writerPoolNames.size(), 2);
+  ASSERT_TRUE(dataSink->finish());
+  ASSERT_EQ(dataSink->close().size(), 2);
 }
 
 TEST_F(HiveDataSinkTest, sanitizeFileName) {

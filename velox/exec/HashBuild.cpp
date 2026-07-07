@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/HashBuild.h"
+#include <fmt/format.h>
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
@@ -142,8 +143,17 @@ bool HashBuild::setupCachedHashTable() {
     return false;
   }
 
-  const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
-  cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+  if (joinNode_->cacheKey().has_value()) {
+    cacheKey_ = joinNode_->cacheKey().value();
+  } else {
+    const auto& queryId = operatorCtx_->task()->queryCtx()->queryId();
+    cacheKey_ = fmt::format("{}:{}", queryId, planNodeId());
+  }
+
+  VELOX_CHECK(
+      !cacheKey_.empty(),
+      "Hash table cache requires a non-empty cache key when "
+      "useHashTableCache is enabled");
 
   // Get or create the cache entry (which includes the pool).
   // If another task is already building, future_ will be set.
@@ -217,7 +227,9 @@ bool HashBuild::receivedCachedHashTable() {
   // Ensure that table is ready.
   VELOX_CHECK(
       cacheEntry_->buildComplete,
-      "Signalled that cache table is ready but it is not built yet.");
+      "Hash table cache build failed for key '{}'. "
+      "The builder task may have encountered an error (e.g., OOM).",
+      cacheKey_);
   // Proceed through normal noMoreInput flow which will use the cache.
   setRunning();
   noMoreInput();
@@ -1423,6 +1435,11 @@ bool HashBuild::nonReclaimableState() const {
 
 void HashBuild::close() {
   Operator::close();
+
+  if (useHashTableCache() && cacheEntry_ != nullptr &&
+      !cacheEntry_->buildComplete && hashTableCacheBuilderTask()) {
+    HashTableCache::instance()->drop(cacheKey_);
+  }
 
   {
     // Free up major memory usage. Gate access to them as they can be accessed

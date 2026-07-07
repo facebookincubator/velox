@@ -1479,6 +1479,37 @@ using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 
+// Timestamp type in UTC that is not subject to session timezone adjustment.
+class TimestampUtcType final : public TimestampType {
+ public:
+  static std::shared_ptr<const TimestampUtcType> get() {
+    VELOX_CONSTEXPR_SINGLETON TimestampUtcType kInstance;
+    return {std::shared_ptr<const TimestampUtcType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "TIMESTAMP UTC";
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return TimestampUtcType::get();
+  }
+
+ protected:
+  constexpr TimestampUtcType() = default;
+};
+
 constexpr long kMillisInSecond = 1000;
 constexpr long kMillisInMinute = 60 * kMillisInSecond;
 constexpr long kMillisInHour = 60 * kMillisInMinute;
@@ -2276,6 +2307,8 @@ VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
+
+TypePtr TIMESTAMP_UTC();
 
 TypePtr UNKNOWN();
 

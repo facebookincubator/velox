@@ -65,16 +65,7 @@ class ReaderBase {
       const dwio::common::ReaderOptions& options,
       std::unique_ptr<dwio::common::BufferedInput> input);
 
-  /// Creates reader base from buffered input.
-  /// It is kept here for backward compatibility with Meta's internal usage.
-  ReaderBase(
-      memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::BufferedInput> input,
-      dwio::common::FileFormat fileFormat,
-      io::IoStatistics* dataIoStats,
-      io::IoStatistics* metadataIoStats);
-
-  /// Creates reader base from metadata.
+  /// Creates reader base from metadata (for testing).
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
@@ -82,12 +73,12 @@ class ReaderBase {
       const proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
       std::unique_ptr<encryption::DecryptionHandler> handler,
-      io::IoStatistics* dataIoStats,
-      io::IoStatistics* metadataIoStats)
+      std::shared_ptr<io::IoStatistics> dataIoStats = nullptr,
+      std::shared_ptr<io::IoStatistics> metadataIoStats = nullptr)
       : options_{[&] {
           dwio::common::ReaderOptions opts(&pool);
-          opts.setDataIoStats(dataIoStats);
-          opts.setMetadataIoStats(metadataIoStats);
+          opts.setDataIoStats(std::move(dataIoStats));
+          opts.setMetadataIoStats(std::move(metadataIoStats));
           return opts;
         }()},
         input_{std::move(input)},
@@ -268,18 +259,6 @@ class ReaderBase {
       const FooterWrapper& footer,
       uint32_t index = 0,
       bool fileColumnNamesReadAsLowerCase = false);
-
-  static dwio::common::ReaderOptions createReaderOptions(
-      memory::MemoryPool& pool,
-      dwio::common::FileFormat fileFormat,
-      io::IoStatistics* dataIoStats,
-      io::IoStatistics* metadataIoStats) {
-    dwio::common::ReaderOptions options(&pool);
-    options.setDataIoStats(dataIoStats);
-    options.setMetadataIoStats(metadataIoStats);
-    options.setFileFormat(fileFormat);
-    return options;
-  }
 
   const dwio::common::ReaderOptions options_;
   const std::unique_ptr<dwio::common::BufferedInput> input_;

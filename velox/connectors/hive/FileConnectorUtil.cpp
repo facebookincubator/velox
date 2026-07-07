@@ -16,12 +16,37 @@
 
 #include "velox/connectors/hive/FileConnectorUtil.h"
 
+#include <fmt/format.h>
+#include <unordered_map>
+
+#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive {
+
+FormatScopedConfigs makeFormatScopedConfigs(
+    const FileConfig& fileConfig,
+    const config::ConfigBase& sessionProperties,
+    dwio::common::FileFormat fileFormat) {
+  VELOX_CHECK_NE(
+      fileFormat,
+      dwio::common::FileFormat::UNKNOWN,
+      "Cannot build format-specific configs for unknown file format");
+
+  return {
+      config::ConfigBase(fileConfig.config()->rawConfigsWithPrefix(
+          fmt::format(
+              "{}{}",
+              fileConfig.connectorConfigPrefix(),
+              dwio::common::formatConfigPrefix(fileFormat, ".")))),
+      config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
+          dwio::common::formatConfigPrefix(fileFormat, "_")))};
+}
 
 void configureReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -46,6 +71,7 @@ void configureReaderOptions(
     const std::unordered_map<std::string, std::string>& /*tableParameters*/,
     dwio::common::ReaderOptions& readerOptions) {
   auto sessionProperties = connectorQueryCtx->sessionProperties();
+  VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
   readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
   readerOptions.setMaxCoalesceBytes(
       fileConfig->maxCoalescedBytes(sessionProperties));
@@ -54,27 +80,20 @@ void configureReaderOptions(
   readerOptions.setFileColumnNamesReadAsLowerCase(
       fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
   readerOptions.setAllowEmptyFile(true);
-  bool useColumnNamesForColumnMapping = false;
+  auto columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   switch (fileSplit->fileFormat) {
     case dwio::common::FileFormat::DWRF:
     case dwio::common::FileFormat::ORC: {
-      useColumnNamesForColumnMapping =
-          fileConfig->isOrcUseColumnNames(sessionProperties);
-      break;
-    }
-    case dwio::common::FileFormat::PARQUET: {
-      useColumnNamesForColumnMapping =
-          fileConfig->isParquetUseColumnNames(sessionProperties);
-      readerOptions.setAllowInt32Narrowing(
-          fileConfig->allowInt32Narrowing(sessionProperties));
+      columnMappingMode = fileConfig->isOrcUseColumnNames(sessionProperties)
+          ? dwio::common::ColumnMappingMode::kName
+          : dwio::common::ColumnMappingMode::kPosition;
       break;
     }
     default:
-      useColumnNamesForColumnMapping = false;
+      columnMappingMode = dwio::common::ColumnMappingMode::kPosition;
   }
 
-  readerOptions.setUseColumnNamesForColumnMapping(
-      useColumnNamesForColumnMapping);
+  readerOptions.setColumnMappingMode(columnMappingMode);
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
@@ -97,10 +116,12 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
-  readerOptions.setFileMetadataCacheEnabled(
-      fileConfig->fileMetadataCacheEnabled(sessionProperties));
-  readerOptions.setPinFileMetadata(
-      fileConfig->pinFileMetadata(sessionProperties));
+  readerOptions.setCacheMetadata(
+      fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
+  readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
+  readerOptions.setCacheIndex(
+      fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
+  readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
 
   // Set footer speculative IO size based on file format.
   switch (fileSplit->fileFormat) {
@@ -110,8 +131,6 @@ void configureReaderOptions(
           fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::PARQUET:
-      readerOptions.setFooterSpeculativeIoSize(
-          fileConfig->parquetFooterSpeculativeIoSize(sessionProperties));
       break;
     case dwio::common::FileFormat::NIMBLE:
       readerOptions.setFooterSpeculativeIoSize(
@@ -128,11 +147,24 @@ void configureReaderOptions(
     VELOX_CHECK(
         readerOptions.fileFormat() == fileSplit->fileFormat,
         "HiveDataSource received splits of different formats: {} and {}",
-        dwio::common::toString(readerOptions.fileFormat()),
-        dwio::common::toString(fileSplit->fileFormat));
+        dwio::common::FileFormatName::toName(readerOptions.fileFormat()),
+        dwio::common::FileFormatName::toName(fileSplit->fileFormat));
   } else {
     readerOptions.setFileFormat(fileSplit->fileFormat);
   }
+
+  if (!dwio::common::hasReaderFactory(fileSplit->fileFormat)) {
+    readerOptions.setFormatSpecificOptions(nullptr);
+    return;
+  }
+
+  auto formatScopedConfigs = makeFormatScopedConfigs(
+      *fileConfig, *sessionProperties, fileSplit->fileFormat);
+  readerOptions.setFormatSpecificOptions(
+      dwio::common::getReaderFactory(fileSplit->fileFormat)
+          ->createFormatOptions(
+              formatScopedConfigs.connectorConfig,
+              formatScopedConfigs.sessionProperties));
 }
 
 void configureRowReaderOptions(
@@ -165,8 +197,14 @@ void configureRowReaderOptions(
         fileConfig->parallelUnitLoadCount(sessionProperties));
     rowReaderOptions.setIndexEnabled(
         fileConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setLazyColumnIo(
+        fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setStringDecoderZeroCopy(
+        fileConfig->nimbleStringDecoderZeroCopy(sessionProperties));
+    rowReaderOptions.setNimblePreserveDictionaryEncoding(
+        fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
   }
 }
 
@@ -205,6 +243,7 @@ bool applyPartitionFilter(
       return applyFilter(*filter, folly::to<bool>(partitionValue));
     }
     case TypeKind::TIMESTAMP: {
+      VELOX_DCHECK(type->equivalent(*TIMESTAMP()));
       auto result = util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast);
       VELOX_CHECK(!result.hasError());
@@ -213,13 +252,31 @@ bool applyPartitionFilter(
       }
       return applyFilter(*filter, result.value());
     }
-    case TypeKind::VARCHAR: {
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
       return applyFilter(*filter, partitionValue);
     }
     default:
       VELOX_FAIL(
           "Bad type {} for partition value: {}", type->kind(), partitionValue);
   }
+}
+
+template <TypeKind kind>
+bool testFilterTyped(const common::Filter* filter, const VectorPtr& vec) {
+  using T = typename TypeTraits<kind>::NativeType;
+  return applyFilter(*filter, vec->as<SimpleVector<T>>()->valueAt(0));
+}
+
+// Tests a filter against a non-null constant vector value (e.g., an
+// initial-default column missing from the data file).
+bool testFilterOnConstantVector(
+    const common::Filter* filter,
+    const VectorPtr& constantVec) {
+  VELOX_CHECK_EQ(constantVec->size(), 1);
+  VELOX_CHECK(!constantVec->isNullAt(0));
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      testFilterTyped, constantVec->typeKind(), filter, constantVec);
 }
 
 } // namespace
@@ -256,9 +313,20 @@ bool testFilters(
               child->filter(),
               asLocalTime);
         }
-        // Column is missing, most likely due to schema evolution. Or it's a
-        // partition key but the partition value is NULL.
-        if (child->filter()->isDeterministic() &&
+        // Column is missing from the file. If it has a constant value (e.g.,
+        // an initial-default from schema evolution), test the filter against
+        // it. Otherwise treat the column as NULL.
+        bool filterMatchedConstant = false;
+        if (child->isConstant()) {
+          auto constantVec = child->constantValue();
+          if (!constantVec->isNullAt(0)) {
+            if (!testFilterOnConstantVector(child->filter(), constantVec)) {
+              return false;
+            }
+            filterMatchedConstant = true;
+          }
+        }
+        if (!filterMatchedConstant && child->filter()->isDeterministic() &&
             !child->filter()->testNull()) {
           VLOG(1) << "Skipping " << filePath
                   << " because the filter testNull() failed for column "

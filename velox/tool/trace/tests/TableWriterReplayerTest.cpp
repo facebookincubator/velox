@@ -394,6 +394,100 @@ TEST_F(TableWriterReplayerTest, basic) {
   assertEqualResults({data}, {copy});
 }
 
+TEST_F(TableWriterReplayerTest, serdeParametersPreserved) {
+  vector_size_t size = 1'000;
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(
+          size, [](auto row) { return row * 2; }, nullEvery(7)),
+  });
+  auto sourceFilePath = TempFilePath::create();
+  writeToFile(sourceFilePath->getPath(), data);
+
+  const std::unordered_map<std::string, std::string> serdeParams = {
+      {"test.param.one", "value1"},
+      {"test.param.two", "42"},
+  };
+
+  auto rowType = asRowType(data->type());
+  auto targetDirectoryPath = TempDirectoryPath::create();
+  auto insertHandle = std::make_shared<core::InsertTableHandle>(
+      kHiveConnectorId,
+      makeHiveInsertTableHandle(
+          rowType->names(),
+          rowType->children(),
+          {},
+          nullptr,
+          makeLocationHandle(
+              targetDirectoryPath->getPath(),
+              std::nullopt,
+              connector::hive::LocationHandle::TableType::kNew),
+          fileFormat_,
+          std::nullopt,
+          serdeParams));
+
+  std::string traceNodeId;
+  auto plan =
+      PlanBuilder()
+          .tableScan(rowType)
+          .addNode(addTableWriter(
+              rowType, rowType->names(), std::nullopt, insertHandle, false))
+          .capturePlanNodeId(traceNodeId)
+          .project({TableWriteTraits::rowCountColumnName()})
+          .singleAggregation(
+              {},
+              {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
+          .planNode();
+
+  const auto testDir = TempDirectoryPath::create();
+  const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kQueryTraceEnabled, true)
+      .config(core::QueryConfig::kQueryTraceDir, traceRoot)
+      .config(core::QueryConfig::kQueryTraceMaxBytes, 100UL << 30)
+      .config(core::QueryConfig::kQueryTraceTaskRegExp, ".*")
+      .config(core::QueryConfig::kQueryTraceNodeId, traceNodeId)
+      .split(makeHiveConnectorSplit(sourceFilePath->getPath()))
+      .copyResults(pool(), task);
+
+  const auto traceOutputDir = TempDirectoryPath::create();
+  const auto result = TableWriterReplayer(
+                          traceRoot,
+                          task->queryCtx()->queryId(),
+                          task->taskId(),
+                          "1",
+                          "TableWriter",
+                          "",
+                          0,
+                          executor_.get(),
+                          traceOutputDir->getPath())
+                          .run();
+
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
+  const auto taskMetaReader =
+      exec::trace::TaskTraceMetadataReader(taskTraceDir, pool());
+  const auto queryPlan = taskMetaReader.queryPlan();
+  const auto* replayNode = core::PlanNode::findFirstNode(
+      queryPlan.get(),
+      [&](const auto* node) { return node->id() == traceNodeId; });
+  ASSERT_NE(replayNode, nullptr);
+  const auto* tableWriteNode =
+      dynamic_cast<const core::TableWriteNode*>(replayNode);
+  ASSERT_NE(tableWriteNode, nullptr);
+  const auto tracedHandle =
+      std::dynamic_pointer_cast<const connector::hive::HiveInsertTableHandle>(
+          tableWriteNode->insertTableHandle()->connectorInsertTableHandle());
+  ASSERT_NE(tracedHandle, nullptr);
+  const auto& tracedSerdeParams = tracedHandle->serdeParameters();
+  ASSERT_EQ(tracedSerdeParams.size(), serdeParams.size());
+  for (const auto& [key, value] : serdeParams) {
+    ASSERT_EQ(tracedSerdeParams.count(key), 1);
+    ASSERT_EQ(tracedSerdeParams.at(key), value);
+  }
+}
+
 TEST_F(TableWriterReplayerTest, partitionWrite) {
   const int32_t numPartitions = 4;
   const int32_t numBatches = 2;
