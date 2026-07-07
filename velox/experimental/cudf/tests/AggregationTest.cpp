@@ -1754,6 +1754,35 @@ TEST_F(AggregationTest, avgAllNullsPartialFinal) {
   assertQuery(op2, "SELECT c0, avg(c2) FROM tmp GROUP BY c0");
 }
 
+// Test avg with NaN inputs preserves NaN (does not convert to NULL)
+TEST_F(AggregationTest, avgNaNInputs) {
+  // Group 0: NaN only -> avg should be NaN
+  // Group 1: normal values -> avg should compute normally
+  // Group 2: all NULLs (count == 0) -> avg should be NULL
+  // Group 3: NaN + NULL + normal -> avg should be NaN
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 1, 1, 2, 2, 3, 3, 3}),
+      makeNullableFlatVector<double>(
+          {std::nan(""),
+           1.0,
+           3.0,
+           5.0,
+           std::nullopt,
+           std::nullopt,
+           std::nan(""),
+           std::nullopt,
+           7.0}),
+  });
+  createDuckDbTable({data});
+
+  auto op = PlanBuilder()
+                .values({data})
+                .singleAggregation({"c0"}, {"avg(c1)"})
+                .planNode();
+
+  assertQuery(op, "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+}
+
 // Test that zero-column rows flow correctly through CudfFromVelox.
 // project({}) produces zero-column output; localPartitionRoundRobin is a CPU
 // operator that forces CudfFromVelox insertion before the GPU aggregation.
