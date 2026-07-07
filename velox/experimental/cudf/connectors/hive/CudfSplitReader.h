@@ -84,7 +84,14 @@ class CudfSplitReader : public NvtxHelper {
   void setupCudfDataSource();
 
   // Whether a pushed-down subfield filter is set on this split reader.
-  bool hasSubfieldFilter() const;
+  bool hasSubfieldFilter() const {
+    return subfieldFilterExpr_ != nullptr;
+  }
+
+  // The pushed-down subfield filter AST, or nullptr if none.
+  cudf::ast::expression const* subfieldFilterExpr() const {
+    return subfieldFilterExpr_;
+  }
 
   // Clear splitReaders and datasources after split has been fully processed.
   void resetSplit();
