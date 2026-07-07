@@ -21,6 +21,7 @@
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/IExpr.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
@@ -1173,6 +1174,56 @@ class PlanBuilder {
   /// final. Partial limit can run multi-threaded. Final limit must run
   /// single-threaded.
   PlanBuilder& limit(int64_t offset, int64_t count, bool isPartial);
+
+  /// Add a FixedPointNode as the root of the plan (a leaf in pipeline terms --
+  /// its iteration plans run as sub-tasks, not as pipeline sources).  Must be
+  /// the first node (no input).
+  ///
+  /// @param stateDeclarations Persistent state entries surviving across
+  /// iterations.
+  /// @param plans Per-iteration plans, run sequentially as sub-tasks.
+  /// @param convergenceConfig Convergence checking + iteration bound.
+  /// @param outputStateEntry The mutable vector state entry whose final
+  /// contents are emitted and into which each iteration's last plan output is
+  /// written.
+  PlanBuilder& fixedPoint(
+      std::vector<core::StateDeclarationPtr> stateDeclarations,
+      std::vector<core::PlanNodePtr> plans,
+      core::ConvergenceConfig convergenceConfig,
+      std::string outputStateEntry);
+
+  /// Add a FixedPointNode with a single per-iteration body plan (the common
+  /// case: no in-iteration shuffle).  `outputStateEntry` defaults to the last
+  /// declared VectorState when omitted.
+  PlanBuilder& fixedPoint(
+      std::vector<core::StateDeclarationPtr> stateDeclarations,
+      const PlanBuilder& body,
+      core::ConvergenceConfig convergenceConfig,
+      std::optional<std::string> outputStateEntry = std::nullopt);
+
+  /// Convenience overload for a single state declaration and a single body
+  /// plan.
+  PlanBuilder& fixedPoint(
+      core::StateDeclarationPtr stateDeclaration,
+      const PlanBuilder& body,
+      core::ConvergenceConfig convergenceConfig,
+      std::optional<std::string> outputStateEntry = std::nullopt);
+
+  /// Add a StateSourceNode as the source node, reading the named vector state
+  /// entry of the enclosing fixed point.  `delta` selects an append entry's
+  /// latest delta (the in-loop frontier) over its full accumulation; immaterial
+  /// for a replace entry.  Must be the first node (no input).
+  PlanBuilder& stateSource(
+      const std::string& stateName,
+      const RowTypePtr& outputType,
+      bool delta = true);
+
+  /// Add a StateHashJoinNode probing the named HashTable state entry of the
+  /// enclosing fixed point with the current plan as the probe input.
+  PlanBuilder& stateHashJoin(
+      const std::string& stateName,
+      std::vector<std::string> probeKeys,
+      const RowTypePtr& outputType);
 
   /// Add an EnforceSingleRowNode to ensure input has at most one row at
   /// runtime.

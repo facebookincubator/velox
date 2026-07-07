@@ -51,7 +51,7 @@ function(velox_install_library_headers)
     cmake_path(
       RELATIVE_PATH
       CMAKE_CURRENT_SOURCE_DIR
-      BASE_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      BASE_DIRECTORY "${PROJECT_SOURCE_DIR}"
       OUTPUT_VARIABLE _hdr_dir
     )
     install(FILES ${_hdrs} DESTINATION include/${_hdr_dir})

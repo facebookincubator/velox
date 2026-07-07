@@ -89,6 +89,18 @@ class CongestionController {
     return effective_;
   }
 
+  /// Returns the learned baseline RTT (nanos), or 0 before the first full
+  /// sample window.
+  int64_t baselineRttNs() const {
+    return baselineRttNs_;
+  }
+
+  /// Returns the number of window-shrink events (onError halving + gradient
+  /// shrinks) since construction.
+  int64_t numShrinks() const {
+    return numShrinks_;
+  }
+
   /// Halves the window, floored at 1 so dispatch never fully stalls. The fast
   /// overload path (rate limit / timeout).
   void onError();
@@ -118,6 +130,9 @@ class CongestionController {
   // number of samples accumulated in it.
   int64_t windowMinRttNs_{0};
   int64_t numWindowSamples_{0};
+
+  // Count of window-shrink events (onError halving + gradient shrinks).
+  int64_t numShrinks_{0};
 };
 
 } // namespace facebook::velox::exec::rpc

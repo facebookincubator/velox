@@ -237,10 +237,13 @@ struct ExecutionState {
 };
 
 /// Executes a single node via its OpKernel with tracing and error logging.
+/// When 'traceState' is non-null, traces the node's input values before the op
+/// and its produced output values after, for any ids in --trace_values.
 void executeNode(
     NodeCP node,
     nativert::OpKernel* kernel,
-    nativert::ExecutionFrame& frame);
+    nativert::ExecutionFrame& frame,
+    TraceState* traceState = nullptr);
 
 /// Runs standalone launches by mapping each formal node to the actual node
 /// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel.

@@ -513,33 +513,30 @@ void Writer::write(const VectorPtr& data) {
   }
 
   ArrowArray array;
-  ArrowSchema schema;
   exportToArrow(exportData, array, generalPool_.get(), options_);
-  exportToArrow(exportData, schema, options_);
 
-  // Convert the arrow schema to Schema and then update the column names based
-  // on schema_.
-  auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
-  common::testutil::TestValue::adjust(
-      "facebook::velox::parquet::Writer::write", arrowSchema.get());
-  std::vector<std::shared_ptr<::arrow::Field>> newFields;
-  auto childSize = schema_->size();
-  if (!parquetFieldIds_.empty()) {
-    VELOX_CHECK(childSize == parquetFieldIds_.size());
-  }
-  for (auto i = 0; i < childSize; i++) {
-    newFields.push_back(updateFieldNameAndIdRecursive(
-        arrowSchema->fields()[i],
-        *schema_->childAt(i),
-        !parquetFieldIds_.empty() ? &parquetFieldIds_.at(i) : nullptr,
-        schema_->nameOf(i)));
-  }
-
-  PARQUET_ASSIGN_OR_THROW(
-      auto recordBatch,
-      ::arrow::ImportRecordBatch(&array, ::arrow::schema(newFields)));
   if (!arrowContext_->schema) {
-    arrowContext_->schema = recordBatch->schema();
+    // First batch: export and fix up the Arrow schema, then cache it.
+    ArrowSchema schema;
+    exportToArrow(exportData, schema, options_);
+
+    auto arrowSchema = ::arrow::ImportSchema(&schema).ValueOrDie();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::parquet::Writer::write", arrowSchema.get());
+    std::vector<std::shared_ptr<::arrow::Field>> newFields;
+    auto childSize = schema_->size();
+    if (!parquetFieldIds_.empty()) {
+      VELOX_CHECK(childSize == parquetFieldIds_.size());
+    }
+    for (auto i = 0; i < childSize; i++) {
+      newFields.push_back(updateFieldNameAndIdRecursive(
+          arrowSchema->fields()[i],
+          *schema_->childAt(i),
+          !parquetFieldIds_.empty() ? &parquetFieldIds_.at(i) : nullptr,
+          schema_->nameOf(i)));
+    }
+
+    arrowContext_->schema = ::arrow::schema(newFields);
     for (int colIdx = 0; colIdx < arrowContext_->schema->num_fields();
          colIdx++) {
       arrowContext_->stagingChunks.push_back(
@@ -547,12 +544,13 @@ void Writer::write(const VectorPtr& data) {
     }
   }
 
+  // Import the data array using the cached schema.
+  PARQUET_ASSIGN_OR_THROW(
+      auto recordBatch,
+      ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
+
   auto bytes = data->estimateFlatSize();
   auto numRows = data->size();
-  if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
-    flush();
-  }
 
   for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
     arrowContext_->stagingChunks.at(colIdx).push_back(
@@ -560,6 +558,14 @@ void Writer::write(const VectorPtr& data) {
   }
   arrowContext_->stagingRows += numRows;
   arrowContext_->stagingBytes += bytes;
+
+  // Flush as soon as the current write pushes the staged row group past the
+  // policy threshold. Otherwise callers that rotate files based on raw written
+  // bytes won't observe the row group until the next write.
+  if (flushPolicy_->shouldFlush(getStripeProgress(
+          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+    flush();
+  }
 }
 
 bool Writer::isCodecAvailable(common::CompressionKind compression) {

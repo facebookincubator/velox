@@ -27,11 +27,6 @@ using namespace facebook::velox::functions;
 namespace facebook::velox {
 namespace {
 
-FOLLY_ALWAYS_INLINE char hexDigit(uint8_t c) {
-  VELOX_DCHECK_LT(c, 16);
-  return c < 10 ? c + '0' : c - 10 + 'A';
-}
-
 FOLLY_ALWAYS_INLINE int32_t digitToHex(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -44,16 +39,6 @@ FOLLY_ALWAYS_INLINE int32_t digitToHex(char c) {
   }
 
   VELOX_USER_FAIL("Invalid escape digit: {}", c);
-}
-
-FOLLY_ALWAYS_INLINE void writeHex(char16_t value, char*& out) {
-  value = folly::Endian::little(value);
-  *out++ = '\\';
-  *out++ = 'u';
-  *out++ = hexDigit((value >> 12) & 0x0F);
-  *out++ = hexDigit((value >> 8) & 0x0F);
-  *out++ = hexDigit((value >> 4) & 0x0F);
-  *out++ = hexDigit(value & 0x0F);
 }
 
 std::array<int8_t, 128> getAsciiEscapes() {
@@ -78,7 +63,7 @@ FOLLY_ALWAYS_INLINE void encodeAscii(int8_t value, char*& out) {
     *out++ = '\\';
     *out++ = char(escapeCode);
   } else {
-    writeHex(value, out);
+    writeUtf16Escape(value, out);
   }
 }
 
@@ -97,25 +82,6 @@ std::array<int8_t, 128> getEncodedAsciiSizes() {
   return sizes;
 }
 static const std::array<int8_t, 128> encodedAsciiSizes = getEncodedAsciiSizes();
-
-// Encode `codePoint` value into one or two UTF-16 code units. Write each code
-// unit as prefixed hexadecimals of 6 chars.
-FOLLY_ALWAYS_INLINE void encodeUtf16Hex(char32_t codePoint, char*& out) {
-  VELOX_DCHECK(codePoint <= 0x10FFFFu);
-  // Two 16-bit code units are needed.
-  if (codePoint >= 0x10000u) {
-    writeHex(
-        static_cast<char16_t>(
-            0xD800u + (((codePoint - 0x10000u) >> 10) & 0x3FFu)),
-        out);
-    writeHex(
-        static_cast<char16_t>(0xDC00u + ((codePoint - 0x10000u) & 0x3FFu)),
-        out);
-    return;
-  }
-  // One 16-bit code unit is needed.
-  writeHex(static_cast<char16_t>(codePoint), out);
-}
 
 } // namespace
 
@@ -151,14 +117,14 @@ void normalizeForJsonCast(const char* input, size_t length, char* output) {
       case 4: {
         char32_t codePoint = folly::utf8ToCodePoint(start, end, true);
         if (codePoint == U'\ufffd') {
-          writeHex(0xFFFDu, pos);
+          writeUtf16Escape(0xFFFDu, pos);
           continue;
         }
         encodeUtf16Hex(codePoint, pos);
         continue;
       }
       default: {
-        writeHex(0xFFFDu, pos);
+        writeUtf16Escape(0xFFFDu, pos);
         start++;
       }
     }
@@ -167,7 +133,7 @@ void normalizeForJsonCast(const char* input, size_t length, char* output) {
 }
 
 size_t normalizedSizeForJsonCast(const char* input, size_t length) {
-  // 6 chars that is returned by `writeHex`.
+  // 6 chars that is returned by `writeUtf16Escape`.
   constexpr size_t kEncodedHexSize = 6;
 
   size_t outSize = 0;
@@ -409,7 +375,7 @@ size_t normalizeForJsonParse(const char* input, size_t length, char* output) {
       }
       case 4: {
         if (codePoint == U'\ufffd') {
-          writeHex(0xFFFDu, pos);
+          writeUtf16Escape(0xFFFDu, pos);
         } else {
           encodeUtf16Hex(codePoint, pos);
         }

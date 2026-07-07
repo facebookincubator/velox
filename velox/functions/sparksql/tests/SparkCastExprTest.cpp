@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -25,6 +26,9 @@ using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::test {
 namespace {
+
+constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
 
 class SparkCastExprTest : public functions::test::CastBaseTest {
  protected:
@@ -38,6 +42,17 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
           std::to_string(value)}});
+  }
+
+  VectorPtr evaluateCastModeSpecialForm(
+      const std::string& castName,
+      const TypePtr& toType,
+      const VectorPtr& input) {
+    auto inputField =
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0");
+    auto cast = std::make_shared<const core::CallTypedExpr>(
+        toType, std::vector<core::TypedExprPtr>{inputField}, castName);
+    return evaluate(cast, makeRowVector({input}));
   }
 
   void testBoolToTimestamp() {
@@ -384,8 +399,11 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         }));
   }
 
+  // Overflow cases for casting timestamp to tinyint/smallint/integer. Under
+  // ANSI OFF (or try_cast), values that do not fit the target type return NULL.
   template <typename T>
-  void testTimestampToIntegralCastOverflow(std::vector<T> expected) {
+  void testTimestampToIntegralCastOverflow(
+      std::vector<std::optional<T>> expected) {
     testCast(
         makeFlatVector<Timestamp>({
             Timestamp(1740470426, 0),
@@ -393,7 +411,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             Timestamp(9223372036854, 775'807'000),
             Timestamp(-9223372036855, 224'192'000),
         }),
-        makeFlatVector<T>(expected));
+        makeNullableFlatVector<T>(expected));
   }
 
   void testTimestampToInt() {
@@ -1072,6 +1090,29 @@ class SparkCastExprTestAnsiOff : public SparkCastExprTest {
   }
 };
 
+TEST_F(SparkCastExprTest, ansiCastModeIgnoresSessionAnsiOff) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          INTEGER(),
+          makeFlatVector<std::string>({"2147483648"})),
+      "Cannot cast");
+}
+
+TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
+  setAnsiSupport(true);
+
+  auto result = evaluateCastModeSpecialForm(
+      kSparkLegacyCast,
+      INTEGER(),
+      makeFlatVector<std::string>({"2147483648", "123"}));
+  auto expected =
+      makeNullableFlatVector<int32_t>({std::nullopt, 123}, INTEGER());
+  assertEqualVectors(expected, result);
+}
+
 // ============================================================================
 // ANSI ON Tests
 // ============================================================================
@@ -1118,6 +1159,22 @@ TEST_F(SparkCastExprTestAnsiOn, doubleToTimestamp) {
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToInt) {
   testTimestampToInt();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToIntOverflow) {
+  // Under ANSI ON, values that overflow the target type throw instead of
+  // returning NULL.
+  auto testOverflowThrows = [this](const std::string& type, Timestamp value) {
+    auto input = makeRowVector({makeFlatVector<Timestamp>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate(fmt::format("cast(c0 as {})", type), input)),
+        "due to an overflow");
+  };
+
+  testOverflowThrows("tinyint", Timestamp(1740470426, 0));
+  testOverflowThrows("smallint", Timestamp(1740470426, 0));
+  testOverflowThrows("integer", Timestamp(9223372036854, 775'807'000));
+  testOverflowThrows("integer", Timestamp(-9223372036855, 224'192'000));
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
@@ -1385,23 +1442,24 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToInt) {
   testTimestampToInt();
   testCast<Timestamp, int64_t>(
       "bigint", {Timestamp(9223372036856, 0)}, {std::nullopt});
+  // Values that overflow the target type return NULL when ANSI is off.
   testTimestampToIntegralCastOverflow<int8_t>({
-      -102,
-      -1,
-      -10,
-      9,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
   });
   testTimestampToIntegralCastOverflow<int16_t>({
-      30874,
-      -1,
-      23286,
-      -23287,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
   });
   testTimestampToIntegralCastOverflow<int32_t>({
       1740470426,
       2147483647,
-      2077252342,
-      -2077252343,
+      std::nullopt,
+      std::nullopt,
   });
 }
 
