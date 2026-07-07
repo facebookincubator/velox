@@ -281,10 +281,14 @@ CudfIcebergSplitReader::readNextChunk(
   // of output columns.
 
   // Compute the row count override if all projected columns are missing
-  auto rowCountOverride = allColumnsMissing
+  auto rowCountOverride = (allColumnsMissing and isApplyingDeletes)
       ? std::optional<cudf::size_type>(
             numRows - countDeletedRows(deleteMaskView_, stream_, get_temp_mr()))
       : std::nullopt;
+  VELOX_CHECK(
+      not rowCountOverride.has_value() or rowCountOverride.value() >= 0,
+      "Encountered a negative row count override for the synthetic table: {}",
+      rowCountOverride.value());
 
   // Build the output table with an optional row count override indicating if
   // all projected columns are missing
