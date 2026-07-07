@@ -95,6 +95,9 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
         PlanBuilder().values(input).project({projection}).planNode();
     assertQuery(plan, sql);
   }
+
+  std::shared_ptr<core::QueryCtx> queryCtx_;
+  std::unique_ptr<core::ExecCtx> execCtx_;
 };
 
 // UnaryFunction: negation of a boolean column. Base column-only path.
