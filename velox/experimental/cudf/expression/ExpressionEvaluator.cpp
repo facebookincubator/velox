@@ -2588,6 +2588,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
       FunctionSignatureBuilder()
           .returnType("boolean")
+          .argumentType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
           .argumentType("double")
           .argumentType("double")
           .build(),

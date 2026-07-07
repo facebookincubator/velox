@@ -121,8 +121,8 @@ TEST_F(CudfLogicalFunctionsTest, notColumn) {
   runProject({data}, "NOT a", "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
-// UnaryFunction: negation of a comparison. The NOT operation wraps the
-// comparison result, which itself comes from a nested FunctionExpression path.
+// Negation of a comparison. Velox rewrites NOT(equalto(...)) to neq(...),
+// so this also exercises the comparison FunctionExpression path.
 TEST_F(CudfLogicalFunctionsTest, notComparison) {
   auto data = makeRowVector(
       {"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
