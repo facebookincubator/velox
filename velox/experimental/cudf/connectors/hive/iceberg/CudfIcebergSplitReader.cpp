@@ -173,9 +173,15 @@ void CudfIcebergSplitReader::createCudfReader(
   CudfSplitReader::createCudfReader(determineCudfMemoryResource());
 }
 
+std::optional<std::unique_ptr<cudf::table>>
+CudfIcebergSplitReader::nextInputChunk() {}
+
 std::optional<cudf::io::table_with_metadata>
 CudfIcebergSplitReader::readNextChunk(
     rmm::device_async_resource_ref output_mr) {
+  // Determine the memory resource to use for `readNextChunk`
+  auto mr = determineCudfMemoryResource();
+
   auto chunkOpt = [&]() -> std::optional<std::unique_ptr<cudf::table>> {
     // If every output column is injected, skip `readNextChunk` and
     // emit a single chunk synthesized.
