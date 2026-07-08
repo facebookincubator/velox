@@ -575,9 +575,6 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
   std::vector<std::unique_ptr<cudf::column>> output;
   output.reserve(outputType_->size());
 
-  // Number of read columns referenced in the output table.
-  size_t consumedReadColumns = 0;
-
   for (size_t i = 0; i < outputType_->size(); ++i) {
     const auto& fieldName = outputType_->nameOf(i);
     const auto& veloxType = outputType_->childAt(i);
@@ -594,7 +591,6 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
                fileIt != fileColumnIndex_.end()) {
       // Column read from the data file.
       output.push_back(std::move(columns[fileIt->second]));
-      ++consumedReadColumns;
     } else {
       // Schema evolution: column added after this data file was written and
       // absent from the file. Emit a typed NULL column.
@@ -613,16 +609,13 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
       outputType_->toString(),
       output.size());
 
-  // Every read column must be accounted for: either an output column, or
-  // intentionally dropped (equality-delete key column). Any leftover means a
-  // read column was silently dropped (a bug).
   VELOX_CHECK_EQ(
-      consumedReadColumns + extraEqualityColumns_.size(),
+      output.size() + extraEqualityColumns_.size(),
       fileColumnIndex_.size(),
-      "Read table columns were not fully accounted for during Iceberg table assembly. "
+      "Read table columns were not fully accounted for during Iceberg table assembly."
       "Read columns: {}, Consumed: {}, Equality columns: {}",
       fileColumnIndex_.size(),
-      consumedReadColumns,
+      output.size(),
       extraEqualityColumns_.size());
 
   return std::make_unique<cudf::table>(std::move(output));
