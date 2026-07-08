@@ -20,12 +20,10 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/AstUtils.h"
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
-#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/type/Type.h"
@@ -37,7 +35,6 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/span.hpp>
@@ -109,25 +106,16 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           useExperimentalCudfReader,
           subfieldFilterExpr),
       icebergSplit_(std::move(icebergSplit)),
-      hiveConfig_(hiveConfig) {
-  // Extract physical names of target data columns from readColumnNames
-  VELOX_CHECK_GE(readColumnNames.size(), outputType->size());
-  physicalNames_.assign(
-      readColumnNames.begin(), readColumnNames.begin() + outputType->size());
-}
+      hiveConfig_(hiveConfig) {}
 
 void CudfIcebergSplitReader::prepareSplit(
     dwio::common::RuntimeStatistics& runtimeStats) {
   // Clear existing delete file readers and other state
   deletionVectorReader_.reset();
+  positionalDeleteFileReaders_.clear();
   equalityDeleteFileReaders_.clear();
   extraEqualityColumns_.clear();
   injectedColumns_.clear();
-  fileColumnNames_.clear();
-  fileColumnIndex_.clear();
-  fileRowCount_.reset();
-  noColumnsToRead_ = false;
-  syntheticTableProduced_ = false;
   baseReadOffset_ = 0;
 
   // Must setup delete file readers before calling base `prepareSplit` so
@@ -136,23 +124,15 @@ void CudfIcebergSplitReader::prepareSplit(
   // stats directly into the DataSource's stats object.
   setupDeleteFileReaders(runtimeStats);
 
-  // Subfield filters along with positional deletes are not supported as the
-  // original row positions may have been altered by the filter.
-  // TODO(mh): Re-enable when https://github.com/rapidsai/cudf/pull/23077 merges
-  if (hasSubfieldFilter() and
-      (deletionVectorReader_ or positionalDeleteFileReaders_.size())) {
-    VELOX_NYI(
-        "cuDF Iceberg reader does not yet support subfield filters together with positional deletes");
-  }
-
   // Setup column projection to include any equality delete key columns that
   // are not already in the output projection. Must be called before base
   // `prepareSplit`
   setupColumnProjection();
 
-  // Detect info and (Hive-migrated) partition columns and remove them from
-  // `readColumnNames_` so the parquet reader doesn't try to read them, and
-  // record them for post-read injection.
+  // Schema evolution: Detect info columns, partition columns, and
+  // schema-evolution missing columns. Filters them from readColumnNames_ so the
+  // parquet reader doesn't try to read them, and records them for post-read
+  // injection.
   adaptColumns();
 
   // Call base to setup stream, datasource, options, and the cudf reader
@@ -171,54 +151,23 @@ CudfIcebergSplitReader::determineCudfMemoryResource() {
 
 void CudfIcebergSplitReader::createCudfReader(
     rmm::device_async_resource_ref output_mr) {
-  // Only set up a reader if there are physical columns to read
-  if (not noColumnsToRead_) {
-    CudfSplitReader::createCudfReader(determineCudfMemoryResource());
-  }
+  CudfSplitReader::createCudfReader(determineCudfMemoryResource());
 }
 
-std::optional<cudf::io::table_with_metadata>
+std::optional<std::unique_ptr<cudf::table>>
 CudfIcebergSplitReader::readNextChunk(
     rmm::device_async_resource_ref output_mr) {
-  auto chunkOpt = [&]() -> std::optional<std::unique_ptr<cudf::table>> {
-    // If every output column is injected, skip `readNextChunk` and
-    // emit a single chunk synthesized.
-    if (noColumnsToRead_) {
-      // No more synthetic table chunks
-      if (syntheticTableProduced_) {
-        return std::nullopt;
-      }
-      syntheticTableProduced_ = true;
-      return std::make_unique<cudf::table>(
-          std::vector<std::unique_ptr<cudf::column>>{});
-    }
+  // Determine the memory resource to use for `readNextChunk`
+  auto mr = determineCudfMemoryResource();
 
-    // Otherwise, read the next table chunk from the cuDF reader.
-    auto chunkOpt =
-        CudfSplitReader::readNextChunk(determineCudfMemoryResource());
-    // No more table chunks
-    if (not chunkOpt.has_value()) {
-      return std::nullopt;
-    }
-    // Lazily cache column names and their positions.
-    ensureFileColumnIndex(chunkOpt.value().metadata.schema_info);
-    return std::move(chunkOpt.value().tbl);
-  }();
-
-  // No more table chunks
-  if (not chunkOpt.has_value()) {
+  // Read the next table chunk from the cuDF reader
+  auto cudfTable = CudfSplitReader::readNextChunk(mr).value_or(nullptr);
+  if (not cudfTable) {
     return std::nullopt;
   }
-  auto cudfTable = std::move(chunkOpt.value());
 
-  // Check if all projected columns are schema-evolution (missing) columns
-  const bool allColumnsMissing = cudfTable->num_columns() == 0;
-
-  // Number of rows before any deletes from cuDF table or parquet footer if all
-  // columns are missing
-  const auto numRows = allColumnsMissing
-      ? fileRowCount()
-      : static_cast<size_t>(cudfTable->num_rows());
+  // Number of table rows read by cuDF (before any deletes)
+  const auto numRows = cudfTable->num_rows();
 
   // Determine if we are applying any deletes
   const auto isApplyingDeletes = numRows > 0 and
@@ -226,12 +175,6 @@ CudfIcebergSplitReader::readNextChunk(
        equalityDeleteFileReaders_.size());
 
   if (isApplyingDeletes) {
-    // Equality deletes require reading their key columns, so
-    // `allColumnsMissing` must be false
-    VELOX_CHECK(
-        not allColumnsMissing or equalityDeleteFileReaders_.empty(),
-        "Equality deletes are not expected when all projected columns are missing from the file");
-
     // Allocate deletion mask column if needed (nothing is deleted)
     if (not deleteMask_ or std::cmp_less(deleteMask_->size(), numRows)) {
       auto false_scalar =
@@ -257,66 +200,44 @@ CudfIcebergSplitReader::readNextChunk(
 
     // Apply deletion vector
     if (deletionVectorReader_) {
-      applyDeletionVector(numRows);
+      applyDeletionVector(cudfTable->view());
     }
     // Apply positional deletes
     if (positionalDeleteFileReaders_.size()) {
-      applyPositionalDeletes(numRows);
+      applyPositionalDeletes(cudfTable->view());
     }
     // Apply equality deletes
     if (equalityDeleteFileReaders_.size()) {
       applyEqualityDeletes(cudfTable->view());
     }
 
-    // Only apply deletes if there are physical columns to filter
-    if (not allColumnsMissing) {
-      cudfTable = cudf::apply_deletion_mask(
-          cudfTable->view(), deleteMaskView_, stream_, get_output_mr());
-    }
+    cudfTable = cudf::apply_deletion_mask(
+        cudfTable->view(), deleteMaskView_, stream_, get_output_mr());
   }
 
-  // Reorder read columns, inject info and partition columns and fill
-  // schema-evolution columns with typed NULLs. This must run even for 0-row
-  // tables so post-delete empty chunks still have the expected number and order
-  // of output columns.
-
-  // Compute the row count override if all projected columns are missing.
-  std::optional<cudf::size_type> rowCountOverride = std::nullopt;
-  if (allColumnsMissing) {
-    if (isApplyingDeletes) {
-      const auto deletedRows = static_cast<std::size_t>(
-          countDeletedRows(deleteMaskView_, stream_, get_temp_mr()));
-      VELOX_CHECK_LE(
-          deletedRows,
-          numRows,
-          "Deleted rows exceed input rows for synthetic table. numRows={}, deletedRows={}",
-          numRows,
-          deletedRows);
-      rowCountOverride = numRows - deletedRows;
-    } else {
-      rowCountOverride = numRows;
-    }
+  // Strip extra equality delete key columns added by
+  // setupColumnProjection()
+  if (not extraEqualityColumns_.empty()) {
+    auto columns = cudfTable->release();
+    VELOX_CHECK_GE(
+        columns.size(),
+        extraEqualityColumns_.size(),
+        "cuDF table has fewer columns than the appended equality delete keys");
+    columns.resize(columns.size() - extraEqualityColumns_.size());
+    cudfTable = std::make_unique<cudf::table>(std::move(columns));
   }
 
-  // Build the output table with an optional row count override indicating if
-  // all projected columns are missing
-  if (noColumnsToRead_ and hasSubfieldFilter()) {
-    cudfTable =
-        buildOutputTable(std::move(cudfTable), get_temp_mr(), rowCountOverride);
-    // Apply the subfield filter when every output column is injected
-    auto filterMask = cudf::compute_column(
-        cudfTable->view(), *subfieldFilterExpr(), stream_, get_temp_mr());
-    cudfTable = cudf::apply_boolean_mask(
-        cudfTable->view(), filterMask->view(), stream_, output_mr);
-  } else {
-    cudfTable =
-        buildOutputTable(std::move(cudfTable), output_mr, rowCountOverride);
+  // Inject partition columns and schema-evolution NULL columns.
+  // This must run even for 0-row tables so post-delete empty chunks still
+  // have the expected number and order of output columns.
+  if (not injectedColumns_.empty()) {
+    cudfTable = injectMissingColumns(std::move(cudfTable), output_mr);
   }
 
   // Update the base read offset
   baseReadOffset_ += numRows;
 
-  return cudf::io::table_with_metadata{std::move(cudfTable), {}};
+  return cudfTable;
 }
 
 void CudfIcebergSplitReader::setupDeleteFileReaders(
@@ -458,14 +379,16 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
   }
 }
 
-void CudfIcebergSplitReader::applyDeletionVector(std::size_t numRows) {
+void CudfIcebergSplitReader::applyDeletionVector(cudf::table_view input) {
   // Apply deletion vector into the deleteMask_
+  const auto numRows = input.num_rows();
   deletionVectorReader_->applyDeletes(
       deleteMaskView_, baseReadOffset_, numRows, stream_, get_temp_mr());
 }
 
-void CudfIcebergSplitReader::applyPositionalDeletes(std::size_t numRows) {
+void CudfIcebergSplitReader::applyPositionalDeletes(cudf::table_view input) {
   // Apply positional deletes into the deleteMask_
+  const auto numRows = input.num_rows();
 
   // Initialize host and device delete bitmaps
   const auto numWords = cudf::num_bitmask_words(numRows);
@@ -517,8 +440,11 @@ void CudfIcebergSplitReader::applyPositionalDeletes(std::size_t numRows) {
 
 void CudfIcebergSplitReader::applyEqualityDeletes(cudf::table_view input) {
   // Apply equality deletes against the running deleteMask_.
+  const auto numRows = input.num_rows();
+
+  // Iteratively apply equality deletes, if any
   for (auto& reader : equalityDeleteFileReaders_) {
-    reader->applyDeletes(input, fileColumnNames_, deleteMaskView_, stream_);
+    reader->applyDeletes(input, readColumnNames_, deleteMaskView_, stream_);
   }
 }
 
@@ -566,196 +492,173 @@ void CudfIcebergSplitReader::setupColumnProjection() {
 }
 
 void CudfIcebergSplitReader::adaptColumns() {
-  // Detect info and partition columns. Split-metadata lookups use the physical
-  // names as outputType may carry logical aliases
+  // Detect info columns and partition columns
+  std::unordered_set<std::string> injectedNames;
   for (size_t i = 0; i < outputType_->size(); ++i) {
-    const auto& fieldName = physicalNames_[i];
-    const auto& veloxType = outputType_->childAt(i);
+    const auto& fieldName = outputType_->nameOf(i);
 
     if (auto iter = split_->infoColumns.find(fieldName);
         iter != split_->infoColumns.end()) {
-      injectedColumns_.emplace(
-          fieldName, InjectedColumn{iter->second, veloxType});
+      injectedColumns_.push_back(
+          {i, fieldName, iter->second, outputType_->childAt(i)});
+      injectedNames.insert(fieldName);
     } else if (auto it = icebergSplit_->partitionKeys.find(fieldName);
                it != icebergSplit_->partitionKeys.end()) {
       // Partition columns: Hive migrated table. In Hive-written data
       // files, partition column values are stored in partition metadata
       // rather than in the data file itself, following Hive's
       // partitioning convention.
-      injectedColumns_.emplace(
-          fieldName, InjectedColumn{it->second, veloxType});
+      injectedColumns_.push_back(
+          {i, fieldName, it->second, outputType_->childAt(i)});
+      injectedNames.insert(fieldName);
     }
   }
 
-  // Remove the metadata-sourced columns from readColumnNames_ so the parquet
-  // reader does not attempt to read them from the file.
+  // Detect schema-evolution missing columns by reading the parquet
+  // footer. Only needed if there are output columns not yet accounted for.
+  if (injectedNames.size() < outputType_->size()) {
+    setupCudfDataSource();
+    VELOX_CHECK_NOT_NULL(
+        dataSource_,
+        "CudfIcebergSplitReader failed to setup a cuDF datasource");
+    auto meta = cudf::io::read_parquet_metadata(
+        cudf::io::source_info{dataSource_.get()});
+    const auto& rootSchema = meta.schema().root();
+    std::unordered_set<std::string> fileColumns;
+    fileColumns.reserve(rootSchema.num_children());
+    std::transform(
+        rootSchema.children().begin(),
+        rootSchema.children().end(),
+        std::inserter(fileColumns, fileColumns.end()),
+        [](const auto& col) { return col.name(); });
+
+    for (size_t i = 0; i < outputType_->size(); ++i) {
+      const auto& fieldName = outputType_->nameOf(i);
+      if (injectedNames.contains(fieldName)) {
+        continue;
+      }
+      if (not fileColumns.contains(fieldName)) {
+        // Schema evolution: Column was added after the data file was written
+        // and doesn't exist in older data files.
+        injectedColumns_.push_back(
+            {i, fieldName, std::nullopt, outputType_->childAt(i)});
+        injectedNames.insert(fieldName);
+      }
+    }
+  }
+
+  // Remove all injected columns from readColumnNames_
   if (not injectedColumns_.empty()) {
-    std::erase_if(readColumnNames_, [this](const auto& name) {
-      return injectedColumns_.contains(name);
+    std::erase_if(readColumnNames_, [&injectedNames](const auto& name) {
+      return injectedNames.contains(name);
     });
-  }
-
-  // If every output column is injected (info/partition), no columns need to be
-  // read from the data file.
-  noColumnsToRead_ = readColumnNames_.empty();
-}
-
-void CudfIcebergSplitReader::ensureFileColumnIndex(
-    const std::vector<cudf::io::column_name_info>& schemaInfo) {
-  // The reader returns the same columns in the same order for every chunk, so
-  // build the name list and the name -> position lookup only once per split.
-  if (not fileColumnNames_.empty()) {
-    return;
-  }
-  fileColumnNames_.reserve(schemaInfo.size());
-  fileColumnIndex_.reserve(schemaInfo.size());
-  for (size_t i = 0; i < schemaInfo.size(); ++i) {
-    fileColumnNames_.push_back(schemaInfo[i].name);
-    fileColumnIndex_.emplace(schemaInfo[i].name, i);
+    // Sort injected columns by output index once here
+    std::sort(
+        injectedColumns_.begin(),
+        injectedColumns_.end(),
+        [](const auto& a, const auto& b) {
+          return a.outputIndex < b.outputIndex;
+        });
   }
 }
 
-std::size_t CudfIcebergSplitReader::fileRowCount() {
-  if (fileRowCount_.has_value()) {
-    return fileRowCount_.value();
-  }
-  setupCudfDataSource();
-  VELOX_CHECK_NOT_NULL(
-      dataSource_, "CudfIcebergSplitReader failed to setup a cuDF datasource");
-
-  // TODO(mh): Compute using selected row group when we support sub-splits
-  const auto meta =
-      cudf::io::read_parquet_metadata(cudf::io::source_info{dataSource_.get()});
-  VELOX_CHECK_LE(
-      meta.num_rows(),
-      std::numeric_limits<cudf::size_type>::max(),
-      "File row count exceeds max cudf::size_type value");
-  fileRowCount_ = static_cast<std::size_t>(meta.num_rows());
-  return fileRowCount_.value();
-}
-
-std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
+std::unique_ptr<cudf::table> CudfIcebergSplitReader::injectMissingColumns(
     std::unique_ptr<cudf::table>&& table,
-    rmm::device_async_resource_ref mr,
-    std::optional<cudf::size_type> rowCountOverride) {
-  const auto numRows = rowCountOverride.value_or(table->num_rows());
-  auto columns = rowCountOverride.has_value()
-      ? std::vector<std::unique_ptr<cudf::column>>{}
-      : table->release();
-  const bool readAsLocalTime =
-      hiveConfig_->readTimestampPartitionValueAsLocalTime(
-          connectorQueryCtx_->sessionProperties());
+    rmm::device_async_resource_ref mr) {
+  const auto numRows = table->num_rows();
+  auto columns = table->release();
 
-  // Build a cudf scalar for an info/partition column from its optional string
-  // value. A `nullopt` value yields a typed NULL partition key column.
-  auto makeConstantScalar =
-      [&](const std::string& name,
-          const std::optional<std::string>& value,
-          const TypePtr& veloxType) -> std::unique_ptr<cudf::scalar> {
+  // Creates a scalar from a string partition value for the given cudf type.
+  auto makePartitionScalar =
+      [&](const std::string& value,
+          cudf::data_type cudfType,
+          const InjectedColumn& col) -> std::unique_ptr<cudf::scalar> {
+    if (cudfType.id() != cudf::type_id::STRING and
+        cudfType.id() != cudf::type_id::INT32 and
+        cudfType.id() != cudf::type_id::INT64 and
+        cudfType.id() != cudf::type_id::TIMESTAMP_DAYS) {
+      VELOX_NYI(
+          "Identity partition columns are limited to VARCHAR, INTEGER, BIGINT, and DATE only. Other types are not yet supported. Column: '{}', Type: {}",
+          col.name,
+          col.veloxType->toString());
+    }
     try {
-      // DATE values arrive in two format-disjoint encodings: Iceberg-native
-      // days-since-epoch integers (e.g. "20244") or Hive-migrated date strings
-      // (e.g. "2025-06-05"). A bare integer is unambiguously days-since-epoch
-      // (date strings contain '-' separators that fail an integer parse).
-      const bool isDaysSinceEpoch = veloxType->isDate() and
-          value.has_value() and folly::tryTo<int32_t>(value.value()).hasValue();
-      const VectorPtr constant = velox::connector::hive::newConstantFromString(
-          veloxType,
-          value,
-          connectorQueryCtx_->memoryPool(),
-          readAsLocalTime,
-          isDaysSinceEpoch);
-      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          cudf_velox::createCudfScalar, veloxType->kind(), constant);
+      switch (cudfType.id()) {
+        case cudf::type_id::STRING:
+          return std::make_unique<cudf::string_scalar>(
+              value, true, stream_, mr);
+        case cudf::type_id::INT32:
+          return std::make_unique<cudf::numeric_scalar<int32_t>>(
+              folly::to<int32_t>(value), true, stream_, mr);
+        case cudf::type_id::INT64:
+          return std::make_unique<cudf::numeric_scalar<int64_t>>(
+              folly::to<int64_t>(value), true, stream_, mr);
+        case cudf::type_id::TIMESTAMP_DAYS: {
+          // DATE partition values arrive either as days-since-epoch (Iceberg
+          // native) or as a date string such as "2025-06-05" (Hive migrated).
+          // The two encodings are disjoint: DATE()->toDays() uses Presto cast
+          // semantics, which reject a bare integer, while a date string always
+          // contains '-' separators that fail integer parsing. So an all-digit
+          // value is unambiguously days-since-epoch, and anything else is
+          // parsed as a date string.
+          const int32_t days = [&] {
+            if (auto parsed = folly::tryTo<int32_t>(value)) {
+              return parsed.value();
+            }
+            return DATE()->toDays(value);
+          }();
+          return std::make_unique<cudf::timestamp_scalar<cudf::timestamp_D>>(
+              days, true, stream_, mr);
+        }
+        default:
+          VELOX_UNREACHABLE();
+      }
     } catch (const std::exception& e) {
       VELOX_FAIL(
           "Bad partition value '{}' for column '{}' (type {}): {}",
-          value.value_or("<null>"),
-          name,
-          veloxType->toString(),
+          value,
+          col.name,
+          col.veloxType->toString(),
           e.what());
     }
   };
 
-  // Assemble the output in output-schema order. Each output column is sourced
-  // from exactly one of: an injected info/partition constant, the read data
-  // table (by name), or a typed NULL constant (schema evolution). Read columns
-  // that are not part of the output schema (equality-delete key columns)
-  // are dropped.
+  // Merge data columns and injected constant columns in output order.
+  const auto totalColumns = columns.size() + injectedColumns_.size();
   std::vector<std::unique_ptr<cudf::column>> output;
-  output.reserve(outputType_->size());
+  output.reserve(totalColumns);
 
-  // Number of read columns referenced in the output table.
-  size_t consumedReadColumns = 0;
+  auto injectedColIter = injectedColumns_.begin();
+  auto dataColIter = columns.begin();
 
-  for (size_t i = 0; i < outputType_->size(); ++i) {
-    const auto& fieldName = physicalNames_[i];
-    const auto& veloxType = outputType_->childAt(i);
-    const auto cudfType = cudf_velox::veloxToCudfDataType(veloxType);
+  for (size_t outIdx = 0; outIdx < totalColumns; ++outIdx) {
+    if (injectedColIter != injectedColumns_.end() &&
+        injectedColIter->outputIndex == outIdx) {
+      const auto& col = *injectedColIter;
+      auto cudfType = cudf_velox::veloxToCudfDataType(col.veloxType);
 
-    if (auto injectedIt = injectedColumns_.find(fieldName);
-        injectedIt != injectedColumns_.end()) {
-      // Info column or Hive-migrated partition column: constant value.
-      auto scalar =
-          makeConstantScalar(fieldName, injectedIt->second.value, veloxType);
+      std::unique_ptr<cudf::scalar> scalar;
+      if (col.partitionValue.has_value()) {
+        scalar = makePartitionScalar(col.partitionValue.value(), cudfType, col);
+      } else {
+        scalar = cudf::make_default_constructed_scalar(cudfType, stream_, mr);
+        scalar->set_valid_async(false, stream_);
+      }
       output.push_back(
           cudf::make_column_from_scalar(*scalar, numRows, stream_, mr));
-    } else if (auto fileIt = fileColumnIndex_.find(fieldName);
-               fileIt != fileColumnIndex_.end()) {
-      // Column read from the data file.
-      output.push_back(std::move(columns[fileIt->second]));
-      ++consumedReadColumns;
+      injectedColIter++;
     } else {
-      // Schema evolution: column added after this data file was written and
-      // absent from the file. Emit a typed NULL column.
-      auto scalar =
-          cudf::make_default_constructed_scalar(cudfType, stream_, mr);
-      scalar->set_valid_async(false, stream_);
-      output.push_back(
-          cudf::make_column_from_scalar(*scalar, numRows, stream_, mr));
+      VELOX_CHECK(
+          dataColIter != columns.end(),
+          "Data column index out of range during column injection");
+      output.push_back(std::move(*dataColIter));
+      dataColIter++;
     }
   }
 
-  VELOX_CHECK_EQ(
-      output.size(),
-      outputType_->size(),
-      "Mismatch between number of columns in the output schema and the assembled Iceberg table. Output schema: {}, Assembled columns: {}",
-      outputType_->toString(),
-      output.size());
-
-  // Append remaining filter-only columns in `readColumnNames_` order.
-  const std::unordered_set<std::string> equalityColumnSet(
-      extraEqualityColumns_.begin(), extraEqualityColumns_.end());
-  size_t filterOnlyColumns = 0;
-  for (const auto& name : readColumnNames_) {
-    // Drop Equality-delete key columns
-    if (equalityColumnSet.contains(name)) {
-      continue;
-    }
-    // Skip missing and already moved-out output columns leaving only
-    // filter-only columns.
-    auto fileIt = fileColumnIndex_.find(name);
-    if (fileIt == fileColumnIndex_.end() or
-        columns[fileIt->second] == nullptr) {
-      continue;
-    }
-    output.push_back(std::move(columns[fileIt->second]));
-    ++consumedReadColumns;
-    ++filterOnlyColumns;
-  }
-
-  // Every read column must be accounted for: an output column, a
-  // filter-only column, or intentionally dropped (equality-delete key
-  // column). Any leftover means a read column was silently dropped (a bug).
-  VELOX_CHECK_EQ(
-      consumedReadColumns + extraEqualityColumns_.size(),
-      columns.size(),
-      "Read table columns were not fully accounted for during Iceberg table assembly. "
-      "Read columns: {}, Consumed: {} including {} filter-only columns, Equality columns: {}",
-      columns.size(),
-      consumedReadColumns,
-      filterOnlyColumns,
-      extraEqualityColumns_.size());
+  VELOX_CHECK(
+      dataColIter == columns.end(),
+      "Not all data columns were consumed during column injection");
 
   return std::make_unique<cudf::table>(std::move(output));
 }
