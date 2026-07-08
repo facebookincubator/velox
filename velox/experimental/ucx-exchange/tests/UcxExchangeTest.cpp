@@ -59,6 +59,8 @@ struct ExchangeTestParams {
   int numRowsPerChunk;
   int numUpstreamTasks;
   TableType tableType = TableType::NARROW; // Default to narrow table
+
+  bool operator==(const ExchangeTestParams&) const = default;
 };
 
 // Helper function to generate test parameters with different numUpstreamTasks
@@ -827,19 +829,15 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
 }
 
-// Regression test for shared UcxExchangeClient ownership. Multiple
-// UcxExchange operators in a sink task share one client. Closing one operator
-// must not close the shared client while another operator still needs to drain
-// data.
+// Focused regression test for shared UcxExchangeClient ownership. This
+// intentionally creates and seeds the client directly, bypassing the normal
+// task-split path, to isolate close behavior after the client is populated.
+// Closing one operator must not close the shared client while another operator
+// still needs to drain data.
 TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
   // This test doesn't use parameters - run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "sharedClientSurvivesOneExchangeClose: runs only once";
-    }
+  if (GetParam() != generateTestParams().front()) {
+    GTEST_SKIP() << "sharedClientSurvivesOneExchangeClose: runs only once";
   }
 
   const std::string taskPrefix = getUniqueTaskPrefix();
