@@ -53,9 +53,7 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
       outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
 }
 
-void checkDecimalDivideTypes(
-    cudf::type_id inType,
-    cudf::type_id outType) {
+void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   VELOX_CHECK(
       inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
       "Unsupported input type for decimal divide");
