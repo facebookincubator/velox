@@ -205,6 +205,13 @@ struct ExecutionState {
   // Standalone nodes skipped during step execution due to None inputs.
   std::vector<NodeCP>* deferredStandalones{nullptr};
 
+  // Fusion-coverage counters for the --trace summary: how many ops actually ran
+  // as eager single-op GPU standalones vs. metadata-only host shortcuts (each
+  // counted once, at its execution site, after the nodeOutputsComputed/None
+  // skip guards).  Reset at the start of each executeWave.
+  int64_t numStandalonesRun{0};
+  int64_t numShortcutsRun{0};
+
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
 

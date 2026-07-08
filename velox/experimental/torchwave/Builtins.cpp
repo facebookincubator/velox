@@ -2496,6 +2496,13 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // The multi-block final stage's output is read cross-block by fused cat
+      // consumers (e.g. the exclusive-prefix cat([zeros[1], cumsum[:-1]]) and
+      // the outer cat of per-chain offsets). Without a launch boundary those
+      // reads are ordered only by intra-block __syncthreads(), which is
+      // insufficient across non-co-resident blocks. Gated by the runtime
+      // WaveConfig::scanOutputReturnBarrier toggle so the fix can be A/B'd.
+      .scanOutputReturnBarrier()
       .only1d()
       .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
@@ -2614,6 +2621,11 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // See cumsum_final: the multi-block final stage's output is read
+      // cross-block by fused cat consumers (the outer cat of per-chain offsets
+      // reads each chain's exclusive-prefix output), so it must end its launch.
+      // Gated by the WaveConfig::scanOutputReturnBarrier toggle.
+      .scanOutputReturnBarrier()
       .only1d()
       .outputConstraints(rank1Constraint)
       .registerOp();

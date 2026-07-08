@@ -238,6 +238,11 @@ class KernelOperation {
     return orderedInputs_;
   }
 
+  /// Returns the static tensor metadata of the subgraph leaf inputs.
+  const std::vector<const nativert::TensorMeta*>& inputTypes() const {
+    return inputTypes_;
+  }
+
   bool isInput(ValueCP value) const {
     return inputs_.count(value);
   }
@@ -425,6 +430,12 @@ class KernelOperation {
   std::string helperCode_;
 
   std::vector<ValueCP> orderedInputs_;
+
+  // Static tensor metadata of the subgraph leaf inputs (carried from Subgraph).
+  // Used to size the grid from a static shape when an input is an
+  // unmaterialized intermediate at host sizing time (e.g. a view-rooted op
+  // under a cooperative grid).
+  std::vector<const nativert::TensorMeta*> inputTypes_;
 
   // Assigns a param offset for 'value', expanding TensorList elements.
   void assignParamOffset(ValueCP value, int32_t& offset);
