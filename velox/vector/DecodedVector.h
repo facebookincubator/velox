@@ -209,6 +209,35 @@ class DecodedVector {
     return bits::isBitNull(nulls_, indices_[idx]);
   }
 
+  /// Invokes 'func(row)' for each null top-level row in [begin, end), in
+  /// increasing row order. 'func' must be invocable as 'void(vector_size_t)'.
+  ///
+  /// Iterates the null bitmap a word at a time for flat and
+  /// dictionary-with-combined-nulls encodings; otherwise resolves the
+  /// dictionary indirection per row, or expands a null constant. Mirrors
+  /// isNullAt() over a range without the per-row call overhead where the
+  /// encoding allows a bulk scan.
+  ///
+  /// If the DecodedVector was created using a selectivity vector, it is the
+  /// caller's responsibility to make sure the input range hits part of the
+  /// decoded row subset.
+  template <typename TFunc>
+  void forEachNull(vector_size_t begin, vector_size_t end, TFunc&& func) const {
+    forEachRow<true>(begin, end, std::forward<TFunc>(func));
+  }
+
+  /// Invokes 'func(row)' for each non-null top-level row in [begin, end), in
+  /// increasing row order. The common companion to forEachNull(): when there is
+  /// no null bitmap every row in the range is visited. Uses the same
+  /// encoding-aware, word-granular scan (bits::forEachSetBit for the flat and
+  /// combined-nulls cases). Same [begin, end) decode-selection contract as
+  /// forEachNull().
+  template <typename TFunc>
+  void forEachNotNull(vector_size_t begin, vector_size_t end, TFunc&& func)
+      const {
+    forEachRow<false>(begin, end, std::forward<TFunc>(func));
+  }
+
   /// Returns the largest decoded row number + 1, i.e. rows.end().
   vector_size_t size() const {
     return size_;
@@ -308,6 +337,44 @@ class DecodedVector {
   static const std::vector<vector_size_t>& consecutiveIndices();
 
  private:
+  // Invokes 'func(row)' for each row in [begin, end) whose null flag equals
+  // 'kIsNull', in increasing row order. Shared implementation of forEachNull()
+  // and forEachNotNull(): a word-at-a-time bitmap scan for flat and
+  // combined-nulls encodings, per-row indirection for other dictionaries, and
+  // constant/no-bitmap handled directly (with no bitmap, every row is
+  // non-null).
+  template <bool kIsNull, typename TFunc>
+  void forEachRow(vector_size_t begin, vector_size_t end, TFunc&& func) const {
+    if (nulls_ == nullptr) {
+      if constexpr (!kIsNull) {
+        for (vector_size_t row = begin; row < end; ++row) {
+          func(row);
+        }
+      }
+      return;
+    }
+    if (isIdentityMapping_ || hasExtraNulls_) {
+      if constexpr (kIsNull) {
+        bits::forEachUnsetBit(nulls_, begin, end, std::forward<TFunc>(func));
+      } else {
+        bits::forEachSetBit(nulls_, begin, end, std::forward<TFunc>(func));
+      }
+    } else if (isConstantMapping_) {
+      if (bits::isBitNull(nulls_, 0) == kIsNull) {
+        for (vector_size_t row = begin; row < end; ++row) {
+          func(row);
+        }
+      }
+    } else {
+      VELOX_DCHECK(indices_);
+      for (vector_size_t row = begin; row < end; ++row) {
+        if (bits::isBitNull(nulls_, indices_[row]) == kIsNull) {
+          func(row);
+        }
+      }
+    }
+  }
+
   DecodedVector(
       const BaseVector& vector,
       const SelectivityVector* rows,

@@ -73,6 +73,16 @@ JSON Functions
         * Whitespace is allowed **after the dot** and **before the field name**, e.g., "$.  field".
         * Trailing whitespace after '$' is allowed, e.g., "$   ".
 
+    When ``path`` resolves to an object or array, characters in the Unicode
+    supplementary planes (code points >= U+10000, e.g. emoji) are escaped as
+    ``\uXXXX\uXXXX`` UTF-16 surrogate pairs, while Basic Multilingual Plane
+    (BMP) characters (e.g. Chinese/Japanese/Korean, CJK) are left literal.
+    Scalar string results are returned literal. ::
+
+        SELECT get_json_object('{"a":{"n":"🧧会员"}}', '$.a'); -- '{"n":"\uD83E\uDDE7会员"}'
+        SELECT get_json_object('{"a":["🥇"]}', '$.a'); -- '["\uD83E\uDD47"]'
+        SELECT get_json_object('{"a":"🥇"}', '$.a'); -- '🥇'
+
 .. spark:function:: json_array_length(jsonString) -> integer
 
     Returns the number of elements in the outermost JSON array from ``jsonString``.

@@ -152,7 +152,13 @@ Valid examples
 From timestamp
 ^^^^^^^^^^^^^^
 
-Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
+*(ANSI compliant)*
+
+Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds,
+dividing by the number of microseconds in a second, and then rounding down to the nearest second since the
+epoch (1970-01-01 00:00:00 UTC).
+
+In ANSI mode, conversion overflow causes an exception to be thrown; otherwise, returns NULL.
 
 Valid examples
 
@@ -164,8 +170,13 @@ Valid examples
   SELECT cast(cast('2000-01-01 12:21:56' as timestamp) as bigint); -- 946684916
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as bigint); -- 1740470426
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as integer); -- 1740470426
-  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- 30874
-  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- -102
+
+Invalid examples
+
+::
+
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to Boolean
 ---------------

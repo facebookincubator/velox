@@ -33,6 +33,7 @@
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -58,6 +59,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/TopN.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/Window.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -969,6 +971,58 @@ class CallbackSinkAdapter : public OperatorAdapter {
   }
 };
 
+// WindowAdapter - Replaces with CudfWindow
+class WindowAdapter : public OperatorAdapter {
+ public:
+  WindowAdapter() : OperatorAdapter("Window") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::Window*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto windowNode =
+        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+    if (!windowNode) {
+      return false;
+    }
+    std::string reason;
+    if (!CudfWindow::canRunOnGPU(*windowNode, &reason)) {
+      LOG_FALLBACK(
+          "{}, PlanNode id: {}",
+          reason.empty() ? "unknown" : reason,
+          planNode->id());
+      return false;
+    }
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto windowPlanNode =
+        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfWindow>(operatorId, ctx, windowPlanNode));
+    return result;
+  }
+};
+
 /// GroupIdAdapter - Replaces with CudfGroupId
 class GroupIdAdapter : public OperatorAdapter {
  public:
@@ -1036,6 +1090,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<GroupIdAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
+  registry.registerAdapter(std::make_unique<WindowAdapter>());
 }
 
 } // namespace facebook::velox::cudf_velox
