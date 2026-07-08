@@ -17,7 +17,7 @@
 
 #include <optional>
 
-#include "velox/common/base/BloomFilter.h"
+#include "velox/functions/sparksql/BloomFilter.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
 

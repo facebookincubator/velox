@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BloomFilter.h"
+#include "velox/functions/sparksql/BloomFilter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include <folly/Hash.h>

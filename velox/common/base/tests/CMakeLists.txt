@@ -17,7 +17,6 @@ add_executable(
   AdmissionControllerTest.cpp
   AsyncSourceTest.cpp
   BitUtilTest.cpp
-  BloomFilterTest.cpp
   CoalesceIoTest.cpp
   ConcurrentCounterTest.cpp
   ExceptionTest.cpp
