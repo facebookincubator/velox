@@ -49,9 +49,6 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
     cudf::size_type size,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  if (size == 0) {
-    return cudf::make_empty_column(outputType);
-  }
   return cudf::make_fixed_width_column(
       outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
 }
