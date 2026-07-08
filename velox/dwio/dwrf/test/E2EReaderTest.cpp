@@ -408,3 +408,102 @@ INSTANTIATE_TEST_SUITE_P(
              "array<integer>",
              "array<bigint>",
              "array<string>"})}));
+
+namespace {
+
+class DwrfReaderColumnMappingTest : public testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  DwrfReaderColumnMappingTest() {
+    rootPool_ =
+        memory::memoryManager()->addRootPool("DwrfReaderColumnMappingTest");
+    leafPool_ = rootPool_->addLeafChild("leaf");
+  }
+
+  // Writes a DWRF file with 'fileSchema', then opens it with
+  // ColumnMappingMode::kName against 'tableSchema' and returns the reader's row
+  // type. When 'forcePositionalEvolution' is set (or the file's physical names
+  // are all Hive placeholders), the reader maps the file to the table schema by
+  // position and renames file columns to the requested names.
+  RowTypePtr readWithColumnNames(
+      const RowTypePtr& fileSchema,
+      const RowTypePtr& tableSchema,
+      bool forcePositionalEvolution) {
+    auto sink = std::make_unique<MemorySink>(
+        16 * 1024 * 1024,
+        dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+
+    dwrf::WriterOptions options;
+    options.config = std::make_shared<dwrf::Config>();
+    options.schema = fileSchema;
+    options.memoryPool = rootPool_.get();
+    dwrf::Writer writer{std::move(sink), options};
+    writer.write(
+        BatchMaker::createBatch(fileSchema, 10, *leafPool_, nullptr, 0));
+    writer.close();
+
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
+    readerOpts.setFileSchema(tableSchema);
+    readerOpts.setForcePositionalEvolution(forcePositionalEvolution);
+    std::string_view data(sinkPtr->data(), sinkPtr->size());
+    auto reader = std::make_unique<dwrf::DwrfReader>(
+        readerOpts,
+        std::make_unique<BufferedInput>(
+            std::make_shared<InMemoryReadFile>(data), readerOpts.memoryPool()));
+    return reader->rowType();
+  }
+
+  std::shared_ptr<memory::MemoryPool> rootPool_;
+  std::shared_ptr<memory::MemoryPool> leafPool_;
+};
+
+} // namespace
+
+// File written by old Hive with placeholder names (_col0, _col1). In name-based
+// mapping the requested names (id, name) are absent from the file, so without
+// positional fallback they would read back as missing. Because every physical
+// name is a Hive placeholder, the reader maps by position and renames the file
+// columns to the requested names, without any positional flag set.
+TEST_F(DwrfReaderColumnMappingTest, PositionalFallbackForHivePlaceholders) {
+  auto fileSchema = ROW({"_col0", "_col1"}, {INTEGER(), VARCHAR()});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto rowType = readWithColumnNames(
+      fileSchema, tableSchema, /*forcePositionalEvolution=*/false);
+
+  ASSERT_EQ(rowType->size(), 2);
+  EXPECT_EQ(rowType->nameOf(0), "id");
+  EXPECT_EQ(rowType->nameOf(1), "name");
+}
+
+// File has real physical names. In name-based mapping (no positional flag, not
+// all placeholders) the reader must NOT rename by position; the physical names
+// are preserved so downstream name matching binds columns correctly.
+TEST_F(DwrfReaderColumnMappingTest, RealNamesNoPositionalFallback) {
+  auto fileSchema = ROW({"uid", "label"}, {INTEGER(), VARCHAR()});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto rowType = readWithColumnNames(
+      fileSchema, tableSchema, /*forcePositionalEvolution=*/false);
+
+  ASSERT_EQ(rowType->size(), 2);
+  EXPECT_EQ(rowType->nameOf(0), "uid");
+  EXPECT_EQ(rowType->nameOf(1), "label");
+}
+
+// File has real physical names but columns were renamed at the table level, so
+// forcePositionalEvolution is set. Even in name-based mapping the reader maps
+// by position and renames the file columns to the requested names.
+TEST_F(DwrfReaderColumnMappingTest, ForcePositionalEvolution) {
+  auto fileSchema = ROW({"uid", "label"}, {INTEGER(), VARCHAR()});
+  auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
+  auto rowType = readWithColumnNames(
+      fileSchema, tableSchema, /*forcePositionalEvolution=*/true);
+
+  ASSERT_EQ(rowType->size(), 2);
+  EXPECT_EQ(rowType->nameOf(0), "id");
+  EXPECT_EQ(rowType->nameOf(1), "name");
+}

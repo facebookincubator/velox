@@ -871,10 +871,8 @@ namespace {
 // Returns true when every top-level field of the file's physical schema is a
 // Hive placeholder name (_col0, _col1, ...). Such files were written by old
 // Hive with no real column names in the footer, so they must be mapped to the
-// requested (table) schema by position rather than by name. Mirrors vanilla
-// Spark's `orcFieldNames.forall(_.startsWith("_col"))` check in
-// OrcUtils.requestedColumnIds. An empty schema returns false (nothing to map
-// positionally, matching Spark's `orcFieldNames.isEmpty` early-out).
+// requested (table) schema by position rather than by name. An empty schema
+// returns false (nothing to map positionally).
 bool isAllHivePlaceholderNames(const std::shared_ptr<const RowType>& schema) {
   if (schema == nullptr || schema->size() == 0) {
     return false;
@@ -903,24 +901,21 @@ DwrfReader::DwrfReader(
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
+  //
+  // Even in name-based mapping, a file must be mapped by position when
+  // `orc.force.positional.evolution=true` (columns were renamed so the physical
+  // names no longer match the table schema), or when the file's physical schema
+  // is made entirely of Hive placeholder names (_col0, _col1, ...) written by
+  // old Hive with no real field names.
   const auto columnMappingMode =
       readerBase_->readerOptions().columnMappingMode();
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
     if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
       updateColumnNamesFromFieldIds();
-    } else if (columnMappingMode != dwio::common::ColumnMappingMode::kName) {
-      updateColumnNamesFromTableSchema();
     } else if (
+        columnMappingMode != dwio::common::ColumnMappingMode::kName ||
         readerBase_->readerOptions().forcePositionalEvolution() ||
         isAllHivePlaceholderNames(readerBase_->schema())) {
-      // Even in name-based mapping, a file must be mapped by position when
-      // `orc.force.positional.evolution=true` (columns were renamed so the
-      // physical names no longer match the table schema), or when the file's
-      // physical schema is made entirely of Hive placeholder names (_col0,
-      // _col1, ...) written by old Hive with no real field names. This mirrors
-      // vanilla Spark's per-file decision in OrcUtils.requestedColumnIds
-      // (`forcePositionalEvolution ||
-      // orcFieldNames.forall(_.startsWith("_col"))`).
       updateColumnNamesFromTableSchema();
     }
   }

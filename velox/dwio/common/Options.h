@@ -744,11 +744,9 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// When true, ORC/DWRF files are mapped to the requested (table) schema by
-  /// physical position even in ColumnMappingMode::kName. This mirrors vanilla
-  /// Spark's OrcUtils.requestedColumnIds, where
-  /// `orc.force.positional.evolution=true` forces positional mapping (used when
+  /// physical position even in ColumnMappingMode::kName. This is used when
   /// columns were renamed so the file's physical names no longer match the
-  /// table schema). Files whose physical schema is all Hive placeholder names
+  /// table schema. Files whose physical schema is all Hive placeholder names
   /// (_col0, _col1, ...) are also mapped positionally regardless of this flag.
   ReaderOptions& setForcePositionalEvolution(bool flag) {
     forcePositionalEvolution_ = flag;
