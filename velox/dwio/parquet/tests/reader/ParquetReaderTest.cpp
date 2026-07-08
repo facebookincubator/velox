@@ -2048,39 +2048,43 @@ TEST_F(ParquetReaderTest, pageSkipStats) {
       kNumWrittenRows, [](auto i) { return (i * 7919) % kNumWrittenRows; });
   auto data = makeRowVector({"a", "b"}, {a, b});
 
-  // Force small data pages within a single row group, giving the reader pages
-  // to skip when the filter on 'a' removes the leading rows before lazy loading
-  // column 'b'.
-  ParquetWriterOptions writerOptions;
-  writerOptions.dataPageSize = 256;
-  writerOptions.enableDictionary = false;
+  auto run = [&](bool useDataPageV2) {
+    ParquetWriterOptions writerOptions;
+    writerOptions.dataPageSize = 256;
+    writerOptions.enableDictionary = false;
+    writerOptions.useParquetDataPageV2 = useDataPageV2;
 
-  auto* sink = write(data, writerOptions);
-  auto reader = createReaderInMemory(*sink);
+    auto* sink = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sink);
 
-  FilterMap filters;
-  filters.emplace(
-      "a",
-      std::make_unique<BigintRange>(
-          kNumWrittenRows - kNumResultRows, kNumWrittenRows - 1, false));
+    FilterMap filters;
+    filters.emplace(
+        "a",
+        std::make_unique<BigintRange>(
+            kNumWrittenRows - kNumResultRows, kNumWrittenRows - 1, false));
 
-  auto scanSpec = makeScanSpec(rowType);
-  for (auto& [col, f] : filters) {
-    scanSpec->getOrCreateChild(Subfield(col))->setFilter(std::move(f));
+    auto scanSpec = makeScanSpec(rowType);
+    for (auto& [col, f] : filters) {
+      scanSpec->getOrCreateChild(Subfield(col))->setFilter(std::move(f));
+    }
+    auto rowReaderOpts = makeRowReaderOpts(rowType);
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    uint64_t totalRows = 0;
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    while (rowReader->next(1000, result)) {
+      totalRows += result->size();
+      LazyVector::ensureLoadedRows(result, SelectivityVector(result->size()));
+    }
+    EXPECT_EQ(totalRows, kNumResultRows);
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_GT(stats.columnReaderStats.processedPages, 0);
+    EXPECT_GT(stats.columnReaderStats.skippedPages, 0);
+  };
+
+  for (const auto useDataPageV2 : {false, true}) {
+    run(useDataPageV2);
   }
-  auto rowReaderOpts = makeRowReaderOpts(rowType);
-  rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
-
-  uint64_t totalRows = 0;
-  VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
-  while (rowReader->next(1000, result)) {
-    totalRows += result->size();
-    LazyVector::ensureLoadedRows(result, SelectivityVector(result->size()));
-  }
-  EXPECT_EQ(totalRows, kNumResultRows);
-  RuntimeStatistics stats;
-  rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.columnReaderStats.processedPages, 0);
-  EXPECT_GT(stats.columnReaderStats.skippedPages, 0);
 }
