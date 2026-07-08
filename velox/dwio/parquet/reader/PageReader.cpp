@@ -277,6 +277,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
     return;
   }
   pageData_ = readBytes(*pageHeader.compressed_page_size(), pageBuffer_);
+  ++stats_.processedPages;
   pageData_ = decompressData(
       pageData_,
       *pageHeader.compressed_page_size(),
@@ -339,7 +340,6 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
 
   if (row != kRepDefOnly) {
     makeDecoder();
-    ++stats_.processedPages;
   }
 }
 
@@ -372,6 +372,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
       defineLength,
       bytes);
   pageData_ = readBytes(bytes, pageBuffer_);
+  ++stats_.processedPages;
 
   if (repeatLength) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
@@ -420,7 +421,6 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
   if (row != kRepDefOnly) {
     makeDecoder();
-    ++stats_.processedPages;
   }
 }
 
