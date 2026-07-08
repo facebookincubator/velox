@@ -1504,6 +1504,105 @@ TEST_F(DecodedVectorTest, forEachNullNotNull) {
   verify(makeConstant<int64_t>(42, 16));
 }
 
+TEST_F(DecodedVectorTest, hasNulls) {
+  auto identity = [](auto row) { return row; };
+
+  // Flat, null buffer present but every bit set (no row null): hasNulls() is
+  // false and normalizes away the null view; values are untouched.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity);
+    flat->mutableRawNulls(); // Allocate an all-non-null (all-set) null buffer.
+    DecodedVector decoded(*flat);
+    ASSERT_TRUE(decoded.mayHaveNulls());
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls()); // Side effect: cleared.
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_FALSE(decoded.isNullAt(i));
+      EXPECT_EQ(decoded.valueAt<int64_t>(i), i);
+    }
+  }
+
+  // Same, but nulls() is materialized first: hasNulls() must invalidate the
+  // cached combined bitmap so a later nulls() does not return a stale one.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity);
+    flat->mutableRawNulls();
+    DecodedVector decoded(*flat);
+    ASSERT_NE(decoded.nulls(), nullptr); // Populate the allNulls_ cache.
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_EQ(decoded.nulls(), nullptr);
+  }
+
+  // Flat with real nulls: hasNulls() is true and the null view is preserved.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity, nullEvery(7));
+    DecodedVector decoded(*flat);
+    EXPECT_TRUE(decoded.hasNulls());
+    EXPECT_TRUE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_EQ(decoded.isNullAt(i), (i % 7) == 0);
+    }
+  }
+
+  // No null buffer at all: false, no-op.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity);
+    DecodedVector decoded(*flat);
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls());
+  }
+
+  // Combined-nulls (hasExtraNulls) dictionary with every bit set: bulk-scanned,
+  // false, and normalized (the combined bitmap is indexed by decoded row).
+  {
+    auto base = makeFlatVector<int64_t>(64, identity);
+    auto indices = makeIndices(64, identity);
+    auto nulls =
+        makeNulls(64, [](auto) { return false; }); // All-set, no nulls.
+    auto dict = BaseVector::wrapInDictionary(nulls, indices, 64, base);
+    DecodedVector decoded(*dict);
+    ASSERT_TRUE(decoded.hasExtraNulls());
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls());
+    EXPECT_FALSE(decoded.hasExtraNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_FALSE(decoded.isNullAt(i));
+    }
+  }
+
+  // Dictionary without extra nulls over an all-set base (per-row confirm path):
+  // hasNulls() resolves each index, finds none, and normalizes.
+  {
+    auto base = makeFlatVector<int64_t>(64, identity);
+    base->mutableRawNulls(); // All-set base null buffer.
+    auto indices = makeIndicesInReverse(64);
+    auto dict = BaseVector::wrapInDictionary(nullptr, indices, 64, base);
+    DecodedVector decoded(*dict);
+    ASSERT_FALSE(decoded.isIdentityMapping());
+    ASSERT_TRUE(decoded.mayHaveNulls());
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_FALSE(decoded.isNullAt(i));
+    }
+  }
+
+  // Dictionary without extra nulls over a base that has nulls (per-row confirm
+  // path finds one): hasNulls() is true and the view is preserved.
+  {
+    auto base = makeFlatVector<int64_t>(64, identity, nullEvery(5));
+    auto indices = makeIndicesInReverse(64);
+    auto dict = BaseVector::wrapInDictionary(nullptr, indices, 64, base);
+    DecodedVector decoded(*dict);
+    ASSERT_FALSE(decoded.isIdentityMapping());
+    EXPECT_TRUE(decoded.hasNulls());
+    EXPECT_TRUE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_EQ(decoded.isNullAt(i), ((64 - i - 1) % 5) == 0);
+    }
+  }
+}
+
 TEST_F(DecodedVectorTest, dictionaryWrapping) {
   constexpr vector_size_t baseVectorSize{100};
   constexpr vector_size_t innerDictSize{30};
