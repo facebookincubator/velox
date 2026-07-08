@@ -19,6 +19,14 @@
 #include <folly/debugging/symbolizer/SignalHandler.h>
 #include <glog/logging.h>
 
+#ifdef _WIN32
+#include <io.h>
+#include <cstdlib>
+#include <windows.h>
+#define STDERR_FILENO 2
+#define write _write
+#endif
+
 namespace facebook::velox::process {
 thread_local const ThreadDebugInfo* threadDebugInfo = nullptr;
 
@@ -75,6 +83,16 @@ ScopedThreadDebugInfo::~ScopedThreadDebugInfo() {
 void addDefaultFatalSignalHandler() {
   static bool initialized = false;
   if (!initialized) {
+#ifdef _WIN32
+    // Suppress Windows CRT abort dialogs and Windows Error Reporting popups.
+    // Without this, abort() in child processes (e.g., GTest death tests) can
+    // hang waiting for user interaction, and crashes produce WER dialogs
+    // instead of clean exit codes.
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    SetErrorMode(
+        SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+        SEM_NOOPENFILEERRORBOX);
+#endif
     folly::symbolizer::addFatalSignalCallback(&printCurrentQueryId);
     initialized = true;
   }

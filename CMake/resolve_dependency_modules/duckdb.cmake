@@ -29,14 +29,24 @@ velox_resolve_dependency_url(DUCKDB)
 message(STATUS "Building DuckDB from source")
 # We need remove-ccache.patch to remove adding ccache to the build command
 # twice. Velox already does this.
-FetchContent_Declare(
-  duckdb
-  URL ${VELOX_DUCKDB_SOURCE_URL}
-  URL_HASH ${VELOX_DUCKDB_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND
-    git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch && git apply
-    ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch
-)
+if(MSVC)
+  # On Windows, git apply fails on CRLF patch files. Use cmake string replacement.
+  FetchContent_Declare(
+    duckdb
+    URL ${VELOX_DUCKDB_SOURCE_URL}
+    URL_HASH ${VELOX_DUCKDB_BUILD_SHA256_CHECKSUM}
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/duckdb/apply_patches.cmake
+  )
+else()
+  FetchContent_Declare(
+    duckdb
+    URL ${VELOX_DUCKDB_SOURCE_URL}
+    URL_HASH ${VELOX_DUCKDB_BUILD_SHA256_CHECKSUM}
+    PATCH_COMMAND
+      git apply ${CMAKE_CURRENT_LIST_DIR}/duckdb/remove-ccache.patch && git apply
+      ${CMAKE_CURRENT_LIST_DIR}/duckdb/re2.patch
+  )
+endif()
 
 # DuckDB uses git commands to retrieve version information during the build,
 # which works with git clone. To prevent incorrectly using the parent project's
@@ -52,7 +62,9 @@ set(EXPORT_DLL_SYMBOLS OFF)
 set(PREVIOUS_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 set(CMAKE_BUILD_TYPE Release)
 set(PREVIOUS_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-non-virtual-dtor")
+if(NOT MSVC)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-non-virtual-dtor")
+endif()
 # Clang17 requires this. See issue #13215.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 17.0.0)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-template-arg-list-after-template-kw")

@@ -40,12 +40,20 @@ int32_t numberOfTrailingZeros(uint64_t hash, int32_t numIndexBits) {
 }
 } // namespace
 
+#ifdef _MSC_VER
+using Allocator = velox::memory::StlAllocator<int8_t>;
+#else
 using Allocator = StlAllocator<int8_t>;
+#endif
 
 SfmSketch::SfmSketch(
     HashStringAllocator* allocator,
     std::optional<int32_t> seed)
+#ifdef _MSC_VER
+    : bits_{Allocator(allocator->pool())} {
+#else
     : bits_{Allocator(allocator)} {
+#endif
   if (seed.has_value()) {
     randomizationStrategy_ = MersenneTwisterRandomizationStrategy(*seed);
   }

@@ -71,3 +71,8 @@ velox_link_libraries(
   velox_test_util
   fmt::fmt
 )
+
+if(MSVC)
+  velox_compile_options(velox_dwio_dwrf_reader PRIVATE /std:c++20)
+  velox_compile_definitions(velox_dwio_dwrf_reader PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
+endif()

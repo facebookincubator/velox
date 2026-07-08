@@ -18,6 +18,13 @@
 
 #include "velox/common/base/Exceptions.h"
 
+#ifdef _MSC_VER
+// When liburing is unavailable (e.g. on Windows) the method bodies below are
+// unreachable stubs that always throw via VELOX_UNSUPPORTED. MSVC does not treat
+// it as [[noreturn]] here and emits C4716 ("must return a value").
+#pragma warning(disable : 4716)
+#endif
+
 #include <algorithm>
 #include <memory>
 #include <mutex>

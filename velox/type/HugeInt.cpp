@@ -78,16 +78,68 @@ int128_t HugeInt::parse(const std::string& str) {
 
 namespace std {
 
+#ifdef _MSC_VER
+string to_string(const facebook::velox::int128_t& x) {
+#else
 string to_string(facebook::velox::int128_t x) {
+#endif
   if (x == 0) {
     return "0";
   }
   string ans;
   bool negative = x < 0;
+#ifdef _MSC_VER
+  // Use correct 128-bit division by 10 without relying on Int128 operator/.
+  // The Int128 operator/ uses double conversion which loses precision.
+  uint64_t hi, lo;
+  if (negative) {
+    // Negate: ~x + 1
+    auto nx = -x;
+    hi = static_cast<uint64_t>(nx.high());
+    lo = nx.low();
+  } else {
+    hi = static_cast<uint64_t>(x.high());
+    lo = x.low();
+  }
+  while (hi != 0 || lo != 0) {
+    // Divide 128-bit (hi:lo) by 10, getting quotient and remainder.
+    // First divide high part.
+    uint64_t q_hi = hi / 10;
+    uint64_t r_hi = hi % 10;
+    // Combine remainder with low part: (r_hi * 2^64 + lo) / 10
+    // Use MSVC _udiv128 or manual two-step division.
+    // r_hi is at most 9, so r_hi * 2^64 + lo fits in 128 bits.
+    // We can split: (r_hi * 2^64 + lo) = (r_hi * (2^64 / 10) * 10 + r_hi * (2^64 % 10) + lo)
+    // Simpler: use the fact that r_hi < 10, so we can do two 64-bit divides.
+    // high_part = r_hi * (2^63) => need to be careful with overflow.
+    // Use: combined = r_hi * 2^64 + lo. Since r_hi < 10, this is < 10 * 2^64.
+    // We split into: (r_hi * (UINT64_MAX / 10 + 1)) * 10 + (r_hi * (UINT64_MAX % 10 + 1) - r_hi * 10 * (UINT64_MAX / 10 + 1)) + lo
+    // Actually, simpler: for each step, r_hi <= 9.
+    // We can compute: temp = r_hi * (1ULL << 32) + (lo >> 32), then
+    //   q_mid = temp / 10, r_mid = temp % 10
+    //   temp2 = r_mid * (1ULL << 32) + (lo & 0xFFFFFFFF)
+    //   q_lo_low = temp2 / 10, digit = temp2 % 10
+    //   q_lo = q_mid * (1ULL << 32) + q_lo_low
+    // This avoids 128-bit arithmetic entirely.
+    uint64_t lo_high = lo >> 32;
+    uint64_t lo_low = lo & 0xFFFFFFFFULL;
+    uint64_t temp1 = (r_hi << 32) | lo_high;
+    uint64_t q_mid = temp1 / 10;
+    uint64_t r_mid = temp1 % 10;
+    uint64_t temp2 = (r_mid << 32) | lo_low;
+    uint64_t q_lo_low = temp2 / 10;
+    uint64_t digit = temp2 % 10;
+    uint64_t q_lo = (q_mid << 32) | q_lo_low;
+    ans += '0' + static_cast<char>(digit);
+    hi = q_hi;
+    lo = q_lo;
+  }
+#else
   while (x != 0) {
     ans += '0' + abs(static_cast<int>(x % 10));
     x /= 10;
   }
+#endif
   if (negative) {
     ans += '-';
   }

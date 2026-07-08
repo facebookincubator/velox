@@ -131,7 +131,11 @@ endif()
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
   add_subdirectory(coverage)
-  add_subdirectory(fuzzer)
+  # The Spark fuzzer drives a reference Spark via Spark Connect (gRPC), which is
+  # not available on Windows.
+  if(NOT WIN32)
+    add_subdirectory(fuzzer)
+  endif()
 endif()
 
 if(${VELOX_ENABLE_BENCHMARKS})

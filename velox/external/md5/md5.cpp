@@ -27,6 +27,7 @@
 #include "md5.h"
 #include <folly/Conv.h>
 #include <folly/Format.h>
+#include "velox/type/HugeInt.h"
 
 namespace facebook::velox::crypto {
 
@@ -255,13 +256,24 @@ namespace facebook::velox::crypto {
     }
 
     std::string MD5Context::DigestToBase10(const unsigned char* digest) {
-      __uint128_t val = 0;
+      uint128_t val = 0;
       for (int i = 0; i < MD5_HASH_LENGTH_BINARY; i++) {
-        val = static_cast<__uint128_t>(val << 4) | ((digest[i] >> 4) & 0xf);
-        val = static_cast<__uint128_t>(val << 4) | (digest[i] & 0xf);
+        val = static_cast<uint128_t>(val << 4) | ((digest[i] >> 4) & 0xf);
+        val = static_cast<uint128_t>(val << 4) | (digest[i] & 0xf);
       }
-      auto dec = folly::to<std::string>(static_cast<__uint128_t>(val));
-      return dec;
+      // folly::to<std::string> does not support the 128-bit integer type on all
+      // platforms (notably the Windows class shim), so format it manually.
+      if (val == 0) {
+        return "0";
+      }
+      std::string result;
+      uint128_t temp = val;
+      while (temp > 0) {
+        int digit = static_cast<int>(static_cast<uint64_t>(temp % 10));
+        result = static_cast<char>('0' + digit) + result;
+        temp = temp / 10;
+      }
+      return result;
     }
 
     int MD5Context::FinishHex(char *out_digest) {

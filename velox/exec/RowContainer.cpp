@@ -22,6 +22,10 @@
 #include "velox/exec/Operator.h"
 #include "velox/type/FloatingPointUtil.h"
 
+#if defined(_MSC_VER)
+#include "velox/common/base/Builtins.h"
+#endif
+
 namespace facebook::velox::exec {
 namespace {
 template <TypeKind Kind>
@@ -147,7 +151,11 @@ RowContainer::RowContainer(
       stringAllocator_(std::make_unique<HashStringAllocator>(pool)),
       accumulators_(accumulators),
       rows_(pool),
+#ifdef _MSC_VER
+      rowPointers_(memory::StlAllocator<char*>(pool)) {
+#else
       rowPointers_(StlAllocator<char*>(stringAllocator_.get())) {
+#endif
   // Compute the layout of the payload row.  The row has keys, null flags,
   // accumulators, dependent fields. All fields are fixed width. If variable
   // width data is referenced, this is done with StringView(for VARCHAR) and
@@ -820,7 +828,8 @@ void RowContainer::storeComplexType(
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
   ByteOutputStream stream(stringAllocator_.get(), false, false);
   auto position = stringAllocator_->newWrite(stream);
-  ContainerRowSerdeOptions options{.isKey = isKey};
+  ContainerRowSerdeOptions options;
+  options.isKey = isKey;
   ContainerRowSerde::serialize(
       *decoded.base(), decoded.index(index), stream, options);
   stringAllocator_->finishWrite(stream, 0);
@@ -915,6 +924,12 @@ void RowContainer::hashTyped(
                    ->hash(valueAt<T>(row, offset));
       } else if constexpr (std::is_floating_point_v<T>) {
         hash = util::floating_point::NaNAwareHash<T>()(valueAt<T>(row, offset));
+      } else if constexpr (std::is_same_v<T, int128_t>) {
+        // folly::hasher doesn't support __int128, use hash_combine
+        auto value = valueAt<T>(row, offset);
+        hash = folly::hash::hash_combine(
+            folly::hasher<uint64_t>()(static_cast<uint64_t>(value >> 64)),
+            folly::hasher<uint64_t>()(static_cast<uint64_t>(value)));
       } else {
         hash = folly::hasher<T>()(valueAt<T>(row, offset));
       }
@@ -1060,6 +1075,12 @@ std::optional<int64_t> RowContainer::estimateRowSize() const {
       stringAllocator_->retainedSize() - stringAllocator_->freeSpace() -
       rowPointers_.capacity() * sizeof(char*);
   int64_t rowSize = usedSize / numRows_;
+  // On Windows, allocation overhead accounting may differ from Linux causing
+  // usedSize to be zero or negative for small row counts. Fall back to the
+  // fixed row size which is always a valid lower bound.
+  if (rowSize <= 0) {
+    rowSize = fixedRowSize_;
+  }
   VELOX_CHECK_GT(
       rowSize, 0, "Estimated row size of the RowContainer must be positive.");
   return rowSize;

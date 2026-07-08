@@ -185,28 +185,52 @@ inline void bulkZigzagDecode(int32_t size, T* data) {
 
 // Stores each byte of 'bytes' as a int64_t at output[0] ... output[3]
 inline void unpack4x1(int32_t bytes, uint64_t*& output) {
+#ifndef _MSC_VER
   *reinterpret_cast<__m256i_u*>(output) =
       _mm256_cvtepi8_epi64(_mm_set1_epi32(bytes));
+#else
+  // MSVC doesn't support __m256i_u, use _mm256_storeu_si256 instead
+  _mm256_storeu_si256(reinterpret_cast<__m256i*>(output),
+      _mm256_cvtepi8_epi64(_mm_set1_epi32(bytes)));
+#endif
   output += 4;
 }
 
 inline void unpack4x1(int32_t bytes, int64_t*& output) {
+#ifndef _MSC_VER
   *reinterpret_cast<__m256i_u*>(output) =
       _mm256_cvtepi8_epi64(_mm_set1_epi32(bytes));
+#else
+  // MSVC doesn't support __m256i_u, use _mm256_storeu_si256 instead
+  _mm256_storeu_si256(reinterpret_cast<__m256i*>(output),
+      _mm256_cvtepi8_epi64(_mm_set1_epi32(bytes)));
+#endif
   output += 4;
 }
 
 // Stores each byte of 'bytes' as a int32_t at output[0] ... output[3]
 inline void unpack4x1(int32_t bytes, int32_t*& output) {
+#ifndef _MSC_VER
   *reinterpret_cast<__m256i_u*>(output) =
       _mm256_cvtepi8_epi32(_mm_set1_epi32(bytes));
+#else
+  // MSVC doesn't support __m256i_u, use _mm256_storeu_si256 instead
+  _mm256_storeu_si256(reinterpret_cast<__m256i*>(output),
+      _mm256_cvtepi8_epi32(_mm_set1_epi32(bytes)));
+#endif
   output += 4;
 }
 
 // Stores each byte of 'bytes' as a int16_t at output[0] ... output[3]
 inline void unpack4x1(int32_t bytes, int16_t*& output) {
+#ifndef _MSC_VER
   *reinterpret_cast<__m256i_u*>(output) =
       _mm256_cvtepi8_epi16(_mm_set1_epi32(bytes));
+#else
+  // MSVC doesn't support __m256i_u, use _mm256_storeu_si256 instead
+  _mm256_storeu_si256(reinterpret_cast<__m256i*>(output),
+      _mm256_cvtepi8_epi16(_mm_set1_epi32(bytes)));
+#endif
   output += 4;
 }
 

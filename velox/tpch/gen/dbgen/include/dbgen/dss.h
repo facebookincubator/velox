@@ -51,7 +51,11 @@
 #include <stdlib.h>
 
 // some defines to avoid r warnings
+// On MSVC, #define exit(status) breaks system headers (process.h, cstdlib)
+// that re-declare exit(). Guard with #ifndef _MSC_VER.
+#ifndef _MSC_VER
 #define exit(status)
+#endif
 #define printf(...)
 #define fprintf(...)
 

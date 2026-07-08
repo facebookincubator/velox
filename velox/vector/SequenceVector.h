@@ -188,6 +188,8 @@ class SequenceVector : public SimpleVector<T> {
 
   VectorPtr slice(vector_size_t, vector_size_t) const override {
     VELOX_NYI();
+    // Unreachable, but required for MSVC
+    return nullptr;
   }
 
   bool isNullsWritable() const override {

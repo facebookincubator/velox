@@ -1509,8 +1509,21 @@ TEST(VariantFloatingToJsonTest, normalTest) {
       R"("Infinity")");
 
   // NaN
+#ifdef _MSC_VER
+  // MSVC rejects the `0.0 / 0.0` compile-time division; use an explicit NaN
+  // (value-identical) on Windows while leaving the POSIX expression untouched.
+  EXPECT_EQ(
+      Variant::create<float>(std::numeric_limits<float>::quiet_NaN())
+          .toJson(REAL()),
+      R"("NaN")");
+  EXPECT_EQ(
+      Variant::create<double>(std::numeric_limits<double>::quiet_NaN())
+          .toJson(DOUBLE()),
+      R"("NaN")");
+#else
   EXPECT_EQ(Variant::create<float>(0.0 / 0.0).toJson(REAL()), R"("NaN")");
   EXPECT_EQ(Variant::create<double>(0.0 / 0.0).toJson(DOUBLE()), R"("NaN")");
+#endif
 }
 
 TEST(VariantTest, opaqueSerializationNotRegistered) {

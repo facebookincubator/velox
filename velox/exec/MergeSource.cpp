@@ -242,6 +242,7 @@ class MergeExchangeSource : public MergeSource {
 
   BlockingReason started(ContinueFuture* /*unused*/) override {
     VELOX_NYI();
+    return BlockingReason::kNotBlocked; // unreachable, satisfies MSVC
   }
 
   BlockingReason next(RowVectorPtr& data, ContinueFuture* future, bool& drained)
@@ -305,6 +306,7 @@ class MergeExchangeSource : public MergeSource {
   BlockingReason
   enqueue(RowVectorPtr input, ContinueFuture* future, bool drained) override {
     VELOX_FAIL();
+    return BlockingReason::kNotBlocked;
   }
 
  private:

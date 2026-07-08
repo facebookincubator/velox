@@ -30,6 +30,11 @@ velox_add_library(
 
 velox_link_libraries(velox_test_util PUBLIC velox_exception Folly::folly PRIVATE glog::glog)
 
+# Add Windows-specific glog defines
+if(WIN32)
+  velox_compile_definitions(velox_test_util PRIVATE GLOG_USE_GLOG_EXPORT)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

@@ -16,6 +16,9 @@
 
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/base/BitUtil.h"
+#if defined(_MSC_VER)
+#include "velox/common/base/Builtins.h"
+#endif
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryAllocator.h"
 

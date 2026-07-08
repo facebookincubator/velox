@@ -58,14 +58,14 @@ template <>
 int8_t add(int8_t value, int8_t step, int32_t sequence) {
   const auto delta =
       static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
-  return value + delta;
+  return static_cast<int8_t>(value + delta);
 }
 
 template <>
 int16_t add(int16_t value, int16_t step, int32_t sequence) {
   const auto delta =
       static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
-  return value + delta;
+  return static_cast<int16_t>(value + delta);
 }
 
 template <>
@@ -74,21 +74,21 @@ int64_t add(int64_t value, int64_t step, int32_t sequence) {
       static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
   // Since step is calculated from start and stop,
   // the sum of 'value' and 'add' is within int64_t.
-  return value + delta;
+  return static_cast<int64_t>(value + delta);
 }
 
 template <>
 int32_t add(int32_t value, int64_t step, int32_t sequence) {
   const auto delta =
       static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
-  return value + delta;
+  return static_cast<int32_t>(value + delta);
 }
 
 template <>
 Timestamp add(Timestamp value, int64_t step, int32_t sequence) {
   const auto delta =
       static_cast<int128_t>(step) * static_cast<int128_t>(sequence);
-  return Timestamp::fromMillis(value.toMillis() + delta);
+  return Timestamp::fromMillis(static_cast<int64_t>(value.toMillis() + delta));
 }
 
 template <>
@@ -104,6 +104,7 @@ Timestamp add(Timestamp value, Months step, int32_t sequence) {
 template <typename T>
 int128_t getStepCount(T start, T end, int32_t step) {
   VELOX_FAIL("Unexpected start/end type for argument INTERVAL_YEAR_MONTH");
+  return {};
 }
 
 template <>
@@ -231,7 +232,7 @@ vector_size_t SequenceFunction<T, K>::checkArguments(
       maxElementsSize,
       "result of sequence function must not have more than {} entries",
       maxElementsSize);
-  return sequenceCount;
+  return static_cast<vector_size_t>(sequenceCount);
 }
 
 template <typename T, typename K>

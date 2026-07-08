@@ -130,6 +130,7 @@ class FileSystem {
   /// for local file system.
   virtual std::string_view extractPath(std::string_view path) const {
     VELOX_NYI();
+    return {}; // Dummy return for MSVC
   }
 
   /// Returns a ReadFile handle for a given file path
@@ -159,6 +160,7 @@ class FileSystem {
   /// Returns true if it is a directory.
   virtual bool isDirectory(std::string_view path) const {
     VELOX_UNSUPPORTED("isDirectory not implemented");
+    return false; // Dummy return for MSVC
   }
 
   /// Returns the list of files or folders in a path. Currently, this method
@@ -190,6 +192,7 @@ class FileSystem {
       std::string_view /*path*/,
       std::string_view /*propertyKey*/) {
     VELOX_UNSUPPORTED("getDirectoryProperty not implemented");
+    return {};
   }
 
  protected:

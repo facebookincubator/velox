@@ -16,7 +16,11 @@
 
 #include "velox/common/memory/MmapArena.h"
 
+#ifndef _WIN32
 #include <sys/mman.h>
+#else
+#include "velox/common/memory/windows/PosixMemoryCompat.h"
+#endif
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 

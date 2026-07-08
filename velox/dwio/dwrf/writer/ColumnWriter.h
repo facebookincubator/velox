@@ -63,12 +63,14 @@ class ColumnWriter {
       std::function<ColumnStatisticsWriteWrapper(uint32_t)> statsFactory)
       const {
     VELOX_NYI();
+    return 0; // unreachable, satisfies MSVC return requirement
   }
 
   virtual uint64_t writeFileStats(
       std::function<velox::dwrf::proto::ColumnStatistics&(uint32_t)>
           statsFactory) const {
     VELOX_NYI();
+    return 0; // unreachable, satisfies MSVC return requirement
   }
 
   virtual bool tryAbandonDictionaries(bool force) = 0;

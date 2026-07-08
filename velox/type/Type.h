@@ -48,9 +48,16 @@ namespace folly {
 struct dynamic;
 }
 
+#ifdef _MSC_VER
+// MSVC does not support __int128_t natively
+#include "velox/type/windows/Int128.h"
+#endif
+
 namespace facebook::velox {
 
+#ifndef _MSC_VER
 using int128_t = __int128_t;
+#endif
 
 using column_index_t = uint32_t;
 
@@ -71,6 +78,12 @@ constexpr column_index_t kConstantChannel =
 ///     information into template parameters.
 
 /// Simple enum with type category.
+#ifdef _WIN32
+// wingdi.h defines OPAQUE as a macro - must undef before our enum
+#ifdef OPAQUE
+#undef OPAQUE
+#endif
+#endif
 enum class TypeKind : int8_t {
   BOOLEAN = 0,
   TINYINT = 1,
@@ -588,7 +601,7 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   /// Returns human-readable summary of the type. Useful when full output of
   /// toString() is too large.
   std::string toSummaryString(
-      TypeSummaryOptions options = {.maxChildren = 0}) const;
+      TypeSummaryOptions options = TypeSummaryOptions{}) const;
 
   /// Types are weakly matched.
   /// Examples: Two RowTypes are equivalent if the children types are
@@ -792,6 +805,8 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
 
   const TypePtr& childAt(uint32_t) const override {
     VELOX_FAIL("scalar type has no children");
+    static const std::shared_ptr<const Type> dummy;
+    return dummy;
   }
 
   std::string toString() const override {
@@ -1374,6 +1389,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   const TypePtr& childAt(uint32_t) const override {
     VELOX_FAIL("OpaqueType type has no children");
+    static const std::shared_ptr<const Type> dummy;
+    return dummy;
   }
 
   std::string toString() const override;
@@ -1510,10 +1527,10 @@ class TimestampUtcType final : public TimestampType {
   constexpr TimestampUtcType() = default;
 };
 
-constexpr long kMillisInSecond = 1000;
-constexpr long kMillisInMinute = 60 * kMillisInSecond;
-constexpr long kMillisInHour = 60 * kMillisInMinute;
-constexpr long kMillisInDay = 24 * kMillisInHour;
+constexpr int64_t kMillisInSecond = 1000;
+constexpr int64_t kMillisInMinute = 60 * kMillisInSecond;
+constexpr int64_t kMillisInHour = 60 * kMillisInMinute;
+constexpr int64_t kMillisInDay = 24 * kMillisInHour;
 
 /// Time interval in milliseconds.
 class IntervalDayTimeType final : public BigintType {
@@ -1559,7 +1576,7 @@ FOLLY_ALWAYS_INLINE bool Type::isIntervalDayTime() const {
   return (this == INTERVAL_DAY_TIME().get());
 }
 
-constexpr long kMonthInYear = 12;
+constexpr int64_t kMonthInYear = 12;
 /// Time interval in months.
 class IntervalYearMonthType final : public IntegerType {
   IntervalYearMonthType() = default;
@@ -1978,7 +1995,7 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
             __VA_ARGS__);                                                     \
       }                                                                       \
       default:                                                                \
-        VELOX_FAIL(                                                           \
+        VELOX_FAIL(                                                      \
             "not a scalar type! kind: {}",                                    \
             ::facebook::velox::TypeKindName::toName(typeKind));               \
     }                                                                         \
@@ -2033,7 +2050,7 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
             __VA_ARGS__);                                                \
       }                                                                  \
       default:                                                           \
-        VELOX_FAIL(                                                      \
+        VELOX_FAIL(                                                 \
             "not a scalar type! kind: {}",                               \
             ::facebook::velox::TypeKindName::toName(typeKind));          \
     }                                                                    \
@@ -2099,7 +2116,7 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
             __VA_ARGS__);                                                     \
       }                                                                       \
       default:                                                                \
-        VELOX_FAIL(                                                           \
+        VELOX_FAIL(                                                      \
             "not a known type kind: {}",                                      \
             ::facebook::velox::TypeKindName::toName(typeKind));               \
     }                                                                         \
@@ -2188,7 +2205,7 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return PREFIX<::facebook::velox::TypeKind::ROW> SUFFIX(__VA_ARGS__);   \
       }                                                                        \
       default:                                                                 \
-        VELOX_FAIL(                                                            \
+        VELOX_FAIL(                                                       \
             "not a known type kind: {}",                                       \
             ::facebook::velox::TypeKindName::toName(typeKind));                \
     }                                                                          \
@@ -2275,7 +2292,7 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return CLASS<::facebook::velox::TypeKind::ROW>::FIELD;       \
       }                                                              \
       default:                                                       \
-        VELOX_FAIL(                                                  \
+        VELOX_FAIL(                                             \
             "not a known type kind: {}",                             \
             ::facebook::velox::TypeKindName::toName(typeKind));      \
     }                                                                \
@@ -2297,6 +2314,11 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
 // todo: union convenience creators
 
 VELOX_SCALAR_ACCESSOR(INTEGER);
+#ifdef _MSC_VER
+// Windows winnt.h defines BOOLEAN as a typedef; #undef it so our
+// BOOLEAN() factory function compiles without ambiguity.
+#undef BOOLEAN
+#endif
 VELOX_SCALAR_ACCESSOR(BOOLEAN);
 VELOX_SCALAR_ACCESSOR(TINYINT);
 VELOX_SCALAR_ACCESSOR(SMALLINT);

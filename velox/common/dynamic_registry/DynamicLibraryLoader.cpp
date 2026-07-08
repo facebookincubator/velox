@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <iostream>
 #include "velox/common/base/Exceptions.h"
 
@@ -23,6 +27,34 @@ namespace facebook::velox {
 void loadDynamicLibrary(
     const std::string& fileName,
     const std::string& registrationFunctionName) {
+#ifdef _WIN32
+  // Windows: Use LoadLibrary/GetProcAddress
+  HMODULE handler = LoadLibraryA(fileName.c_str());
+
+  if (handler == nullptr) {
+    VELOX_USER_FAIL(
+        "Error while loading shared library: {} (error code {})",
+        fileName,
+        GetLastError());
+  }
+
+  LOG(INFO) << "Loaded library " << fileName << ". Searching registry symbol "
+            << registrationFunctionName;
+
+  auto loadUserLibrary = reinterpret_cast<void (*)()>(
+      GetProcAddress(handler, registrationFunctionName.c_str()));
+
+  if (loadUserLibrary == nullptr) {
+    VELOX_USER_FAIL(
+        "Couldn't find Velox registry symbol '{}' (error code {})",
+        registrationFunctionName,
+        GetLastError());
+  }
+
+  // Invoke the registry function.
+  loadUserLibrary();
+  LOG(INFO) << "Registered functions by " << registrationFunctionName;
+#else
   // Try to dynamically load the shared library.
   void* handler = dlopen(fileName.c_str(), RTLD_NOW);
 
@@ -53,6 +85,7 @@ void loadDynamicLibrary(
   // Invoke the registry function.
   loadUserLibrary();
   LOG(INFO) << "Registered functions by " << registrationFunctionName;
+#endif
 }
 
 } // namespace facebook::velox

@@ -69,9 +69,20 @@ class DecimalAverageAggregate {
       exec::out_type<Row<int128_t, int64_t>>& out,
       exec::optional_arg_type<TInputType> in) {
     if (in.has_value()) {
+#ifdef _WIN32
+      // MSVC: int128_t is a shim class, so `int -> int128_t` and
+      // `int -> optional<int128_t>` are both user-defined conversions and the
+      // writer's operator= is ambiguous. Make the int128 element explicit.
+      out.copy_from(std::make_tuple(static_cast<int128_t>(in.value()), 1));
+#else
       out.copy_from(std::make_tuple(in.value(), 1));
+#endif
     } else {
+#ifdef _WIN32
+      out.copy_from(std::make_tuple(static_cast<int128_t>(0), 0));
+#else
       out.copy_from(std::make_tuple(0, 0));
+#endif
     }
     return true;
   }

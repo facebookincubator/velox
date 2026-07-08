@@ -16,41 +16,63 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-bison_target(
-  SignatureParser
-  SignatureParser.yy
-  ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.cc
-  DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.h
-  COMPILE_FLAGS "-Werror -Wno-deprecated"
-)
+find_package(BISON 3.0.4 QUIET)
+find_package(FLEX 2.5.13 QUIET)
 
-flex_target(
-  SignatureParserScanner
-  SignatureParser.ll
-  ${CMAKE_CURRENT_BINARY_DIR}/Scanner.cpp
-  COMPILE_FLAGS "-Cf --prefix=veloxsp"
-)
-
-add_flex_bison_dependency(SignatureParserScanner SignatureParser)
-
-if(VELOX_MONO_LIBRARY)
-  add_custom_target(
-    velox_signature_gen_src
-    DEPENDS ${BISON_SignatureParser_OUTPUTS} ${FLEX_SignatureParserScanner_OUTPUTS}
+if(BISON_FOUND AND FLEX_FOUND)
+  bison_target(
+    SignatureParser
+    SignatureParser.yy
+    ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.cc
+    DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/SignatureParser.yy.h
+    COMPILE_FLAGS "-Werror -Wno-deprecated"
   )
-  add_dependencies(velox velox_signature_gen_src)
+
+  flex_target(
+    SignatureParserScanner
+    SignatureParser.ll
+    ${CMAKE_CURRENT_BINARY_DIR}/Scanner.cpp
+    COMPILE_FLAGS "--prefix=veloxsp"
+  )
+
+  add_flex_bison_dependency(SignatureParserScanner SignatureParser)
+
+  set(_PARSER_SRCS ${BISON_SignatureParser_OUTPUTS} ${FLEX_SignatureParserScanner_OUTPUTS})
+
+  if(VELOX_MONO_LIBRARY)
+    add_custom_target(
+      velox_signature_gen_src
+      DEPENDS ${BISON_SignatureParser_OUTPUTS} ${FLEX_SignatureParserScanner_OUTPUTS}
+    )
+    add_dependencies(velox velox_signature_gen_src)
+  endif()
+else()
+  message(STATUS "Bison/Flex not found - using pre-generated parser files for signature_parser")
+  set(_PARSER_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/generated/SignatureParser.yy.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/generated/Scanner.cpp
+  )
+  # Make generated headers available
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/generated)
 endif()
 
 include_directories(${PROJECT_BINARY_DIR})
-include_directories(${FLEX_INCLUDE_DIRS})
+if(FLEX_FOUND)
+  include_directories(${FLEX_INCLUDE_DIRS})
+endif()
 velox_add_library(
   velox_signature_parser
-  ${BISON_SignatureParser_OUTPUTS}
-  ${FLEX_SignatureParserScanner_OUTPUTS}
+  ${_PARSER_SRCS}
   ParseUtil.cpp
   HEADERS
   ParseUtil.h
   Scanner.h
   SignatureParser.h
 )
+
+# Windows fix: flex-generated scanner tries to include unistd.h which doesn't exist on Windows
+if(WIN32)
+  velox_compile_definitions(velox_signature_parser PRIVATE YY_NO_UNISTD_H)
+endif()
+
 velox_link_libraries(velox_signature_parser velox_common_base velox_type)

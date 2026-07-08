@@ -36,3 +36,16 @@ target_link_libraries(dbgen PRIVATE fmt::fmt Folly::folly)
 
 # Suppress warnings when compiling dbgen.
 target_compile_options(dbgen PRIVATE -w)
+
+# Folly's exported INTERFACE compile options add /Zc:strictStrings (C++20
+# conformance), which makes newer MSVC reject the vendored dbgen sources that
+# assign string literals to non-const char* (e.g. `char* eol[2] = {" ", "},"};`
+# -> C2440). Because Folly's flag is emitted after dbgen's own PRIVATE options,
+# a plain target_compile_options(/Zc:strictStrings-) is overridden. Linking an
+# INTERFACE target AFTER Folly makes /Zc:strictStrings- the last flag, so it
+# wins, without editing the upstream dbgen sources.
+if(MSVC)
+  add_library(dbgen_msvc_compat INTERFACE)
+  target_compile_options(dbgen_msvc_compat INTERFACE /Zc:strictStrings-)
+  target_link_libraries(dbgen PRIVATE dbgen_msvc_compat)
+endif()

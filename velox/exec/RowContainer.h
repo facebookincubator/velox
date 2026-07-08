@@ -254,7 +254,7 @@ class RowColumn {
       // which is always false and always safe to do.
       return static_cast<uint64_t>(offset) << 32;
     }
-    return (1UL << (nullOffset & 7)) | ((nullOffset & ~7UL) << 5) |
+    return (1ULL << (nullOffset & 7)) | ((nullOffset & ~7ULL) << 5) |
         static_cast<uint64_t>(offset) << 32;
   }
 
@@ -874,7 +874,18 @@ class RowContainer {
     return 0;
   }
 
-  const std::vector<char*, StlAllocator<char*>>& testingRowPointers() const {
+  // On MSVC Debug builds (_ITERATOR_DEBUG_LEVEL=2), std::vector allocates a
+  // _Container_proxy through the allocator. Using HashStringAllocator's
+  // StlAllocator causes use-after-free because clear() calls
+  // stringAllocator_->clear() which frees the proxy before the vector destructor.
+  // Use MemoryPool-based allocator on MSVC to avoid this and prevent
+  // C2872 ambiguity when test files use 'using namespace facebook::velox::memory'.
+#ifdef _MSC_VER
+  const std::vector<char*, memory::StlAllocator<char*>>&
+#else
+  const std::vector<char*, facebook::velox::StlAllocator<char*>>&
+#endif
+  testingRowPointers() const {
     return rowPointers_;
   }
 
@@ -1345,6 +1356,7 @@ class RowContainer {
       vector_size_t /*index*/,
       CompareFlags /*flags*/) const {
     VELOX_UNSUPPORTED("Comparing Opaque types is not supported.");
+    return 0; // MSVC: unreachable, but satisfies C4716
   }
 
   template <
@@ -1411,6 +1423,7 @@ class RowContainer {
       RowColumn /*rightColumn*/,
       CompareFlags /*flags*/) const {
     VELOX_UNSUPPORTED("Comparing Opaque types is not supported.");
+    return 0; // Unreachable, but MSVC requires a return statement
   }
 
   template <bool typeProvidesCustomComparison, TypeKind Kind>
@@ -1626,7 +1639,13 @@ class RowContainer {
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
-  std::vector<char*, StlAllocator<char*>> rowPointers_;
+#ifdef _MSC_VER
+  // Use MemoryPool allocator on MSVC to avoid _Container_proxy use-after-free
+  // and C2872 ambiguity when test files use 'using namespace facebook::velox::memory'.
+  std::vector<char*, memory::StlAllocator<char*>> rowPointers_;
+#else
+  std::vector<char*, facebook::velox::StlAllocator<char*>> rowPointers_;
+#endif
 
   int alignment_ = 1;
 

@@ -159,7 +159,7 @@ class ScratchPtr {
   raw_vector<char> data_;
   T* ptr_{nullptr};
   int32_t size_{0};
-  T inline_[inlineSize];
+  T inline_[inlineSize == 0 ? 1 : inlineSize];
   char padding_[inlineSize == 0 ? 0 : simd::kPadding];
 };
 

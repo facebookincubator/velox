@@ -161,6 +161,9 @@ class BiasVector : public SimpleVector<T> {
 
   VectorPtr slice(vector_size_t, vector_size_t) const override {
     VELOX_NYI();
+#ifdef _MSC_VER
+    return nullptr; // Unreachable, but MSVC requires a return statement.
+#endif
   }
 
   VectorPtr testingCopyPreserveEncodings(

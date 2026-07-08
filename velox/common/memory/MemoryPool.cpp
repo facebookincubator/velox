@@ -131,12 +131,11 @@ void treeMemoryUsageVisitor(
   if (stats.empty() && skipEmptyPool) {
     return;
   }
-  const MemoryUsage usage{
-      .name = pool->name(),
-      .currentUsage = stats.usedBytes,
-      .reservedUsage = stats.reservedBytes,
-      .peakUsage = stats.peakBytes,
-  };
+  MemoryUsage usage;
+  usage.name = pool->name();
+  usage.currentUsage = stats.usedBytes;
+  usage.reservedUsage = stats.reservedBytes;
+  usage.peakUsage = stats.peakBytes;
   out << std::string(indent, ' ') << usage.toString() << "\n";
 
   if (pool->kind() == MemoryPool::Kind::kLeaf) {
@@ -895,6 +894,13 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     bool threadSafe,
     const std::function<size_t(size_t)>& getPreferredSize,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
+  MemoryPool::Options opts;
+  opts.alignment = alignment_;
+  opts.trackUsage = trackUsage_;
+  opts.threadSafe = threadSafe;
+  opts.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
+  opts.getPreferredSize = getPreferredSize;
+  opts.debugOptions = debugOptions_;
   return std::make_shared<MemoryPoolImpl>(
       manager_,
       name,
@@ -1151,11 +1157,11 @@ std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   {
     std::lock_guard<std::mutex> l(mutex_);
     const Stats stats = statsLocked();
-    const MemoryUsage usage{
-        .name = name(),
-        .currentUsage = stats.usedBytes,
-        .reservedUsage = stats.reservedBytes,
-        .peakUsage = stats.peakBytes};
+    MemoryUsage usage;
+    usage.name = name();
+    usage.currentUsage = stats.usedBytes;
+    usage.reservedUsage = stats.reservedBytes;
+    usage.peakUsage = stats.peakBytes;
     out << usage.toString() << "\n";
   }
 
@@ -1411,7 +1417,8 @@ void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
   uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
   auto allocResult = debugAllocRecords_.find(addrUint64);
   if (allocResult == debugAllocRecords_.end()) {
-    VELOX_FAIL("Freeing of un-allocated memory. Free address {}.", addrUint64);
+    VELOX_FAIL(
+        "Freeing of un-allocated memory. Free address {}.", addrUint64);
   }
   const auto allocRecord = allocResult->second;
   if (allocRecord.size != size) {
@@ -1456,7 +1463,8 @@ void MemoryPoolImpl::recordGrowDbg(const void* addr, uint64_t newSize) {
   uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
   auto allocResult = debugAllocRecords_.find(addrUint64);
   if (allocResult == debugAllocRecords_.end()) {
-    VELOX_FAIL("Growing of un-allocated memory. Free address {}.", addrUint64);
+    VELOX_FAIL(
+        "Growing of un-allocated memory. Free address {}.", addrUint64);
   }
   allocResult->second.size = newSize;
 }
@@ -1576,6 +1584,7 @@ void MemoryPoolImpl::handleAllocationFailure(
     const std::string& failureMessage) {
   if (coreOnAllocationFailureEnabled_) {
     VELOX_MEM_LOG(ERROR) << failureMessage;
+#ifndef _WIN32
     // SIGBUS is one of the standard signals in Linux that triggers a core
     // dump Normally it is raised by the operating system when a misaligned
     // memory access occurs. On x86 and aarch64 misaligned access is allowed
@@ -1583,6 +1592,10 @@ void MemoryPoolImpl::handleAllocationFailure(
     // signal other than SIGABRT makes it easier to distinguish an allocation
     // failure from any other crash
     raise(SIGBUS);
+#else
+    // On Windows, use SIGABRT instead
+    raise(SIGABRT);
+#endif
   }
 
   VELOX_MEM_ALLOC_ERROR(failureMessage);

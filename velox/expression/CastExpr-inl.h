@@ -439,14 +439,26 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
               .thenOrThrow(folly::identity, [&](const Status& status) {
                 VELOX_USER_FAIL("{}", status.message());
               });
+#ifdef _MSC_VER
+      // The Windows int128_t shim has no float conversion operator; divide via
+      // a double-typed scale factor.
+      finalValue = static_cast<To>(output / static_cast<double>(scaleFactor));
+#else
       finalValue = static_cast<To>(output / scaleFactor);
+#endif
     } else {
       const auto output =
           util::Converter<ToKind>::tryCast(unscaledValue)
               .thenOrThrow(folly::identity, [&](const Status& status) {
                 VELOX_USER_FAIL("{}", status.message());
               });
+#ifdef _MSC_VER
+      // The Windows int128_t shim has no float conversion operator; divide via
+      // a double-typed scale factor.
+      finalValue = static_cast<To>(output / static_cast<double>(scaleFactor));
+#else
       finalValue = output / scaleFactor;
+#endif
     }
     resultBuffer[row] = finalValue;
   });
@@ -471,12 +483,83 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   if (hooks_->truncate()) {
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+#ifdef _MSC_VER
+      // The Windows int128_t shim lacks heterogeneous int64_t/int128_t
+      // operators; keep the division operands the same type.
+      if constexpr (std::is_same_v<FromNativeType, int128_t>) {
+        int128_t value = simpleInput->valueAt(row);
+        int128_t quotient = value / scaleFactor;
+        resultBuffer[row] = static_cast<To>(static_cast<int64_t>(quotient));
+      } else {
+        auto sf = static_cast<int64_t>(scaleFactor);
+        resultBuffer[row] = static_cast<To>(simpleInput->valueAt(row) / sf);
+      }
+#else
       resultBuffer[row] =
           static_cast<To>(simpleInput->valueAt(row) / scaleFactor);
+#endif
     });
   } else {
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       auto value = simpleInput->valueAt(row);
+#ifdef _MSC_VER
+      // The Windows int128_t shim lacks heterogeneous int64_t/int128_t
+      // operators; cast the scale factor to the value's type so all decimal
+      // arithmetic stays homogeneous.
+      if constexpr (std::is_same_v<FromNativeType, int128_t>) {
+        auto sf128 = static_cast<int128_t>(scaleFactor);
+        auto integralPart = value / sf128;
+        if (hooks_->getPolicy() != SparkTryCastPolicy) {
+          auto fractionPart = value % sf128;
+          auto sign = value >= static_cast<int128_t>(0) ? 1 : -1;
+          bool needsRoundUp = (sf128 != static_cast<int128_t>(1)) &&
+              (sign * fractionPart >= (sf128 >> 1));
+          integralPart += needsRoundUp ? sign : 0;
+        }
+        if (integralPart > std::numeric_limits<To>::max() ||
+            integralPart < std::numeric_limits<To>::min()) {
+          if (setNullInResultAtError()) {
+            result->setNull(row, true);
+          } else {
+            context.setVeloxExceptionError(
+                row,
+                makeBadCastException(
+                    result->type(),
+                    input,
+                    row,
+                    makeErrorMessage(input, row, toType) + "Out of bounds."));
+          }
+          return;
+        }
+        resultBuffer[row] = static_cast<To>(integralPart);
+      } else {
+        auto sf = static_cast<int64_t>(scaleFactor);
+        auto integralPart = value / sf;
+        if (hooks_->getPolicy() != SparkTryCastPolicy) {
+          auto fractionPart = value % sf;
+          auto sign = value >= 0 ? 1 : -1;
+          bool needsRoundUp =
+              (sf != 1) && (sign * fractionPart >= (sf >> 1));
+          integralPart += needsRoundUp ? sign : 0;
+        }
+        if (integralPart > std::numeric_limits<To>::max() ||
+            integralPart < std::numeric_limits<To>::min()) {
+          if (setNullInResultAtError()) {
+            result->setNull(row, true);
+          } else {
+            context.setVeloxExceptionError(
+                row,
+                makeBadCastException(
+                    result->type(),
+                    input,
+                    row,
+                    makeErrorMessage(input, row, toType) + "Out of bounds."));
+          }
+          return;
+        }
+        resultBuffer[row] = static_cast<To>(integralPart);
+      }
+#else
       auto integralPart = value / scaleFactor;
       if (hooks_->getPolicy() != SparkTryCastPolicy) {
         auto fractionPart = value % scaleFactor;
@@ -500,6 +583,7 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
       }
 
       resultBuffer[row] = static_cast<To>(integralPart);
+#endif
     });
   }
   return result;

@@ -221,7 +221,12 @@ class SfmSketch {
   double randomizedResponseProbability_{0.0};
 
   // The underline bit representation of the sketch.
+#ifdef _MSC_VER
+  // Use MemoryPool allocator on MSVC to avoid C2872 ambiguity.
+  std::vector<int8_t, velox::memory::StlAllocator<int8_t>> bits_;
+#else
   std::vector<int8_t, facebook::velox::StlAllocator<int8_t>> bits_;
+#endif
 
   // Pointer to the raw bits.
   uint64_t* rawBits_{nullptr};

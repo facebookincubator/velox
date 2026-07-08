@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+
+#ifdef _MSC_VER
+#define _USE_MATH_DEFINES
+#include <cmath>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#endif
 #include "velox/functions/prestosql/types/BingTileType.h"
 #include <folly/Expected.h>
 #include <algorithm>
@@ -32,10 +40,10 @@ folly::Expected<int64_t, std::string> mapSize(uint8_t zoomLevel) {
             zoomLevel,
             BingTileType::kBingTileMaxZoomLevel));
   }
-  return 256L << zoomLevel;
+  return 256LL << zoomLevel;
 }
 
-int32_t axisToCoordinates(double axis, long mapSize) {
+int32_t axisToCoordinates(double axis, int64_t mapSize) {
   int32_t tileAxis = std::clamp<int32_t>(
       static_cast<int32_t>(axis * mapSize),
       0,
@@ -218,7 +226,7 @@ std::optional<std::string> BingTileType::bingTileInvalidReason(uint64_t tile) {
         BingTileType::kBingTileMaxZoomLevel);
   }
 
-  uint64_t coordinateBound = 1ul << zoom;
+  uint64_t coordinateBound = 1ULL << zoom;
 
   if (BingTileType::bingTileX(tile) >= coordinateBound) {
     return fmt::format(

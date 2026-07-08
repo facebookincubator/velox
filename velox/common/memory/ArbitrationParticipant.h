@@ -29,8 +29,8 @@ namespace facebook::velox::memory {
 #define VELOX_MEM_ARBITRATION_TIMEOUT(errorMessage)                  \
   _VELOX_THROW(                                                      \
       ::facebook::velox::VeloxRuntimeError,                          \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(),  \
-      ::facebook::velox::error_code::kMemArbitrationTimeout.c_str(), \
+      ::facebook::velox::error_source::kErrorSourceRuntime,  \
+      ::facebook::velox::error_code::kMemArbitrationTimeout, \
       /* isRetriable */ true,                                        \
       "{}",                                                          \
       errorMessage);

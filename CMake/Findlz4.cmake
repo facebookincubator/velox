@@ -34,8 +34,30 @@ find_package_handle_standard_args(lz4 DEFAULT_MSG LZ4_LIBRARY LZ4_INCLUDE_DIR)
 
 mark_as_advanced(LZ4_LIBRARY LZ4_INCLUDE_DIR)
 
-get_filename_component(liblz4_ext ${LZ4_LIBRARY} EXT)
-if(liblz4_ext STREQUAL ".a")
+# Handle case where LZ4_LIBRARY might be a list of optimized/debug libraries (vcpkg)
+if(LZ4_LIBRARY_RELEASE)
+  get_filename_component(liblz4_ext ${LZ4_LIBRARY_RELEASE} EXT)
+elseif(LZ4_LIBRARY_DEBUG)
+  get_filename_component(liblz4_ext ${LZ4_LIBRARY_DEBUG} EXT)
+elseif(LZ4_LIBRARY)
+  # LZ4_LIBRARY might be a list with generator expressions, extract just the first actual path
+  if(LZ4_LIBRARY MATCHES "optimized;([^;]+)")
+    get_filename_component(liblz4_ext "${CMAKE_MATCH_1}" EXT)
+  elseif(LZ4_LIBRARY MATCHES "debug;([^;]+)")
+    get_filename_component(liblz4_ext "${CMAKE_MATCH_1}" EXT)
+  else()
+    # Single library path
+    get_filename_component(liblz4_ext ${LZ4_LIBRARY} EXT)
+  endif()
+else()
+  if(MSVC)
+    set(liblz4_ext ".lib")
+  else()
+    set(liblz4_ext ".so")
+  endif()
+endif()
+
+if(liblz4_ext STREQUAL ".a" OR (WIN32 AND liblz4_ext STREQUAL ".lib"))
   set(liblz4_type STATIC)
 else()
   set(liblz4_type SHARED)
@@ -44,8 +66,20 @@ endif()
 if(NOT TARGET lz4::lz4)
   add_library(lz4::lz4 ${liblz4_type} IMPORTED)
   set_target_properties(lz4::lz4 PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${LZ4_INCLUDE_DIR}")
-  set_target_properties(
-    lz4::lz4
-    PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C" IMPORTED_LOCATION "${LZ4_LIBRARIES}"
-  )
+  set_target_properties(lz4::lz4 PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C")
+  # Set per-config locations for multi-config generators (Visual Studio).
+  # LZ4_LIBRARIES from select_library_configurations is a mixed list
+  # ("optimized;...;debug;...") that doesn't work as IMPORTED_LOCATION.
+  # Always set a fallback IMPORTED_LOCATION for configs without per-config locations.
+  if(LZ4_LIBRARY_RELEASE)
+    set_target_properties(lz4::lz4 PROPERTIES
+      IMPORTED_LOCATION "${LZ4_LIBRARY_RELEASE}"
+      IMPORTED_LOCATION_RELEASE "${LZ4_LIBRARY_RELEASE}")
+  endif()
+  if(LZ4_LIBRARY_DEBUG)
+    set_target_properties(lz4::lz4 PROPERTIES IMPORTED_LOCATION_DEBUG "${LZ4_LIBRARY_DEBUG}")
+  endif()
+  if(NOT LZ4_LIBRARY_RELEASE AND NOT LZ4_LIBRARY_DEBUG)
+    set_target_properties(lz4::lz4 PROPERTIES IMPORTED_LOCATION "${LZ4_LIBRARIES}")
+  endif()
 endif()

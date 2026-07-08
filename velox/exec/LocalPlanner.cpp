@@ -488,7 +488,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
   for (int32_t i = 0; i < planNodes.size(); ++i) {
     // Id of the Operator being made. This is not the same as 'i'
     // because some PlanNodes may get fused.
-    auto id = operators.size();
+    const auto id = static_cast<int32_t>(operators.size());
     auto planNode = planNodes[i];
     if (auto filterNode =
             std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {

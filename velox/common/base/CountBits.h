@@ -18,10 +18,18 @@
 
 #include <folly/CPortability.h>
 
+#ifdef _MSC_VER
+#include "velox/type/windows/Int128.h"
+#else
+namespace facebook::velox {
+using uint128_t = __uint128_t;
+}
+#endif
+
 namespace facebook::velox {
 
 // Copied from format.h of fmt.
-FOLLY_ALWAYS_INLINE int countDigits(__uint128_t n) {
+FOLLY_ALWAYS_INLINE int countDigits(uint128_t n) {
   int count = 1;
   for (;;) {
     if (n < 10) {

@@ -18,6 +18,12 @@
 
 #include "boost/filesystem.hpp"
 
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#include <windows.h>
+#endif
+
 namespace facebook::velox::common::testutil {
 
 std::shared_ptr<TempDirectoryPath> TempDirectoryPath::create(bool injectFault) {
@@ -36,10 +42,27 @@ TempDirectoryPath::~TempDirectoryPath() {
 }
 
 std::string TempDirectoryPath::createTempDirectory() {
+#ifdef _WIN32
+  char tempDir[MAX_PATH];
+  if (::GetTempPathA(MAX_PATH, tempDir) == 0) {
+    VELOX_FAIL("Cannot determine temp directory");
+  }
+  char path[MAX_PATH];
+  if (::GetTempFileNameA(tempDir, "vlx", 0, path) == 0) {
+    VELOX_FAIL("Cannot create temp directory name");
+  }
+  // GetTempFileNameA created a file with this name; replace it with a directory.
+  ::_unlink(path);
+  if (::_mkdir(path) != 0) {
+    VELOX_FAIL("Cannot create temp directory");
+  }
+  return path;
+#else
   char tempPath[] = "/tmp/velox_test_XXXXXX";
   const char* tempDirectoryPath = ::mkdtemp(tempPath);
   VELOX_CHECK_NOT_NULL(tempDirectoryPath, "Cannot open temp directory");
   return tempDirectoryPath;
+#endif
 }
 
 } // namespace facebook::velox::common::testutil

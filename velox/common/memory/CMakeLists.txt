@@ -15,6 +15,12 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
+if(WIN32)
+  set(WINDOWS_MEMORY_SOURCES windows/PosixMemoryCompat.cpp)
+else()
+  set(WINDOWS_MEMORY_SOURCES "")
+endif()
+
 velox_add_library(
   velox_memory
   Allocation.cpp
@@ -34,6 +40,7 @@ velox_add_library(
   RawVector.cpp
   SharedArbitrator.cpp
   StreamArena.cpp
+  ${WINDOWS_MEMORY_SOURCES}
   HEADERS
   Allocation.h
   AllocationPool.h
@@ -55,6 +62,10 @@ velox_add_library(
   SharedArbitrator.h
   StreamArena.h
 )
+
+if(WIN32)
+  velox_compile_options(velox_memory PRIVATE /std:c++20)
+endif()
 
 velox_link_libraries(
   velox_memory

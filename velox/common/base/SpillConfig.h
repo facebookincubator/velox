@@ -28,8 +28,8 @@ namespace facebook::velox::common {
 #define VELOX_SPILL_LIMIT_EXCEEDED(errorMessage)                    \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kSpillLimitExceeded.c_str(),   \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kSpillLimitExceeded,   \
       /* isRetriable */ true,                                       \
       "{}",                                                         \
       errorMessage);
@@ -37,8 +37,8 @@ namespace facebook::velox::common {
 #define VELOX_GENERIC_SPILL_FAILURE(errorMessage)                   \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kGenericSpillFailure.c_str(),  \
+      ::facebook::velox::error_source::kErrorSourceRuntime, \
+      ::facebook::velox::error_code::kGenericSpillFailure,  \
       /* isRetriable */ true,                                       \
       "{}",                                                         \
       errorMessage);

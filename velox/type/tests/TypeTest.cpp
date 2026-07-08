@@ -23,6 +23,15 @@
 #include "velox/type/TypeSerde.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 
+#ifdef _MSC_VER
+// The Windows SDK (<winnt.h>) defines `typedef BYTE BOOLEAN;`, which collides
+// with velox's BOOLEAN() type factory once `using namespace facebook::velox;`
+// is in scope. Redirect the function-like form to the fully-qualified factory.
+// Only `BOOLEAN(` token sequences expand, so `TypeKind::BOOLEAN` is unaffected,
+// and the macro is processed after all velox headers declare the real factory.
+#define BOOLEAN() ::facebook::velox::BOOLEAN()
+#endif
+
 using namespace facebook;
 using namespace facebook::velox;
 
@@ -843,6 +852,14 @@ class OpaqueWithMetadataType : public OpaqueType {
     return OpaqueType::operator==(other) &&
         reinterpret_cast<const OpaqueWithMetadataType*>(&other)->metadata ==
         metadata;
+  }
+
+  // Provide an explicit operator!= so MSVC does not have to choose between the
+  // C++20 rewritten and synthesized-reversed `operator==` candidates (which it
+  // reports as ambiguous when both operands have this exact static type). The
+  // negation is identical to the behavior GCC/Clang synthesize implicitly.
+  bool operator!=(const Type& other) const {
+    return !(*this == other);
   }
 
   folly::dynamic serialize() const override {

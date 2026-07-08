@@ -18,11 +18,15 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/CallOnce.h>
 #include <folly/system/HardwareConcurrency.h>
+#ifdef _WIN32
+#include "velox/common/base/windows/FollyConcurrencyCompat.h"
+#endif
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 
 #include <cstdio>
 #include <filesystem>
+#include <thread>
 
 namespace facebook::velox::filesystems {
 
@@ -61,7 +65,8 @@ std::shared_ptr<FileSystem> getFileSystem(
       return p.second(properties, filePath);
     }
   }
-  VELOX_FAIL("No registered file system matched with file path '{}'", filePath);
+  VELOX_FAIL(
+      "No registered file system matched with file path '{}'", filePath);
 }
 
 bool isPathSupportedByRegisteredFileSystems(const std::string_view& filePath) {
@@ -136,12 +141,34 @@ class LocalFileSystem : public FileSystem {
 
   void remove(std::string_view path) override {
     auto file = extractPath(path);
+#ifdef _WIN32
+    // On Windows, files may still be locked by other handles briefly.
+    // Use std::filesystem::remove which handles some edge cases better,
+    // and retry a few times.
+    std::error_code ec;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+      if (std::filesystem::remove(file, ec)) {
+        VLOG(1) << "LocalFileSystem::remove " << path;
+        return;
+      }
+      if (!std::filesystem::exists(file)) {
+        VLOG(1) << "LocalFileSystem::remove " << path << " (already gone)";
+        return;
+      }
+      if (attempt < 9) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+    }
+    VELOX_USER_FAIL(
+        "Failed to delete file {} with errno {}", file, ec.message());
+#else
     int32_t rc = std::remove(std::string(file).c_str());
     if (rc < 0 && std::filesystem::exists(file)) {
       VELOX_USER_FAIL(
           "Failed to delete file {} with errno {}", file, strerror(errno));
     }
     VLOG(1) << "LocalFileSystem::remove " << path;
+#endif
   }
 
   void rename(
@@ -158,6 +185,20 @@ class LocalFileSystem : public FileSystem {
           newFile);
       return;
     }
+#ifdef _WIN32
+    // On Windows, ::rename() fails if target exists. Use std::filesystem::rename
+    // which handles overwrite correctly.
+    std::error_code ec;
+    std::filesystem::rename(
+        std::string(oldFile), std::string(newFile), ec);
+    if (ec) {
+      VELOX_USER_FAIL(
+          "Failed to rename file {} to {} with errno {}",
+          oldFile,
+          newFile,
+          ec.message());
+    }
+#else
     int32_t rc =
         ::rename(std::string(oldFile).c_str(), std::string(newFile).c_str());
     if (rc != 0) {
@@ -167,6 +208,7 @@ class LocalFileSystem : public FileSystem {
           newFile,
           folly::errnoStr(errno));
     }
+#endif
     VLOG(1) << "LocalFileSystem::rename oldFile: " << oldFile
             << ", newFile:" << newFile;
   }
@@ -186,7 +228,12 @@ class LocalFileSystem : public FileSystem {
     const std::filesystem::path folder{directoryPath};
     std::vector<std::string> filePaths;
     for (auto const& entry : std::filesystem::directory_iterator{folder}) {
-      filePaths.push_back(entry.path());
+      auto pathStr = entry.path().string();
+#ifdef _MSC_VER
+      // Normalize backslashes to forward slashes for consistency with Linux
+      std::replace(pathStr.begin(), pathStr.end(), '\\', '/');
+#endif
+      filePaths.push_back(std::move(pathStr));
     }
     return filePaths;
   }
@@ -233,7 +280,28 @@ class LocalFileSystem : public FileSystem {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
     return [](std::string_view filePath) {
+#ifdef _WIN32
+      // Windows: Match absolute paths (C:\...), file: scheme, or relative paths
+      // Check for drive letter pattern (e.g., C:\, D:\)
+      if (filePath.length() >= 3 && 
+          std::isalpha(static_cast<unsigned char>(filePath[0])) && 
+          filePath[1] == ':' && 
+          (filePath[2] == '\\' || filePath[2] == '/')) {
+        return true;
+      }
+      // Match file: scheme
+      if (filePath.starts_with(kFileScheme)) {
+        return true;
+      }
+      // Exclude paths with a scheme prefix (e.g., faulty:, s3://, abfs://)
+      if (filePath.find(':') != std::string_view::npos) {
+        return false;
+      }
+      // Match relative paths (no scheme, no drive letter)
+      return !filePath.empty();
+#else
       return filePath.starts_with('/') || filePath.starts_with(kFileScheme);
+#endif
     };
   }
 

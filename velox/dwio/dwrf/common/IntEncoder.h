@@ -322,6 +322,26 @@ template <bool isSigned>
   switch (leadingZeros) {
     case 0:
       return writeVarint<10>(value, buffer);
+#ifdef _MSC_VER
+    // MSVC doesn't support case ranges, expand them
+    case 1: case 2: case 3: case 4: case 5: case 6: case 7:
+      return writeVarint<9>(value, buffer);
+    case 8: case 9: case 10: case 11: case 12: case 13: case 14:
+      return writeVarint<8>(value, buffer);
+    case 15: case 16: case 17: case 18: case 19: case 20: case 21:
+      return writeVarint<7>(value, buffer);
+    case 22: case 23: case 24: case 25: case 26: case 27: case 28:
+      return writeVarint<6>(value, buffer);
+    case 29: case 30: case 31: case 32: case 33: case 34: case 35:
+      return writeVarint<5>(value, buffer);
+    case 36: case 37: case 38: case 39: case 40: case 41: case 42:
+      return writeVarint<4>(value, buffer);
+    case 43: case 44: case 45: case 46: case 47: case 48: case 49:
+      return writeVarint<3>(value, buffer);
+    case 50: case 51: case 52: case 53: case 54: case 55: case 56:
+      return writeVarint<2>(value, buffer);
+    case 57: case 58: case 59: case 60: case 61: case 62: case 63:
+#else
     case 1 ... 7:
       return writeVarint<9>(value, buffer);
     case 8 ... 14:
@@ -339,6 +359,7 @@ template <bool isSigned>
     case 50 ... 56:
       return writeVarint<2>(value, buffer);
     case 57 ... 63:
+#endif
       return writeVarint<1>(value, buffer);
   }
   DWIO_RAISE(
@@ -394,11 +415,11 @@ void IntEncoder<isSigned>::writeLongLE(int64_t val) {
 template <bool isSigned>
 void IntEncoder<isSigned>::writeVuHugeInt(uint128_t val) {
   while (true) {
-    if ((val & ~0x7f) == 0) {
-      writeByte(static_cast<char>(val));
+    if ((val & ~uint128_t(0x7f)) == 0) {
+      writeByte(static_cast<char>(static_cast<uint64_t>(val)));
       return;
     }
-    writeByte(static_cast<char>(0x80 | (val & dwio::common::BASE_128_MASK)));
+    writeByte(static_cast<char>(0x80 | static_cast<uint64_t>(val & dwio::common::BASE_128_MASK)));
     // Cast val to unsigned so as to force 0-fill right shift.
     val >>= 7;
   }

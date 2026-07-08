@@ -527,6 +527,16 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
   using type_at = typename std::tuple_element<N, arg_types>::type;
   static constexpr int num_args = std::tuple_size<arg_types>::value;
 
+#ifdef _MSC_VER
+  // MSVC has issues with type_at<num_args - 1> when num_args == 0
+  // even inside constexpr if, so we need this helper
+  template <size_t N>
+  using safe_type_at = typename std::conditional_t<
+      (N < num_args),
+      std::tuple_element<N, arg_types>,
+      std::tuple_element<0, std::tuple<void>>>::type;
+#endif
+
  public:
   template <typename T>
   struct CreateType {
@@ -582,7 +592,11 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
     if constexpr (num_args == 0) {
       return false;
     } else {
+#ifdef _MSC_VER
+      return isVariadicType<safe_type_at<num_args - 1>>::value;
+#else
       return isVariadicType<type_at<num_args - 1>>::value;
+#endif
     }
   }
 
@@ -1066,6 +1080,9 @@ class UDFHolder {
       VELOX_UNREACHABLE(
           "call should never be called if the UDF does not "
           "implement call or callNullable.");
+#ifdef _MSC_VER
+      return Status::OK(); // unreachable
+#endif
     }
   }
 
@@ -1111,6 +1128,9 @@ class UDFHolder {
     } else {
       VELOX_UNREACHABLE(
           "callNullFree should never be called if the UDF does not implement callNullFree.");
+#ifdef _MSC_VER
+      return Status::OK(); // unreachable
+#endif
     }
   }
 

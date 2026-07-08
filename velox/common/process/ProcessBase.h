@@ -16,8 +16,16 @@
 
 #pragma once
 
+#ifndef _WIN32
 #include <pthread.h>
 #include <sys/types.h>
+#else
+// Windows types - define in namespace to avoid conflicts
+namespace facebook::velox::process {
+using pid_t = int;
+using pthread_t = unsigned long;
+} // namespace facebook::velox::process
+#endif
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -31,10 +39,18 @@ std::string getAppName();
 std::string getHostName();
 
 /// Process identifier.
+#ifdef _WIN32
 pid_t getProcessId();
+#else
+::pid_t getProcessId();
+#endif
 
 /// Current thread's identifier.
+#ifdef _WIN32
 pthread_t getThreadId();
+#else
+::pthread_t getThreadId();
+#endif
 
 /// Get current working directory.
 std::string getCurrentDirectory();

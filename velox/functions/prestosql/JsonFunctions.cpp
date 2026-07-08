@@ -201,8 +201,10 @@ class JsonParseImpl {
       VectorPtr& localResult,
       bool nullOnError) const {
     // Initialize errors here so that we get the proper exception context.
+#ifndef _WIN32
     folly::call_once(
         initializeErrors_, [this] { simdjsonErrorsToExceptions(errors_); });
+#endif
 
     if (arg->isConstantEncoding()) {
       auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
@@ -227,7 +229,7 @@ class JsonParseImpl {
             localResult = BaseVector::createNullConstant(
                 JSON(), rows.end(), context.pool());
           } else {
-            context.setErrors(rows, errors_[error]);
+            context.setErrors(rows, getError(error));
           }
           return;
         }
@@ -318,7 +320,7 @@ class JsonParseImpl {
         auto size = prepareInput(value, needNormalizes[row]);
         if (auto error = parse(size, needNormalizes[row])) {
           if (!nullOnError) {
-            context.setVeloxExceptionError(row, errors_[error]);
+            context.setVeloxExceptionError(row, getError(error));
           } else {
             bits::setNull(rawNullsOnErrors, row, true);
           }
@@ -555,6 +557,16 @@ class JsonParseImpl {
     fields_.clear();
     sortIndices_.clear();
     fastSortKeys_.clear();
+  }
+
+  const std::exception_ptr& getError(simdjson::error_code error) const {
+#ifdef _WIN32
+    if (!errors_[error]) {
+      simdjson::simdjson_error e(error);
+      errors_[error] = toVeloxException(std::make_exception_ptr(e));
+    }
+#endif
+    return errors_[error];
   }
 
   mutable folly::once_flag initializeErrors_;

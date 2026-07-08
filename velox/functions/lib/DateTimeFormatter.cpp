@@ -23,6 +23,7 @@
 #include "velox/external/date/iso_week.h"
 #include "velox/external/tzdb/tzdb_list.h"
 #include "velox/functions/lib/DateTimeFormatterBuilder.h"
+#include "velox/type/HugeInt.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -210,7 +211,7 @@ int32_t padContent(
     const bool padFront = true) {
   const bool isNegative = content < 0;
   const auto digitLength =
-      isNegative ? countDigits(-(__int128_t)content) : countDigits(content);
+      isNegative ? countDigits(-(int128_t)content) : countDigits(content);
   const auto contentLength = isNegative ? digitLength + 1 : digitLength;
   if (contentLength == 0) {
     std::fill(result, result + totalDigits, padding);

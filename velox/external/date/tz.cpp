@@ -42,9 +42,16 @@ CONSTCD14 const sys_seconds min_seconds = date::sys_days(min_year/min_day);
 
 enum class endian
 {
+#ifdef _MSC_VER
+    // Windows x86/x64 is always little-endian
+    little = 0,
+    big    = 1,
+    native = 0
+#else
     native = __BYTE_ORDER__,
     little = __ORDER_LITTLE_ENDIAN__,
     big    = __ORDER_BIG_ENDIAN__
+#endif
 };
 
 inline

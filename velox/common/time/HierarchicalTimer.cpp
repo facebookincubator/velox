@@ -26,6 +26,10 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #ifdef ENABLE_HW_TIMER
 #if !defined(__x86_64__)
 #error "HierarchicalTimer RDTSCP mode requires x86-64 architecture"
@@ -401,10 +405,33 @@ uint64_t TimerTree::now() const {
 }
 
 uint64_t TimerTree::cpuNow() const {
+#ifdef _WIN32
+  FILETIME creationTime;
+  FILETIME exitTime;
+  FILETIME kernelTime;
+  FILETIME userTime;
+  if (::GetThreadTimes(
+          ::GetCurrentThread(),
+          &creationTime,
+          &exitTime,
+          &kernelTime,
+          &userTime) == 0) {
+    return 0;
+  }
+  const auto toNanos = [](const FILETIME& ft) -> uint64_t {
+    ULARGE_INTEGER value;
+    value.LowPart = ft.dwLowDateTime;
+    value.HighPart = ft.dwHighDateTime;
+    // FILETIME counts 100-nanosecond intervals.
+    return value.QuadPart * 100ULL;
+  };
+  return toNanos(kernelTime) + toNanos(userTime);
+#else
   struct timespec ts{};
   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
   return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL +
       static_cast<uint64_t>(ts.tv_nsec);
+#endif
 }
 
 TimerNode* TimerTree::getOrCreateNode(const std::string& path) {

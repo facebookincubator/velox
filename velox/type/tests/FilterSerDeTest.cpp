@@ -46,7 +46,8 @@ class FilterSerDeTest : public testing::Test {
     std::vector<T> values;
     values.reserve(sz);
     for (size_t i = 0; i < sz; ++i) {
-      auto num = lower + folly::Random::rand32() % (upper - lower);
+      auto num =
+          lower + static_cast<T>(folly::Random::rand32()) % (upper - lower);
       values.push_back(num);
     }
     return values;
