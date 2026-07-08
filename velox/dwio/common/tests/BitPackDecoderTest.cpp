@@ -174,30 +174,32 @@ TEST_F(BitPackDecoderTest, uint32AllRows) {
   }
 }
 
-// Verifies that unpack correctly advances both the input and result pointers
-// when the naive fallback handles all values (buffer too small for fast path).
+// Verifies that unpackNaive correctly advances both the input and result
+// pointers after decoding. Calls unpackNaive directly to ensure the fix is
+// exercised regardless of platform (the AVX2 fast path in unpack<uint8_t>
+// handles all values when numValues is a multiple of 8).
 TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
-  // First byte: 0,1,0,1,0,1,0,1.
-  // Second byte: 1,1,1,1,0,0,0,0.
-  // Padded to 8 bytes so unpack's uint64_t reads don't overflow the buffer.
-  const uint8_t packed[] = {0xAA, 0x0F, 0, 0, 0, 0, 0, 0};
+  // Two bytes encoding 16 one-bit values:
+  //   byte 0 = 0xAA = 0b10101010 → values {0,1,0,1,0,1,0,1}
+  //   byte 1 = 0x0F = 0b00001111 → values {1,1,1,1,0,0,0,0}
+  const uint8_t packed[] = {0xAA, 0x0F};
   const uint8_t* input = packed;
-  // Only 2 bytes of meaningful packed data.
-  constexpr uint64_t kPackedLen = 2;
 
   uint8_t output[16] = {};
   uint8_t* result = output;
 
-  facebook::velox::dwio::common::unpack<uint8_t>(
-      input, kPackedLen, 8, 1, result);
+  // Decode first 8 values (consumes byte 0 entirely: 8 bits at bitWidth=1).
+  facebook::velox::dwio::common::unpackNaive<uint8_t>(
+      input, /*inputBufferLen=*/1, /*numValues=*/8, /*bitWidth=*/1, result);
 
   EXPECT_EQ(input, packed + 1);
   EXPECT_EQ(result, output + 8);
 
-  facebook::velox::dwio::common::unpack<uint8_t>(
-      input, kPackedLen - 1, 8, 1, result);
+  // Decode next 8 values from byte 1.
+  facebook::velox::dwio::common::unpackNaive<uint8_t>(
+      input, /*inputBufferLen=*/1, /*numValues=*/8, /*bitWidth=*/1, result);
 
-  EXPECT_EQ(input, packed + kPackedLen);
+  EXPECT_EQ(input, packed + 2);
   EXPECT_EQ(result, output + 16);
 
   const uint8_t expected[] = {0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0};
