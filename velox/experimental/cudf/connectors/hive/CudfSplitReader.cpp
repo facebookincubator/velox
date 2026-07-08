@@ -119,6 +119,9 @@ void CudfSplitReader::prepareSplit(
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
     uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
+  VELOX_CHECK(
+      splitReader_ or exptSplitReader_,
+      "No Cudf Split reader present. Call prepareSplit() first.");
 
   // Record start time before reading chunk
   auto startTimeUs = getCurrentTimeMicro();
@@ -313,6 +316,10 @@ void CudfSplitReader::setupCudfDataSource() {
   }
   dataSource_ =
       std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
+}
+
+bool CudfSplitReader::hasSubfieldFilter() const {
+  return subfieldFilterExpr_ != nullptr;
 }
 
 void CudfSplitReader::setupReaderOptions() {

@@ -37,7 +37,6 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
-#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/span.hpp>
@@ -171,10 +170,7 @@ CudfIcebergSplitReader::determineCudfMemoryResource() {
 
 void CudfIcebergSplitReader::createCudfReader(
     rmm::device_async_resource_ref output_mr) {
-  // Only set up a reader if there are physical columns to read
-  if (not noColumnsToRead_) {
-    CudfSplitReader::createCudfReader(determineCudfMemoryResource());
-  }
+  CudfSplitReader::createCudfReader(determineCudfMemoryResource());
 }
 
 std::optional<cudf::io::table_with_metadata>
@@ -288,18 +284,8 @@ CudfIcebergSplitReader::readNextChunk(
 
   // Build the output table with an optional row count override indicating if
   // all projected columns are missing
-  if (noColumnsToRead_ and hasSubfieldFilter()) {
-    cudfTable =
-        buildOutputTable(std::move(cudfTable), get_temp_mr(), rowCountOverride);
-    // Apply the subfield filter when every output column is injected
-    auto filterMask = cudf::compute_column(
-        cudfTable->view(), *subfieldFilterExpr(), stream_, get_temp_mr());
-    cudfTable = cudf::apply_boolean_mask(
-        cudfTable->view(), filterMask->view(), stream_, output_mr);
-  } else {
-    cudfTable =
-        buildOutputTable(std::move(cudfTable), output_mr, rowCountOverride);
-  }
+  cudfTable =
+      buildOutputTable(std::move(cudfTable), output_mr, rowCountOverride);
 
   // Update the base read offset
   baseReadOffset_ += numRows;
