@@ -27,6 +27,7 @@ add_subdirectory(specialforms)
 velox_add_library(
   velox_functions_spark_impl
   ArrayGetFunction.cpp
+  BloomFilter.cpp
   ArraySort.cpp
   AssertNotNull.cpp
   SequenceFunction.cpp

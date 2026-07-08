@@ -73,19 +73,7 @@ class BloomFilterView : BloomFilterBase {
 
   /// Constructs a view from serialized Bloom filter data.
   /// Does not take ownership of the data.
-  explicit BloomFilterView(const char* serializedBloom) {
-    common::InputByteStream stream(serializedBloom);
-    const auto version = stream.read<int8_t>();
-    VELOX_USER_CHECK_EQ(
-        kBloomFilterV1,
-        version,
-        "Unsupported BloomFilter version: {}",
-        version);
-    size_ = stream.read<int32_t>();
-    VELOX_USER_CHECK_GT(size_, 0, "Invalid BloomFilter size: {}", size_);
-    bitsData_ =
-        reinterpret_cast<const uint64_t*>(serializedBloom + stream.offset());
-  }
+  explicit BloomFilterView(const char* serializedBloom);
 
   /// Tests if a value may be contained in the Bloom filter.
   /// Input is hashed uint64_t value, optional hash function is
