@@ -206,7 +206,8 @@ static inline void unpack1to4(
 
   // Process 2 * bitWidth bytes (16 values) a time.
   while (outputBuffer + 16 <= writeEndOffset) {
-    uint64_t val = *reinterpret_cast<const uint64_t*>(inputBuffer);
+    uint64_t val;
+    std::memcpy(&val, inputBuffer, sizeof(uint64_t));
 
     intermediateValues[0] = _pdep_u64(val, pdepMask);
     intermediateValues[1] = _pdep_u64(val >> shift, pdepMask);
@@ -308,8 +309,8 @@ static inline void unpack8_cast(
 
   // Process bitWidth bytes (16 values) a time.
   while (outputBuffer + 16 <= writeEndOffset) {
-    vals[0] = *reinterpret_cast<const uint64_t*>(inputBuffer);
-    vals[1] = *reinterpret_cast<const uint64_t*>(inputBuffer + 8);
+    std::memcpy(&vals[0], inputBuffer, sizeof(uint64_t));
+    std::memcpy(&vals[1], inputBuffer + 8, sizeof(uint64_t));
 
     __m256i result = _mm256_cvtepu8_epi16(*((const __m128i*)vals));
     _mm256_storeu_si256(reinterpret_cast<__m256i*>(outputBuffer), result);
@@ -358,14 +359,15 @@ static inline void unpack9to15(
     // Process the first part of bytes1 bytes.
     uint64_t value1 = 0;
     std::memcpy(&value1, inputBuffer, bytes1);
-    *reinterpret_cast<uint64_t*>(outputBuffer) =
-        _pdep_u64(value1 & valueMask, pdepMask);
+    uint64_t expanded1 = _pdep_u64(value1 & valueMask, pdepMask);
+    std::memcpy(outputBuffer, &expanded1, sizeof(uint64_t));
 
     // Process the second part of bytes2 bytes.
     uint64_t value2 = 0;
     std::memcpy(&value2, inputBuffer + bytes1, bytes2);
-    *reinterpret_cast<uint64_t*>(outputBuffer + 4) =
+    uint64_t expanded2 =
         _pdep_u64((value1 >> shift1) | (value2 << shift2), pdepMask);
+    std::memcpy(outputBuffer + 4, &expanded2, sizeof(uint64_t));
 
     inputBuffer += bitWidth;
     outputBuffer += 8;
@@ -477,7 +479,8 @@ static inline void unpack8(
 
   // Process 8 bytes (8 values) a time.
   while (outputBuffer + 8 <= writeEndOffset) {
-    uint64_t value = *(reinterpret_cast<const uint64_t*>(inputBuffer));
+    uint64_t value;
+    std::memcpy(&value, inputBuffer, sizeof(uint64_t));
     __m128i packed = _mm_set_epi64x(0, value);
     __m256i result = _mm256_cvtepu8_epi32(packed);
     _mm256_storeu_si256(reinterpret_cast<__m256i*>(outputBuffer), result);
@@ -574,13 +577,16 @@ static inline void unpack17to21(
   while (outputBuffer + 8 <= writeEndOffset) {
     std::memcpy(values, inputBuffer, bitWidth);
 
-    *reinterpret_cast<uint64_t*>(outputBuffer) = _pdep_u64(values[0], pdepMask);
-    *(reinterpret_cast<uint64_t*>(outputBuffer) + 1) = _pdep_u64(
+    uint64_t expanded0 = _pdep_u64(values[0], pdepMask);
+    uint64_t expanded1 = _pdep_u64(
         (values[0] >> rightShift1) | (values[1] << leftShift1), pdepMask);
-    *(reinterpret_cast<uint64_t*>(outputBuffer) + 2) =
-        _pdep_u64(values[1] >> rightShift2, pdepMask);
-    *(reinterpret_cast<uint64_t*>(outputBuffer) + 3) = _pdep_u64(
+    uint64_t expanded2 = _pdep_u64(values[1] >> rightShift2, pdepMask);
+    uint64_t expanded3 = _pdep_u64(
         (values[1] >> rightShift3) | (values[2] << leftShift3), pdepMask);
+    std::memcpy(outputBuffer, &expanded0, sizeof(uint64_t));
+    std::memcpy(outputBuffer + 2, &expanded1, sizeof(uint64_t));
+    std::memcpy(outputBuffer + 4, &expanded2, sizeof(uint64_t));
+    std::memcpy(outputBuffer + 6, &expanded3, sizeof(uint64_t));
 
     inputBuffer += bitWidth;
     outputBuffer += 8;
@@ -618,13 +624,17 @@ static inline void unpack22to31(
   while (outputBuffer + 8 <= writeEndOffset) {
     std::memcpy(values, inputBuffer, bitWidth);
 
-    *reinterpret_cast<uint64_t*>(outputBuffer) = _pdep_u64(values[0], pdepMask);
-    *(reinterpret_cast<uint64_t*>(outputBuffer) + 1) = _pdep_u64(
+    uint64_t expanded0 = _pdep_u64(values[0], pdepMask);
+    uint64_t expanded1 = _pdep_u64(
         (values[1] << leftShift1) | (values[0] >> rightShift1), pdepMask);
-    *(reinterpret_cast<uint64_t*>(outputBuffer) + 2) = _pdep_u64(
+    uint64_t expanded2 = _pdep_u64(
         (values[2] << leftShift2) | (values[1] >> rightShift2), pdepMask);
-    *(reinterpret_cast<uint64_t*>(outputBuffer) + 3) = _pdep_u64(
+    uint64_t expanded3 = _pdep_u64(
         (values[3] << leftShift3) | (values[2] >> rightShift3), pdepMask);
+    std::memcpy(outputBuffer, &expanded0, sizeof(uint64_t));
+    std::memcpy(outputBuffer + 2, &expanded1, sizeof(uint64_t));
+    std::memcpy(outputBuffer + 4, &expanded2, sizeof(uint64_t));
+    std::memcpy(outputBuffer + 6, &expanded3, sizeof(uint64_t));
 
     inputBuffer += bitWidth;
     outputBuffer += 8;
@@ -918,7 +928,9 @@ inline uint64_t safeLoadBits(
   VELOX_DCHECK_GE(7, bitOffset);
   VELOX_DCHECK_GE(56, bitWidth);
   if (ptr < lastSafeWord) {
-    return *reinterpret_cast<const uint64_t*>(ptr) >> bitOffset;
+    uint64_t val;
+    std::memcpy(&val, ptr, sizeof(uint64_t));
+    return val >> bitOffset;
   }
   int32_t byteWidth =
       facebook::velox::bits::divRoundUp(bitOffset + bitWidth, 8);
