@@ -24,6 +24,8 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
+using functions::sparksql::BloomFilter;
+using functions::sparksql::BloomFilterView;
 using functions::sparksql::SparkQueryConfig;
 
 namespace {

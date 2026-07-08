@@ -22,7 +22,7 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-using namespace facebook::velox;
+using namespace facebook::velox::functions::sparksql;
 
 class BloomFilterTest : public ::testing::Test {};
 
