@@ -314,18 +314,51 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
   auto token = std::make_shared<RPCRateLimiter::Token>(
       RPCRateLimiter::acquire(tierKey_));
 
-  // Scatter responses into batch-position order using each response's
-  // function-assigned rowId (its position within the batch), then stamp
-  // the global rowIds. Functions may return results out of order (e.g.,
-  // MetaGen's batchDialogCompletion streams results in arbitrary order).
-  // Without this, responses[i] would be paired with rowLocations[i] in
-  // buildOutputFromReadyBatch, silently mis-mapping results to wrong
-  // passthrough rows.
+  // Share rowIds across both continuations. Order matters: deferError runs
+  // BEFORE deferValue, so a whole-batch backend failure is first converted into
+  // one errored response per row (in batch-position order), and then flows
+  // through the same scatter as real responses. This keeps the scatter's
+  // invariant checks (below) FATAL for genuine function-contract violations
+  // (wrong response count / duplicate / out-of-range rowId) — those must still
+  // hard-fail the query, not be silently degraded to NULL rows.
+  auto rowIdsPtr = std::make_shared<std::vector<int64_t>>(std::move(rowIds));
   auto wrapped =
       std::move(future)
           .within(kBatchRpcTimeout)
-          .deferValue([rowIds = std::move(rowIds),
-                       token](std::vector<RPCResponse> resps) {
+          .deferError([rowIdsPtr, token](folly::exception_wrapper ew) {
+            // A whole-batch failure (e.g. an operator-level batch/RPC timeout)
+            // degrades to per-row errored responses so the per-row error policy
+            // (meta_ai_on_error) applies downstream, instead of hard-failing
+            // the whole query. Mirrors the client-layer fan-out, but covers all
+            // backends and the operator-level timeout uniformly. Both AIMD
+            // controllers still back off via evaluateCongestion (a batch
+            // failure is overload). Responses carry batch-position rowId
+            // (0..N-1) so the scatter below stamps global rowIds identically to
+            // the success path.
+            const auto& rowIds = *rowIdsPtr;
+            RPC_OP_LOG(ERROR)
+                << "RPC batch failed, " << rowIds.size()
+                << " rows will carry a per-row error: " << ew.what();
+            std::vector<RPCResponse> errResponses(rowIds.size());
+            for (size_t i = 0; i < rowIds.size(); ++i) {
+              errResponses[i].rowId = static_cast<int64_t>(i);
+              errResponses[i].error = std::string("[RPC_BATCH] batch error: ") +
+                  ew.what().toStdString();
+              errResponses[i].errorKind =
+                  velox::rpc::RPCErrorKind::kBackendError;
+            }
+            return errResponses;
+          })
+          // Scatter responses into batch-position order using each response's
+          // function-assigned rowId (its position within the batch), then stamp
+          // the global rowIds. Functions may return results out of order (e.g.,
+          // MetaGen's batchDialogCompletion streams results in arbitrary
+          // order). Without this, responses[i] would be paired with
+          // rowLocations[i] in buildOutputFromReadyBatch, silently mis-mapping
+          // results to wrong passthrough rows. Invariant violations here are
+          // fatal by design.
+          .deferValue([rowIdsPtr, token](std::vector<RPCResponse> resps) {
+            const auto& rowIds = *rowIdsPtr;
             VELOX_CHECK_EQ(
                 resps.size(),
                 rowIds.size(),
@@ -352,11 +385,6 @@ void RPCOperator::flushBatchRequests(int32_t maxRows) {
               sorted[static_cast<size_t>(batchIdx)] = std::move(resp);
             }
             return sorted;
-          })
-          .deferError([token](folly::exception_wrapper ew) {
-            RPC_OP_LOG(ERROR) << "RPC batch failed: " << ew.what();
-            return folly::makeSemiFuture<std::vector<RPCResponse>>(
-                std::move(ew));
           });
 
   state_->addPendingBatch(state_, std::move(wrapped), std::move(rowLocations));
