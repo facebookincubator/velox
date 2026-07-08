@@ -513,7 +513,7 @@ class FileWriterImpl : public FileWriter {
     return Status::OK();
   }
 
-  int64_t currentRowGroupBufferedBytes() const override {
+  int64_t currentRowGroupTotalBytes() const override {
     if (rowGroupWriter_ == nullptr) {
       return 0;
     }

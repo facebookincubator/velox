@@ -528,9 +528,13 @@ void Writer::write(const VectorPtr& data) {
   // policy threshold. Otherwise callers that rotate files based on raw written
   // bytes won't observe the row group until the next write.
   if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->writer->currentRowGroupBufferedBytes() +
-          stream_->bufferedBytes()))) {
+          arrowContext_->writer->currentRowGroupTotalBytes()))) {
     flush();
+  } else if (flushPolicy_->bytesInRowGroup() <= stream_->bufferedBytes()) {
+    // Flush the sink separately so completed row groups don't keep accumulating
+    // in the stream buffer when Arrow keeps starting new row groups before the
+    // current one hits the byte threshold.
+    PARQUET_THROW_NOT_OK(stream_->Flush());
   }
 }
 

@@ -767,7 +767,7 @@ TEST_F(ParquetWriterTest, writerMagic) {
   EXPECT_EQ("PAR1", std::string(fileData.data() + fileData.size() - 4, 4));
 }
 
-TEST_F(ParquetWriterTest, flushByAccumulatedBytes) {
+TEST_F(ParquetWriterTest, flushWhenStreamBuffersGrow) {
   constexpr int64_t kNumRows = 200;
 
   ParquetWriterOptions writerOptions;
@@ -823,7 +823,7 @@ TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
               makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
         }
 
-        const auto* sinkPtr = write(batches, options, writerOptions, false);
+        const auto* sinkPtr = write(batches, options, writerOptions);
         const auto reader = createReaderInMemory(*sinkPtr);
         EXPECT_EQ(expectedNumRowGroups, reader->fileMetaData().numRowGroups());
         EXPECT_EQ(expectedNumRows, reader->numberOfRows());
@@ -849,7 +849,7 @@ TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
         makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
   }
 
-  const auto* sinkPtr = write(batches, options, writerOptions, false);
+  const auto* sinkPtr = write(batches, options, writerOptions);
   const auto reader = createReaderInMemory(*sinkPtr);
   EXPECT_EQ(1, reader->fileMetaData().numRowGroups());
   EXPECT_EQ(50, reader->numberOfRows());
