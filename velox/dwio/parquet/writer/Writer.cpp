@@ -429,6 +429,7 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, parquetWriterOptions, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = parquetWriterOptions.writeInt96AsTimestamp;
+  enableParallelWrite_ = parquetWriterOptions.enableParallelWrite;
   arrowMemoryPool_ = parquetWriterOptions.arrowMemoryPool;
   parquetFieldIds_ = parquetWriterOptions.parquetFieldIds;
 }
@@ -512,6 +513,9 @@ void Writer::write(const VectorPtr& data) {
     ArrowWriterProperties::Builder builder;
     if (writeInt96AsTimestamp_) {
       builder.enableDeprecatedInt96Timestamps();
+    }
+    if (enableParallelWrite_) {
+      builder.setUseThreads(true);
     }
     auto arrowProperties = builder.build();
     PARQUET_ASSIGN_OR_THROW(
