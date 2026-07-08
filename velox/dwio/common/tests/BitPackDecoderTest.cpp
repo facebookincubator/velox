@@ -271,6 +271,38 @@ TEST_P(BitPackDecoderBmi2Test, smallBufferNoPadding) {
       EXPECT_EQ(output[i], i) << "uint32 bw4 at index " << i;
     }
   }
+
+  // Test uint16_t: 16 values at bitWidth=1 -> exactly 2 bytes of packed data.
+  {
+    // Values: alternating 0,1 packed at 1 bit each = 16 bits = 2 bytes.
+    uint8_t packed[2] = {0xAA, 0xAA}; // 01010101 01010101
+    const uint8_t* input = packed;
+    uint16_t output[16] = {};
+    uint16_t* outputPtr = output;
+    facebook::velox::dwio::common::unpack<uint16_t>(input, 2, 16, 1, outputPtr);
+    for (int i = 0; i < 16; ++i) {
+      EXPECT_EQ(output[i], (i % 2 == 0) ? 0 : 1) << "uint16 bw1 at index " << i;
+    }
+  }
+
+  // Test uint16_t: 16 values at bitWidth=2 -> exactly 4 bytes of packed data.
+  {
+    // Values: 0,1,2,3 repeating packed at 2 bits each = 32 bits = 4 bytes.
+    uint8_t packed[4];
+    uint32_t bits = 0;
+    for (int i = 0; i < 16; ++i) {
+      bits |= (uint32_t)(i % 4) << (i * 2);
+    }
+    std::memcpy(packed, &bits, 4);
+
+    const uint8_t* input = packed;
+    uint16_t output[16] = {};
+    uint16_t* outputPtr = output;
+    facebook::velox::dwio::common::unpack<uint16_t>(input, 4, 16, 2, outputPtr);
+    for (int i = 0; i < 16; ++i) {
+      EXPECT_EQ(output[i], i % 4) << "uint16 bw2 at index " << i;
+    }
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

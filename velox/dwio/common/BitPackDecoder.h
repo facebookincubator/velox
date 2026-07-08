@@ -195,6 +195,7 @@ static inline uint32_t unpackNaive(
 static inline void unpack1to4(
     uint8_t bitWidth,
     const uint8_t* FOLLY_NONNULL& inputBuffer,
+    uint64_t inputBufferLen,
     uint64_t numValues,
     uint16_t* FOLLY_NONNULL& outputBuffer) {
   uint64_t pdepMask = kPdepMask8[bitWidth];
@@ -203,9 +204,12 @@ static inline void unpack1to4(
   uint64_t shift = bitWidth * 8;
   alignas(16) uint64_t intermediateValues[2];
   auto writeEndOffset = outputBuffer + numValues;
+  const uint8_t* inputEnd = inputBuffer + inputBufferLen;
 
-  // Process 2 * bitWidth bytes (16 values) a time.
-  while (outputBuffer + 16 <= writeEndOffset) {
+  // Process 2 * bitWidth bytes (16 values) a time. Requires at least 8 bytes
+  // available for the memcpy load.
+  while (outputBuffer + 16 <= writeEndOffset &&
+         inputEnd - inputBuffer >= (int64_t)sizeof(uint64_t)) {
     uint64_t val;
     std::memcpy(&val, inputBuffer, sizeof(uint64_t));
 
@@ -221,7 +225,8 @@ static inline void unpack1to4(
 
   // Finish the last batch which has < 8 bytes. Now Process 8 values a time.
   uint64_t val = 0;
-  while (outputBuffer + 8 <= writeEndOffset) {
+  while (outputBuffer + 8 <= writeEndOffset &&
+         inputEnd - inputBuffer >= bitWidth) {
     std::memcpy(&val, inputBuffer, bitWidth);
 
     uint64_t intermediateValue = _pdep_u64(val, pdepMask);
@@ -777,7 +782,7 @@ inline void unpack<uint16_t>(
     case 2:
     case 3:
     case 4:
-      unpack1to4(bitWidth, inputBits, numValues, result);
+      unpack1to4(bitWidth, inputBits, inputBufferLen, numValues, result);
       break;
     case 5:
     case 6:
