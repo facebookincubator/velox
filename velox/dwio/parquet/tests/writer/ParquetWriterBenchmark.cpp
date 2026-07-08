@@ -18,9 +18,8 @@
 #include "folly/init/Init.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/parquet/writer/Writer.h"
-#include "velox/vector/BaseVector.h"
-#include "velox/vector/ComplexVector.h"
-#include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
@@ -29,19 +28,22 @@ using namespace facebook::velox::parquet;
 namespace {
 
 constexpr vector_size_t kNumRows = 100'000;
-constexpr int kNumIterations = 50;
-constexpr int kSinkSize = 200 * 1024 * 1024;
+constexpr int32_t kNumIterations = 50;
+constexpr int32_t kSinkSize = 200 * 1024 * 1024;
 
-/// Writes a RowVector to a Parquet in-memory sink kNumIterations times.
-/// Setup (vector creation, sink allocation) is excluded from timing.
+// Writes a RowVector to a Parquet in-memory sink kNumIterations times.
+// Vector creation is excluded from timing by the caller's BenchmarkSuspender.
+// Sink and writer option allocation are excluded via a per-iteration suspender.
 void writeParquet(const RowVectorPtr& data, memory::MemoryPool* rootPool) {
   auto leafPool = rootPool->addLeafChild("sink");
-  for (int i = 0; i < kNumIterations; ++i) {
+  for (int32_t i = 0; i < kNumIterations; ++i) {
+    folly::BenchmarkSuspender suspender;
     auto sink = std::make_unique<MemorySink>(
         kSinkSize, FileSink::Options{.pool = leafPool.get()});
     WriterOptions options;
     options.memoryPool = rootPool;
     options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+    suspender.dismiss();
     auto writer = std::make_unique<parquet::Writer>(
         std::move(sink), options, asRowType(data->type()));
     writer->write(data);
@@ -49,88 +51,64 @@ void writeParquet(const RowVectorPtr& data, memory::MemoryPool* rootPool) {
   }
 }
 
-/// Builds a dictionary-encoded VARCHAR column with the given cardinality.
-VectorPtr
-makeDictVarchar(vector_size_t numRows, int dictSize, memory::MemoryPool* pool) {
-  // Build stable string storage for the dictionary values.
-  auto strings = std::make_shared<std::vector<std::string>>(dictSize);
-  for (int i = 0; i < dictSize; ++i) {
-    (*strings)[i] = fmt::format("value_{:06d}", i);
-  }
-
-  auto dictionary = BaseVector::create(VARCHAR(), dictSize, pool);
-  auto* flat = dictionary->asFlatVector<StringView>();
-  for (int i = 0; i < dictSize; ++i) {
-    flat->set(i, StringView((*strings)[i]));
-  }
-
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    rawIndices[i] = i % dictSize;
-  }
-
+// Builds a dictionary-encoded VARCHAR column with the given cardinality.
+VectorPtr makeDictVarchar(
+    vector_size_t numRows,
+    int32_t dictionarySize,
+    memory::MemoryPool* pool) {
+  test::VectorMaker maker(pool);
+  auto dictionary = maker.flatVector<std::string>(
+      dictionarySize,
+      [](vector_size_t i) { return fmt::format("value_{:06d}", i); });
+  auto indices = test::makeIndices(
+      numRows,
+      [dictionarySize](vector_size_t i) { return i % dictionarySize; },
+      pool);
   return BaseVector::wrapInDictionary(
       BufferPtr(nullptr), indices, numRows, dictionary);
 }
 
-/// Builds a dictionary-encoded INTEGER column with the given cardinality.
-VectorPtr
-makeDictInteger(vector_size_t numRows, int dictSize, memory::MemoryPool* pool) {
-  auto dictionary = BaseVector::create(INTEGER(), dictSize, pool);
-  auto* flat = dictionary->asFlatVector<int32_t>();
-  for (int i = 0; i < dictSize; ++i) {
-    flat->set(i, i * 7);
-  }
-
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    rawIndices[i] = i % dictSize;
-  }
-
+// Builds a dictionary-encoded INTEGER column with the given cardinality.
+VectorPtr makeDictInteger(
+    vector_size_t numRows,
+    int32_t dictionarySize,
+    memory::MemoryPool* pool) {
+  test::VectorMaker maker(pool);
+  auto dictionary = maker.flatVector<int32_t>(
+      dictionarySize, [](vector_size_t i) { return i * 7; });
+  auto indices = test::makeIndices(
+      numRows,
+      [dictionarySize](vector_size_t i) { return i % dictionarySize; },
+      pool);
   return BaseVector::wrapInDictionary(
       BufferPtr(nullptr), indices, numRows, dictionary);
 }
 
-/// Builds a flat VARCHAR column (control case, no dictionary).
+// Builds a flat VARCHAR column (control case, no dictionary).
 VectorPtr makeFlatVarchar(vector_size_t numRows, memory::MemoryPool* pool) {
-  auto vector = BaseVector::create(VARCHAR(), numRows, pool);
-  auto* flat = vector->asFlatVector<StringView>();
-  auto strings = std::make_shared<std::vector<std::string>>(numRows);
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    (*strings)[i] = fmt::format("value_{:06d}", i % 10);
-  }
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    flat->set(i, StringView((*strings)[i]));
-  }
-  return vector;
+  test::VectorMaker maker(pool);
+  return maker.flatVector<std::string>(numRows, [](vector_size_t i) {
+    return fmt::format("value_{:06d}", i % 10);
+  });
 }
 
-/// Builds a flat INTEGER column (control case).
+// Builds a flat INTEGER column (control case).
 VectorPtr makeFlatInteger(vector_size_t numRows, memory::MemoryPool* pool) {
-  auto vector = BaseVector::create(INTEGER(), numRows, pool);
-  auto* flat = vector->asFlatVector<int32_t>();
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    flat->set(i, static_cast<int32_t>(i));
-  }
-  return vector;
+  test::VectorMaker maker(pool);
+  return maker.flatVector<int32_t>(
+      numRows, [](vector_size_t i) { return static_cast<int32_t>(i); });
 }
 
 std::shared_ptr<memory::MemoryPool> rootPool;
 
 // -- Dictionary VARCHAR benchmarks at various cardinalities --
 
-void benchDictVarchar(int dictSize) {
+void benchDictVarchar(int32_t dictionarySize) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
-  auto column = makeDictVarchar(kNumRows, dictSize, leafPool.get());
-  auto data = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW({"c0"}, {VARCHAR()}),
-      BufferPtr(nullptr),
-      kNumRows,
-      std::vector<VectorPtr>{column});
+  test::VectorMaker maker(leafPool.get());
+  auto column = makeDictVarchar(kNumRows, dictionarySize, leafPool.get());
+  auto data = maker.rowVector({"c0"}, {column});
   suspender.dismiss();
   writeParquet(data, rootPool.get());
 }
@@ -152,16 +130,12 @@ BENCHMARK_DRAW_LINE();
 
 // -- Dictionary INTEGER benchmarks --
 
-void benchDictInteger(int dictSize) {
+void benchDictInteger(int32_t dictionarySize) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
-  auto column = makeDictInteger(kNumRows, dictSize, leafPool.get());
-  auto data = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW({"c0"}, {INTEGER()}),
-      BufferPtr(nullptr),
-      kNumRows,
-      std::vector<VectorPtr>{column});
+  test::VectorMaker maker(leafPool.get());
+  auto column = makeDictInteger(kNumRows, dictionarySize, leafPool.get());
+  auto data = maker.rowVector({"c0"}, {column});
   suspender.dismiss();
   writeParquet(data, rootPool.get());
 }
@@ -183,13 +157,9 @@ BENCHMARK_DRAW_LINE();
 BENCHMARK(FlatVarchar) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
   auto column = makeFlatVarchar(kNumRows, leafPool.get());
-  auto data = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW({"c0"}, {VARCHAR()}),
-      BufferPtr(nullptr),
-      kNumRows,
-      std::vector<VectorPtr>{column});
+  auto data = maker.rowVector({"c0"}, {column});
   suspender.dismiss();
   writeParquet(data, rootPool.get());
 }
@@ -197,13 +167,9 @@ BENCHMARK(FlatVarchar) {
 BENCHMARK(FlatInteger) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
   auto column = makeFlatInteger(kNumRows, leafPool.get());
-  auto data = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW({"c0"}, {INTEGER()}),
-      BufferPtr(nullptr),
-      kNumRows,
-      std::vector<VectorPtr>{column});
+  auto data = maker.rowVector({"c0"}, {column});
   suspender.dismiss();
   writeParquet(data, rootPool.get());
 }
@@ -216,63 +182,48 @@ BENCHMARK_DRAW_LINE();
 // columns get materialized.  With selective flattening, only the one that
 // needs it is flattened.
 
-/// Builds a dict-of-dict INTEGER column (forces flattening in needFlatten).
+// Builds a dict-of-dict INTEGER column (forces flattening in needFlatten).
 VectorPtr makeDictOfDictInteger(
     vector_size_t numRows,
-    int dictSize,
+    int32_t dictionarySize,
     memory::MemoryPool* pool) {
-  auto dictionary = BaseVector::create(INTEGER(), dictSize, pool);
-  auto* flat = dictionary->asFlatVector<int32_t>();
-  for (int i = 0; i < dictSize; ++i) {
-    flat->set(i, i * 13);
-  }
-
-  BufferPtr innerIdx = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
-  auto rawInner = innerIdx->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    rawInner[i] = i % dictSize;
-  }
+  test::VectorMaker maker(pool);
+  auto dictionary = maker.flatVector<int32_t>(
+      dictionarySize, [](vector_size_t i) { return i * 13; });
+  auto innerIndices = test::makeIndices(
+      numRows,
+      [dictionarySize](vector_size_t i) { return i % dictionarySize; },
+      pool);
   auto innerDict = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), innerIdx, numRows, dictionary);
-
-  BufferPtr outerIdx = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
-  auto rawOuter = outerIdx->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < numRows; ++i) {
-    rawOuter[i] = i;
-  }
+      BufferPtr(nullptr), innerIndices, numRows, dictionary);
+  auto outerIndices =
+      test::makeIndices(numRows, [](vector_size_t i) { return i; }, pool);
   return BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), outerIdx, numRows, innerDict);
+      BufferPtr(nullptr), outerIndices, numRows, innerDict);
 }
 
-/// N passthrough dict VARCHAR columns + 1 dict-of-dict column that forces
-/// flattening.  With blanket flattening all N+1 columns are flattened; with
-/// selective flattening only the dict-of-dict column is.
-void benchMixedColumns(int numPassthroughCols) {
+// N passthrough dict VARCHAR columns + 1 dict-of-dict column that forces
+// flattening.  With blanket flattening all N+1 columns are flattened; with
+// selective flattening only the dict-of-dict column is.
+void benchMixedColumns(int32_t numPassthroughColumns) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
 
   std::vector<VectorPtr> columns;
   std::vector<std::string> names;
-  std::vector<TypePtr> types;
 
   // Passthrough dict VARCHAR columns (low cardinality).
-  for (int i = 0; i < numPassthroughCols; ++i) {
+  for (int32_t i = 0; i < numPassthroughColumns; ++i) {
     columns.push_back(makeDictVarchar(kNumRows, 10, leafPool.get()));
     names.push_back(fmt::format("dict_{}", i));
-    types.push_back(VARCHAR());
   }
 
   // One dict-of-dict INTEGER column that forces flattening.
   columns.push_back(makeDictOfDictInteger(kNumRows, 50, leafPool.get()));
   names.push_back("nested");
-  types.push_back(INTEGER());
 
-  auto data = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW(std::move(names), std::move(types)),
-      BufferPtr(nullptr),
-      kNumRows,
-      std::move(columns));
+  auto data = maker.rowVector(std::move(names), columns);
 
   suspender.dismiss();
   writeParquet(data, rootPool.get());
@@ -293,28 +244,22 @@ BENCHMARK(Mixed_20DictPassthrough_1Nested) {
 
 BENCHMARK_DRAW_LINE();
 
-/// Control: N passthrough dict VARCHAR columns with NO column that forces
-/// flattening.  Should show no difference between blanket and selective.
-void benchAllPassthroughColumns(int numCols) {
+// Control: N passthrough dict VARCHAR columns with NO column that forces
+// flattening.  Should show no difference between blanket and selective.
+void benchAllPassthroughColumns(int32_t numColumns) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
 
   std::vector<VectorPtr> columns;
   std::vector<std::string> names;
-  std::vector<TypePtr> types;
 
-  for (int i = 0; i < numCols; ++i) {
+  for (int32_t i = 0; i < numColumns; ++i) {
     columns.push_back(makeDictVarchar(kNumRows, 10, leafPool.get()));
     names.push_back(fmt::format("c{}", i));
-    types.push_back(VARCHAR());
   }
 
-  auto data = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW(std::move(names), std::move(types)),
-      BufferPtr(nullptr),
-      kNumRows,
-      std::move(columns));
+  auto data = maker.rowVector(std::move(names), columns);
 
   suspender.dismiss();
   writeParquet(data, rootPool.get());
@@ -334,46 +279,42 @@ BENCHMARK_DRAW_LINE();
 // each batch re-exports, re-imports, and re-walks the Arrow schema.  With
 // caching, only the first batch pays that cost.
 
-/// Writes numBatches batches of batchSize rows each to a single file.
+// Writes numBatches batches of batchSize rows each to a single file.
 void writeParquetMultiBatch(
     const RowVectorPtr& batch,
-    int numBatches,
+    int32_t numBatches,
     memory::MemoryPool* rootPool) {
   auto leafPool = rootPool->addLeafChild("sink");
+  folly::BenchmarkSuspender suspender;
   auto sink = std::make_unique<MemorySink>(
       kSinkSize, FileSink::Options{.pool = leafPool.get()});
   WriterOptions options;
   options.memoryPool = rootPool;
   options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  suspender.dismiss();
   auto writer = std::make_unique<parquet::Writer>(
       std::move(sink), options, asRowType(batch->type()));
-  for (int i = 0; i < numBatches; ++i) {
+  for (int32_t i = 0; i < numBatches; ++i) {
     writer->write(batch);
   }
   writer->close();
 }
 
-void benchMultiBatch(int numCols, int numBatches) {
+void benchMultiBatch(int32_t numColumns, int32_t numBatches) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
 
   std::vector<VectorPtr> columns;
   std::vector<std::string> names;
-  std::vector<TypePtr> types;
   constexpr vector_size_t kBatchSize = 10'000;
 
-  for (int i = 0; i < numCols; ++i) {
+  for (int32_t i = 0; i < numColumns; ++i) {
     columns.push_back(makeDictVarchar(kBatchSize, 10, leafPool.get()));
     names.push_back(fmt::format("c{}", i));
-    types.push_back(VARCHAR());
   }
 
-  auto batch = std::make_shared<RowVector>(
-      leafPool.get(),
-      ROW(std::move(names), std::move(types)),
-      BufferPtr(nullptr),
-      kBatchSize,
-      std::move(columns));
+  auto batch = maker.rowVector(std::move(names), columns);
 
   suspender.dismiss();
   writeParquetMultiBatch(batch, numBatches, rootPool.get());
@@ -390,6 +331,106 @@ BENCHMARK(MultiBatch_20Cols_50Batches) {
 }
 BENCHMARK(MultiBatch_10Cols_200Batches) {
   benchMultiBatch(10, 200);
+}
+
+BENCHMARK_DRAW_LINE();
+
+// -- MAP(VARCHAR, INTEGER) column benchmarks --
+// Tests the encoding overhead of nested map structures.
+
+// Builds a MAP(VARCHAR, INTEGER) column with the given number of entries per
+// map row.
+VectorPtr makeMapVarcharInteger(
+    vector_size_t numRows,
+    int32_t entriesPerRow,
+    memory::MemoryPool* pool) {
+  test::VectorMaker maker(pool);
+  return maker.mapVector<std::string, int32_t>(
+      numRows,
+      [entriesPerRow](vector_size_t /*mapRow*/) { return entriesPerRow; },
+      [](vector_size_t /*mapRow*/, vector_size_t row) {
+        return fmt::format("key_{}", row);
+      },
+      [](vector_size_t mapRow, vector_size_t row) {
+        return static_cast<int32_t>(mapRow * 10 + row);
+      });
+}
+
+void benchMapColumn(int32_t entriesPerRow) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+  auto column = makeMapVarcharInteger(kNumRows, entriesPerRow, leafPool.get());
+  auto data = maker.rowVector({"c0"}, {column});
+  suspender.dismiss();
+  writeParquet(data, rootPool.get());
+}
+
+BENCHMARK(MapVarcharInt_3Entries) {
+  benchMapColumn(3);
+}
+BENCHMARK(MapVarcharInt_5Entries) {
+  benchMapColumn(5);
+}
+BENCHMARK(MapVarcharInt_10Entries) {
+  benchMapColumn(10);
+}
+
+BENCHMARK_DRAW_LINE();
+
+// -- Parallel column writing benchmarks --
+// These exercise the enableParallelWrite option which compresses and encodes
+// columns concurrently using Arrow's internal CPU thread pool.
+
+// Writes with parallel column writing enabled.
+void writeParquetParallel(
+    const RowVectorPtr& data,
+    memory::MemoryPool* rootPool) {
+  auto leafPool = rootPool->addLeafChild("sink");
+  for (int32_t i = 0; i < kNumIterations; ++i) {
+    folly::BenchmarkSuspender suspender;
+    auto sink = std::make_unique<MemorySink>(
+        kSinkSize, FileSink::Options{.pool = leafPool.get()});
+    WriterOptions options;
+    options.memoryPool = rootPool;
+    auto parquetOptions = std::make_shared<ParquetWriterOptions>();
+    parquetOptions->enableParallelWrite = true;
+    options.formatSpecificOptions = parquetOptions;
+    suspender.dismiss();
+    auto writer = std::make_unique<parquet::Writer>(
+        std::move(sink), options, asRowType(data->type()));
+    writer->write(data);
+    writer->close();
+  }
+}
+
+void benchParallelColumns(int32_t numColumns) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+
+  std::vector<VectorPtr> columns;
+  std::vector<std::string> names;
+
+  for (int32_t i = 0; i < numColumns; ++i) {
+    columns.push_back(makeDictVarchar(kNumRows, 100, leafPool.get()));
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto data = maker.rowVector(std::move(names), columns);
+
+  suspender.dismiss();
+  writeParquetParallel(data, rootPool.get());
+}
+
+BENCHMARK(Parallel_5Cols) {
+  benchParallelColumns(5);
+}
+BENCHMARK(Parallel_10Cols) {
+  benchParallelColumns(10);
+}
+BENCHMARK(Parallel_20Cols) {
+  benchParallelColumns(20);
 }
 
 } // namespace

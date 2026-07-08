@@ -60,6 +60,7 @@ if(VELOX_ENABLE_BENCHMARKS)
   target_link_libraries(
     velox_dwio_parquet_writer_benchmark
     velox_dwio_parquet_writer
+    velox_vector_test_lib
     velox_link_libs
     Folly::follybenchmark
     Folly::folly
