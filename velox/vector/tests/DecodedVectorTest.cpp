@@ -1434,6 +1434,76 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   decodeAndCheckNulls(dict);
 }
 
+TEST_F(DecodedVectorTest, forEachNullNotNull) {
+  // forEachNull/forEachNotNull must visit exactly the null / non-null rows in
+  // [begin, end), in order. Cross-check against isNullAt for every encoding so
+  // the assertion holds regardless of which internal branch (bulk scan vs
+  // per-row) is taken.
+  auto verify = [&](const VectorPtr& vector) {
+    SelectivityVector rows(vector->size());
+    DecodedVector decoded(*vector, rows);
+
+    auto collect = [&](bool wantNull, vector_size_t begin, vector_size_t end) {
+      std::vector<vector_size_t> visited;
+      auto push = [&](vector_size_t row) { visited.push_back(row); };
+      if (wantNull) {
+        decoded.forEachNull(begin, end, push);
+      } else {
+        decoded.forEachNotNull(begin, end, push);
+      }
+      return visited;
+    };
+    auto expected = [&](bool wantNull, vector_size_t begin, vector_size_t end) {
+      std::vector<vector_size_t> result;
+      for (vector_size_t row = begin; row < end; ++row) {
+        if (decoded.isNullAt(row) == wantNull) {
+          result.push_back(row);
+        }
+      }
+      return result;
+    };
+    auto check = [&](vector_size_t begin, vector_size_t end) {
+      EXPECT_EQ(collect(true, begin, end), expected(true, begin, end));
+      EXPECT_EQ(collect(false, begin, end), expected(false, begin, end));
+    };
+
+    const auto size = vector->size();
+    check(0, size);
+    // Interior sub-range: only rows inside [begin, end), nothing outside.
+    ASSERT_GE(size, 4);
+    check(1, size - 1);
+  };
+
+  auto identity = [](auto row) { return row; };
+
+  // Flat: some nulls, no nulls, all null.
+  verify(makeFlatVector<int64_t>(64, identity, nullEvery(7)));
+  verify(makeFlatVector<int64_t>(64, identity));
+  verify(makeFlatVector<int64_t>(64, identity, nullEvery(1)));
+
+  // Dictionary inheriting base nulls through indirection (per-row index path).
+  // Reverse indices ensure the scan must translate indices_[row] rather than
+  // iterating top-level row numbers (which would give the wrong null bits).
+  {
+    auto base = makeFlatVector<int64_t>(64, identity, nullEvery(5));
+    auto indices = makeIndicesInReverse(64);
+    verify(BaseVector::wrapInDictionary(nullptr, indices, 64, base));
+  }
+
+  // Dictionary adding its own nulls over a null-free base (combined-nulls
+  // path).
+  {
+    auto base = makeFlatVector<int64_t>(64, identity);
+    auto indices = makeIndices(64, identity);
+    auto nulls = makeNulls(64, nullEvery(3));
+    verify(BaseVector::wrapInDictionary(nulls, indices, 64, base));
+  }
+
+  // Constant: null and non-null.
+  verify(makeNullConstant(TypeKind::BIGINT, 16));
+  verify(makeConstant<int64_t>(42, 16));
+}
+
 TEST_F(DecodedVectorTest, dictionaryWrapping) {
   constexpr vector_size_t baseVectorSize{100};
   constexpr vector_size_t innerDictSize{30};

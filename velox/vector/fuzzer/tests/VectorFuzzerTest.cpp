@@ -680,6 +680,32 @@ TEST_F(VectorFuzzerTest, mapKeys) {
   }
 }
 
+// Regression test: normalizeMapKeys must read keys through decoding so non-flat
+// encodings work. A dictionary wrapping an unloaded lazy vector has no value
+// accessor until decoded; hashing it directly used to deref null.
+TEST_F(VectorFuzzerTest, normalizeMapKeysEncodedKeys) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0;
+  opts.dictionaryHasNulls = false;
+  opts.normalizeMapKeys = true;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Build DICTIONARY(LAZY(FLAT)) non-null keys, left unloaded.
+  auto keys = fuzzer.fuzzDictionary(
+      VectorFuzzer::wrapInLazyVector(fuzzer.fuzzFlat(BIGINT(), 1000)));
+  ASSERT_TRUE(VectorEncoding::isDictionary(keys->encoding()));
+  ASSERT_TRUE(isLazyNotLoaded(*keys->valueVector()));
+
+  VectorPtr vector;
+  ASSERT_NO_THROW(
+      vector = fuzzer.fuzzMap(keys, fuzzer.fuzzFlat(BIGINT(), 1000), 10));
+
+  // Materialize the lazy layer so the uniqueness check can read key values,
+  // then verify normalization actually deduplicated keys.
+  vector->as<MapVector>()->mapKeys()->loadedVector();
+  assertMapKeys(vector->as<MapVector>());
+}
+
 TEST_F(VectorFuzzerTest, row) {
   VectorFuzzer::Options opts;
   opts.nullRatio = 0.5;
