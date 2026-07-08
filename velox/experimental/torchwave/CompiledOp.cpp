@@ -701,13 +701,11 @@ CompositeInvocation::CompositeInvocation(
     std::unique_ptr<CompositeKernel> kernel,
     std::vector<OpInvocation> ops,
     std::deque<c10::IValue> ivalueStorage,
-    int32_t sequenceNumber,
-    std::vector<Launch> prePassStandalones)
+    int32_t sequenceNumber)
     : kernel_(std::move(kernel)),
       ops_(std::move(ops)),
       ivalueStorage_(std::move(ivalueStorage)),
-      sequenceNumber_(sequenceNumber),
-      prePassStandalones_(std::move(prePassStandalones)) {}
+      sequenceNumber_(sequenceNumber) {}
 
 namespace {
 
@@ -1943,13 +1941,25 @@ void CompositeInvocation::gatherLaunches(
             } else {
               newGrid = &projectOp->grid();
             }
-            grids[i].singleBlock = wantSingleBlock;
           }
           if (!wantSingleBlock && !projectOp->cgGrid().empty() &&
               WaveConfig::get().isCg.has_value() && *WaveConfig::get().isCg) {
             newGrid = &projectOp->cgGrid();
           }
-          if (newGrid && newGrid != grids[i].grid) {
+          // A scanOutputReturnBarrier op takes a launch break only in the
+          // multi-block grid, so its multi-block grid has more steps than its
+          // single-block variant. The grid-choice kernel can therefore sit at a
+          // stepIdx that exists only in the current (longer) grid; switching to
+          // a shorter variant here would index it out of bounds (the initial
+          // access above is guarded, but these post-swap accesses are not).
+          // Only switch when the target grid actually has this step. Otherwise
+          // keep the current grid -- it is a complete, correct plan for this op
+          // -- so the launch still runs, just under the already-selected
+          // variant. The op's earlier steps already ran under that variant, so
+          // this also keeps the whole op on one consistent grid.
+          if (newGrid && newGrid != grids[i].grid &&
+              stepIdx < static_cast<int32_t>(newGrid->size())) {
+            grids[i].singleBlock = wantSingleBlock;
             grids[i].grid = newGrid;
             grid = newGrid;
             step = &(*grid)[stepIdx];
@@ -2003,6 +2013,34 @@ void CompositeInvocation::gatherLaunches(
                 break;
               }
             }
+          }
+        }
+        // Under a cooperative grid the whole step launches as ONE kernel, so an
+        // op cannot be skipped -- numElements only sets its block share. A
+        // view-rooted op (e.g. slice->clamp) fused into the step reads an input
+        // that is a step-internal intermediate: None/unallocated at host sizing
+        // time, so the guards above zero its numElements and it is starved to
+        // ~1 block even though it runs correctly once the cooperative kernel
+        // materializes that input mid-launch (op 138: 6 of 480 blocks, ~85ms).
+        // Recover a grid size from the kernel's concrete static input shapes
+        // (TensorMeta is available without materialization). numElements only
+        // drives the grid; the kernel loops to the true size on device, so an
+        // over-estimate is safe (surplus blocks early-out).
+        if (data.numElements == 0 && WaveConfig::get().isCg.value_or(false)) {
+          int64_t staticNumElements = 0;
+          for (const auto* tensorMeta : launch.op->inputTypes()) {
+            if (tensorMeta != nullptr && !tensorMeta->hasSymbolicShape()) {
+              int64_t numElements = 1;
+              for (auto extent : tensorMeta->sizes()) {
+                numElements *= extent;
+              }
+              if (numElements > staticNumElements) {
+                staticNumElements = numElements;
+              }
+            }
+          }
+          if (staticNumElements > 0) {
+            data.numElements = staticNumElements;
           }
         }
         if (!launch.op->barrierCounters().empty()) {
@@ -2091,12 +2129,26 @@ void verifyAgainstReference(
   int32_t numPassed = 0;
   for (const auto& data : launches) {
     bool nodeChecked = false;
-    for (auto actualId : data.actualOutputs) {
+    for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
+      auto actualId = data.actualOutputs[oi];
       auto refIt = ref->find(actualId);
       if (refIt == ref->end()) {
         continue;
       }
       if (!refIt->second.isTensor()) {
+        continue;
+      }
+      // Skip scalar/symint outputs.  The reference stores SymInt/SymFloat/
+      // SymBool as 1-D tensors, but wave computes them as register scalars --
+      // frequently consumed internally for shapes/bounds (e.g. sym_numel used
+      // as a clamp max) and not materialized into a frame tensor.  Their
+      // correctness is covered indirectly: a metadata scalar (sym_numel/
+      // sym_size) derives from a tensor that IS verified, and any wrong symint
+      // produces a wrong downstream tensor shape that surfaces as a mismatch on
+      // that tensor.
+      if (oi < data.actualOutputTypes.size() &&
+          data.actualOutputTypes[oi] != nativert::Type::Kind::Tensor &&
+          data.actualOutputTypes[oi] != nativert::Type::Kind::TensorList) {
         continue;
       }
       auto actualOpt = asTensor(frame.getIValue(actualId));
@@ -2106,6 +2158,24 @@ void verifyAgainstReference(
       const at::Tensor& actualTensor = *actualOpt;
       const auto& refTensor = refIt->second.toTensor();
       if (actualTensor.numel() == 0) {
+        continue;
+      }
+      // A meta tensor carries no data. An intentional shape-only output (e.g.
+      // an index a composite consumes internally and exposes only for
+      // downstream shape inference, like a gather index) has nothing to compare
+      // -- its correctness is covered by verifying its data-consumer's output.
+      // A meta output that is NOT shape-only is unexpected (a materialization
+      // bug): surface it as a mismatch rather than silently skipping, so we do
+      // not lose a correctness signal.
+      if (actualTensor.is_meta()) {
+        bool isShapeOnly = oi < data.actualOutputDescs.size() &&
+            data.actualOutputDescs[oi].shapeOnly;
+        if (!isShapeOnly) {
+          ++numMismatches;
+          LOG(ERROR) << "Value %" << actualId
+                     << " is a meta tensor (no data) but is not a shape-only "
+                        "output; cannot verify (unexpected materialization).";
+        }
         continue;
       }
       if (state.numRefTensorsChecked) {
@@ -2329,53 +2399,20 @@ void CompositeInvocation::execute(ExecutionState& state) {
     std::cout << "==== Node " << sequenceNumber_ << std::endl;
   }
 
-  // Run pre-pass standalone ops whose inputs are all available.
-  // Iterate until no more progress: each round may produce values
-  // that unblock subsequent standalones.
-  if (!prePassStandalones_.empty()) {
-    std::vector<bool> executed(prePassStandalones_.size(), false);
-    bool progress = true;
-    while (progress) {
-      progress = false;
-      for (size_t k = 0; k < prePassStandalones_.size(); ++k) {
-        if (executed[k]) {
-          continue;
-        }
-        auto& launch = prePassStandalones_[k];
-        auto kernelIt = state.kernelMap->find(launch.standalone);
-        if (kernelIt == state.kernelMap->end()) {
-          executed[k] = true;
-          continue;
-        }
-        // Skip if already computed (e.g. by an earlier composite or
-        // runReadyGraphNodes); see nodeOutputsComputed.  Matches the guards in
-        // the post-step and deferred pre-pass loops below.
-        if (nodeOutputsComputed(launch.standalone, frame)) {
-          executed[k] = true;
-          continue;
-        }
-        bool allInputsReady = true;
-        for (const auto& input : launch.standalone->inputs()) {
-          if (isUnreadyNoneDependency(input.value, frame)) {
-            allInputsReady = false;
-            break;
-          }
-        }
-        if (allInputsReady) {
-          executeNode(launch.standalone, kernelIt->second, frame);
-          executed[k] = true;
-          progress = true;
-        }
-      }
-    }
-  }
-
   auto& sv0 = getStepVectors(state.stepVectors, sequenceNumber_, 0);
   auto& gridChoices = sv0.gridChoices;
-  if (gridChoices.empty()) {
-    for (auto& op : ops_) {
-      gridChoices.push_back({0, false, &op.projectOp()->grid()});
-    }
+  // Reset each op's grid-variant choice to the multi-block default on every
+  // execution. gridChoices lives in the pooled ExecutionState, so it would
+  // otherwise carry a prior run's evolved choice into the next frame reuse.
+  // The single-block variant of a scanOutputReturnBarrier op has fewer steps
+  // than its multi-block variant, so starting a reused frame from a persisted
+  // single-block choice drops that op's multi-block-only steps, leaving their
+  // outputs unproduced (None) and crashing a later consumer. Re-deriving from
+  // the default each run makes every execution schedule identically to the
+  // first; gatherLaunches re-applies the single-block switch as needed.
+  gridChoices.clear();
+  for (auto& op : ops_) {
+    gridChoices.push_back({0, false, &op.projectOp()->grid()});
   }
 
   using Clock = std::chrono::high_resolution_clock;
@@ -2710,30 +2747,6 @@ void CompositeInvocation::execute(ExecutionState& state) {
     }
   }
 
-  // Run remaining pre-pass standalones that couldn't execute before
-  // the step loop (their inputs were produced by kernels).
-  if (!prePassStandalones_.empty()) {
-    for (auto& launch : prePassStandalones_) {
-      auto kernelIt = state.kernelMap->find(launch.standalone);
-      if (kernelIt == state.kernelMap->end()) {
-        continue;
-      }
-      if (nodeOutputsComputed(launch.standalone, frame)) {
-        continue;
-      }
-      bool allInputsReady = true;
-      for (const auto& input : launch.standalone->inputs()) {
-        if (isUnreadyNoneDependency(input.value, frame)) {
-          allInputsReady = false;
-          break;
-        }
-      }
-      if (allInputsReady) {
-        executeNode(launch.standalone, kernelIt->second, frame);
-      }
-    }
-  }
-
   // If any eager standalone op ran, synchronize the default CUDA stream before
   // returning. The eager ops run on the default stream and are otherwise
   // unordered against wave-stream kernels of later invocations, which can
@@ -2768,6 +2781,29 @@ void CompositeInvocation::launch(
   params.debugInfo = deviceDebugBase;
   void* args[] = {&params};
 
+  // opBarrier (Core.cuh) is a counter spin-wait that blocks until numBlocksInOp
+  // blocks have arrived, so it needs those blocks co-resident -- which only a
+  // cooperative launch guarantees. A barrier op assigned a single block passes
+  // its barrier immediately (the count reaches 1 as soon as that block runs),
+  // so it needs no co-residency. sv.isCgGrid merely marks "this step has a
+  // barrier op"; a cooperative launch is only actually required when some
+  // barrier op spans more than one block. Refining the decision here lets a
+  // wide fan-out of single-block ops (whose total block count can exceed the
+  // device co-residency limit) launch normally instead of failing the
+  // cooperative launch's block cap ("too many blocks in cooperative launch").
+  bool cooperative = false;
+  if (sv.isCgGrid) {
+    for (size_t ki = 0; ki < sv.kernels.size(); ++ki) {
+      const auto& kd = sv.kernels[ki];
+      if (kd.launch && kd.launch->op &&
+          !kd.launch->op->barrierCounters().empty() &&
+          ki < sv.numBlocksPerLaunch.size() && sv.numBlocksPerLaunch[ki] > 1) {
+        cooperative = true;
+        break;
+      }
+    }
+  }
+
   auto* pinnedBlocks = reinterpret_cast<BlockInfo*>(pinnedBase);
 
   if (WaveConfig::get().debugSingleOps) {
@@ -2790,14 +2826,29 @@ void CompositeInvocation::launch(
       // vector fails loudly instead of reading out of bounds.
       TORCH_CHECK(active < static_cast<int32_t>(sv.launchIndices.size()));
       auto launchIdx = sv.launchIndices[active];
+      // A barrier op needs cooperative grouping only when it spans more than
+      // one block (see 'cooperative' above): opBarrier waits for numBlocksInOp
+      // arrivals, which is immediate for a single-block op.
       bool hasBarriers = launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
           sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op &&
-          !sv.kernels[launchIdx].launch->op->barrierCounters().empty();
+          !sv.kernels[launchIdx].launch->op->barrierCounters().empty() &&
+          launchIdx < static_cast<int32_t>(sv.numBlocksPerLaunch.size()) &&
+          sv.numBlocksPerLaunch[launchIdx] > 1;
+
+      // Under a cooperative grid the whole step is compiled as one cooperative
+      // kernel whose cross-block barriers require every block of an op to be
+      // co-resident and launched cooperatively. Single-stepping a subset of an
+      // op's blocks, or launching that kernel via the regular (non-cooperative)
+      // path, faults with an illegal memory access. So when the step needs a
+      // cooperative launch, treat every op like a barrier op: activate all of
+      // its blocks and launch cooperatively, mirroring the non-debug path
+      // below.
+      bool groupAndCooperative = hasBarriers || cooperative;
 
       // Set all opcodes to kDebugNoOp on device.
       setOpCodes(deviceBlocks, 0, numBlocks, kDebugNoOp, stream);
 
-      if (hasBarriers) {
+      if (groupAndCooperative) {
         auto* inv = sv.kernels[launchIdx].invocation;
         if (!launched.insert(reinterpret_cast<intptr_t>(inv)).second) {
           continue;
@@ -2815,8 +2866,10 @@ void CompositeInvocation::launch(
         setOpCodes(deviceBlocks, active, 1, originalOps[active], stream);
       }
 
-      // Reset barrier counters on device for the active op.
-      if (hasBarriers) {
+      // Reset barrier counters on device for the active op. Ops without
+      // barriers have an empty barrierCounters(), so this loop is a no-op for
+      // them even when it runs under a cooperative grid.
+      if (groupAndCooperative) {
         for (size_t li = 0; li < sv.kernels.size(); ++li) {
           if (sv.kernels[li].invocation == sv.kernels[launchIdx].invocation) {
             auto* kernelOp = sv.kernels[li].launch->op;
@@ -2830,7 +2883,7 @@ void CompositeInvocation::launch(
       }
 
       try {
-        if (hasBarriers) {
+        if (groupAndCooperative) {
           kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
         } else {
           kernel_->launch(numBlocks, blockSize, 0, stream, args);
@@ -2870,7 +2923,7 @@ void CompositeInvocation::launch(
     }
   } else {
     stream->hostToDeviceAsync(deviceBase, pinnedBase, totalPinnedBytes);
-    if (sv.isCgGrid) {
+    if (cooperative) {
       kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
     } else {
       kernel_->launch(numBlocks, blockSize, 0, stream, args);
