@@ -9105,4 +9105,127 @@ TEST_F(HashJoinTest, emptyBuildWithDebugEnabled) {
       .run();
 }
 
+// Verifies that inner join output exceeding batchSizeMaxThreshold is correctly
+// split into multiple batches and emitted via the output queue.
+TEST_F(HashJoinTest, innerJoinOutputBatching) {
+  // Set a low threshold to force multiple output batches.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    config.batchSizeMaxThreshold = std::nullopt;
+  };
+
+  // 50 probe rows with keys 0..49, 50 build rows with keys 0..49.
+  // Each probe row matches exactly one build row -> 50 output rows total,
+  // split into batches of at most 10.
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int32_t>(50, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(50, [](auto row) { return row * 10; })});
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int32_t>(50, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(50, [](auto row) { return row * 100; })});
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .injectSpill(false)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kInner)
+      .joinOutputLayout({"c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c1 FROM t INNER JOIN u ON t.c0 = u.c0")
+      .run();
+}
+
+// Verifies that right join unmatched-right output exceeding
+// batchSizeMaxThreshold is correctly split and emitted via the output queue.
+TEST_F(HashJoinTest, rightJoinOutputBatching) {
+  // Set a low threshold to force multiple output batches.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    config.batchSizeMaxThreshold = std::nullopt;
+  };
+
+  // Probe keys are 0..9. Build keys are 0..49.
+  // Only build rows with keys 0..9 match; build rows 10..49 are unmatched
+  // and emitted via the unmatched-right path (40 rows, split at threshold 10).
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(10, [](auto row) { return row * 10; })});
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int32_t>(50, [](auto row) { return row; }),
+         makeFlatVector<int32_t>(50, [](auto row) { return row * 100; })});
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .injectSpill(false)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kRight)
+      .joinOutputLayout({"c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0")
+      .run();
+}
+
+// Verifies that a single inner join chunk exceeding batchSizeMaxThreshold
+// is correctly split via chunkedJoinOutput (Scenario 1).
+TEST_F(HashJoinTest, innerJoinSingleChunkExceedsRowLimit) {
+  // Set a low threshold so a single join result exceeds the limit.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    config.batchSizeMaxThreshold = std::nullopt;
+  };
+
+  // Many-to-many join: 10 probe rows all with key=1, 10 build rows all with
+  // key=1. The single inner_join call produces 10*10=100 output rows, well
+  // above the threshold of 10.
+  auto probeVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int32_t>(10, [](auto /*row*/) { return 1; }),
+         makeFlatVector<int32_t>(10, [](auto row) { return row; })});
+  });
+  auto buildVectors = makeBatches(1, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int32_t>(10, [](auto /*row*/) { return 1; }),
+         makeFlatVector<int32_t>(10, [](auto row) { return row * 100; })});
+  });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .injectSpill(false)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kInner)
+      .joinOutputLayout({"c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c1 FROM t INNER JOIN u ON t.c0 = u.c0")
+      .run();
+}
+
 } // namespace
