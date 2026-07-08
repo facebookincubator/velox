@@ -130,7 +130,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
   if (!chunkOpt.has_value()) {
     return std::nullopt;
   }
-  auto cudfTable = std::move(chunkOpt.value().tbl);
+  auto cudfTable = std::move(chunkOpt.value());
 
   TotalScanTimeCallbackData* callbackData =
       new TotalScanTimeCallbackData{startTimeUs, ioStatistics_};
@@ -142,7 +142,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
   return cudfTable;
 }
 
-std::optional<cudf::io::table_with_metadata> CudfSplitReader::readNextChunk(
+std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
     rmm::device_async_resource_ref output_mr) {
   if (!useExperimentalCudfReader_) {
     // Read table using the regular cudf parquet reader
@@ -152,7 +152,8 @@ std::optional<cudf::io::table_with_metadata> CudfSplitReader::readNextChunk(
       return std::nullopt;
     }
 
-    return splitReader_->read_chunk();
+    auto tableWithMetadata = splitReader_->read_chunk();
+    return std::move(tableWithMetadata.tbl);
   }
 
   // Read table using the experimental parquet reader
@@ -214,7 +215,8 @@ std::optional<cudf::io::table_with_metadata> CudfSplitReader::readNextChunk(
     return std::nullopt;
   }
 
-  return exptSplitReader_->materialize_all_columns_chunk();
+  auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
+  return std::move(tableWithMetadata.tbl);
 }
 
 void CudfSplitReader::resetSplit() {

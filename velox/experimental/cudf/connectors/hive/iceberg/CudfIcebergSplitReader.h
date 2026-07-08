@@ -26,9 +26,6 @@
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 #include <list>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -73,7 +70,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   void createCudfReader(rmm::device_async_resource_ref output_mr) override;
 
   // Override to apply Iceberg deletes after reading a cudf table chunk.
-  std::optional<cudf::io::table_with_metadata> readNextChunk(
+  std::optional<std::unique_ptr<cudf::table>> readNextChunk(
       rmm::device_async_resource_ref output_mr) override;
 
  private:
@@ -110,38 +107,33 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Classifies each output column into one of:
   //
   // 1. Info columns:
-  //    Column is a synthesized using a constant value (e.g., $file_size) from
-  //    the split metadata. Recorded for post-read injection as a constant.
+  //    Column is a synthesized info column (e.g., $file_size) from the
+  //    split metadata. Recorded for post-read injection as a constant.
   //
-  // 2. Regular columns present in file:
-  //    Column exists in both fileType and readerOutputType. Type is adapted
-  //    from fileType to match the expected output type, handling schema
-  //    evolution where column types may have changed.
+  // 2. Columns present in File:
+  //    Column exists in the parquet file and will be read normally.
+  //    Type coercion is handled by the cudf parquet reader options.
   //
-  // 3. Columns missing from file:
+  // 3. Columns missing from File:
   //    a) Partition columns (Hive-migrated tables):
-  //       Column is a partition key in  the Iceberg split.
-  //       In Hive-written Iceberg tables, partition column values are stored
-  //       in partition metadata, not in the data file itself. Value is read
-  //       from partition metadata and set as a constant.
-  //    b) Schema evolution (newly added columns - NOT detected here):
+  //       Column is a partition key in the Iceberg split. In Hive-written
+  //       Iceberg tables, partition column values are stored in partition
+  //       metadata, not in the data file itself. Recorded for post-read
+  //       injection as a constant.
+  //    b) Schema evolution (newly added columns):
   //       Column was added to the table schema after this data file was
-  //       written. Injected as NULL constant since the old file doesn't contain
-  //       this column by `buildOutputTable()` after reading the table's
-  //       schema.
+  //       written. Recorded for post-read injection as a typed NULL column.
+  //
+  // Columns are recorded in injectedColumns_ and removed from readColumnNames_
+  // so they are injected after reading using `injectMissingColumns()`.
   void adaptColumns();
 
-  // Assemble the final output table. Reorder read columns, inject
-  // info/partition constants, fill typed NULL columns for schema-evolution
-  // columns and drop equality delete key columns.
-  std::unique_ptr<cudf::table> buildOutputTable(
+  // Inject partition columns and schema-evolution NULL columns into the
+  // cudf table after reading. Returns a new table with all output columns
+  // in the correct order.
+  std::unique_ptr<cudf::table> injectMissingColumns(
       std::unique_ptr<cudf::table>&& table,
       rmm::device_async_resource_ref mr);
-
-  // Lazily builds `fileColumnNames_` and `fileColumnIndex_` from the cuDF
-  // table's schema info for reuse across chunks
-  void ensureFileColumnIndex(
-      const std::vector<cudf::io::column_name_info>& schemaInfo);
 
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
@@ -162,22 +154,18 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // are not part of the output projection.
   std::vector<std::string> extraEqualityColumns_;
 
-  // Describes a column whose value is known from the split metadata (an info
-  // column or a Hive-migrated partition column) and is injected as a constant
-  // after reading the table.
+  // Describes a column that must be injected after reading because it is
+  // not present in the parquet file (partition column or schema evolution).
   struct InjectedColumn {
-    std::string value; // info-column / partition-key string value
+    size_t outputIndex; // position in the final output schema
+    std::string name;
+    std::optional<std::string>
+        partitionValue; // nullopt = NULL (schema evolution)
     TypePtr veloxType;
   };
 
-  // Columns to inject after reading, keyed by output column name.
-  // This is populated by `adaptColumns()`.
-  std::unordered_map<std::string, InjectedColumn> injectedColumns_;
-
-  // Column names from the cudf reader, in reader order, and a name ->
-  // position lookup over them.
-  std::vector<std::string> fileColumnNames_;
-  std::unordered_map<std::string, size_t> fileColumnIndex_;
+  // Columns to inject after reading. Populated by adaptColumns().
+  std::vector<InjectedColumn> injectedColumns_;
 
   // Tracks the absolute row offset within the data file. Each chunk advances
   // this by the number of rows read (before deletes).
