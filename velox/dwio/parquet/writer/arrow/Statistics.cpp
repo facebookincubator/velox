@@ -39,8 +39,8 @@
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
 
-#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 
@@ -556,7 +556,9 @@ TypedComparatorImpl<false, ByteArrayType>::getMinMax(
 template <typename T>
 std::string encodeDecimalToBigEndian(T value) {
   uint8_t buffer[sizeof(T)];
-  if constexpr (std::is_same_v<T, int64_t>) {
+  if constexpr (std::is_same_v<T, int32_t>) {
+    *reinterpret_cast<int32_t*>(buffer) = ::arrow::bit_util::ToBigEndian(value);
+  } else if constexpr (std::is_same_v<T, int64_t>) {
     *reinterpret_cast<int64_t*>(buffer) = ::arrow::bit_util::ToBigEndian(value);
   } else if constexpr (std::is_same_v<T, int128_t>) {
     *reinterpret_cast<int128_t*>(buffer) = DecimalUtil::bigEndian(value);
@@ -633,10 +635,14 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
     }
 
     if (!encodedMin.empty()) {
-      plainDecode(encodedMin, &min_);
+      T decoded_min;
+      plainDecode(encodedMin, &decoded_min);
+      copy(decoded_min, &min_, minBuffer_.get());
     }
     if (!encodedMax.empty()) {
-      plainDecode(encodedMax, &max_);
+      T decoded_max;
+      plainDecode(encodedMax, &decoded_max);
+      copy(decoded_max, &max_, maxBuffer_.get());
     }
     hasMinMax_ = hasMinMax;
   }
@@ -783,6 +789,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
   }
 
   std::string icebergLowerBoundInclusive(int32_t truncateTo) const override {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      if (descr_->logicalType()->isDecimal()) {
+        return encodeDecimalToBigEndian(min_);
+      }
+    }
     if constexpr (std::is_same_v<T, int64_t>) {
       if (descr_->logicalType()->isDecimal()) {
         return encodeDecimalToBigEndian(min_);
@@ -792,8 +803,16 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       return encodeDecimalToBigEndian(min_);
     }
     if constexpr (std::is_same_v<T, ByteArray>) {
-      const auto truncatedMin = functions::stringImpl::truncateUtf8(
-          std::string_view(min_), truncateTo);
+      // STRING columns truncate by UTF-8 code points; BINARY/VARBINARY
+      // columns truncate by raw bytes (mirrors the upper-bound dispatch).
+      const std::string_view minView(min_);
+      const auto truncatedMin = descr_->logicalType()->isString()
+          ? truncateUtf8(minView, truncateTo)
+          : minView.substr(
+                0,
+                std::min(
+                    minView.size(),
+                    static_cast<size_t>(std::max(truncateTo, 0))));
       std::string s;
       this->plainEncode(
           ByteArray(
@@ -807,6 +826,11 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
 
   std::optional<std::string> icebergUpperBoundExclusive(
       int32_t truncateTo) const override {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      if (descr_->logicalType()->isDecimal()) {
+        return encodeDecimalToBigEndian(max_);
+      }
+    }
     if constexpr (std::is_same_v<T, int64_t>) {
       if (descr_->logicalType()->isDecimal()) {
         return encodeDecimalToBigEndian(max_);
@@ -816,8 +840,23 @@ class TypedStatisticsImpl : public TypedStatistics<DType> {
       return encodeDecimalToBigEndian(max_);
     }
     if constexpr (std::is_same_v<T, ByteArray>) {
-      const auto truncatedMax = functions::stringImpl::roundUpUtf8(
-          std::string_view(max_), truncateTo);
+      // For ByteArray, we need to determine if this is UTF-8 text (STRING)
+      // or raw binary data (BINARY/VARBINARY). The Parquet logical type tells
+      // us this.
+      const bool isUtf8String = descr_->logicalType()->isString();
+
+      std::optional<std::string> truncatedMax;
+
+      if (isUtf8String) {
+        // Use UTF-8 string logic for STRING type
+        truncatedMax = roundUpUtf8(std::string_view(max_), truncateTo);
+      } else {
+        // Use binary byte logic for BINARY type (VARBINARY)
+        // Implementation follows Apache Iceberg's
+        // BinaryUtil.truncateBinaryMax()
+        truncatedMax = roundUpBinary(std::string_view(max_), truncateTo);
+      }
+
       if (!truncatedMax.has_value()) {
         return std::nullopt;
       }

@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <atomic>
 #include <deque>
+#include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -25,6 +28,7 @@
 
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/rpc/RPCTypes.h"
+#include "velox/exec/rpc/CongestionController.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec::rpc {
@@ -77,6 +81,9 @@ class RPCState {
     int64_t rowId{0};
     RowLocation location;
     RPCResponse response;
+    /// Round-trip latency (nanos) from dispatch to completion, used as the
+    /// gradient congestion signal on success.
+    int64_t rttNs{0};
   };
 
   /// A batch of rows waiting for RPC response.
@@ -87,6 +94,14 @@ class RPCState {
     /// Stored at batch level instead of per-row in a map, since callBatch()
     /// returns responses in the same order as requests.
     std::vector<RowLocation> rowLocations;
+    /// Monotonic dispatch time (nanos, steady_clock).
+    int64_t dispatchTimeNs{0};
+    /// Monotonic completion time (nanos), stamped by the future's completion
+    /// callback (not at poll time) so the round-trip latency fed to the
+    /// gradient excludes any in-operator queueing between completion and poll.
+    /// Shared so the callback (executor thread) and the poll path (driver
+    /// thread) refer to the same cell; 0 until the batch completes.
+    std::shared_ptr<std::atomic<int64_t>> completionTimeNs;
   };
 
   /// A batch with completed RPC responses.
@@ -96,6 +111,25 @@ class RPCState {
     std::optional<std::string> error;
     /// Row locations carried from PendingBatch for response-to-input mapping.
     std::vector<RowLocation> rowLocations;
+    /// Round-trip latency (nanos) from dispatch to completion, used as the
+    /// gradient congestion signal on success.
+    int64_t rttNs{0};
+  };
+
+  /// Snapshot of all operator-visible state at close() time, captured under a
+  /// single lock acquisition for consistency.
+  struct OperatorSnapshot {
+    // Congestion controller.
+    int64_t windowLimit{0};
+    int64_t baselineRttNs{0};
+    int64_t numShrinks{0};
+    int64_t peakInFlight{0};
+    // Transport RTT.
+    int64_t rttMinNs{0};
+    int64_t rttMaxNs{0};
+    int64_t numRttSamples{0};
+    // Streaming mode.
+    RPCStreamingMode streamingMode{RPCStreamingMode::kPerRow};
   };
 
   RPCState() = default;
@@ -103,18 +137,35 @@ class RPCState {
   // ===== Configuration =====
   // These must be called before any dispatch (single-threaded init phase).
 
-  /// Set the streaming mode. Must be called before any dispatch.
-  void setStreamingMode(RPCStreamingMode mode);
+  /// Set the streaming mode and the congestion-window tunables. Must be called
+  /// before any dispatch.
+  /// @param minWindow Floor the window may shrink to under overload (default
+  /// 1).
+  /// @param stepCoef Multiplier on the additive-increase headroom
+  /// (default 1.0). Both default to the controller's defaults so callers and
+  /// OSS behavior are unchanged; the RPCOperator threads runtime-tunable values
+  /// from QueryConfig.
+  /// @param maxWindow Ceiling for the congestion window (and, for PER_ROW, its
+  /// starting value). 0 keeps the per-mode built-in ceiling (PER_ROW 100, BATCH
+  /// 256). Raise it so a high-latency backend can run at high concurrency;
+  /// admission-controlled dispatch makes this ceiling bind.
+  void setStreamingMode(
+      RPCStreamingMode mode,
+      int64_t minWindow = 1,
+      double stepCoef = 1.0,
+      int64_t maxWindow = 0);
 
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
 
-  /// Set the maximum number of pending rows before backpressure.
-  void setMaxPendingRows(int64_t maxPendingRows);
-
-  /// Set the maximum number of pending batches before backpressure (BATCH
-  /// mode).
-  void setMaxPendingBatches(int64_t maxPendingBatches);
+  /// Set both the starting limit and the ceiling to maxWindow, overriding the
+  /// per-mode default chosen in setStreamingMode(). This yields a fixed window
+  /// only while no samples/errors are fed: onUnitError still halves it and
+  /// onUnitSample still grows it via the sqrt headroom. That no-feed case is
+  /// the deterministic window the unit tests rely on. Must be called AFTER
+  /// setStreamingMode(), which always resets the window. Tests only; production
+  /// relies on the per-mode defaults.
+  void setMaxWindow(int64_t maxWindow);
 
   // ===== Input batch storage =====
   // Called from the driver thread (addInput/getOutput). Thread-safe.
@@ -174,8 +225,9 @@ class RPCState {
   /// Used for batched PER_ROW output to amortize RowVector allocation.
   void drainReadyRows(std::vector<ReadyRow>& out, int32_t maxRows);
 
-  /// Returns the number of pending (in-flight) rows. Thread-safe.
-  int64_t numPendingRows();
+  /// Returns the number of in-flight units of the active mode (rows in
+  /// PER_ROW, batches in BATCH). Thread-safe.
+  int64_t numInFlight() const;
 
   // ===== BATCH mode API =====
 
@@ -223,28 +275,55 @@ class RPCState {
   bool isFinished();
 
   /// Returns true if backpressure should be applied. Thread-safe.
-  /// PER_ROW mode: pending rows >= maxPendingRows.
-  /// BATCH mode: pending batches >= effectiveMaxPendingBatches
-  /// (congestion-adjusted).
+  /// Both modes: in-flight units (rows for PER_ROW, batches for BATCH) >=
+  /// the congestion window limit.
   bool isUnderBackpressure();
 
-  /// Signal that a batch completed successfully (all responses non-empty).
-  /// Increases the effective concurrency window by increment (additive
-  /// increase). Thread-safe.
-  void onBatchSuccess(int64_t increment = 2);
-
-  /// Signal that a batch had errors (e.g., empty responses from overload).
-  /// Halves the effective concurrency window (multiplicative decrease).
+  /// Available dispatch headroom under the per-driver congestion window:
+  /// max(0, window.limit() - inFlight). Admission-controlled dispatch takes the
+  /// min of this and the process-global rate-limiter headroom to size each
+  /// drip chunk, so a whole-vector blast can no longer overrun the window.
   /// Thread-safe.
-  void onBatchError();
+  int64_t dispatchHeadroom();
+
+  /// Report that a completed unit showed backend overload (rate limit /
+  /// timeout). Multiplicative-decrease (halving) of the congestion window.
+  /// Thread-safe.
+  void onUnitError();
+
+  /// Feed one completed unit's round-trip latency (nanos) into the
+  /// latency-gradient window so it learns the in-flight sweet spot with no
+  /// fixed ceiling. Thread-safe.
+  void onUnitSample(int64_t rttNs);
+
+  /// Feed many completed units' round-trip latencies under a single lock
+  /// acquisition. The PER_ROW path drains up to ~1k rows per output and would
+  /// otherwise lock once per row, contending with completion callbacks.
+  /// Thread-safe.
+  void onUnitSamples(const std::vector<int64_t>& rttNsList);
+
+  /// Return a consistent snapshot of all operator-visible state under a single
+  /// lock acquisition. Thread-safe.
+  OperatorSnapshot operatorSnapshot() const;
 
  private:
   /// Move a completed row into readyRows_ and notify waiters.
   /// Called from the RPC completion callback (runs on executor thread).
-  void completeRow(int64_t rowId, RowLocation location, RPCResponse response);
+  void completeRow(
+      int64_t rowId,
+      RowLocation location,
+      RPCResponse response,
+      int64_t rttNs);
 
   /// Fulfill all waiting promises and clear. Called under lock.
   void notifyWaitersLocked();
+
+  /// Extract the ready batch referenced by `it`: compute its round-trip
+  /// latency, move out the responses (capturing any error), erase the entry,
+  /// and decrement inFlight_. Must be called under mutex_ with `it->future`
+  /// ready.
+  ReadyBatch extractReadyBatchLocked(
+      const std::deque<PendingBatch>::iterator& it);
 
   mutable std::mutex mutex_;
   std::vector<ContinuePromise> promises_;
@@ -254,7 +333,6 @@ class RPCState {
 
   // PER_ROW state
   std::deque<ReadyRow> readyRows_;
-  int64_t numPendingRows_{0};
 
   // BATCH state
   int64_t nextBatchId_{0};
@@ -263,15 +341,30 @@ class RPCState {
   // Common
   bool noMoreInput_{false};
   RPCStreamingMode streamingMode_{RPCStreamingMode::kPerRow};
-  int64_t maxPendingRows_{100};
-  int64_t maxPendingBatches_{2};
 
-  // Congestion control for BATCH mode.
-  // effectiveMaxPendingBatches_ starts at maxPendingBatches_ and adjusts:
-  //   - On success: min(effective + 1, maxPendingBatches_)  (additive increase)
-  //   - On error:   max(effective / 2, 1)                   (multiplicative
-  //   decrease)
-  int64_t effectiveMaxPendingBatches_{2};
+  // Dispatched-but-not-completed UNITS of the active mode: rows in PER_ROW,
+  // in-flight batches in BATCH. Mode is fixed for the lifetime of an RPCState,
+  // so exactly one dispatch path feeds this counter. Backpressure compares it
+  // against window_.limit().
+  int64_t inFlight_{0};
+
+  // High-water mark of inFlight_ across the lifetime of this RPCState.
+  int64_t peakInFlight_{0};
+
+  // Accumulated RTT measurements across all completed units.
+  int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};
+  int64_t rttMaxNs_{0};
+  int64_t numRttSamples_{0};
+
+  // Latency-gradient concurrency window, fed RTT via onUnitSample(). Both modes
+  // use the same learner; setStreamingMode() only picks the (start, max) pair:
+  // - PER_ROW {100, 100}: starts non-binding (per-row parallelism is bounded by
+  //   the transport thread pool) but still shrinks under sustained overload and
+  //   recovers back toward 100.
+  // - BATCH {2, large}: starts at 2 and learns the in-flight-batch sweet spot,
+  //   bounded only by a large safety ceiling.
+  // Shrinks fast on overload (onUnitError).
+  CongestionController window_;
 };
 
 } // namespace facebook::velox::exec::rpc

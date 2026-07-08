@@ -45,6 +45,10 @@ class SplitIndexReader {
   using Result = IndexSource::Result;
   using Options = dwio::common::IndexReader::Options;
 
+  /// The total number of output rows returned across all next() calls.
+  static constexpr std::string_view kNumIndexReaderOutputRows{
+      "numIndexReaderOutputRows"};
+
   virtual ~SplitIndexReader() = default;
 
   /// Initializes a lookup for the given probe request.
@@ -116,7 +120,7 @@ class IndexReaderFactoryRegistry {
     VELOX_CHECK(
         inserted,
         "IndexReaderFactory already registered for format: {}",
-        dwio::common::toString(format));
+        dwio::common::FileFormatName::toName(format));
   }
 
   /// Unregisters the factory for the given file format. Returns true if a

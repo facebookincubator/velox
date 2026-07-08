@@ -54,7 +54,7 @@ class OnDemandUnitLoader : public UnitLoader {
 
     uint64_t unitLoadNanos{0};
     {
-      NanosecondTimer timer{&unitLoadNanos};
+      NanosecondWallTimer timer{&unitLoadNanos};
       auto measure = measureTimeIfCallback(blockedOnIoCallback_);
       loadUnits_[unit]->load();
     }

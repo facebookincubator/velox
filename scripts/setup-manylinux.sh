@@ -38,8 +38,6 @@ USE_CLANG="${USE_CLANG:-false}"
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 
-export THRIFT_VERSION="v0.21.0"
-
 # CMake 4.0 removed support for cmake minimums of <=3.5 and will fail builds, this overrides it
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
@@ -71,6 +69,10 @@ function install_velox_deps_from_dnf {
     openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
     libdwarf-devel elfutils-libelf-devel curl-devel libicu-devel bison flex \
     libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel
+}
+
+function install_cxl_deps {
+  dnf_install numactl-devel
 }
 
 function install_conda {
@@ -122,7 +124,6 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
 }
 

@@ -175,7 +175,9 @@ Writer::Writer(
       pool,
       options.sessionTimezone,
       options.adjustTimestampToTimezone,
-      std::move(handler));
+      std::move(handler),
+      options.memoryBudget);
+  writerBase_->setSchemaAttributes(options.schemaAttributes);
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),
@@ -798,7 +800,7 @@ void Writer::flush() {
   flushInternal(false);
 }
 
-void Writer::close() {
+std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
   checkRunning();
   auto exitGuard = folly::makeGuard([this]() {
     flushPolicy_->onClose();
@@ -806,6 +808,7 @@ void Writer::close() {
   });
   flushInternal(true);
   writerBase_->close();
+  return std::make_unique<DwrfFileMetadata>();
 }
 
 void Writer::abort() {
@@ -924,6 +927,13 @@ std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
 std::unique_ptr<dwio::common::WriterOptions>
 DwrfWriterFactory::createWriterOptions() {
   return std::make_unique<dwrf::WriterOptions>();
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfWriterFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  return nullptr;
 }
 
 void WriterOptions::processConfigs(

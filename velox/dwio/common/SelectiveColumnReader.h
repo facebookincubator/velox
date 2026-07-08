@@ -27,7 +27,7 @@
 
 namespace facebook::velox::dwio::common {
 
-struct ColumnMetrics;
+struct DecodingStats;
 
 using ScanSpec = velox::common::ScanSpec;
 
@@ -283,7 +283,14 @@ class SelectiveColumnReader {
     return returnReaderNulls_;
   }
 
-  void initReturnReaderNulls(const RowSet& rows);
+  /// Resolves which buffer resultNulls() returns for this read, by setting the
+  /// returnReaderNulls_ flag (and anyNulls_). Sets it true on the fast path --
+  /// bulk read, no filter, dense rows, and nulls present -- so the nulls
+  /// decoded into nullsInReadRange_ can be returned directly; otherwise false,
+  /// so resultNulls() returns the separately-built, output-aligned
+  /// resultNulls_. Resolves the flag only; allocates no buffer. Call after the
+  /// read-range nulls are decoded.
+  void setReturnNullsMode(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
     numValues_ = size;
@@ -546,7 +553,8 @@ class SelectiveColumnReader {
     }
     formatData_->readNulls(
         numRows, incomingNulls, nullsInReadRange_, readsNullsOnly);
-    if (isFlatMapValue_ && nullsInReadRange_) {
+    if (isFlatMapValue_ && nullsInReadRange_ &&
+        flatMapValueNullsInReadRange_.get() != nullsInReadRange_.get()) {
       flatMapValueNullsInReadRange_ = nullsInReadRange_;
     }
   }
@@ -659,9 +667,8 @@ class SelectiveColumnReader {
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* const scanSpec_;
 
-  // Per-column metrics for timing stats. May be nullptr if collection is
-  // disabled.
-  ColumnMetrics* columnMetrics_{nullptr};
+  // Per-column decoding statistics. May be nullptr if collection is disabled.
+  DecodingStats* decodingStats_{nullptr};
 
   // Row number after last read row, relative to the ORC stripe or Parquet
   // Rowgroup start.

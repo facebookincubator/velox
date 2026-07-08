@@ -74,6 +74,14 @@ DEFINE_double(
     "(expressed as double from 0 to 1). Only columns not already encoded "
     "will be considered.");
 
+DEFINE_bool(
+    velox_fuzzer_non_contiguous_elements,
+    false,
+    "If true, the vector fuzzer lays out array/map elements non-contiguously, "
+    "leaving random gaps of unreferenced elements between containers, so that "
+    "expressions which ignore offsets/sizes and read the raw elements buffer "
+    "are caught.");
+
 DEFINE_int32(
     max_expression_trees_per_step,
     1,
@@ -92,9 +100,9 @@ DEFINE_string(
 
 DEFINE_string(
     special_forms,
-    "and,or,cast,coalesce,if,switch",
+    "and,or,cast,coalesce,if,switch,case",
     "Comma-separated list of special forms to use in generated expression. "
-    "Supported special forms: and, or, coalesce, if, switch, cast.");
+    "Supported special forms: and, or, coalesce, if, switch, case, cast.");
 
 DEFINE_int32(
     velox_fuzzer_max_level_of_nesting,
@@ -172,6 +180,7 @@ VectorFuzzer::Options getVectorFuzzerOptions() {
   opts.stringLength = 100;
   opts.nullRatio = FLAGS_null_ratio;
   opts.useRandomNullPattern = true;
+  opts.fuzzNonContiguousElements = FLAGS_velox_fuzzer_non_contiguous_elements;
   opts.timestampPrecision =
       VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return opts;

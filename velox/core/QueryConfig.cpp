@@ -142,20 +142,6 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Writer.
     VELOX_REGISTER_QUERY_CONFIG(kWriterFlushThresholdBytes);
 
-    // Presto-specific.
-    VELOX_REGISTER_QUERY_CONFIG(kPrestoArrayAggIgnoreNulls);
-
-    // Spark-specific.
-    VELOX_REGISTER_QUERY_CONFIG(kSparkAnsiEnabled);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterExpectedNumItems);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterNumBits);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterMaxNumBits);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkBloomFilterMaxNumItems);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkLegacyDateFormatter);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkLegacyStatisticalAggregate);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkJsonIgnoreNullFields);
-    VELOX_REGISTER_QUERY_CONFIG(kSparkCollectListIgnoreNulls);
-
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
 
@@ -204,7 +190,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kDebugLambdaFunctionEvaluationBatchSize);
     VELOX_REGISTER_QUERY_CONFIG(kDebugBingTileChildrenMaxZoomShift);
 
-    // Nimble.
+    // Nimble (deprecated, kept for backward compatibility).
     VELOX_REGISTER_QUERY_CONFIG(kSelectiveNimbleReaderEnabled);
 
     // Scale writer.
@@ -269,6 +255,17 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Mark sorted.
     VELOX_REGISTER_QUERY_CONFIG(kMarkSortedZeroCopyThreshold);
+
+    // RPC congestion.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMinWindow);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionStepCoef);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMaxWindow);
+
+    // RPC adaptive rate limiter.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
 
 #undef VELOX_REGISTER_QUERY_CONFIG
 

@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
-- [Nimble Cluster Index: Efficient Indexed Lookups on Columnar Data](https://velox-lib.io/blog/nimble-cluster-index) (2026-04-27)
-- [Axiom: Composable Query Engines Built on Velox](https://velox-lib.io/blog/axiom-composable-query-engines) (2026-04-23)
-- [Why NULLIF Must Be a Special Form](https://velox-lib.io/blog/nullif-special-form) (2026-04-10)
+- [Making OpenZL Available in Nimble OSS](https://velox-lib.io/blog/openzl-in-nimble-oss) (2026-07-05)
+- [Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox](https://velox-lib.io/blog/right-semi-join-performance) (2026-06-26)
+- [From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox](https://velox-lib.io/blog/parquet-delta-decoding) (2026-06-17)
 
 ## Community
 

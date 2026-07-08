@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/Arena.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
@@ -72,6 +77,15 @@ class WriterBase {
     userMetadata_[key] = value;
   }
 
+  /// Sets the per-type attributes (e.g. Iceberg "iceberg.id") to stamp into the
+  /// footer, keyed by pre-order schema node id. Empty by default.
+  void setSchemaAttributes(
+      std::unordered_map<
+          uint32_t,
+          std::vector<std::pair<std::string, std::string>>> schemaAttributes) {
+    schemaAttributes_ = std::move(schemaAttributes);
+  }
+
   // protected:
   void writeFooter(const Type& type);
 
@@ -80,14 +94,16 @@ class WriterBase {
       std::shared_ptr<velox::memory::MemoryPool> pool,
       const tz::TimeZone* sessionTimezone = nullptr,
       const bool adjustTimestampToTimezone = false,
-      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr) {
+      std::unique_ptr<encryption::EncryptionHandler> handler = nullptr,
+      int64_t memoryBudget = std::numeric_limits<int64_t>::max()) {
     context_ = std::make_unique<WriterContext>(
         config,
         std::move(pool),
         sink_->metricsLog(),
         sessionTimezone,
         adjustTimestampToTimezone,
-        std::move(handler));
+        std::move(handler),
+        memoryBudget);
     writerSink_ = std::make_unique<WriterSink>(
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
@@ -179,6 +195,8 @@ class WriterBase {
   std::unique_ptr<FooterWriteWrapper> footer_;
   proto::orc::Metadata metadata_;
   std::unordered_map<std::string, std::string> userMetadata_;
+  std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
+      schemaAttributes_;
   std::unique_ptr<google::protobuf::Arena> arena_;
 
   friend class WriterTest;

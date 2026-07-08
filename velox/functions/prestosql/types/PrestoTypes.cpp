@@ -20,6 +20,8 @@
 #include <velox/common/base/Exceptions.h>
 #include <iomanip>
 #include <sstream>
+#include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -88,6 +90,14 @@ std::string PrestoTypes::toSql(const TypePtr& type) {
     }
     sql << ")";
     return sql.str();
+  }
+
+  if (isBigintEnumType(*type)) {
+    return asBigintEnum(type)->toSql();
+  }
+
+  if (isVarcharEnumType(*type)) {
+    return asVarcharEnum(type)->toSql();
   }
 
   // Primitive types and custom types (e.g. IPPREFIX, BINGTILE).
@@ -224,6 +234,20 @@ std::string PrestoTypes::valueToString(
   }
 
   return decoded.toString(index);
+}
+
+std::string PrestoTypes::timestampToPrestoString(Timestamp value) {
+  // Uses millisecond precision to match Presto Java's SqlTimestamp.JSON_FORMAT
+  // ("uuuu-MM-dd HH:mm:ss.SSS"). Sub-millisecond nanos are truncated.
+  // This is consistent with PrestoCastHooks (non-legacy mode), which sets the
+  // same options for CAST(timestamp AS varchar).
+  // TODO: Support microsecond precision for TIMESTAMP(6) if needed.
+  static const TimestampToStringOptions kPrestoOptions{
+      .precision = TimestampToStringOptions::Precision::kMilliseconds,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+  };
+  return value.toString(kPrestoOptions);
 }
 
 std::string PrestoTypes::toHex(StringView value) {

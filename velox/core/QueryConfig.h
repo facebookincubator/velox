@@ -838,100 +838,6 @@ class QueryConfig {
       96L << 20,
       "Minimum memory footprint to reclaim from a file writer by flushing.")
 
-  /// If true, array_agg() aggregation function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kPrestoArrayAggIgnoreNulls,
-      prestoArrayAggIgnoreNulls,
-      "presto.array_agg.ignore_nulls",
-      bool,
-      false,
-      "If true, array_agg() ignores nulls in the input.")
-
-  /// If true, Spark function's behavior is ANSI-compliant.
-  VELOX_QUERY_CONFIG(
-      kSparkAnsiEnabled,
-      sparkAnsiEnabled,
-      "spark.ansi_enabled",
-      bool,
-      false,
-      "Enable ANSI-compliant behavior for Spark functions.")
-
-  /// The default number of expected items for the bloomfilter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterExpectedNumItems,
-      sparkBloomFilterExpectedNumItems,
-      "spark.bloom_filter.expected_num_items",
-      int64_t,
-      1'000'000L,
-      "Default number of expected items for the Spark bloom filter.")
-
-  /// The default number of bits to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterNumBits,
-      sparkBloomFilterNumBits,
-      "spark.bloom_filter.num_bits",
-      int64_t,
-      8'388'608L,
-      "Default number of bits for the Spark bloom filter.")
-
-  /// The max number of bits to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterMaxNumBits,
-      sparkBloomFilterMaxNumBits,
-      "spark.bloom_filter.max_num_bits",
-      int64_t,
-      67'108'864,
-      "Maximum number of bits for the Spark bloom filter.")
-
-  /// The max number of items to use for the bloom filter.
-  VELOX_QUERY_CONFIG(
-      kSparkBloomFilterMaxNumItems,
-      sparkBloomFilterMaxNumItems,
-      "spark.bloom_filter.max_num_items",
-      int64_t,
-      4'000'000L,
-      "Maximum number of items for the Spark bloom filter.")
-
-  /// The current spark partition id. No default (throws if not set).
-  static constexpr const char* kSparkPartitionId = "spark.partition_id";
-
-  /// If true, simple date formatter is used for time formatting and parsing.
-  VELOX_QUERY_CONFIG(
-      kSparkLegacyDateFormatter,
-      sparkLegacyDateFormatter,
-      "spark.legacy_date_formatter",
-      bool,
-      false,
-      "Use simple date formatter instead of Joda for Spark.")
-
-  /// If true, Spark statistical aggregation functions return NaN instead of
-  /// NULL when dividing by zero.
-  VELOX_QUERY_CONFIG(
-      kSparkLegacyStatisticalAggregate,
-      sparkLegacyStatisticalAggregate,
-      "spark.legacy_statistical_aggregate",
-      bool,
-      false,
-      "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
-
-  /// If true, ignore null fields when generating JSON string.
-  VELOX_QUERY_CONFIG(
-      kSparkJsonIgnoreNullFields,
-      sparkJsonIgnoreNullFields,
-      "spark.json_ignore_null_fields",
-      bool,
-      true,
-      "Ignore null fields when generating JSON string in Spark.")
-
-  /// If true, collect_list aggregate function will ignore nulls in the input.
-  VELOX_QUERY_CONFIG(
-      kSparkCollectListIgnoreNulls,
-      sparkCollectListIgnoreNulls,
-      "spark.collect_list.ignore_nulls",
-      bool,
-      true,
-      "If true, Spark collect_list() ignores nulls in the input.")
-
   /// The number of local parallel table writer operators per task.
   VELOX_QUERY_CONFIG(
       kTaskWriterCount,
@@ -1233,7 +1139,8 @@ class QueryConfig {
       7,
       "Maximum zoom level difference for bing_tile_children.")
 
-  /// Temporary flag to control whether selective Nimble reader should be used.
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
+  /// Kept for backward compatibility with Presto session properties.
   VELOX_QUERY_CONFIG(
       kSelectiveNimbleReaderEnabled,
       selectiveNimbleReaderEnabled,
@@ -1334,7 +1241,9 @@ class QueryConfig {
       0,
       "Maximum input batches to prefetch for index lookup. 0 disables.")
 
-  /// If true, index join operator may split output per input batch.
+  /// If true, index join operator may split output per input batch. This can be
+  /// overridden on a per operator basis by the splitOutput parameter in the
+  /// IndexLookupJoinNode.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinSplitOutput,
       indexLookupJoinSplitOutput,
@@ -1489,6 +1398,97 @@ class QueryConfig {
       1000,
       "Batch size threshold for zero-copy in MarkSorted operator.")
 
+  /// Floor the RPC congestion window may shrink to under overload
+  /// (RPCOperator).
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionMinWindow,
+      rpcCongestionMinWindow,
+      "rpc.congestion.min_window",
+      int64_t,
+      1,
+      "Floor the RPC flow-control congestion window may shrink to under "
+      "overload. Default 1 (never fully stalls dispatch). Clamped to "
+      "[1, maxWindow] by the controller.")
+
+  /// Multiplier on the RPC congestion window's sqrt additive-increase headroom.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionStepCoef,
+      rpcCongestionStepCoef,
+      "rpc.congestion.step_coef",
+      double,
+      1.0,
+      "Multiplier on the RPC congestion window's sqrt(window) additive-increase "
+      "headroom. Default 1.0 (plain sqrt headroom); lower converges tighter. "
+      "Clamped to >= 0 by the controller.")
+
+  /// Ceiling for the per-driver RPC congestion window.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionMaxWindow,
+      rpcCongestionMaxWindow,
+      "rpc.congestion.max_window",
+      int64_t,
+      0,
+      "Ceiling for the per-driver RPC congestion window (and, for PER_ROW, its "
+      "starting value). 0 (default) keeps the per-mode built-in ceiling "
+      "(PER_ROW 100, BATCH 256). Raise it so a high-latency backend can run at "
+      "high concurrency for throughput (Little's law) while the gradient / "
+      "adaptive limiter shrinks concurrency only under overload. With "
+      "admission-controlled dispatch this ceiling now actually bounds in-flight "
+      "rows, so it must be sized for the backend's healthy concurrency.")
+
+  /// Enables the adaptive per-tier RPC rate limiter (RPCRateLimiter).
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterAdaptiveEnabled,
+      rpcRateLimiterAdaptiveEnabled,
+      "rpc.ratelimiter.adaptive_enabled",
+      bool,
+      true,
+      "When true (default), the process-global per-tier RPC rate limiter adapts "
+      "its max-pending cap via AIMD driven by the backend overload signal "
+      "(rate-limit/timeout): multiplicative-decrease on an overload-classified "
+      "drain, additive-increase on a clean drain. On by default because it is "
+      "the protective behavior for shared, rate-limited inference backends; set "
+      "false to keep a static cap. Unlike the per-driver congestion window, this "
+      "coordinates all drivers on the worker and reacts to the rate-limit signal "
+      "directly, not to RTT.")
+
+  /// Floor for the adaptive per-tier RPC rate limiter's max-pending cap.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterMinLimit,
+      rpcRateLimiterMinLimit,
+      "rpc.ratelimiter.min_limit",
+      int64_t,
+      50,
+      "Floor the adaptive RPC rate limiter's per-tier max-pending cap may "
+      "shrink to under sustained overload. Default 50 (a floor of 1 can stall a "
+      "workload under sustained throttling). Only used when "
+      "rpc.ratelimiter.adaptive_enabled is true.")
+
+  /// Multiplicative-decrease factor for the adaptive RPC rate limiter.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterDecreaseFactor,
+      rpcRateLimiterDecreaseFactor,
+      "rpc.ratelimiter.decrease_factor",
+      double,
+      0.5,
+      "Factor applied to the adaptive RPC rate limiter's per-tier max-pending "
+      "cap on each overload-classified drain. Default 0.5 (halve). Clamped to "
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true.")
+
+  /// Ceiling for the per-tier RPC rate-limiter max-pending cap.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterMaxLimit,
+      rpcRateLimiterMaxLimit,
+      "rpc.ratelimiter.max_limit",
+      int64_t,
+      200,
+      "Ceiling (and, with adaptive enabled, the starting value) for the "
+      "process-global per-tier RPC rate-limiter max-pending cap. Default 200 "
+      "(validated for LLM-inference backends); 0 falls back to the built-in 20. "
+      "With admission-controlled dispatch this cap actually bounds process-wide "
+      "in-flight rows per tier; the adaptive limiter shrinks from here toward "
+      "rpc.ratelimiter.min_limit under overload.")
+
   // --- Hand-written accessors for properties that need custom logic ---
 
   // Generated by VELOX_QUERY_CONFIG for simple properties above.
@@ -1530,14 +1530,6 @@ class QueryConfig {
     constexpr uint8_t kMaxBits = 3;
     return std::min(
         kMaxBits, get<uint8_t>(kSpillNumPartitionBits, kDefaultBits));
-  }
-
-  int32_t sparkPartitionId() const {
-    auto id = get<int32_t>(kSparkPartitionId);
-    VELOX_CHECK(id.has_value(), "Spark partition id is not set.");
-    auto value = id.value();
-    VELOX_CHECK_GE(value, 0, "Invalid Spark partition id.");
-    return value;
   }
 
   uint32_t taskPartitionedWriterCount() const {

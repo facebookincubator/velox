@@ -366,11 +366,11 @@ class StripeStreamsImpl : public StripeStreamsBase {
   }
 
   io::IoCounter* getDecompressCounter(uint32_t nodeId) const {
-    if (!columnReaderStats_ || !columnReaderStats_->columnMetricsSet) {
+    if (!columnReaderStats_ || !columnReaderStats_->decodingStatsSet) {
       return nullptr;
     }
-    auto* metrics = columnReaderStats_->columnMetricsSet->getOrCreate(nodeId);
-    return &metrics->decompressCPUTimeNanos;
+    auto* stats = columnReaderStats_->decodingStatsSet->getOrCreate(nodeId);
+    return &stats->decompressCPUTimeNanos;
   }
 
   void loadStreams();

@@ -18,6 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/parquet/thrift/ParquetThrift.h"
 
 namespace facebook::velox::parquet {
 
@@ -64,6 +65,15 @@ class ColumnChunkMetaDataPtr {
   /// The compression.
   common::CompressionKind compression() const;
 
+  /// Returns the list of encodings used for all pages in this column chunk.
+  std::vector<thrift::Encoding> encodings() const;
+
+  /// Returns the column's physical path in the file schema as ordered segments,
+  /// e.g. {"tags", "list", "element"} or {"lookup", "key_value", "key"}. Unlike
+  /// the logical row type, this includes the synthetic repeated-group levels
+  /// ("list", "key_value") that Parquet inserts for arrays and maps.
+  std::vector<std::string> pathInSchema() const;
+
   /// Total byte size of all the compressed (and potentially encrypted)
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
@@ -73,6 +83,14 @@ class ColumnChunkMetaDataPtr {
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
+
+  /// Returns the estimated total bytes held by this column's thrift
+  /// representation: sizeof(thrift::ColumnChunk) plus every dynamically
+  /// allocated vector and string reachable through it. The estimate
+  /// walks the inline struct tree and approximates the heap footprint;
+  /// it is not measured from the allocator and may over- or
+  /// under-report by a small fraction.
+  size_t estimateColumnMetadataSize() const;
 
  private:
   const void* ptr_;
@@ -155,6 +173,14 @@ class FileMetaDataPtr {
 
   /// Return the Parquet writer created_by string.
   std::string createdBy() const;
+
+  /// Returns the estimated total heap memory held by this file's thrift
+  /// representation: sizeof(thrift::FileMetaData) plus every dynamically
+  /// allocated vector and string reachable through it. The estimate
+  /// walks the inline struct tree and approximates the heap footprint;
+  /// it is not measured from the allocator and may over- or
+  /// under-report by a small fraction.
+  size_t estimateFileMetadataSize() const;
 
  private:
   const void* ptr_;

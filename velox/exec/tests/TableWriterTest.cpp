@@ -23,6 +23,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/common/tests/utils/RuntimeStatsInjectingWriter.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -30,6 +31,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+#include <folly/ScopeGuard.h>
 #include <re2/re2.h>
 #include <string>
 #include "folly/synchronization/EventCount.h"
@@ -40,6 +42,7 @@
 
 namespace velox::exec::test {
 using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::dwio::common::test;
 
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
 
@@ -189,6 +192,59 @@ TEST_F(BasicTableWriterTest, targetFileName) {
       .split(makeHiveConnectorSplit(
           fmt::format("{}/{}", directory->getPath(), kFileName)))
       .assertResults(data);
+}
+
+TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
+  constexpr int64_t kInjectedNanos = 42'000'000;
+
+  folly::F14FastMap<std::string, RuntimeMetric> injectedStats;
+  injectedStats.emplace(
+      std::string{Operator::kBackgroundCpuTimeNanos},
+      RuntimeMetric(kInjectedNanos, RuntimeCounter::Unit::kNanos));
+
+  auto originalFactory =
+      dwio::common::getWriterFactory(dwio::common::FileFormat::DWRF);
+  auto injectingFactory = std::make_shared<RuntimeStatsInjectingWriterFactory>(
+      originalFactory, injectedStats);
+  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+  dwio::common::registerWriterFactory(injectingFactory);
+  auto restoreFactory = folly::makeGuard([&]() {
+    dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+    dwio::common::registerWriterFactory(originalFactory);
+  });
+
+  auto data = makeRowVector({makeFlatVector<int64_t>(1'000, folly::identity)});
+
+  auto directory = TempDirectoryPath::create();
+  auto plan =
+      PlanBuilder().values({data}).tableWrite(directory->getPath()).planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).copyResults(pool(), task);
+
+  auto taskStats = task->taskStats();
+  const OperatorStats* writerOpStats = nullptr;
+  for (const auto& pipelineStats : taskStats.pipelineStats) {
+    for (const auto& opStats : pipelineStats.operatorStats) {
+      if (opStats.operatorType == "TableWrite") {
+        writerOpStats = &opStats;
+        break;
+      }
+    }
+    if (writerOpStats) {
+      break;
+    }
+  }
+  ASSERT_NE(writerOpStats, nullptr) << "TableWrite operator not found";
+  ASSERT_GT(writerOpStats->backgroundTiming.cpuNanos, 0);
+  ASSERT_EQ(
+      writerOpStats->backgroundTiming.cpuNanos,
+      static_cast<uint64_t>(kInjectedNanos));
+  ASSERT_EQ(
+      writerOpStats->runtimeStats
+          .at(std::string{Operator::kBackgroundCpuTimeNanos})
+          .sum,
+      kInjectedNanos);
 }
 
 class PartitionedTableWriterTest
@@ -2752,9 +2808,9 @@ DEBUG_ONLY_TEST_P(UnpartitionedTableWriterTest, dataSinkAbortError) {
 
   std::atomic<bool> triggerAbortErrorOnce{true};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::connector::hive::HiveDataSink::closeInternal",
-      std::function<void(const HiveDataSink*)>(
-          [&](const HiveDataSink* /*unused*/) {
+      "facebook::velox::connector::hive::FileDataSink::closeInternal",
+      std::function<void(const FileDataSink*)>(
+          [&](const FileDataSink* /*unused*/) {
             if (!triggerAbortErrorOnce.exchange(false)) {
               return;
             }
@@ -3261,8 +3317,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
               return;
             }
 
+            // Base the fake allocation on usedBytes() rather than
+            // reservedBytes() so it consumes all genuinely free capacity and
+            // forces the arbitrator to reclaim the sort writer's buffered
+            // memory by spilling, instead of being satisfied from unused
+            // reserved capacity.
             const auto fakeAllocationSize =
-                kQueryMemoryCapacity - op->pool()->parent()->reservedBytes();
+                kQueryMemoryCapacity - op->pool()->parent()->usedBytes();
             if (writerSpillEnabled) {
               auto* buffer = op->pool()->allocate(fakeAllocationSize);
               op->pool()->free(buffer, fakeAllocationSize);

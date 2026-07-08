@@ -23,6 +23,7 @@
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
+#include <span>
 
 namespace facebook::velox::cudf_velox {
 
@@ -86,6 +87,20 @@ namespace facebook::velox::cudf_velox {
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/**
+ * @brief Concatenates multiple CudfVectors into CudfVector output batches.
+ *
+ * This wraps getConcatenatedTableBatched for column-bearing tables and
+ * preserves logical row counts from CudfVector::size() for zero-column tables,
+ * whose cuDF table views cannot represent the row count.
+ */
+[[nodiscard]] std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
+    memory::MemoryPool* pool,
+    std::vector<CudfVectorPtr>&& vectors,
     const TypePtr& tableType,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
@@ -178,6 +193,29 @@ class CudaEvent {
  */
 void streamsWaitForStream(
     CudaEvent& event,
-    const std::vector<rmm::cuda_stream_view>& streams,
+    std::span<const rmm::cuda_stream_view> streams,
     rmm::cuda_stream_view stream);
+
+/**
+ * @brief Orders CudfVector deallocations after work on a target stream.
+ *
+ * Prefer rebinding owned table buffers to @p stream so stream-ordered memory
+ * resources free the inputs after prior work on that stream. Falls back to an
+ * event wait on @p inputStreams when an input cannot be rebound without
+ * materializing, e.g. packed-table inputs or older cuDF builds.
+ */
+void orderCudfVectorDeallocationsAfterStream(
+    std::span<const CudfVectorPtr> vectors,
+    std::span<const rmm::cuda_stream_view> inputStreams,
+    rmm::cuda_stream_view stream);
+
+/// Extract the base function name from a possibly-prefixed name.
+/// Handles both Presto-style "presto.default.lag" and simple "lag".
+std::string getBaseFunctionName(const std::string& fullName);
+
+/// Also strip any registered function name prefix (e.g. "spark_" for Spark).
+std::string stripFunctionPrefix(
+    const std::string& name,
+    const std::string& prefix);
+
 } // namespace facebook::velox::cudf_velox

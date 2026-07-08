@@ -27,6 +27,7 @@ namespace facebook::velox::connector::hive::iceberg {
 namespace {
 static constexpr uint32_t kSerialCookieNoRun = 12'346;
 static constexpr uint32_t kSerialCookie = 12'347;
+static constexpr uint32_t kRunContainersNoOffsetThreshold = 4;
 } // namespace
 
 DeletionVectorReader::DeletionVectorReader(
@@ -54,25 +55,32 @@ void DeletionVectorReader::loadBitmap() {
   }
   loaded_ = true;
 
-  uint64_t blobOffset = 0;
-  uint64_t blobLength = dvFile_.fileSizeInBytes;
+  // Prefer the typed contentOffset / contentLength fields. The legacy
+  // bounds-map encoding (kDvOffsetFieldId / kDvLengthFieldId) is kept as a
+  // fallback for callers that have not migrated yet.
+  uint64_t blobOffset = static_cast<uint64_t>(dvFile_.contentOffset);
+  uint64_t blobLength = dvFile_.contentLength > 0
+      ? static_cast<uint64_t>(dvFile_.contentLength)
+      : dvFile_.fileSizeInBytes;
 
-  if (auto it = dvFile_.lowerBounds.find(kDvOffsetFieldId);
-      it != dvFile_.lowerBounds.end()) {
-    try {
-      blobOffset = std::stoull(it->second);
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Failed to parse DV blob offset from bounds map: {}", e.what());
+  if (dvFile_.contentLength == 0) {
+    if (auto it = dvFile_.lowerBounds.find(kDvOffsetFieldId);
+        it != dvFile_.lowerBounds.end()) {
+      try {
+        blobOffset = std::stoull(it->second);
+      } catch (const std::exception& e) {
+        VELOX_FAIL(
+            "Failed to parse DV blob offset from bounds map: {}", e.what());
+      }
     }
-  }
-  if (auto it = dvFile_.upperBounds.find(kDvLengthFieldId);
-      it != dvFile_.upperBounds.end()) {
-    try {
-      blobLength = std::stoull(it->second);
-    } catch (const std::exception& e) {
-      VELOX_FAIL(
-          "Failed to parse DV blob length from bounds map: {}", e.what());
+    if (auto it = dvFile_.upperBounds.find(kDvLengthFieldId);
+        it != dvFile_.upperBounds.end()) {
+      try {
+        blobLength = std::stoull(it->second);
+      } catch (const std::exception& e) {
+        VELOX_FAIL(
+            "Failed to parse DV blob length from bounds map: {}", e.what());
+      }
     }
   }
 
@@ -225,8 +233,10 @@ void DeletionVectorReader::deserializeRoaring64Bitmap(const std::string& data) {
       containers[i] = {key, static_cast<uint32_t>(cardMinus1) + 1, isRun};
     }
 
-    // Skip offset section.
-    if (numContainers >= 4) {
+    // Skip offset section
+    const bool hasOffsetSection =
+        !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
+    if (hasOffsetSection) {
       ptr += numContainers * sizeof(uint32_t);
     }
 
@@ -315,8 +325,10 @@ void DeletionVectorReader::deserialize32BitRoaringBitmap(
     containers[i] = {key, static_cast<uint32_t>(cardMinus1) + 1};
   }
 
-  // Skip offset section.
-  if (numContainers >= 4) {
+  // Skip offset section
+  const bool hasOffsetSection =
+      !hasRunContainers || numContainers >= kRunContainersNoOffsetThreshold;
+  if (hasOffsetSection) {
     VELOX_CHECK_GE(
         static_cast<size_t>(end - ptr),
         numContainers * 4,

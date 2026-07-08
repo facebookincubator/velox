@@ -137,7 +137,14 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "ssdCacheReadWallNanos",
       "cacheWaitWallNanos",
       "coalescedSsdLoadWallNanos",
-      "coalescedStorageLoadWallNanos"};
+      "coalescedStorageLoadWallNanos",
+      "rpcCongestionWindowFinal",
+      "rpcPeakInFlight",
+      "rpcBaselineRttNanos",
+      "rpcRttMinWallNanos",
+      "rpcRttMaxWallNanos",
+      "rpcStreamingMode",
+  };
   if (metricNames.contains(name)) {
     return true;
   }
@@ -488,6 +495,13 @@ void addOperatorRuntimeStats(
     VELOX_CHECK_EQ(statIt->second.unit, value.unit);
   }
   statIt->second.addValue(value.value);
+}
+
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats.insert_or_assign(std::string(name), metric);
 }
 
 void aggregateOperatorRuntimeStats(

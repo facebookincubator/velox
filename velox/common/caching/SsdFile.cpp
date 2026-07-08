@@ -42,11 +42,12 @@ namespace facebook::velox::cache {
 namespace {
 
 void addEntryToIovecs(AsyncDataCacheEntry& entry, std::vector<iovec>& iovecs) {
-  if (entry.tinyData() != nullptr) {
-    iovecs.push_back({entry.tinyData(), static_cast<size_t>(entry.size())});
+  if (entry.hasContiguousData()) {
+    iovecs.push_back(
+        {entry.contiguousData(), static_cast<size_t>(entry.size())});
     return;
   }
-  const auto& data = entry.data();
+  const auto& data = entry.nonContiguousData();
   iovecs.reserve(iovecs.size() + data.numRuns());
   int64_t bytesLeft = entry.size();
   for (auto i = 0; i < data.numRuns(); ++i) {
@@ -60,12 +61,11 @@ void addEntryToIovecs(AsyncDataCacheEntry& entry, std::vector<iovec>& iovecs) {
   }
 }
 
-// Returns the number of entries in a cache 'entry'.
 uint32_t numIoVectorsFromEntry(AsyncDataCacheEntry& entry) {
-  if (entry.tinyData() != nullptr) {
+  if (entry.hasContiguousData()) {
     return 1;
   }
-  return entry.data().numRuns();
+  return entry.nonContiguousData().numRuns();
 }
 } // namespace
 
@@ -138,6 +138,8 @@ SsdFile::SsdFile(const Config& config)
   regionPins_.resize(maxRegions_, 0);
   if (checkpointEnabled()) {
     initializeCheckpoint();
+  } else {
+    removeStaleRecoveryFiles();
   }
 
   if (disableFileCow_) {
@@ -232,6 +234,9 @@ CoalesceIoStats SsdFile::load(
         read(offset, buffers);
       });
 
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cache::SsdFile::load", this);
+
   for (auto i = 0; i < ssdPins.size(); ++i) {
     pins[i].checkedEntry()->setSsdFile(this, ssdPins[i].run().offset());
     auto* entry = pins[i].checkedEntry();
@@ -276,8 +281,12 @@ std::optional<std::pair<uint64_t, int32_t>> SsdFile::getSpace(
       // At least some pins got space from this region. If the region is full
       // the next call will get space from another region.
       regionSizes_[region] += toWrite;
-      return std::make_pair<uint64_t, int32_t>(
-          region * kRegionSize + offset, toWrite);
+      // Pin the region to prevent eviction while the caller writes to it
+      // without holding 'mutex_'. The caller must call unpinRegion() after
+      // the write and entry registration are complete.
+      const auto fileOffset = region * kRegionSize + offset;
+      pinRegionLocked(fileOffset);
+      return std::pair<uint64_t, int32_t>(fileOffset, toWrite);
     }
 
     tracker_.regionFilled(region);
@@ -392,6 +401,16 @@ void SsdFile::write(std::vector<CachePin>& pins) {
     }
 
     auto [offset, available] = space.value();
+    // getSpace() pins the region to prevent eviction during the unlocked
+    // disk write below. Unpin on all exit paths via SCOPE_EXIT. We save
+    // the original offset since 'offset' is modified during entry
+    // registration.
+    const auto regionStartOffset = offset;
+    SCOPE_EXIT {
+      unpinRegion(regionStartOffset);
+    };
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cache::SsdFile::write", this);
     int32_t numWrittenEntries = 0;
     uint64_t writeOffset = offset;
     int32_t writeLength = 0;
@@ -511,12 +530,12 @@ void SsdFile::verifyWrite(AsyncDataCacheEntry& entry, SsdRun ssdRun) {
   const auto rc =
       readFile_->pread(ssdRun.offset(), entry.size(), testData.get());
   VELOX_CHECK_EQ(rc.size(), entry.size());
-  if (entry.tinyData() != nullptr) {
-    if (::memcmp(testData.get(), entry.tinyData(), entry.size()) != 0) {
+  if (entry.hasContiguousData()) {
+    if (::memcmp(testData.get(), entry.contiguousData(), entry.size()) != 0) {
       VELOX_FAIL("bad read back");
     }
   } else {
-    const auto& data = entry.data();
+    const auto& data = entry.nonContiguousData();
     int64_t bytesLeft = entry.size();
     int64_t offset = 0;
     for (auto i = 0; i < data.numRuns(); ++i) {
@@ -710,6 +729,28 @@ void SsdFile::deleteFile(std::unique_ptr<WriteFile> file) {
     ++stats_.deleteMetaFileErrors;
     VELOX_SSD_CACHE_LOG(ERROR)
         << fmt::format("Error in deleting file {}: {}", filePath, e.what());
+  }
+}
+
+void SsdFile::removeStaleRecoveryFiles() {
+  const auto checkpointPath = checkpointFilePath();
+  if (fs_->exists(checkpointPath)) {
+    try {
+      fs_->remove(checkpointPath);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(WARNING) << "Failed to remove stale checkpoint file "
+                                   << checkpointPath << ": " << e.what();
+    }
+  }
+  const auto logPath = evictLogFilePath();
+  if (fs_->exists(logPath)) {
+    try {
+      fs_->remove(logPath);
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(WARNING)
+          << "Failed to remove stale eviction log file " << logPath << ": "
+          << e.what();
+    }
   }
 }
 
@@ -938,11 +979,11 @@ void SsdFile::initializeCheckpoint() {
 
 uint32_t SsdFile::checksumEntry(const AsyncDataCacheEntry& entry) const {
   bits::Crc32 crc;
-  if (entry.tinyData()) {
-    crc.process_bytes(entry.tinyData(), entry.size());
+  if (entry.hasContiguousData()) {
+    crc.process_bytes(entry.contiguousData(), entry.size());
   } else {
     int64_t bytesLeft = entry.size();
-    const auto& data = entry.data();
+    const auto& data = entry.nonContiguousData();
     for (auto i = 0; i < data.numRuns() && bytesLeft > 0; ++i) {
       const auto run = data.runAt(i);
       const auto bytesToProcess = std::min<size_t>(bytesLeft, run.numBytes());
