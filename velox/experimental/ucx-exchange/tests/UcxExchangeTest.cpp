@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include <cudf/column/column_factories.hpp>
 #include <cudf/contiguous_split.hpp>
 #include <cudf/copying.hpp>
@@ -36,7 +37,6 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
-#include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
