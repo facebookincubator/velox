@@ -19,6 +19,7 @@
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 
 #include <folly/Random.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox::dwio::common;
@@ -171,4 +172,34 @@ TEST_F(BitPackDecoderTest, uint32AllRows) {
   for (auto width = 1; width <= 32; ++width) {
     testUnpack<uint32_t>(width);
   }
+}
+
+// Verifies that unpack correctly advances both the input and result pointers
+// when the naive fallback handles all values (buffer too small for fast path).
+TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
+  // First byte: 0,1,0,1,0,1,0,1.
+  // Second byte: 1,1,1,1,0,0,0,0.
+  // Padded to 8 bytes so unpack's uint64_t reads don't overflow the buffer.
+  const uint8_t packed[] = {0xAA, 0x0F, 0, 0, 0, 0, 0, 0};
+  const uint8_t* input = packed;
+  // Only 2 bytes of meaningful packed data.
+  constexpr uint64_t kPackedLen = 2;
+
+  uint8_t output[16] = {};
+  uint8_t* result = output;
+
+  facebook::velox::dwio::common::unpack<uint8_t>(
+      input, kPackedLen, 8, 1, result);
+
+  EXPECT_EQ(input, packed + 1);
+  EXPECT_EQ(result, output + 8);
+
+  facebook::velox::dwio::common::unpack<uint8_t>(
+      input, kPackedLen - 1, 8, 1, result);
+
+  EXPECT_EQ(input, packed + kPackedLen);
+  EXPECT_EQ(result, output + 16);
+
+  const uint8_t expected[] = {0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0};
+  EXPECT_THAT(output, ::testing::ElementsAreArray(expected));
 }
