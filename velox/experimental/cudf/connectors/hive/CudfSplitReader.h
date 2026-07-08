@@ -77,20 +77,17 @@ class CudfSplitReader : public NvtxHelper {
   }
 
  protected:
-  // Create the chunked parquet reader.
+  /// Create the chunked parquet reader.
   virtual void createCudfReader(rmm::device_async_resource_ref output_mr);
 
-  // Setup the cuDF data source
+  /// Setup the cuDF data source
   void setupCudfDataSource();
 
-  // Whether a pushed-down subfield filter is set on this split reader.
-  bool hasSubfieldFilter() const;
-
-  // Clear splitReaders and datasources after split has been fully processed.
+  /// Clear splitReaders and datasources after split has been fully processed.
   void resetSplit();
 
-  // Read the next table chunk with metadata from the parquet reader (regular
-  // or hybrid). Returns nullopt when no more data.
+  /// Read the next table chunk with metadata from the parquet reader (regular
+  /// or hybrid). Returns nullopt when no more data.
   virtual std::optional<cudf::io::table_with_metadata> readNextChunk(
       rmm::device_async_resource_ref output_mr);
 

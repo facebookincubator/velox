@@ -125,8 +125,6 @@ void CudfIcebergSplitReader::prepareSplit(
   fileColumnNames_.clear();
   fileColumnIndex_.clear();
   fileRowCount_.reset();
-  noColumnsToRead_ = false;
-  syntheticTableProduced_ = false;
   baseReadOffset_ = 0;
 
   // Must setup delete file readers before calling base `prepareSplit` so
@@ -134,15 +132,6 @@ void CudfIcebergSplitReader::prepareSplit(
   // reader. Pass the DataSource's runtimeStats so delete readers accumulate
   // stats directly into the DataSource's stats object.
   setupDeleteFileReaders(runtimeStats);
-
-  // Subfield filters along with positional deletes are not supported as the
-  // original row positions may have been altered by the filter.
-  // TODO(mh): Re-enable when https://github.com/rapidsai/cudf/pull/23077 merges
-  if (hasSubfieldFilter() and
-      (deletionVectorReader_ or positionalDeleteFileReaders_.size())) {
-    VELOX_NYI(
-        "cuDF Iceberg reader does not yet support subfield filters together with positional deletes");
-  }
 
   // Setup column projection to include any equality delete key columns that
   // are not already in the output projection. Must be called before base
@@ -173,45 +162,22 @@ void CudfIcebergSplitReader::createCudfReader(
   CudfSplitReader::createCudfReader(determineCudfMemoryResource());
 }
 
-std::optional<std::unique_ptr<cudf::table>>
-CudfIcebergSplitReader::nextInputChunk() {}
-
 std::optional<cudf::io::table_with_metadata>
 CudfIcebergSplitReader::readNextChunk(
     rmm::device_async_resource_ref output_mr) {
   // Determine the memory resource to use for `readNextChunk`
   auto mr = determineCudfMemoryResource();
 
-  auto chunkOpt = [&]() -> std::optional<std::unique_ptr<cudf::table>> {
-    // If every output column is injected, skip `readNextChunk` and
-    // emit a single chunk synthesized.
-    if (noColumnsToRead_) {
-      // No more synthetic table chunks
-      if (syntheticTableProduced_) {
-        return std::nullopt;
-      }
-      syntheticTableProduced_ = true;
-      return std::make_unique<cudf::table>(
-          std::vector<std::unique_ptr<cudf::column>>{});
-    }
-
-    // Otherwise, read the next table chunk from the cuDF reader.
-    auto chunkOpt =
-        CudfSplitReader::readNextChunk(determineCudfMemoryResource());
-    // No more table chunks
-    if (not chunkOpt.has_value()) {
-      return std::nullopt;
-    }
-    // Lazily cache column names and their positions.
-    ensureFileColumnIndex(chunkOpt.value().metadata.schema_info);
-    return std::move(chunkOpt.value().tbl);
-  }();
-
-  // No more table chunks
+  // Read the next table chunk from the cuDF reader
+  auto chunkOpt = CudfSplitReader::readNextChunk(mr);
   if (not chunkOpt.has_value()) {
     return std::nullopt;
   }
-  auto cudfTable = std::move(chunkOpt.value());
+  auto cudfTable = std::move(chunkOpt.value().tbl);
+  const auto& schemaInfo = chunkOpt.value().metadata.schema_info;
+
+  // Lazily cache column names and their positions
+  ensureFileColumnIndex(schemaInfo);
 
   // Check if all projected columns are schema-evolution (missing) columns
   const bool allColumnsMissing = cudfTable->num_columns() == 0;
@@ -574,10 +540,6 @@ void CudfIcebergSplitReader::adaptColumns() {
       return injectedColumns_.contains(name);
     });
   }
-
-  // If every output column is injected (info/partition), no columns need to be
-  // read from the data file.
-  noColumnsToRead_ = readColumnNames_.empty();
 }
 
 void CudfIcebergSplitReader::ensureFileColumnIndex(
