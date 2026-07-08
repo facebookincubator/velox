@@ -424,14 +424,15 @@ class DwrfReaderColumnMappingTest : public testing::Test {
   }
 
   // Writes a DWRF file with 'fileSchema', then opens it with
-  // ColumnMappingMode::kName against 'tableSchema' and returns the reader's row
-  // type. When 'forcePositionalEvolution' is set (or the file's physical names
-  // are all Hive placeholders), the reader maps the file to the table schema by
-  // position and renames file columns to the requested names.
-  RowTypePtr readWithColumnNames(
+  // 'columnMappingMode' against 'tableSchema' and returns the reader's row
+  // type. In ColumnMappingMode::kName the reader maps by position (renaming
+  // file columns to the requested names) only when the file's physical names
+  // are all Hive placeholders; otherwise it maps by name. In
+  // ColumnMappingMode::kPosition it always maps by position.
+  RowTypePtr readWithColumnMapping(
       const RowTypePtr& fileSchema,
       const RowTypePtr& tableSchema,
-      bool forcePositionalEvolution) {
+      dwio::common::ColumnMappingMode columnMappingMode) {
     auto sink = std::make_unique<MemorySink>(
         16 * 1024 * 1024,
         dwio::common::FileSink::Options{.pool = leafPool_.get()});
@@ -447,9 +448,8 @@ class DwrfReaderColumnMappingTest : public testing::Test {
     writer.close();
 
     dwio::common::ReaderOptions readerOpts(leafPool_.get());
-    readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
+    readerOpts.setColumnMappingMode(columnMappingMode);
     readerOpts.setFileSchema(tableSchema);
-    readerOpts.setForcePositionalEvolution(forcePositionalEvolution);
     std::string_view data(sinkPtr->data(), sinkPtr->size());
     auto reader = std::make_unique<dwrf::DwrfReader>(
         readerOpts,
@@ -468,40 +468,40 @@ class DwrfReaderColumnMappingTest : public testing::Test {
 // mapping the requested names (id, name) are absent from the file, so without
 // positional fallback they would read back as missing. Because every physical
 // name is a Hive placeholder, the reader maps by position and renames the file
-// columns to the requested names, without any positional flag set.
+// columns to the requested names.
 TEST_F(DwrfReaderColumnMappingTest, PositionalFallbackForHivePlaceholders) {
   auto fileSchema = ROW({"_col0", "_col1"}, {INTEGER(), VARCHAR()});
   auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
-  auto rowType = readWithColumnNames(
-      fileSchema, tableSchema, /*forcePositionalEvolution=*/false);
+  auto rowType = readWithColumnMapping(
+      fileSchema, tableSchema, dwio::common::ColumnMappingMode::kName);
 
   ASSERT_EQ(rowType->size(), 2);
   EXPECT_EQ(rowType->nameOf(0), "id");
   EXPECT_EQ(rowType->nameOf(1), "name");
 }
 
-// File has real physical names. In name-based mapping (no positional flag, not
-// all placeholders) the reader must NOT rename by position; the physical names
-// are preserved so downstream name matching binds columns correctly.
-TEST_F(DwrfReaderColumnMappingTest, RealNamesNoPositionalFallback) {
+// File has real physical names. In name-based mapping (not all placeholders)
+// the reader must NOT rename by position; the physical names are preserved so
+// downstream name matching binds columns correctly.
+TEST_F(DwrfReaderColumnMappingTest, RealNamesMappedByName) {
   auto fileSchema = ROW({"uid", "label"}, {INTEGER(), VARCHAR()});
   auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
-  auto rowType = readWithColumnNames(
-      fileSchema, tableSchema, /*forcePositionalEvolution=*/false);
+  auto rowType = readWithColumnMapping(
+      fileSchema, tableSchema, dwio::common::ColumnMappingMode::kName);
 
   ASSERT_EQ(rowType->size(), 2);
   EXPECT_EQ(rowType->nameOf(0), "uid");
   EXPECT_EQ(rowType->nameOf(1), "label");
 }
 
-// File has real physical names but columns were renamed at the table level, so
-// forcePositionalEvolution is set. Even in name-based mapping the reader maps
-// by position and renames the file columns to the requested names.
-TEST_F(DwrfReaderColumnMappingTest, ForcePositionalEvolution) {
+// File has real physical names but the caller requested position-based mapping
+// (e.g. Spark's orc.force.positional.evolution, expressed as kPosition). The
+// reader maps by position and renames the file columns to the requested names.
+TEST_F(DwrfReaderColumnMappingTest, RealNamesMappedByPosition) {
   auto fileSchema = ROW({"uid", "label"}, {INTEGER(), VARCHAR()});
   auto tableSchema = ROW({"id", "name"}, {INTEGER(), VARCHAR()});
-  auto rowType = readWithColumnNames(
-      fileSchema, tableSchema, /*forcePositionalEvolution=*/true);
+  auto rowType = readWithColumnMapping(
+      fileSchema, tableSchema, dwio::common::ColumnMappingMode::kPosition);
 
   ASSERT_EQ(rowType->size(), 2);
   EXPECT_EQ(rowType->nameOf(0), "id");

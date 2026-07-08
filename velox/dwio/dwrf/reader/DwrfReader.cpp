@@ -902,11 +902,10 @@ DwrfReader::DwrfReader(
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
   //
-  // Even in name-based mapping, a file must be mapped by position when
-  // `orc.force.positional.evolution=true` (columns were renamed so the physical
-  // names no longer match the table schema), or when the file's physical schema
-  // is made entirely of Hive placeholder names (_col0, _col1, ...) written by
-  // old Hive with no real field names.
+  // Even in name-based mapping, a file must be mapped by position when its
+  // physical schema is made entirely of Hive placeholder names (_col0, _col1,
+  // ...) written by old Hive with no real field names, so name-based matching
+  // would find nothing.
   const auto columnMappingMode =
       readerBase_->readerOptions().columnMappingMode();
   if (readerBase_->readerOptions().fileSchema() != nullptr) {
@@ -914,7 +913,6 @@ DwrfReader::DwrfReader(
       updateColumnNamesFromFieldIds();
     } else if (
         columnMappingMode != dwio::common::ColumnMappingMode::kName ||
-        readerBase_->readerOptions().forcePositionalEvolution() ||
         isAllHivePlaceholderNames(readerBase_->schema())) {
       updateColumnNamesFromTableSchema();
     }

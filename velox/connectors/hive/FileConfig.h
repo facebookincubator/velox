@@ -47,18 +47,6 @@ class FileConfig {
       "Map ORC table field names to file field names using names, not indices.")
 
   VELOX_HIVE_CONFIG_LEGACY(
-      kOrcForcePositionalEvolutionSession,
-      kOrcForcePositionalEvolution,
-      isOrcForcePositionalEvolution,
-      "orc_force_positional_evolution",
-      "orc.force-positional-evolution",
-      bool,
-      false,
-      "Force ORC/DWRF files to be mapped to the requested schema by physical "
-      "position even in name-based mapping. Mirrors Spark's "
-      "orc.force.positional.evolution.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
       kReadTimestampPartitionValueAsLocalTimeSession,
       kReadTimestampPartitionValueAsLocalTime,
       readTimestampPartitionValueAsLocalTime,

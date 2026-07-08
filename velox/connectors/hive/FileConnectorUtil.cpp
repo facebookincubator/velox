@@ -87,11 +87,6 @@ void configureReaderOptions(
       columnMappingMode = fileConfig->isOrcUseColumnNames(sessionProperties)
           ? dwio::common::ColumnMappingMode::kName
           : dwio::common::ColumnMappingMode::kPosition;
-      // Even in name-based mapping, individual files may need positional
-      // mapping (see ReaderOptions::setForcePositionalEvolution). The reader
-      // decides per file; here we only forward the session flag.
-      readerOptions.setForcePositionalEvolution(
-          fileConfig->isOrcForcePositionalEvolution(sessionProperties));
       break;
     }
     default:
