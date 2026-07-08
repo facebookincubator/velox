@@ -16,6 +16,8 @@
 
 #include "velox/exec/rpc/RPCOperator.h"
 
+#include <algorithm>
+
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
@@ -47,7 +49,8 @@ RPCOperator::RPCOperator(
   state_->setStreamingMode(
       rpcNode_->streamingMode(),
       queryConfig.rpcCongestionMinWindow(),
-      queryConfig.rpcCongestionStepCoef());
+      queryConfig.rpcCongestionStepCoef(),
+      queryConfig.rpcCongestionMaxWindow());
 }
 
 void RPCOperator::initialize() {
@@ -69,6 +72,20 @@ void RPCOperator::initialize() {
       rpcNode_->constantInputs());
 
   tierKey_ = function_->tierKey();
+
+  // Configure the process-global adaptive rate limiter from QueryConfig. This
+  // is idempotent and cluster-default-driven; off by default (static cap).
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  RPCRateLimiter::setAdaptiveConfig(
+      queryConfig.rpcRateLimiterAdaptiveEnabled(),
+      queryConfig.rpcRateLimiterMinLimit(),
+      queryConfig.rpcRateLimiterDecreaseFactor());
+  // Raise the per-tier ceiling so a high-latency backend can run at high
+  // concurrency; admission-controlled dispatch makes this cap bind, and the
+  // adaptive limiter shrinks from here under overload. 0 keeps the built-in 20.
+  if (const auto rlMax = queryConfig.rpcRateLimiterMaxLimit(); rlMax > 0) {
+    RPCRateLimiter::setMaxPending(tierKey_, rlMax);
+  }
 
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
@@ -105,6 +122,12 @@ bool RPCOperator::needsInput() const {
 
   // Don't accept input if we have results ready to output.
   if (!claimedRows_.empty() || claimedBatch_.has_value()) {
+    return false;
+  }
+
+  // Don't take a new input vector until the current one's buffered rows
+  // are fully dispatched (drained under admission control).
+  if (hasPendingRows()) {
     return false;
   }
 
@@ -153,35 +176,17 @@ void RPCOperator::addInput(RowVectorPtr input) {
   auto streamingMode = state_->streamingMode();
 
   if (streamingMode == RPCStreamingMode::kPerRow) {
-    // PER_ROW: function dispatches individual RPCs and returns futures.
-    auto futures = function_->dispatchPerRow(rows, args);
-
-    auto batchIndex = state_->storeInputBatch(
-        flattenedColumns, static_cast<int64_t>(futures.size()));
-    numRequestsDispatched_ += static_cast<int64_t>(futures.size());
-
-    for (auto& [originalRowIndex, future] : futures) {
-      auto rowId = globalRowIdCounter_++;
-      auto token = std::make_shared<RPCRateLimiter::Token>(
-          RPCRateLimiter::acquire(tierKey_));
-
-      auto wrapped =
-          std::move(future)
-              .within(kBatchRpcTimeout)
-              .deferValue([rowId, token](RPCResponse resp) {
-                resp.rowId = rowId;
-                return resp;
-              })
-              .deferError([token](folly::exception_wrapper ew) {
-                return folly::makeSemiFuture<RPCResponse>(std::move(ew));
-              });
-
-      state_->addPendingRow(
-          state_,
-          rowId,
-          RPCState::RowLocation{batchIndex, originalRowIndex},
-          std::move(wrapped));
-    }
+    // PER_ROW: buffer the input and drip its rows out under admission
+    // control (dispatchPendingRows) instead of dispatching the whole vector at
+    // once, which would overrun both the per-driver window and the per-tier
+    // rate limiter. needsInput() returns false until this buffer is drained, so
+    // exactly one input vector is buffered at a time.
+    pendingArgs_ = std::move(args);
+    pendingNumRows_ = static_cast<vector_size_t>(input->size());
+    pendingCursor_ = 0;
+    pendingBatchIndex_ = state_->storeInputBatch(
+        std::move(flattenedColumns), static_cast<int64_t>(pendingNumRows_));
+    dispatchPendingRows();
   } else {
     // BATCH: function accumulates typed data internally.
     auto rowIndices = function_->accumulateBatch(rows, args);
@@ -206,6 +211,72 @@ void RPCOperator::addInput(RowVectorPtr input) {
         flushBatchRequests(dispatchBatchSize_);
       }
     }
+  }
+}
+
+void RPCOperator::dispatchPendingRows() {
+  while (hasPendingRows()) {
+    // Admission headroom = min(per-driver congestion window, process-global
+    // per-tier rate limiter). Both must have room; the tighter one binds. This
+    // is what makes rpcPeakInFlight track the cap instead of the vector size.
+    const int64_t headroom = std::min(
+        state_->dispatchHeadroom(),
+        RPCRateLimiter::availableHeadroom(tierKey_));
+    if (headroom <= 0) {
+      break;
+    }
+    const auto remaining =
+        static_cast<int64_t>(pendingNumRows_ - pendingCursor_);
+    const auto numRowsInChunk =
+        static_cast<vector_size_t>(std::min(headroom, remaining));
+
+    // Select this chunk's rows [pendingCursor_, pendingCursor_ +
+    // numRowsInChunk).
+    SelectivityVector chunk(pendingNumRows_, false);
+    chunk.setValidRange(pendingCursor_, pendingCursor_ + numRowsInChunk, true);
+    chunk.updateBounds();
+
+    auto futures = function_->dispatchPerRow(chunk, pendingArgs_);
+    // Contract: one future per selected row. We advance pendingCursor_ by n and
+    // the stored batch's activeRowCount was set to the full row count, so a
+    // short return would leave the batch buffer un-released (leak) and drop
+    // rows from the output. Enforce it rather than fail silently.
+    VELOX_CHECK_EQ(
+        futures.size(),
+        static_cast<size_t>(numRowsInChunk),
+        "dispatchPerRow returned {} futures for {} selected rows",
+        futures.size(),
+        numRowsInChunk);
+    numRequestsDispatched_ += static_cast<int64_t>(futures.size());
+    for (auto& [originalRowIndex, future] : futures) {
+      auto rowId = globalRowIdCounter_++;
+      auto token = std::make_shared<RPCRateLimiter::Token>(
+          RPCRateLimiter::acquire(tierKey_));
+      auto wrapped =
+          std::move(future)
+              .within(kBatchRpcTimeout)
+              .deferValue([rowId, token](RPCResponse resp) {
+                resp.rowId = rowId;
+                return resp;
+              })
+              .deferError([token](folly::exception_wrapper ew) {
+                return folly::makeSemiFuture<RPCResponse>(std::move(ew));
+              });
+      state_->addPendingRow(
+          state_,
+          rowId,
+          RPCState::RowLocation{pendingBatchIndex_, originalRowIndex},
+          std::move(wrapped));
+    }
+    pendingCursor_ += numRowsInChunk;
+  }
+  if (!hasPendingRows()) {
+    // Buffer fully dripped; drop references so needsInput() accepts the next
+    // input vector.
+    pendingArgs_.clear();
+    pendingNumRows_ = 0;
+    pendingCursor_ = 0;
+    pendingBatchIndex_ = -1;
   }
 }
 
@@ -311,6 +382,10 @@ RowVectorPtr RPCOperator::getOutput() {
   auto streamingMode = state_->streamingMode();
 
   if (streamingMode == RPCStreamingMode::kPerRow) {
+    // Drip more buffered rows now that in-flight completions may have
+    // freed window / rate-limiter headroom.
+    dispatchPendingRows();
+
     if (claimedRows_.empty()) {
       // If draining and nothing left to output, check finish.
       if (isDraining() && state_->isFinished()) {
@@ -350,15 +425,28 @@ RowVectorPtr RPCOperator::getOutput() {
       responses.push_back(std::move(row.response));
     }
 
-    // Same congestion policy as BATCH: the function classifies the drained
-    // responses and the operator feeds the gradient window. On success the
-    // healthy rows' RTTs are samples; on overload the window shrinks.
-    auto signal = function_->evaluateCongestion(responses);
+    // Two AIMD controllers at different scopes, BOTH backing off on the
+    // function's overload verdict (see RPCRateLimiter.h /
+    // CongestionController.h / the function's CongestionPolicy):
+    //  - Window (per-driver): halve on overload; otherwise feed the successful
+    //    rows' RTTs to the latency gradient.
+    //  - Rate limiter (process-global per tier): halve the cap on overload,
+    //    additive-recover on success.
+    // The policy classifies overload as rate-limit / timeout / majority error
+    // (ignoring null_input). Both scopes must back off on it: a rate-limit
+    // storm is LOW-latency, so the latency gradient alone is blind to it — the
+    // error verdict is what makes the per-driver window back off, not just
+    // latency.
+    const auto signal = function_->evaluateCongestion(responses);
     if (signal == AsyncRPCFunction::CongestionSignal::kError) {
       state_->onUnitError();
+      RPCRateLimiter::onRateLimited(tierKey_);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
-      // Single lock acquisition for the whole drained batch of row RTTs.
+      // Feed the whole drained batch of successful RTTs to the gradient in one
+      // lock acquisition; its size is the success count driving AIMD recovery.
       state_->onUnitSamples(roundTripTimesNs);
+      RPCRateLimiter::onSuccess(
+          tierKey_, static_cast<int64_t>(roundTripTimesNs.size()));
     }
 
     auto output = buildOutputVector(responses, locations);
@@ -383,22 +471,29 @@ RowVectorPtr RPCOperator::getOutput() {
     }
 
     auto numRows = static_cast<int64_t>(claimedBatch_->responses.size());
+    int64_t batchErrors = 0;
     for (const auto& response : claimedBatch_->responses) {
       if (response.hasError()) {
         numErrors_++;
+        ++batchErrors;
         recordErrorKind(response.errorKind);
       }
     }
 
-    // Delegate congestion evaluation to the function.
-    // The function knows its domain-specific error semantics.
-    auto signal = function_->evaluateCongestion(claimedBatch_->responses);
+    // Both AIMD controllers back off on the function's overload verdict (see
+    // PER_ROW above): the window (per-driver) halves on overload, else feeds
+    // the batch RTT to the latency gradient; the rate limiter (global) halves
+    // the cap on overload and recovers on success.
+    const auto signal = function_->evaluateCongestion(claimedBatch_->responses);
     if (signal == AsyncRPCFunction::CongestionSignal::kError) {
       state_->onUnitError();
+      RPCRateLimiter::onRateLimited(tierKey_);
     } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
       // Feed the measured round-trip latency to the gradient window so it
       // learns the in-flight-batch sweet spot without a fixed ceiling.
       state_->onUnitSample(claimedBatch_->rttNs);
+      // Successful rows in this batch drive AIMD recovery of the per-tier cap.
+      RPCRateLimiter::onSuccess(tierKey_, numRows - batchErrors);
     }
 
     auto output = buildOutputFromReadyBatch(*claimedBatch_);
@@ -420,17 +515,12 @@ exec::BlockingReason RPCOperator::isBlocked(ContinueFuture* future) {
     blockWaitStartNs_ = std::nullopt;
   }
 
-  // Check per-tier backpressure first.
-  if (auto backpressureFuture = RPCRateLimiter::checkBackpressure(tierKey_)) {
-    RPC_OP_VLOG(1) << "Backpressure applied for tier '" << tierKey_
-                   << "', pending=" << RPCRateLimiter::pendingCount(tierKey_);
-    *future = std::move(*backpressureFuture);
-    blockWaitStartNs_ = getCurrentTimeNano();
-    blockWaitIsBackpressure_ = true;
-    return exec::BlockingReason::kWaitForRPC;
-  }
-
-  // If we already have output ready, don't block.
+  // Emit ready output / report finished BEFORE any backpressure gate: a driver
+  // holding completed rows (or with its own in-flight completions to harvest)
+  // must never park behind the shared per-tier cap held by OTHER drivers. The
+  // per-tier backpressure wait is applied as a last resort below, only when
+  // this operator has buffered rows and nothing in-flight (i.e. it is genuinely
+  // blocked on the global cap, with no local completion to wake it).
   if (!claimedRows_.empty() || claimedBatch_.has_value()) {
     return exec::BlockingReason::kNotBlocked;
   }
@@ -444,9 +534,51 @@ exec::BlockingReason RPCOperator::isBlocked(ContinueFuture* future) {
 
   if (streamingMode == RPCStreamingMode::kPerRow) {
     if (!noMoreInput_ && !isDraining()) {
+      // A completion may have freed headroom — try to drip more.
+      dispatchPendingRows();
       auto claimedRow = state_->tryClaimReady();
       if (claimedRow) {
         claimedRows_.push_back(std::move(*claimedRow));
+        return exec::BlockingReason::kNotBlocked;
+      }
+      // No ready output. Wait on the per-state completion future ONLY when this
+      // operator has in-flight rows — those are guaranteed to fire that future.
+      // If rows are buffered but nothing is in-flight, they are blocked solely
+      // on the process-global per-tier rate limiter (its cap held by other
+      // drivers); the per-state future would never resolve, so returning
+      // kWaitForRPC here would hang the driver. Instead fall through to
+      // kNotBlocked and let the next isBlocked() re-check
+      // RPCRateLimiter::checkBackpressure(), which a slot-freeing decrement on
+      // any driver wakes. needsInput() stays false while the buffer is
+      // non-empty, so no new input arrives meanwhile.
+      if (state_->numInFlight() > 0) {
+        std::optional<RPCState::ReadyRow> waited;
+        ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+        auto result = state_->tryClaimOrWait(&waitFuture, &waited);
+        switch (result) {
+          case RPCState::ClaimResult::kClaimed:
+            claimedRows_.push_back(std::move(*waited));
+            return exec::BlockingReason::kNotBlocked;
+          case RPCState::ClaimResult::kFinished:
+            return exec::BlockingReason::kNotBlocked;
+          case RPCState::ClaimResult::kMustWait:
+            *future = std::move(waitFuture);
+            blockWaitStartNs_ = getCurrentTimeNano();
+            blockWaitIsBackpressure_ = false;
+            return exec::BlockingReason::kWaitForRPC;
+        }
+      }
+      // Buffered rows but nothing in-flight: this operator is blocked solely on
+      // the process-global per-tier cap (its slots held by other drivers). Park
+      // on the limiter's waiter — woken by any driver's slot-freeing decrement
+      // — rather than busy-spinning via repeated kNotBlocked.
+      if (hasPendingRows()) {
+        if (auto bp = RPCRateLimiter::checkBackpressure(tierKey_)) {
+          *future = std::move(*bp);
+          blockWaitStartNs_ = getCurrentTimeNano();
+          blockWaitIsBackpressure_ = true;
+          return exec::BlockingReason::kWaitForRPC;
+        }
       }
       return exec::BlockingReason::kNotBlocked;
     }
@@ -673,6 +805,22 @@ void RPCOperator::recordRuntimeStats() {
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
         kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
+  }
+
+  // Process-global per-tier rate-limiter cap trajectory (the shared cap this
+  // operator drips against). Distinct from the per-driver rpcCongestion*
+  // window. Emitted unconditionally — including for the empty/default tier,
+  // which is the bucket the meta.ai per-row-key path uses; gating on a
+  // non-empty tierKey_ would hide the cap on exactly that main path.
+  lockedStats->addRuntimeStat(
+      kRpcRateLimiterCap,
+      RuntimeCounter(RPCRateLimiter::currentLimit(tierKey_)));
+  lockedStats->addRuntimeStat(
+      kRpcRateLimiterPeakPending,
+      RuntimeCounter(RPCRateLimiter::peakPending(tierKey_)));
+  const auto minCap = RPCRateLimiter::minLimitReached(tierKey_);
+  if (minCap > 0) {
+    lockedStats->addRuntimeStat(kRpcRateLimiterMinCap, RuntimeCounter(minCap));
   }
 }
 
