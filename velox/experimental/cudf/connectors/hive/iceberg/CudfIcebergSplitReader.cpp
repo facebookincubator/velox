@@ -618,10 +618,10 @@ std::unique_ptr<cudf::table> CudfIcebergSplitReader::buildOutputTable(
   // read column was silently dropped (a bug).
   VELOX_CHECK_EQ(
       consumedReadColumns + extraEqualityColumns_.size(),
-      columns.size(),
+      fileColumnIndex_.size(),
       "Read table columns were not fully accounted for during Iceberg table assembly. "
       "Read columns: {}, Consumed: {}, Equality columns: {}",
-      columns.size(),
+      fileColumnIndex_.size(),
       consumedReadColumns,
       extraEqualityColumns_.size());
 
