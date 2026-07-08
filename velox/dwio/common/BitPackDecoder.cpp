@@ -53,7 +53,9 @@ void store8Ints(__m256i eightInts, int32_t i, T* result) {
 inline uint64_t loadUnaligned64(const uint64_t* pointer, int32_t byteOffset) {
   uint64_t value;
   std::memcpy(
-      &value, reinterpret_cast<const char*>(pointer) + byteOffset, sizeof(value));
+      &value,
+      reinterpret_cast<const char*>(pointer) + byteOffset,
+      sizeof(value));
   return value;
 }
 
@@ -279,7 +281,8 @@ void unpack(
     auto byte = bit / 8;
     auto shift = bit & 7;
     uint64_t word;
-    std::memcpy(&word, reinterpret_cast<const char*>(bits) + byte, sizeof(word));
+    std::memcpy(
+        &word, reinterpret_cast<const char*>(bits) + byte, sizeof(word));
     result[i] = (word >> shift) & mask;
   }
   if (anyUnsafe) {

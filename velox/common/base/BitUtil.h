@@ -847,7 +847,8 @@ storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
   current = (current & ~mask) | (mask & (word << bitOffset));
   std::memcpy(rawAddress, &current, sizeof(T));
   if (numBits + bitOffset > kBitSize) {
-    uint8_t* lastByteAddress = reinterpret_cast<uint8_t*>(rawAddress) + sizeof(T);
+    uint8_t* lastByteAddress =
+        reinterpret_cast<uint8_t*>(rawAddress) + sizeof(T);
     uint8_t lastByteBits = bitOffset + numBits - kBitSize;
     uint8_t lastByteMask = (1 << lastByteBits) - 1;
     *lastByteAddress = (*lastByteAddress & ~lastByteMask) |
