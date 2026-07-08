@@ -17,9 +17,9 @@
 
 #include <optional>
 
-#include "velox/functions/sparksql/BloomFilter.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/BloomFilter.h"
 
 namespace facebook::velox::functions::sparksql {
 
