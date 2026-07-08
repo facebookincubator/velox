@@ -1515,6 +1515,8 @@ void fillLaunchParams(
       if (returnCounter < static_cast<int32_t>(launch.returnValues.size()) &&
           actualId == launch.returnValues[returnCounter]) {
         launch.returnOffsets.push_back(listOffset);
+        // fillTensorListParam above appended the entry, so back() is safe.
+        TORCH_CHECK(!launch.tensorLists.empty());
         const auto& tlp = launch.tensorLists.back();
         for (auto elemOff : tlp.elementOffsets) {
           if (returnBegin == -1) {
@@ -1990,14 +1992,13 @@ void CompositeInvocation::gatherLaunches(
             if (oi < data.actualOutputTypes.size() &&
                 data.actualOutputTypes[oi] == nativert::Type::Kind::Tensor) {
               const auto& oiv = state.frame->getIValue(data.actualOutputs[oi]);
-              // A None output comes from a later PN.  An empty (0-element)
-              // output means there is nothing to compute and its storage (and
-              // that of any broadcast-to-empty input) may be null -- launching
-              // would fault.  numElements from a kMax sizeExpr ignores the
-              // empty (broadcast-to-0) dimension, so guard on the allocated
-              // output extent explicitly here.
-              if (oiv.isNone() ||
-                  (oiv.isTensor() && oiv.toTensor().numel() == 0)) {
+              // A None output comes from a later PN -- its tensor is not
+              // materialized, so the kernel must not launch yet. An empty
+              // (0-element) output is handled in device code (the elementwise
+              // size head sets size=0 -> 0 iterations), so it does not zero the
+              // whole launch here -- that would wrongly skip the non-empty
+              // lanes of a multi-output kernel.
+              if (oiv.isNone()) {
                 data.numElements = 0;
                 break;
               }
@@ -2749,40 +2750,6 @@ void CompositeInvocation::execute(ExecutionState& state) {
   }
 }
 
-void CompositeInvocation::runDeferredStandalones(ExecutionState& state) {
-  if (prePassStandalones_.empty()) {
-    return;
-  }
-  auto& frame = *state.frame;
-  bool progress = true;
-  while (progress) {
-    progress = false;
-    for (auto& launch : prePassStandalones_) {
-      if (!launch.standalone) {
-        continue;
-      }
-      if (nodeOutputsComputed(launch.standalone, frame)) {
-        continue;
-      }
-      auto kernelIt = state.kernelMap->find(launch.standalone);
-      if (kernelIt == state.kernelMap->end()) {
-        continue;
-      }
-      bool allInputsReady = true;
-      for (const auto& input : launch.standalone->inputs()) {
-        if (isUnreadyNoneDependency(input.value, frame)) {
-          allInputsReady = false;
-          break;
-        }
-      }
-      if (allInputsReady) {
-        executeNode(launch.standalone, kernelIt->second, frame);
-        progress = true;
-      }
-    }
-  }
-}
-
 void CompositeInvocation::launch(
     int32_t numBlocks,
     int32_t blockSize,
@@ -3025,10 +2992,6 @@ std::string CompositeInvocation::toString(Listing mode, int32_t ordinal) const {
 
 void CompiledNode::execute(ExecutionState& state) {
   kernels_->execute(state);
-}
-
-void CompiledNode::runDeferredStandalones(ExecutionState& state) {
-  kernels_->runDeferredStandalones(state);
 }
 
 std::string CompiledNode::toString(Listing mode, int32_t ordinal) const {

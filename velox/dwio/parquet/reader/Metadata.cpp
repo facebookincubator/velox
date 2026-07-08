@@ -450,6 +450,11 @@ std::vector<thrift::Encoding> ColumnChunkMetaDataPtr::encodings() const {
       thriftColumnChunkPtr(ptr_)->meta_data()->encodings());
 }
 
+std::vector<std::string> ColumnChunkMetaDataPtr::pathInSchema() const {
+  return *apache::thrift::can_throw(
+      thriftColumnChunkPtr(ptr_)->meta_data()->path_in_schema());
+}
+
 int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return apache::thrift::can_throw(
       *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())

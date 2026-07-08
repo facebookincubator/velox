@@ -19,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -249,6 +250,10 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     /// to std::malloc(). If zero, no allocations are delegated to malloc
     /// and 'smallAllocationReservePct' is automatically set to 0.
     int32_t maxMallocBytes{3072};
+
+    /// If set, invoked with the address and byte length of each region
+    /// MmapAllocator maps, before its pages are faulted in.
+    std::function<void(void* address, size_t bytes)> onMap{nullptr};
   };
 
   /// Defines the memory allocator kinds.

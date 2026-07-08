@@ -118,6 +118,9 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       return true;
     }
   }
+  if (fromType->isTimestamp() && isIntegralType(toType)) {
+    return true;
+  }
 
   return false;
 }

@@ -1908,7 +1908,7 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
   for (const auto step :
        {core::AggregationNode::Step::kSingle,
         core::AggregationNode::Step::kPartial}) {
-    SCOPED_TRACE(fmt::format("step {}", core::mapAggregationStepToName(step)));
+    SCOPED_TRACE(fmt::format("step {}", core::AggregationNode::toName(step)));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto buildSide =
         PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();

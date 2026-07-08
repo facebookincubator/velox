@@ -32,6 +32,7 @@ add_library(
   CudfOrderBy.cpp
   CudfReduce.cpp
   CudfTopN.cpp
+  CudfWindow.cpp
   DebugUtil.cpp
   DecimalAggregationDevice.cu
   DecimalAggregationHostOps.cpp

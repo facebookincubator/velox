@@ -79,9 +79,7 @@ bool eagerFlush(const core::PlanNode& node) {
 namespace detail {
 
 /// Returns true if source nodes must run in a separate pipeline.
-bool mustStartNewPipeline(
-    const std::shared_ptr<const core::PlanNode>& planNode,
-    int sourceId) {
+bool mustStartNewPipeline(const core::PlanNodePtr& planNode, int sourceId) {
   if (auto localMerge =
           std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
     // LocalMerge's source runs on its own pipeline.
@@ -116,7 +114,10 @@ std::unique_ptr<Operator> createScaleWriterLocalPartition(
       operatorId, ctx, localPartitionNode);
 }
 
-OperatorSupplier makeOperatorSupplier(ConsumerSupplier consumerSupplier) {
+// Builds the supplier for a pipeline's final output sink: a CallbackSink that
+// hands each output batch to 'consumerSupplier's consumer. Returns nullptr when
+// there is no consumer (the pipeline output is delivered elsewhere).
+OperatorSupplier makeOutputSinkSupplier(ConsumerSupplier consumerSupplier) {
   if (consumerSupplier) {
     return [consumerSupplier = std::move(consumerSupplier)](
                int32_t operatorId, DriverCtx* ctx) {
@@ -127,49 +128,60 @@ OperatorSupplier makeOperatorSupplier(ConsumerSupplier consumerSupplier) {
   return nullptr;
 }
 
-OperatorSupplier makeOperatorSupplier(
-    const std::shared_ptr<const core::PlanNode>& planNode) {
-  if (auto localMerge =
-          std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
-    return [localMerge](int32_t operatorId, DriverCtx* ctx) {
-      auto mergeSource = ctx->task->addLocalMergeSource(
-          ctx->splitGroupId,
-          localMerge->id(),
-          localMerge->outputType(),
-          ctx->queryConfig().localMergeSourceQueueSize());
-      auto consumerCb =
+// Builds the supplier for the sink that feeds a local-merge source, shared by
+// LocalMerge and MixedUnion. The sink registers a source under 'planNodeId',
+// enqueues each input batch into it, and carries 'planNodeId' so its stats
+// aggregate into that node (and tracing can associate it). 'supportsDrain'
+// selects the drain-aware enqueue (MixedUnion) over the drain-unsupported one
+// (LocalMerge).
+OperatorSupplier makeMergeSinkSupplier(
+    const core::PlanNodePtr& planNode,
+    bool supportsDrain) {
+  auto planNodeId = planNode->id();
+  auto outputType = planNode->outputType();
+  return [planNodeId = std::move(planNodeId),
+          outputType = std::move(outputType),
+          supportsDrain](int32_t operatorId, DriverCtx* ctx) {
+    auto mergeSource = ctx->task->addLocalMergeSource(
+        ctx->splitGroupId,
+        planNodeId,
+        outputType,
+        ctx->queryConfig().localMergeSourceQueueSize());
+
+    Consumer consumerCb;
+    if (supportsDrain) {
+      consumerCb =
+          [mergeSource](
+              RowVectorPtr input, bool drained, ContinueFuture* future) {
+            return mergeSource->enqueue(std::move(input), future, drained);
+          };
+    } else {
+      consumerCb =
           [mergeSource](
               RowVectorPtr input, bool drained, ContinueFuture* future) {
             VELOX_CHECK(!drained);
             return mergeSource->enqueue(std::move(input), future);
           };
-      auto startCb = [mergeSource](ContinueFuture* future) {
-        return mergeSource->started(future);
-      };
-      return std::make_unique<CallbackSink>(
-          operatorId, ctx, std::move(consumerCb), std::move(startCb));
+    }
+
+    auto startCb = [mergeSource](ContinueFuture* future) {
+      return mergeSource->started(future);
     };
+
+    return std::make_unique<CallbackSink>(
+        operatorId, ctx, std::move(consumerCb), std::move(startCb), planNodeId);
+  };
+}
+
+OperatorSupplier makeOperatorSupplier(const core::PlanNodePtr& planNode) {
+  if (auto localMerge =
+          std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
+    return makeMergeSinkSupplier(localMerge, /*supportsDrain=*/false);
   }
 
   if (auto mixedUnion =
           std::dynamic_pointer_cast<const core::MixedUnionNode>(planNode)) {
-    return [mixedUnion](int32_t operatorId, DriverCtx* ctx) {
-      auto mergeSource = ctx->task->addLocalMergeSource(
-          ctx->splitGroupId,
-          mixedUnion->id(),
-          mixedUnion->outputType(),
-          static_cast<int>(ctx->queryConfig().localMergeSourceQueueSize()));
-      auto consumerCb =
-          [mergeSource](
-              RowVectorPtr input, bool drained, ContinueFuture* future) {
-            return mergeSource->enqueue(std::move(input), future, drained);
-          };
-      auto startCb = [mergeSource](ContinueFuture* future) {
-        return mergeSource->started(future);
-      };
-      return std::make_unique<CallbackSink>(
-          operatorId, ctx, std::move(consumerCb), std::move(startCb));
-    };
+    return makeMergeSinkSupplier(mixedUnion, /*supportsDrain=*/true);
   }
 
   if (auto localPartitionNode =
@@ -233,15 +245,11 @@ OperatorSupplier makeOperatorSupplier(
               return source->enqueue(std::move(input), future);
             }
           };
-      // NOTE: Pass planNodeId to associate CallbackSink with the MergeJoin
-      // node for proper operator identification and input collection.
-      // Operator::maybeSetTracer() uses this to enable tracing.
+      // The sink feeding this MergeJoin's right source is part of the MergeJoin
+      // node; give it the node id so its stats aggregate into that node and
+      // tracing can associate it.
       return std::make_unique<CallbackSink>(
-          operatorId,
-          ctx,
-          consumer,
-          nullptr,
-          ctx->queryConfig().queryTraceEnabled() ? planNodeId : "N/A");
+          operatorId, ctx, consumer, /*startedCb=*/nullptr, planNodeId);
     };
   }
 
@@ -249,9 +257,9 @@ OperatorSupplier makeOperatorSupplier(
 }
 
 void plan(
-    const std::shared_ptr<const core::PlanNode>& planNode,
-    std::vector<std::shared_ptr<const core::PlanNode>>* currentPlanNodes,
-    const std::shared_ptr<const core::PlanNode>& consumerNode,
+    const core::PlanNodePtr& planNode,
+    std::vector<core::PlanNodePtr>* currentPlanNodes,
+    const core::PlanNodePtr& consumerNode,
     OperatorSupplier operatorSupplier,
     std::vector<std::unique_ptr<DriverFactory>>* driverFactories) {
   if (!currentPlanNodes) {
@@ -282,8 +290,7 @@ void plan(
 }
 
 // Sometimes consumer limits the number of drivers its producer can run.
-uint32_t maxDriversForConsumer(
-    const std::shared_ptr<const core::PlanNode>& node) {
+uint32_t maxDriversForConsumer(const core::PlanNodePtr& node) {
   if (std::dynamic_pointer_cast<const core::MergeJoinNode>(node)) {
     // MergeJoinNode must run single-threaded.
     return 1;
@@ -353,7 +360,7 @@ void LocalPlanner::plan(
       planFragment.planNode,
       nullptr,
       nullptr,
-      detail::makeOperatorSupplier(std::move(consumerSupplier)),
+      detail::makeOutputSinkSupplier(std::move(consumerSupplier)),
       driverFactories);
 
   (*driverFactories)[0]->outputDriver = true;

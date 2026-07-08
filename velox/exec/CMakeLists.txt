@@ -72,7 +72,7 @@ velox_add_library(
   OperatorUtils.cpp
   OrderBy.cpp
   OutputBuffer.cpp
-  OutputBufferManager.cpp
+  DefaultOutputBufferManager.cpp
   ParallelProject.cpp
   PartitionFunction.cpp
   PartitionedOutput.cpp
@@ -172,7 +172,7 @@ velox_add_library(
   OperatorUtils.h
   OrderBy.h
   OutputBuffer.h
-  OutputBufferManager.h
+  DefaultOutputBufferManager.h
   ParallelProject.h
   PartitionFunction.h
   PartitionedOutput.h

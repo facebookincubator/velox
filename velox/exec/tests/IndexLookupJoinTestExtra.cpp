@@ -23,8 +23,8 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/IndexLookupJoin.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -1987,8 +1987,9 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
       task->noMoreSplitsForGroup(indexScanNodeId_, group);
     }
 
-    // Consume output via OutputBufferManager.
-    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    // Consume output via DefaultOutputBufferManager.
+    auto outputBufferManager =
+        exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     waitForTaskCompletion(task.get());
@@ -2102,7 +2103,8 @@ TEST_P(IndexLookupJoinTest, groupedExecutionWithEmptyIndexSplits) {
     task->noMoreSplitsForGroup(indexScanNodeId_, 1);
     task->noMoreSplitsForGroup(indexScanNodeId_, 2);
 
-    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    auto outputBufferManager =
+        exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     waitForTaskCompletion(task.get());

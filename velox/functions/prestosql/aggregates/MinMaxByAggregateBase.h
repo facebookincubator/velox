@@ -1197,7 +1197,7 @@ std::vector<exec::AggregateRegistrationResult> registerMinMaxBy(
         const std::string errorMessage = fmt::format(
             "Unknown input types for {} ({}) aggregation: {}",
             names.front(),
-            mapAggregationStepToName(step),
+            core::AggregationNode::toName(step),
             toString(argTypes));
 
         const bool nAgg = (argTypes.size() == 3) ||
