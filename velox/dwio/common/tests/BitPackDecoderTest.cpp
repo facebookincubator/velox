@@ -19,9 +19,12 @@
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 
 #include <folly/Random.h>
+#include <gflags/gflags.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstring>
+
+DECLARE_bool(bmi2); // NOLINT
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;
@@ -148,6 +151,25 @@ class BitPackDecoderTest : public testing::Test {
   RowSet oddRows_;
 };
 
+// Parameterized fixture that exercises both FLAGS_bmi2=true (PDEP path) and
+// FLAGS_bmi2=false (shift+mask fallback) on every CI run.
+class BitPackDecoderBmi2Test : public BitPackDecoderTest,
+                               public testing::WithParamInterface<bool> {
+ protected:
+  void SetUp() override {
+    savedBmi2_ = FLAGS_bmi2;
+    FLAGS_bmi2 = GetParam(); // NOLINT
+    BitPackDecoderTest::SetUp();
+  }
+
+  void TearDown() override {
+    FLAGS_bmi2 = savedBmi2_; // NOLINT
+  }
+
+ private:
+  bool savedBmi2_;
+};
+
 TEST_F(BitPackDecoderTest, allWidths) {
   for (auto width = 0; width < bitPackedData_.size() - 1; ++width) {
     testUnpack<int32_t>(width, allRows_);
@@ -157,19 +179,19 @@ TEST_F(BitPackDecoderTest, allWidths) {
   }
 }
 
-TEST_F(BitPackDecoderTest, uint8AllRows) {
+TEST_P(BitPackDecoderBmi2Test, uint8AllRows) {
   for (auto width = 1; width <= 8; ++width) {
     testUnpack<uint8_t>(width);
   }
 }
 
-TEST_F(BitPackDecoderTest, uint16AllRows) {
+TEST_P(BitPackDecoderBmi2Test, uint16AllRows) {
   for (auto width = 1; width <= 16; ++width) {
     testUnpack<uint16_t>(width);
   }
 }
 
-TEST_F(BitPackDecoderTest, uint32AllRows) {
+TEST_P(BitPackDecoderBmi2Test, uint32AllRows) {
   for (auto width = 1; width <= 32; ++width) {
     testUnpack<uint32_t>(width);
   }
@@ -178,7 +200,7 @@ TEST_F(BitPackDecoderTest, uint32AllRows) {
 // Edge case: input buffer is exactly the minimum size with no padding.
 // Verifies that the fast paths correctly fall through to unpackNaive when
 // fewer than sizeof(uint64_t) bytes remain, avoiding out-of-bounds reads.
-TEST_F(BitPackDecoderTest, smallBufferNoPadding) {
+TEST_P(BitPackDecoderBmi2Test, smallBufferNoPadding) {
   // Test uint8_t: 8 values at bitWidth=1 -> exactly 1 byte of packed data.
   {
     // Pack 8 known bit values: alternating 0,1,0,1,0,1,0,1 = 0xAA
@@ -251,6 +273,14 @@ TEST_F(BitPackDecoderTest, smallBufferNoPadding) {
   }
 }
 
+INSTANTIATE_TEST_SUITE_P(
+    Bmi2,
+    BitPackDecoderBmi2Test,
+    testing::Values(true, false),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "bmi2_on" : "bmi2_off";
+    });
+
 // Verifies that unpack correctly advances both the input and result pointers
 // when the naive fallback handles all values (buffer too small for fast path).
 TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
@@ -275,25 +305,6 @@ TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
   EXPECT_EQ(input, inputEnd);
   EXPECT_EQ(result, output + 16);
 
-  const uint8_t expected[] = {
-      0,
-      1,
-      0,
-      1,
-      0,
-      1,
-      0,
-      1,
-      1,
-      1,
-      1,
-      1,
-      0,
-      0,
-      0,
-      0,
-  };
-  for (int32_t i = 0; i < 16; ++i) {
-    EXPECT_EQ(output[i], expected[i]) << "index " << i;
-  }
+  const uint8_t expected[] = {0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0};
+  EXPECT_THAT(output, ::testing::ElementsAreArray(expected));
 }
