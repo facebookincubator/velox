@@ -54,7 +54,9 @@ void registerSparkFunctions(const std::string& prefix) {
            .constantArgumentType("integer")
            .argumentType("any")
            .variableArity("any")
-           .build()});
+           .build()},
+      true,
+      sparksql::HashFunction::canEvaluate);
 
   registerCudfFunction(
       prefix + "date_add",

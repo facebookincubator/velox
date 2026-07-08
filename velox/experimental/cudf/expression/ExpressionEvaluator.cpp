@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -2084,12 +2083,14 @@ bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
+  registry[name].push_back(
+      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)});
   return true;
 }
 
@@ -2097,9 +2098,10 @@ void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   for (const auto& name : aliases) {
-    registerCudfFunction(name, factory, signatures, overwrite);
+    registerCudfFunction(name, factory, signatures, overwrite, canEvaluate);
   }
 }
 
@@ -2116,6 +2118,9 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     // the special case of cast.
     if (!spec.signatures.empty() &&
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
+    }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
     return spec.factory(name, expr);
@@ -2864,6 +2869,9 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
       continue;
     }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+      continue;
+    }
     return true;
   }
   return false;
@@ -2872,24 +2880,6 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   ensureBuiltinExpressionEvaluatorsRegistered();
 
-  // Multi-column hash_with_seed runs on GPU via cuDF murmurhash3_x86_32, which
-  // combines columns with a constant seed (hash_combine) instead of Spark's
-  // iterative seed-chaining (rapidsai/cudf#21720). Only safe in pure-GPU mode;
-  // force multi-column hashes to CPU when CPU fallback is enabled.
-  {
-    constexpr std::string_view kHashWithSeed{"hash_with_seed"};
-    const auto& functionName = expr->name();
-    const bool isHashWithSeed = functionName.size() >= kHashWithSeed.size() &&
-        functionName.compare(
-            functionName.size() - kHashWithSeed.size(),
-            kHashWithSeed.size(),
-            kHashWithSeed) == 0;
-    if (isHashWithSeed && expr->inputs().size() > 2 &&
-        CudfConfig::getInstance().allowCpuFallback) {
-      LOG_FALLBACK(expr->toString());
-      return false;
-    }
-  }
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
