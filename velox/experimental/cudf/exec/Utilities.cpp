@@ -78,16 +78,7 @@ size_t maxBatchRows() {
         "cuDF max batch size must be positive");
     return static_cast<size_t>(cudfConfig.batchSizeMaxThreshold.value());
   }
-  return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max()) - 1;
-}
-
-// Concatenate a vector of table views into a single table.
-std::unique_ptr<cudf::table> concatenateViews(
-    std::vector<cudf::table_view> const& views,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_GT(views.size(), 0);
-  return cudf::concatenate(views, stream, mr);
+  return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
 }
 
 // Concatenate table views into batches that respect maxBatchRows().
@@ -139,7 +130,7 @@ std::unique_ptr<cudf::table> concatenateTables(
   for (const auto& tbl : tables) {
     views.push_back(tbl->view());
   }
-  return concatenateViews(views, stream, mr);
+  return cudf::concatenate(views, stream, mr);
 }
 
 std::vector<std::unique_ptr<cudf::table>> concatenateTablesBatched(
@@ -211,7 +202,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   // release in-place: the output is owned by `stream` but the input buffer was
   // allocated on a different stream, so releasing it would bind deallocation to
   // the wrong stream.
-  auto output = concatenateViews(tableViews, stream, mr);
+  auto output = cudf::concatenate(tableViews, stream, mr);
 
   orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
   // Input tables are deallocated here when 'tables' goes out of scope.
