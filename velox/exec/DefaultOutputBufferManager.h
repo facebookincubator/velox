@@ -16,10 +16,13 @@
 #pragma once
 
 #include "velox/exec/OutputBuffer.h"
+#include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec {
 
-class DefaultOutputBufferManager {
+struct OutputTransportEntry;
+
+class DefaultOutputBufferManager : public OutputBufferManager {
  public:
   /// Options for shuffle. This is initialized once and affects both
   /// PartitionedOutput and Exchange. This can be used for controlling
@@ -29,23 +32,40 @@ class DefaultOutputBufferManager {
 
   explicit DefaultOutputBufferManager(Options) {}
 
+  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef();
+
+  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef(
+      const Options& options);
+
+  /// Builds the registry entry for the built-in in-memory transport, pairing
+  /// the default manager singleton with the PartitionedOutput operator.
+  /// OutputTransportRegistry::global() registers it under kInMemory.
+  static std::shared_ptr<OutputTransportEntry> makeDefaultTransportEntry();
+
+  // Lifecycle.
+
   void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers) override;
 
-  /// Updates the number of buffers. Returns true if the buffer exists for a
-  /// given taskId, else returns false.
+  /// Updates the number of destination buffers. Returns true if the buffer
+  /// exists for a given taskId, else returns false.
   bool updateOutputBuffers(
       const std::string& taskId,
-      int numBuffers,
-      bool noMoreBuffers);
+      int numDestinations,
+      bool noMoreBuffers) override;
 
   /// When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
   /// Returns true if the buffer exists for a given taskId, else returns false.
-  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers);
+  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers)
+      override;
+
+  void removeTask(const std::string& taskId) override;
+
+  // Data plane.
 
   /// Adds data to the outgoing queue for 'destination'. 'data' must not be
   /// nullptr. 'data' is always added but if the buffers are full the future is
@@ -92,15 +112,6 @@ class DefaultOutputBufferManager {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
-  void removeTask(const std::string& taskId);
-
-  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef();
-
-  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef(
-      const Options& options);
-
-  uint64_t numBuffers() const;
-
   // Returns a new stream listener if a listener factory has been set.
   std::unique_ptr<OutputStreamListener> newListener() const {
     return listenerFactory_ ? listenerFactory_() : nullptr;
@@ -113,22 +124,27 @@ class DefaultOutputBufferManager {
     listenerFactory_ = factory;
   }
 
-  std::string toString();
-
-  // Gets the memory utilization ratio for the output buffer from a task of
-  // taskId, if the task of this taskId is not found, return 0.
-  double getUtilization(const std::string& taskId);
-
-  // If the output buffer from a task of taskId is over-utilized and blocks its
-  // producers. When the task of this taskId is not found, return false.
-  bool isOverutilized(const std::string& taskId);
-
-  // Returns nullopt when the specified output buffer doesn't exist.
-  std::optional<OutputBuffer::Stats> stats(const std::string& taskId);
-
   // Retrieves the set of buffers for a query if exists.
   // Returns NULL if task not found.
   std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
+
+  // Observability.
+
+  uint64_t numBuffers() const;
+
+  std::string toString();
+
+  /// Returns a human-readable representation of the output buffer state for
+  /// the task identified by 'taskId', or an empty string if no buffer exists.
+  std::string toString(const std::string& taskId) override;
+
+  std::optional<double> getUtilization(const std::string& taskId) override;
+
+  // Over-utilized when buffered bytes exceed half of the configured max output
+  // buffer size, or the buffer is at end.
+  std::optional<bool> isOverutilized(const std::string& taskId) override;
+
+  std::optional<OutputBufferStats> stats(const std::string& taskId) override;
 
  private:
   // Retrieves the set of buffers for a query.

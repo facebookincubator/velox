@@ -81,31 +81,32 @@ std::string ArbitraryBuffer::toString() const {
       hasNoMoreData());
 }
 
-void DestinationBuffer::Stats::recordEnqueue(const SerializedPageBase& data) {
+void DestinationBuffer::recordEnqueue(const SerializedPageBase& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
-  bytesBuffered += data.size();
-  rowsBuffered += numRows.value();
-  ++pagesBuffered;
+  stats_.bytesBuffered += data.size();
+  stats_.rowsBuffered += numRows.value();
+  ++stats_.pagesBuffered;
 }
 
-void DestinationBuffer::Stats::recordAcknowledge(
-    const SerializedPageBase& data) {
+void DestinationBuffer::recordAcknowledge(const SerializedPageBase& data) {
   const auto numRows = data.numRows();
   VELOX_CHECK(numRows.has_value(), "SerializedPage's numRows must be valid");
   const int64_t size = data.size();
-  bytesBuffered -= size;
-  VELOX_DCHECK_GE(bytesBuffered, 0, "bytesBuffered must be non-negative");
-  rowsBuffered -= numRows.value();
-  VELOX_DCHECK_GE(rowsBuffered, 0, "rowsBuffered must be non-negative");
-  --pagesBuffered;
-  VELOX_DCHECK_GE(pagesBuffered, 0, "pagesBuffered must be non-negative");
-  bytesSent += size;
-  rowsSent += numRows.value();
-  ++pagesSent;
+  stats_.bytesBuffered -= size;
+  VELOX_DCHECK_GE(
+      stats_.bytesBuffered, 0, "bytesBuffered must be non-negative");
+  stats_.rowsBuffered -= numRows.value();
+  VELOX_DCHECK_GE(stats_.rowsBuffered, 0, "rowsBuffered must be non-negative");
+  --stats_.pagesBuffered;
+  VELOX_DCHECK_GE(
+      stats_.pagesBuffered, 0, "pagesBuffered must be non-negative");
+  stats_.bytesSent += size;
+  stats_.rowsSent += numRows.value();
+  ++stats_.pagesSent;
 }
 
-void DestinationBuffer::Stats::recordDelete(const SerializedPageBase& data) {
+void DestinationBuffer::recordDelete(const SerializedPageBase& data) {
   recordAcknowledge(data);
 }
 
@@ -193,7 +194,7 @@ void DestinationBuffer::enqueue(std::shared_ptr<SerializedPageBase> data) {
   }
 
   if (data != nullptr) {
-    stats_.recordEnqueue(*data);
+    recordEnqueue(*data);
   }
   data_.push_back(std::move(data));
 }
@@ -275,7 +276,7 @@ std::vector<std::shared_ptr<SerializedPageBase>> DestinationBuffer::acknowledge(
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordAcknowledge(*data_[i]);
+    recordAcknowledge(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.erase(data_.cbegin(), data_.cbegin() + numDeleted);
@@ -291,14 +292,14 @@ DestinationBuffer::deleteResults() {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
-    stats_.recordDelete(*data_[i]);
+    recordDelete(*data_[i]);
     freed.push_back(std::move(data_[i]));
   }
   data_.clear();
   return freed;
 }
 
-DestinationBuffer::Stats DestinationBuffer::stats() const {
+DestinationBufferStats DestinationBuffer::stats() const {
   return stats_;
 }
 
@@ -344,9 +345,11 @@ OutputBuffer::OutputBuffer(
   finishedBufferStats_.resize(numDestinations);
 }
 
-void OutputBuffer::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
+void OutputBuffer::updateOutputBuffers(
+    int numDestinations,
+    bool noMoreBuffers) {
   if (isPartitioned()) {
-    VELOX_CHECK_EQ(buffers_.size(), numBuffers);
+    VELOX_CHECK_EQ(buffers_.size(), numDestinations);
     VELOX_CHECK(noMoreBuffers);
     noMoreBuffers_ = true;
     return;
@@ -357,8 +360,8 @@ void OutputBuffer::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (numBuffers > buffers_.size()) {
-      addOutputBuffersLocked(numBuffers);
+    if (numDestinations > buffers_.size()) {
+      addOutputBuffersLocked(numDestinations);
     }
 
     if (!noMoreBuffers) {
@@ -391,11 +394,11 @@ void OutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
   }
 }
 
-void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
+void OutputBuffer::addOutputBuffersLocked(int numDestinations) {
   VELOX_CHECK(!noMoreBuffers_);
   VELOX_CHECK(!isPartitioned());
-  buffers_.reserve(numBuffers);
-  for (int32_t i = buffers_.size(); i < numBuffers; ++i) {
+  buffers_.reserve(numDestinations);
+  for (int32_t i = buffers_.size(); i < numDestinations; ++i) {
     auto buffer = std::make_unique<DestinationBuffer>();
     if (isBroadcast()) {
       for (const auto& data : dataToBroadcast_) {
@@ -407,7 +410,7 @@ void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
     }
     buffers_.emplace_back(std::move(buffer));
   }
-  finishedBufferStats_.resize(numBuffers);
+  finishedBufferStats_.resize(numDestinations);
 }
 
 void OutputBuffer::updateStatsWithEnqueuedPageLocked(
@@ -802,7 +805,7 @@ namespace {
 
 // Find out how many buffers hold 80% of the data. Useful to identify skew.
 int32_t countTopBuffers(
-    const std::vector<DestinationBuffer::Stats>& bufferStats,
+    const std::vector<DestinationBufferStats>& bufferStats,
     int64_t totalBytes) {
   std::vector<int64_t> bufferSizes;
   bufferSizes.reserve(bufferStats.size());
@@ -831,9 +834,9 @@ int32_t countTopBuffers(
 
 } // namespace
 
-OutputBuffer::Stats OutputBuffer::stats() {
+OutputBufferStats OutputBuffer::stats() {
   std::lock_guard<std::mutex> l(mutex_);
-  std::vector<DestinationBuffer::Stats> bufferStats;
+  std::vector<DestinationBufferStats> bufferStats;
   VELOX_CHECK_EQ(buffers_.size(), finishedBufferStats_.size());
   bufferStats.resize(buffers_.size());
   for (auto i = 0; i < buffers_.size(); ++i) {
@@ -847,19 +850,19 @@ OutputBuffer::Stats OutputBuffer::stats() {
 
   updateTotalBufferedBytesMsLocked();
 
-  return OutputBuffer::Stats(
-      kind_,
-      noMoreBuffers_,
-      atEnd_,
-      isFinishedLocked(),
-      bufferedBytes_,
-      bufferedPages_,
-      numOutputBytes_,
-      numOutputRows_,
-      numOutputPages_,
-      getAverageBufferTimeMsLocked(),
-      countTopBuffers(bufferStats, numOutputBytes_),
-      bufferStats);
+  return OutputBufferStats{
+      .kind = kind_,
+      .noMoreBuffers = noMoreBuffers_,
+      .noMoreData = atEnd_,
+      .finished = isFinishedLocked(),
+      .bufferedBytes = bufferedBytes_,
+      .bufferedPages = bufferedPages_,
+      .totalBytesSent = static_cast<int64_t>(numOutputBytes_),
+      .totalRowsSent = static_cast<int64_t>(numOutputRows_),
+      .totalPagesSent = static_cast<int64_t>(numOutputPages_),
+      .averageBufferTimeMs = getAverageBufferTimeMsLocked(),
+      .numTopBuffers = countTopBuffers(bufferStats, numOutputBytes_),
+      .buffersStats = bufferStats};
 }
 
 } // namespace facebook::velox::exec

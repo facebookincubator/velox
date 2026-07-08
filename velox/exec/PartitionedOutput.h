@@ -176,7 +176,8 @@ class PartitionedOutput : public Operator {
       int32_t operatorId,
       DriverCtx* ctx,
       const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
-      bool eagerFlush);
+      bool eagerFlush,
+      const std::shared_ptr<DefaultOutputBufferManager>& manager);
 
   void addInput(RowVectorPtr input) override;
 

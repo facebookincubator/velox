@@ -27,7 +27,6 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
-#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
@@ -37,6 +36,7 @@
 #include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
@@ -438,8 +438,7 @@ Task::Task(
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
-      splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(DefaultOutputBufferManager::getInstanceRef()) {
+      splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
   // NOTE: the executor must not be folly::InlineLikeExecutor for parallel
   // execution.
@@ -1279,11 +1278,6 @@ void Task::initializePartitionOutput() {
       taskId_,
       errorMessageLocked());
 
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "PartitionedOutputBufferManager was already destructed");
   std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
       nullptr};
   int numOutputDrivers{0};
@@ -1327,12 +1321,29 @@ void Task::initializePartitionOutput() {
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
     VELOX_CHECK_GT(numOutputDrivers, 0);
-    bufferManager->initializeTask(
+    const auto& transport = partitionedOutputNode->transportKind();
+    auto entry = OutputTransportRegistry::tryGet(*queryCtx_, transport);
+    VELOX_CHECK_NOT_NULL(
+        entry,
+        "No output buffer manager registered for transport '{}'",
+        transport);
+    auto manager = entry->manager;
+    {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      bufferManager_ = manager;
+      outputOperatorFactory_ = entry->makeOutputOperator;
+    }
+    manager->initializeTask(
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
         numOutputDrivers);
   }
+}
+
+std::weak_ptr<OutputBufferManager> Task::outputBufferManager() const {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  return bufferManager_;
 }
 
 // static
@@ -1528,6 +1539,7 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
               splitGroupId,
               partitionId),
           getExchangeClientLocked(pipeline),
+          outputOperatorFactory_,
           filters,
           [self](size_t i) {
             return i < self->driverFactories_.size()
@@ -2132,9 +2144,10 @@ bool Task::checkNoMoreSplitGroupsLocked() {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
     if (groupedPartitionedOutput_) {
-      auto bufferManager = bufferManager_.lock();
-      bufferManager->updateNumDrivers(
-          taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      if (auto manager = bufferManager_.lock()) {
+        manager->updateNumDrivers(
+            taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
+      }
     }
 
     return checkIfFinishedLocked();
@@ -2335,22 +2348,20 @@ bool Task::isFinishedLocked() const {
 }
 
 bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "DefaultOutputBufferManager was already destructed");
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
+    // Ignore messages received after no-more-buffers message.
     if (noMoreOutputBuffers_) {
-      // Ignore messages received after no-more-buffers message.
       return false;
     }
     if (noMoreBuffers) {
       noMoreOutputBuffers_ = true;
     }
   }
-  return bufferManager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  if (auto manager = outputBufferManager().lock()) {
+    return manager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
+  }
+  return false;
 }
 
 int Task::getOutputPipelineId() const {
@@ -2843,15 +2854,14 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
 void Task::maybeRemoveFromOutputBufferManager() {
   if (hasPartitionedOutput()) {
-    if (auto bufferManager = bufferManager_.lock()) {
-      // Capture output buffer stats before deleting the buffer.
+    if (auto manager = outputBufferManager().lock()) {
       {
         std::lock_guard<std::timed_mutex> l(mutex_);
         if (!taskStats_.outputBufferStats.has_value()) {
-          taskStats_.outputBufferStats = bufferManager->stats(taskId_);
+          taskStats_.outputBufferStats = manager->stats(taskId_);
         }
       }
-      bufferManager->removeTask(taskId_);
+      manager->removeTask(taskId_);
     }
   }
 }
@@ -3010,11 +3020,14 @@ TaskStats Task::taskStats() const {
     }
   }
 
-  auto bufferManager = bufferManager_.lock();
-  taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
-  taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
-  if (!taskStats.outputBufferStats.has_value()) {
-    taskStats.outputBufferStats = bufferManager->stats(taskId_);
+  if (auto manager = bufferManager_.lock()) {
+    taskStats.outputBufferUtilization =
+        manager->getUtilization(taskId_).value_or(0);
+    taskStats.outputBufferOverutilized =
+        manager->isOverutilized(taskId_).value_or(false);
+    if (!taskStats.outputBufferStats.has_value()) {
+      taskStats.outputBufferStats = manager->stats(taskId_);
+    }
   }
   return taskStats;
 }
@@ -3274,9 +3287,10 @@ folly::dynamic Task::toJson() const {
   }
   obj["drivers"] = drivers;
 
-  if (auto buffers = bufferManager_.lock()) {
-    if (auto buffer = buffers->getBufferIfExists(taskId_)) {
-      obj["buffer"] = buffer->toString();
+  if (auto manager = bufferManager_.lock()) {
+    auto bufferState = manager->toString(taskId_);
+    if (!bufferState.empty()) {
+      obj["buffer"] = bufferState;
     }
   }
 
