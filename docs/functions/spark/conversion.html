@@ -414,6 +414,35 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 </pre></div>
 </div>
 </section>
+<section id="id8">
+<h3>From TIMESTAMP_UTC<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<p>Casting a TIMESTAMP_UTC to TIMESTAMP interprets the stored timestamp as a local
+timestamp in the session timezone and returns the corresponding UTC epoch. When
+the local timestamp falls in a DST spring-forward gap, Spark adjusts to the
+post-transition timestamp instead of throwing.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Stored</span> <span class="n">epoch</span> <span class="mi">1577808000</span> <span class="n">represents</span> <span class="n">local</span> <span class="mi">2019</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.</span>
+<span class="o">--</span> <span class="n">In</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span> <span class="p">(</span><span class="n">UTC</span><span class="o">-</span><span class="mi">8</span><span class="p">)</span> <span class="n">that</span> <span class="ow">is</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span> <span class="n">UTC</span><span class="o">.</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">TIMESTAMP_NTZ</span> <span class="s1">&#39;2019-12-31 16:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-timestamp-utc">
+<h2>Cast to TIMESTAMP UTC<a class="headerlink" href="#cast-to-timestamp-utc" title="Link to this heading">¶</a></h2>
+<section id="id9">
+<h3>From TIMESTAMP<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<p>Casting a TIMESTAMP to TIMESTAMP_UTC applies the session timezone offset so
+that the local timestamp is preserved. The stored epoch in TIMESTAMP_UTC
+represents the same timestamp fields as the local timestamp, treated as a UTC
+epoch. When no session timezone is configured the cast is an identity operation.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span> <span class="n">UTC</span> <span class="ow">in</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span> <span class="ow">is</span> <span class="n">local</span> <span class="mi">2019</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.</span>
+<span class="o">--</span> <span class="n">TIMESTAMP_UTC</span> <span class="n">stores</span> <span class="n">that</span> <span class="n">local</span> <span class="n">time</span> <span class="k">as</span> <span class="n">epoch</span> <span class="mf">1577808000.</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;2020-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2019</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">31</span> <span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -466,6 +495,11 @@ The input value is treated as the number of seconds since the epoch (1970-01-01 
 <li><a class="reference internal" href="#id6">From integral types</a></li>
 <li><a class="reference internal" href="#id7">From floating-point types</a></li>
 <li><a class="reference internal" href="#from-boolean">From boolean</a></li>
+<li><a class="reference internal" href="#id8">From TIMESTAMP_UTC</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-timestamp-utc">Cast to TIMESTAMP UTC</a><ul>
+<li><a class="reference internal" href="#id9">From TIMESTAMP</a></li>
 </ul>
 </li>
 </ul>
