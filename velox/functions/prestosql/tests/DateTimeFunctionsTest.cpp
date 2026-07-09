@@ -120,9 +120,6 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
       std::optional<int64_t> result,
       int64_t expected) {
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(
-        util::unpackZoneOffset(result.value()),
-        util::unpackZoneOffset(expected));
     EXPECT_EQ(result.value(), expected);
   }
 
@@ -827,8 +824,6 @@ TEST_F(DateTimeFunctionsTest, hourTime) {
 }
 
 TEST_F(DateTimeFunctionsTest, hourTimeWithTimezone) {
-  using namespace facebook::velox::util;
-
   const auto hour = [&](std::optional<int64_t> timeWithTimezone) {
     return evaluateOnce<int64_t>(
         "hour(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
@@ -1185,8 +1180,6 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
 }
 
 TEST_F(DateTimeFunctionsTest, timeWithTimezoneIntervalDayTime) {
-  using namespace facebook::velox::util;
-
   const auto testTimePlusIntervalCommutative =
       [&](int64_t timeWithTimezone,
           int64_t interval) -> std::optional<int64_t> {
@@ -1226,11 +1219,29 @@ TEST_F(DateTimeFunctionsTest, timeWithTimezoneIntervalDayTime) {
   auto result4 = testTimePlusIntervalCommutative(
       makeTimeWithTz("12:30:45.123+00:00"), oneDay);
   expectTimeWithTzEq(result4, makeTimeWithTz("12:30:45.123+00:00"));
+
+  // Negative-interval wrap: 01:00:00 + (-2h) wraps to 23:00:00.
+  auto result5 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("01:00:00.000+05:30"), -twoHours);
+  expectTimeWithTzEq(result5, makeTimeWithTz("23:00:00.000+05:30"));
+
+  // Positive wrap past midnight: 23:00:00 + 2h wraps to 01:00:00.
+  auto result6 = testTimePlusIntervalCommutative(
+      makeTimeWithTz("23:00:00.000+00:00"), twoHours);
+  expectTimeWithTzEq(result6, makeTimeWithTz("01:00:00.000+00:00"));
+
+  // Null propagation.
+  auto nullResult = evaluateOnce<int64_t>(
+      "plus(c0, c1)",
+      makeRowVector({
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt}, TIME_WITH_TIME_ZONE()),
+          makeNullableFlatVector<int64_t>({threeHours}, INTERVAL_DAY_TIME()),
+      }));
+  EXPECT_EQ(std::nullopt, nullResult);
 }
 
 TEST_F(DateTimeFunctionsTest, timeWithTimezoneMinusIntervalDayTime) {
-  using namespace facebook::velox::util;
-
   const auto timeMinusInterval =
       [&](int64_t timeWithTimezone,
           int64_t interval) -> std::optional<int64_t> {
@@ -1249,11 +1260,24 @@ TEST_F(DateTimeFunctionsTest, timeWithTimezoneMinusIntervalDayTime) {
   auto result2 =
       timeMinusInterval(makeTimeWithTz("01:00:00.000+05:30"), threeHours);
   expectTimeWithTzEq(result2, makeTimeWithTz("22:00:00.000+05:30"));
+
+  // Negative wrap: 01:00:00 - 2h wraps to 23:00:00.
+  auto result3 =
+      timeMinusInterval(makeTimeWithTz("01:00:00.000+00:00"), twoHours);
+  expectTimeWithTzEq(result3, makeTimeWithTz("23:00:00.000+00:00"));
+
+  // Null propagation.
+  auto nullResult = evaluateOnce<int64_t>(
+      "minus(c0, c1)",
+      makeRowVector({
+          makeNullableFlatVector<int64_t>(
+              {std::nullopt}, TIME_WITH_TIME_ZONE()),
+          makeNullableFlatVector<int64_t>({twoHours}, INTERVAL_DAY_TIME()),
+      }));
+  EXPECT_EQ(std::nullopt, nullResult);
 }
 
 TEST_F(DateTimeFunctionsTest, timeWithTimezoneMinusTimeWithTimezone) {
-  using namespace facebook::velox::util;
-
   const auto timeMinusTime = [&](int64_t time1,
                                  int64_t time2) -> std::optional<int64_t> {
     return evaluateOnce<int64_t>(
@@ -2117,8 +2141,6 @@ TEST_F(DateTimeFunctionsTest, minuteTime) {
 }
 
 TEST_F(DateTimeFunctionsTest, minuteTimeWithTimezone) {
-  using namespace facebook::velox::util;
-
   const auto minute = [&](std::optional<int64_t> timeWithTimezone) {
     return evaluateOnce<int64_t>(
         "minute(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
@@ -2276,8 +2298,6 @@ TEST_F(DateTimeFunctionsTest, secondTime) {
 }
 
 TEST_F(DateTimeFunctionsTest, secondTimeWithTimezone) {
-  using namespace facebook::velox::util;
-
   const auto second = [&](std::optional<int64_t> timeWithTimezone) {
     return evaluateOnce<int64_t>(
         "second(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
@@ -2451,8 +2471,6 @@ TEST_F(DateTimeFunctionsTest, millisecondTime) {
 }
 
 TEST_F(DateTimeFunctionsTest, millisecondTimeWithTimezone) {
-  using namespace facebook::velox::util;
-
   const auto millisecond = [&](std::optional<int64_t> timeWithTimezone) {
     return evaluateOnce<int64_t>(
         "millisecond(c0)", TIME_WITH_TIME_ZONE(), timeWithTimezone);
@@ -6580,8 +6598,6 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneTimeWithTimezoneTest) {
-  using namespace facebook::velox::util;
-
   const auto at_timezone = [&](std::optional<int64_t> timeWithTimezone,
                                std::optional<std::string> targetTimezone) {
     return evaluateOnce<int64_t>(
