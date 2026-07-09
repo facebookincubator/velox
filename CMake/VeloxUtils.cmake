@@ -352,6 +352,19 @@ function(velox_configure_clang_atomic_linker_flags)
     return()
   endif()
 
+  # Clang 15 ships compiler-rt builtins that do not provide
+  # __atomic_is_lock_free, so the compiler-rt heuristic below wrongly skips
+  # libatomic and linking libvelox.so fails with an undefined reference. Force
+  # libatomic (executables and shared libraries) on Clang 15.
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
+     AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
+    message(STATUS "Clang 15 detected, forcing libatomic linking")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -latomic" PARENT_SCOPE)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -latomic"
+        PARENT_SCOPE)
+    return()
+  endif()
+
   set(COMPILER_RT_FOUND FALSE)
 
   # Get Clang's resource directory
