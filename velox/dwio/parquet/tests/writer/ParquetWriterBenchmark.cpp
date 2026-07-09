@@ -58,9 +58,10 @@ VectorPtr makeDictVarchar(
     int32_t dictionarySize,
     memory::MemoryPool* pool) {
   test::VectorMaker maker(pool);
-  auto dictionary = maker.flatVector<std::string>(
-      dictionarySize,
-      [](vector_size_t i) { return fmt::format("value_{:06d}", i); });
+  auto dictionary =
+      maker.flatVector<std::string>(dictionarySize, [](vector_size_t i) {
+        return fmt::format("val_{}{}", i, std::string(i % 47, 'x'));
+      });
   auto indices = test::makeIndices(
       numRows,
       [dictionarySize](vector_size_t i) { return i % dictionarySize; },
@@ -89,7 +90,7 @@ VectorPtr makeDictInteger(
 VectorPtr makeFlatVarchar(vector_size_t numRows, memory::MemoryPool* pool) {
   test::VectorMaker maker(pool);
   return maker.flatVector<std::string>(numRows, [](vector_size_t i) {
-    return fmt::format("value_{:06d}", i % 10);
+    return fmt::format("val_{}{}", i, std::string(i % 47, 'x'));
   });
 }
 
@@ -376,6 +377,114 @@ BENCHMARK(MapVarcharInt_5Entries) {
 }
 BENCHMARK(MapVarcharInt_10Entries) {
   benchMapColumn(10);
+}
+
+BENCHMARK_DRAW_LINE();
+
+// -- Parallel column writing benchmarks --
+// Compare serial vs parallel writing with ZSTD compression.
+
+void writeParquetWithOptions(
+    const RowVectorPtr& data,
+    memory::MemoryPool* rootPool,
+    bool parallel,
+    common::CompressionKind compression) {
+  auto leafPool = rootPool->addLeafChild("sink");
+  auto sink = std::make_unique<MemorySink>(
+      kSinkSize, FileSink::Options{.pool = leafPool.get()});
+  WriterOptions options;
+  options.memoryPool = rootPool;
+  options.compressionKind = compression;
+  auto parquetOpts = std::make_shared<ParquetWriterOptions>();
+  parquetOpts->enableParallelWrite = parallel;
+  options.formatSpecificOptions = parquetOpts;
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), options, asRowType(data->type()));
+  writer->write(data);
+  writer->close();
+}
+
+void benchParallelWrite(int32_t numCols, bool parallel) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+  constexpr vector_size_t kParBatchSize = 100'000;
+
+  std::vector<VectorPtr> columns;
+  std::vector<std::string> names;
+
+  for (int32_t i = 0; i < numCols; ++i) {
+    columns.push_back(makeDictVarchar(kParBatchSize, 100, leafPool.get()));
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto data = maker.rowVector(std::move(names), columns);
+
+  suspender.dismiss();
+  writeParquetWithOptions(
+      data, rootPool.get(), parallel, common::CompressionKind_ZSTD);
+}
+
+BENCHMARK(Serial_10Cols_Zstd) {
+  benchParallelWrite(10, false);
+}
+BENCHMARK(Parallel_10Cols_Zstd) {
+  benchParallelWrite(10, true);
+}
+BENCHMARK(Serial_20Cols_Zstd) {
+  benchParallelWrite(20, false);
+}
+BENCHMARK(Parallel_20Cols_Zstd) {
+  benchParallelWrite(20, true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+// -- Flush estimation benchmarks --
+// These write many batches of dictionary data with a size-based flush policy.
+// With accurate size estimation, fewer row groups are created, meaning less
+// flush overhead and better compression.
+
+void benchFlushEstimation(int32_t numBatches) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+  constexpr vector_size_t kBatchSize = 10'000;
+  constexpr int kDictSize = 10;
+
+  // Each batch: 10K rows of dict VARCHAR (retained ~40KB, flat estimate ~600KB)
+  auto dict = makeDictVarchar(kBatchSize, kDictSize, leafPool.get());
+  auto batch = maker.rowVector({"c0"}, {dict});
+
+  suspender.dismiss();
+
+  auto sinkPool = rootPool->addLeafChild("sink");
+  auto sink = std::make_unique<MemorySink>(
+      kSinkSize, FileSink::Options{.pool = sinkPool.get()});
+  WriterOptions options;
+  options.memoryPool = rootPool.get();
+  // 512KB byte threshold -- with flat estimate each 10K batch looks like
+  // ~600KB (exceeds threshold every batch). With retained size each batch
+  // is ~40KB so ~12 batches fit per row group.
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1'000'000,
+        /*bytesInRowGroup=*/512 * 1'024);
+  };
+  options.formatSpecificOptions = std::make_shared<ParquetWriterOptions>();
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), options, asRowType(batch->type()));
+  for (int32_t i = 0; i < numBatches; ++i) {
+    writer->write(batch);
+  }
+  writer->close();
+}
+
+BENCHMARK(FlushEstimation_50Batches) {
+  benchFlushEstimation(50);
+}
+BENCHMARK(FlushEstimation_200Batches) {
+  benchFlushEstimation(200);
 }
 
 } // namespace
