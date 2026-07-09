@@ -709,6 +709,7 @@ void HashProbe::addInput(RowVectorPtr input) {
 
   // Reset passingInputRowsInitialized_ as input_ as changed.
   passingInputRowsInitialized_ = false;
+  probeOnlyFilterPreEvaluated_ = false;
 
   const auto numInput = input_->size();
 
@@ -798,6 +799,13 @@ void HashProbe::addInput(RowVectorPtr input) {
     }
     lookup_->hits.resize(lookup_->rows.back() + 1);
     table_->joinProbe(*lookup_);
+  }
+
+  probeOnlyFilterPreEvaluated_ = tryPreEvaluateProbeOnlyFilter();
+
+  if (probeOnlyFilterPreEvaluated_ && isRightSemiFilterJoin(joinType_)) {
+    processRightSemiNoFilter(false);
+    return;
   }
 
   resultIter_->reset(*lookup_);
@@ -1089,6 +1097,46 @@ void HashProbe::processRightSemiNoFilter(bool emptyBuildSide) {
   input_ = nullptr;
 }
 
+bool HashProbe::tryPreEvaluateProbeOnlyFilter() {
+  if (!filter_ || !filterTableProjections_.empty() ||
+      !filter_->expr(0)->isDeterministic()) {
+    return false;
+  }
+
+  if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
+      !isRightSemiFilterJoin(joinType_)) {
+    return false;
+  }
+
+  const auto numInput = input_->size();
+  filterInputRows_.resizeFill(numInput, isFullJoin(joinType_));
+
+  if (!isFullJoin(joinType_)) {
+    filterInputRows_.clearAll();
+    for (const auto probeRow : lookup_->rows) {
+      if (lookup_->hits[probeRow] != nullptr) {
+        filterInputRows_.setValid(probeRow, true);
+      }
+    }
+    filterInputRows_.updateBounds();
+  }
+
+  if (filterInputRows_.hasSelections()) {
+    RowVectorPtr filterInput = createProbeOnlyFilterInput(numInput);
+    EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput.get());
+    filter_->eval(0, 1, true, filterInputRows_, evalCtx, filterResult_);
+    decodedFilterResult_.decode(*filterResult_[0], filterInputRows_);
+  }
+
+  for (const auto probeRow : lookup_->rows) {
+    if (lookup_->hits[probeRow] != nullptr && !filterPassed(probeRow)) {
+      lookup_->hits[probeRow] = nullptr;
+    }
+  }
+
+  return true;
+}
+
 RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   if (isFinished()) {
     return nullptr;
@@ -1302,7 +1350,9 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       VELOX_CHECK_NOT_NULL(table_);
     }
 
-    numOut = evalFilter(numOut);
+    if (!probeOnlyFilterPreEvaluated_) {
+      numOut = evalFilter(numOut);
+    }
 
     if (numOut == 0) {
       // The hash probe might get stuck in the output loop if the filter is
@@ -1381,6 +1431,19 @@ RowVectorPtr HashProbe::createFilterInput(vector_size_t size) {
       pool(),
       filterInputType_->children(),
       filterColumns);
+
+  return std::make_shared<RowVector>(
+      pool(), filterInputType_, nullptr, size, std::move(filterColumns));
+}
+
+RowVectorPtr HashProbe::createProbeOnlyFilterInput(vector_size_t size) {
+  std::vector<VectorPtr> filterColumns(filterInputType_->size());
+  for (const auto& projection : filterInputProjections_) {
+    LazyVector::ensureLoadedRows(
+        input_->childAt(projection.inputChannel), filterInputRows_);
+    filterColumns[projection.outputChannel] =
+        input_->childAt(projection.inputChannel);
+  }
 
   return std::make_shared<RowVector>(
       pool(), filterInputType_, nullptr, size, std::move(filterColumns));
