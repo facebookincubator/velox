@@ -599,7 +599,16 @@ jobs:
           install_fmt
           install_boost
           install_fast_float
-          install_folly
+          # Build folly (and its gflags) shared under Clang so it matches the
+          # shared libvelox.so. A static folly links gflags statically, which
+          # then collides with the shared gflags velox links
+          # (VELOX_GFLAGS_TYPE=shared), registering gflags' flags twice and
+          # aborting every test at startup.
+          if [[ "${USE_CLANG}" = "true" ]]; then
+            VELOX_BUILD_SHARED=ON install_folly
+          else
+            install_folly
+          fi
           install_fizz
           install_wangle
           install_mvfst
@@ -644,6 +653,11 @@ jobs:
           BUILD_PROFILE=ubuntu-debug USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
+             # folly is now built shared (linking the system libgflags.so), so
+             # resolve gflags from SYSTEM here too. This keeps a single shared
+             # libgflags.so across folly, glog and velox instead of mixing a
+             # BUNDLED gflags into libvelox.so alongside the system one.
+             export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug 2>&1 | tee /tmp/build-output.log
