@@ -401,6 +401,34 @@ class CudfHashJoinProbe : public CudfOperatorBase {
 
   /// Gather one batch from pendingIndices_ and return as CudfVector.
   RowVectorPtr gatherPendingBatch(rmm::cuda_stream_view stream);
+
+  /// Updates rightMatchedFlags_[chunkIndex] by OR-ing in which build rows
+  /// appear in rightIndicesCol. Synchronizes the stream before move-assigning
+  /// the updated flags to avoid a race with cudaFreeAsync.
+  void updateRightMatchedFlags(
+      size_t chunkIndex,
+      cudf::column_view rightIndicesCol,
+      cudf::size_type numBuildRows,
+      rmm::cuda_stream_view stream);
+
+  /// Applies AST filter_join_indices to join index pairs in sub-maxBatchRows
+  /// chunks and enqueues the filtered results into pendingIndices_.
+  void filterAndEnqueueAstIndices(
+      cudf::table_view leftTableView,
+      size_t rightTableIndex,
+      rmm::device_uvector<cudf::size_type>& leftJoinIndices,
+      rmm::device_uvector<cudf::size_type>& rightJoinIndices,
+      cudf::join_kind joinKind,
+      rmm::cuda_stream_view stream);
+
+  /// Eagerly gathers, applies non-AST filter, and pushes results to
+  /// outputQueue_. Splits oversized index spans into sub-maxBatchRows chunks.
+  void gatherFilterAndEnqueue(
+      cudf::table_view leftTableView,
+      cudf::table_view rightTableView,
+      rmm::device_uvector<cudf::size_type>& leftJoinIndices,
+      rmm::device_uvector<cudf::size_type>& rightJoinIndices,
+      rmm::cuda_stream_view stream);
 };
 
 /**

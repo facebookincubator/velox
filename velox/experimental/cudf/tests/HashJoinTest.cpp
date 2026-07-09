@@ -9188,7 +9188,7 @@ TEST_F(HashJoinTest, rightJoinOutputBatching) {
 }
 
 // Verifies that a single inner join chunk exceeding batchSizeMaxThreshold
-// is correctly split via chunkedJoinOutput (Scenario 1).
+// is correctly split via pendingIndices_ and gatherPendingBatch.
 TEST_F(HashJoinTest, innerJoinSingleChunkExceedsRowLimit) {
   // Set a low threshold so a single join result exceeds the limit.
   auto& config = cudf_velox::CudfConfig::getInstance();

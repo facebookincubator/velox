@@ -82,6 +82,8 @@ size_t maxBatchRows() {
 }
 
 // Concatenate table views into batches that respect maxBatchRows().
+// A single view whose row count exceeds maxBatchRows() is emitted as-is
+// (table views cannot be split).
 std::vector<std::unique_ptr<cudf::table>> concatenateViewsBatched(
     std::vector<cudf::table_view> const& views,
     rmm::cuda_stream_view stream,
