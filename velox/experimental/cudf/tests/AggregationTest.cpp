@@ -290,6 +290,18 @@ int64_t streamingGroupbyApiRepartitions(
   return stat == it->second.customStats.end() ? 0 : stat->second.sum;
 }
 
+int64_t streamingGroupbyApiCapacityLimit(
+    const std::shared_ptr<exec::Task>& task,
+    const core::PlanNodeId& planNodeId) {
+  auto const planStats = toPlanStats(task->taskStats());
+  auto it = planStats.find(planNodeId);
+  if (it == planStats.end()) {
+    return 0;
+  }
+  auto stat = it->second.customStats.find("streamingGroupbyApiCapacityLimit");
+  return stat == it->second.customStats.end() ? 0 : stat->second.sum;
+}
+
 TEST_F(AggregationTest, global) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
@@ -1691,6 +1703,33 @@ TEST_F(
 
   ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
   ASSERT_GT(streamingGroupbyApiRepartitions(task, finalAggId), 0);
+}
+
+TEST_F(
+    StreamingGroupbyApiAggregationTest,
+    streamingGroupbyApiCapsCapacityFor32BitCucoOffsets) {
+  setBatchSizeMaxThreshold(std::numeric_limits<int32_t>::max());
+  auto vectors = {makeRowVector({
+      makeFlatVector<int64_t>({0, 1, 2, 3}),
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+  })};
+  createDuckDbTable(vectors);
+
+  core::PlanNodeId finalAggId;
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(
+                      PlanBuilder()
+                          .values(vectors)
+                          .partialAggregation({"c0"}, {"sum(c1)"})
+                          .finalAggregation()
+                          .capturePlanNodeId(finalAggId)
+                          .planNode())
+                  .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  ASSERT_TRUE(wasStreamingGroupbyApiUsed(task, finalAggId));
+  ASSERT_EQ(
+      streamingGroupbyApiCapacityLimit(task, finalAggId),
+      static_cast<int64_t>(std::numeric_limits<cudf::size_type>::max()) / 2);
 }
 
 TEST_F(

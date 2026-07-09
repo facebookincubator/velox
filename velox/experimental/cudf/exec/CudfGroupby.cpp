@@ -532,6 +532,8 @@ constexpr std::string_view kStreamingGroupbyApiRebuildsStat{
     "streamingGroupbyApiRebuilds"};
 constexpr std::string_view kStreamingGroupbyApiRepartitionsStat{
     "streamingGroupbyApiRepartitions"};
+constexpr std::string_view kStreamingGroupbyApiCapacityLimitStat{
+    "streamingGroupbyApiCapacityLimit"};
 
 constexpr std::string_view kStreamingGroupbyDiagnosticEnv{
     "VELOX_CUDF_STREAMING_GROUPBY_DIAGNOSTICS"};
@@ -698,6 +700,16 @@ bool isStreamingGroupbyCapacityError(const std::exception& e) {
 
 size_t cudfSizeTypeMaxRows() {
   return static_cast<size_t>(std::numeric_limits<cudf::size_type>::max());
+}
+
+size_t streamingGroupbyApiSafeCapacity() {
+  // streaming_groupby's cuco set currently uses a 0.5 load factor, hence a
+  // requested capacity of N allocates approximately 2N physical slots. cuDF
+  // stores offsets into those slots in signed 32-bit cudf::size_type values.
+  // Keeping both the requested capacity and every merge source at or below
+  // half of size_type max prevents physical slot-offset overflow as well as
+  // overflow of the transient `max_distinct_keys + row_index` encoding.
+  return cudfSizeTypeMaxRows() / 2;
 }
 
 size_t saturatingAdd(size_t a, size_t b) {
@@ -2460,6 +2472,14 @@ void CudfGroupby::initialize() {
     streamingGroupbyApiEnabled_ =
         canUseStreamingGroupbyApi(inputRowSchema, aggregationInput.constants);
 
+    if (streamingGroupbyApiEnabled_) {
+      // This limit is also passed to PartitionedBufferedState below. Once a
+      // leaf reaches the safe streaming_groupby capacity, PBS repartitions it
+      // before another batch is added instead of attempting an unsafe rebuild.
+      maxBufferedRows_ =
+          std::min(maxBufferedRows_, streamingGroupbyApiSafeCapacity());
+    }
+
     if (streamingGroupbyApiEnabled_ && !isPartialOutput_) {
       auto const outputRowType = asRowType(outputType_);
       streamingPreparedColumns_.clear();
@@ -2499,6 +2519,9 @@ void CudfGroupby::initialize() {
         auto lockedStats = stats_.wlock();
         lockedStats->addRuntimeStat(
             std::string{kStreamingGroupbyApiUsedStat}, RuntimeCounter(1));
+        lockedStats->addRuntimeStat(
+            std::string{kStreamingGroupbyApiCapacityLimitStat},
+            RuntimeCounter(maxBufferedRows_));
       }
     }
 
