@@ -230,9 +230,9 @@ static inline void unpack1to4(
     std::memcpy(&val, inputBuffer, bitWidth);
 
     uint64_t intermediateValue = _pdep_u64(val, pdepMask);
-    __m256i result = _mm256_cvtepu8_epi16(_mm_loadl_epi64(
-        (reinterpret_cast<const __m128i*>(&intermediateValue))));
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(outputBuffer), result);
+    __m128i result = _mm_cvtepu8_epi16(
+        _mm_loadl_epi64(reinterpret_cast<const __m128i*>(&intermediateValue)));
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(outputBuffer), result);
 
     inputBuffer += bitWidth;
     outputBuffer += 8;
