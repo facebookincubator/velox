@@ -62,6 +62,7 @@ endif()
 
 add_executable(
   velox_dwio_parquet_reader_test
+  ColumnPageIndexTest.cpp
   ParquetReaderTest.cpp
   ParquetReaderWideningTest.cpp
   ParquetReaderBenchmarkTest.cpp

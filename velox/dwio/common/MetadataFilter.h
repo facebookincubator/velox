@@ -18,14 +18,15 @@
 
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/dwio/common/RowRanges.h"
 
 namespace facebook::velox::common {
 
 class ScanSpec;
 
-/// Represent a logical combination of filters that can be used in row group
-/// skipping.  Filters are put at leaf nodes and internal nodes represents
-/// logical conjunctions between them.
+/// Represent a logical combination of filters that can be used in row group /
+/// data page skipping.  Filters are put at leaf nodes and internal nodes
+/// represents logical conjunctions between them.
 class MetadataFilter {
  public:
   class LeafNode;
@@ -45,6 +46,17 @@ class MetadataFilter {
       std::vector<std::pair<const LeafNode*, std::vector<uint64_t>>>&
           leafNodeResults,
       std::vector<uint64_t>& finalResult);
+
+  /// Evaluate the filter results based on logical conjunctions tracked in this
+  /// object. The `leafNodeResults` parameter stores the results for each leaf
+  /// node as RowRanges. Existing RowRanges in `finalResult` will be merged with
+  /// the evaluation outcome and updated accordingly. This function is utilized
+  /// for parquet data page skipping. Because data pages are not aligned across
+  /// columns, RowRanges are used to represent the results.
+  void evalRowRanges(
+      std::vector<std::pair<const LeafNode*, dwio::common::RowRanges>>&
+          leafNodeResults,
+      dwio::common::RowRanges& finalResult);
 
   std::string toString() const;
 

@@ -17,7 +17,9 @@
 #pragma once
 
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/RowRanges.h"
 #include "velox/dwio/common/SelectiveRepeatedColumnReader.h"
+#include "velox/dwio/parquet/reader/ColumnPageIndex.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
 
 namespace facebook::velox::parquet {
@@ -72,7 +74,10 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
 
   void seekToRowGroup(int64_t index) override;
 
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      dwio::common::RowRanges& rowRanges);
 
   void read(
       int64_t offset,
@@ -103,6 +108,17 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
       uint64_t rowGroupSize,
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
+
+  bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  void filterDataPages(
+      uint32_t index,
+      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
+          pageIndices,
+      dwio::common::RowRanges& range,
+      std::vector<std::pair<
+          const velox::common::MetadataFilter::LeafNode*,
+          dwio::common::RowRanges>>& metadataFilterResults);
 
  private:
   RepeatedLengths lengths_;
@@ -129,7 +145,10 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
 
   void seekToRowGroup(int64_t index) override;
 
-  void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
+  void enqueueRowGroup(
+      uint32_t index,
+      dwio::common::BufferedInput& input,
+      dwio::common::RowRanges& rowRanges);
 
   void read(
       int64_t offset,
@@ -160,6 +179,17 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
       uint64_t rowGroupSize,
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
+
+  bool collectIndexPageInfoMap(uint32_t index, PageIndexInfoMap& map);
+
+  void filterDataPages(
+      uint32_t index,
+      folly::F14FastMap<uint32_t, std::unique_ptr<ColumnPageIndex>>&
+          pageIndices,
+      dwio::common::RowRanges& range,
+      std::vector<std::pair<
+          const velox::common::MetadataFilter::LeafNode*,
+          dwio::common::RowRanges>>& metadataFilterResults);
 
  private:
   RepeatedLengths lengths_;

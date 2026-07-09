@@ -38,6 +38,10 @@ class ColumnChunkMetaDataPtr {
   /// Check the presence of the dictionary page offset in ColumnChunk metadata.
   bool hasDictionaryPageOffset() const;
 
+  /// Check the presence of column and offset index page offsets in the
+  /// ColumnChunk metadata.
+  bool hasColumnAndOffsetIndexOffset() const;
+
   /// Return the ColumnChunk statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
       const TypePtr type,
@@ -83,6 +87,18 @@ class ColumnChunkMetaDataPtr {
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
+
+  /// Returns the file byte offset of this column chunk's offset index.
+  int64_t offsetIndexOffset() const;
+
+  /// Returns the length in bytes of this column chunk's offset index.
+  int32_t offsetIndexLength() const;
+
+  /// Returns the file byte offset of this column chunk's column index.
+  int64_t columnIndexOffset() const;
+
+  /// Returns the length in bytes of this column chunk's column index.
+  int32_t columnIndexLength() const;
 
   /// Returns the estimated total bytes held by this column's thrift
   /// representation: sizeof(thrift::ColumnChunk) plus every dynamically

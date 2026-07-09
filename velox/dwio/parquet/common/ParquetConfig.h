@@ -89,6 +89,19 @@ class ParquetConfig {
       false,
       "Allow reading INT32 Parquet columns as a narrower integer type.")
 
+  VELOX_PARQUET_CONFIG(
+      kFilterColumnIndexEnabledSession,
+      kFilterColumnIndexEnabled,
+      filterColumnIndexEnabled,
+      "filter_column_index_enabled",
+      "filter-column-index-enabled",
+      bool,
+      true,
+      "When pushdown filters exist and the Parquet file contains page index "
+      "pages, use the column and offset index to skip data pages that cannot "
+      "match the filters, reducing IO and CPU. May add overhead on small "
+      "files; set to false to disable page-index pruning.")
+
   static constexpr uint64_t kDefaultFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
   VELOX_PARQUET_CONFIG(

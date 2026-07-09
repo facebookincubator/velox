@@ -50,6 +50,11 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
   bool allowInt32Narrowing{
       ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
 
+  /// Enables page-index (column and offset index) based data page pruning
+  /// when pushdown filters are present.
+  bool filterColumnIndexEnabled{
+      ParquetConfig::kFilterColumnIndexEnabledSessionProperty::defaultValue};
+
   /// Serialized footer size threshold above which heap tracking is enabled.
   uint64_t footerMemoryTrackingThreshold{
       ParquetConfig::kDefaultFooterMemoryTrackingThreshold};

@@ -768,6 +768,10 @@ struct RuntimeStatistics {
 
   int64_t numStripes{0};
 
+  int64_t skippedPages{0};
+
+  int64_t processedPages{0};
+
   // Estimated bytes reported to the memory pool for the deserialized
   // Parquet file footer, when the parquet reader's footer-memory
   // tracking path is engaged. Lets operators compare the estimate
@@ -815,6 +819,12 @@ struct RuntimeStatistics {
     }
     if (numStripes > 0) {
       result.emplace("numStripes", RuntimeMetric(numStripes));
+    }
+    if (skippedPages > 0) {
+      result.emplace("skippedPages", RuntimeMetric(skippedPages));
+    }
+    if (processedPages > 0) {
+      result.emplace("processedPages", RuntimeMetric(processedPages));
     }
     if (parquetFooterEstimatedBytes > 0) {
       result.emplace(
