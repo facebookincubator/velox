@@ -29,8 +29,8 @@
 #include <cudf/ast/expressions.hpp>
 #include <cudf/copying.hpp>
 #include <cudf/join/hash_join.hpp>
-#include <cudf/utilities/span.hpp>
 #include <cudf/table/table.hpp>
+#include <cudf/utilities/span.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
@@ -287,7 +287,9 @@ class CudfHashJoinProbe : public CudfOperatorBase {
     std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightIndices;
     size_t offset{0};
     size_t buildChunkIndex;
-    size_t remaining() const { return leftIndices->size() - offset; }
+    size_t remaining() const {
+      return leftIndices->size() - offset;
+    }
   };
 
   /// Queue of deferred index pairs awaiting gather in doGetOutput().
@@ -297,32 +299,24 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    * @brief Performs inner join between probe table and all build tables.
    * Populates pendingIndices_ (lazy gather) or outputQueue_ (non-AST filter).
    */
-  void innerJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void innerJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs left join between probe table and all build tables.
    * Populates pendingIndices_ (lazy gather) or outputQueue_ (non-AST filter).
    */
-  void leftJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void leftJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs right join between probe table and all build tables.
    * Populates pendingIndices_ for matched rows. Updates rightMatchedFlags_
    * eagerly. Uses outputQueue_ for non-AST filtered right joins.
    */
-  void rightJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void rightJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs full outer join between probe table and all build tables.
    * Populates pendingIndices_ for matched rows. Updates rightMatchedFlags_
    * eagerly. Full join requires AST filter support.
    */
-  void fullJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void fullJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs left semi filter join. Pushes results to outputQueue_.
    */
@@ -344,9 +338,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /**
    * @brief Performs anti join. Pushes results to outputQueue_.
    */
-  void antiJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void antiJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Constructs join output table without applying filter conditions.
    * @param leftTableView Input probe table view

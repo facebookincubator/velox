@@ -26,8 +26,6 @@
 
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
-
-#include <limits>
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/type/TypeUtil.h"
 
@@ -58,6 +56,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 
 namespace facebook::velox::cudf_velox {
 
@@ -888,13 +887,11 @@ void CudfHashJoinProbe::filterAndEnqueueAstIndices(
         scalars_,
         probeType_,
         stream);
-    extendedLeftView =
-        createExtendedTableView(leftTableView, leftPrecomputed);
+    extendedLeftView = createExtendedTableView(leftTableView, leftPrecomputed);
   }
   auto& rightTables = hashObject_.value().first;
   auto rightTableView = rightTables[rightTableIndex]->view();
-  cudf::table_view extendedRightView =
-      (!rightPrecomputeInstructions_.empty())
+  cudf::table_view extendedRightView = (!rightPrecomputeInstructions_.empty())
       ? cachedExtendedRightViews_[rightTableIndex]
       : rightTableView;
 
@@ -956,9 +953,13 @@ void CudfHashJoinProbe::gatherFilterAndEnqueue(
         filterFunc,
         stream);
     if (output.numRows > 0) {
-      outputQueue_.push(std::make_shared<CudfVector>(
-          pool(), outputType_, output.numRows,
-          std::move(output.table), stream));
+      outputQueue_.push(
+          std::make_shared<CudfVector>(
+              pool(),
+              outputType_,
+              output.numRows,
+              std::move(output.table),
+              stream));
     }
   }
 }
@@ -1059,8 +1060,11 @@ void CudfHashJoinProbe::innerJoin(
               << "] innerJoin (non-AST filter) chunk " << i
               << ": joinResultRows=" << leftJoinIndices->size();
       gatherFilterAndEnqueue(
-          leftTableView, rightTableView,
-          *leftJoinIndices, *rightJoinIndices, stream);
+          leftTableView,
+          rightTableView,
+          *leftJoinIndices,
+          *rightJoinIndices,
+          stream);
     }
     return;
   }
@@ -1075,17 +1079,20 @@ void CudfHashJoinProbe::innerJoin(
         std::nullopt,
         stream,
         get_temp_mr());
-    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] innerJoin chunk "
-            << i << ": joinResultRows=" << leftJoinIndices->size()
+    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] innerJoin chunk " << i
+            << ": joinResultRows=" << leftJoinIndices->size()
             << ", leftProbeRows=" << leftTableView.num_rows()
             << ", rightBuildRows=" << rightTableView.num_rows();
 
     if (joinNode_->filter()) {
       // AST filter: eagerly apply filter_join_indices to reduce index count.
       filterAndEnqueueAstIndices(
-          leftTableView, i,
-          *leftJoinIndices, *rightJoinIndices,
-          cudf::join_kind::INNER_JOIN, stream);
+          leftTableView,
+          i,
+          *leftJoinIndices,
+          *rightJoinIndices,
+          cudf::join_kind::INNER_JOIN,
+          stream);
     } else {
       // No filter: enqueue raw indices for lazy gather.
       enqueuePendingIndices(
@@ -1115,8 +1122,11 @@ void CudfHashJoinProbe::leftJoin(
               << "] leftJoin (non-AST filter) chunk " << i
               << ": joinResultRows=" << leftJoinIndices->size();
       gatherFilterAndEnqueue(
-          leftTableView, rightTableView,
-          *leftJoinIndices, *rightJoinIndices, stream);
+          leftTableView,
+          rightTableView,
+          *leftJoinIndices,
+          *rightJoinIndices,
+          stream);
     }
     return;
   }
@@ -1131,17 +1141,20 @@ void CudfHashJoinProbe::leftJoin(
         std::nullopt,
         stream,
         get_temp_mr());
-    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] leftJoin chunk "
-            << i << ": joinResultRows=" << leftJoinIndices->size()
+    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] leftJoin chunk " << i
+            << ": joinResultRows=" << leftJoinIndices->size()
             << ", leftProbeRows=" << leftTableView.num_rows()
             << ", rightBuildRows=" << rightTableView.num_rows();
 
     if (joinNode_->filter()) {
       // AST filter: eagerly apply filter_join_indices to reduce index count.
       filterAndEnqueueAstIndices(
-          leftTableView, i,
-          *leftJoinIndices, *rightJoinIndices,
-          cudf::join_kind::LEFT_JOIN, stream);
+          leftTableView,
+          i,
+          *leftJoinIndices,
+          *rightJoinIndices,
+          cudf::join_kind::LEFT_JOIN,
+          stream);
     } else {
       // No filter: enqueue raw indices for lazy gather.
       enqueuePendingIndices(
@@ -1176,8 +1189,8 @@ void CudfHashJoinProbe::rightJoin(
         "Chunking for right join is not yet implemented.",
         leftJoinIndices->size());
 
-    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] rightJoin chunk "
-            << i << ": joinResultRows=" << leftJoinIndices->size()
+    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] rightJoin chunk " << i
+            << ": joinResultRows=" << leftJoinIndices->size()
             << ", leftProbeRows=" << leftTableView.num_rows()
             << ", rightBuildRows=" << rightTableView.num_rows();
 
@@ -1252,9 +1265,13 @@ void CudfHashJoinProbe::rightJoin(
           filterFunc,
           stream);
       if (output.numRows > 0) {
-        outputQueue_.push(std::make_shared<CudfVector>(
-            pool(), outputType_, output.numRows,
-            std::move(output.table), stream));
+        outputQueue_.push(
+            std::make_shared<CudfVector>(
+                pool(),
+                outputType_,
+                output.numRows,
+                std::move(output.table),
+                stream));
       }
     } else {
       // No filter: update rightMatchedFlags_ eagerly, then enqueue indices
@@ -1302,8 +1319,8 @@ void CudfHashJoinProbe::fullJoin(
         "Chunking for full join is not yet implemented.",
         leftJoinIndices->size());
 
-    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] fullJoin chunk "
-            << i << ": joinResultRows=" << leftJoinIndices->size()
+    VLOG(1) << "CudfHashJoinProbe[" << planNodeId() << "] fullJoin chunk " << i
+            << ": joinResultRows=" << leftJoinIndices->size()
             << ", leftProbeRows=" << leftTableView.num_rows()
             << ", rightBuildRows=" << rightTableView.num_rows();
 
@@ -1338,7 +1355,8 @@ void CudfHashJoinProbe::fullJoin(
       // Enqueue filtered indices for lazy gather.
       enqueuePendingIndices(
           std::move(filteredLeftJoinIndices),
-          std::move(filteredRightJoinIndices), i);
+          std::move(filteredRightJoinIndices),
+          i);
     } else {
       // No filter: update rightMatchedFlags_ eagerly, then enqueue indices
       // for lazy gather.
@@ -1393,9 +1411,13 @@ void CudfHashJoinProbe::leftSemiFilterJoin(
         rightIndicesCol->view(),
         stream);
     if (output.numRows > 0) {
-      outputQueue_.push(std::make_shared<CudfVector>(
-          pool(), outputType_, output.numRows,
-          std::move(output.table), stream));
+      outputQueue_.push(
+          std::make_shared<CudfVector>(
+              pool(),
+              outputType_,
+              output.numRows,
+              std::move(output.table),
+              stream));
     }
   }
 }
@@ -1910,9 +1932,13 @@ void CudfHashJoinProbe::leftSemiProjectJoin(
 
   auto output = std::make_unique<cudf::table>(std::move(outputCols));
   if (numProbeRows > 0) {
-    outputQueue_.push(std::make_shared<CudfVector>(
-        pool(), outputType_, static_cast<cudf::size_type>(numProbeRows),
-        std::move(output), stream));
+    outputQueue_.push(
+        std::make_shared<CudfVector>(
+            pool(),
+            outputType_,
+            static_cast<cudf::size_type>(numProbeRows),
+            std::move(output),
+            stream));
   }
 }
 
@@ -1958,9 +1984,13 @@ void CudfHashJoinProbe::rightSemiFilterJoin(
       rightIndicesCol,
       stream);
   if (output.numRows > 0) {
-    outputQueue_.push(std::make_shared<CudfVector>(
-        pool(), outputType_, output.numRows,
-        std::move(output.table), stream));
+    outputQueue_.push(
+        std::make_shared<CudfVector>(
+            pool(),
+            outputType_,
+            output.numRows,
+            std::move(output.table),
+            stream));
   }
 }
 
@@ -2036,9 +2066,13 @@ void CudfHashJoinProbe::antiJoin(
       rightIndicesCol->view(),
       stream);
   if (output.numRows > 0) {
-    outputQueue_.push(std::make_shared<CudfVector>(
-        pool(), outputType_, output.numRows,
-        std::move(output.table), stream));
+    outputQueue_.push(
+        std::make_shared<CudfVector>(
+            pool(),
+            outputType_,
+            output.numRows,
+            std::move(output.table),
+            stream));
   }
 }
 
@@ -2141,9 +2175,13 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
           while (remaining > 0) {
             auto const chunkRows =
                 static_cast<vector_size_t>(std::min(remaining, maxRows));
-            outputQueue_.push(std::make_shared<CudfVector>(
-                pool(), outputType_, chunkRows,
-                std::make_unique<cudf::table>(), stream));
+            outputQueue_.push(
+                std::make_shared<CudfVector>(
+                    pool(),
+                    outputType_,
+                    chunkRows,
+                    std::make_unique<cudf::table>(),
+                    stream));
             remaining -= chunkRows;
           }
           if (!outputQueue_.empty()) {
@@ -2162,14 +2200,17 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
           auto batchSize =
               static_cast<vector_size_t>(outputBatches[i]->num_rows());
           if (batchSize > 0) {
-            outputQueue_.push(std::make_shared<CudfVector>(
-                pool(), outputType_, batchSize,
-                std::move(outputBatches[i]), stream));
+            outputQueue_.push(
+                std::make_shared<CudfVector>(
+                    pool(),
+                    outputType_,
+                    batchSize,
+                    std::move(outputBatches[i]),
+                    stream));
           }
         }
 
-        auto size =
-            static_cast<vector_size_t>(outputBatches[0]->num_rows());
+        auto size = static_cast<vector_size_t>(outputBatches[0]->num_rows());
         if (size == 0) {
           return nullptr;
         }

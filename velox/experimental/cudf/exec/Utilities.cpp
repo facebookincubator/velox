@@ -98,11 +98,12 @@ std::vector<std::unique_ptr<cudf::table>> concatenateViewsBatched(
     // If adding this view would exceed the limit, flush current batch
     // [startpos, i).
     if (runningRows > 0 && runningRows + numRows > maxRows) {
-      output.push_back(cudf::concatenate(
-          std::vector<cudf::table_view>(
-              views.begin() + startpos, views.begin() + i),
-          stream,
-          mr));
+      output.push_back(
+          cudf::concatenate(
+              std::vector<cudf::table_view>(
+                  views.begin() + startpos, views.begin() + i),
+              stream,
+              mr));
       startpos = i;
       runningRows = 0;
     }
@@ -110,11 +111,12 @@ std::vector<std::unique_ptr<cudf::table>> concatenateViewsBatched(
   }
   // Flush the final batch [startpos, end).
   if (startpos < views.size()) {
-    output.push_back(cudf::concatenate(
-        std::vector<cudf::table_view>(
-            views.begin() + startpos, views.end()),
-        stream,
-        mr));
+    output.push_back(
+        cudf::concatenate(
+            std::vector<cudf::table_view>(
+                views.begin() + startpos, views.end()),
+            stream,
+            mr));
   }
   return output;
 }
