@@ -1147,6 +1147,14 @@ void ExecutorTestBase::runTestWithFixture(
     auto debugFrame = waveExec.getFrame();
     ASSERT_NE(debugFrame, nullptr);
     for (int run = 0; run < 2; ++run) {
+      // The frame is reused across runs; clear the prior run's intermediates so
+      // this run recomputes from the refilled inputs.  Otherwise stale outputs
+      // make standalone ops (including in-place mutations) look
+      // already-computed (see nodeOutputsComputed) and get skipped, yielding
+      // stale results.
+      if (run > 0) {
+        debugFrame->clearNonPersistentValues();
+      }
       fillWaveFrame(graph, *debugFrame, deviceInputs);
       auto outputs = waveExec.executeWithPrefilledFrame(*debugFrame);
       if (run == 1) {

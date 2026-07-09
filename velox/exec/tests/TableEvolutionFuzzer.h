@@ -136,9 +136,7 @@ class TableEvolutionFuzzer {
       const PushdownConfig& pushdownConfig,
       bool useFiltersAsNode,
       bool insertProjectToBlockPushdown,
-      const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
-          globalMapColumnKeys = {},
-      const std::vector<int>& globallyCompatibleFlatmapColumns = {});
+      const RowTypePtr& fullOutSchema);
 
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.
