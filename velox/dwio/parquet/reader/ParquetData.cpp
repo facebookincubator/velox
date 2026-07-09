@@ -118,7 +118,8 @@ bool ParquetData::collectIndexPageInfoMap(
   }
   const auto& chunk =
       fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
-  if (chunk.hasColumnAndOffsetIndexOffset()) {
+  if (chunk.hasColumnAndOffsetIndexOffset() && chunk.columnIndexLength() > 0 &&
+      chunk.offsetIndexLength() > 0) {
     map[type_->column()] = {
         chunk.offsetIndexOffset(),
         chunk.offsetIndexLength(),

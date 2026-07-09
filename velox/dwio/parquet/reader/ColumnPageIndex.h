@@ -131,13 +131,17 @@ class ColumnPageIndex {
   std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsForPage(
       size_t index,
       const velox::Type& type) {
-    std::optional<uint64_t> valueCount = columnIndex_.null_counts().has_value()
-        ? std::optional<uint64_t>(
-              pageRowCount_.at(index) - columnIndex_.null_counts()->at(index))
-        : std::nullopt;
-    std::optional<bool> hasNull = columnIndex_.null_counts().has_value()
-        ? std::optional<bool>(columnIndex_.null_counts()->at(index) > 0)
-        : std::nullopt;
+    std::optional<uint64_t> valueCount = std::nullopt;
+    std::optional<bool> hasNull = std::nullopt;
+    if (columnIndex_.null_counts().has_value()) {
+      auto nullCount = columnIndex_.null_counts()->at(index);
+      auto rowCount = pageRowCount_.at(index);
+      // Validate null_counts <= pageRowCount to avoid underflow.
+      if (static_cast<uint64_t>(nullCount) <= rowCount) {
+        valueCount = rowCount - nullCount;
+        hasNull = nullCount > 0;
+      }
+    }
 
     switch (type.kind()) {
       case TypeKind::BOOLEAN:
@@ -236,7 +240,10 @@ class ColumnPageIndex {
 
  private:
   template <typename T>
-  inline const T load(const char* ptr) {
+  inline std::optional<T> load(const char* ptr, size_t bufferSize) {
+    if (bufferSize < sizeof(T)) {
+      return std::nullopt;
+    }
     T ret;
     std::memcpy(&ret, ptr, sizeof(ret));
     return ret;
@@ -250,7 +257,8 @@ class ColumnPageIndex {
     if constexpr (std::is_same_v<T, std::string>) {
       return std::optional<T>(columnIndex_.min_values()->at(i));
     } else {
-      return std::optional<T>(load<T>(columnIndex_.min_values()->at(i).data()));
+      const auto& data = columnIndex_.min_values()->at(i);
+      return load<T>(data.data(), data.size());
     }
   }
 
@@ -262,7 +270,8 @@ class ColumnPageIndex {
     if constexpr (std::is_same_v<T, std::string>) {
       return std::optional<T>(columnIndex_.max_values()->at(i));
     } else {
-      return std::optional<T>(load<T>(columnIndex_.max_values()->at(i).data()));
+      const auto& data = columnIndex_.max_values()->at(i);
+      return load<T>(data.data(), data.size());
     }
   }
 

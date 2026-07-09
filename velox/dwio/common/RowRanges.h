@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::dwio::common {
@@ -55,12 +57,18 @@ struct RowRange {
   static std::optional<RowRange> tryUnion(
       const RowRange& left,
       const RowRange& right) {
+    // Check if ranges are adjacent or overlapping.
+    // Rewrite "a.to_ + 1 >= b.from_" as "b.from_ - a.to_ <= 1" to avoid
+    // overflow when to_ == UINT64_MAX. Since from_ <= to_ for valid ranges,
+    // and we know a.from_ <= b.from_ in the first branch, we have
+    // a.to_ >= a.from_, so b.from_ - a.to_ won't underflow if b.from_ >= a.to_.
+    // If b.from_ < a.to_, ranges overlap, which is the case we want to capture.
     if (left.from_ <= right.from_) {
-      if (left.to_ + 1 >= right.from_) {
+      if (right.from_ <= left.to_ || right.from_ - left.to_ <= 1) {
         return RowRange(left.from_, std::max(left.to_, right.to_));
       }
     } else {
-      if (right.to_ + 1 >= left.from_) {
+      if (left.from_ <= right.to_ || left.from_ - right.to_ <= 1) {
         return RowRange(right.from_, std::max(left.to_, right.to_));
       }
     }
@@ -150,15 +158,24 @@ class RowRanges {
   }
 
   /// Computes the unionWith of two RowRanges objects.
+  /// Uses merge algorithm since both inputs are already sorted.
   static RowRanges unionWith(const RowRanges& left, const RowRanges& right) {
-    std::vector<RowRange> all = left.ranges_;
-    all.insert(all.end(), right.ranges_.begin(), right.ranges_.end());
-    std::sort(all.begin(), all.end(), [](const RowRange& a, const RowRange& b) {
-      return a.from_ < b.from_;
-    });
     RowRanges result;
-    for (const auto& r : all) {
-      result.add(r);
+    size_t i = 0, j = 0;
+    const auto& A = left.ranges_;
+    const auto& B = right.ranges_;
+    while (i < A.size() && j < B.size()) {
+      if (A[i].from_ <= B[j].from_) {
+        result.add(A[i++]);
+      } else {
+        result.add(B[j++]);
+      }
+    }
+    while (i < A.size()) {
+      result.add(A[i++]);
+    }
+    while (j < B.size()) {
+      result.add(B[j++]);
     }
     return result;
   }
@@ -228,18 +245,19 @@ class RowRanges {
   }
 
   /// Check if the given interval [from, to] overlaps with any existing
-  /// interval.
+  /// interval. Uses binary search for efficiency.
   bool isOverlapping(int64_t from, int64_t to) const {
-    RowRange query(from, to);
-    for (const auto& r : ranges_) {
-      if (query.isBefore(r)) {
-        break;
-      }
-      if (!query.isAfter(r)) {
-        return true;
-      }
+    if (ranges_.empty()) {
+      return false;
     }
-    return false;
+    // Binary search for the first range whose to_ >= from (potential overlap).
+    auto it = std::lower_bound(
+        ranges_.begin(),
+        ranges_.end(),
+        from,
+        [](const RowRange& r, int64_t val) { return r.to_ < val; });
+    // Check if we found a range that overlaps with [from, to].
+    return it != ranges_.end() && it->from_ <= to;
   }
 
   /// Return string representation, e.g. "[[0, 9], [15, 20]]".
