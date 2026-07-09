@@ -81,10 +81,6 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return bytesFlushed_ + buffer_.size();
   }
 
-  int64_t bufferedBytes() const {
-    return buffer_.size();
-  }
-
   ::arrow::Status Close() override {
     ARROW_RETURN_NOT_OK(Flush());
     sink_->close();
@@ -111,6 +107,8 @@ struct ArrowContext {
   std::unique_ptr<FileWriter> writer;
   std::shared_ptr<::arrow::Schema> schema;
   std::shared_ptr<WriterProperties> properties;
+  uint64_t stagingRows = 0;
+  int64_t stagingBytes = 0;
 };
 
 Compression::type getArrowParquetCompression(
@@ -427,6 +425,7 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, parquetWriterOptions, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = parquetWriterOptions.writeInt96AsTimestamp;
+  enableParallelWrite_ = parquetWriterOptions.enableParallelWrite;
   arrowMemoryPool_ = parquetWriterOptions.arrowMemoryPool;
   parquetFieldIds_ = parquetWriterOptions.parquetFieldIds;
 }
@@ -445,25 +444,45 @@ Writer::Writer(
           std::move(schema)} {}
 
 void Writer::flush() {
-  if (arrowContext_->writer) {
-    PARQUET_THROW_NOT_OK(arrowContext_->writer->finishRowGroup());
+  if (arrowContext_->stagingRows > 0) {
+    if (arrowContext_->writer) {
+      // Complete the current buffered row group so its encoded/compressed
+      // data is written to the stream. This makes the bytes visible to
+      // callers that check raw written bytes for file-rotation decisions.
+      PARQUET_THROW_NOT_OK(arrowContext_->writer->flushBufferedRowGroup());
+    }
+    PARQUET_THROW_NOT_OK(stream_->Flush());
+    arrowContext_->stagingRows = 0;
+    arrowContext_->stagingBytes = 0;
   }
-  PARQUET_THROW_NOT_OK(stream_->Flush());
 }
 
-dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
-  // Arrow Parquet FileWriter will new row group based on the row number, so
-  // we only check buffered bytes to flush row group here.
-  return dwio::common::StripeProgress{.stripeSizeEstimate = bufferedBytes};
+dwio::common::StripeProgress getStripeProgress(
+    uint64_t stagingRows,
+    int64_t stagingBytes) {
+  return dwio::common::StripeProgress{
+      .stripeRowCount = stagingRows, .stripeSizeEstimate = stagingBytes};
 }
 
 /**
+ * This method would cache input `ColumnarBatch` to make the size of row group
+ * big. It would flush when:
+ * - the cached numRows bigger than `rowsInRowGroup_`
+ * - the cached bytes bigger than `bytesInRowGroup_`
+ *
  * This method assumes each input `ColumnarBatch` have same schema.
  */
 void Writer::write(const VectorPtr& data) {
   VELOX_USER_CHECK(
       data->type()->equivalent(*schema_),
       "The file schema type should be equal with the input rowvector type.");
+
+  // Nothing to write for an empty batch. Avoid creating the FileWriter so
+  // that close() will not produce a file (and commit task) for zero-row
+  // inputs.
+  if (data->size() == 0) {
+    return;
+  }
 
   VectorPtr exportData = data;
   if (needFlatten(exportData)) {
@@ -502,39 +521,49 @@ void Writer::write(const VectorPtr& data) {
       auto recordBatch,
       ::arrow::ImportRecordBatch(&array, arrowContext_->schema));
 
-  if (recordBatch->num_rows() == 0) {
-    return;
+  auto bytes = data->estimateFlatSize();
+  auto numRows = data->size();
+
+  // Check flush policy before writing. Flush closes the current buffered
+  // row group so the next writeRecordBatch starts a new one.
+  if (flushPolicy_->shouldFlush(getStripeProgress(
+          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
+    flush();
   }
 
+  // Lazily open the FileWriter on the first batch that has data.
   if (!arrowContext_->writer) {
     ArrowWriterProperties::Builder builder;
     if (writeInt96AsTimestamp_) {
       builder.enableDeprecatedInt96Timestamps();
     }
+    if (enableParallelWrite_) {
+      builder.setUseThreads(true);
+    }
     auto arrowProperties = builder.build();
     PARQUET_ASSIGN_OR_THROW(
         arrowContext_->writer,
         FileWriter::open(
-            *recordBatch->schema(),
+            *arrowContext_->schema.get(),
             arrowMemoryPool_.get(),
             stream_,
             arrowContext_->properties,
             arrowProperties));
   }
 
+  // Write the batch directly. The Arrow writer manages buffered row groups
+  // and splits them when maxRowGroupLength is reached.
   PARQUET_THROW_NOT_OK(arrowContext_->writer->writeRecordBatch(*recordBatch));
+
+  arrowContext_->stagingRows += numRows;
+  arrowContext_->stagingBytes += bytes;
 
   // Flush as soon as the current write pushes the staged row group past the
   // policy threshold. Otherwise callers that rotate files based on raw written
   // bytes won't observe the row group until the next write.
   if (flushPolicy_->shouldFlush(getStripeProgress(
-          arrowContext_->writer->currentRowGroupTotalBytes()))) {
+          arrowContext_->stagingRows, arrowContext_->stagingBytes))) {
     flush();
-  } else if (flushPolicy_->bytesInRowGroup() <= stream_->bufferedBytes()) {
-    // Flush the sink separately so completed row groups don't keep accumulating
-    // in the stream buffer when Arrow keeps starting new row groups before the
-    // current one hits the byte threshold.
-    PARQUET_THROW_NOT_OK(stream_->Flush());
   }
 }
 
@@ -543,11 +572,9 @@ bool Writer::isCodecAvailable(common::CompressionKind compression) {
       getArrowParquetCompression(compression));
 }
 
-void Writer::newRowGroup(int32_t numRows) {
-  PARQUET_THROW_NOT_OK(arrowContext_->writer->newRowGroup(numRows));
-}
-
 std::unique_ptr<dwio::common::FileMetadata> Writer::close() {
+  flush();
+
   std::unique_ptr<ParquetFileMetadata> parquetFileMetadata;
   if (arrowContext_->writer) {
     PARQUET_THROW_NOT_OK(arrowContext_->writer->close());

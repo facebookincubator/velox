@@ -56,12 +56,6 @@ class ParquetFileMetadata : public dwio::common::FileMetadata {
   std::shared_ptr<arrow::FileMetaData> metadata_;
 };
 
-/// Parquet writer enforces the row-count cap via Arrow, and this policy
-/// supplements it with a byte threshold. For Parquet,
-/// - stripeSizeEstimate: the actual compressed bytes of current row group.
-/// - stripeRowCount: remains 0.
-/// Custom Parquet policies should derive from DefaultFlushPolicy to preserve
-/// this contract.
 class DefaultFlushPolicy : public dwio::common::FlushPolicy {
  public:
   DefaultFlushPolicy()
@@ -75,7 +69,8 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
+        stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
   }
 
   void onClose() override {
@@ -148,6 +143,12 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
 
+  /// Write columns in parallel using Arrow's internal thread pool.
+  /// Compression and encoding of different columns proceed concurrently.
+  /// Default is false. Do not enable when writing multiple files in the same
+  /// executor to avoid deadlocks.
+  bool enableParallelWrite = false;
+
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
 
   /// Optional field IDs to assign to columns in the Parquet schema.
@@ -161,10 +162,9 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
 class Writer : public dwio::common::Writer {
  public:
   // Constructs a writer with output to 'sink'. 'options' carries common writer
-  // options and Parquet-specific format options. For Parquet,
-  // 'options.flushPolicyFactory' must create a DefaultFlushPolicy (or a
-  // subclass); 'pool' is used for temporary memory. 'schema' specifies the
-  // file's overall schema, and it is always non-null.
+  // options and Parquet-specific format options. 'pool' is used for temporary
+  // memory. 'schema' specifies the file's overall schema, and it is always
+  // non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
       const dwio::common::WriterOptions& options,
@@ -184,9 +184,6 @@ class Writer : public dwio::common::Writer {
   void write(const VectorPtr& data) override;
 
   void flush() override;
-
-  // Forces a row group boundary before the data added by next write().
-  void newRowGroup(int32_t numRows);
 
   bool finish() override {
     return true;
@@ -229,6 +226,9 @@ class Writer : public dwio::common::Writer {
 
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;
+
+  // Whether to write columns in parallel using Arrow's thread pool.
+  bool enableParallelWrite_;
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {

@@ -346,16 +346,10 @@ class FileWriterImpl : public FileWriter {
     if (!closed_) {
       // Make idempotent.
       closed_ = true;
-      PARQUET_CATCH_NOT_OK(finishRowGroup());
+      if (rowGroupWriter_ != nullptr) {
+        PARQUET_CATCH_NOT_OK(rowGroupWriter_->close());
+      }
       PARQUET_CATCH_NOT_OK(writer_->close());
-    }
-    return Status::OK();
-  }
-
-  ::arrow::Status finishRowGroup() override {
-    if (rowGroupWriter_ != nullptr) {
-      PARQUET_CATCH_NOT_OK(rowGroupWriter_->close());
-      rowGroupWriter_ = nullptr;
     }
     return Status::OK();
   }
@@ -444,6 +438,14 @@ class FileWriterImpl : public FileWriter {
     return Status::OK();
   }
 
+  Status flushBufferedRowGroup() override {
+    if (rowGroupWriter_ != nullptr) {
+      PARQUET_CATCH_NOT_OK(rowGroupWriter_->close());
+      rowGroupWriter_ = nullptr;
+    }
+    return Status::OK();
+  }
+
   Status writeRecordBatch(const RecordBatch& batch) override {
     if (batch.num_rows() == 0) {
       return Status::OK();
@@ -502,25 +504,14 @@ class FileWriterImpl : public FileWriter {
       RETURN_NOT_OK(writeBatch(offset, batchSize));
       offset += batchSize;
 
-      // Flush current row group if it is full.
+      // Flush current row group if it is full and there is more data to write.
       if (rowGroupWriter_->numRows() >= maxRowGroupLength &&
-          // Avoid leaving an empty row group at the end of the file.
           offset < batch.num_rows()) {
         RETURN_NOT_OK(newBufferedRowGroup());
       }
     }
 
     return Status::OK();
-  }
-
-  int64_t currentRowGroupTotalBytes() const override {
-    if (rowGroupWriter_ == nullptr) {
-      return 0;
-    }
-    auto stats = rowGroupWriter_->estimatedBufferedStats();
-    return stats.defLevelBytes + stats.repLevelBytes + stats.valueBytes +
-        stats.dictBytes + rowGroupWriter_->totalCompressedBytes() +
-        rowGroupWriter_->totalCompressedBytesWritten();
   }
 
   const WriterProperties& properties() const {

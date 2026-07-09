@@ -18,7 +18,6 @@
 
 namespace facebook::velox::dwio::common {
 
-/// Format-specific writers may use different underlying metrics.
 struct StripeProgress {
   uint32_t stripeIndex{0};
   uint64_t stripeRowCount{0};
@@ -28,8 +27,7 @@ struct StripeProgress {
 };
 
 // Specific formats can extend this interface to do additional
-// checks and customize how the decisions are combined. They may only populate
-// or honor a subset of StripeProgress fields.
+// checks and customize how the decisions are combined.
 class FlushPolicy {
  public:
   virtual ~FlushPolicy() = default;

@@ -378,6 +378,64 @@ BENCHMARK(MapVarcharInt_10Entries) {
   benchMapColumn(10);
 }
 
+BENCHMARK_DRAW_LINE();
+
+// -- Parallel column writing benchmarks --
+// These exercise the enableParallelWrite option which compresses and encodes
+// columns concurrently using Arrow's internal CPU thread pool.
+
+// Writes with parallel column writing enabled.
+void writeParquetParallel(
+    const RowVectorPtr& data,
+    memory::MemoryPool* rootPool) {
+  auto leafPool = rootPool->addLeafChild("sink");
+  for (int32_t i = 0; i < kNumIterations; ++i) {
+    folly::BenchmarkSuspender suspender;
+    auto sink = std::make_unique<MemorySink>(
+        kSinkSize, FileSink::Options{.pool = leafPool.get()});
+    WriterOptions options;
+    options.memoryPool = rootPool;
+    auto parquetOptions = std::make_shared<ParquetWriterOptions>();
+    parquetOptions->enableParallelWrite = true;
+    options.formatSpecificOptions = parquetOptions;
+    suspender.dismiss();
+    auto writer = std::make_unique<parquet::Writer>(
+        std::move(sink), options, asRowType(data->type()));
+    writer->write(data);
+    writer->close();
+    suspender.rehire();
+  }
+}
+
+void benchParallelColumns(int32_t numColumns) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+
+  std::vector<VectorPtr> columns;
+  std::vector<std::string> names;
+
+  for (int32_t i = 0; i < numColumns; ++i) {
+    columns.push_back(makeDictVarchar(kNumRows, 100, leafPool.get()));
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto data = maker.rowVector(std::move(names), columns);
+
+  suspender.dismiss();
+  writeParquetParallel(data, rootPool.get());
+}
+
+BENCHMARK(Parallel_5Cols) {
+  benchParallelColumns(5);
+}
+BENCHMARK(Parallel_10Cols) {
+  benchParallelColumns(10);
+}
+BENCHMARK(Parallel_20Cols) {
+  benchParallelColumns(20);
+}
+
 } // namespace
 
 int32_t main(int32_t argc, char* argv[]) {
