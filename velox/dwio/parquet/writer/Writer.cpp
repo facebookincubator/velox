@@ -603,6 +603,22 @@ bool childNeedsFlatten(const VectorPtr& child) {
       if (!innerVector->isFlatEncoding()) {
         return true;
       }
+      // Only VARCHAR and VARBINARY benefit from dictionary passthrough in
+      // Parquet. Arrow's Parquet writer converts non-binary-like dictionary
+      // arrays back to dense anyway, and passing them through as dictionaries
+      // causes schema inconsistency across batches (the cached schema from the
+      // first batch may not match the encoding of subsequent batches).
+      auto typeKind = innerVector->typeKind();
+      if (typeKind != TypeKind::VARCHAR && typeKind != TypeKind::VARBINARY) {
+        return true;
+      }
+      // Arrow's Parquet writer does not support writing DictionaryArray when
+      // the dictionary values contain nulls. Flatten to avoid the
+      // "NotImplemented: Writing DictionaryArray with null encoded in
+      // dictionary type not yet supported" error.
+      if (innerVector->mayHaveNulls()) {
+        return true;
+      }
     }
   } else if (encoding == VectorEncoding::Simple::CONSTANT) {
     // Flatten constant wrapping a non-flat inner vector
@@ -623,8 +639,18 @@ VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
 
   const auto& children = rowVector->children();
   bool anyNeedsFlatten = false;
-  for (const auto& child : children) {
-    if (childNeedsFlatten(child)) {
+  for (size_t i = 0; i < children.size(); ++i) {
+    if (childNeedsFlatten(children[i])) {
+      anyNeedsFlatten = true;
+      break;
+    }
+    // Schema consistency: if the schema is already cached and expects a
+    // non-dictionary type for this column, flatten any dictionary vector
+    // to avoid import errors from schema/data encoding mismatch across batches.
+    if (arrowContext_->schema &&
+        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+        arrowContext_->schema->field(i)->type()->id() !=
+            ::arrow::Type::DICTIONARY) {
       anyNeedsFlatten = true;
       break;
     }
@@ -637,7 +663,16 @@ VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
   // Selectively flatten only the columns that need it.
   std::vector<VectorPtr> newChildren(children.size());
   for (size_t i = 0; i < children.size(); ++i) {
-    if (childNeedsFlatten(children[i])) {
+    bool needsFlatten = childNeedsFlatten(children[i]);
+    // Also flatten if the cached schema does not expect a dictionary for this
+    // column (prevents schema/data mismatch on subsequent batches).
+    if (!needsFlatten && arrowContext_->schema &&
+        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+        arrowContext_->schema->field(i)->type()->id() !=
+            ::arrow::Type::DICTIONARY) {
+      needsFlatten = true;
+    }
+    if (needsFlatten) {
       newChildren[i] = children[i];
       BaseVector::flattenVector(newChildren[i]);
     } else {
