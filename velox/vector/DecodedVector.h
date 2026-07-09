@@ -209,6 +209,51 @@ class DecodedVector {
     return bits::isBitNull(nulls_, indices_[idx]);
   }
 
+  /// Returns whether any decoded row is actually null, scanning the bitmap for
+  /// a definitive answer. mayHaveNulls() is only indeterminate: it is true
+  /// whenever a null buffer is present, even if no bit in it is set.
+  ///
+  /// Side effect (so it is non-const, like nulls()): the first call that finds
+  /// no nulls normalizes this view -- drops the null buffer pointer, clears
+  /// mayHaveNulls()/hasExtraNulls(), and invalidates the nulls() cache -- so
+  /// later null checks take the no-null fast path and repeated calls are O(1).
+  /// Only this decoded view is touched, never the base vector; a view that has
+  /// nulls is left unchanged.
+  ///
+  /// Scans only when a null buffer is present: bulk for flat and combined-nulls
+  /// encodings, O(1) for constants, O(size()) for a dictionary (nulls indexed
+  /// indirectly).
+  bool hasNulls() {
+    if (!mayHaveNulls_) {
+      return false;
+    }
+    bool anyNull = false;
+    if (nulls_ != nullptr) {
+      if (isIdentityMapping_ || hasExtraNulls_) {
+        // Bitmap is indexed directly by decoded row over [0, size()).
+        anyNull = !bits::isAllSet(nulls_, 0, size_);
+      } else if (isConstantMapping_) {
+        anyNull = bits::isBitNull(nulls_, 0);
+      } else {
+        // Dictionary without extra nulls: resolve each row's base index.
+        VELOX_DCHECK(indices_);
+        for (vector_size_t i = 0; i < size_; ++i) {
+          if (bits::isBitNull(nulls_, indices_[i])) {
+            anyNull = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!anyNull) {
+      nulls_ = nullptr;
+      mayHaveNulls_ = false;
+      hasExtraNulls_ = false;
+      allNulls_.reset();
+    }
+    return anyNull;
+  }
+
   /// Invokes 'func(row)' for each null top-level row in [begin, end), in
   /// increasing row order. 'func' must be invocable as 'void(vector_size_t)'.
   ///

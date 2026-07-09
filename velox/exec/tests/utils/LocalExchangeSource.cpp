@@ -17,8 +17,8 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec::test {
 namespace {
@@ -55,8 +55,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
       promise_ = std::move(promise);
     }
 
-    auto buffers = OutputBufferManager::getInstanceRef();
-    VELOX_CHECK_NOT_NULL(buffers, "invalid OutputBufferManager");
+    auto buffers = DefaultOutputBufferManager::getInstanceRef();
+    VELOX_CHECK_NOT_NULL(buffers, "invalid DefaultOutputBufferManager");
     VELOX_CHECK(requestPending_);
     auto requestedSequence = sequence_;
     auto self = shared_from_this();
@@ -169,8 +169,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
   void pause() override {
     common::testutil::TestValue::adjust(
         "facebook::velox::exec::test::LocalExchangeSource::pause", nullptr);
-    auto buffers = OutputBufferManager::getInstanceRef();
-    VELOX_CHECK_NOT_NULL(buffers, "invalid OutputBufferManager");
+    auto buffers = DefaultOutputBufferManager::getInstanceRef();
+    VELOX_CHECK_NOT_NULL(buffers, "invalid DefaultOutputBufferManager");
     int64_t ackSequence;
     {
       std::lock_guard<std::mutex> l(queue_->mutex());
@@ -182,7 +182,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
   void close() override {
     checkSetRequestPromise();
 
-    auto buffers = OutputBufferManager::getInstanceRef();
+    auto buffers = DefaultOutputBufferManager::getInstanceRef();
     buffers->deleteResults(remoteTaskId_, destination_);
   }
 
