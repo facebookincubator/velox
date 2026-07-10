@@ -118,6 +118,29 @@ TEST_F(ToJsonTest, basicString) {
   testToJson(input, expected);
 }
 
+TEST_F(ToJsonTest, basicBinary) {
+  disableJsonIgnoreNullFields();
+  auto data = makeNullableFlatVector<std::string>(
+      {"Man",
+       "",
+       std::string("\x01", 1),
+       std::string("\xff\xee", 2),
+       "Spark SQL",
+       std::string(58, 'A'),
+       std::nullopt},
+      VARBINARY());
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":"TWFu"})",
+       R"({"a":""})",
+       R"({"a":"AQ=="})",
+       R"({"a":"/+4="})",
+       R"({"a":"U3BhcmsgU1FM"})",
+       R"({"a":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ=="})",
+       R"({"a":null})"});
+  testToJson(input, expected);
+}
+
 TEST_F(ToJsonTest, basicTinyInt) {
   auto data =
       makeNullableFlatVector<int8_t>({0, 127, 128, -128, -129, std::nullopt});
