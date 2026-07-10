@@ -1853,4 +1853,46 @@ TEST_F(AggregationTest, maskedMinMaxVarchar) {
           "FROM tmp GROUP BY k");
 }
 
+// Masked groupby across multiple input batches, so the cross-batch reuse of
+// maskedValues_/maskedCount_ actually runs: groups and mask true/false/null
+// rows straddle batch boundaries.
+TEST_F(AggregationTest, maskedGroupbyMultiBatch) {
+  auto batch1 = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 2, 1}),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeNullableFlatVector<bool>({true, false, std::nullopt})});
+  auto batch2 = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({2, 1, 2}),
+       makeFlatVector<int64_t>({40, 50, 60}),
+       makeFlatVector<bool>({true, true, false})});
+  createDuckDbTable({batch1, batch2});
+  auto plan = PlanBuilder()
+                  .values({batch1, batch2})
+                  .singleAggregation({"k"}, {"sum(v)", "count(v)"}, {"m", "m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(v) FILTER (WHERE m), count(v) FILTER (WHERE m) "
+          "FROM tmp GROUP BY k");
+}
+
+// Global masked min/max (no GROUP BY) with an all-false mask: every row is
+// excluded, so both aggregates return NULL (the all-excluded reduce path).
+TEST_F(AggregationTest, maskedMinMaxGlobalAllExcluded) {
+  auto data = makeRowVector(
+      {"v", "m"},
+      {makeFlatVector<int64_t>({10, 20, 30, 40}),
+       makeFlatVector<bool>({false, false, false, false})});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"min(v)", "max(v)"}, {"m", "m"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT min(v) FILTER (WHERE m), max(v) FILTER (WHERE m) FROM tmp");
+}
+
 } // namespace facebook::velox::exec::test
