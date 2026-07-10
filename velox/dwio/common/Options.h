@@ -636,7 +636,7 @@ class RowReaderOptions {
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
   // This is a bit of a hack as there is (by design) no good way
-  // To propogate information from column reader to Koski
+  // To propagate information from column reader to Koski
   std::function<void(
       facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback_;
