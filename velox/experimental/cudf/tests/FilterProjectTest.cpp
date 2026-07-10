@@ -649,6 +649,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
   std::vector<RowVectorPtr> makeTimestampExtractVectors() {
     std::vector<std::optional<Timestamp>> timestamps = {
+        Timestamp(-14400, 0), // 1969-12-31 20:00:00
         Timestamp(1609459199, 0), // 2020-12-31 23:59:59
         Timestamp(1609459200, 0), // 2021-01-01 00:00:00
         Timestamp(1609718400, 0), // 2021-01-04 00:00:00
@@ -658,6 +659,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
         std::nullopt};
 
     std::vector<std::optional<int32_t>> dates = {
+        toDateDays("1969-12-31"),
         toDateDays("2020-12-31"),
         toDateDays("2021-01-01"),
         toDateDays("2021-01-04"),
@@ -668,7 +670,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
     auto data = makeRowVector(
         {"event_id", "event_ts", "event_date"},
-        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
          makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
          makeNullableFlatVector<int32_t>(dates, DATE())});
     return {data};
@@ -1223,7 +1225,8 @@ TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
                   .project({"date_add('day', 2147483648, event_date) AS r"})
                   .planNode();
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()), "Value should be in range");
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
 }
 
 TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {

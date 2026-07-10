@@ -19,6 +19,8 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 
+#include <cudf/scalar/scalar.hpp>
+
 namespace facebook::velox::cudf_velox {
 
 /// Truncates a timestamp or date to the specified unit (second, minute, hour,
@@ -36,7 +38,10 @@ class DateTruncFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override;
 
  private:
-  functions::DateTimeUnit unit_;
+  functions::DateTimeUnit unit_{};
+  std::unique_ptr<cudf::scalar> oneScalar_;
+  std::unique_ptr<cudf::scalar> threeScalar_;
+  std::unique_ptr<cudf::scalar> negOneScalar_;
 };
 
 } // namespace facebook::velox::cudf_velox

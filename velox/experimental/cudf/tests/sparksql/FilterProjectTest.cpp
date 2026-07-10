@@ -224,6 +224,12 @@ TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
   EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("month", ts));
   EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("quarter", ts));
   EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("year", ts));
+
+  auto preEpochTs = parseTs("1969-12-31 20:00:00");
+  EXPECT_EQ(parseTs("1969-12-31 00:00:00"), dateTrunc("day", preEpochTs));
+  EXPECT_EQ(parseTs("1969-12-01 00:00:00"), dateTrunc("month", preEpochTs));
+  EXPECT_EQ(parseTs("1969-10-01 00:00:00"), dateTrunc("quarter", preEpochTs));
+  EXPECT_EQ(parseTs("1969-01-01 00:00:00"), dateTrunc("year", preEpochTs));
 }
 
 TEST_F(CudfFilterProjectTest, getConstantIndex) {

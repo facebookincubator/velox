@@ -63,10 +63,15 @@ int32_t unitScale(DateTimeUnit unit) {
 
 // Multiplies value by scale and returns the result as int32_t, throwing if
 // either value or value*scale overflow int32_t.
+void checkDateAddValueInInt32Range(int64_t value) {
+  VELOX_USER_CHECK(
+      value == static_cast<int32_t>(value), "date_add value is out of range");
+}
+
 int32_t checkedScaleValue(int64_t value, int32_t scale) {
-  functions::checkValueInInt32Range(value);
+  checkDateAddValueInInt32Range(value);
   const auto scaledValue = value * scale;
-  functions::checkValueInInt32Range(scaledValue);
+  checkDateAddValueInInt32Range(scaledValue);
   return static_cast<int32_t>(scaledValue);
 }
 

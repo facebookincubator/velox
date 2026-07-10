@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
@@ -31,6 +32,9 @@ using functions::DateTimeUnit;
 bool DateTruncFunction::canEvaluate(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   if (expr->inputs().size() != 2) {
+    return false;
+  }
+  if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1])) {
     return false;
   }
   auto unitString = constantVarcharValue(expr->inputs()[0]);
@@ -82,20 +86,36 @@ DateTruncFunction::DateTruncFunction(
     VELOX_CHECK(
         isTimestamp, "date_trunc {} requires timestamp input", *unitString);
   }
+
+  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto mr = get_temp_mr();
+  oneScalar_ =
+      std::make_unique<cudf::numeric_scalar<int32_t>>(1, true, stream, mr);
+  threeScalar_ =
+      std::make_unique<cudf::numeric_scalar<int32_t>>(3, true, stream, mr);
+  negOneScalar_ =
+      std::make_unique<cudf::numeric_scalar<int32_t>>(-1, true, stream, mr);
+  stream.synchronize();
 }
 
 ColumnOrView DateTruncFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
+  VELOX_CHECK_EQ(inputColumns.size(), 1, "date_trunc expects one column input");
   auto inputCol = asView(inputColumns[0]);
   auto outputType = inputCol.type();
   auto dayType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
   auto intType = cudf::data_type(cudf::type_id::INT32);
   auto durationDayType = cudf::data_type(cudf::type_id::DURATION_DAYS);
 
-  auto castToDay = [&](cudf::column_view col) {
-    return cudf::cast(col, dayType, stream, mr);
+  auto floorToDay = [&](cudf::column_view col) {
+    if (col.type() == dayType) {
+      return std::make_unique<cudf::column>(col, stream, mr);
+    }
+    auto floored = cudf::datetime::floor_datetimes(
+        col, cudf::datetime::rounding_frequency::DAY, stream, mr);
+    return cudf::cast(floored->view(), dayType, stream, mr);
   };
   auto castToInt32 = [&](cudf::column_view col) {
     return cudf::cast(col, intType, stream, mr);
@@ -111,10 +131,6 @@ ColumnOrView DateTruncFunction::eval(
     return cudf::cast(daysCol->view(), outputType, stream, mr);
   };
 
-  auto makeScalar = [&](int32_t value) {
-    return cudf::numeric_scalar<int32_t>(value, true, stream, mr);
-  };
-
   switch (unit_) {
     case DateTimeUnit::kSecond:
       return cudf::datetime::floor_datetimes(
@@ -126,22 +142,18 @@ ColumnOrView DateTruncFunction::eval(
       return cudf::datetime::floor_datetimes(
           inputCol, cudf::datetime::rounding_frequency::HOUR, stream, mr);
     case DateTimeUnit::kDay:
-      if (inputCol.type() == dayType) {
-        return std::make_unique<cudf::column>(inputCol, stream, mr);
-      }
-      return castDaysToOutput(castToDay(inputCol));
+      return castDaysToOutput(floorToDay(inputCol));
     case DateTimeUnit::kWeek: {
-      auto dayCol = castToDay(inputCol);
+      auto dayCol = floorToDay(inputCol);
       auto dowCol = cudf::datetime::extract_datetime_component(
           dayCol->view(),
           cudf::datetime::datetime_component::WEEKDAY,
           stream,
           mr);
       auto dowInt = castToInt32(dowCol->view());
-      auto oneScalar = makeScalar(1);
       auto offset = cudf::binary_operation(
           dowInt->view(),
-          oneScalar,
+          *oneScalar_,
           cudf::binary_operator::SUB,
           intType,
           stream,
@@ -159,14 +171,13 @@ ColumnOrView DateTruncFunction::eval(
     case DateTimeUnit::kMonth:
     case DateTimeUnit::kQuarter:
     case DateTimeUnit::kYear: {
-      auto dayCol = castToDay(inputCol);
+      auto dayCol = floorToDay(inputCol);
       auto dayOfMonth = cudf::datetime::extract_datetime_component(
           dayCol->view(), cudf::datetime::datetime_component::DAY, stream, mr);
       auto dayOfMonthInt = castToInt32(dayOfMonth->view());
-      auto oneScalar = makeScalar(1);
       auto dayOffset = cudf::binary_operation(
           dayOfMonthInt->view(),
-          oneScalar,
+          *oneScalar_,
           cudf::binary_operator::SUB,
           intType,
           stream,
@@ -192,7 +203,7 @@ ColumnOrView DateTruncFunction::eval(
       auto monthInt = castToInt32(monthCol->view());
       auto monthIndex = cudf::binary_operation(
           monthInt->view(),
-          oneScalar,
+          *oneScalar_,
           cudf::binary_operator::SUB,
           intType,
           stream,
@@ -202,20 +213,18 @@ ColumnOrView DateTruncFunction::eval(
       if (unit_ == DateTimeUnit::kYear) {
         monthsToSubtract = std::move(monthIndex);
       } else {
-        auto threeScalar = makeScalar(3);
         monthsToSubtract = cudf::binary_operation(
             monthIndex->view(),
-            threeScalar,
+            *threeScalar_,
             cudf::binary_operator::MOD,
             intType,
             stream,
             mr);
       }
 
-      auto negOneScalar = makeScalar(-1);
       auto negMonths = cudf::binary_operation(
           monthsToSubtract->view(),
-          negOneScalar,
+          *negOneScalar_,
           cudf::binary_operator::MUL,
           intType,
           stream,
