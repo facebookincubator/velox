@@ -219,6 +219,11 @@ class Writer : public dwio::common::Writer {
   // Only VARCHAR/VARBINARY dictionary vectors with null-free values are
   // passed through as Arrow DictionaryArrays for zero-copy Parquet writing.
   //
+  // Also handles the reverse schema mismatch: if the cached schema expects a
+  // dictionary type but the current data is flat, the cached schema is updated
+  // to use the dictionary's value type so ImportRecordBatch buffer counts
+  // match.
+  //
   // When flattening is needed, only the columns that require it are flattened.
   // Columns that can be passed through are left unchanged, avoiding
   // unnecessary materialization.

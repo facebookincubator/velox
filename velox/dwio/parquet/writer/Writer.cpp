@@ -638,6 +638,30 @@ VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
       rowVector, "Arrow export expects a RowVector as input data.");
 
   const auto& children = rowVector->children();
+
+  // Reverse schema consistency: if the cached schema expects a dictionary
+  // type for a column but the current data is not dictionary-encoded, update
+  // the cached schema field to use the dictionary's value type. This prevents
+  // import errors when buffer counts don't match (dict schema expects 2
+  // buffers but flat data produces 3).
+  if (arrowContext_->schema) {
+    for (size_t i = 0; i < children.size(); ++i) {
+      if (children[i]->encoding() != VectorEncoding::Simple::DICTIONARY &&
+          arrowContext_->schema->field(i)->type()->id() ==
+              ::arrow::Type::DICTIONARY) {
+        auto dictType = std::static_pointer_cast<::arrow::DictionaryType>(
+            arrowContext_->schema->field(i)->type());
+        arrowContext_->schema =
+            arrowContext_->schema
+                ->SetField(
+                    i,
+                    arrowContext_->schema->field(i)->WithType(
+                        dictType->value_type()))
+                .ValueOrDie();
+      }
+    }
+  }
+
   bool anyNeedsFlatten = false;
   for (size_t i = 0; i < children.size(); ++i) {
     if (childNeedsFlatten(children[i])) {
