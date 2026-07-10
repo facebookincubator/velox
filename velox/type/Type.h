@@ -454,7 +454,7 @@ VELOX_DECLARE_ENUM_NAME(TypeParameterKind);
 struct TypeParameter {
   const TypeParameterKind kind;
 
-  /// Must be not not null when kind is kType. All other properties should be
+  /// Must be not null when kind is kType. All other properties should be
   /// null or unset (other than rowFieldName).
   const TypePtr type;
 

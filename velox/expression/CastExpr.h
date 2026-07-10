@@ -302,6 +302,18 @@ class CastExpr : public SpecialForm {
       const BaseVector& input,
       const TimestampToStringOptions& options);
 
+  // Casts between TIMESTAMP and TIMESTAMP UTC.
+  // Casting TIMESTAMP_UTC to TIMESTAMP converts from local timestamp
+  // representation to UTC. Casting TIMESTAMP to TIMESTAMP_UTC applies the
+  // session timezone offset so that the local timestamp is preserved.
+  // @tparam kToUtc If true, casts TIMESTAMP to TIMESTAMP UTC. Otherwise,
+  // casts TIMESTAMP UTC to TIMESTAMP.
+  template <bool kToUtc>
+  VectorPtr applyTimestampTimestampUtcCast(
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
+      const BaseVector& input);
+
   // Casts basic numeric types to wider types.
   template <TypeKind ToKind, TypeKind FromKind>
   void applyNumericUpcast(
@@ -327,28 +339,39 @@ class CastExpr : public SpecialForm {
   /// @param result The result vector to update
   /// @param wrapException Output parameter indicating if exception should be
   /// wrapped
-  /// @param details Optional error details message
-  template <typename TResult>
+  /// @param makeErrorDetails Callable returning the error details string. It is
+  /// invoked lazily and only when the error details are actually needed.
+  template <typename TResult, typename TMakeErrorDetails>
   void setCastError(
       vector_size_t row,
       EvalCtx& context,
       TResult* result,
       bool& wrapException,
-      const std::string& details = "") const {
+      TMakeErrorDetails makeErrorDetails) const {
     if (setNullInResultAtError()) {
       result->setNull(row, true);
-    } else {
-      wrapException = false;
-      if (context.captureErrorDetails()) {
-        if (!details.empty()) {
-          context.setStatus(row, Status::UserError("{}", details));
-        } else {
-          context.setStatus(row, Status::UserError());
-        }
-      } else {
-        context.setStatus(row, Status::UserError());
+      return;
+    }
+    wrapException = false;
+    if (context.captureErrorDetails()) {
+      const std::string details = makeErrorDetails();
+      if (!details.empty()) {
+        context.setStatus(row, Status::UserError("{}", details));
+        return;
       }
     }
+    context.setStatus(row, Status::UserError());
+  }
+
+  /// Overload for cases where no error details are available.
+  template <typename TResult>
+  void setCastError(
+      vector_size_t row,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException) const {
+    setCastError(
+        row, context, result, wrapException, [] { return std::string{}; });
   }
 
   /// Helper to set result or error from Expected<T> cast result.
@@ -371,14 +394,9 @@ class CastExpr : public SpecialForm {
       TResult* result,
       bool& wrapException) const {
     if (castResult.hasError()) {
-      if (setNullInResultAtError()) {
-        setCastError(row, context, result, wrapException);
-        return;
-      }
-      const auto errorDetails = context.captureErrorDetails()
-          ? makeErrorDetails(castResult.error().message())
-          : std::string{};
-      setCastError(row, context, result, wrapException, errorDetails);
+      setCastError(row, context, result, wrapException, [&] {
+        return makeErrorDetails(castResult.error().message());
+      });
     } else {
       result->set(row, castResult.value());
     }

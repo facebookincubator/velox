@@ -108,7 +108,7 @@ struct WrapState {
 };
 
 /// Wraps 'inputVector' with 'wrapIndices' and
-/// 'wrapNulls'. 'wrapSize' is the size of of 'wrapIndices' and of
+/// 'wrapNulls'. 'wrapSize' is the size of 'wrapIndices' and of
 /// the resulting vector. Dictionary combining is deduplicated using
 /// 'wrapState'. If the same indices are added on top of dictionary
 /// encoded vectors sharing the same wrapping, the resulting vectors

@@ -176,6 +176,13 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_logical_functions_test
+  SOURCES Main.cpp LogicalFunctionsTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_expression
+  TIMEOUT 3000
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_local_partition_test
   SOURCES Main.cpp LocalPartitionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
