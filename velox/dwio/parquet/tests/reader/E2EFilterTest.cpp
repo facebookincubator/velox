@@ -512,6 +512,55 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
       20);
 }
 
+TEST_F(E2EFilterTest, decimalDeltaByteArray) {
+  options_.enableDictionary = false;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
+  options_.enableStoreDecimalAsInteger = false;
+  const auto expectedEncoding = options_.encoding;
+
+  testWithTypes(
+      "shortdecimal_val:decimal(10, 5)",
+      [&]() {
+        makeIntDistribution<int64_t>(
+            "shortdecimal_val",
+            10, // min
+            100, // max
+            22, // repeats
+            19, // rareFrequency
+            -40'000'000, // rareMin
+            40'000'000, // rareMax
+            true);
+      },
+      false,
+      {"shortdecimal_val"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+
+  // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
+  // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
+  for (const auto& type :
+       {"longdecimal_val:decimal(30, 10)", "longdecimal_val:decimal(37, 15)"}) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int128_t>(
+              "longdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30'000, // rareMax
+              true);
+        },
+        false,
+        {"longdecimal_val"},
+        20);
+    EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+  }
+}
+
 TEST_F(E2EFilterTest, stringDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
