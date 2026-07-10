@@ -20,6 +20,7 @@
 #include "velox/core/PlanNode.h"
 
 #include "velox/common/EnumDefine.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
 
@@ -4084,6 +4085,9 @@ void PlanNode::registerSerDe() {
   registry.Register("MarkDistinctNode", MarkDistinctNode::create);
   registry.Register("MixedUnionNode", MixedUnionNode::create);
   registry.Register("RPCNode", RPCNode::create);
+  registry.Register("FixedPointNode", FixedPointNode::create);
+  registry.Register("StateSourceNode", StateSourceNode::create);
+  registry.Register("StateHashJoinNode", StateHashJoinNode::create);
   registry.Register(
       "GatherPartitionFunctionSpec", GatherPartitionFunctionSpec::deserialize);
 }

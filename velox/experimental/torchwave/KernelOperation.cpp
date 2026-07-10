@@ -482,6 +482,7 @@ KernelOperation::KernelOperation(
       waveGraph_{&compileCtx.waveGraph()},
       inputs_{sg.inputs.begin(), sg.inputs.end()},
       orderedInputs_{sg.inputs},
+      inputTypes_{sg.inputTypes},
       numInputs_(static_cast<int32_t>(sg.inputs.size())) {
   flattenScalarListInputs(inputs_, orderedInputs_);
   numInputs_ = static_cast<int32_t>(orderedInputs_.size());
@@ -731,6 +732,18 @@ void KernelOperation::setCode(std::stringstream& code) {
       }
       orderingInputs_.insert(viewInputs[k].value->id());
     }
+  }
+
+  // The loop above collects ordering inputs from this op's (possibly lowered)
+  // variant nodes.  When an op is lowered to tw.* helpers, a boundary tensor
+  // input can be read only via reserveShape / sizeExpr at gatherLaunches time
+  // rather than as a tracked variant node input, so its id is missing here.
+  // Add the op's actual boundary inputs (orderedInputs_) so placeKernelLaunch
+  // orders this op after their producers -- otherwise a standalone producer can
+  // be co-scheduled in the same step and its output read during gatherLaunches
+  // before the standalone has run.
+  for (int32_t i = 0; i < numInputs_; ++i) {
+    orderingInputs_.insert(orderedInputs_[i]->id());
   }
 
   for (size_t i = 0; i < outputDescs_.size(); ++i) {

@@ -96,27 +96,6 @@ struct HybridScanState {
 };
 
 /**
- * @brief Fetches a host buffer of Parquet footer bytes from the input data
- * source
- *
- * @param dataSource Input data source
- * @return Host buffer containing footer bytes
- */
-std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
-    std::shared_ptr<cudf::io::datasource> dataSource);
-
-/**
- * @brief Fetches a host buffer of Parquet page index from the input data source
- *
- * @param dataSource Input datasource
- * @param pageIndexBytes Byte range of page index
- * @return Host buffer containing page index bytes
- */
-std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
-    std::shared_ptr<cudf::io::datasource> dataSource,
-    const cudf::io::text::byte_range_info pageIndexBytes);
-
-/**
  * @brief Fetches a list of byte ranges from a host buffer into device buffers
  *
  * @param dataSource Input datasource
