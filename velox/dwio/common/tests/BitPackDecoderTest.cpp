@@ -19,6 +19,7 @@
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 
 #include <folly/Random.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using namespace facebook::velox::dwio::common;
@@ -171,4 +172,36 @@ TEST_F(BitPackDecoderTest, uint32AllRows) {
   for (auto width = 1; width <= 32; ++width) {
     testUnpack<uint32_t>(width);
   }
+}
+
+// Verifies that unpackNaive correctly advances both the input and result
+// pointers after decoding. Calls unpackNaive directly to ensure the fix is
+// exercised regardless of platform (the AVX2 fast path in unpack<uint8_t>
+// handles all values when numValues is a multiple of 8).
+TEST_F(BitPackDecoderTest, naiveFallbackAdvancesPointers) {
+  // Two bytes encoding 16 one-bit values:
+  //   byte 0 = 0xAA = 0b10101010 → values {0,1,0,1,0,1,0,1}
+  //   byte 1 = 0x0F = 0b00001111 → values {1,1,1,1,0,0,0,0}
+  const uint8_t packed[] = {0xAA, 0x0F};
+  const uint8_t* input = packed;
+
+  uint8_t output[16] = {};
+  uint8_t* result = output;
+
+  // Decode first 8 values (consumes byte 0 entirely: 8 bits at bitWidth=1).
+  facebook::velox::dwio::common::unpackNaive<uint8_t>(
+      input, /*inputBufferLen=*/1, /*numValues=*/8, /*bitWidth=*/1, result);
+
+  EXPECT_EQ(input, packed + 1);
+  EXPECT_EQ(result, output + 8);
+
+  // Decode next 8 values from byte 1.
+  facebook::velox::dwio::common::unpackNaive<uint8_t>(
+      input, /*inputBufferLen=*/1, /*numValues=*/8, /*bitWidth=*/1, result);
+
+  EXPECT_EQ(input, packed + 2);
+  EXPECT_EQ(result, output + 16);
+
+  const uint8_t expected[] = {0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0};
+  EXPECT_THAT(output, ::testing::ElementsAreArray(expected));
 }

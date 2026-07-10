@@ -176,6 +176,12 @@ static inline uint32_t unpackNaive(
     }
     result[i] = val;
   }
+  // Advance inputBits past the last byte consumed (the loop leaves it pointing
+  // at the last accessed byte when bitPosition > 0).
+  if (bitPosition > 0) {
+    inputBits++;
+  }
+  result += numValues;
   return numValues;
 }
 
