@@ -99,12 +99,35 @@ std::string getOriginalName(const std::string& kind) {
 
 bool aggregationSupportsMask(const std::string& aggregateName) {
   // TODO: Support masked avg/stddev (needs partial-struct null handling).
+  // Match exact names, not prefixes: a prefix match would also accept
+  // max_by/min_by/count_if/sum_data_size and drift wider than the supported
+  // set the moment such a family member is registered.
   const auto originalName = getOriginalName(aggregateName);
   const auto prefix = CudfConfig::getInstance().functionNamePrefix;
-  return originalName.rfind(prefix + "sum", 0) == 0 ||
-      originalName.rfind(prefix + "count", 0) == 0 ||
-      originalName.rfind(prefix + "min", 0) == 0 ||
-      originalName.rfind(prefix + "max", 0) == 0;
+  return originalName == prefix + "sum" || originalName == prefix + "count" ||
+      originalName == prefix + "min" || originalName == prefix + "max";
+}
+
+bool maskSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate,
+    core::AggregationNode::Step step) {
+  if (!aggregate.mask) {
+    return true;
+  }
+  // Masks only apply to raw rows.
+  const auto companionStep = getCompanionStep(aggregate.call->name(), step);
+  if (!exec::isRawInput(companionStep)) {
+    return false;
+  }
+  // Mask must be a plain boolean column reference (it is projected via
+  // inputRowSchema->getChildIdx(mask->name())).
+  if (aggregate.mask->type()->kind() != TypeKind::BOOLEAN ||
+      aggregate.mask->kind() != core::ExprKind::kFieldAccess) {
+    return false;
+  }
+  // Aggregates that ignore the mask must fall back to CPU rather than silently
+  // produce an unmasked result.
+  return aggregationSupportsMask(aggregate.call->name());
 }
 
 namespace {

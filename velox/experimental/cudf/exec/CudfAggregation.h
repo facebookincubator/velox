@@ -45,11 +45,21 @@ core::AggregationNode::Step getCompanionStep(
 std::string getOriginalName(const std::string& kind);
 
 // Returns true if the cuDF aggregator for 'aggregateName' honors a FILTER mask.
-// Only sum/count/min/max null-inject masked rows; every other aggregate ignores
-// the mask and would silently produce an unmasked result, so callers must fall
-// back to CPU for them. Centralizes the supported-family list so groupby and
-// reduce validation agree.
+// Only sum/count/min/max apply the mask (masked rows are excluded via
+// null-injection, or via the validity column for count(*)/count(const)); every
+// other aggregate ignores the mask and would silently produce an unmasked
+// result, so callers must fall back to CPU for them. Centralizes the
+// supported-family list so groupby and reduce validation agree.
 bool aggregationSupportsMask(const std::string& aggregateName);
+
+// Returns true if cuDF can honor 'aggregate's FILTER mask at 'step' (no mask is
+// trivially true). The mask must sit at a raw-input step, be a bare boolean
+// field access, and target an aggregate in aggregationSupportsMask. Shared by
+// groupby and reduce validation so the two paths cannot diverge on what they
+// accept.
+bool maskSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate,
+    core::AggregationNode::Step step);
 
 enum class CountInputKind {
   kColumn,

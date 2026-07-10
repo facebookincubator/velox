@@ -902,23 +902,8 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    if (aggregate.mask) {
-      const auto companionStep = getCompanionStep(aggregate.call->name(), step);
-      // Masks only apply to raw rows.
-      if (!exec::isRawInput(companionStep)) {
-        return false;
-      }
-      // Mask must be a plain boolean column reference (it is projected via
-      // inputRowSchema->getChildIdx(mask->name())).
-      if (aggregate.mask->type()->kind() != TypeKind::BOOLEAN ||
-          aggregate.mask->kind() != core::ExprKind::kFieldAccess) {
-        return false;
-      }
-      // Aggregates that ignore the mask must fall back to CPU rather than
-      // silently produce an unmasked result.
-      if (!aggregationSupportsMask(aggregate.call->name())) {
-        return false;
-      }
+    if (!maskSupportedByCudf(aggregate, step)) {
+      return false;
     }
 
     if (isCountFunctionName(aggregate.call->name())) {
