@@ -188,7 +188,7 @@ Timestamp EncodingTest::testValue(int32_t i, BufferPtr& /*space*/) {
 }
 
 TEST_F(EncodingTest, basic) {
-  checkTypeEncoding<TypeKind::BOOLEAN>(BOOLEAN());
+  checkTypeEncoding<TypeKind::BOOLEAN>(::facebook::velox::BOOLEAN());
   checkTypeEncoding<TypeKind::TINYINT>(TINYINT());
   checkTypeEncoding<TypeKind::SMALLINT>(SMALLINT());
   checkTypeEncoding<TypeKind::INTEGER>(INTEGER());
