@@ -56,6 +56,21 @@ class CacheInputStream : public SeekableInputStream {
   std::string getName() const override;
   size_t positionSize() const override;
 
+  /// Returns true if the next read() will not block on IO. The cache
+  /// stream is considered loaded if either (a) we already hold a cache
+  /// pin that covers the current position, or (b) the coalesced load
+  /// associated with this stream has reached kLoaded / kCancelled
+  /// state, or (c) no coalesced load is registered (the bytes are
+  /// already in the cache or will be served synchronously without an
+  /// IO round trip beyond a cheap cache lookup).
+  bool isLoaded() const override;
+
+  /// Returns a future that completes when isLoaded() would return
+  /// true. If already loaded, returns a ready future. If a coalesced
+  /// load is in flight, returns its in-flight future via
+  /// loadOrFutureAsync(); otherwise ready.
+  folly::SemiFuture<folly::Unit> loadedFuture() override;
+
   /// Returns a copy of 'this', ranging over the same bytes. The clone is
   /// initially positioned at the position of 'this' and can be moved
   /// independently within 'region_'.  This is used for first caching a range of
@@ -177,6 +192,12 @@ class CacheInputStream : public SeekableInputStream {
   uint32_t runSize_ = 0;
   // Position relative to 'region_.offset'.
   uint64_t position_ = 0;
+
+  // Set true on first loadPosition() call. loadedFuture()/isLoaded() are
+  // intended for pre-read readiness checks against the initial coalesced
+  // load. After reading starts (including reseek), those readiness answers can
+  // become stale for future-ordering purposes.
+  bool readStarted_{false};
 
   // A restricted view over 'region'. offset is relative to 'region_'. A cloned
   // CacheInputStream can cover a sub-range of the range of the original.

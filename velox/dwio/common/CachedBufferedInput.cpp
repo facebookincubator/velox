@@ -15,9 +15,12 @@
  */
 
 #include "velox/dwio/common/CachedBufferedInput.h"
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 #include "folly/io/Cursor.h"
 #include "velox/common/Casts.h"
 #include "velox/common/memory/Allocation.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 
@@ -446,17 +449,7 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
   }
 
   std::vector<CachePin> loadData(bool prefetch) override {
-    std::vector<CachePin> pins;
-    pins.reserve(keys_.size());
-    cache_.makePins(
-        keys_,
-        [&](int32_t index) { return sizes_[index]; },
-        [&](int32_t /*index*/, CachePin pin) {
-          if (prefetch) {
-            pin.checkedEntry()->setPrefetch(true);
-          }
-          pins.push_back(std::move(pin));
-        });
+    auto pins = makeAndPreparePins(prefetch);
     if (pins.empty()) {
       return pins;
     }
@@ -476,6 +469,84 @@ class DwioCoalescedLoad : public DwioCoalescedLoadBase {
     return pins;
   }
 
+  folly::SemiFuture<std::vector<CachePin>> loadDataAsync(
+      bool prefetch) override {
+    auto pinsPtr =
+        std::make_shared<std::vector<CachePin>>(makeAndPreparePins(prefetch));
+    if (pinsPtr->empty()) {
+      return folly::makeSemiFuture(std::vector<CachePin>{});
+    }
+
+    struct AsyncRead {
+      uint64_t offset;
+      std::vector<folly::Range<char*>> buffers;
+    };
+    auto reads = std::make_shared<std::vector<AsyncRead>>();
+    auto stats = cache::readPins(
+        *pinsPtr,
+        maxCoalesceDistance_,
+        1000,
+        [&](int32_t i) { return (*pinsPtr)[i].entry()->offset(); },
+        [&](const std::vector<CachePin>& /*pins*/,
+            int32_t /*begin*/,
+            int32_t /*end*/,
+            uint64_t offset,
+            const std::vector<folly::Range<char*>>& buffers) {
+          reads->push_back(AsyncRead{offset, buffers});
+        });
+
+    std::vector<folly::SemiFuture<uint64_t>> futures;
+    futures.reserve(reads->size());
+    for (auto& r : *reads) {
+      futures.push_back(input_->readAsync(r.buffers, r.offset, LogType::FILE));
+    }
+    auto self = std::static_pointer_cast<DwioCoalescedLoad>(shared_from_this());
+    return folly::collectAll(std::move(futures))
+        .deferValue(
+            [self, pinsPtr, reads, stats, prefetch](
+                std::vector<folly::Try<uint64_t>>&& results) mutable
+                -> std::vector<CachePin> {
+              VELOX_CHECK_EQ(results.size(), reads->size());
+              for (size_t i = 0; i < results.size(); ++i) {
+                auto& t = results[i];
+                if (t.hasException()) {
+                  t.exception().throw_exception();
+                }
+                uint64_t expectedBytes = 0;
+                for (auto& buffer : (*reads)[i].buffers) {
+                  expectedBytes += buffer.size();
+                }
+                VELOX_CHECK_EQ(
+                    t.value(),
+                    expectedBytes,
+                    "Should read exactly as requested. File name: {}, offset: {}, length: {}, read: {}",
+                    self->input_->getName(),
+                    (*reads)[i].offset,
+                    expectedBytes,
+                    t.value());
+              }
+              self->updateStats(stats, prefetch, false);
+              return std::move(*pinsPtr);
+            });
+  }
+
+ private:
+  std::vector<CachePin> makeAndPreparePins(bool prefetch) {
+    std::vector<CachePin> pins;
+    pins.reserve(keys_.size());
+    cache_.makePins(
+        keys_,
+        [&](int32_t index) { return sizes_[index]; },
+        [&](int32_t /*index*/, CachePin pin) {
+          if (prefetch) {
+            pin.checkedEntry()->setPrefetch(true);
+          }
+          pins.push_back(std::move(pin));
+        });
+    return pins;
+  }
+
+ public:
   std::shared_ptr<ReadFileInputStream> input_;
   const int32_t maxCoalesceDistance_;
 };
@@ -576,25 +647,56 @@ void CachedBufferedInput::readRegions(
     requestGroup.clear();
   }
 
-  if (prefetch && executor_) {
-    // Only submit the loads created by this call to the executor.
-    for (auto i = startIndex; i < coalescedLoads_.size(); ++i) {
+  const bool useAsync = input_->hasReadAsync();
+  if (executor_ || useAsync) {
+    // Prune completed releases before pushing new ones to keep the
+    // retention list bounded across many load() cycles on the same
+    // BufferedInput instance.
+    pruneReadyAsyncReleases();
+    // For the async path a prefetch cycle re-attempts every kPlanned load,
+    // including ones a prior cycle left unsubmitted because the
+    // outstanding-prefetch-bytes budget was at cap (skip-not-queue). On
+    // demand submits only this call's new loads.
+    const int32_t submitBegin = prefetch ? 0 : startIndex;
+    // Continuation executor for the async-submit path: prefer the Velox
+    // IO executor when available, otherwise fall back to InlineExecutor
+    // (the release continuation then runs on whichever thread completes
+    // preadvAsync -- typically the backend's IO thread).
+    folly::Executor* const continuationExec =
+        executor_ ? executor_ : &folly::InlineExecutor::instance();
+    std::vector<int32_t> doneIndices;
+    for (int32_t i = submitBegin; i < coalescedLoads_.size(); ++i) {
       auto& load = coalescedLoads_[i];
       if (load->state() == CoalescedLoad::State::kPlanned) {
-        executor_->add(
-            [pendingLoad = load, ssdSavable = options_.cacheable()]() {
-              pendingLoad->loadOrFuture(nullptr, ssdSavable);
-            });
+        if (useAsync) {
+          // Native async backend: submit preadvAsync directly. The
+          // skip-not-queue prefetch-bytes gate, the budget-release
+          // continuation, and the inflightAsyncReleases_ retention all
+          // live in BufferedInput::submitAsyncLoad (shared with
+          // DirectBufferedInput::readRegions).
+          submitAsyncLoad(
+              load,
+              prefetch,
+              /*ssdSavable=*/options_.cacheable(),
+              continuationExec);
+        } else if (prefetch && executor_) {
+          // Sync (non-async backend) prefetch path. Intentionally NOT
+          // budget-tracked: the byte budget bounds the resident memory of
+          // speculative async fan-out; the sync path parks an executor
+          // thread per load, so concurrency is implicitly bounded by
+          // executor thread count.
+          executor_->add(
+              [pendingLoad = load, ssdSavable = options_.cacheable()]() {
+                process::TraceContext trace("Read Ahead");
+                pendingLoad->loadOrFuture(nullptr, ssdSavable);
+              });
+        }
+      } else {
+        doneIndices.push_back(i);
       }
     }
     // Remove the loads that were complete. There can be done loads if the same
     // CachedBufferedInput has multiple cycles of enqueues and loads.
-    std::vector<int32_t> doneIndices;
-    for (int32_t i = 0; i < startIndex; ++i) {
-      if (coalescedLoads_[i]->state() != CoalescedLoad::State::kPlanned) {
-        doneIndices.push_back(i);
-      }
-    }
     for (int i = 0, j = 0, k = 0; i < coalescedLoads_.size(); ++i) {
       if (j < doneIndices.size() && doneIndices[j] == i) {
         ++j;
@@ -615,10 +717,17 @@ std::shared_ptr<cache::CoalescedLoad> CachedBufferedInput::coalescedLoad(
           return nullptr;
         }
         auto load = std::move(it->second);
-        auto* dwioLoad = checkedPointerCast<DwioCoalescedLoadBase>(load.get());
-        for (auto& request : dwioLoad->requests()) {
-          loads.erase(request.stream);
-        }
+        // Only erase the popped stream's entry. Sibling streams sharing
+        // this coalesced load must retain their map entries so that
+        // peekCoalescedLoad() / isLoaded() / loadedFuture() observe the
+        // load's true state during the in-flight window. Erasing every
+        // sibling here would make siblings' peek return nullptr, so the
+        // readiness APIs would report "ready" while the load was still
+        // kLoading -- silently bypassing the wait in the async
+        // completion-order read path. Sibling re-triggering is harmless:
+        // CoalescedLoad::loadOrFuture is idempotent via its
+        // kPlanned/kLoading/kLoaded state machine.
+        loads.erase(it);
         return load;
       });
 }

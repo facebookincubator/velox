@@ -16,6 +16,8 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
+#include "velox/common/io/IoExecutorThreadRegistry.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -170,12 +172,62 @@ size_t CacheInputStream::positionSize() const {
   return 1;
 }
 
+bool CacheInputStream::isLoaded() const {
+  // (a) Already holding a pin that covers the current position -> ready.
+  if (!pin_.empty()) {
+    auto* entry = pin_.checkedEntry();
+    const auto start = entry->offset();
+    const auto end = start + entry->size();
+    const uint64_t pos = static_cast<uint64_t>(position_);
+    if (pos >= start && pos < end) {
+      return true;
+    }
+  }
+  // (b) Coalesced load registered: check its state.
+  auto load = bufferedInput_->peekCoalescedLoad(this);
+  if (!load) {
+    // (c) No load registered. Either the load was already consumed
+    // (bytes are in cache and a pin lookup will succeed without IO),
+    // or this stream was never scheduled for coalesced load. Either
+    // way, the first read may still hit SSD or remote, but it won't
+    // block on a folly future. Treat as ready.
+    return true;
+  }
+  const auto state = load->state();
+  return state == cache::CoalescedLoad::State::kLoaded ||
+      state == cache::CoalescedLoad::State::kCancelled;
+}
+
+folly::SemiFuture<folly::Unit> CacheInputStream::loadedFuture() {
+  DCHECK(!readStarted_)
+      << "CacheInputStream::loadedFuture called after loadPosition() "
+         "started. loadedFuture only models the initial coalesced-load "
+         "readiness and may be stale after seek/read progression.";
+  if (isLoaded()) {
+    return folly::makeSemiFuture(folly::unit);
+  }
+  auto load = bufferedInput_->peekCoalescedLoad(this);
+  if (!load) {
+    return folly::makeSemiFuture(folly::unit);
+  }
+  // Chain the load's bool-future onto a Unit-future, decoupled from
+  // the bool result (consumers only care about completion, not
+  // success — a failed load will still surface its error on read()).
+  return load->loadOrFutureAsync().deferValue([](bool) { return folly::unit; });
+}
+
 void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
   VELOX_CHECK_GE(region_.length, position_ + remainingBytes);
   window_ = Region{static_cast<uint64_t>(position_), remainingBytes};
 }
 
 void CacheInputStream::loadSync(const Region& region) {
+  // This block-on-future is safe only on the consumer thread. Invoking
+  // from an IO executor thread risks self-deadlock at executor_size=1
+  // (future may be settled by the same executor).
+  DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
+      << "CacheInputStream::loadSync called on IO executor thread";
+  process::TraceContext trace("loadSync");
   int64_t hitSize = region.length;
   if (window_.has_value()) {
     const int64_t regionEnd = region.offset + region.length;
@@ -322,6 +374,11 @@ std::string CacheInputStream::ssdFileName() const {
 }
 
 void CacheInputStream::loadPosition() {
+  // Safe only on the consumer thread (self-deadlock risk at
+  // executor_size=1 otherwise).
+  DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
+      << "CacheInputStream::loadPosition called on IO executor thread";
+  readStarted_ = true;
   const auto offset = region_.offset;
 
   if (pin_.empty()) {

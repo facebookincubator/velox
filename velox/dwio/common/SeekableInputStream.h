@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/futures/Future.h>
+
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/PositionProvider.h"
@@ -49,6 +51,30 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
   }
 
   void readFully(char* buffer, size_t bufferSize);
+
+  /// Returns true if a subsequent read from this stream will not block
+  /// on IO. Default = true (synchronous / already-loaded streams).
+  ///
+  /// Async-capable backends (CacheInputStream over CoalescedLoad,
+  /// DirectInputStream) override to report the underlying load's state.
+  /// Used by the parquet reader to reorder per-column / per-row-group
+  /// CPU work so that streams whose IO is already complete are
+  /// processed first, maximizing CPU/IO overlap on cold-cache reads
+  /// with long-tail region latency.
+  virtual bool isLoaded() const {
+    return true;
+  }
+
+  /// Returns a future that completes when this stream is safe to read
+  /// without blocking on IO. Default = ready future. Cheap when
+  /// already loaded; allocates a folly Promise/Future only when the
+  /// load is still in flight.
+  ///
+  /// Same use case as isLoaded(); preferred when the consumer wants to
+  /// chain CPU work as a continuation rather than poll-and-reorder.
+  virtual folly::SemiFuture<folly::Unit> loadedFuture() {
+    return folly::makeSemiFuture(folly::unit);
+  }
 };
 
 /**

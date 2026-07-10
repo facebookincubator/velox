@@ -50,6 +50,17 @@ class DirectInputStream : public SeekableInputStream {
   std::string getName() const override;
   size_t positionSize() const override;
 
+  /// Returns true if the next read() will not block on IO. Considered
+  /// loaded if either (a) data_ / tinyData_ already covers the current
+  /// position, or (b) the coalesced load registered with the parent
+  /// DirectBufferedInput has reached kLoaded / kCancelled, or (c) no
+  /// coalesced load is registered (a fresh synchronous read will be
+  /// issued but not as part of a coalesced async batch).
+  bool isLoaded() const override;
+
+  /// Returns a future completing when isLoaded() would return true.
+  folly::SemiFuture<folly::Unit> loadedFuture() override;
+
   /// Testing function to access loaded state.
   void testingData(
       velox::common::Region& loadedRegion,

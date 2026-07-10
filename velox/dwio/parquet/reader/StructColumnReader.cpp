@@ -140,6 +140,32 @@ bool StructColumnReader::isRowGroupBuffered(
   return input.isBuffered(offset, length);
 }
 
+namespace {
+// Mirrors enqueueRowGroup's projected-leaf walk: sums each projected
+// leaf's column-chunk compressed bytes. Using the full row-group region
+// here would over-estimate by the unprojected-columns ratio (often
+// 30-100x on sparse-projection workloads) and cause the budget gate to
+// collapse the prefetch window precisely on the workloads that benefit
+// most from cross-RG batching.
+int64_t sumProjectedLeafBytes(
+    dwio::common::SelectiveColumnReader* reader,
+    uint32_t index) {
+  auto children = reader->children();
+  if (children.empty()) {
+    return reader->formatData().as<ParquetData>().projectedRowGroupSize(index);
+  }
+  int64_t sum = 0;
+  for (auto* child : children) {
+    sum += sumProjectedLeafBytes(child, index);
+  }
+  return sum;
+}
+} // namespace
+
+int64_t StructColumnReader::rowGroupSize(uint32_t index) {
+  return sumProjectedLeafBytes(this, index);
+}
+
 void StructColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {

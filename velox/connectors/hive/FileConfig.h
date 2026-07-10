@@ -160,6 +160,19 @@ class FileConfig {
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
 
   VELOX_HIVE_CONFIG(
+      kMaxOutstandingPrefetchBytesSession,
+      maxOutstandingPrefetchBytes,
+      "max-outstanding-prefetch-bytes",
+      int64_t,
+      256 << 20,
+      "Outstanding-prefetch-bytes budget per BufferedInput. Bounds the "
+      "resident bytes of in-flight async prefetch loads; the primary memory "
+      "cap on async prefetch fan-out. A value <= 0 disables the cap. Default "
+      "256 MB (matches io::ReaderOptions::kDefaultMaxOutstandingPrefetchBytes).")
+  static constexpr const char* kMaxOutstandingPrefetchBytes =
+      "max-outstanding-prefetch-bytes";
+
+  VELOX_HIVE_CONFIG(
       kLoadQuantumSession,
       loadQuantum,
       "load-quantum",

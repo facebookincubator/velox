@@ -17,6 +17,7 @@
 #include "velox/dwio/common/InputStream.h"
 
 #include <folly/container/F14Map.h>
+#include <folly/futures/Future.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <cstdint>
@@ -122,7 +123,24 @@ folly::SemiFuture<uint64_t> ReadFileInputStream::readAsync(
     LogType logType) {
   const int64_t bufferSize = totalBufferSize(buffers);
   logRead(offset, bufferSize, logType);
-  return readFile_->preadvAsync(offset, buffers, fileIoContext_);
+  // Capture only what the size-check needs (the file name, by value)
+  // rather than raw `this`. The deferValue continuation may outlive the
+  // stack frame, and a future caller could drop its reference to this
+  // stream before the async read completes; capturing `this` would then
+  // be a use-after-free. `getName()` returns a std::string by const ref,
+  // so copy it once here into the continuation's own storage.
+  return readFile_->preadvAsync(offset, buffers, fileIoContext_)
+      .deferValue([name = getName(), offset, bufferSize](uint64_t size) -> uint64_t {
+        VELOX_CHECK_EQ(
+            size,
+            bufferSize,
+            "Should read exactly as requested. File name: {}, offset: {}, length: {}, read: {}",
+            name,
+            offset,
+            bufferSize,
+            size);
+        return size;
+      });
 }
 
 bool ReadFileInputStream::hasReadAsync() const {

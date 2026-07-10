@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "folly/io/Cursor.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/dwio/common/BufferedInput.h"
 
 DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
@@ -64,6 +65,85 @@ folly::IOBuf CachedRegion::toIOBuf() const {
 }
 
 static_assert(std::is_move_constructible<BufferedInput>());
+
+BufferedInput::~BufferedInput() {
+  // Drain in-flight async release continuations before destroying any state
+  // they capture (the prefetch budget shared_ptr, retained loads, etc.).
+  // Subclass destructors run first and cancel their coalesced loads; by the
+  // time this base destructor runs the loads have been signalled, so this is
+  // the cancel-first / drain-second order. Each chain runs on the backend's
+  // IO completion thread (or on the registered executor); waiting here mirrors
+  // the AsyncOperation destructor pattern (wait the in-flight one, log on
+  // failure, never rethrow from a destructor).
+  //
+  // Lifetime contract: the BufferedInput destructor MUST NOT run on the
+  // executor that drives these continuations, otherwise wait() self-deadlocks.
+  std::list<folly::Future<folly::Unit>> toDrain;
+  toDrain.splice(toDrain.end(), inflightAsyncReleases_);
+  if (toDrain.empty()) {
+    return;
+  }
+  std::vector<folly::SemiFuture<folly::Unit>> semis;
+  semis.reserve(toDrain.size());
+  for (auto& f : toDrain) {
+    semis.push_back(std::move(f).semi());
+  }
+  auto all = folly::collectAll(std::move(semis)).wait();
+  for (auto& t : all.value()) {
+    if (t.hasException()) {
+      LOG(WARNING) << "~BufferedInput: async release continuation completed "
+                      "with exception (discarded): "
+                   << folly::exceptionStr(t.exception());
+    }
+  }
+}
+
+void BufferedInput::pruneReadyAsyncReleases() {
+  inflightAsyncReleases_.remove_if([](auto& f) { return f.isReady(); });
+}
+
+void BufferedInput::submitAsyncLoad(
+    const std::shared_ptr<cache::CoalescedLoad>& load,
+    bool prefetch,
+    bool ssdSavable,
+    folly::Executor* continuationExec) {
+  // Outstanding-prefetch-bytes "skip-not-queue" gate, prefetch only. On
+  // failure (over cap) the load stays kPlanned and is not submitted; the
+  // consumer's first read() / next load() tick re-attempts. On-demand reads
+  // bypass this counter (always submit).
+  const int64_t loadBytes = load->size();
+  if (prefetch && !tryReservePrefetchBytes(loadBytes)) {
+    return;
+  }
+  // Budget release applies only when the reservation was taken (prefetch
+  // path). On-demand path uses bytes=0 to no-op.
+  const int64_t bytesToRelease = prefetch ? loadBytes : 0;
+  // Capture the PrefetchBudget by shared_ptr (NOT `this`) so this continuation
+  // is lifetime-safe even if the originating BufferedInput has been destroyed
+  // before completion: the budget is the only state the release path touches.
+  // Release exactly once via thenTry (a prior deferError+deferValue pair
+  // double-released on every async failure). The Future is retained in
+  // inflightAsyncReleases_ so the deferred chain isn't dropped on .detach()
+  // when continuationExec is InlineExecutor (which has no internal queue);
+  // the destructor drains it.
+  auto budget = prefetchBudget();
+  auto pendingLoad = load;
+  auto chainFuture =
+      pendingLoad->loadOrFutureAsync(ssdSavable)
+          .via(continuationExec)
+          .thenTry([budget = std::move(budget), bytesToRelease, pendingLoad](
+                       folly::Try<bool>&& t) {
+            if (t.hasException()) {
+              LOG(WARNING) << "Async coalesced load failed: "
+                           << folly::exceptionStr(t.exception());
+            }
+            if (bytesToRelease > 0) {
+              budget->release(bytesToRelease);
+            }
+            return folly::Unit{};
+          });
+  inflightAsyncReleases_.push_back(std::move(chainFuture));
+}
 
 namespace {
 void copyIOBufToMemory(folly::IOBuf&& iobuf, folly::Range<char*> allocated) {

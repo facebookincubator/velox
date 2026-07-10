@@ -72,7 +72,22 @@ class ParquetData : public dwio::common::FormatData {
         maxRepeat_(type_->maxRepeat_),
         rowsInRowGroup_(-1),
         stats_(stats),
-        sessionTimezone_(sessionTimezone) {}
+        sessionTimezone_(sessionTimezone) {
+    // Pre-size the per-row-group stream vector once, up front, to a
+    // fixed length. This vector is shared across concurrent
+    // async-prefetch windows (the IO executor's enqueueRowGroup writes
+    // streams_[K+1] while the consumer's seekToRowGroup moves out
+    // streams_[K]). A per-call resize() would reallocate the backing
+    // store the first time it grows, and a reallocation concurrent with
+    // any other access to the same vector is undefined behavior -- even
+    // when the touched indices differ. Sizing once at construction (on
+    // the single owning thread, before any continuation runs) makes the
+    // backing store stable for the object's whole lifetime, so the
+    // remaining cross-thread accesses are disjoint-index writes/reads on
+    // a non-reallocating vector (well-defined) with same-index access
+    // ordered by the per-slot readyPromise.
+    streams_.resize(fileMetaDataPtr_.numRowGroups());
+  }
 
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
@@ -90,6 +105,23 @@ class ParquetData : public dwio::common::FormatData {
 
   PageReader* reader() const {
     return reader_.get();
+  }
+
+  /// FormatData override -- true if the current row-group's underlying
+  /// IO has landed (so the next page read will not block). Probes the
+  /// active PageReader's input stream. Returns true when no PageReader
+  /// is set yet (before seekToRowGroup wires it in, there is no IO to
+  /// probe and the conservative answer is "go ahead, you'll block if
+  /// needed"). Used by SelectiveStructColumnReader to pick the
+  /// next-ready eager non-filter child to read.
+  ///
+  /// `final` lets the compiler devirtualize the vtable hop through
+  /// FormatData on the hot pop-as-ready loop at wide schemas.
+  bool isInputReady() const final {
+    if (reader_) {
+      return reader_->isInputReady();
+    }
+    return true;
   }
 
   // Reads null flags for 'numValues' next top level rows. The first
@@ -210,6 +242,14 @@ class ParquetData : public dwio::common::FormatData {
 
   // Returns the <offset, length> of the row group.
   std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
+
+  /// Returns the on-disk compressed byte length of this leaf's column
+  /// chunk in row group 'index'. Aggregated across projected leaves by
+  /// StructColumnReader::rowGroupSize to estimate prefetch bytes for the
+  /// PrefetchBudget admission gate. Mirrors the columns that
+  /// enqueueRowGroup actually loads (projected-only), so over-wide
+  /// schemas do not over-estimate and starve speculative admission.
+  int64_t projectedRowGroupSize(uint32_t index) const;
 
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the

@@ -18,7 +18,15 @@
 
 #include <thrift/lib/cpp2/FieldRef.h>
 
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
+#include <folly/futures/SharedPromise.h>
+
+#include <atomic>
+#include <list>
+
 #include "velox/common/Casts.h"
+#include "velox/common/io/IoExecutorThreadRegistry.h"
 #include "velox/dwio/common/StatisticsBuilder.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
@@ -223,10 +231,31 @@ class ReaderBase {
 
   /// Ensures that streams are enqueued and loading for the row group at
   /// 'currentGroup'. May start loading one or more subsequent groups.
-  void scheduleRowGroups(
+  ///
+  /// Returns a SemiFuture that resolves when the per-RG data-page loads
+  /// scheduled by this call have been submitted and each slot's promise
+  /// fulfilled. Callers MUST keep the returned future alive until all
+  /// by-reference captures (rowGroupIds, reader) are safe to discard.
+  /// The Impl stashes returned futures into pendingSchedules_ so per-slot
+  /// consumer waits don't have to block on the whole window; ~Impl waits
+  /// on all pending schedules to enforce the lifetime contract.
+  folly::SemiFuture<folly::Unit> scheduleRowGroups(
       const std::vector<uint32_t>& groups,
       int32_t currentGroup,
       StructColumnReader& reader);
+
+  /// Blocks the calling (consumer) thread until the slot for
+  /// 'rowGroupIndex' has been loaded. On success stores the loaded
+  /// BufferedInput into the slot for lifetime anchoring. On failure the
+  /// original exception is rethrown here (.getTry().value() semantics).
+  /// MUST be called from the consumer thread -- blocking on the IO
+  /// executor thread would self-deadlock at executor_size=1.
+  void awaitRowGroupReady(uint32_t rowGroupIndex);
+
+  /// Erases the slot for an RG the consumer is done with. Called from
+  /// advanceToNextRowGroup after seekToRowGroup(K) has repointed the
+  /// column readers off K-1's input.
+  void eraseInputSlot(uint32_t rowGroupIndex);
 
   /// Returns the uncompressed size for columns in 'type' and its children in
   /// row group.
@@ -302,9 +331,30 @@ class ReaderBase {
 
   std::optional<SemanticVersion> version_;
 
-  // Map from row group index to pre-created loading BufferedInput.
-  std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
-      inputs_;
+  // Per-RG input slot. The BufferedInput is loaded (possibly
+  // asynchronously on the IO executor) and delivered to the consumer
+  // through 'readyPromise'. The consumer stores the delivered
+  // BufferedInput into 'input' for lifetime anchoring (StructColumnReader
+  // retains an internal raw pointer into it after loadRowGroup/enqueue;
+  // the slot must keep that storage alive until erase).
+  //
+  // Concurrency: 'inputs_' is consumer-thread-only. The IO executor never
+  // touches the map. The promise is the sole cross-thread channel -- the
+  // IO continuation captures its shared_ptr<SharedPromise> by value at
+  // schedule time and calls setValue/setException on it. No mutex needed.
+  //
+  // SharedPromise (not Promise) keeps multiple awaiters per slot cheap --
+  // forward-compat for parallel column-reader pin-wait patterns.
+  struct InputSlot {
+    std::shared_ptr<dwio::common::BufferedInput> input;
+    std::shared_ptr<
+        folly::SharedPromise<std::shared_ptr<dwio::common::BufferedInput>>>
+        readyPromise;
+  };
+
+  // Consumer-thread-only map of in-flight + buffered RG input slots.
+  // See InputSlot for the concurrency contract.
+  std::unordered_map<uint32_t, InputSlot> inputs_;
 
   // Whether the deserialized Thrift footer's heap footprint has been
   // reported to 'pool_'. Set once in the constructor after a successful
@@ -1341,23 +1391,231 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
       std::move(childNames), std::move(childTypes));
 }
 
-void ReaderBase::scheduleRowGroups(
+folly::SemiFuture<folly::Unit> ReaderBase::scheduleRowGroups(
     const std::vector<uint32_t>& rowGroupIds,
     int32_t currentGroup,
     StructColumnReader& reader) {
   auto numRowGroupsToLoad = std::min(
       options_.prefetchRowGroups() + 1,
       static_cast<int64_t>(rowGroupIds.size() - currentGroup));
+
+  // Entry to load for each newly-scheduled RG in this window. Each holds
+  // its own shared_ptr<SharedPromise> so the promises outlive this frame.
+  struct ToLoad {
+    uint32_t thisGroup;
+    std::shared_ptr<
+        folly::SharedPromise<std::shared_ptr<dwio::common::BufferedInput>>>
+        promise;
+  };
+  std::vector<ToLoad> toLoad;
+  toLoad.reserve(numRowGroupsToLoad);
+
+  // Budget-aware speculative admission. The first RG in this window is
+  // REQUIRED-NOW (the consumer's currentGroup) and is always admitted
+  // regardless of budget -- denying it would deadlock the consumer. Every
+  // subsequent RG is SPECULATIVE: admitted only if its estimated bytes
+  // plus already-reserved bytes in this window plus currently outstanding
+  // bytes fit under maxOutstandingPrefetchBytes. First refusal stops
+  // window growth: further-out RGs are even less likely to be needed, and
+  // admitting non-contiguous prefix-skipped RGs would break the
+  // consumer's sequential scheduling assumption.
+  //
+  // The hard cap is still enforced at BufferedInput::load() via
+  // tryReservePrefetchBytes (which can refuse a load that slipped through
+  // here under a concurrent reservation race). This admission gate is a
+  // soft pre-filter that avoids the cost of creating promises, clones,
+  // and enqueue state for RGs the budget will refuse anyway.
+  const int64_t budgetCap = input_->maxOutstandingPrefetchBytes();
+  const int64_t budgetOutstanding =
+      budgetCap > 0 ? input_->outstandingPrefetchBytes() : 0;
+  int64_t windowReservedBytes = 0;
+
   for (auto i = 0; i < numRowGroupsToLoad; i++) {
-    auto thisGroup = rowGroupIds[currentGroup + i];
-    if (!inputs_[thisGroup]) {
-      inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
+    const auto thisGroup = rowGroupIds[currentGroup + i];
+    const bool isRequiredNow = (i == 0);
+
+    if (!isRequiredNow && budgetCap > 0) {
+      const int64_t estBytes = reader.rowGroupSize(thisGroup);
+      if (budgetOutstanding + windowReservedBytes + estBytes > budgetCap) {
+        // First speculative refusal: stop window growth. This RG will be
+        // re-considered on the next scheduleRowGroups call once
+        // outstanding bytes drop (the consumer drains earlier RGs and
+        // their releasePrefetchBytes runs in the load continuation).
+        break;
+      }
+      windowReservedBytes += estBytes;
+    }
+
+    auto [it, inserted] = inputs_.try_emplace(thisGroup);
+    if (inserted) {
+      it->second.readyPromise = std::make_shared<
+          folly::SharedPromise<std::shared_ptr<dwio::common::BufferedInput>>>();
+      toLoad.push_back({thisGroup, it->second.readyPromise});
     }
   }
 
-  if (currentGroup >= 1) {
-    inputs_.erase(rowGroupIds[currentGroup - 1]);
-  }
+  // Continuation executor selection: prefer the registered Velox IO
+  // executor; fall back to InlineExecutor otherwise. With InlineExecutor
+  // + a sync backend the Phase-2 continuation runs inline on the caller
+  // thread (legacy behavior for callers that don't register an IO
+  // executor). With a natively-async backend + registered executor the
+  // continuation runs off the consumer thread so its load() submits
+  // preadvAsync without blocking the consumer.
+  auto* rawExecutor = input_->executor();
+  folly::Executor* const executor =
+      rawExecutor ? rawExecutor : &folly::InlineExecutor::instance();
+
+  // No page-index phase in the page-index-free reader: the data-page load
+  // is scheduled directly off a ready future. Phase 2 runs inline for
+  // sync backends and on the IO executor otherwise.
+  return folly::makeSemiFuture().via(executor).thenValue([this,
+                                                          &reader,
+                                                          toLoad = std::move(
+                                                              toLoad)](auto&&) {
+    // Phase 2 data batching:
+    //   1) For each RG in this window, enqueue data streams.
+    //   2) Submit ONE input->load(STRIPE) for all cache-miss RGs.
+    //   3) Fulfill each RG promise with its backing input.
+    // Avoids issuing one backend load() per RG on the hot data path.
+    //
+    // Fault isolation: enqueue failures are isolated per RG; the
+    // batched load() has shared fate by design (coalesced IO can't
+    // fail per-region). The outer try/catch is defense-in-depth: any
+    // throw not caught by the per-RG/per-batch handlers would leave
+    // some promises unsettled and hang awaitRowGroupReady, so we
+    // settle every unfulfilled promise then rethrow.
+    try {
+      folly::exception_wrapper firstError;
+      std::vector<const ToLoad*> toBatchLoad;
+      toBatchLoad.reserve(toLoad.size());
+      // Cache-hit entries: enqueueRowGroup runs in the loop below, but
+      // fulfillment is deferred until AFTER the loop (see the data-race
+      // comment at the cache-hit branch).
+      std::vector<const ToLoad*> cacheHitFulfilled;
+      cacheHitFulfilled.reserve(toLoad.size());
+
+      auto fulfillSuccess =
+          [&](const ToLoad& entry,
+              const std::shared_ptr<dwio::common::BufferedInput>& loadedInput) {
+            entry.promise->setValue(loadedInput);
+          };
+
+      for (const auto& entry : toLoad) {
+        const auto thisGroup = entry.thisGroup;
+        try {
+          // The in-place cache-hit fast path enqueues into the SHARED
+          // input_, which is only safe when this continuation runs
+          // synchronously on the consumer thread. That holds iff the
+          // backend is sync-load: isBuffered() can return true only on
+          // the base (sync) BufferedInput, and on that backend this
+          // continuation runs inline on the caller. The async backends
+          // (Cached/Direct) run this continuation off the consumer
+          // thread -- possibly concurrently across sibling prefetch
+          // windows -- and always report isBuffered()==false, so gating
+          // on supportSyncLoad() keeps shared-input_ mutation off the
+          // async path structurally rather than by coincidence.
+          DCHECK(
+              input_->supportSyncLoad() ||
+              !reader.isRowGroupBuffered(thisGroup, *input_))
+              << "async backend reported a buffered row group; "
+                 "in-place cache-hit enqueue would race shared input_";
+          if (input_->supportSyncLoad() &&
+              reader.isRowGroupBuffered(thisGroup, *input_)) {
+            // Cache hit (sync backend): enqueue directly into input_,
+            // mirroring the legacy StructColumnReader::loadRowGroup
+            // path. BufferedInput::enqueue takes the readBuffer fast
+            // path for already-buffered regions, so it needs no
+            // subsequent load(). DO NOT fulfill the promise here:
+            // enqueueRowGroup mutates per-leaf ParquetData vectors, and
+            // waking the consumer mid-loop would race its
+            // seekToRowGroup against a concurrent enqueueRowGroup(K+1)
+            // on the same vectors. Defer to the post-loop fulfill pass.
+            reader.enqueueRowGroup(thisGroup, *input_);
+            cacheHitFulfilled.push_back(&entry);
+          } else {
+            toBatchLoad.push_back(&entry);
+          }
+        } catch (...) {
+          auto ew = folly::exception_wrapper{std::current_exception()};
+          if (!firstError) {
+            firstError = ew;
+          }
+          entry.promise->setException(std::move(ew));
+        }
+      }
+
+      // Phase A: per-RG enqueue for batched (cache-miss) RGs into a
+      // clone (pure CPU, no IO). MUST complete before ANY promise is
+      // fulfilled -- enqueueRowGroup mutates the per-leaf ParquetData
+      // vectors, and the consumer's seekToRowGroup on a just-woken RG
+      // mutates those same vectors. The clone only changes which
+      // BufferedInput receives the enqueue; the ParquetData vectors are
+      // shared regardless.
+      std::shared_ptr<dwio::common::BufferedInput> batchedInput;
+      std::vector<const ToLoad*> toBatchLoadFinal;
+      if (!toBatchLoad.empty()) {
+        batchedInput = input_->clone();
+        toBatchLoadFinal.reserve(toBatchLoad.size());
+        for (const auto* entry : toBatchLoad) {
+          try {
+            reader.enqueueRowGroup(entry->thisGroup, *batchedInput);
+            toBatchLoadFinal.push_back(entry);
+          } catch (...) {
+            auto ew = folly::exception_wrapper{std::current_exception()};
+            if (!firstError) {
+              firstError = ew;
+            }
+            entry->promise->setException(std::move(ew));
+          }
+        }
+      }
+
+      // All ParquetData enqueue mutation is complete on this thread. It
+      // is finally safe to wake cache-hit consumers: load() below
+      // touches only the clone (batchedInput), never input_ or the
+      // ParquetData vectors, so it cannot race the consumer.
+      for (const auto* entry : cacheHitFulfilled) {
+        fulfillSuccess(*entry, input_);
+      }
+
+      if (!toBatchLoadFinal.empty()) {
+        // Phase B: single coalesced load() across surviving RGs. This
+        // is the only step with shared fate by design.
+        try {
+          batchedInput->load(dwio::common::LogType::STRIPE);
+          for (const auto* entry : toBatchLoadFinal) {
+            fulfillSuccess(*entry, batchedInput);
+          }
+        } catch (...) {
+          auto ew = folly::exception_wrapper{std::current_exception()};
+          if (!firstError) {
+            firstError = ew;
+          }
+          for (const auto* entry : toBatchLoadFinal) {
+            entry->promise->setException(ew);
+          }
+        }
+      }
+
+      // Re-throw the first observed exception into the schedule future
+      // so the destructor drain observes it (the per-slot setException
+      // above is the primary wake-up path for the consumer).
+      if (firstError) {
+        firstError.throw_exception();
+      }
+    } catch (...) {
+      // Defense-in-depth: settle any promise still unfulfilled so
+      // awaitRowGroupReady can never hang, then rethrow so the returned
+      // SemiFuture carries the error (drained + logged in ~Impl).
+      auto ew = folly::exception_wrapper{std::current_exception()};
+      for (const auto& entry : toLoad) {
+        if (!entry.promise->isFulfilled()) {
+          entry.promise->setException(ew);
+        }
+      }
+      throw;
+    }
+  });
 }
 
 int64_t ReaderBase::rowGroupUncompressedSize(
@@ -1387,7 +1645,69 @@ int64_t ReaderBase::rowGroupUncompressedSize(
 }
 
 bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
-  return inputs_.count(rowGroupIndex) != 0;
+  // Consumer-thread-only map; see InputSlot concurrency contract.
+  // `input != nullptr` means the consumer has awaited + stored the load
+  // result. A slot whose input is still null but whose readyPromise's
+  // SemiFuture is ready is also "buffered" -- the backend IO completed,
+  // only the consumer-side swap into `input` hasn't happened yet.
+  auto it = inputs_.find(rowGroupIndex);
+  if (it == inputs_.end()) {
+    return false;
+  }
+  if (it->second.input != nullptr) {
+    return true;
+  }
+  const auto& promise = it->second.readyPromise;
+  return promise != nullptr && promise->isFulfilled();
+}
+
+void ReaderBase::awaitRowGroupReady(uint32_t rowGroupIndex) {
+  auto it = inputs_.find(rowGroupIndex);
+  VELOX_CHECK(
+      it != inputs_.end(),
+      "awaitRowGroupReady: slot for RG {} not found. Consumer requested an "
+      "RG that was not in the most recent scheduleRowGroups window. This is "
+      "a sequencing bug.",
+      rowGroupIndex);
+  if (it->second.input != nullptr) {
+    // Fast path: a prior await already populated this slot.
+    return;
+  }
+  auto promise = it->second.readyPromise;
+  VELOX_CHECK_NOT_NULL(
+      promise,
+      "awaitRowGroupReady: slot for RG {} has no readyPromise. Invariant "
+      "violated: scheduled slots must have a promise.",
+      rowGroupIndex);
+  // Block on the consumer thread; this MUST NOT run on the IO executor
+  // (would self-deadlock at executor_size=1).
+  DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
+      << "awaitRowGroupReady invoked on IO executor thread; self-deadlock "
+         "risk at executor_size=1.";
+  // getTry() (not wait()) so Phase 2 exceptions surface here rather than
+  // silently leaving the slot empty. value() rethrows the original
+  // exception (folly::Try semantics).
+  auto loadedTry = promise->getSemiFuture().getTry();
+  auto loaded = std::move(loadedTry).value();
+  it->second.input = std::move(loaded);
+}
+
+void ReaderBase::eraseInputSlot(uint32_t rowGroupIndex) {
+  // Consumer-thread-only map; see InputSlot concurrency contract.
+  auto it = inputs_.find(rowGroupIndex);
+  if (it == inputs_.end()) {
+    // Slot may be missing if the consumer already advanced past this RG.
+    // No-op is correctness-safe.
+    return;
+  }
+  // Erase invariant: every promise must be settled before its slot is
+  // erased. `input != nullptr` implies setValue was observed and consumed.
+  // The failure path (.value() threw) returns out of advanceToNextRowGroup
+  // before reaching eraseInputSlot, so we only erase success slots here.
+  DCHECK(it->second.input != nullptr)
+      << "eraseInputSlot: erasing slot for RG " << rowGroupIndex
+      << " that was never observed ready.";
+  inputs_.erase(it);
 }
 
 class ParquetRowReader::Impl {
@@ -1446,6 +1766,36 @@ class ParquetRowReader::Impl {
 
     columnReaderOptions_ =
         dwio::common::makeColumnReaderOptions(readerBase_->options());
+  }
+
+  // Drains any stashed scheduleRowGroups futures before Impl destruction.
+  // The futures capture by reference into Impl/ReaderBase state
+  // (rowGroupIds_, columnReader_), so any continuation that hasn't fired
+  // by the time Impl is destroyed would UAF on those captures. Synchronous
+  // drain is the lifetime contract.
+  //
+  // Safe by the caller-is-consumer rule: ~Impl runs on whichever thread
+  // destroys the owning split (consumer-side), so blocking here can't
+  // self-deadlock against the IO executor.
+  ~Impl() {
+    DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
+        << "~Impl called on IO executor thread; pendingSchedules_ drain "
+           "would self-deadlock at executor_size=1.";
+    std::list<folly::SemiFuture<folly::Unit>> pending;
+    pending.swap(pendingSchedules_);
+    // MUST wait synchronously (getTry) here, NOT clear()/detach(): Phase 2
+    // continuations capture Impl state (rowGroupIds_, columnReader_) BY
+    // REFERENCE, so an in-flight continuation would read freed Impl state.
+    for (auto& f : pending) {
+      // getTry() (not get()) so we don't throw from the destructor. Log
+      // failures since downstream schedule futures may be stashed but never
+      // awaited on teardown after an unrelated error.
+      auto result = std::move(f).getTry();
+      if (result.hasException()) {
+        LOG(ERROR) << "scheduleRowGroups future failed during ~Impl drain: "
+                   << result.exception().what();
+      }
+    }
   }
 
   void filterRowGroups() {
@@ -1615,15 +1965,50 @@ class ParquetRowReader::Impl {
     }
 
     auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
-    readerBase_->scheduleRowGroups(
+
+    // Post the schedule (don't block on the whole window's future).
+    // Stash the future in pendingSchedules_ to keep it alive until either
+    // its by-reference captures are drained as the consumer progresses,
+    // or ~Impl exhaustively waits on all stashed futures (UAF safety).
+    // Only the per-slot promise for nextRowGroupIndex is awaited below;
+    // RGs beyond it keep loading in the background while the consumer
+    // processes this RG.
+    //
+    // Prune all resolved futures first. A head-only pop could retain
+    // out-of-order completed windows (N+1 ready before N), letting the
+    // list grow in pathological interleavings.
+    pendingSchedules_.remove_if(
+        [](const folly::SemiFuture<folly::Unit>& f) { return f.isReady(); });
+    pendingSchedules_.push_back(readerBase_->scheduleRowGroups(
         rowGroupIds_,
         nextRowGroupIdsIdx_,
-        static_cast<StructColumnReader&>(*columnReader_));
+        static_cast<StructColumnReader&>(*columnReader_)));
+
+    // Per-slot await: block only on nextRowGroupIndex's slot, not the
+    // whole window. The remaining slots keep loading on the IO executor in
+    // parallel with the consumer's decode of this RG. Uses getTry().value()
+    // so Phase 2 exceptions surface here rather than silently leaving a
+    // null input, and stores the loaded BufferedInput into the slot for
+    // lifetime anchoring (StructColumnReader holds an internal raw pointer
+    // into it after enqueueRowGroup).
+    readerBase_->awaitRowGroupReady(nextRowGroupIndex);
+
     currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
     rowsInCurrentRowGroup_ = *currentRowGroupPtr_->num_rows();
     currentRowInGroup_ = 0;
     nextRowGroupIdsIdx_++;
     columnReader_->seekToRowGroup(nextRowGroupIndex);
+
+    // Erase the immediately-prior RG's slot here, AFTER seekToRowGroup(K)
+    // has destroyed every column's PageReader for K-1 (releasing K-1's
+    // SeekableInputStreams and their cache pins). At this point nothing in
+    // column-reader-side state references K-1's BufferedInput. Index math:
+    // nextRowGroupIdsIdx_ was just post-incremented from its pre-call value
+    // (which indexed K-1), so rowGroupIds_[nextRowGroupIdsIdx_ - 2] is K-1.
+    // The `>= 2` guard skips the first round when there is no prior RG.
+    if (nextRowGroupIdsIdx_ >= 2) {
+      readerBase_->eraseInputSlot(rowGroupIds_[nextRowGroupIdsIdx_ - 2]);
+    }
     return true;
   }
 
@@ -1652,6 +2037,15 @@ class ParquetRowReader::Impl {
 
   mutable std::optional<size_t> estimatedRowSize_;
   mutable int32_t lastRowGroupWithRowEstimate_{-1};
+
+  // In-flight scheduleRowGroups futures. Pruned at each new schedule call
+  // (drop already-resolved entries) and exhaustively drained in ~Impl to
+  // prevent UAF of by-reference captures (rowGroupIds_, columnReader_)
+  // owned by Impl. std::list so mid-iteration prune is O(1) per entry.
+  // Consumer-thread access only; no mutex needed (advanceToNextRowGroup
+  // and ~Impl both run on the consumer thread per the caller-is-consumer
+  // rule).
+  std::list<folly::SemiFuture<folly::Unit>> pendingSchedules_;
 };
 
 ParquetRowReader::ParquetRowReader(

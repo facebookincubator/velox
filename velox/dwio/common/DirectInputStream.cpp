@@ -16,6 +16,8 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
+#include "velox/common/io/IoExecutorThreadRegistry.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/DirectInputStream.h"
@@ -109,6 +111,40 @@ size_t DirectInputStream::positionSize() const {
   return 1;
 }
 
+bool DirectInputStream::isLoaded() const {
+  // (a) Already have buffered data covering the current position.
+  const uint64_t pos = offsetInRegion_;
+  if (pos >= loadedRegion_.offset &&
+      pos < loadedRegion_.offset + loadedRegion_.length) {
+    return true;
+  }
+  // (b) Coalesced load registered: check its state.
+  auto load = bufferedInput_->peekCoalescedLoad(this);
+  if (!load) {
+    // (c) No load registered. First read will issue a fresh sync read,
+    // not block on a future. Treat as ready.
+    return true;
+  }
+  const auto state = load->state();
+  return state == cache::CoalescedLoad::State::kLoaded ||
+      state == cache::CoalescedLoad::State::kCancelled;
+}
+
+folly::SemiFuture<folly::Unit> DirectInputStream::loadedFuture() {
+  DCHECK(!loaded_)
+      << "DirectInputStream::loadedFuture called after loadPosition() "
+         "started. loadedFuture only models the initial coalesced-load "
+         "readiness and may be stale after seek/read progression.";
+  if (isLoaded()) {
+    return folly::makeSemiFuture(folly::unit);
+  }
+  auto load = bufferedInput_->peekCoalescedLoad(this);
+  if (!load) {
+    return folly::makeSemiFuture(folly::unit);
+  }
+  return load->loadOrFutureAsync().deferValue([](bool) { return folly::unit; });
+}
+
 namespace {
 std::vector<folly::Range<char*>>
 makeRanges(size_t size, memory::Allocation& data, std::string& tinyData) {
@@ -156,6 +192,10 @@ void DirectInputStream::loadSync() {
 }
 
 void DirectInputStream::loadPosition() {
+  // Safe only on the consumer thread (self-deadlock risk at
+  // executor_size=1 otherwise).
+  DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
+      << "DirectInputStream::loadPosition called on IO executor thread";
   VELOX_CHECK_LT(offsetInRegion_, region_.length);
 
   // Fast path: serve from preloaded whole-file data.

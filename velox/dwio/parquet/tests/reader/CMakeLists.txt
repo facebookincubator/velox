@@ -63,6 +63,7 @@ endif()
 add_executable(
   velox_dwio_parquet_reader_test
   ParquetReaderTest.cpp
+  ParquetReaderAsyncTest.cpp
   ParquetReaderWideningTest.cpp
   ParquetReaderBenchmarkTest.cpp
   BloomFilterTest.cpp

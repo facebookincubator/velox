@@ -89,6 +89,31 @@ class PageReader {
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);
 
+  /// Readiness probe -- true if the underlying coalesced load backing
+  /// this column-chunk's IO has already landed (so the next page read
+  /// will not block). Checks the single input stream. Returns true if
+  /// no stream is set (e.g. test-only ctor) so callers behave as today
+  /// when there's nothing to probe.
+  ///
+  /// Memoized: once the stream has arrived it does not un-arrive within
+  /// the PageReader's lifetime (which is per-RG; a new PageReader is
+  /// constructed in seekToRowGroup for the next RG, so the cache is
+  /// implicitly invalidated at RG transitions).
+  bool isInputReady() const {
+    if (inputReadyCached_) {
+      return true;
+    }
+    if (inputStream_) {
+      if (!inputStream_->isLoaded()) {
+        return false;
+      }
+      inputReadyCached_ = true;
+      return true;
+    }
+    inputReadyCached_ = true;
+    return true;
+  }
+
   /// Decodes repdefs for 'numTopLevelRows'. Use getLengthsAndNulls()
   /// to access the lengths and nulls for the different nesting
   /// levels.
@@ -407,6 +432,10 @@ class PageReader {
   memory::MemoryPool& pool_;
 
   std::unique_ptr<dwio::common::SeekableInputStream> inputStream_;
+  // Memoized readiness for isInputReady(). Flips false->true once the
+  // stream has landed; never flips back (PageReader is per-RG, so RG
+  // transitions reset via destructor + reconstruction).
+  mutable bool inputReadyCached_{false};
   ParquetTypeWithIdPtr type_;
   const int32_t maxRepeat_;
   const int32_t maxDefine_;
