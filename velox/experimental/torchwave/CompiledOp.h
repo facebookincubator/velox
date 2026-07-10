@@ -45,6 +45,15 @@ struct Launch {
   NodeCP standalone{nullptr};
   KernelOperation* op{nullptr};
 
+  /// For a standalone metadata-only op, the specific host-side shortcut, or
+  /// kNone. Set from the node target in the standalone constructor.
+  StandaloneShortcut standaloneShortcut{StandaloneShortcut::kNone};
+
+  /// True if 'standalone' only manipulates tensor metadata (no real compute).
+  /// Initialized from the op's Metadata, or true for prim.ListPack (which has
+  /// no registry entry).
+  bool metadataOnly{false};
+
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
@@ -263,6 +272,17 @@ struct LaunchData {
   const Launch* launch{nullptr};
   OpInvocation* invocation{nullptr};
   NodeCP standalone{nullptr};
+
+  /// For a metadata-only standalone shortcut (launch->standaloneShortcut !=
+  /// kNone): the op's operands in c10 schema order (first-to-last for
+  /// prim.ListPack, which has no schema). args[i] is the value operand, or
+  /// nullptr when that operand is an integer constant -- in which case
+  /// intArgs[i] holds the constant. intList holds an all-integer list operand
+  /// (e.g. aten.view's size) for direct pass-through to the ATen primitive.
+  std::vector<ValueCP> args;
+  std::vector<int64_t> intArgs;
+  std::vector<int64_t> intList;
+
   SizeExpr sizeExpr;
   int64_t numElements{0};
   std::vector<nativert::ValueId> actualInputs;
@@ -301,17 +321,11 @@ class CompositeInvocation {
       std::unique_ptr<CompositeKernel> kernel,
       std::vector<OpInvocation> ops,
       std::deque<c10::IValue> ivalueStorage,
-      int32_t sequenceNumber,
-      std::vector<Launch> prePassStandalones = {});
+      int32_t sequenceNumber);
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
   void execute(ExecutionState& state);
-
-  /// Runs pre-pass standalones that were skipped during execute() because
-  /// their inputs were None.  Called after all PNs have executed so that
-  /// cross-PN values are available.
-  void runDeferredStandalones(ExecutionState& state);
 
   std::string toString(Listing mode = kExprs, int32_t ordinal = 0) const;
 
@@ -367,15 +381,6 @@ class CompositeInvocation {
   std::vector<OpInvocation> ops_;
   std::deque<c10::IValue> ivalueStorage_;
   int32_t sequenceNumber_;
-
-  // Grid standalones skipped during execute() due to None inputs.
-  // Re-run by runDeferredStandalones() after all PNs execute.
-  std::vector<NodeCP> deferredStandalones_;
-
-  // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
-  // start of execute() before any kernel step, so their outputs are
-  // available for SizeExpr evaluation.
-  std::vector<Launch> prePassStandalones_;
 };
 
 /// Represents a single ProjectNode in a stack of ProjectNodes. Contains a graph
@@ -388,9 +393,6 @@ class CompiledNode {
 
   /// Executes this node using the given execution state.
   void execute(ExecutionState& state);
-
-  /// Runs deferred standalone ops after all PNs have executed.
-  void runDeferredStandalones(ExecutionState& state);
 
   const CompositeInvocation* kernels() const {
     return kernels_.get();

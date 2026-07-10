@@ -16,6 +16,7 @@
 #pragma once
 #include <folly/container/F14Map.h>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -68,6 +69,14 @@ struct PlanFragment {
   /// the map uses TransportKind::kHttp.
   folly::F14FastMap<PlanNodeId, std::string> inputTransportTypes;
   folly::F14FastMap<PlanNodeId, std::string> outputTransportTypes;
+
+  /// Identifies this task among all tasks running the same query stage.
+  /// Supplied by the consumer at task creation time. AssignUniqueId packs it
+  /// into the high 24 bits of each generated id and the per-row counter into
+  /// the low 40 bits, so it must fit in 24 bits (0 <= taskUniqueId < 2^24).
+  /// When unset, AssignUniqueId falls back to the value carried on its plan
+  /// node (0 in the canonical construction path).
+  std::optional<int32_t> taskUniqueId{};
 
   /// Validates that every node ID in inputTransportTypes refers to an Exchange
   /// node and every node ID in outputTransportTypes refers to a

@@ -751,6 +751,14 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Sets the per-type attribute key under which the file encodes field ids
+  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// columnMappingMode() == kFieldId.
+  ReaderOptions& setFieldIdAttributeKey(std::string key) {
+    fieldIdAttributeKey_ = std::move(key);
+    return *this;
+  }
+
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -793,6 +801,13 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the requested schema field ids for ColumnMappingMode::kFieldId.
   const std::vector<ParquetFieldId>& fieldIds() const {
     return fieldIds_;
+  }
+
+  /// Gets the per-type attribute key under which the file encodes field ids
+  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// columnMappingMode() == kFieldId.
+  const std::string& fieldIdAttributeKey() const {
+    return fieldIdAttributeKey_;
   }
 
   SerDeOptions& serDeOptions() {
@@ -991,6 +1006,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   std::vector<ParquetFieldId> fieldIds_;
+  std::string fieldIdAttributeKey_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
@@ -1039,6 +1055,7 @@ struct WriterOptions {
 
   std::string sessionTimezoneName;
   bool adjustTimestampToTimezone{false};
+  std::shared_ptr<FormatSpecificOptions> formatSpecificOptions;
 
   // WriterOption implementations can implement this function to specify how to
   // process format-specific session and connector configs.

@@ -92,6 +92,10 @@ class CompiledModuleImpl : public CompiledModule {
   int64_t compileMs_;
 };
 
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+
 namespace {
 
 void addFlag(
@@ -172,16 +176,24 @@ bool readSystemHeaders(std::map<std::string, std::string>& headers) {
 }
 
 void saveSystemHeaders(std::map<std::string, std::string>& map) {
-  std::ofstream out(fmt::format("/tmp/h.{}", getpid()));
-  for (auto& pair : map) {
-    out << pair.first << std::endl
-        << pair.second.size() << std::endl
-        << pair.second;
+  auto tmpPath = fmt::format("/tmp/h.{}", getpid());
+  {
+    std::ofstream out(tmpPath);
+    for (auto& pair : map) {
+      out << pair.first << std::endl
+          << pair.second.size() << std::endl
+          << pair.second;
+    }
   }
-  out.close();
-  system(
-      fmt::format(" mv /tmp/h.{} /tmp/wavesystemheaders.txt", getpid())
-          .c_str());
+  // Use rename(2) instead of system("mv ...") to publish the headers file.
+  // system() calls fork(), and forking from a Wave compile-pool thread inside
+  // a heavyweight host (NCCL/Thrift/folly executors) can deadlock the child
+  // before exec via lock inheritance, hanging warmup() forever (T275179010).
+  // rename is a single atomic syscall within the same filesystem (/tmp).
+  if (std::rename(tmpPath.c_str(), "/tmp/wavesystemheaders.txt") != 0) {
+    LOG(WARNING) << "Failed to rename " << tmpPath
+                 << " to /tmp/wavesystemheaders.txt: " << std::strerror(errno);
+  }
 }
 
 // Adds a trailing zero to make the string.data() a C char*.

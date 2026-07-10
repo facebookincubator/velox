@@ -32,7 +32,7 @@
 
 namespace facebook::velox::exec {
 
-class OutputBufferManager;
+class DefaultOutputBufferManager;
 
 class HashJoinBridge;
 class IndexLookupJoinBridge;
@@ -136,6 +136,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
   const int destination() const {
     return destination_;
+  }
+
+  /// Returns the pool of unique row ids shared by all AssignUniqueId operators
+  /// in this task. Each operator atomically claims disjoint ranges from it, so
+  /// the ids it generates never collide across operators or drivers of the same
+  /// task.
+  const std::shared_ptr<std::atomic_int64_t>& uniqueRowIdPool() const {
+    return uniqueRowIdPool_;
   }
 
   /// Configured cpu slice time limit for drivers. 0 (meaning slicing/yield
@@ -794,7 +802,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// folder could not be created.
   const std::string& getOrCreateSpillDirectory();
 
-  /// True if produces output via OutputBufferManager.
+  /// True if produces output via DefaultOutputBufferManager.
   bool hasPartitionedOutput() const {
     return numDriversInPartitionedOutput_ > 0;
   }
@@ -1268,7 +1276,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // default hierarchy is unchanged.
   std::vector<std::shared_ptr<memory::MemoryPool>> customChildPools_;
 
-  // Set to true by OutputBufferManager when all output is
+  // Set to true by DefaultOutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
   // Driver to finish will set state_ to kFinished. If Drivers have
   // finished then setting this to true will also set state_ to
@@ -1293,6 +1301,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // process remaining remote splits after the task has completed early.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
       exchangeClientByPlanNode_;
+
+  // Pool of unique row ids shared by all AssignUniqueId operators in this task.
+  // See uniqueRowIdPool().
+  const std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool_{
+      std::make_shared<std::atomic_int64_t>(0)};
 
   ConsumerSupplier consumerSupplier_;
 
@@ -1457,7 +1470,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // ungrouped execution we use the [0] entry in this vector.
   std::unordered_map<uint32_t, SplitGroupState> splitGroupStates_;
 
-  std::weak_ptr<OutputBufferManager> bufferManager_;
+  std::weak_ptr<DefaultOutputBufferManager> bufferManager_;
 
   // Boolean indicating that we have already received no-more-output-buffers
   // message. Subsequent messages will be ignored.

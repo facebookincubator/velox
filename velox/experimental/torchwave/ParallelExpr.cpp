@@ -196,7 +196,7 @@ NodeSet makeCseBorder(
 
 float parallelBorder(NodeCP expr, const NodeSet& placed, NodeSet& result) {
   constexpr float kSplit = -1;
-  constexpr float kTargetCost = 50;
+  constexpr float kTargetCost = 500;
   if (placed.count(expr)) {
     return 0;
   }

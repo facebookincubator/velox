@@ -317,7 +317,7 @@ void DirectBufferedInput::preload() {
   preloadData_->size = fileSize_;
   uint64_t storageReadUs{0};
   {
-    MicrosecondTimer timer(&storageReadUs);
+    MicrosecondWallTimer timer(&storageReadUs);
     if (fileSize_ <= kTinySize) {
       preloadData_->tinyData.resize(fileSize_);
       input_->read(preloadData_->tinyData.data(), fileSize_, 0, LogType::FILE);
@@ -422,7 +422,7 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
 
   uint64_t usecs = 0;
   {
-    MicrosecondTimer timer(&usecs);
+    MicrosecondWallTimer timer(&usecs);
     input_->read(buffers, requests_[0].region.offset, LogType::FILE);
   }
 

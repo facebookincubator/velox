@@ -281,6 +281,11 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
+  md_.scanOutputReturnBarrier = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   md_.alwaysSingleBlock = val;
   return *this;
@@ -325,6 +330,11 @@ MetadataBuilder& MetadataBuilder::isStandalone(bool val) {
 
 MetadataBuilder& MetadataBuilder::only1d(bool val) {
   md_.only1d = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::metadataOnly(bool val) {
+  md_.metadataOnly = val;
   return *this;
 }
 

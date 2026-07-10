@@ -36,7 +36,7 @@ class SparkCastHooks : public exec::CastHooks {
   /// number of seconds since the epoch (1970-01-01 00:00:00 UTC).
   Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
 
-  Expected<int64_t> castTimestampToInt(Timestamp timestamp) const override;
+  Expected<int64_t> castTimestampToBigint(Timestamp timestamp) const override;
 
   /// When casting double as timestamp, the input is treated as
   /// the number of seconds since the epoch (1970-01-01 00:00:00 UTC).
@@ -68,6 +68,8 @@ class SparkCastHooks : public exec::CastHooks {
     return timestampToStringOptions_;
   }
 
+  TimestampToStringOptions timestampUtcToStringOptions() const override;
+
   bool truncate() const override {
     return allowOverflow_;
   }
@@ -77,6 +79,11 @@ class SparkCastHooks : public exec::CastHooks {
   }
 
   exec::PolicyType getPolicy() const override;
+
+  // Spark supports TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return true;
+  }
 
   void castDateTimestampToGMT(
       Timestamp& timestamp,

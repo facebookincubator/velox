@@ -146,7 +146,7 @@ void DirectInputStream::loadSync() {
   auto ranges = makeRanges(loadedRegion_.length, data_, tinyData_);
   uint64_t usecs = 0;
   {
-    MicrosecondTimer timer(&usecs);
+    MicrosecondWallTimer timer(&usecs);
     input_->read(ranges, loadedRegion_.offset, LogType::FILE);
   }
   ioStats_->read().increment(loadedRegion_.length);
@@ -176,7 +176,7 @@ void DirectInputStream::loadPosition() {
       folly::SemiFuture<bool> waitFuture(false);
       uint64_t loadUs = 0;
       {
-        MicrosecondTimer timer(&loadUs);
+        MicrosecondWallTimer timer(&loadUs);
         if (!load->loadOrFuture(&waitFuture)) {
           waitFuture.wait();
         }

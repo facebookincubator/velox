@@ -13,26 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
 
 // static
-const std::shared_ptr<OutputBufferManager>&
-OutputBufferManager::getInstanceRef() {
+const std::shared_ptr<DefaultOutputBufferManager>&
+DefaultOutputBufferManager::getInstanceRef() {
   return getInstanceRef(Options());
 }
 
 // static
-const std::shared_ptr<OutputBufferManager>& OutputBufferManager::getInstanceRef(
-    const Options& options) {
-  static const std::shared_ptr<OutputBufferManager> instance =
-      std::make_shared<OutputBufferManager>(options);
+const std::shared_ptr<DefaultOutputBufferManager>&
+DefaultOutputBufferManager::getInstanceRef(const Options& options) {
+  static const std::shared_ptr<DefaultOutputBufferManager> instance =
+      std::make_shared<DefaultOutputBufferManager>(options);
   return instance;
 }
 
-std::shared_ptr<OutputBuffer> OutputBufferManager::getBuffer(
+std::shared_ptr<OutputBuffer> DefaultOutputBufferManager::getBuffer(
     const std::string& taskId) {
   return buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
@@ -42,7 +42,7 @@ std::shared_ptr<OutputBuffer> OutputBufferManager::getBuffer(
   });
 }
 
-std::shared_ptr<OutputBuffer> OutputBufferManager::getBufferIfExists(
+std::shared_ptr<OutputBuffer> DefaultOutputBufferManager::getBufferIfExists(
     const std::string& taskId) {
   return buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
@@ -50,11 +50,11 @@ std::shared_ptr<OutputBuffer> OutputBufferManager::getBufferIfExists(
   });
 }
 
-uint64_t OutputBufferManager::numBuffers() const {
+uint64_t DefaultOutputBufferManager::numBuffers() const {
   return buffers_.lock()->size();
 }
 
-bool OutputBufferManager::enqueue(
+bool DefaultOutputBufferManager::enqueue(
     const std::string& taskId,
     int destination,
     std::unique_ptr<SerializedPageBase> data,
@@ -62,15 +62,15 @@ bool OutputBufferManager::enqueue(
   return getBuffer(taskId)->enqueue(destination, std::move(data), future);
 }
 
-void OutputBufferManager::noMoreData(const std::string& taskId) {
+void DefaultOutputBufferManager::noMoreData(const std::string& taskId) {
   getBuffer(taskId)->noMoreData();
 }
 
-bool OutputBufferManager::isFinished(const std::string& taskId) {
+bool DefaultOutputBufferManager::isFinished(const std::string& taskId) {
   return getBuffer(taskId)->isFinished();
 }
 
-void OutputBufferManager::acknowledge(
+void DefaultOutputBufferManager::acknowledge(
     const std::string& taskId,
     int destination,
     int64_t sequence) {
@@ -89,7 +89,7 @@ void OutputBufferManager::acknowledge(
   }
 }
 
-void OutputBufferManager::deleteResults(
+void DefaultOutputBufferManager::deleteResults(
     const std::string& taskId,
     int destination) {
   if (auto buffer = getBufferIfExists(taskId)) {
@@ -97,7 +97,7 @@ void OutputBufferManager::deleteResults(
   }
 }
 
-bool OutputBufferManager::getData(
+bool DefaultOutputBufferManager::getData(
     const std::string& taskId,
     int destination,
     uint64_t maxBytes,
@@ -111,7 +111,7 @@ bool OutputBufferManager::getData(
   return false;
 }
 
-void OutputBufferManager::initializeTask(
+void DefaultOutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
@@ -130,7 +130,7 @@ void OutputBufferManager::initializeTask(
   });
 }
 
-bool OutputBufferManager::updateOutputBuffers(
+bool DefaultOutputBufferManager::updateOutputBuffers(
     const std::string& taskId,
     int numBuffers,
     bool noMoreBuffers) {
@@ -141,7 +141,7 @@ bool OutputBufferManager::updateOutputBuffers(
   return false;
 }
 
-bool OutputBufferManager::updateNumDrivers(
+bool DefaultOutputBufferManager::updateNumDrivers(
     const std::string& taskId,
     uint32_t newNumDrivers) {
   if (auto buffer = getBufferIfExists(taskId)) {
@@ -151,7 +151,7 @@ bool OutputBufferManager::updateNumDrivers(
   return false;
 }
 
-void OutputBufferManager::removeTask(const std::string& taskId) {
+void DefaultOutputBufferManager::removeTask(const std::string& taskId) {
   auto buffer =
       buffers_.withLock([&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
         auto it = buffers.find(taskId);
@@ -168,7 +168,7 @@ void OutputBufferManager::removeTask(const std::string& taskId) {
   }
 }
 
-std::string OutputBufferManager::toString() {
+std::string DefaultOutputBufferManager::toString() {
   return buffers_.withLock([](const auto& buffers) {
     std::stringstream out;
     out << "[BufferManager:" << std::endl;
@@ -180,7 +180,7 @@ std::string OutputBufferManager::toString() {
   });
 }
 
-double OutputBufferManager::getUtilization(const std::string& taskId) {
+double DefaultOutputBufferManager::getUtilization(const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {
     return buffer->getUtilization();
@@ -188,7 +188,7 @@ double OutputBufferManager::getUtilization(const std::string& taskId) {
   return 0;
 }
 
-bool OutputBufferManager::isOverutilized(const std::string& taskId) {
+bool DefaultOutputBufferManager::isOverutilized(const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {
     return buffer->isOverutilized();
@@ -196,7 +196,7 @@ bool OutputBufferManager::isOverutilized(const std::string& taskId) {
   return false;
 }
 
-std::optional<OutputBuffer::Stats> OutputBufferManager::stats(
+std::optional<OutputBuffer::Stats> DefaultOutputBufferManager::stats(
     const std::string& taskId) {
   auto buffer = getBufferIfExists(taskId);
   if (buffer != nullptr) {

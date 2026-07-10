@@ -25,9 +25,10 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
+#include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
-#ifdef VELOX_ENABLE_PARQUET
-#include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
+#ifdef VELOX_ENABLE_NIMBLE
+#include "velox/connectors/hive/iceberg/fb/IcebergNimbleStatsCollector.h"
 #endif
 
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -37,6 +38,28 @@
 #include "velox/functions/iceberg/Register.h"
 
 namespace facebook::velox::connector::hive::iceberg {
+
+class IcebergFileNameGenerator : public FileNameGenerator {
+ public:
+  IcebergFileNameGenerator() {}
+
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      uint32_t maxNumBuckets,
+      bool commitRequired) const override;
+
+  static void registerSerDe();
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+
+  static std::shared_ptr<IcebergFileNameGenerator> deserialize(
+      const folly::dynamic& obj,
+      void* context);
+};
 
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
@@ -83,6 +106,8 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param writeKind Selects between data-file emission (default) and V3
   /// deletion-vector emission. The default preserves existing INSERT
   /// semantics.
+  /// @param fileNameGenerator File name generator for generating unique file
+  /// names for data files. Defaults to IcebergFileNameGenerator.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
@@ -90,7 +115,9 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
-      WriteKind writeKind = WriteKind::kData);
+      WriteKind writeKind = WriteKind::kData,
+      std::shared_ptr<const FileNameGenerator> fileNameGenerator =
+          std::make_shared<const IcebergFileNameGenerator>());
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -298,9 +325,11 @@ class IcebergDataSink : public HiveDataSink {
 
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
 
-#ifdef VELOX_ENABLE_PARQUET
-  std::shared_ptr<IcebergParquetStatsCollector> parquetStatsCollector_;
-#endif
+  // Collects per-file Iceberg column statistics and wires Iceberg field ids
+  // into the writer options. Polymorphic over the table's file format; created
+  // via IcebergStatsCollector::create() and reused across all writers. Null
+  // when the format has no Iceberg statistics support compiled in.
+  std::shared_ptr<IcebergStatsCollector> statsCollector_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

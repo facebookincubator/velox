@@ -299,6 +299,19 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       const SelectivityVector& rows,
       exec::EvalCtx& context,
+      const BaseVector& input,
+      const TimestampToStringOptions& options);
+
+  // Casts between TIMESTAMP and TIMESTAMP UTC.
+  // Casting TIMESTAMP_UTC to TIMESTAMP converts from local timestamp
+  // representation to UTC. Casting TIMESTAMP to TIMESTAMP_UTC applies the
+  // session timezone offset so that the local timestamp is preserved.
+  // @tparam kToUtc If true, casts TIMESTAMP to TIMESTAMP UTC. Otherwise,
+  // casts TIMESTAMP UTC to TIMESTAMP.
+  template <bool kToUtc>
+  VectorPtr applyTimestampTimestampUtcCast(
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
       const BaseVector& input);
 
   // Casts basic numeric types to wider types.

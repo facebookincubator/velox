@@ -108,6 +108,13 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_decimal_aggregation_test
+  SOURCES Main.cpp DecimalAggregationTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+  TIMEOUT 3000
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_vector_test
   SOURCES Main.cpp CudfVectorTest.cpp
   LIBS velox_cudf_vector velox_vector_test_lib cudf::cudf
@@ -166,6 +173,13 @@ velox_add_cudf_test(
   NAME velox_cudf_limit_test
   SOURCES Main.cpp LimitTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_logical_functions_test
+  SOURCES Main.cpp LogicalFunctionsTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_expression
+  TIMEOUT 3000
 )
 
 velox_add_cudf_test(
@@ -266,6 +280,12 @@ velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_window_test
+  SOURCES Main.cpp WindowTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window
 )
 
 add_subdirectory(iceberg)

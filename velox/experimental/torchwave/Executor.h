@@ -75,6 +75,9 @@ struct LaunchMeta {
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
+  // Wall time of the metadata-only shortcut-standalone batch (one
+  // hardware_timestamp pair around the tight loop).
+  int64_t shortcutUs{0};
   bool standaloneBound{false};
   bool noDtoH{false};
   int64_t inputBytes{0};
@@ -111,6 +114,10 @@ struct StepVectors {
   /// Used by CompositeInvocation::execute / gatherLaunches.
   std::vector<LaunchData> kernels;
   std::vector<LaunchData> standalones;
+  /// Metadata-only standalones with a StandaloneShortcut, split out from
+  /// 'standalones' so they run in a tight switch loop (no per-op timing, no
+  /// stream sync) and are timed as one batch.
+  std::vector<LaunchData> shortcutStandalones;
   std::vector<int64_t> paramOffsets;
 
   /// Used by makeGrid (output).
@@ -152,6 +159,12 @@ struct StepVectors {
   /// (multi-block synchronization). Causes cooperative launch.
   bool isCgGrid{false};
 
+  /// Set by gatherLaunches when this step has at least one standalone that does
+  /// device-side work (a non-shortcut op). Shortcut standalones only manipulate
+  /// host-side tensor metadata and never read wave-stream buffers, so when this
+  /// is false the wave stream need not be synced before running them.
+  bool hasGpuStandalones{false};
+
   // Timing fields, populated when kTiming trace bit or printTiming is on.
   int64_t gatherUs{0};
   int64_t gridUs{0};
@@ -159,6 +172,9 @@ struct StepVectors {
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
+  // Wall time of the metadata-only shortcut-standalone batch (one
+  // hardware_timestamp pair around the tight loop).
+  int64_t shortcutUs{0};
   bool standaloneBound{false};
   bool noDtoH{false};
   int64_t inputBytes{0};
@@ -188,6 +204,13 @@ struct ExecutionState {
 
   // Standalone nodes skipped during step execution due to None inputs.
   std::vector<NodeCP>* deferredStandalones{nullptr};
+
+  // Fusion-coverage counters for the --trace summary: how many ops actually ran
+  // as eager single-op GPU standalones vs. metadata-only host shortcuts (each
+  // counted once, at its execution site, after the nodeOutputsComputed/None
+  // skip guards).  Reset at the start of each executeWave.
+  int64_t numStandalonesRun{0};
+  int64_t numShortcutsRun{0};
 
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
@@ -221,20 +244,36 @@ struct ExecutionState {
 };
 
 /// Executes a single node via its OpKernel with tracing and error logging.
+/// When 'traceState' is non-null, traces the node's input values before the op
+/// and its produced output values after, for any ids in --trace_values.
 void executeNode(
     NodeCP node,
     nativert::OpKernel* kernel,
-    nativert::ExecutionFrame& frame);
+    nativert::ExecutionFrame& frame,
+    TraceState* traceState = nullptr);
 
 /// Runs standalone launches by mapping each formal node to the actual node
-/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel,
-/// and recording timing in standaloneStats.
+/// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel.
+/// When 'timing' is true, syncs the PyTorch default stream after each op and
+/// records its elapsed time in standaloneStats; when false, no clock is read
+/// and standaloneStats is left untouched.
 void runStandalones(
     const std::vector<LaunchData>& standalones,
     ExecutionState& state,
     const folly::F14FastMap<NodeCP, nativert::OpKernel*>& kernelMap,
     const folly::F14FastMap<NodeCP, int32_t>& standaloneIndices,
-    std::vector<StandaloneStats>& standaloneStats);
+    std::vector<StandaloneStats>& standaloneStats,
+    bool timing);
+
+/// Runs the metadata-only shortcut standalones in a tight loop (just the
+/// per-op switch in runStandaloneShortcut), with no per-op timing or stream
+/// sync. When 'timing' is true, records the whole batch's wall time (via
+/// folly::hardware_timestamp) into 'outUs'.
+void runShortcutStandalones(
+    const std::vector<LaunchData>& shortcuts,
+    ExecutionState& state,
+    bool timing,
+    int64_t& outUs);
 
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,

@@ -26,7 +26,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -623,6 +623,84 @@ TEST_F(TaskTest, createdCount) {
   task->noMoreSplits("0");
   waitForTaskCompletion(task.get());
   ASSERT_EQ(Task::numCreatedTasks(), createdCount + 1);
+}
+
+TEST_F(TaskTest, stateChangeFutureOnSplitQueueDrain) {
+  // Draining the scan split queue while more splits may still arrive resolves
+  // stateChangeFuture, so a coordinator's status poll can refill the queue
+  // before the task starves. Serial next() requires noMoreSplits up front,
+  // which would gate the notification, so exercise the consume path directly.
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+  auto task = Task::create(
+      "task-1",
+      PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+  task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  ASSERT_EQ(task->taskStats().numQueuedTableScanSplits, 1);
+
+  auto future = task->stateChangeFuture(0);
+  EXPECT_FALSE(future.isReady());
+
+  exec::Split split;
+  ContinueFuture splitFuture = ContinueFuture::makeEmpty();
+  EXPECT_EQ(
+      task->getSplitOrFuture(
+          /*driverId=*/0,
+          kUngroupedGroupId,
+          "0",
+          /*maxPreloadSplits=*/0,
+          /*preload=*/nullptr,
+          split,
+          splitFuture),
+      BlockingReason::kNotBlocked);
+  EXPECT_EQ(task->taskStats().numQueuedTableScanSplits, 0);
+  EXPECT_TRUE(future.isReady());
+
+  task->requestCancel().wait();
+}
+
+TEST_F(TaskTest, stateChangeFutureNotFiredWhenNoMoreSplits) {
+  // After noMoreSplits there is nothing left to refill, so draining the scan
+  // split queue carries no actionable signal and does not resolve
+  // stateChangeFuture.
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+  auto task = Task::create(
+      "task-1",
+      PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+  task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  task->noMoreSplits("0");
+  ASSERT_EQ(task->taskStats().numQueuedTableScanSplits, 1);
+
+  auto future = task->stateChangeFuture(0);
+  EXPECT_FALSE(future.isReady());
+
+  exec::Split split;
+  ContinueFuture splitFuture = ContinueFuture::makeEmpty();
+  EXPECT_EQ(
+      task->getSplitOrFuture(
+          /*driverId=*/0,
+          kUngroupedGroupId,
+          "0",
+          /*maxPreloadSplits=*/0,
+          /*preload=*/nullptr,
+          split,
+          splitFuture),
+      BlockingReason::kNotBlocked);
+  EXPECT_EQ(task->taskStats().numQueuedTableScanSplits, 0);
+  EXPECT_FALSE(future.isReady());
+
+  task->requestCancel().wait();
 }
 
 TEST_F(TaskTest, wrongPlanNodeForSplit) {
@@ -1357,7 +1435,7 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
                   .project({"c0 % 10"})
                   .partitionedOutputBroadcast({})
                   .planFragment();
-  auto bufferManager = OutputBufferManager::getInstanceRef();
+  auto bufferManager = DefaultOutputBufferManager::getInstanceRef();
   {
     auto task = Task::create(
         "t0",

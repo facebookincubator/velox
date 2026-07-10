@@ -19,7 +19,10 @@
 #include <ostream>
 #include <string>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/common/base/Portability.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/common/FileMetadata.h"
 #include "velox/vector/BaseVector.h"
 
@@ -76,6 +79,13 @@ class Writer {
   ///
   /// NOTE: this must be called after the last finish() which returns true.
   virtual std::unique_ptr<FileMetadata> close() = 0;
+
+  /// Returns runtime statistics accumulated by this writer (default: none).
+  /// CPU spent off the driver thread (e.g. parallel encode) is reported under
+  /// the well-known "backgroundCpuTimeNanos" key so the owner can surface it.
+  virtual folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const {
+    return {};
+  }
 
   /// Aborts the writing by closing the writer and dropping everything.
   /// Data can no longer be written.
