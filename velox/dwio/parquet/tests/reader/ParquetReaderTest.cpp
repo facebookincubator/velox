@@ -1823,7 +1823,15 @@ TEST_F(ParquetReaderTest, timestampRowGroupPruning) {
 
   ParquetWriterOptions writerOptions;
   writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
-  auto* sink = write({batch1, batch2}, writerOptions);
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<parquet::LambdaFlushPolicy>(
+        /*rowsInRowGroup=*/3,
+        /*bytesInRowGroup=*/1'024 * 1'024,
+        []() { return false; });
+  };
+  auto* sink = write({batch1, batch2}, options, writerOptions);
   auto reader = createReaderInMemory(*sink);
   ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
 
