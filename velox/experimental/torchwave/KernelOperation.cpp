@@ -29,13 +29,17 @@ namespace torch::wave {
 
 int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
     const {
-  if (values.empty() && args.empty()) {
+  // A pure factory expression (e.g. zeros(size=[1000])) has no tensor leaves to
+  // size from -- its extent lives entirely in constShapes.  Fall through to the
+  // constShapes path below rather than returning the scalar default.
+  if (values.empty() && args.empty() && constShapes.empty()) {
     return 1;
   }
   // Broadcasting elementwise: the element count is the product of the broadcast
   // shape across all operands, which can exceed the largest single operand
-  // (e.g. [20,1] and [100] broadcast to [20,100]).
-  if (broadcast) {
+  // (e.g. [20,1] and [100] broadcast to [20,100]).  Also used when a fused
+  // factory op contributes a constant shape (constShapes) the leaves lack.
+  if (broadcast || !constShapes.empty()) {
     int64_t n = 1;
     for (auto dim : dims(frame)) {
       n *= dim;
@@ -45,7 +49,23 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
   int64_t result = 0;
   for (auto valueId : values) {
     auto& ivalue = frame->getIValue(valueId);
-    int64_t n = ivalue.isTensor() ? ivalue.toTensor().numel() : ivalue.toInt();
+    // A size operand must be a tensor (sized by numel) or a scalar int.
+    // Anything else (a list / float / None that slipped into the size
+    // expression, e.g. from a list-producing op's subgraph) does not drive the
+    // grid, so treat it as 0 rather than asserting in IValue::toInt().
+    if (!ivalue.isTensor() && !ivalue.isInt()) {
+      continue;
+    }
+    int64_t n;
+    if (ivalue.isTensor()) {
+      n = ivalue.toTensor().numel();
+    } else if (ivalue.isInt()) {
+      n = ivalue.toInt();
+    } else {
+      LOG(WARNING) << "SizeExpr: value " << valueId << " is "
+                   << ivalue.tagKind() << ", expected Tensor or Int";
+      n = 1;
+    }
     if (op == SizeShortcut::kMax) {
       if (n > result) {
         result = n;
@@ -75,22 +95,32 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
       op == SizeShortcut::kMax,
       "SizeExpr::dims only supported for kMax, got ",
       static_cast<int>(op));
-  if (values.empty() && args.empty()) {
+  if (values.empty() && args.empty() && constShapes.empty()) {
     return {1};
   }
   // Broadcasting: combine all operand shapes right-aligned, taking the max
   // (non-1) extent per dimension. Operands are assumed broadcast-compatible.
-  if (broadcast) {
+  // constShapes folds in factory-op extents (zeros/ones/full) fused into the
+  // subtree whose size comes from a `size` attribute, not a frame value.
+  if (broadcast || !constShapes.empty()) {
     std::vector<Dim> result;
     auto combine = [&result](const std::vector<Dim>& shape) {
-      // Right-align: grow result to the larger rank, then max each dim from
-      // the right.
+      // Right-align: grow result to the larger rank, then broadcast each dim
+      // from the right.  Broadcast rule: a size-1 dim takes the other operand's
+      // extent -- which may be 0 for an empty tensor (1 broadcasts to 0, so
+      // [N,1] vs [N,0] -> [N,0]).  Using max here would wrongly turn an empty
+      // result into a non-empty one and read past the empty operand.
       if (shape.size() > result.size()) {
         result.insert(result.begin(), shape.size() - result.size(), 1);
       }
       for (size_t i = 0; i < shape.size(); ++i) {
         auto& resultDim = result[result.size() - shape.size() + i];
-        resultDim = std::max<Dim>(resultDim, shape[i]);
+        if (resultDim == 1) {
+          resultDim = shape[i];
+        } else if (shape[i] != 1) {
+          // Both extents are non-1; in a valid broadcast they are equal.
+          resultDim = std::max<Dim>(resultDim, shape[i]);
+        }
       }
     };
     for (auto valueId : values) {
@@ -102,6 +132,9 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
     }
     for (auto& child : args) {
       combine(child.dims(frame));
+    }
+    for (const auto& shape : constShapes) {
+      combine(shape);
     }
     if (result.empty()) {
       result.push_back(1);
@@ -141,6 +174,7 @@ SizeExpr SizeExpr::toActual(
   SizeExpr result;
   result.op = op;
   result.broadcast = broadcast;
+  result.constShapes = constShapes;
   result.values.reserve(values.size());
   for (auto valueId : values) {
     auto it = bindings.find(valueId);
@@ -185,8 +219,16 @@ void makeConstantIndicesImpl(
     }
   }
   int32_t numAttrs = 0;
-  forEachSortedAttribute(
-      node, [&](NodeCP, const nativert::Attribute&) { ++numAttrs; });
+  forEachSortedAttribute(node, [&](NodeCP, const nativert::Attribute& attr) {
+    // Match listConstants: an attribute whose value is None does not occupy a
+    // constant slot, so it must not be counted here either.  Otherwise a None
+    // attribute (e.g. searchsorted's `side`/`sorter`, repeat_interleave's
+    // `output_size`) on a producer node shifts every later node's constant
+    // index past the end of the constants vector.
+    if (!nativert::constantToIValue(attr.value).isNone()) {
+      ++numAttrs;
+    }
+  });
   if (numAttrs > 0) {
     result[myOrdinal] = numAttrsSeen;
     numAttrsSeen += numAttrs;
@@ -440,6 +482,7 @@ KernelOperation::KernelOperation(
       waveGraph_{&compileCtx.waveGraph()},
       inputs_{sg.inputs.begin(), sg.inputs.end()},
       orderedInputs_{sg.inputs},
+      inputTypes_{sg.inputTypes},
       numInputs_(static_cast<int32_t>(sg.inputs.size())) {
   flattenScalarListInputs(inputs_, orderedInputs_);
   numInputs_ = static_cast<int32_t>(orderedInputs_.size());
@@ -504,6 +547,22 @@ KernelOperation::KernelOperation(
   for (size_t oi = 0; oi < outputValues.size(); ++oi) {
     auto* value = outputValues[oi];
     if (paramOffsets_.find(value) != paramOffsets_.end()) {
+      // The value already has a param slot because it is also a (leaf) input of
+      // this kernel. If it is produced by a view node (e.g. a slice fed into a
+      // prim.ListPack), the kernel emits no device code to compute it, so it
+      // must be materialized on the host before the kernel reads it. Keep the
+      // output desc, set its viewNode, and reuse the existing input offset (do
+      // not re-assign) so allocateLaunchOutputs executes the view before
+      // launch. Without this the value stays None in the frame.
+      auto* producer = value->producer();
+      auto* producerMeta =
+          producer ? Registry::metadata(producer->target()) : nullptr;
+      if (producerMeta && producerMeta->isView() &&
+          !outputDescs_[oi].viewNode) {
+        outputDescs_[oi].viewNode = compileCtx_.originalFromVariant(producer);
+        orderedInputs_.push_back(value);
+        continue;
+      }
       outputDescs_.erase(outputDescs_.begin() + static_cast<ptrdiff_t>(oi));
       outputValues.erase(outputValues.begin() + static_cast<ptrdiff_t>(oi));
       --oi;
@@ -652,6 +711,41 @@ void KernelOperation::setCode(std::stringstream& code) {
     }
   }
 
+  // A view that is run on the host before launch (a viewNode output desc, e.g.
+  // a leaf-input slice) has computed shape/offset operands such as a slice end
+  // = item(...). Those operands are produced by other launches but are not
+  // inputs of any fused node here, so they are missing from orderingInputs_.
+  // Add them, otherwise this launch can be scheduled into a step before the
+  // producer of the operand and the host view reads a stale (None) bound.
+  for (const auto& desc : outputDescs_) {
+    if (!desc.viewNode) {
+      continue;
+    }
+    auto* viewMeta = Registry::metadata(desc.viewNode->target());
+    int32_t baseOrdinal = (viewMeta && viewMeta->viewOfArg.has_value())
+        ? *viewMeta->viewOfArg
+        : -1;
+    const auto& viewInputs = desc.viewNode->inputs();
+    for (size_t k = 0; k < viewInputs.size(); ++k) {
+      if (static_cast<int32_t>(k) == baseOrdinal) {
+        continue;
+      }
+      orderingInputs_.insert(viewInputs[k].value->id());
+    }
+  }
+
+  // The loop above collects ordering inputs from this op's (possibly lowered)
+  // variant nodes.  When an op is lowered to tw.* helpers, a boundary tensor
+  // input can be read only via reserveShape / sizeExpr at gatherLaunches time
+  // rather than as a tracked variant node input, so its id is missing here.
+  // Add the op's actual boundary inputs (orderedInputs_) so placeKernelLaunch
+  // orders this op after their producers -- otherwise a standalone producer can
+  // be co-scheduled in the same step and its output read during gatherLaunches
+  // before the standalone has run.
+  for (int32_t i = 0; i < numInputs_; ++i) {
+    orderingInputs_.insert(orderedInputs_[i]->id());
+  }
+
   for (size_t i = 0; i < outputDescs_.size(); ++i) {
     if (outputDescs_[i].shapeSetOnDevice) {
       continue;
@@ -726,6 +820,41 @@ void collectElementwiseLeaves(
   }
 }
 
+// Walks the elementwise subtree rooted at 'node' and records the `size`
+// attribute of any factory op (zeros/ones/full) in it.  Such ops have no
+// tensor inputs, so collectElementwiseLeaves finds no leaf to size the fused
+// subtree from; their extent lives in the `size` attribute instead and must be
+// broadcast into the output shape.
+void collectFactorySizes(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited,
+    std::vector<std::vector<Dim>>& constShapes) {
+  if (!visited.insert(node).second) {
+    return;
+  }
+  if (const auto* sizeAttr = node->tryGetAttribute("size")) {
+    if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+      const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
+      constShapes.emplace_back(sz.begin(), sz.end());
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    auto* value = input.value;
+    if (subgraphInputs.count(value)) {
+      continue;
+    }
+    auto* producer = value->producer();
+    if (!producer) {
+      continue;
+    }
+    auto* producerMeta = Registry::metadata(producer->target());
+    if (producerMeta && producerMeta->elementwise) {
+      collectFactorySizes(producer, subgraphInputs, visited, constShapes);
+    }
+  }
+}
+
 } // namespace
 
 SizeExpr KernelOperation::makeSizeExpr(
@@ -737,12 +866,16 @@ SizeExpr KernelOperation::makeSizeExpr(
     std::unordered_set<ValueCP> seen;
     std::vector<nativert::ValueId> leafIds;
     collectElementwiseLeaves(node, subgraphInputs, seen, leafIds);
+    std::unordered_set<NodeCP> factoryVisited;
+    std::vector<std::vector<Dim>> constShapes;
+    collectFactorySizes(node, subgraphInputs, factoryVisited, constShapes);
     // With more than one operand the result is their broadcast: the size is the
     // product of the broadcast shape, which can exceed the largest single
     // operand (e.g. [20,1] + [100] -> [20,100]). With one operand the size is
     // just that operand, so the broadcast path is unnecessary.
     SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
     expr.broadcast = expr.values.size() > 1;
+    expr.constShapes = std::move(constShapes);
     return expr;
   }
 
@@ -789,21 +922,34 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       std::unordered_set<ValueCP> seen;
       std::vector<nativert::ValueId> leafIds;
       collectElementwiseLeaves(expr_, inputs_, seen, leafIds);
+      std::unordered_set<NodeCP> factoryVisited;
+      std::vector<std::vector<Dim>> constShapes;
+      collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       // Multiple operands broadcast against each other; size by the broadcast
       // shape (see makeSizeExpr).
       SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
       expr.broadcast = expr.values.size() > 1;
+      expr.constShapes = std::move(constShapes);
       return expr;
     }
   }
+  // kMax over the kernel's inputs. Skip inputs that are neither a tensor, a
+  // tensor list, nor a scalar int -- SizeExpr::numElements can only size by
+  // those, and a list / float / None input does not drive the grid (and would
+  // assert in IValue::toInt(); this is what an orphaned list-producing op such
+  // as group_length_guard_final, generated with a SymIntList-bearing subgraph,
+  // would otherwise hit).
   std::vector<nativert::ValueId> leafIds;
   for (int32_t i = 0; i < numInputs_; ++i) {
     auto* value = orderedInputs_[i];
-    if (value->type().kind() == nativert::Type::Kind::TensorList) {
+    auto kind = value->type().kind();
+    if (kind == nativert::Type::Kind::TensorList) {
       for (auto* elem : value->getListElements()) {
         leafIds.push_back(elem->id());
       }
-    } else {
+    } else if (
+        kind == nativert::Type::Kind::Tensor ||
+        kind == nativert::Type::Kind::SymInt) {
       leafIds.push_back(value->id());
     }
   }

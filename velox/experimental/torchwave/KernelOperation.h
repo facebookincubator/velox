@@ -65,6 +65,13 @@ struct SizeExpr {
   /// returns its product. Only meaningful for kMax.
   bool broadcast{false};
 
+  /// Constant shapes contributed by factory ops (zeros/ones/full) fused into an
+  /// elementwise subtree. Such ops have no tensor inputs, so their extent comes
+  /// from a `size` attribute rather than a frame value; it is broadcast in
+  /// alongside `values`/`args`. When non-empty, dims()/numElements() use the
+  /// broadcast (per-dimension max) path. Only meaningful for kMax.
+  std::vector<std::vector<Dim>> constShapes{};
+
   /// Accesses all Values and calls recursively on args and combines the
   /// results (numel() of Values) by 'op'. (max or sum). If largestOut is
   /// not null and op is kMax, assigns the ValueId with the largest numel.
@@ -229,6 +236,11 @@ class KernelOperation {
 
   const std::vector<ValueCP>& orderedInputs() const {
     return orderedInputs_;
+  }
+
+  /// Returns the static tensor metadata of the subgraph leaf inputs.
+  const std::vector<const nativert::TensorMeta*>& inputTypes() const {
+    return inputTypes_;
   }
 
   bool isInput(ValueCP value) const {
@@ -418,6 +430,12 @@ class KernelOperation {
   std::string helperCode_;
 
   std::vector<ValueCP> orderedInputs_;
+
+  // Static tensor metadata of the subgraph leaf inputs (carried from Subgraph).
+  // Used to size the grid from a static shape when an input is an
+  // unmaterialized intermediate at host sizing time (e.g. a view-rooted op
+  // under a cooperative grid).
+  std::vector<const nativert::TensorMeta*> inputTypes_;
 
   // Assigns a param offset for 'value', expanding TensorList elements.
   void assignParamOffset(ValueCP value, int32_t& offset);

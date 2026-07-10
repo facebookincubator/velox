@@ -98,6 +98,20 @@ getConcatenatedTableBatched(
     rmm::device_async_resource_ref mr);
 
 /**
+ * @brief Concatenates multiple CudfVectors into CudfVector output batches.
+ *
+ * This wraps getConcatenatedTableBatched for column-bearing tables and
+ * preserves logical row counts from CudfVector::size() for zero-column tables,
+ * whose cuDF table views cannot represent the row count.
+ */
+[[nodiscard]] std::vector<CudfVectorPtr> getConcatenatedCudfVectorsBatched(
+    memory::MemoryPool* pool,
+    std::vector<CudfVectorPtr>&& vectors,
+    const TypePtr& tableType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/**
  * @brief Wrapper for CUDA events used for stream synchronization.
  *
  * CudaEvent provides a safe, move-only wrapper around cudaEvent_t that
@@ -200,4 +214,14 @@ void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
     std::span<const rmm::cuda_stream_view> inputStreams,
     rmm::cuda_stream_view stream);
+
+/// Extract the base function name from a possibly-prefixed name.
+/// Handles both Presto-style "presto.default.lag" and simple "lag".
+std::string getBaseFunctionName(const std::string& fullName);
+
+/// Also strip any registered function name prefix (e.g. "spark_" for Spark).
+std::string stripFunctionPrefix(
+    const std::string& name,
+    const std::string& prefix);
+
 } // namespace facebook::velox::cudf_velox

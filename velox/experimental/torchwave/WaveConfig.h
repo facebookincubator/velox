@@ -115,6 +115,21 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{false};
 
+  // If true, reuse a value's buffer in place when an op is its unique last use
+  // (turning copying ops into in-place ops). Off by default.
+  bool enableReuse{false};
+
+  // Force a launch boundary after a multi-block (non-cooperative) scan so every
+  // cross-block consumer of its output reads a fully materialized buffer from a
+  // later stream-ordered launch, and fence a multi-block cat's shifted copies
+  // with a grid-wide opBarrier before an in-kernel consumer reads them.
+  // Without this, a fused cat consumer that reads a scan output (or a
+  // shift-by-offset cat element) cross-block within one kernel is ordered only
+  // by intra-block __syncthreads(), which is insufficient across
+  // non-co-resident blocks and produces stale reads.  On by default (a
+  // correctness fix); the race harness flips it off for the racy A/B arm.
+  bool scanOutputReturnBarrier{true};
+
   /// Not thread-safe. All mutations must happen before concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
     static WaveConfig instance;

@@ -18,6 +18,7 @@
 
 #include <folly/Executor.h>
 
+#include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/dwio/common/Reader.h"
@@ -30,6 +31,16 @@ class FileTableHandle;
 using FileTableHandlePtr = std::shared_ptr<const FileTableHandle>;
 class FileConfig;
 struct FileConnectorSplit;
+
+struct FormatScopedConfigs {
+  config::ConfigBase connectorConfig;
+  config::ConfigBase sessionProperties;
+};
+
+FormatScopedConfigs makeFormatScopedConfigs(
+    const FileConfig& fileConfig,
+    const config::ConfigBase& sessionProperties,
+    dwio::common::FileFormat fileFormat);
 
 /// Configures reader options for reading a data file. This is the generic
 /// version that does not apply serde (serialization/deserialization) options.

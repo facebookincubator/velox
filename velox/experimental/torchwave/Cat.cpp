@@ -36,6 +36,11 @@ namespace {
 SizeExpr translateSizeExpr(const SizeExpr& expr, const FormalToActual& map) {
   SizeExpr result;
   result.op = expr.op;
+  // Preserve broadcast and constShapes: a pure factory operand (e.g.
+  // zeros(size=[1000])) carries its extent in constShapes with no tensor
+  // leaves, so dropping them collapses its size to the scalar default.
+  result.broadcast = expr.broadcast;
+  result.constShapes = expr.constShapes;
   for (auto id : expr.values) {
     auto it = map.find(id);
     result.values.push_back(it != map.end() ? it->second : id);
@@ -382,7 +387,7 @@ catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
     auto* exclusiveSum = graph->createNode(
         "torch.ops.aten.exclusive_sum.default", {{"input", cumsumInput}});
     exclusiveSum->addAttribute({"dim", static_cast<int64_t>(0)});
-    exclusiveSum->addAttribute({"dtype", std::string(c10::toString(dtype))});
+    exclusiveSum->addAttribute({"dtype", dtype});
     graph->insertBefore(exclusiveSum, const_cast<nativert::Node*>(node));
     auto* newOutput =
         waveGraph.newTensorValue(exclusiveSum, "exclusive_sum", dtype);
@@ -472,10 +477,21 @@ void catSpecialForm(
     auto* producer = elem->producer();
     auto* producerMeta =
         producer ? Registry::metadata(producer->target()) : nullptr;
-    bool isCopyInput = !producer || ctx->generatingOp()->isInput(elem) ||
-        (producerMeta && producerMeta->isView());
+    bool isSubgraphInput = !producer || ctx->generatingOp()->isInput(elem);
+    bool producerIsView = producerMeta && producerMeta->isView();
+    bool isCopyInput = isSubgraphInput || producerIsView;
     if (isCopyInput) {
       auto& op = *ctx->generatingOp();
+      // A view element (e.g. slice(cumsum(...)) in an exclusive-prefix
+      // cat([zeros, cumsum[:-1]])) is metadata-only, but its producer chain
+      // holds interior fused compute that must still run -- otherwise the copy
+      // below reads the buffer the view aliases before anything wrote it.
+      // fusedCode recurses through the view into that producer (the cumsum) and
+      // is idempotent on already-placed nodes.
+      if (producerIsView && !isSubgraphInput && !ctx->isPlaced(producer)) {
+        auto viewSpecs = outputSpecs(producer);
+        ctx->fusedCode(producer, viewSpecs);
+      }
       std::string incrExpr;
       for (size_t j = lastAccumulated + 1; j < i; ++j) {
         auto p = ctx->param(elements[j], op);
@@ -525,6 +541,24 @@ void catSpecialForm(
       }
     }
   }
+
+  // A cat element's copy (__copy) partitions blocks by SOURCE index, but an
+  // in-kernel consumer (e.g. a fused elementwise add reading the cat output)
+  // partitions by DESTINATION index. When a copy shifts data by a nonzero
+  // offset (e.g. the exclusive-prefix cat([zeros[1], cumsum[:-1]]) writing
+  // offsets[1+i] = cumsum[i]), the element that lands on one block's
+  // destination range was written by a different block, so the consumer's
+  // cross-block read is ordered only by intra-block __syncthreads() -- stale
+  // across non-co-resident blocks in the multi-block (non-cooperative) path.
+  // Fence the cat's writes with a grid-wide opBarrier before any consumer
+  // reads. Only needed in multi-block non-CG mode (single-block is intra-block
+  // safe; CG blocks are co-resident and already fenced), matching
+  // isKernelBreak's grid-mode gating. Gated by the runtime
+  // WaveConfig::scanOutputReturnBarrier toggle.
+  if (WaveConfig::get().scanOutputReturnBarrier && !ctx->isSingleBlock() &&
+      !ctx->isCgGrid()) {
+    ctx->emitBarrier();
+  }
   if (needsViewFixup) {
     auto& op = *ctx->generatingOp();
     for (auto j = lastAccumulated + 1;
@@ -566,7 +600,8 @@ void registerCatMetadata() {
             if (elements.empty()) {
               return {};
             }
-            return {{.rank = types.rank(elements[0])}};
+            // cat materializes a fresh, densely-laid-out output.
+            return {{.rank = types.rank(elements[0]), .contiguous = true}};
           })
       .maybeReplace(catMaybeReplace)
       .setOutputs(catSetOutputs)

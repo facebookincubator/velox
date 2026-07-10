@@ -126,7 +126,7 @@ void PageReader::updateBufferPointersAfterDeserialization(
 const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
   uint64_t readUs{0};
   {
-    MicrosecondTimer timer(&readUs);
+    MicrosecondWallTimer timer(&readUs);
     if (bufferEnd_ == bufferStart_) {
       const void* buffer = nullptr;
       int32_t bufferSize = 0;
@@ -464,7 +464,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       } else {
         uint64_t readUs{0};
         {
-          MicrosecondTimer timer(&readUs);
+          MicrosecondWallTimer timer(&readUs);
           dwio::common::readBytes(
               numBytes,
               inputStream_.get(),
@@ -504,7 +504,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       } else {
         uint64_t readUs{0};
         {
-          MicrosecondTimer timer(&readUs);
+          MicrosecondWallTimer timer(&readUs);
           dwio::common::readBytes(
               numBytes,
               inputStream_.get(),
@@ -541,7 +541,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       } else {
         uint64_t readUs{0};
         {
-          MicrosecondTimer timer(&readUs);
+          MicrosecondWallTimer timer(&readUs);
           dwio::common::readBytes(
               numBytes, inputStream_.get(), strings, bufferStart_, bufferEnd_);
         }
@@ -570,7 +570,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       } else {
         uint64_t readUs{0};
         {
-          MicrosecondTimer timer(&readUs);
+          MicrosecondWallTimer timer(&readUs);
           dwio::common::readBytes(
               numParquetBytes,
               inputStream_.get(),

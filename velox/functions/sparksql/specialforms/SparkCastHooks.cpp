@@ -32,6 +32,12 @@ SparkCastHooks::SparkCastHooks(
   }
 }
 
+TimestampToStringOptions SparkCastHooks::timestampUtcToStringOptions() const {
+  auto options = timestampToStringOptions_;
+  options.timeZone = nullptr;
+  return options;
+}
+
 Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     const StringView& view) const {
   auto conversionResult = util::fromTimestampWithTimezoneString(
@@ -72,7 +78,7 @@ Expected<Timestamp> SparkCastHooks::castIntToTimestamp(int64_t seconds) const {
   return castNumberToTimestamp(seconds);
 }
 
-Expected<int64_t> SparkCastHooks::castTimestampToInt(
+Expected<int64_t> SparkCastHooks::castTimestampToBigint(
     Timestamp timestamp) const {
   auto micros = timestamp.toMicros();
   if (micros < 0) {

@@ -27,6 +27,7 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
@@ -36,7 +37,6 @@
 #include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
@@ -439,7 +439,7 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)),
-      bufferManager_(OutputBufferManager::getInstanceRef()) {
+      bufferManager_(DefaultOutputBufferManager::getInstanceRef()) {
   ++numCreatedTasks_;
   // Validate that any per-node transport type annotations refer to the right
   // kind of plan node before they are used to select exchange transports.
@@ -546,7 +546,11 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
 
   taskStats_.executionStartTimeMs = getCurrentTimeMs();
   LocalPlanner::plan(
-      planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
+      planFragment_,
+      /*consumerSupplier=*/nullptr,
+      &driverFactories_,
+      queryCtx_->queryConfig(),
+      /*maxDrivers=*/1);
   exchangeClients_.resize(driverFactories_.size());
 
   // In Task::next() we always assume ungrouped execution.
@@ -976,7 +980,11 @@ bool Task::supportSerialExecutionMode() const {
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories;
   LocalPlanner::plan(
-      planFragment_, nullptr, &driverFactories, queryCtx_->queryConfig(), 1);
+      planFragment_,
+      /*consumerSupplier=*/nullptr,
+      &driverFactories,
+      queryCtx_->queryConfig(),
+      /*maxDrivers=*/1);
 
   for (const auto& factory : driverFactories) {
     if (!factory->supportsSerialExecution()) {
@@ -2156,13 +2164,27 @@ BlockingReason Task::getSplitOrFuture(
     const ConnectorSplitPreloadFunc& preload,
     exec::Split& split,
     ContinueFuture& future) {
-  std::lock_guard<std::timed_mutex> l(mutex_);
-  auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
-  return splitsStore->nextSplit(
-             driverId, maxPreloadSplits, preload, split, future)
-      ? BlockingReason::kNotBlocked
-      : BlockingReason::kWaitForSplit;
+  EventCompletionNotifier stateChangeNotifier;
+  bool notBlocked{false};
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+    auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
+    const auto numQueuedBefore = taskStats_.numQueuedTableScanSplits;
+    notBlocked = splitsStore->nextSplit(
+        driverId, maxPreloadSplits, preload, split, future);
+    // Wake status waiters when the scan split queue drains while more splits
+    // may still arrive, so a coordinator can refill before the task starves.
+    // Once noMoreSplits has been signaled there is nothing left to refill, so
+    // the drain carries no actionable signal and is skipped.
+    if (numQueuedBefore > 0 && taskStats_.numQueuedTableScanSplits == 0 &&
+        !splitsState.noMoreSplits) {
+      stateChangeNotifier.activate(std::move(stateChangePromises_));
+    }
+  }
+  stateChangeNotifier.notify();
+  return notBlocked ? BlockingReason::kNotBlocked
+                    : BlockingReason::kWaitForSplit;
 }
 
 bool Task::testingHasDriverWaitForSplit() const {
@@ -2320,7 +2342,7 @@ bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   VELOX_CHECK_NOT_NULL(
       bufferManager,
       "Unable to initialize task. "
-      "OutputBufferManager was already destructed");
+      "DefaultOutputBufferManager was already destructed");
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (noMoreOutputBuffers_) {
@@ -3801,7 +3823,7 @@ uint64_t Task::MemoryReclaimer::reclaim(
   uint64_t reclaimWaitTimeUs{0};
   uint64_t reclaimedBytes{0};
   {
-    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     reclaimedBytes = reclaimTask(task, targetBytes, maxWaitMs, stats);
   }
   ++task->taskStats_.memoryReclaimCount;
@@ -3826,7 +3848,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   uint64_t reclaimWaitTimeUs{0};
   bool paused{true};
   {
-    MicrosecondTimer timer{&reclaimWaitTimeUs};
+    MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     if (maxWaitMs == 0) {
       task->requestPause().wait();
     } else {
@@ -3857,7 +3879,7 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
   try {
     uint64_t reclaimExecTimeUs{0};
     {
-      MicrosecondTimer timer{&reclaimExecTimeUs};
+      MicrosecondWallTimer timer{&reclaimExecTimeUs};
       reclaimedBytes = memory::MemoryReclaimer::reclaim(
           task->pool(), targetBytes, maxWaitMs, stats);
     }

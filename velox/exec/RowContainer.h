@@ -711,6 +711,15 @@ class RowContainer {
 #endif
   void setProbedFlag(char** rows, int32_t numRows);
 
+  /// Sets 'probed' flag for a single non-null row. Returns true if the flag
+  /// transitioned from false to true.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  __attribute__((__no_sanitize__("thread")))
+#endif
+#endif
+  bool testAndSetProbedFlag(char* row);
+
   /// Compares the value at 'column' in 'row' with the value at 'index' in
   /// 'decoded'. Returns 0 for equal, < 0 for 'row' < 'decoded', > 0 otherwise.
   /// 'mayHaveNulls' specifies if nulls need to be checked. This is a fast path

@@ -32,7 +32,11 @@ add_library(
   CudfOrderBy.cpp
   CudfReduce.cpp
   CudfTopN.cpp
+  CudfWindow.cpp
   DebugUtil.cpp
+  DecimalAggregationDevice.cu
+  DecimalAggregationHostOps.cpp
+  DecimalAggregationState.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
   PartitionedBufferedState.cpp

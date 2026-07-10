@@ -76,9 +76,16 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
 
   std::shared_ptr<const hive::FileConnectorSplit> makeSplit(
       dwio::common::FileFormat format = dwio::common::FileFormat::DWRF,
-      const std::string& path = "/tmp/testfile") {
+      const std::string& path = "/tmp/testfile",
+      bool cacheable = true) {
     return std::make_shared<hive::FileConnectorSplit>(
-        "testConnectorId", path, format);
+        "testConnectorId",
+        path,
+        format,
+        /*_start=*/0,
+        /*_length=*/std::numeric_limits<uint64_t>::max(),
+        /*splitWeight=*/0,
+        cacheable);
   }
 
   std::string writeDataFile(const RowVectorPtr& data) {
@@ -176,6 +183,97 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
   }
 }
 
+TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
+  // When cache_metadata/cache_index session properties are enabled but the
+  // split is not cacheable (non-preferred node in soft affinity), metadata and
+  // index caching should be disabled to avoid polluting the cache with entries
+  // unlikely to be reused.
+  auto fileConfig = makeFileConfig();
+
+  // cache_metadata=true, cacheable split => cacheMetadata=true.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kCacheMetadataSession, "true"},
+         {hive::FileConfig::kCacheIndexSession, "true"}});
+    auto split = makeSplit(
+        dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/true);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    hive::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+    EXPECT_TRUE(readerOptions.cacheMetadata());
+    EXPECT_TRUE(readerOptions.cacheIndex());
+  }
+
+  // cache_metadata=true, non-cacheable split => cacheMetadata=false.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kCacheMetadataSession, "true"},
+         {hive::FileConfig::kCacheIndexSession, "true"}});
+    auto split = makeSplit(
+        dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/false);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    hive::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+    EXPECT_FALSE(readerOptions.cacheMetadata());
+    EXPECT_FALSE(readerOptions.cacheIndex());
+  }
+
+  // cache_metadata=false, cacheable split => cacheMetadata=false.
+  {
+    auto holder = makeConnectorQueryCtx();
+    auto split = makeSplit(
+        dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/true);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    hive::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+    EXPECT_FALSE(readerOptions.cacheMetadata());
+    EXPECT_FALSE(readerOptions.cacheIndex());
+  }
+
+  // pinMetadata/pinIndex are NOT gated on cacheable — they control per-reader
+  // in-process cache, not AsyncDataCache.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kPinMetadataSession, "true"},
+         {hive::FileConfig::kPinIndexSession, "true"}});
+    auto split = makeSplit(
+        dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/false);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    hive::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+    EXPECT_TRUE(readerOptions.pinMetadata());
+    EXPECT_TRUE(readerOptions.pinIndex());
+  }
+}
+
 TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   auto fileConfig = makeFileConfig();
   auto holder = makeConnectorQueryCtx();
@@ -218,6 +316,53 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   EXPECT_EQ(rowReaderOptions.scanSpec(), scanSpec);
   EXPECT_EQ(rowReaderOptions.offset(), 0);
   EXPECT_EQ(rowReaderOptions.length(), std::numeric_limits<uint64_t>::max());
+}
+
+TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleDictVectorFlags) {
+  auto fileConfig = makeFileConfig();
+  auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  // Both session flags enabled => both RowReaderOptions flags true.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
+         {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"}});
+    dwio::common::RowReaderOptions rowReaderOptions;
+    hive::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+
+    EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+  }
+
+  // Keys absent => both flags fall back to their default (false).
+  {
+    auto holder = makeConnectorQueryCtx();
+    dwio::common::RowReaderOptions rowReaderOptions;
+    hive::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+
+    EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+  }
 }
 
 TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {

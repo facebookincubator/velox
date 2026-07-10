@@ -61,6 +61,12 @@ std::pair<c10::ScalarType, std::string> resolveOutDtype(
   } else {
     dtypeStr = c10::toString(outDtype);
   }
+  // An empty or unrecognized dtype string (e.g. dtype="" serialized for a
+  // factory op that infers its type from the input) must fall back to the
+  // resolved dtype name; otherwise downstream codegen defaults it to Float.
+  if (dtypeStr.empty()) {
+    dtypeStr = c10::toString(outDtype);
+  }
   return {outDtype, dtypeStr};
 }
 
@@ -213,27 +219,41 @@ nativert::Node* makeSumCgVariant(NodeCP single, WaveGraph* waveGraph) {
 
 namespace {
 
+// Returns node's input value at 'idx', erroring if it is absent. These ops
+// require the input, so a missing one is a fatal error rather than a case to
+// silently skip.
+nativert::Value* inputAt(NodeCP node, size_t idx) {
+  const auto& inputs = node->inputs();
+  TORCH_CHECK(
+      idx < inputs.size() && inputs[idx].value,
+      node->target(),
+      ": required input ",
+      idx,
+      " is missing");
+  return inputs[idx].value;
+}
+
 void resolveDtypeFromInput(nativert::Node* node, const ValueTypes& types) {
-  if (node->inputs().empty()) {
-    return;
-  }
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
-  auto inputId = node->inputs()[0].value->id();
+  auto inputId = inputAt(node, 0)->id();
   if (inputId < static_cast<int>(types.types.size()) && types.types[inputId]) {
     auto inputDtype = types.types[inputId]->dtype();
     auto outDtype = c10::isIntegralType(inputDtype, /*includeBool=*/true)
         ? c10::ScalarType::Long
         : inputDtype;
-    node->addAttribute({"dtype", std::string(c10::toString(outDtype))});
+    node->addAttribute({"dtype", outDtype});
   }
 }
 
 std::vector<ValueConstraint> rank1Constraint(
     NodeCP /*node*/,
     const ValueTypes& /*types*/) {
-  return {{.rank = 1}};
+  // Used by ops that materialize a fresh dense 1-D output (cumsum, exclusive
+  // sum, masked_select, repeat_interleave and their multi-kernel intrinsics),
+  // so the result is contiguous.
+  return {{.rank = 1, .contiguous = true}};
 }
 
 // Returns a scalar value from an attribute (int64_t or double) or a symint
@@ -262,10 +282,7 @@ int64_t integerParamByName(
 void castScalarAttrsToInputDtype(
     nativert::Node* node,
     const ValueTypes& types) {
-  if (node->inputs().empty()) {
-    return;
-  }
-  auto inputId = node->inputs()[0].value->id();
+  auto inputId = inputAt(node, 0)->id();
   if (inputId >= static_cast<int>(types.types.size()) ||
       !types.types[inputId]) {
     return;
@@ -300,7 +317,7 @@ void resolveDefaultDtype(nativert::Node* node, const ValueTypes& /*types*/) {
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
-  node->addAttribute({"dtype", std::string("Float")});
+  node->addAttribute({"dtype", c10::ScalarType::Float});
 }
 
 void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
@@ -315,33 +332,31 @@ void resolveArangeDtype(nativert::Node* node, const ValueTypes& /*types*/) {
       break;
     }
   }
-  node->addAttribute({"dtype", std::string(hasFloat ? "Float" : "Long")});
+  node->addAttribute(
+      {"dtype", hasFloat ? c10::ScalarType::Float : c10::ScalarType::Long});
 }
 
 void resolveNanToNumDefaults(nativert::Node* node, const ValueTypes& types) {
   double posinfDefault = std::numeric_limits<double>::max();
   double neginfDefault = std::numeric_limits<double>::lowest();
-  if (!node->inputs().empty()) {
-    auto inputId = node->inputs()[0].value->id();
-    if (inputId < static_cast<int>(types.types.size()) &&
-        types.types[inputId]) {
-      switch (types.types[inputId]->dtype()) {
-        case c10::ScalarType::Half:
-          posinfDefault = 65504.0;
-          neginfDefault = -65504.0;
-          break;
-        case c10::ScalarType::Float:
-          posinfDefault = std::numeric_limits<float>::max();
-          neginfDefault = std::numeric_limits<float>::lowest();
-          break;
-        case c10::ScalarType::BFloat16:
-          // BFloat16 max value
-          posinfDefault = 0x1.FEp+127;
-          neginfDefault = -0x1.FEp+127;
-          break;
-        default:
-          break;
-      }
+  auto inputId = inputAt(node, 0)->id();
+  if (inputId < static_cast<int>(types.types.size()) && types.types[inputId]) {
+    switch (types.types[inputId]->dtype()) {
+      case c10::ScalarType::Half:
+        posinfDefault = 65504.0;
+        neginfDefault = -65504.0;
+        break;
+      case c10::ScalarType::Float:
+        posinfDefault = std::numeric_limits<float>::max();
+        neginfDefault = std::numeric_limits<float>::lowest();
+        break;
+      case c10::ScalarType::BFloat16:
+        // BFloat16 max value
+        posinfDefault = 0x1.FEp+127;
+        neginfDefault = -0x1.FEp+127;
+        break;
+      default:
+        break;
     }
   }
   auto resolveAttr = [&](const char* name, double defaultVal) {
@@ -360,17 +375,29 @@ void resolveNanToNumDefaults(nativert::Node* node, const ValueTypes& types) {
   resolveAttr("neginf", neginfDefault);
 }
 
-void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
-  if (node->inputs().empty()) {
+// aten.logit(self, eps=None). __logit takes eps as a double and only clamps
+// when eps >= 0, so resolve a missing/None eps to -1.0 (the "no clamp"
+// sentinel). A dynamic eps input is left as-is and passed through as a value.
+void resolveLogitDefault(nativert::Node* node, const ValueTypes& /*types*/) {
+  if (node->tryGetInput("eps")) {
     return;
   }
+  const auto* attr = node->tryGetAttribute("eps");
+  if (!attr) {
+    node->addAttribute({"eps", -1.0});
+  } else if (std::holds_alternative<nativert::None>(attr->value)) {
+    const_cast<nativert::Attribute*>(attr)->value = -1.0;
+  }
+}
+
+void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
   }
-  auto inputId = node->inputs()[0].value->id();
+  auto inputId = inputAt(node, 0)->id();
   if (inputId < static_cast<int>(types.types.size()) && types.types[inputId]) {
     auto inputDtype = types.types[inputId]->dtype();
-    node->addAttribute({"dtype", std::string(c10::toString(inputDtype))});
+    node->addAttribute({"dtype", inputDtype});
   }
 }
 
@@ -380,9 +407,40 @@ std::vector<ValueConstraint> sizeAttrRankConstraint(
   const auto* sizeAttr = node->tryGetAttribute("size");
   if (sizeAttr) {
     const auto& size = std::get<std::vector<int64_t>>(sizeAttr->value);
-    return {{.rank = static_cast<int8_t>(size.size())}};
+    // Factory ops (zeros/ones/full/empty/...) materialize a fresh dense tensor.
+    return {{.rank = static_cast<int8_t>(size.size()), .contiguous = true}};
   }
   return {};
+}
+
+// Reads a statically-known integer argument 'name' from 'node' (a constant
+// attribute). Returns nullopt when the argument is absent, None, or supplied as
+// a dynamic symint input -- in which case the value is not known at compile
+// time.
+std::optional<int64_t> constIntArg(NodeCP node, const char* name) {
+  const auto* attr = node->tryGetAttribute(name);
+  if (attr && std::holds_alternative<int64_t>(attr->value)) {
+    return std::get<int64_t>(attr->value);
+  }
+  return std::nullopt;
+}
+
+// Whether argument 'name' is supplied as a dynamic (symint) input rather than a
+// constant attribute.
+bool hasDynamicArg(NodeCP node, const char* name) {
+  return node->tryGetInput(name) != nullptr;
+}
+
+// A view-like op (view/slice/...) is materialized as a before-launch host view
+// (OutputDesc::viewNode), which requires every shape argument to be available
+// in the frame when the kernel's outputs are set up. If any argument other than
+// the viewed tensor is a dynamic Value (e.g. slice end = sym_size/item, or a
+// dynamic size list), that bound may be produced by the same wave and is not
+// yet computed at setup time, so the op must run as a standalone (after its
+// inputs are ready) instead. The viewed tensor (viewOfArg) is the only expected
+// Value operand; any additional Value input is such a dynamic shape argument.
+bool viewHasDynamicShapeArgs(NodeCP node, const ValueTypes& /*types*/) {
+  return node->inputs().size() > 1;
 }
 
 std::vector<std::vector<Dim>> sizeAttrReserveShape(
@@ -404,8 +462,12 @@ std::vector<std::vector<Dim>> numBlocksShape(
     const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
   auto blockSize = WaveConfig::get().blockSize;
-  auto numBlocks =
-      static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize);
+  // At least one block: makeGrid always launches >=1 block (even for an empty
+  // input), and that block's head kernel unconditionally writes one per-block
+  // partial sum (out[blockInOp]).  A zero-length counts buffer would make that
+  // write dereference null storage.
+  auto numBlocks = std::max<Dim>(
+      1, static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize));
   return {{numBlocks}};
 }
 
@@ -432,49 +494,60 @@ std::vector<std::vector<Dim>> inputShapePlusOne(
 
 void registerRankPreservingStandalone(
     const char* opName,
-    std::optional<int32_t> viewOfArgOrdinal = std::nullopt) {
+    std::optional<int32_t> viewOfArgOrdinal = std::nullopt,
+    bool contiguousOutput = false) {
   MetadataBuilder builder(opName);
   builder.sizeOrdinal({0})
       .isStandalone()
       .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            return {{.rank = types.rank(inputs[0].value)}};
+          [contiguousOutput](
+              NodeCP node,
+              const ValueTypes& types) -> std::vector<ValueConstraint> {
+            // contiguousOutput is true only for ops that produce a dense result
+            // (e.g. aten.contiguous); a view-like op such as transpose leaves
+            // it false.
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguous = contiguousOutput}};
           })
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& types,
              WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
-            const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
-            if (inputs.empty() || outputs.empty()) {
+            if (outputs.empty()) {
               return {};
             }
-            if (types.rank(inputs[0].value) == 1) {
-              return {{outputs[0], inputs[0].value}};
+            auto* self = inputAt(node, 0);
+            if (types.rank(self) == 1) {
+              return {{outputs[0], self}};
             }
             return {};
           });
   if (viewOfArgOrdinal.has_value()) {
     builder.viewOfArg(*viewOfArgOrdinal);
+    // A view-like rank-preserving op (e.g. transpose) only rearranges tensor
+    // metadata; a materializing op (contiguousOutput) does real compute.
+    if (!contiguousOutput) {
+      builder.metadataOnly();
+    }
   }
   builder.registerOp();
 }
 
-void registerReshapeLikeOp(const char* opName, const char* shapeAttrName) {
-  MetadataBuilder(opName)
-      .sizeOrdinal({0})
-      .isStandalone()
+void registerReshapeLikeOp(
+    const char* opName,
+    const char* shapeAttrName,
+    bool isView) {
+  MetadataBuilder builder(opName);
+  builder.sizeOrdinal({0})
       .viewOfArg(0)
+      .metadataOnly(isView)
       .shapeAttr(shapeAttrName)
       .outputConstraints(
           [shapeAttrName](
               NodeCP node,
-              const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+              const ValueTypes& types) -> std::vector<ValueConstraint> {
             const auto* attr = node->tryGetAttribute(shapeAttrName);
             if (!attr) {
               return {};
@@ -486,28 +559,88 @@ void registerReshapeLikeOp(const char* opName, const char* shapeAttrName) {
             } else {
               constraint.rank = static_cast<int8_t>(shape.size());
             }
+            // view/reshape return a view that reinterprets the same storage, so
+            // the result is contiguous exactly when the input is.
+            constraint.contiguous = types.contiguous(inputAt(node, 0));
             return {constraint};
           })
       .maybeReplace(
-          [shapeAttrName](NodeCP node, ValueTypes& types, WaveGraph&)
+          [shapeAttrName, isView](NodeCP node, ValueTypes& types, WaveGraph&)
               -> std::vector<std::pair<ValueCP, ValueCP>> {
-            const auto& inputs = node->inputs();
             const auto& outputs = node->outputs();
-            if (inputs.empty() || outputs.empty()) {
+            if (outputs.empty()) {
               return {};
             }
+            auto* selfVal = inputAt(node, 0);
             const auto* attr = node->tryGetAttribute(shapeAttrName);
-            if (!attr) {
+
+            // Identity: a rank-1 tensor reshaped/viewed to [-1] is its input.
+            if (attr) {
+              const auto& shape = std::get<std::vector<int64_t>>(attr->value);
+              if (shape.size() == 1 && shape[0] == -1 &&
+                  types.rank(selfVal) == 1) {
+                return {{outputs[0], selfVal}};
+              }
+            }
+
+            // reshape with a contiguous input never copies, so it is exactly a
+            // view. Retarget it to aten.view (copying the shape list under
+            // view's "size" attribute name) so the view-collapse below treats
+            // reshape and view uniformly. Returning {} with a changed target
+            // makes the optimizer re-visit the node as a view.
+            if (!isView && types.contiguous(selfVal)) {
+              auto* mutableNode = const_cast<nativert::Node*>(node);
+              if (attr) {
+                // Copy the list before addAttribute, which invalidates the
+                // attribute spans (the stale "shape" attribute is then ignored
+                // by view's name-based argument lookup).
+                auto shapeList = std::get<std::vector<int64_t>>(attr->value);
+                mutableNode->addAttribute({"size", std::move(shapeList)});
+              }
+              mutableNode->setTarget("torch.ops.aten.view.default");
               return {};
             }
-            const auto& shape = std::get<std::vector<int64_t>>(attr->value);
-            if (shape.size() == 1 && shape[0] == -1 &&
-                types.rank(inputs[0].value) == 1) {
-              return {{outputs[0], inputs[0].value}};
+
+            // Collapse a view whose only consumer is another view (or a reshape
+            // that will itself become a view) when this view's input is
+            // contiguous: replace this view's output with its input so the
+            // consumer views the input directly. Safe because a view of a
+            // contiguous tensor to any compatible shape is always legal, so the
+            // consumer stays valid. This chains: once an inner view folds away,
+            // the next outer view sees the same contiguous input and folds too,
+            // leaving one view.
+            //
+            // The consumer may still read as reshape.default here: the
+            // optimizer visits inputs first, so this (inner) view runs before
+            // the outer reshape is retargeted to view by the branch above. A
+            // reshape of a contiguous input is a view, so accept it too.
+            if (isView && types.contiguous(selfVal) &&
+                outputs[0]->users().size() == 1) {
+              NodeCP user = *outputs[0]->users().begin();
+              if (user != nullptr &&
+                  (user->target() == "torch.ops.aten.view.default" ||
+                   user->target() == "torch.ops.aten.reshape.default")) {
+                return {{outputs[0], selfVal}};
+              }
             }
             return {};
-          })
-      .registerOp();
+          });
+  if (isView) {
+    // view only reinterprets storage metadata, so give it a device function so
+    // it can run fused inside a kernel (like select.int). It still runs as a
+    // metadata-only standalone shortcut when it is not fused. A view with a
+    // dynamic size list must stay a standalone (its bounds are not known when
+    // the kernel's outputs are set up before launch).
+    builder.headerFile("velox/experimental/torchwave/Views.cuh")
+        .deviceFunc("tw_view")
+        .isStandaloneFunc(viewHasDynamicShapeArgs);
+  } else {
+    // reshape may materialize a copy when its input is non-contiguous, so it
+    // has no device function and runs as a standalone. A contiguous reshape is
+    // retargeted to view by maybeReplace above and then picks up tw_view.
+    builder.isStandalone();
+  }
+  builder.registerOp();
 }
 
 float elementwiseCostFromDtype(c10::ScalarType dtype, float baseCost) {
@@ -641,6 +774,30 @@ void registerBuiltins() {
       .registerOp();
   MetadataBuilder("torch.ops.aten.div_.Tensor")
       .elementwise()
+      .costFunction(divCost)
+      .registerOp();
+
+  // In-place (Tensor, Scalar). Same __*_ device functions; the scalar operand
+  // is cast to self's dtype via normalize, and no arithmeticPromotion so the
+  // result keeps self's dtype.
+  MetadataBuilder("torch.ops.aten.add_.Scalar")
+      .elementwiseFunc("__add_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Scalar")
+      .elementwiseFunc("__sub_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Scalar")
+      .elementwiseFunc("__mul_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Scalar")
+      .elementwiseFunc("__div_")
+      .normalize(castScalarAttrsToInputDtype)
       .costFunction(divCost)
       .registerOp();
 
@@ -942,9 +1099,19 @@ void registerBuiltins() {
       .normalize(resolveNanToNumDefaults)
       .registerOp();
 
+  // logit (inverse sigmoid): log(self / (1 - self)), with an optional eps that
+  // clamps self to [eps, 1 - eps]. Elementwise; resolveLogitDefault turns a
+  // None eps into the -1 "no clamp" sentinel that __logit understands.
+  MetadataBuilder("torch.ops.aten.logit.default")
+      .elementwise()
+      .normalize(resolveLogitDefault)
+      .costFunction(transcendentalCost)
+      .registerOp();
+
   // Type cast.
   MetadataBuilder("torch.ops.aten.to.dtype")
       .elementwiseFunc("__to")
+      .numArgs(1)
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -964,6 +1131,7 @@ void registerBuiltins() {
   // placement/layout, which wave handles separately, so they are ignored.
   MetadataBuilder("torch.ops.aten._to_copy.default")
       .elementwiseFunc("__to")
+      .numArgs(1)
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -1095,14 +1263,29 @@ void registerBuiltins() {
             if (!sizeAttr) {
               return {};
             }
-            auto [outDtype, dtypeStr] = resolveOutDtype(node, &waveGraph);
+            auto outDtype = resolveOutDtype(node, &waveGraph).first;
             auto* graph = waveGraph.graph();
             auto* zerosNode =
                 graph->createNode("torch.ops.aten.zeros.default", {});
             zerosNode->addAttribute(
                 {sizeAttr->name,
                  std::get<std::vector<int64_t>>(sizeAttr->value)});
-            zerosNode->addAttribute({"dtype", dtypeStr});
+            // aten.zeros runs as a standalone via nativert C10Kernel, whose
+            // boxed schema expects an int ScalarType for `dtype`.  Emit a typed
+            // ScalarType (not the string name) so it unboxes natively, with no
+            // string-reinterpret workaround needed in
+            // prefillStackWithStaticArgs.
+            zerosNode->addAttribute({"dtype", outDtype});
+            // new_zeros inherits its input's device; the rewritten zeros has no
+            // such input, so pin it to the wave (GPU) device.  Without this the
+            // C10 zeros falls back to CPU and trips device-mismatch checks.
+            if (auto* dev = facebook::velox::wave::currentDevice()) {
+              zerosNode->addAttribute(
+                  {"device",
+                   c10::Device(
+                       c10::kCUDA,
+                       static_cast<c10::DeviceIndex>(dev->deviceId))});
+            }
             graph->insertBefore(zerosNode, const_cast<nativert::Node*>(node));
             auto* newOutput =
                 waveGraph.newTensorValue(zerosNode, "zeros", outDtype);
@@ -1235,12 +1418,11 @@ void registerBuiltins() {
         [](NodeCP node,
            ValueTypes& /*types*/,
            WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
-          const auto& inputs = node->inputs();
           const auto& outputs = node->outputs();
-          if (inputs.empty() || outputs.empty()) {
+          if (outputs.empty()) {
             return {};
           }
-          return {{outputs[0], inputs[0].value}};
+          return {{outputs[0], inputAt(node, 0)}};
         });
     if (std::string_view(opName) == "torch.ops.aten.detach_.default") {
       builder.viewOfArg(0);
@@ -1309,29 +1491,77 @@ void registerBuiltins() {
     return static_cast<int>(rank);
   };
 
+  // Shared output constraint for in-place scatter ops (index_put_,
+  // index_put_elt_*, masked_put_): the result aliases the first argument
+  // (self), so it has self's rank and is contiguous exactly when self is.
+  auto viewOfFirstArgConstraint =
+      [](NodeCP node, const ValueTypes& types) -> std::vector<ValueConstraint> {
+    auto* self = inputAt(node, 0);
+    return {{.rank = types.rank(self), .contiguous = types.contiguous(self)}};
+  };
+
   // Clone: eliminate unless a user mutates the output in place.
   MetadataBuilder("torch.ops.aten.clone.default")
       .sizeOrdinal({0})
-      .rankArgument(0)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            // clone makes a fresh, densely-laid-out copy regardless of the
+            // input's layout.
+            return {{.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+          })
       .deviceFunc("__copyTensor")
       .typeTemplateParams({0})
       .maybeReplace(
-          [](NodeCP node, ValueTypes& /*types*/, WaveGraph& /*waveGraph*/)
-              -> std::vector<std::pair<ValueCP, ValueCP>> {
-            const auto& inputs = node->inputs();
+          [](NodeCP node,
+             ValueTypes& /*types*/,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto& outputs = node->outputs();
-            if (inputs.empty() || outputs.empty() || !inputs[0].value) {
+            if (outputs.empty()) {
               return {};
             }
-            // Eliminate the clone (alias its output to the source) only when
-            // the source is produced by an elementwise node whose result has
-            // no user other than this clone. The source is then a fresh value
-            // computed here and read nowhere else, so the copy is redundant
-            // and aliasing it cannot expose a later in-place mutation to
-            // another reader. In any other case -- the source is a graph
-            // input, a view, a standalone (non-elementwise) result, or is
-            // shared by other users -- keep the clone as a real copy.
-            auto* source = inputs[0].value;
+            auto* source = inputAt(node, 0);
+            auto* outputNode = waveGraph.graph()->outputNode();
+            // clone(memory_format=contiguous_format) is not an identity: it
+            // produces a contiguous copy that a following view() relies on.
+            // Keep the clone (its __copyTensor writes a contiguous register)
+            // rather than eliding it.
+            const auto* mfAttr = node->tryGetAttribute("memory_format");
+            if (mfAttr) {
+              bool isContiguous = false;
+              if (std::holds_alternative<c10::MemoryFormat>(mfAttr->value)) {
+                isContiguous = std::get<c10::MemoryFormat>(mfAttr->value) ==
+                    c10::MemoryFormat::Contiguous;
+              } else if (std::holds_alternative<std::string>(mfAttr->value)) {
+                const auto& s = std::get<std::string>(mfAttr->value);
+                isContiguous = s == "contiguous_format" || s == "Contiguous";
+              }
+              if (isContiguous) {
+                return {};
+              }
+            }
+            for (auto* user : outputs[0]->users()) {
+              if (isInPlaceMutation(user, outputs[0])) {
+                return {};
+              }
+              // A returned clone must stay a real copy: it is a distinct output
+              // tensor, and aliasing it to its source can collide with another
+              // output that is the same value.
+              if (user == outputNode) {
+                return {};
+              }
+            }
+            // Do not eliminate the clone if its source storage is mutated in
+            // place later: the clone is a required snapshot of the pre-mutation
+            // value, so it cannot be aliased to its (later-overwritten) source.
+            if (baseMutatedAfter(*waveGraph.graph(), node, source)) {
+              return {};
+            }
+            // Otherwise eliminate the clone (alias its output to the source)
+            // only when the source is produced by an elementwise node whose
+            // result has no other user -- a fresh value read nowhere else.  In
+            // any other case (graph input, view, standalone, or shared) keep
+            // the clone as a real copy.
             const auto* producer = source->producer();
             const auto* producerMeta = producer ? nodeMeta(producer) : nullptr;
             if (!producerMeta || !producerMeta->elementwise ||
@@ -1353,11 +1583,8 @@ void registerBuiltins() {
           [&isIntegerIndices](
               NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
               -> std::vector<std::pair<ValueCP, ValueCP>> {
-            if (node->inputs().size() < 2 || !node->inputs()[0].value) {
-              return {};
-            }
-            auto n = isIntegerIndices(
-                types, node->inputs()[0].value, node->inputs()[1].value);
+            auto n =
+                isIntegerIndices(types, inputAt(node, 0), inputAt(node, 1));
             if (n > 0) {
               static const char* kNames[] = {
                   "tw.index_elt_one", "tw.index_elt_two", "tw.index_elt_three"};
@@ -1430,11 +1657,8 @@ void registerBuiltins() {
           [](NodeCP node,
              ValueTypes& types,
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
-            if (node->inputs().empty() || !node->inputs()[0].value) {
-              return {};
-            }
             auto* mutableNode = const_cast<nativert::Node*>(node);
-            auto* selfVal = node->inputs()[0].value;
+            auto* selfVal = inputAt(node, 0);
             auto* selfProducer = selfVal->producer();
             const bool alreadyClone = selfProducer &&
                 selfProducer->target() == "torch.ops.aten.clone.default" &&
@@ -1454,6 +1678,19 @@ void registerBuiltins() {
               graph->insertBefore(cloneNode, mutableNode);
               auto* cloneOutput = waveGraph.newTensorValue(
                   cloneNode, "index_put_clone", selfDtype);
+              // newTensorValue records only the dtype, so the clone output's
+              // TensorMeta has no sizes (dim()==0). clone preserves self's
+              // shape, so carry self's full type onto it; otherwise the
+              // index_put_ rewrite below cannot read the rank and the fused
+              // form (masked_put_ / index_put_elt_*) is silently skipped,
+              // leaving a standalone index_put_.
+              auto cloneId = cloneOutput->id();
+              if (cloneId >= 0) {
+                if (static_cast<size_t>(cloneId) >= types.types.size()) {
+                  types.types.resize(cloneId + 1, nullptr);
+                }
+                types.types[cloneId] = types.types[selfId];
+              }
               mutableNode->inputs()[0].value = cloneOutput;
             }
             mutableNode->setTarget("torch.ops.aten.index_put_.default");
@@ -1496,6 +1733,7 @@ void registerBuiltins() {
             std::vector<c10::Argument>{
                 c10::Argument("output", c10::TensorType::get())}))
         .sizeOrdinal({0})
+        .outputConstraints(viewOfFirstArgConstraint)
         .deviceFunc("__masked_put")
         .typeTemplateParams({0})
         .returnMeta({{.reserveShape = maskedPutReserve}})
@@ -1552,6 +1790,7 @@ void registerBuiltins() {
               std::vector<c10::Argument>{
                   c10::Argument("output", c10::TensorType::get())}))
           .elementwiseFunc(kFuncs[i])
+          .outputConstraints(viewOfFirstArgConstraint)
           .argumentMeta(
               {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
                {.isRegister = true},
@@ -1573,17 +1812,14 @@ void registerBuiltins() {
   {
     MetadataBuilder("torch.ops.aten.index_put_.default")
         .isStandalone()
+        .outputConstraints(viewOfFirstArgConstraint)
         .maybeReplace(
             [&isIntegerIndices, &isSingleBoolIndices](
                 NodeCP node, ValueTypes& types, WaveGraph& waveGraph)
                 -> std::vector<std::pair<ValueCP, ValueCP>> {
-              if (node->inputs().size() < 3 || !node->inputs()[0].value ||
-                  !node->inputs()[1].value || !node->inputs()[2].value) {
-                return {};
-              }
-              auto* selfVal = node->inputs()[0].value;
-              auto* indicesVal = node->inputs()[1].value;
-              auto* valuesVal = node->inputs()[2].value;
+              auto* selfVal = inputAt(node, 0);
+              auto* indicesVal = inputAt(node, 1);
+              auto* valuesVal = inputAt(node, 2);
               auto n = isIntegerIndices(types, selfVal, indicesVal);
               if (n > 0) {
                 static const char* kEltNames[] = {
@@ -1622,26 +1858,54 @@ void registerBuiltins() {
         .registerOp();
   }
 
-  // Transpose.
+  // Transpose -- a view that permutes dims, generally not contiguous.
   registerRankPreservingStandalone("torch.ops.aten.transpose.int", 0);
 
-  // Contiguous.
-  registerRankPreservingStandalone("torch.ops.aten.contiguous.default");
+  // Contiguous -- always materializes a dense result.
+  registerRankPreservingStandalone(
+      "torch.ops.aten.contiguous.default",
+      /*viewOfArgOrdinal=*/std::nullopt,
+      /*contiguousOutput=*/true);
 
   // Slice.
   MetadataBuilder("torch.ops.aten.slice.Tensor")
       .sizeOrdinal({0})
-      .isStandalone()
       .viewOfArg(0)
+      .metadataOnly()
+      .isStandaloneFunc(viewHasDynamicShapeArgs)
+      .headerFile("velox/experimental/torchwave/Views.cuh")
+      .deviceFunc("tw_slice")
+      .typeTemplateParams({0})
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
+            auto* self = inputAt(node, 0);
             ValueConstraint constraint;
-            constraint.rank = types.rank(inputs[0].value);
+            int8_t rank = types.rank(self);
+            constraint.rank = rank;
+            // aten.slice returns a view. A step-1 slice preserves the input's
+            // contiguity only when it slices the outermost dim, or is a
+            // full-extent (no-op) slice; slicing an inner dim, or step > 1,
+            // introduces a stride gap. If any parameter is a dynamic symint we
+            // cannot prove contiguity, so leave it false (conservative).
+            constexpr int64_t kSliceEndMax = int64_t{1} << 62;
+            bool stepOne = !hasDynamicArg(node, "step") &&
+                constIntArg(node, "step").value_or(1) == 1;
+            auto dimOpt = constIntArg(node, "dim");
+            bool dimKnown = dimOpt.has_value() && !hasDynamicArg(node, "dim");
+            int64_t dim = dimOpt.value_or(0);
+            if (dim < 0 && rank > 0) {
+              dim += rank;
+            }
+            // start defaults to None (== 0); end defaults to None (== to end).
+            bool startZero = !hasDynamicArg(node, "start") &&
+                constIntArg(node, "start").value_or(0) == 0;
+            bool endFull = !hasDynamicArg(node, "end") &&
+                constIntArg(node, "end").value_or(kSliceEndMax) >= kSliceEndMax;
+            bool fullSlice = startZero && endFull;
+            bool dimZero = dimKnown && dim == 0;
+            constraint.contiguous =
+                types.contiguous(self) && stepOne && (dimZero || fullSlice);
             return {constraint};
           })
       .registerOp();
@@ -1650,19 +1914,28 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.select.int")
       .sizeOrdinal({0})
       .viewOfArg(0)
+      .metadataOnly()
       .headerFile("velox/experimental/torchwave/Views.cuh")
       .deviceFunc("tw_select")
       .typeTemplateParams({0})
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
+            auto* self = inputAt(node, 0);
             ValueConstraint constraint;
-            constraint.rank =
-                static_cast<int8_t>(types.rank(inputs[0].value) - 1);
+            int8_t rank = types.rank(self);
+            constraint.rank = static_cast<int8_t>(rank - 1);
+            // aten.select removes 'dim'. The result is contiguous only when the
+            // input is contiguous and the outermost dim is removed; removing an
+            // inner dim leaves the outer strides with a gap.
+            auto dimOpt = constIntArg(node, "dim");
+            bool dimKnown = dimOpt.has_value() && !hasDynamicArg(node, "dim");
+            int64_t dim = dimOpt.value_or(0);
+            if (dim < 0 && rank > 0) {
+              dim += rank;
+            }
+            constraint.contiguous =
+                types.contiguous(self) && dimKnown && dim == 0;
             return {constraint};
           })
       .registerOp();
@@ -1672,7 +1945,112 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .isStandalone()
       .viewOfArg(0)
+      .metadataOnly()
       .rankArgument(0)
+      .registerOp();
+
+  // tw.slice_scatter: fused functional slice_scatter along dim 0 or dim 1. Args
+  // mirror aten.slice_scatter (self, src, dim, start, end, step) so the rewrite
+  // below can retarget the node directly. The loop iterates every output
+  // element (sized by self, ordinal 0); __slice_scatter returns each element,
+  // taking it from 'src' inside the slice and passing 'self' through elsewhere.
+  // Both 'self' and 'src' are whole tensors read at computed offsets (so they
+  // carry randomAccess, forcing them to be materialized before this op), not
+  // per-loop register reads. Being functional, it needs no clone of self.
+  {
+    auto sliceScatterReserve =
+        [](NodeCP node,
+           nativert::ExecutionFrame& frame,
+           const FormalToActual& map,
+           NodeCP /*originalFormalNode*/,
+           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+      // Functional slice_scatter: the output is a fresh tensor with self's
+      // shape (the framework allocates it; do not alias self).
+      auto* selfValue = node->inputs()[0].value;
+      auto selfId = selfValue->id();
+      auto it = map.find(selfId);
+      auto actualId = it != map.end() ? it->second : selfId;
+      auto& selfTensor = frame.getIValue(actualId).toTensor();
+      auto sizes = selfTensor.sizes();
+      return {{sizes.begin(), sizes.end()}};
+    };
+
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.slice_scatter",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("src", c10::TensorType::get()),
+                c10::Argument(
+                    "dim", c10::IntType::get(), std::nullopt, c10::IValue(0)),
+                c10::Argument(
+                    "start",
+                    c10::OptionalType::create(c10::IntType::get()),
+                    std::nullopt,
+                    c10::IValue()),
+                c10::Argument(
+                    "end",
+                    c10::OptionalType::create(c10::IntType::get()),
+                    std::nullopt,
+                    c10::IValue()),
+                c10::Argument(
+                    "step", c10::IntType::get(), std::nullopt, c10::IValue(1))},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .elementwiseFunc("__slice_scatter")
+        // Size the loop by self (== the output shape), so every output element
+        // is visited regardless of how few elements the slice writes. The
+        // runtime start/end scalars must not drive the grid.
+        .sizeOrdinal({0})
+        .hasIdxArg()
+        .hasBlockInfo()
+        .outputConstraints(
+            [](NodeCP node,
+               const ValueTypes& types) -> std::vector<ValueConstraint> {
+              // Functional output: self's rank, freshly allocated (contiguous).
+              return {
+                  {.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+            })
+        .argumentMeta(
+            {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+             {.isRegister = false, .wholeTensor = true, .randomAccess = true},
+             {.isRegister = true},
+             {.isRegister = true},
+             {.isRegister = true},
+             {.isRegister = true}})
+        .returnMeta({{.isRegister = true, .reserveShape = sliceScatterReserve}})
+        .typeTemplateParams({0})
+        .registerOp();
+  }
+
+  // slice_scatter (functional, out-of-place): returns a fresh copy of self with
+  // a slice overwritten by src. For dim 0 and dim 1 with a statically-known
+  // dim, retarget to the fused functional tw.slice_scatter (no clone needed: it
+  // reads self and produces a fresh output). Other dims (or a dynamic dim) fall
+  // back to the standalone op.
+  MetadataBuilder("torch.ops.aten.slice_scatter.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            auto* self = inputAt(node, 0);
+            return {{.rank = types.rank(self), .contiguous = true}};
+          })
+      .maybeReplace(
+          [](NodeCP node, ValueTypes& /*types*/, WaveGraph& /*waveGraph*/)
+              -> std::vector<std::pair<ValueCP, ValueCP>> {
+            // Fuse scatter along dim 0 or dim 1 with a statically-known dim;
+            // other cases fall back to the standalone op.
+            int64_t scatterDim = constIntArg(node, "dim").value_or(0);
+            if (hasDynamicArg(node, "dim") ||
+                (scatterDim != 0 && scatterDim != 1)) {
+              return {};
+            }
+            const_cast<nativert::Node*>(node)->setTarget("tw.slice_scatter");
+            return {};
+          })
       .registerOp();
 
   // Unsqueeze.
@@ -1680,16 +2058,13 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .isStandalone()
       .viewOfArg(0)
+      .metadataOnly()
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
+            auto* self = inputAt(node, 0);
             ValueConstraint constraint;
-            constraint.rank =
-                static_cast<int8_t>(types.rank(inputs[0].value) + 1);
+            constraint.rank = static_cast<int8_t>(types.rank(self) + 1);
             return {constraint};
           })
       .registerOp();
@@ -1702,11 +2077,8 @@ void registerBuiltins() {
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            auto inputRank = types.rank(inputs[0].value);
+            auto* self = inputAt(node, 0);
+            auto inputRank = types.rank(self);
             auto getInt = [&](const char* name, int64_t defaultVal) -> int64_t {
               const auto* attr = node->tryGetAttribute(name);
               if (!attr) {
@@ -1736,12 +2108,8 @@ void registerBuiltins() {
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            int8_t outputRank =
-                static_cast<int8_t>(types.rank(inputs[0].value) - 1);
+            auto* self = inputAt(node, 0);
+            int8_t outputRank = static_cast<int8_t>(types.rank(self) - 1);
             std::vector<ValueConstraint> constraints;
             constraints.reserve(node->outputs().size());
             for (size_t i = 0; i < node->outputs().size(); ++i) {
@@ -1752,21 +2120,28 @@ void registerBuiltins() {
       .registerOp();
 
   // Concat.
+  // concat is an alias of cat with the identical (tensors, dim) signature.
+  // Retarget it to aten.cat so it shares cat's full handling (size shortcut,
+  // setOutputs, special form, and the contiguous output constraint) instead of
+  // duplicating a subset. The optimizer re-visits the node as cat after the
+  // target changes, recomputing its constraints from cat's metadata.
   MetadataBuilder("torch.ops.aten.concat.default")
       .sizeOrdinal({0})
       .isStandalone()
-      .outputConstraints(
+      .maybeReplace(
           [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
+             ValueTypes& /*types*/,
+             WaveGraph&) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            auto* mutableNode = const_cast<nativert::Node*>(node);
+            // cat reads its concat dimension from a "dim" attribute; supply the
+            // schema default (0) only if the node carries neither a "dim"
+            // attribute nor a "dim" input.
+            if (node->tryGetAttribute("dim") == nullptr &&
+                node->tryGetInput("dim") == nullptr) {
+              mutableNode->addAttribute({"dim", static_cast<int64_t>(0)});
             }
-            auto elements = inputs[0].value->getListElements();
-            if (elements.empty()) {
-              return {};
-            }
-            return {ValueConstraint{.rank = types.rank(elements[0])}};
+            mutableNode->setTarget("torch.ops.aten.cat.default");
+            return {};
           })
       .registerOp();
 
@@ -1778,11 +2153,8 @@ void registerBuiltins() {
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            auto rank = types.rank(inputs[0].value);
+            auto* self = inputAt(node, 0);
+            auto rank = types.rank(self);
             std::vector<ValueConstraint> constraints;
             constraints.reserve(node->outputs().size());
             for (size_t i = 0; i < node->outputs().size(); ++i) {
@@ -1793,10 +2165,11 @@ void registerBuiltins() {
       .registerOp();
 
   // Reshape.
-  registerReshapeLikeOp("torch.ops.aten.reshape.default", "shape");
+  registerReshapeLikeOp(
+      "torch.ops.aten.reshape.default", "shape", /*isView=*/false);
 
   // View.
-  registerReshapeLikeOp("torch.ops.aten.view.default", "size");
+  registerReshapeLikeOp("torch.ops.aten.view.default", "size", /*isView=*/true);
 
   static const std::string kScanHeader =
       "velox/experimental/torchwave/Scan.cuh";
@@ -1915,6 +2288,7 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasBlockSizeTemplateParam()
       .alwaysSingleBlock()
+      .outputConstraints(rank1Constraint)
       .registerOp();
 
   // --- Torchwave intrinsics for multi-kernel masked_select ---
@@ -2040,6 +2414,7 @@ void registerBuiltins() {
       .alwaysSingleBlock()
       .only1d()
       .templateAttrs({"dim"})
+      .outputConstraints(rank1Constraint)
       .registerOp();
 
   // tw.cumsum_head: (Tensor) -> Tensor
@@ -2121,6 +2496,13 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // The multi-block final stage's output is read cross-block by fused cat
+      // consumers (e.g. the exclusive-prefix cat([zeros[1], cumsum[:-1]]) and
+      // the outer cat of per-chain offsets). Without a launch boundary those
+      // reads are ordered only by intra-block __syncthreads(), which is
+      // insufficient across non-co-resident blocks. Gated by the runtime
+      // WaveConfig::scanOutputReturnBarrier toggle so the fix can be A/B'd.
+      .scanOutputReturnBarrier()
       .only1d()
       .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
@@ -2239,6 +2621,11 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // See cumsum_final: the multi-block final stage's output is read
+      // cross-block by fused cat consumers (the outer cat of per-chain offsets
+      // reads each chain's exclusive-prefix output), so it must end its launch.
+      // Gated by the WaveConfig::scanOutputReturnBarrier toggle.
+      .scanOutputReturnBarrier()
       .only1d()
       .outputConstraints(rank1Constraint)
       .registerOp();
@@ -2718,11 +3105,8 @@ void registerBuiltins() {
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            return {{types.rank(inputs[0].value)}};
+            auto* self = inputAt(node, 0);
+            return {{types.rank(self)}};
           })
       .normalize([](nativert::Node* node, const ValueTypes& types) {
         const auto* attr = node->tryGetAttribute("value");

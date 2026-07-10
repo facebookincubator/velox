@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <unordered_set>
@@ -124,7 +125,9 @@ class MmapArena {
 /// fragmentation happens.
 class ManagedMmapArenas {
  public:
-  explicit ManagedMmapArenas(uint64_t singleArenaCapacity);
+  ManagedMmapArenas(
+      uint64_t singleArenaCapacity,
+      std::function<void(void* address, size_t bytes)> onMap = nullptr);
 
   void* allocate(uint64_t bytes);
 
@@ -137,6 +140,9 @@ class ManagedMmapArenas {
  private:
   // Capacity in bytes for a single MmapArena managed by this.
   const uint64_t singleArenaCapacity_;
+
+  // Invoked on each arena region as it is mapped.
+  const std::function<void(void* address, size_t bytes)> onMap_;
 
   // A sorted list of MmapArena by its initial address
   std::map<uintptr_t, std::shared_ptr<MmapArena>> arenas_;

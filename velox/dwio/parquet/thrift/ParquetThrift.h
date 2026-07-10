@@ -88,7 +88,7 @@ struct StreamReader {
     bool haveData;
     uint64_t readUs{0};
     {
-      MicrosecondTimer timer(&readUs);
+      MicrosecondWallTimer timer(&readUs);
       haveData = input->Next(data, dataBytes);
     }
     totalReadUs += readUs;

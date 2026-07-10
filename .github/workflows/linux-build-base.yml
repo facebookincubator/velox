@@ -594,6 +594,7 @@ jobs:
           source scripts/setup-ubuntu.sh
           install_apt_deps
           install_faiss_deps
+          install_cxl_deps
           # We can remove them once we bundle FBThrift.
           install_fmt
           install_boost
@@ -821,6 +822,11 @@ jobs:
         run: |
           ccache -sz
 
+      - name: Install CXL Dependencies
+        run: |
+          source scripts/setup-fedora.sh
+          install_cxl_deps
+
       - name: Make Debug Build
         id: build
         env:
@@ -913,7 +919,7 @@ jobs:
       failed-cases: ${{ steps.tests.outputs.failed-cases }}
       failure-details: ${{ steps.tests.outputs.failure-details }}
     concurrency:
-      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.event.pull_request.number }}
+      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.head_ref || github.sha }}
       cancel-in-progress: true
     steps:
       - name: Free Disk Space

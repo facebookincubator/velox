@@ -137,6 +137,8 @@ void Optimizer::visitValue(const nativert::Value* value) {
       if (outputId >= 0) {
         ensureConstraint(outputId);
         types_.constraints[outputId].rank = maxRank;
+        // An elementwise op materializes a fresh, densely-laid-out output.
+        types_.constraints[outputId].contiguous = true;
       }
     }
   }
@@ -176,8 +178,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
           auto* originalValue = mutableProducer->inputs()[ordinal].value;
           auto* castNode = graph_->createNode(
               "torch.ops.aten.to.dtype", {{"self", originalValue}});
-          castNode->addAttribute(
-              {"dtype", std::string(c10::toString(pytorchType))});
+          castNode->addAttribute({"dtype", pytorchType});
           graph_->insertBefore(castNode, mutableProducer);
           auto* castOutput = waveGraph_.newTensorValue(
               castNode,

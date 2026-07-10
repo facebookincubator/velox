@@ -132,12 +132,11 @@ void listConstantsImpl(
           if (meta && meta->isPresenceTemplateParam(attr.name)) {
             return;
           }
-          TORCH_CHECK(
-              false,
-              "Constant attribute '",
-              attr.name,
-              "' is None in node: ",
-              standaloneToString(n));
+          // A None constant attribute does not occupy a constant slot (e.g.
+          // searchsorted's side/sorter, repeat_interleave's output_size); skip
+          // it rather than erroring, so later nodes' constant indices are not
+          // shifted past the end of the constants vector.
+          return;
         }
         storage.push_back(std::move(iv));
       });
@@ -173,7 +172,11 @@ bool tensorMetaCompatible(
 bool isParamPresent(NodeCP node, std::string_view name) {
   for (const auto& input : node->inputs()) {
     if (input.name == name) {
-      return true;
+      // A None-typed input slot represents an absent optional argument (e.g.
+      // clamp(self, min=None, max=5)).  It must NOT count as present, otherwise
+      // the op selects the wrong presence template (e.g. __clamp<true, true>
+      // reading a None->0 min) and dedup merges it with present-arg ops.
+      return input.value->type().kind() != nativert::Type::Kind::None;
     }
   }
   const auto* attr = node->tryGetAttribute(std::string(name));
@@ -879,12 +882,30 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   };
 
   for (auto i = 0; i < node->inputs().size(); ++i) {
-    if (meta && meta->inputFromPreviousKernel.has_value() &&
-        i != meta->inputFromPreviousKernel.value()) {
+    bool isPrevKernel = meta && meta->inputFromPreviousKernel.has_value() &&
+        i == meta->inputFromPreviousKernel.value();
+    if (meta && meta->inputFromPreviousKernel.has_value() && !isPrevKernel) {
       continue;
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
+    if (isPrevKernel) {
+      // The producer of an inputFromPreviousKernel argument is always its own
+      // kernel stage: there is a kernel break between it and this op.  Place
+      // its own inputs, then push it directly.  Otherwise, when the producer's
+      // isKernelBreak is false (e.g. a single-block scan head) it returns
+      // kFused and is collected into this op's fusedInputs -- which the
+      // kFusedBreak path below discards, leaving this op reading a buffer its
+      // producer never wrote (an orphaned scan stage).
+      if (producer && !placed_.count(producer) &&
+          !(inputs_ && inputs_->count(producer))) {
+        placeKernels(producer, Context::kFused);
+        if (!placed_.count(producer)) {
+          pushdownFused(producer);
+        }
+      }
+      continue;
+    }
     auto inputKind = inputValue->type().kind();
     bool isScalarSize = isSizeArg(node->inputs()[i].name, meta) &&
         inputKind != nativert::Type::Kind::Tensor &&
@@ -906,7 +927,10 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     pushdownStandalone(node);
     return thisContext;
   }
-  if (meta->isKernelBreak(isSingleBlock_, isCgGrid_)) {
+  if (meta->isKernelBreak(
+          isSingleBlock_,
+          isCgGrid_,
+          WaveConfig::get().scanOutputReturnBarrier)) {
     pushdownFused(node);
     return Context::kFusedBreak;
   }
@@ -957,6 +981,12 @@ void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
         bool found = false;
         forEachSortedAttribute(
             original, [&](NodeCP, const nativert::Attribute& origAttr) {
+              // None-valued attributes do not occupy a constant slot (see
+              // listConstants / makeConstantIndices), so skip them when
+              // computing the offset of 'attr' among the real constants.
+              if (nativert::constantToIValue(origAttr.value).isNone()) {
+                return;
+              }
               if (origAttr.name == attr.name) {
                 found = true;
               } else if (!found) {
@@ -1537,7 +1567,6 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     return result;
   }
   const auto& schemaArgs = meta.functionSchema->arguments();
-  const auto& nodeInputs = node->inputs();
   for (size_t i = 0; i < schemaArgs.size(); ++i) {
     if (i >= meta.argumentMeta.size() ||
         !meta.argumentMeta[i].hasPresentTemplateParam) {
@@ -1546,21 +1575,9 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     if (!result.empty()) {
       result += ", ";
     }
-    bool present = false;
-    const auto& argName = schemaArgs[i].name();
-    for (const auto& input : nodeInputs) {
-      if (input.name == argName) {
-        present = true;
-        break;
-      }
-    }
-    if (!present) {
-      const auto* attr = node->tryGetAttribute(argName);
-      if (attr && !std::holds_alternative<nativert::None>(attr->value)) {
-        present = true;
-      }
-    }
-    result += present ? "true" : "false";
+    // Use the same presence rule as dedup (isParamPresent), which treats a
+    // None-typed input slot as absent.
+    result += isParamPresent(node, schemaArgs[i].name()) ? "true" : "false";
   }
   return result;
 }
@@ -1825,8 +1842,18 @@ void CompileCtx::emitCopy(
     const std::string& destOffsetExpr,
     const std::string& cudaTypeName) {
   auto& op = *generatingOp_;
-  code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
-        << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  auto srcTypeName = cudaType(source);
+  if (srcTypeName != cudaTypeName) {
+    // Mixed-dtype cat element (e.g. an int64 cumsum slice copied into a float
+    // cat output, where torch type-promotes the element): value-convert rather
+    // than bit-copy, which would reinterpret the source bytes.
+    code_ << "  __copyConvert<" << srcTypeName << ", " << cudaTypeName << ">("
+          << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  } else {
+    code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  }
   if (!destOffsetExpr.empty()) {
     code_ << " + " << destOffsetExpr;
   }
@@ -1885,8 +1912,33 @@ std::string CompileCtx::cudaType(ValueCP value) const {
         value->name());
     return cudaTypeString(types_.types[value->id()]->dtype());
   }
+  // A TensorList's element type (all elements share a dtype) lets an op
+  // template on a list input, e.g. group_length_guard_final templates on the
+  // head_list (offset) and values element types.
+  if (kind == nativert::Type::Kind::TensorList) {
+    auto elements = value->getListElements();
+    TORCH_CHECK(
+        !elements.empty(), "Empty TensorList for cudaType: ", value->name());
+    auto elemId = elements[0]->id();
+    TORCH_CHECK(
+        elemId < types_.types.size() && types_.types[elemId],
+        "No TensorMeta for TensorList element of ",
+        value->name());
+    return cudaTypeString(types_.types[elemId]->dtype());
+  }
   switch (kind) {
     case nativert::Type::Kind::SymInt:
+      return "int32_t";
+    case nativert::Type::Kind::None:
+      // Type not set during export.  Recover from TensorMeta if available,
+      // otherwise fall back to int32_t (covers integer scalar attributes
+      // like dim, index whose Kind was not annotated).
+      if (value->id() < types_.types.size() && types_.types[value->id()]) {
+        return cudaTypeString(types_.types[value->id()]->dtype());
+      }
+      LOG(WARNING) << "Value " << value->name()
+                   << " has Kind::None with no TensorMeta, defaulting to "
+                      "int32_t";
       return "int32_t";
     case nativert::Type::Kind::SymFloat:
       return "float";
@@ -2025,26 +2077,11 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   currentNodeId_ = project.id();
   numDistinctOps_ = 0;
   auto& nodes = project.nodes();
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    currentExprOrdinal_ = static_cast<int32_t>(i);
-    auto* node = nodes[i];
-    if (node->target() == "prim.Input" || placed_.count(node)) {
-      continue;
-    }
-    if (node->target() == "prim.ListUnpack") {
-      auto* listValue = node->inputs()[0].value;
-      auto* producer = listValue->producer();
-      // A prim.listunpack over a placed fused op is a no-op. The fused code
-      // assigns the tensors in the list directly.
-      if (producer) {
-        auto* producerMeta = Registry::metadata(producer->target());
-        if (producerMeta && !producerMeta->isStandalone(producer, types_)) {
-          placed_.insert(node);
-          continue;
-        }
-      }
-    }
-    auto sg = extractSubgraph(node, project.inputs(), placed_);
+
+  // Generates the kernel / standalone for a single node: extract its subgraph
+  // and either reuse a duplicate ProjectOperation or build a new one.
+  auto generateNode = [&](NodeCP genNode) {
+    auto sg = extractSubgraph(genNode, project.inputs(), placed_);
     auto it = projectOps_.find(sg);
     if (it != projectOps_.end()) {
       ops_.emplace_back(it->second, sg, ivalueStorage_);
@@ -2080,6 +2117,50 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
         addSelfExtraBindings(ops_.back(), projectOp->extraValues());
       }
     }
+  };
+
+  // Fused ops whose only consumer is a no-op prim.ListUnpack (the fused code
+  // assigns the list tensors directly). They are skipped during the main pass;
+  // any that a downstream consumer pulls into its own kernel become placed, and
+  // the genuinely orphaned ones (e.g. a single-use list result feeding graph
+  // outputs, like group_length_guard_final) are generated in the cleanup pass.
+  std::vector<NodeCP> deferredFusedProducers;
+
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    currentExprOrdinal_ = static_cast<int32_t>(i);
+    auto* node = nodes[i];
+    if (node->target() == "prim.Input" || placed_.count(node)) {
+      continue;
+    }
+    if (node->target() == "prim.ListUnpack") {
+      auto* listValue = node->inputs()[0].value;
+      auto* producer = listValue->producer();
+      // A prim.listunpack over a fused op is a no-op. Mark the unpack placed
+      // and defer its producer: it is generated on its own only if nothing else
+      // pulls it into a kernel (see the cleanup pass below).
+      if (producer) {
+        auto* producerMeta = Registry::metadata(producer->target());
+        if (producerMeta && !producerMeta->isStandalone(producer, types_)) {
+          placed_.insert(node);
+          if (!placed_.count(producer)) {
+            deferredFusedProducers.push_back(producer);
+          }
+          continue;
+        }
+      }
+    }
+    generateNode(node);
+  }
+
+  // Cleanup pass: generate any deferred fused producer that no consumer pulled
+  // into a kernel, rooted at the producer rather than the (no-op) unpack.
+  for (size_t k = 0; k < deferredFusedProducers.size(); ++k) {
+    auto* producer = deferredFusedProducers[k];
+    if (placed_.count(producer)) {
+      continue;
+    }
+    currentExprOrdinal_ = static_cast<int32_t>(nodes.size() + k);
+    generateNode(producer);
   }
   if (ops_.empty()) {
     return nullptr;

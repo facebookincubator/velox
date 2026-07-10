@@ -42,11 +42,11 @@ velox_add_library(
   ArraySum.cpp
   Comparisons.cpp
   DecimalFunctions.cpp
+  DestructureTDigest.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FindFirst.cpp
   FromUtf8.cpp
-  GooglePolylineFunctions.cpp
   InPredicate.cpp
   JsonFunctions.cpp
   Map.cpp
@@ -170,6 +170,8 @@ endif()
 
 if(VELOX_ENABLE_GEO)
   add_subdirectory(geospatial)
+
+  velox_sources(velox_functions_prestosql_impl PRIVATE GooglePolylineFunctions.cpp)
 
   # S2 cell operations are isolated in a separate library to prevent a
   # nallocx symbol conflict between s2geometry's malloc_extension.h and
