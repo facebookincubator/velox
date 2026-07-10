@@ -153,7 +153,8 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
           (BaseVector::nullCount_.value_or(0) > 0 ? 1 : 0),
       0 /* nullCount */,
       false /* sorted */,
-      sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /* representedBytes */);
 }
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER

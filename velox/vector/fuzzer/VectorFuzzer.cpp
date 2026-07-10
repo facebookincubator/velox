@@ -83,7 +83,8 @@ size_t getElementsVectorLength(
 
 int64_t randShortDecimal(const TypePtr& type, FuzzerGenerator& rng) {
   auto precision = type->asShortDecimal().precision();
-  return rand<int64_t>(rng) % DecimalUtil::kPowersOfTen[precision];
+  return rand<int64_t>(rng) %
+      static_cast<int64_t>(DecimalUtil::kPowersOfTen[precision]);
 }
 
 int128_t randLongDecimal(const TypePtr& type, FuzzerGenerator& rng) {
@@ -703,7 +704,7 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
   auto rawOffsets = offsets->asMutable<vector_size_t>();
   auto rawSizes = sizes->asMutable<vector_size_t>();
 
-  size_t containerAvgLength = std::max(elementsSize / size, 1UL);
+  size_t containerAvgLength = std::max<size_t>(elementsSize / size, 1);
   size_t childSize = 0;
   size_t length = 0;
   const auto bound = static_cast<vector_size_t>(elementsSize);
