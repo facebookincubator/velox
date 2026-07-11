@@ -1832,10 +1832,11 @@ struct CurrentTimestampFunction {
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
     Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
-    timeZone_ = getTimeZoneFromConfig(config);
-    if (timeZone_ == nullptr) {
-      VELOX_USER_FAIL("Timezone cannot be null");
-    }
+    const auto& sessionTzName = config.sessionTimezone();
+    VELOX_USER_CHECK(
+        !sessionTzName.empty(),
+        "Session timezone must be set for current_timestamp.");
+    timeZone_ = tz::locateZone(sessionTzName);
     result_ = pack(ts, timeZone_->id());
   }
 
@@ -2140,9 +2141,11 @@ struct CurrentTimeFunction {
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /* type */,
       const core::QueryConfig& config) {
-    const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
-    // Java/Presto session always provides a timezone (TimeZoneKey is required).
-    VELOX_CHECK_NOT_NULL(timeZone);
+    const auto& sessionTzName = config.sessionTimezone();
+    VELOX_USER_CHECK(
+        !sessionTzName.empty(),
+        "Session timezone must be set for current_time.");
+    const tz::TimeZone* timeZone = tz::locateZone(sessionTzName);
 
     auto sessionStartTimeMs = config.sessionStartTimeMs();
 
