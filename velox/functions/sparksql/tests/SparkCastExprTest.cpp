@@ -1219,10 +1219,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     testCast<std::string, int64_t>(
         "decimal(12, 2)", {" -3E+2"}, {-30000}, VARCHAR(), DECIMAL(12, 2));
   }
-
-  std::string zeros(uint32_t numZeros) {
-    return std::string(numZeros, '0');
-  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
