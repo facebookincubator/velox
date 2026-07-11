@@ -25,17 +25,27 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
-/// Applies the deletion bitmap to the current deletion row mask
-/// @param bitmap Deletion bitmap
-/// @param deleteMask Mutable view of deletion mask column
-/// @param stream CUDA stream to use
-/// @param temp_mr Memory resource for temporary allocations
+/// Applies a file-row deletion bitmap to the deletion mask.
+/// Bitmap's zeroth bit corresponds to `startRow`.
+///
+/// @param bitmap Deletion bitmap.
+/// @param startRow Starting bitmap row
+/// @param numRows Number of bitmap rows
+/// @param rowIndex Row index column (UINT64)
+/// @param deleteMask Mutable boolean deletion mask column
+/// @param stream CUDA stream for kernel launches
+/// @param temp_mr Device memory resource for temporary allocations
 void applyBitmapToMask(
     cudf::device_span<const cudf::bitmask_type> bitmap,
+    std::size_t startRow,
+    std::size_t numRows,
+    cudf::column_view const& rowIndex,
     cudf::mutable_column_view const& deleteMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr);

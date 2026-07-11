@@ -94,17 +94,13 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     const TypePtr& type,
     T value,
     bool isNull,
-    std::optional<cudf::type_id> toType = std::nullopt) {
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+    std::optional<cudf::type_id> toType = std::nullopt,
+    rmm::cuda_stream_view stream =
+        cudf::get_default_stream(cudf::allow_default_stream)) {
   auto mr = get_temp_mr();
 
-  // Scalars are constructed once at init time but later consumed on
-  // an arbitrary per-batch CUDA stream.  The underlying device_buffer
-  // is allocated with cudaMallocAsync on `stream`.  Without a sync
-  // the allocation may still be pending when a different stream reads
-  // the scalar, causing use-before-alloc.  Synchronising here is
-  // cheap (one-time cost per scalar) and guarantees the memory is
-  // available on every stream.
+  // Synchronize before returning as scalar construction can enqueue an
+  // asynchronous copy from the caller's host value.
   if constexpr (std::is_same_v<T, Timestamp>) {
     auto unit = CudfConfig::getInstance().timestampUnit;
     if (unit == cudf::type_id::TIMESTAMP_MICROSECONDS) {
@@ -214,11 +210,13 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
 template <TypeKind Kind>
 static std::unique_ptr<cudf::scalar> createCudfScalar(
     const velox::VectorPtr& value,
-    std::optional<cudf::type_id> toType = std::nullopt) {
+    std::optional<cudf::type_id> toType = std::nullopt,
+    rmm::cuda_stream_view stream =
+        cudf::get_default_stream(cudf::allow_default_stream)) {
   using T = typename TypeTraits<Kind>::NativeType;
   auto vector = value->as<velox::ConstantVector<T>>();
   return makeScalarFromValue<T>(
-      vector->type(), vector->value(), vector->isNullAt(0), toType);
+      vector->type(), vector->value(), vector->isNullAt(0), toType, stream);
 }
 
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
