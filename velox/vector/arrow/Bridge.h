@@ -40,7 +40,8 @@ struct ArrowOptions {
   std::optional<std::string> timestampTimeZone{std::nullopt};
   // Export VARCHAR and VARBINARY to Arrow 15 StringView format
   bool exportToStringView = false;
-  // Export VARCHAR and VARBINARY with 64-bit offsets (Arrow LargeUtf8/LargeBinary).
+  // Export VARCHAR and VARBINARY with 64-bit offsets (Arrow
+  // LargeUtf8/LargeBinary).
   bool exportToLargeVarTypes = false;
   // Export VARBINARY as UTF-8 string (for consumers that lack binary support).
   bool exportVarbinaryAsString = false;
