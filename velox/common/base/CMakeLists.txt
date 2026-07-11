@@ -83,6 +83,7 @@ velox_add_library(
   SuccinctPrinter.h
   TreeOfLosers.h
   XxHashInline.h
+  windows/BuiltinUtil.h
 )
 
 velox_link_libraries(
@@ -122,3 +123,8 @@ velox_add_library(velox_async_source INTERFACE HEADERS AsyncSource.h)
 velox_add_library(velox_lazy_cpu_thread_pool_executor INTERFACE HEADERS LazyCPUThreadPoolExecutor.h)
 
 velox_add_library(velox_exception_helper INTERFACE HEADERS ExceptionHelper.h)
+
+# Add Windows-specific glog defines
+if(WIN32)
+  velox_compile_definitions(velox_status PRIVATE GLOG_USE_GLOG_EXPORT)
+endif()

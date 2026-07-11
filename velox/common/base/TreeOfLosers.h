@@ -51,6 +51,7 @@ class MergeStream {
   /// TreeOfLosers::nextWithEquals().
   virtual int32_t compare(const MergeStream& /*other*/) const {
     VELOX_UNSUPPORTED();
+    return 0; // Unreachable, but MSVC requires a return statement
   }
 };
 
