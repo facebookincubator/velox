@@ -35,13 +35,24 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace {
 
-// Functor to apply deletion bitmap to the mask. A row is deleted if it was
-// either previously or now deleted
+// Applies bitmap membership to each row's absolute index. A row is deleted if
+// it was already deleted or if the bitmap bit is set.
 struct IsDeletedRow {
   const cudf::bitmask_type* bitmask;
+  const size_t* rowIndex;
+  std::size_t startRow;
+  std::size_t numRows;
+
   __device__ bool operator()(cudf::size_type index, bool wasDeleted)
       const noexcept {
-    return wasDeleted or cudf::bit_is_set(bitmask, index);
+    const auto row = rowIndex[index];
+    if (row < startRow) {
+      return wasDeleted;
+    }
+    const auto bitmapIndex = row - startRow;
+    return wasDeleted or
+        (bitmapIndex < numRows and
+         cudf::bit_is_set(bitmask, static_cast<cudf::size_type>(bitmapIndex)));
   }
 };
 
@@ -49,10 +60,12 @@ struct IsDeletedRow {
 
 void applyBitmapToMask(
     cudf::device_span<const cudf::bitmask_type> bitmap,
+    std::size_t startRow,
+    std::size_t numRows,
+    cudf::column_view const& rowIndex,
     cudf::mutable_column_view const& deleteMask,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr) {
-  // Alternate: Use `cudf::mask_to_bools` but it produces a new column.
   auto iter = cuda::counting_iterator{0};
   thrust::transform(
       rmm::exec_policy_nosync(stream, temp_mr),
@@ -60,7 +73,7 @@ void applyBitmapToMask(
       iter + deleteMask.size(),
       deleteMask.begin<bool>(),
       deleteMask.begin<bool>(),
-      IsDeletedRow{bitmap.data()});
+      IsDeletedRow{bitmap.data(), rowIndex.begin<size_t>(), startRow, numRows});
 }
 
 cudf::size_type countDeletedRows(
