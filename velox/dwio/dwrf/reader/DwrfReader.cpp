@@ -270,7 +270,8 @@ DwrfRowReader::DwrfRowReader(
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
       columnReaderStats_(
-          std::make_shared<dwio::common::ColumnReaderStatistics>()),
+          std::make_shared<dwio::common::ColumnReaderStatistics>(
+              dwio::common::FileFormat::DWRF)),
       currentUnit_{nullptr} {
   columnReaderStats_->initColumnStatsCollection(
       *getReader().schemaWithId(), options_);

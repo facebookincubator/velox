@@ -21,7 +21,6 @@
 #include <folly/container/F14Map.h>
 #include <type_traits>
 #include <utility>
-#include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -306,9 +305,7 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
   std::optional<int64_t> sum_;
 };
 
-/**
- * Statistics for timestamp columns.
- */
+/// Statistics for timestamp columns.
 class TimestampColumnStatistics : public virtual ColumnStatistics {
  public:
   TimestampColumnStatistics(
@@ -347,9 +344,7 @@ class TimestampColumnStatistics : public virtual ColumnStatistics {
   std::optional<Timestamp> max_;
 };
 
-/**
- * Statistics for string columns.
- */
+/// Statistics for string columns.
 class StringColumnStatistics : public virtual ColumnStatistics {
  public:
   StringColumnStatistics(
@@ -517,15 +512,23 @@ struct DecodingStatsSet {
 
 /// Collects runtime metrics produced while reading columns.
 struct ColumnReaderStatistics {
-  // Number of rows returned by string dictionary reader that is flattened
-  // instead of keeping dictionary encoding.
-  int64_t flattenStringDictionaryValues{0};
+  explicit ColumnReaderStatistics(
+      std::optional<FileFormat> format = std::nullopt)
+      : format_(format) {}
 
-  // Total time spent in loading pages, in nanoseconds.
-  io::IoCounter pageLoadTimeNs;
+  /// Returns the bound file format if set.
+  std::optional<FileFormat> format() const {
+    return format_;
+  }
 
-  // Per-column decoding statistics. Only populated when decoding stats
-  // collection is enabled.
+  /// Stores whole-reader named counters keyed by metric name.
+  ///
+  /// Use this for format-specific metrics accumulated ad hoc while reading.
+  folly::F14FastMap<std::string, RuntimeMetric> formatStats;
+
+  /// Stores per-column decode and decompress timing keyed by column node id.
+  ///
+  /// Only populated when decoding stats collection is enabled.
   std::optional<DecodingStatsSet> decodingStatsSet;
 
   /// Initializes column stats collection for the given schema if enabled in
@@ -533,6 +536,11 @@ struct ColumnReaderStatistics {
   void initColumnStatsCollection(
       const TypeWithId& schema,
       const RowReaderOptions& options);
+
+  /// Accumulates a named format-specific runtime metric.
+  void accumulateFormatStat(
+      const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+      int64_t value);
 
   /// Merges all stats from another ColumnReaderStatistics instance.
   void mergeFrom(const ColumnReaderStatistics& other);
@@ -542,6 +550,10 @@ struct ColumnReaderStatistics {
       std::unordered_map<std::string, RuntimeMetric>& result) const;
 
  private:
+  std::string formatStatName(std::string_view name) const;
+
+  std::optional<FileFormat> format_;
+
   void registerDecodingStatsImpl(const TypeWithId& node);
 };
 

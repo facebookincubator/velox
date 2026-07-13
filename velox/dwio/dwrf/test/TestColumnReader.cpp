@@ -233,7 +233,7 @@ class ColumnReaderTestBase {
 
  private:
   std::unique_ptr<common::ScanSpec> scanSpec_;
-  ColumnReaderStatistics columnReaderStatistics_;
+  ColumnReaderStatistics columnReaderStatistics_{FileFormat::DWRF};
 };
 
 struct StringReaderTestParams {

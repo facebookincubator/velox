@@ -17,12 +17,28 @@
 #include <gtest/gtest.h>
 #include <thread>
 #include <vector>
+
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
 using namespace facebook::velox::dwio::common;
 using facebook::velox::RuntimeMetric;
 using facebook::velox::TypeKind;
+
+namespace {
+
+constexpr std::string_view kExampleFormatMetricName = "exampleFormatMetric";
+
+constexpr std::pair<std::string_view, facebook::velox::RuntimeCounter::Unit>
+    kExampleFormatMetric = {
+        kExampleFormatMetricName,
+        facebook::velox::RuntimeCounter::Unit::kNone};
+
+constexpr auto kExampleFormat = FileFormat::PARQUET;
+constexpr std::string_view kExampleQualifiedFormatMetricName =
+    "parquet.exampleFormatMetric";
+
+} // namespace
 
 TEST(IoCounterTest, BasicOperations) {
   facebook::velox::io::IoCounter counter;
@@ -180,6 +196,7 @@ TEST(DecodingStatsSetTest, ToRuntimeMetricsWithDecodeTime) {
 
 TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   RuntimeStatistics stats;
+  stats.columnReaderStats = ColumnReaderStatistics{kExampleFormat};
 
   // Empty stats produces empty result.
   EXPECT_TRUE(stats.toRuntimeMetricMap().empty());
@@ -190,7 +207,7 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   stats.skippedStrides = 10;
   stats.processedStrides = 30;
   stats.numStripes = 4;
-  stats.columnReaderStats.flattenStringDictionaryValues = 1'000;
+  stats.columnReaderStats.accumulateFormatStat(kExampleFormatMetric, 1'000);
 
   // Add per-column stats with type.
   stats.columnReaderStats.decodingStatsSet.emplace();
@@ -206,11 +223,11 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   EXPECT_EQ(result["skippedStrides"].sum, 10);
   EXPECT_EQ(result["processedStrides"].sum, 30);
   EXPECT_EQ(result["numStripes"].sum, 4);
-  EXPECT_EQ(result["flattenStringDictionaryValues"].sum, 1'000);
   EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
   EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].count, 1);
   EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].sum, 12'000);
   EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result[std::string(kExampleQualifiedFormatMetricName)].sum, 1'000);
 }
 
 TEST(IoCounterTest, MergeStats) {
@@ -306,18 +323,23 @@ TEST(DecodingStatsSetTest, MergeFromEmpty) {
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromWithDecodingStats) {
-  ColumnReaderStatistics src;
-  src.flattenStringDictionaryValues = 100;
+  ColumnReaderStatistics src{kExampleFormat};
+  src.accumulateFormatStat(kExampleFormatMetric, 100);
   src.decodingStatsSet.emplace();
   src.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(1'000);
 
   // Merge into stats without decodingStatsSet - creates and populates it.
-  ColumnReaderStatistics dst;
-  dst.flattenStringDictionaryValues = 50;
+  ColumnReaderStatistics dst{kExampleFormat};
+  dst.accumulateFormatStat(kExampleFormatMetric, 50);
   dst.mergeFrom(src);
 
-  EXPECT_EQ(dst.flattenStringDictionaryValues, 150);
+  ASSERT_NE(
+      dst.formatStats.find(std::string(kExampleQualifiedFormatMetricName)),
+      dst.formatStats.end());
+  EXPECT_EQ(
+      dst.formatStats.at(std::string(kExampleQualifiedFormatMetricName)).sum,
+      150);
   ASSERT_TRUE(dst.decodingStatsSet.has_value());
 
   std::unordered_map<std::string, RuntimeMetric> result;
@@ -326,21 +348,26 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithDecodingStats) {
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromBothWithDecodingStats) {
-  ColumnReaderStatistics src;
-  src.flattenStringDictionaryValues = 100;
+  ColumnReaderStatistics src{kExampleFormat};
+  src.accumulateFormatStat(kExampleFormatMetric, 100);
   src.decodingStatsSet.emplace();
   src.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(1'000);
 
-  ColumnReaderStatistics dst;
-  dst.flattenStringDictionaryValues = 50;
+  ColumnReaderStatistics dst{kExampleFormat};
+  dst.accumulateFormatStat(kExampleFormatMetric, 50);
   dst.decodingStatsSet.emplace();
   dst.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(2'000);
 
   dst.mergeFrom(src);
 
-  EXPECT_EQ(dst.flattenStringDictionaryValues, 150);
+  ASSERT_NE(
+      dst.formatStats.find(std::string(kExampleQualifiedFormatMetricName)),
+      dst.formatStats.end());
+  EXPECT_EQ(
+      dst.formatStats.at(std::string(kExampleQualifiedFormatMetricName)).sum,
+      150);
   ASSERT_TRUE(dst.decodingStatsSet.has_value());
 
   std::unordered_map<std::string, RuntimeMetric> result;
@@ -365,18 +392,23 @@ TEST(WithDecompressStatsTest, NullCounter) {
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromWithoutDecodingStats) {
-  ColumnReaderStatistics src;
-  src.flattenStringDictionaryValues = 100;
+  ColumnReaderStatistics src{kExampleFormat};
+  src.accumulateFormatStat(kExampleFormatMetric, 100);
 
-  ColumnReaderStatistics dst;
-  dst.flattenStringDictionaryValues = 50;
+  ColumnReaderStatistics dst{kExampleFormat};
+  dst.accumulateFormatStat(kExampleFormatMetric, 50);
   dst.decodingStatsSet.emplace();
   dst.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(1'000);
 
   dst.mergeFrom(src);
 
-  EXPECT_EQ(dst.flattenStringDictionaryValues, 150);
+  ASSERT_NE(
+      dst.formatStats.find(std::string(kExampleQualifiedFormatMetricName)),
+      dst.formatStats.end());
+  EXPECT_EQ(
+      dst.formatStats.at(std::string(kExampleQualifiedFormatMetricName)).sum,
+      150);
   ASSERT_TRUE(dst.decodingStatsSet.has_value());
 
   std::unordered_map<std::string, RuntimeMetric> result;

@@ -127,9 +127,9 @@ std::string TimestampColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", min: ",
-      (min_.has_value() ? min_.value().toString() : "unknown"),
+      toStringOr(min_, kUnknown),
       ", max: ",
-      (max_.has_value() ? max_.value().toString() : "unknown"));
+      toStringOr(max_, kUnknown));
 }
 
 std::string StringColumnStatistics::toString() const {
@@ -221,6 +221,29 @@ void DecodingStatsSet::toRuntimeMetrics(
   }
 }
 
+std::string ColumnReaderStatistics::formatStatName(
+    std::string_view name) const {
+  if (!format_.has_value()) {
+    return std::string{name};
+  }
+  return fmt::format("{}.{}", FileFormatName::toName(*format_), name);
+}
+
+void ColumnReaderStatistics::accumulateFormatStat(
+    const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+    int64_t value) {
+  VELOX_CHECK(
+      format_.has_value(),
+      "ColumnReaderStatistics format must be set before accumulating format stats");
+  auto [it, inserted] = formatStats.try_emplace(formatStatName(stat.first));
+  if (inserted) {
+    it->second.unit = stat.second;
+  } else {
+    VELOX_CHECK_EQ(it->second.unit, stat.second);
+  }
+  it->second.addValue(value);
+}
+
 void ColumnReaderStatistics::initColumnStatsCollection(
     const TypeWithId& schema,
     const RowReaderOptions& options) {
@@ -232,8 +255,12 @@ void ColumnReaderStatistics::initColumnStatsCollection(
 }
 
 void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
-  flattenStringDictionaryValues += other.flattenStringDictionaryValues;
-  pageLoadTimeNs.merge(other.pageLoadTimeNs);
+  for (const auto& [name, metric] : other.formatStats) {
+    auto [it, inserted] = formatStats.emplace(name, metric);
+    if (!inserted) {
+      it->second.merge(metric);
+    }
+  }
   if (other.decodingStatsSet) {
     if (!decodingStatsSet) {
       decodingStatsSet.emplace();
@@ -244,21 +271,7 @@ void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
 
 void ColumnReaderStatistics::toRuntimeMetrics(
     std::unordered_map<std::string, RuntimeMetric>& result) const {
-  if (flattenStringDictionaryValues > 0) {
-    result.emplace(
-        "flattenStringDictionaryValues",
-        RuntimeMetric(flattenStringDictionaryValues));
-  }
-  if (pageLoadTimeNs.sum() > 0) {
-    result.emplace(
-        "pageLoadTimeNanos",
-        RuntimeMetric(
-            pageLoadTimeNs.sum(),
-            pageLoadTimeNs.count(),
-            pageLoadTimeNs.min(),
-            pageLoadTimeNs.max(),
-            RuntimeCounter::Unit::kNanos));
-  }
+  result.insert(formatStats.begin(), formatStats.end());
   if (decodingStatsSet) {
     decodingStatsSet->toRuntimeMetrics(result);
   }

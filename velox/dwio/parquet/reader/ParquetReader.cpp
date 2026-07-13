@@ -1407,7 +1407,8 @@ class ParquetRowReader::Impl {
         nextRowGroupIdsIdx_{0},
         currentRowGroupPtr_{nullptr},
         rowsInCurrentRowGroup_{0},
-        currentRowInGroup_{0} {
+        currentRowInGroup_{0},
+        columnReaderStats_{dwio::common::FileFormat::PARQUET} {
     // Validate the requested type is compatible with what's in the file
     std::function<std::string()> createExceptionContext = [&]() {
       std::string exceptionMessageContext = fmt::format(
@@ -1601,8 +1602,7 @@ class ParquetRowReader::Impl {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
     stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
-    stats.columnReaderStats.pageLoadTimeNs.merge(
-        columnReaderStats_.pageLoadTimeNs);
+    stats.columnReaderStats.mergeFrom(columnReaderStats_);
   }
 
   void resetFilterCaches() {

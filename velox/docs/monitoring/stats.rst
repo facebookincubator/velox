@@ -473,7 +473,10 @@ FileBasedDataSource
 These stats are reported by the file-based connector data source (Hive connector).
 Data stream IO stats use the stat names directly (e.g., ``storageReadBytes``).
 Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
-(e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``).
+(e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``). Reader
+format-specific stats are prefixed with the file format name
+(e.g., ``dwrf.flattenStringDictionaryValues``,
+``parquet.pageLoadTimeNs``).
 
 .. list-table::
    :widths: 50 25 50
@@ -504,13 +507,6 @@ Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
    * - numStripes
      -
      - The number of stripes read from the file.
-   * - flattenStringDictionaryValues
-     -
-     - The number of rows returned by the string dictionary reader that were
-       flattened instead of keeping dictionary encoding.
-   * - pageLoadTimeNs
-     - nanos
-     - The total time spent loading pages.
    * - numPrefetch
      -
      - The number of prefetch operations issued.
@@ -547,3 +543,10 @@ Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
        coalescing. Measures data locality on disk — smaller gaps indicate
        co-accessed columns are physically adjacent in the file. Includes
        min and max per gap.
+   * - dwrf.flattenStringDictionaryValues
+     -
+     - The number of rows returned by the DWRF string dictionary reader that
+       were flattened instead of keeping dictionary encoding.
+   * - parquet.pageLoadTimeNs
+     - nanos
+     - The total time spent loading Parquet pages.

@@ -176,7 +176,7 @@ class GetFlatValuesTest : public ::testing::Test {
 
   void SetUp() override {
     pool_ = memory::memoryManager()->addLeafPool("GetFlatValuesTest");
-    stats_ = std::make_unique<ColumnReaderStatistics>();
+    stats_ = std::make_unique<ColumnReaderStatistics>(FileFormat::DWRF);
     params_ = std::make_unique<StubFormatParams>(*pool_, *stats_);
     scanSpec_ = std::make_unique<velox::common::ScanSpec>("test");
     scanSpec_->setProjectOut(true);
