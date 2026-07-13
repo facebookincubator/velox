@@ -107,9 +107,8 @@ class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
-  // String to Boolean, Integer, or Date types support ANSI mode.
   if (fromType->isVarchar()) {
-    if (toType->isBoolean() || toType->isDate()) {
+    if (toType->isBoolean() || toType->isDate() || toType->isDecimal()) {
       return true;
     }
     if (isIntegralType(toType)) {
