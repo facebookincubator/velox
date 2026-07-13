@@ -62,7 +62,7 @@ Exchange::Exchange(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
-    std::shared_ptr<ExchangeClient> exchangeClient,
+    std::shared_ptr<DefaultExchangeClient> exchangeClient,
     std::string_view operatorType)
     : SourceOperator(
           driverCtx,
@@ -345,7 +345,7 @@ void Exchange::close() {
 
   if (exchangeClient_) {
     // Close the client before recording stats so that stats are captured
-    // from the final state. ExchangeClient::close() caches final stats
+    // from the final state. DefaultExchangeClient::close() caches final stats
     // before clearing sources.
     exchangeClient_->close();
     recordExchangeClientStats();

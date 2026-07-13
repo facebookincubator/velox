@@ -1862,7 +1862,7 @@ void Task::noMoreSplitsForGroup(
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
-  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::shared_ptr<DefaultExchangeClient> exchangeClient;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2656,7 +2656,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier taskCompletionNotifier;
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
+  std::vector<std::shared_ptr<DefaultExchangeClient>> exchangeClients;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -3741,7 +3741,7 @@ void Task::createExchangeClientLocked(
       planNodeId);
   // Low-water mark for filling the exchange queue is 1/2 of the per worker
   // buffer size of the producers.
-  exchangeClients_[pipelineId] = std::make_shared<ExchangeClient>(
+  exchangeClients_[pipelineId] = std::make_shared<DefaultExchangeClient>(
       taskId_,
       destination_,
       queryCtx()->queryConfig().maxExchangeBufferSize(),
@@ -3755,7 +3755,7 @@ void Task::createExchangeClientLocked(
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 
-std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
+std::shared_ptr<DefaultExchangeClient> Task::getExchangeClientLocked(
     const core::PlanNodeId& planNodeId) const {
   auto it = exchangeClientByPlanNode_.find(planNodeId);
   if (it == exchangeClientByPlanNode_.end()) {
@@ -3764,7 +3764,7 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return it->second;
 }
 
-std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
+std::shared_ptr<DefaultExchangeClient> Task::getExchangeClientLocked(
     int32_t pipelineId) const {
   VELOX_CHECK_LT(pipelineId, exchangeClients_.size());
   return exchangeClients_[pipelineId];

@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/ExchangeClient.h"
+#include "velox/exec/DefaultExchangeClient.h"
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 
 namespace facebook::velox::exec {
 
-void ExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
+void DefaultExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
   std::vector<RequestSpec> requestSpecs;
   std::shared_ptr<ExchangeSource> toClose;
   {
@@ -74,11 +74,11 @@ void ExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
   }
 }
 
-void ExchangeClient::noMoreRemoteTasks() {
+void DefaultExchangeClient::noMoreRemoteTasks() {
   queue_->noMoreSources();
 }
 
-void ExchangeClient::close() {
+void DefaultExchangeClient::close() {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
   std::queue<ProducingSource> producingSources;
   std::queue<std::shared_ptr<ExchangeSource>> emptySources;
@@ -105,7 +105,7 @@ void ExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() {
+folly::F14FastMap<std::string, RuntimeMetric> DefaultExchangeClient::stats() {
   std::lock_guard<std::mutex> l(queue_->mutex());
   if (stats_.empty()) {
     stats_ = collectStatsLocked();
@@ -114,7 +114,7 @@ folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() {
 }
 
 folly::F14FastMap<std::string, RuntimeMetric>
-ExchangeClient::collectStatsLocked() const {
+DefaultExchangeClient::collectStatsLocked() const {
   folly::F14FastMap<std::string, RuntimeMetric> stats;
 
   for (const auto& source : sources_) {
@@ -144,7 +144,7 @@ ExchangeClient::collectStatsLocked() const {
   return stats;
 }
 
-std::vector<std::unique_ptr<SerializedPageBase>> ExchangeClient::next(
+std::vector<std::unique_ptr<SerializedPageBase>> DefaultExchangeClient::next(
     int consumerId,
     uint32_t maxBytes,
     bool* atEnd,
@@ -181,7 +181,7 @@ std::vector<std::unique_ptr<SerializedPageBase>> ExchangeClient::next(
   return pages;
 }
 
-void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
+void DefaultExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
   auto self = shared_from_this();
   for (auto& spec : requestSpecs) {
     auto future = folly::SemiFuture<ExchangeSource::Response>::makeEmpty();
@@ -252,8 +252,8 @@ void ExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
   }
 }
 
-std::vector<ExchangeClient::RequestSpec>
-ExchangeClient::pickSourcesToRequestLocked() {
+std::vector<DefaultExchangeClient::RequestSpec>
+DefaultExchangeClient::pickSourcesToRequestLocked() {
   if (closed_) {
     return {};
   }
@@ -296,9 +296,9 @@ ExchangeClient::pickSourcesToRequestLocked() {
     //    transfer. Let the transfer happen in this case to avoid getting stuck.
     //
     // 2. We have some data in the queue that is not big enough for consumers,
-    //    and it is big enough to not allow ExchangeClient to initiate request
-    //    for more data. Let transfer happen in this case to avoid this deadlock
-    //    situation.
+    //    and it is big enough to not allow DefaultExchangeClient to initiate
+    //    request for more data. Let transfer happen in this case to avoid this
+    //    deadlock situation.
     auto& source = producingSources_.front().source;
     auto requestBytes = producingSources_.front().remainingBytes.at(0);
     LOG(INFO) << "Requesting large single page " << requestBytes
@@ -311,8 +311,8 @@ ExchangeClient::pickSourcesToRequestLocked() {
   return requestSpecs;
 }
 
-std::vector<ExchangeClient::RequestSpec>
-ExchangeClient::pickupSingleSourceToRequestLocked() {
+std::vector<DefaultExchangeClient::RequestSpec>
+DefaultExchangeClient::pickupSingleSourceToRequestLocked() {
   VELOX_CHECK_EQ(sources_.size(), 1);
   VELOX_CHECK(!closed_);
   if (emptySources_.empty() && producingSources_.empty()) {
@@ -348,11 +348,11 @@ ExchangeClient::pickupSingleSourceToRequestLocked() {
   return requestSpecs;
 }
 
-ExchangeClient::~ExchangeClient() {
+DefaultExchangeClient::~DefaultExchangeClient() {
   close();
 }
 
-std::string ExchangeClient::toString() const {
+std::string DefaultExchangeClient::toString() const {
   std::stringstream out;
   for (auto& source : sources_) {
     out << source->toString() << std::endl;
@@ -360,7 +360,7 @@ std::string ExchangeClient::toString() const {
   return out.str();
 }
 
-folly::dynamic ExchangeClient::toJson() const {
+folly::dynamic DefaultExchangeClient::toJson() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["taskId"] = taskId_;
   obj["closed"] = closed_;

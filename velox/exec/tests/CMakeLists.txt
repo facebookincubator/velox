@@ -52,7 +52,7 @@ target_link_libraries(
 #   MergeJoinTest 111s, AggregationTest 105s,
 #   DefaultOutputBufferManagerTest 98s, ScaleWriterLocalPartitionTest 96s,
 #   OrderByTest 71s, TopNRowNumberTest 64s,
-#   HashTableTest 60s, StreamingAggregationTest 58s, ExchangeClientTest 54s,
+#   HashTableTest 60s, StreamingAggregationTest 58s, DefaultExchangeClientTest 54s,
 #   RowNumberTest 42s.
 #
 # Max group ~784s (bounded by IndexLookupJoinTest.cpp).
@@ -143,7 +143,7 @@ set(
   IndexLookupJoinTestExtra.cpp
   MergeJoinTest.cpp
   ScaleWriterLocalPartitionTest.cpp
-  ExchangeClientTest.cpp
+  DefaultExchangeClientTest.cpp
   NestedLoopJoinTest.cpp
   UnorderedStreamReaderTest.cpp
   PlanNodeToStringTest.cpp
