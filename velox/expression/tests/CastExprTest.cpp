@@ -478,7 +478,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<double>::quiet_NaN(),
       },
       {
-          "12345678901234567000.0",
+          "1.2345678901234567e+19",
           "123456789.01234567",
           "10000000.0",
           "12345.0",
@@ -491,7 +491,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-12345.0",
           "-10000000.0",
           "-123456789.01234567",
-          "-12345678901234567000.0",
+          "-1.2345678901234567e+19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -520,7 +520,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<float>::quiet_NaN(),
       },
       {
-          "12345678295994466000.0",
+          "1.2345678295994466e+19",
           "123456784.0",
           "10000000.0",
           "12345.0",
@@ -533,7 +533,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-12345.0",
           "-10000000.0",
           "-123456784.0",
-          "-12345678295994466000.0",
+          "-1.2345678295994466e+19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -2311,39 +2311,39 @@ TEST_F(CastExprTest, doubleToDecimal) {
       DOUBLE(),
       DECIMAL(10, 2),
       {9999999999999999999999.99},
-      "Cannot cast DOUBLE '1E22' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+22' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast DOUBLE '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast DOUBLE '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast DOUBLE '1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast DOUBLE '-1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::max()},
-      "Cannot cast DOUBLE '1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::lowest()},
-      "Cannot cast DOUBLE '-1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<double>(std::numeric_limits<double>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
@@ -2427,33 +2427,33 @@ TEST_F(CastExprTest, realToDecimal) {
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast REAL '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast REAL '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast REAL '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast REAL '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast REAL '9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast REAL '9.999999680285692e+37' to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast REAL '-9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast REAL '-9.999999680285692e+37' to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::max()},
-      "Cannot cast REAL '3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast REAL '3.4028234663852886e+38' to DECIMAL(38, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::lowest()},
-      "Cannot cast REAL '-3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast REAL '-3.4028234663852886e+38' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<float>(std::numeric_limits<float>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
