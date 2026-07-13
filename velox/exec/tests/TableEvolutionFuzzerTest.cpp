@@ -53,6 +53,52 @@ void registerFactories(folly::Executor* ioExecutor) {
   dwrf::registerDwrfWriterFactory();
 }
 
+TableEvolutionFuzzer::Config makeDwrfConfig(
+    memory::MemoryPool* pool,
+    int evolutionCount) {
+  TableEvolutionFuzzer::Config config;
+  config.pool = pool;
+  config.columnCount = 5;
+  config.evolutionCount = evolutionCount;
+  config.formats = TableEvolutionFuzzer::parseFileFormats("dwrf");
+  return config;
+}
+
+// Constructs the fuzzer with various evolutionCount values to pin the relaxed
+// constructor assert (VELOX_CHECK_GT(evolutionCount, 0)). evolutionCount == 1
+// is the no-evolution mode (single setup, no schema evolution) and must
+// construct cleanly; evolutionCount == 0 must throw.
+TEST(TableEvolutionFuzzerTest, constructorEvolutionCountBoundary) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+
+  EXPECT_NO_THROW(
+      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1)); });
+  EXPECT_NO_THROW(
+      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 2)); });
+
+  EXPECT_THROW(
+      { TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 0)); },
+      VeloxException);
+}
+
+// Runs the fuzzer in no-evolution mode (evolutionCount == 1) for a small,
+// fixed number of deterministic iterations. This exercises the no-evolution
+// path together with filter-no-project (dropped filter-only columns) and the
+// shared flatmap-as-struct read schema end to end; the fuzzer's internal
+// pushdown-vs-FilterNode oracle is the assertion (run() throws on divergence).
+TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1));
+  fuzzer.setSeed(20260629);
+  constexpr int kIterations = 4;
+  for (int i = 0; i < kIterations; ++i) {
+    LOG(INFO) << "noEvolutionBoundedRun iteration " << i
+              << ", seed=" << fuzzer.seed();
+    EXPECT_NO_THROW(fuzzer.run());
+    fuzzer.reSeed();
+  }
+}
+
 TEST(TableEvolutionFuzzerTest, run) {
   auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
   exec::test::TableEvolutionFuzzer::Config config;

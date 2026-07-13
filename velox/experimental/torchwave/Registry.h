@@ -197,6 +197,14 @@ struct Metadata {
   /// In single-block mode the flag is ignored.
   bool multiBlockReturnBarrier{false};
 
+  /// Like multiBlockReturnBarrier, but only takes effect when the runtime
+  /// WaveConfig::scanOutputReturnBarrier toggle is enabled (passed in as the
+  /// scanOutputReturnBarrierEnabled argument to isKernelBreak). Set on scan ops
+  /// whose multi-block output is read cross-block by fused cat consumers so the
+  /// scan ends its launch and the consumer reads a materialized buffer from a
+  /// later stream-ordered launch.
+  bool scanOutputReturnBarrier{false};
+
   /// If true, the operation always uses the single block grid variant
   /// regardless of input size.
   bool alwaysSingleBlock{false};
@@ -417,7 +425,10 @@ struct Metadata {
       bool callerIsElementwise)>
       setOutputs;
 
-  bool isKernelBreak(bool isSingleBlock, bool isCgGrid = false) const {
+  bool isKernelBreak(
+      bool isSingleBlock,
+      bool isCgGrid = false,
+      bool scanOutputReturnBarrierEnabled = false) const {
     for (auto& rm : returnMeta) {
       if (rm.neededOnHost) {
         return true;
@@ -426,7 +437,8 @@ struct Metadata {
     if (isSingleBlock || isCgGrid) {
       return false;
     }
-    return multiBlockReturnBarrier;
+    return multiBlockReturnBarrier ||
+        (scanOutputReturnBarrier && scanOutputReturnBarrierEnabled);
   }
 };
 
@@ -492,6 +504,7 @@ class MetadataBuilder {
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
+  MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(

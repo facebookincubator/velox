@@ -636,7 +636,7 @@ class RowReaderOptions {
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
   // This is a bit of a hack as there is (by design) no good way
-  // To propogate information from column reader to Koski
+  // To propagate information from column reader to Koski
   std::function<void(
       facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback_;
@@ -751,6 +751,14 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Sets the per-type attribute key under which the file encodes field ids
+  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// columnMappingMode() == kFieldId.
+  ReaderOptions& setFieldIdAttributeKey(std::string key) {
+    fieldIdAttributeKey_ = std::move(key);
+    return *this;
+  }
+
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -793,6 +801,13 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the requested schema field ids for ColumnMappingMode::kFieldId.
   const std::vector<ParquetFieldId>& fieldIds() const {
     return fieldIds_;
+  }
+
+  /// Gets the per-type attribute key under which the file encodes field ids
+  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// columnMappingMode() == kFieldId.
+  const std::string& fieldIdAttributeKey() const {
+    return fieldIdAttributeKey_;
   }
 
   SerDeOptions& serDeOptions() {
@@ -991,6 +1006,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   std::vector<ParquetFieldId> fieldIds_;
+  std::string fieldIdAttributeKey_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;

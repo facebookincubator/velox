@@ -321,8 +321,7 @@ class CompositeInvocation {
       std::unique_ptr<CompositeKernel> kernel,
       std::vector<OpInvocation> ops,
       std::deque<c10::IValue> ivalueStorage,
-      int32_t sequenceNumber,
-      std::vector<Launch> prePassStandalones = {});
+      int32_t sequenceNumber);
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
@@ -382,11 +381,6 @@ class CompositeInvocation {
   std::vector<OpInvocation> ops_;
   std::deque<c10::IValue> ivalueStorage_;
   int32_t sequenceNumber_;
-
-  // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
-  // start of execute() before any kernel step, so their outputs are
-  // available for SizeExpr evaluation.
-  std::vector<Launch> prePassStandalones_;
 };
 
 /// Represents a single ProjectNode in a stack of ProjectNodes. Contains a graph

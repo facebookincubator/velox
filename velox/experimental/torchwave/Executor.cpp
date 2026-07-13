@@ -393,7 +393,8 @@ void runStandalones(
     }
 
     // Skip standalone ops with None inputs — they depend on values
-    // from later PNs and are retried by the deferred-standalones pass below.
+    // from later PNs.  The grid-standalone retry loop in executeWave will
+    // retry them after all PNs execute.
     bool hasNoneInput = false;
     for (const auto& input : actualNode->inputs()) {
       if (isUnreadyNoneDependency(input.value, *state.frame)) {
@@ -423,6 +424,7 @@ void runStandalones(
     if (isShortcut) {
       // Metadata-only op: call the typed ATen primitive directly, bypassing the
       // boxed nativert dispatch.
+      ++state.numShortcutsRun;
       runStandaloneShortcut(data, *state.frame);
     } else {
       auto kernelIt = kernelMap.find(actualNode);
@@ -433,6 +435,7 @@ void runStandalones(
       // executeNode moves cpuOnly-flagged args (e.g. tensor_split indices) to
       // CPU and restores them via a SCOPE_EXIT, so no outer swap is needed
       // here.
+      ++state.numStandalonesRun;
       executeNode(
           actualNode, kernelIt->second, *state.frame, &state.traceState);
     }
@@ -487,6 +490,7 @@ void runShortcutStandalones(
       traceFrameValues(
           "input", data.actualInputs, *state.frame, state.traceState);
     }
+    ++state.numShortcutsRun;
     runStandaloneShortcut(data, *state.frame);
     if (WaveConfig::get().trace & WaveConfig::kFrame) {
       for (auto outputId : data.actualOutputs) {
@@ -759,43 +763,75 @@ void WaveGraphExecutor::executeWave(
 
   std::vector<NodeCP> deferredStandalones;
   state.deferredStandalones = &deferredStandalones;
-
+  state.numStandalonesRun = 0;
+  state.numShortcutsRun = 0;
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
   }
-  // Run grid standalones that were skipped due to None inputs.
-  {
-    bool progress = true;
-    while (progress) {
-      progress = false;
-      for (auto* deferredNode : deferredStandalones) {
-        auto& output = frame.getIValue(deferredNode->outputs()[0]->id());
-        if (!output.isNone()) {
+
+  // Sanity check (replaces the former deferred-standalone retry pass): every
+  // standalone must have executed in place during the composite passes above.
+  // A standalone skipped for an unready-None input -- a cross-ProjectNode
+  // back-edge whose input is produced by a later composite -- is left with a
+  // None output here.  Rather than silently retrying to a fixpoint, fail
+  // loudly: such a leftover is a real scheduling gap to fix at the partitioner.
+  for (auto* deferredNode : deferredStandalones) {
+    const auto& output = frame.getIValue(deferredNode->outputs()[0]->id());
+    TORCH_CHECK(
+        !output.isNone(),
+        "wave: standalone '",
+        deferredNode->target(),
+        "' (output id ",
+        deferredNode->outputs()[0]->id(),
+        ") was deferred on a cross-ProjectNode None input and left unexecuted; "
+        "fix the ordering at scheduling time instead of relying on a runtime retry");
+  }
+  state.deferredStandalones = nullptr;
+  // Fusion-coverage summary: how much of the graph wave covered as composite
+  // (fused) / standalone / shortcut, vs. left uncovered.  The eager C10
+  // fallback has been removed, so an uncovered node (output still None after
+  // execution) is a real coverage gap to fix at the source, not a
+  // silently-absorbed leftover.  Logged once, under any --trace bit.  Placed
+  // after all deferred/grid standalones have run so the standalone and shortcut
+  // counts (incremented at their execution sites) are complete.
+  if (WaveConfig::get().trace != 0) {
+    static std::atomic<bool> fusionLogged{false};
+    if (!fusionLogged.exchange(true)) {
+      auto& graph = *waveGraph.graph();
+      int64_t uncovered = 0;
+      for (auto& gnode : graph.nodes()) {
+        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
           continue;
         }
-        auto kernelIt = state.kernelMap->find(deferredNode);
-        if (kernelIt == state.kernelMap->end()) {
-          continue;
-        }
-        bool allReady = true;
-        for (const auto& input : deferredNode->inputs()) {
-          if (isUnreadyNoneDependency(input.value, frame)) {
-            allReady = false;
+        for (auto* output : gnode.outputs()) {
+          if (frame.getIValue(output->id()).isNone()) {
+            ++uncovered;
             break;
           }
         }
-        if (allReady) {
-          executeNode(deferredNode, kernelIt->second, frame, &state.traceState);
-          progress = true;
-        }
       }
+      auto totalNodes = static_cast<int64_t>(graph.nodes().size());
+      auto numComposites = waveGraph.nodes().size();
+      int64_t numStandalones = state.numStandalonesRun;
+      int64_t numShortcuts = state.numShortcutsRun;
+      int64_t fusedNodes =
+          totalNodes - uncovered - numStandalones - numShortcuts;
+      std::cout << "FUSION: nativert_graph_nodes=" << totalNodes
+                << " wave_composite_kernels=" << numComposites
+                << " fused_nodes=" << fusedNodes
+                << " standalone_ops=" << numStandalones
+                << " shortcut_ops=" << numShortcuts
+                << " uncovered_ops=" << uncovered << " (~"
+                << (100.0 * fusedNodes / totalNodes) << "% fused, ~"
+                << (100.0 * uncovered / totalNodes) << "% uncovered)"
+                << std::endl;
     }
   }
-  state.deferredStandalones = nullptr;
   // Sync the wave stream and the PyTorch default stream: eager standalone ops
   // run on the default stream while fused kernels run on the wave stream, and
   // the two are otherwise unordered. Both must complete before executeWave
-  // returns so all results this invocation produced are visible to the caller.
+  // returns so all results this invocation produced are visible to the
+  // caller.
   state.stream->wait();
   syncTorchDefaultStream();
   auto wallUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1028,8 +1064,8 @@ std::string WaveGraphExecutor::makePerfReport(
   int64_t totalInputBytes = 0;
   int64_t totalDataBytes = 0;
   // Total reference-frame checking time (device-to-host copy + comparison).
-  // This is debug-only overhead included in the measured wall time, so subtract
-  // it to report the real e2e time.
+  // This is debug-only overhead included in the measured wall time, so
+  // subtract it to report the real e2e time.
   int64_t totalRefCheckUs = 0;
   for (const auto& meta : info.launchMeta) {
     totalDataBytes += meta.inputBytes + meta.outputBytes;
@@ -1122,8 +1158,8 @@ std::string WaveGraphExecutor::makePerfReport(
   }
 
   // Compute per-node wall times. Within a step the fused kernel (wave stream)
-  // and the eager standalones (default stream) run concurrently, so the step's
-  // wall is interpretation plus the larger of the two, not their sum.
+  // and the eager standalones (default stream) run concurrently, so the
+  // step's wall is interpretation plus the larger of the two, not their sum.
   std::vector<std::pair<int32_t, int64_t>> nodeWallTimes;
   // Track which sequence numbers have kernel launches.
   std::set<int32_t> nodesWithLaunches;
@@ -1234,8 +1270,8 @@ std::string WaveGraphExecutor::makePerfReport(
         ss << fmt::format(
             " standalone={}{}", m.standaloneUs, m.standaloneBound ? "*" : "");
       }
-      // Op-target breakdown covers both standalone and shortcut lists; print it
-      // whenever either ran.
+      // Op-target breakdown covers both standalone and shortcut lists; print
+      // it whenever either ran.
       if (m.standaloneUs > 0 || m.shortcutUs > 0) {
         ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx);
       }

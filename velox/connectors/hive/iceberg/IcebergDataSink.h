@@ -27,6 +27,10 @@
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
+#ifdef VELOX_ENABLE_NIMBLE
+#include "velox/connectors/hive/iceberg/fb/IcebergNimbleStatsCollector.h"
+#endif
+
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"

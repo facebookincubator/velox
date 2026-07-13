@@ -1660,7 +1660,7 @@ template class TimeType<TimePrecision::kMicroseconds, false>;
 
 // static
 TypePtr TimeTypeFactory::deserialize(const folly::dynamic& obj) {
-  // Default to millseconds and local time for backward compatibility.
+  // Default to milliseconds and local time for backward compatibility.
   auto precision = obj.get_ptr("precision")
       ? static_cast<TimePrecision>(obj["precision"].asInt())
       : TimePrecision::kMilliseconds;

@@ -145,17 +145,23 @@ function get_cxx_flags {
     ARM_CPU_FILE="/sys/devices/system/cpu/cpu0/regs/identification/midr_el1"
 
     # https://gitlab.arm.com/telemetry-solution/telemetry-solution/-/blob/main/data/pmu/cpu/neoverse/neoverse-n1.json#L13
-    # N1:d0c; N2:d49; V1:d40;
+    # N1:d0c; N2:d49; V1:d40; V2:d4f;
     Neoverse_N1="d0c"
     Neoverse_N2="d49"
     Neoverse_V1="d40"
     Neoverse_V2="d4f"
+    Nvidia_Implementer="4e"
+    Nvidia_Olympus="010"
     if [ -f "$ARM_CPU_FILE" ] && [ "$ARM_BUILD_TARGET" = "local" ]; then
       hex_ARM_CPU_DETECT=$(cat $ARM_CPU_FILE)
+      # Implementer, [31:24]: The CPU implementer such as Arm or NVIDIA.
+      ARM_CPU_IMPLEMENTER=${hex_ARM_CPU_DETECT: -8:2}
       # PartNum, [15:4]: The primary part number such as Neoverse N1/N2 core.
       ARM_CPU_PRODUCT=${hex_ARM_CPU_DETECT: -4:3}
 
-      if [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
+      if [ "$ARM_CPU_IMPLEMENTER" = "$Nvidia_Implementer" ] && [ "$ARM_CPU_PRODUCT" = "$Nvidia_Olympus" ]; then
+        echo -n "-mcpu=olympus "
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N1" ]; then
         echo -n "-mcpu=neoverse-n1 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
         echo -n "-mcpu=neoverse-n2 "
