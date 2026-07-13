@@ -878,6 +878,18 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  /// If true, Nimble reads use DirectBufferedInput, which loads each stream
+  /// quantum-by-quantum (loadQuantum-sized) on demand instead of fetching the
+  /// whole stream up front. When false, Nimble uses BufferedInput and fetches
+  /// each stream in one piece.
+  bool nimbleDirectBufferedInputEnabled() const {
+    return nimbleDirectBufferedInputEnabled_;
+  }
+
+  void setNimbleDirectBufferedInputEnabled(bool value) {
+    nimbleDirectBufferedInputEnabled_ = value;
+  }
+
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
@@ -1020,6 +1032,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool nimbleDirectBufferedInputEnabled_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};
