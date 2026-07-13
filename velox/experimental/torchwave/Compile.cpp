@@ -2167,11 +2167,19 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   }
   auto compositeKernel = std::make_unique<CompositeKernel>(
       std::move(opStorage_), std::move(kernelOpStorage_), includes_);
+  // Values whose last use is in this node (graph outputs already excluded);
+  // WaveConfig::freeIntermediates releases their frame tensors after execute().
+  std::vector<nativert::ValueId> lastUseIds;
+  lastUseIds.reserve(project.lastUse.size());
+  for (auto* value : project.lastUse) {
+    lastUseIds.push_back(value->id());
+  }
   auto invocation = std::make_unique<CompositeInvocation>(
       std::move(compositeKernel),
       std::move(ops_),
       std::move(ivalueStorage_),
-      waveGraph_.nextCompositeInvocationId());
+      waveGraph_.nextCompositeInvocationId(),
+      std::move(lastUseIds));
   placed_.insert(nodes.begin(), nodes.end());
   return std::make_unique<CompiledNode>(std::move(invocation));
 }

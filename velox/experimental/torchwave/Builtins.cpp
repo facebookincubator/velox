@@ -113,6 +113,11 @@ nativert::Node* makeCumsumVariant(NodeCP single, WaveGraph* waveGraph) {
   if (dimAttr) {
     finalNode->addAttribute({dimAttr->name, std::get<int64_t>(dimAttr->value)});
   }
+  // The op input feeds both head and final, and the head counts feed both
+  // add_sizes and final: each is consumed by more than one part of this
+  // expansion, so it must not be freed as a per-op intermediate.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -139,6 +144,10 @@ nativert::Node* makeExclusiveSumVariant(NodeCP single, WaveGraph* waveGraph) {
        {"counts", headOutput},
        {"link", addSizesOutput}});
   finalNode->addAttribute({"dtype", dtypeStr});
+  // Consumed by more than one part of this expansion (input by head+final,
+  // counts by add_sizes+final); keep out of the freeable intermediates.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -164,6 +173,12 @@ nativert::Node* makeMaskedSelectVariant(NodeCP single, WaveGraph* waveGraph) {
        {"mask", single->inputs()[1].value},
        {"counts", headOutput},
        {"total", addSizesOutput}});
+  // input, mask and counts are each consumed by more than one part of this
+  // expansion (input/mask by head+final, counts by add_sizes+final); keep them
+  // out of the freeable intermediates.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[1].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }

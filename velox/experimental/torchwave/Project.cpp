@@ -45,6 +45,8 @@ std::string ProjectNode::toString(
   opts.graph = &graph;
   opts.valueTypes = valueTypes;
   opts.showTypes = valueTypes != nullptr;
+  // Drives the '&' annotation on operands that are a reusable last use here.
+  opts.projectNode = this;
   NodePrinter printer(opts);
 
   std::stringstream ss;
@@ -60,6 +62,23 @@ std::string ProjectNode::toString(
       printer.printOutputIds(ss, nodes_[i]);
       ss << " = " << printer.print(nodes_[i]) << "\n";
     }
+  }
+  // Values whose last use is in this node but that are not exclusively consumed
+  // by a single expr: their buffers may be released after the node runs, but
+  // cannot be reused in place by one op (unlike reusableValues_, flagged '&').
+  std::vector<int32_t> releasable;
+  for (auto* value : lastUse) {
+    if (value != nullptr && !isReusableInput(value)) {
+      releasable.push_back(value->id());
+    }
+  }
+  if (!releasable.empty()) {
+    std::sort(releasable.begin(), releasable.end());
+    ss << "  May release ";
+    for (size_t i = 0; i < releasable.size(); ++i) {
+      ss << (i > 0 ? ", " : "") << "%" << releasable[i];
+    }
+    ss << "\n";
   }
   if (input_ != nullptr) {
     ss << fmt::format("  input: ProjectNode {}\n", input_->id());
