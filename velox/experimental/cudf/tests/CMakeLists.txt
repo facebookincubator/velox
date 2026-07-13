@@ -201,6 +201,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_null_mask_test
+  SOURCES Main.cpp NullMaskTest.cpp
+  LIBS velox_cudf_expression cudf::cudf
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_order_by_test
   SOURCES Main.cpp OrderByTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
