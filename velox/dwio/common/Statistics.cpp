@@ -19,6 +19,21 @@
 #include <fmt/format.h>
 
 namespace facebook::velox::dwio::common {
+namespace {
+
+constexpr std::string_view kUnknown = "unknown";
+
+template <typename T>
+std::string toStringOr(
+    const std::optional<T>& value,
+    std::string_view fallback) {
+  if (value.has_value()) {
+    return folly::to<std::string>(*value);
+  }
+  return std::string{fallback};
+}
+
+} // namespace
 
 bool KeyInfo::operator==(const KeyInfo& other) const {
   return intKey == other.intKey && bytesKey == other.bytesKey;
@@ -27,7 +42,8 @@ bool KeyInfo::operator==(const KeyInfo& other) const {
 std::string KeyInfo::toString() const {
   if (intKey.has_value()) {
     return folly::to<std::string>(*intKey);
-  } else if (bytesKey.has_value()) {
+  }
+  if (bytesKey.has_value()) {
     return *bytesKey;
   }
   VELOX_UNREACHABLE("Illegal null key info");
@@ -36,7 +52,8 @@ std::string KeyInfo::toString() const {
 size_t KeyInfoHash::operator()(const KeyInfo& keyInfo) const {
   if (keyInfo.intKey.has_value()) {
     return folly::Hash{}(*keyInfo.intKey);
-  } else if (keyInfo.bytesKey.has_value()) {
+  }
+  if (keyInfo.bytesKey.has_value()) {
     return folly::Hash{}(*keyInfo.bytesKey);
   }
   VELOX_UNREACHABLE("Illegal null key info");
@@ -54,70 +71,75 @@ bool ColumnStatistics::isAllNull() const {
 std::string ColumnStatistics::toString() const {
   return folly::to<std::string>(
       "RawSize: ",
-      (rawSize_ ? folly::to<std::string>(rawSize_.value()) : "unknown"),
+      toStringOr(rawSize_, kUnknown),
       ", Size: ",
-      (size_ ? folly::to<std::string>(size_.value()) : "unknown"),
+      toStringOr(size_, kUnknown),
       ", Values: ",
-      (valueCount_ ? folly::to<std::string>(valueCount_.value()) : "unknown"),
+      toStringOr(valueCount_, kUnknown),
       ", hasNull: ",
-      (hasNull_ ? (hasNull_.value() ? "yes" : "no") : "unknown"));
+      (hasNull_ ? (hasNull_.value() ? "yes" : "no") : kUnknown));
 }
 
 std::string BinaryColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", Length: ",
-      (length_.has_value() ? folly::to<std::string>(length_.value())
-                           : "unknown"));
+      toStringOr(length_, kUnknown));
 }
 
 std::optional<uint64_t> BooleanColumnStatistics::getFalseCount() const {
   auto valueCount = getNumberOfValues();
   return trueCount_.has_value() && valueCount.has_value()
-      ? valueCount.value() - trueCount_.value()
-      : std::optional<uint64_t>();
+      ? std::optional{valueCount.value() - trueCount_.value()}
+      : std::nullopt;
 }
 
 std::string BooleanColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", trueCount: ",
-      (trueCount_.has_value() ? folly::to<std::string>(trueCount_.value())
-                              : "unknown"));
+      toStringOr(trueCount_, kUnknown));
 }
 
 std::string DoubleColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", min: ",
-      (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
+      toStringOr(min_, kUnknown),
       ", max: ",
-      (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"),
+      toStringOr(max_, kUnknown),
       ", sum: ",
-      (sum_.has_value() ? folly::to<std::string>(sum_.value()) : "unknown"));
+      toStringOr(sum_, kUnknown));
 }
 
 std::string IntegerColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", min: ",
-      (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
+      toStringOr(min_, kUnknown),
       ", max: ",
-      (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"),
+      toStringOr(max_, kUnknown),
       ", sum: ",
-      (sum_.has_value() ? folly::to<std::string>(sum_.value()) : "unknown"));
+      toStringOr(sum_, kUnknown));
+}
+std::string TimestampColumnStatistics::toString() const {
+  return folly::to<std::string>(
+      ColumnStatistics::toString(),
+      ", min: ",
+      (min_.has_value() ? min_.value().toString() : "unknown"),
+      ", max: ",
+      (max_.has_value() ? max_.value().toString() : "unknown"));
 }
 
 std::string StringColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", min: ",
-      min_.value_or("unknown"),
+      toStringOr(min_, kUnknown),
       ", max: ",
-      max_.value_or("unknown"),
+      toStringOr(max_, kUnknown),
       ", length: ",
-      (length_.has_value() ? folly::to<std::string>(length_.value())
-                           : "unknown"));
+      toStringOr(length_, kUnknown));
 }
 
 std::string MapColumnStatistics::toString() const {

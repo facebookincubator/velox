@@ -35,16 +35,17 @@
 
 namespace facebook::velox::dwio::common {
 
-// Common base for writer version information used in interpreting
-// metadata. Needed to have format-independent signatures for
-// format-specific functions. Each format implementation downcasts this to the
-// format-specific metadata.
+/// Provides a common base for writer version information used when
+/// interpreting metadata.
+///
+/// Enables format-independent function signatures while allowing each format
+/// implementation to downcast to its specific metadata context.
 struct StatsContext {
   virtual ~StatsContext() = default;
 };
 
+/// Encodes either an integer or string flat-map key.
 struct KeyInfo {
- public:
   explicit KeyInfo(int64_t intKey)
       : intKey{std::make_optional<int64_t>(intKey)} {}
   explicit KeyInfo(const std::string& bytesKey)
@@ -60,15 +61,14 @@ struct KeyInfo {
   KeyInfo() {}
 };
 
+/// Hashes a `KeyInfo` using the active key variant.
 struct KeyInfoHash {
   KeyInfoHash() = default;
 
   size_t operator()(const KeyInfo& keyInfo) const;
 };
 
-/**
- * Statistics that are available for all types of columns.
- */
+/// Statistics that are available for all types of columns.
 class ColumnStatistics {
  public:
   ColumnStatistics(
@@ -85,53 +85,45 @@ class ColumnStatistics {
 
   virtual ~ColumnStatistics() = default;
 
-  /**
-   * Get the number of values in this column. It will differ from the number
-   * of rows because of NULL values and repeated (list/map) values.
-   */
+  /// Get the number of values in this column. It will differ from the number
+  /// of rows because of NULL values and repeated (list/map) values.
   std::optional<uint64_t> getNumberOfValues() const {
     return valueCount_;
   }
 
-  /**
-   * Get whether column has null value.
-   *
-   * WARNING: Some writer implementation does not take ancestor nulls into
-   * account, so this value should not be trusted.  Check whether
-   * `getNumberOfValues()' is smaller than the row group size is a more accurate
-   * way.
-   */
+  /// Get whether column has null value.
+  ///
+  /// WARNING: Some writer implementation does not take ancestor nulls into
+  /// account, so this value should not be trusted. Check whether
+  /// `getNumberOfValues()` is smaller than the row group size for a more
+  /// accurate signal.
   std::optional<bool> hasNull() const {
     return hasNull_;
   }
 
-  /**
-   * Get uncompressed size of all data including child
-   */
+  /// Get uncompressed size of all data including child columns.
   std::optional<uint64_t> getRawSize() const {
     return rawSize_;
   }
 
-  /**
-   * Get total length of all streams including child.
-   */
+  /// Get total length of all streams including child columns.
   std::optional<uint64_t> getSize() const {
     return size_;
   }
 
+  /// Returns the number of distinct values when available.
   std::optional<uint64_t> numDistinct() const {
     return numDistinct_;
   }
 
+  /// Sets the distinct-value count once when the writer provides it.
   void setNumDistinct(int64_t count);
 
   /// Returns true if there are no non-null values (value count is known to be
   /// zero).
   bool isAllNull() const;
 
-  /**
-   * return string representation of this stats object
-   */
+  /// Return string representation of this stats object.
   virtual std::string toString() const;
 
  protected:
@@ -144,9 +136,7 @@ class ColumnStatistics {
   std::optional<uint64_t> numDistinct_;
 };
 
-/**
- * Statistics for binary columns.
- */
+/// Statistics for binary columns.
 class BinaryColumnStatistics : public virtual ColumnStatistics {
  public:
   BinaryColumnStatistics(
@@ -164,9 +154,7 @@ class BinaryColumnStatistics : public virtual ColumnStatistics {
 
   ~BinaryColumnStatistics() override = default;
 
-  /**
-   * get optional total length
-   */
+  /// Get optional total length.
   std::optional<uint64_t> getTotalLength() const {
     return length_;
   }
@@ -179,9 +167,7 @@ class BinaryColumnStatistics : public virtual ColumnStatistics {
   std::optional<uint64_t> length_;
 };
 
-/**
- * Statistics for boolean columns.
- */
+/// Statistics for boolean columns.
 class BooleanColumnStatistics : public virtual ColumnStatistics {
  public:
   BooleanColumnStatistics(
@@ -200,16 +186,12 @@ class BooleanColumnStatistics : public virtual ColumnStatistics {
 
   ~BooleanColumnStatistics() override = default;
 
-  /*
-   * get optional true count
-   */
+  /// Get optional true count.
   std::optional<uint64_t> getTrueCount() const {
     return trueCount_;
   }
 
-  /*
-   * get optional false count
-   */
+  /// Get optional false count.
   std::optional<uint64_t> getFalseCount() const;
 
   std::string toString() const override;
@@ -220,9 +202,7 @@ class BooleanColumnStatistics : public virtual ColumnStatistics {
   std::optional<uint64_t> trueCount_;
 };
 
-/**
- * Statistics for float and double columns.
- */
+/// Statistics for float and double columns.
 class DoubleColumnStatistics : public virtual ColumnStatistics {
  public:
   DoubleColumnStatistics(
@@ -247,25 +227,19 @@ class DoubleColumnStatistics : public virtual ColumnStatistics {
 
   ~DoubleColumnStatistics() override = default;
 
-  /**
-   * Get optional smallest value in the column. Only defined if
-   * getNumberOfValues is non-zero.
-   */
+  /// Get optional smallest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<double> getMinimum() const {
     return min_;
   }
 
-  /**
-   * Get optional largest value in the column. Only defined if getNumberOfValues
-   * is non-zero.
-   */
+  /// Get optional largest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<double> getMaximum() const {
     return max_;
   }
 
-  /**
-   * Get optional sum of the values in the column.
-   */
+  /// Get optional sum of the values in the column.
   std::optional<double> getSum() const {
     return sum_;
   }
@@ -280,10 +254,7 @@ class DoubleColumnStatistics : public virtual ColumnStatistics {
   std::optional<double> sum_;
 };
 
-/**
- * Statistics for all of the integer columns, such as byte, short, int, and
- * long.
- */
+/// Statistics for all integer columns, such as byte, short, int, and long.
 class IntegerColumnStatistics : public virtual ColumnStatistics {
  public:
   IntegerColumnStatistics(
@@ -308,26 +279,20 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
 
   ~IntegerColumnStatistics() override = default;
 
-  /**
-   * Get optional smallest value in the column. Only defined if
-   * getNumberOfValues is non-zero.
-   */
+  /// Get optional smallest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<int64_t> getMinimum() const {
     return min_;
   }
 
-  /**
-   * Get optional largest value in the column. Only defined if getNumberOfValues
-   * is non-zero.
-   */
+  /// Get optional largest value in the column. Only defined if
+  /// `getNumberOfValues()` is non-zero.
   std::optional<int64_t> getMaximum() const {
     return max_;
   }
 
-  /**
-   * Get optional sum of the column. Only valid if getNumberOfValues is non-zero
-   * and sum doesn't overflow
-   */
+  /// Get optional sum of the column. Only valid if `getNumberOfValues()` is
+  /// non-zero and the sum does not overflow.
   std::optional<int64_t> getSum() const {
     return sum_;
   }
@@ -374,14 +339,7 @@ class TimestampColumnStatistics : public virtual ColumnStatistics {
     return max_;
   }
 
-  std::string toString() const override {
-    return folly::to<std::string>(
-        ColumnStatistics::toString(),
-        ", min: ",
-        (min_.has_value() ? min_.value().toString() : "unknown"),
-        ", max: ",
-        (max_.has_value() ? max_.value().toString() : "unknown"));
-  }
+  std::string toString() const override;
 
  protected:
   TimestampColumnStatistics() {}
@@ -417,23 +375,17 @@ class StringColumnStatistics : public virtual ColumnStatistics {
 
   ~StringColumnStatistics() override = default;
 
-  /**
-   * Get optional minimum value for the column.
-   */
+  /// Get optional minimum value for the column.
   const std::optional<std::string>& getMinimum() const {
     return min_;
   }
 
-  /**
-   * Get optional maximum value for the column.
-   */
+  /// Get optional maximum value for the column.
   const std::optional<std::string>& getMaximum() const {
     return max_;
   }
 
-  /**
-   * Get optional total length of all values.
-   */
+  /// Get optional total length of all values.
   std::optional<uint64_t> getTotalLength() const {
     return length_;
   }
@@ -448,9 +400,7 @@ class StringColumnStatistics : public virtual ColumnStatistics {
   std::optional<uint64_t> length_;
 };
 
-/**
- * Statistics for (flat) map columns.
- */
+/// Statistics for (flat) map columns.
 class MapColumnStatistics : public virtual ColumnStatistics {
  public:
   MapColumnStatistics(
@@ -488,21 +438,15 @@ class MapColumnStatistics : public virtual ColumnStatistics {
       entryStatistics_;
 };
 
+/// Exposes column statistics for a file or row group.
 class Statistics {
  public:
   virtual ~Statistics() = default;
 
-  /**
-   * Get the statistics of the given column.
-   * @param colId id of the column
-   * @return one column's statistics
-   */
+  /// Get the statistics of the given column.
   virtual const ColumnStatistics& getColumnStatistics(uint32_t colId) const = 0;
 
-  /**
-   * Get the number of columns
-   * @return the number of columns
-   */
+  /// Get the number of columns.
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
@@ -574,6 +518,7 @@ struct DecodingStatsSet {
       map_;
 };
 
+/// Collects runtime metrics produced while reading columns.
 struct ColumnReaderStatistics {
   // Number of rows returned by string dictionary reader that is flattened
   // instead of keeping dictionary encoding.
@@ -603,6 +548,7 @@ struct ColumnReaderStatistics {
   void registerDecodingStatsImpl(const TypeWithId& node);
 };
 
+/// Aggregates runtime statistics collected while processing a split.
 struct RuntimeStatistics {
   // Number of splits skipped based on statistics.
   int64_t skippedSplits{0};
@@ -619,12 +565,16 @@ struct RuntimeStatistics {
   // Number of strides (row groups) processed based on statistics.
   int64_t processedStrides{0};
 
+  // Records extra bytes read past the ideal footer size.
   int64_t footerBufferOverread{0};
 
+  // Records missing bytes relative to the ideal footer size.
   int64_t footerBufferUnderread{0};
 
+  // Counts footer cache hits.
   int64_t footerCacheHit{0};
 
+  // Counts stripes observed in the file.
   int64_t numStripes{0};
 
   // Estimated bytes reported to the memory pool for the deserialized
@@ -634,9 +584,12 @@ struct RuntimeStatistics {
   // tracking (e.g. footer below threshold or non-parquet format).
   int64_t parquetFooterEstimatedBytes{0};
 
+  // Stores unit-loader runtime metrics.
   UnitLoaderStats unitLoaderStats;
+  // Stores reader-side column runtime metrics.
   ColumnReaderStatistics columnReaderStats;
 
+  // Exports collected counters as runtime metrics.
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;
 };
 
