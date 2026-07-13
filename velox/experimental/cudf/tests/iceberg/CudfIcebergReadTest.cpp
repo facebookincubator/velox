@@ -1607,7 +1607,8 @@ TEST_F(CudfIcebergReadTest, positionalDeleteFileWithRowGroupFilter) {
                   makeContinuousIncreasingValues(100, 200))}),
           makeRowVector(
               {"id"},
-              {makeFlatVector<int64_t>(makeContinuousIncreasingValues(0, 100))}),
+              {makeFlatVector<int64_t>(
+                  makeContinuousIncreasingValues(0, 100))}),
           makeRowVector(
               {"id"},
               {makeFlatVector<int64_t>(
