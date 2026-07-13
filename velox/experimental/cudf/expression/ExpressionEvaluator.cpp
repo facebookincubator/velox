@@ -2113,12 +2113,14 @@ bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
+  registry[name].push_back(
+      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)});
   return true;
 }
 
@@ -2126,9 +2128,10 @@ void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   for (const auto& name : aliases) {
-    registerCudfFunction(name, factory, signatures, overwrite);
+    registerCudfFunction(name, factory, signatures, overwrite, canEvaluate);
   }
 }
 
@@ -2145,6 +2148,9 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     // the special case of cast.
     if (!spec.signatures.empty() &&
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
+    }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
     return spec.factory(name, expr);
@@ -2930,6 +2936,9 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
       continue;
     }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+      continue;
+    }
     return true;
   }
   return false;
@@ -2937,6 +2946,7 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   ensureBuiltinExpressionEvaluatorsRegistered();
+
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;
