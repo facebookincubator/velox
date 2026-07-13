@@ -81,6 +81,49 @@ class ParquetWriterTest : public ParquetTestBase {
     return data;
   }
 
+  // Builds a dictionary column of 'size' rows over 'values', mapping each row
+  // to values[indexAt(row)], optionally applying a null buffer.
+  VectorPtr makeDictionaryColumn(
+      vector_size_t size,
+      const VectorPtr& values,
+      std::function<vector_size_t(vector_size_t)> indexAt,
+      BufferPtr nulls = nullptr) {
+    return BaseVector::wrapInDictionary(
+        std::move(nulls), makeIndices(size, std::move(indexAt)), size, values);
+  }
+
+  // Returns a flattened copy of 'vector'. Parquet always reads back flat, so
+  // the flattened input is the expected round-trip output.
+  static VectorPtr flatten(const VectorPtr& vector) {
+    VectorPtr flat = vector;
+    BaseVector::flattenVector(flat);
+    return flat;
+  }
+
+  // Writes single-batch 'data' and verifies it round-trips to 'expected'.
+  void assertRoundTrip(
+      const RowVectorPtr& data,
+      const RowVectorPtr& expected,
+      const ParquetWriterOptions& writerOptions = {}) {
+    auto schema = asRowType(data->type());
+    auto* sinkPtr = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sinkPtr);
+    ASSERT_EQ(reader->numberOfRows(), data->size());
+    auto rowReader = createRowReaderFromReader(*reader, schema);
+    assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  }
+
+  // Writes 'data' and verifies it round-trips, using the flattened form of each
+  // column as the expected output.
+  void assertFlattenedRoundTrip(const RowVectorPtr& data) {
+    std::vector<VectorPtr> expectedChildren;
+    expectedChildren.reserve(data->children().size());
+    for (const auto& child : data->children()) {
+      expectedChildren.push_back(flatten(child));
+    }
+    assertRoundTrip(data, makeRowVector(expectedChildren));
+  }
+
   thrift::PageHeader readPageHeader(
       MemorySink* sinkPtr,
       int64_t offsetFromDataPage) {
@@ -184,6 +227,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
       {"hive.parquet.writer.enable-dictionary", "true"},
       {"hive.parquet.writer.page-size", "2KB"},
       {"hive.parquet.writer.created-by", "test-writer"},
+      {"hive.parquet.writer.enable-parallel-write", "true"},
       {"iceberg.parquet.writer.page-size", "4KB"},
   });
   config::ConfigBase session({
@@ -205,6 +249,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   EXPECT_EQ(parquetOptions->dataPageSize.value(), 2 * 1024);
   EXPECT_EQ(parquetOptions->batchSize.value(), 97);
   EXPECT_EQ(parquetOptions->createdBy.value(), "test-writer");
+  EXPECT_TRUE(parquetOptions->enableParallelWrite);
 
   config::ConfigBase icebergConnectorConfig(
       rawConnectorConfig.rawConfigsWithPrefix("iceberg.parquet."));
@@ -1182,32 +1227,11 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharLowCardinality) {
   auto dictionary = makeFlatVector<StringView>(
       kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
 
-  // Index buffer pointing into the dictionary.
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i % kDictSize;
-  }
-
-  auto dictVector = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
+  auto dictVector = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
   ASSERT_EQ(dictVector->encoding(), VectorEncoding::Simple::DICTIONARY);
 
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  // Build expected output as a flat vector (Parquet always reads back flat).
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
 }
 
 /// Verifies round-trip correctness with high-cardinality VARCHAR dictionary
@@ -1224,101 +1248,37 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughVarcharHighCardinality) {
   auto dictionary = makeFlatVector<StringView>(
       kSize, [&](auto row) { return StringView(dictStrings[row]); });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i;
-  }
+  auto dictVector =
+      makeDictionaryColumn(kSize, dictionary, [](auto row) { return row; });
 
-  auto dictVector = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
-
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
 }
 
-/// Verifies that DictionaryVector<INTEGER> (non-string type) round-trips
-/// correctly.  The Arrow Parquet writer's dictionaryDirectWriteSupported()
-/// only supports binary-like types for direct dict write, so integer
-/// dictionaries should fall back to dense encoding internally.
-TEST_F(ParquetWriterTest, dictionaryPassthroughInteger) {
+/// Verifies that dictionary-encoded non-string primitive columns (INTEGER,
+/// BIGINT, DOUBLE, BOOLEAN) round-trip correctly. These share the same
+/// non-VARCHAR/VARBINARY path: childNeedsFlatten() forces flattening because
+/// Arrow's Parquet writer only supports dictionary passthrough for binary-like
+/// scalar types.
+TEST_F(ParquetWriterTest, dictionaryNonStringPrimitivesFlatten) {
   constexpr vector_size_t kSize = 10'000;
-  constexpr int kDictSize = 50;
 
-  auto dictionary =
-      makeFlatVector<int32_t>(kDictSize, [](auto row) { return row * 7; });
+  auto intDict = makeFlatVector<int32_t>(50, [](auto row) { return row * 7; });
+  auto bigintDict = makeFlatVector<int64_t>(
+      100, [](auto row) { return static_cast<int64_t>(row) * 1'000'000; });
+  auto doubleDict =
+      makeFlatVector<double>(10, [](auto row) { return row * 1.5; });
+  auto boolDict = makeFlatVector<bool>(2, [](auto row) { return row == 1; });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i % kDictSize;
-  }
-
-  auto dictVector = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
-
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
-}
-
-/// Verifies that DictionaryVector<BIGINT> round-trips correctly and that the
-/// data is identical whether dictionary encoding or plain encoding is used in
-/// the Parquet file.
-TEST_F(ParquetWriterTest, dictionaryPassthroughBigint) {
-  constexpr vector_size_t kSize = 5'000;
-  constexpr int kDictSize = 100;
-
-  auto dictionary = makeFlatVector<int64_t>(kDictSize, [](auto row) {
-    return static_cast<int64_t>(row) * 1'000'000;
+  auto data = makeRowVector({
+      makeDictionaryColumn(kSize, intDict, [](auto row) { return row % 50; }),
+      makeDictionaryColumn(
+          kSize, bigintDict, [](auto row) { return row % 100; }),
+      makeDictionaryColumn(
+          kSize, doubleDict, [](auto row) { return row % 10; }),
+      makeDictionaryColumn(kSize, boolDict, [](auto row) { return row % 2; }),
   });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i % kDictSize;
-  }
-
-  auto dictVector = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
-
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(data);
 }
 
 /// Verifies that writing multiple batches with changing dictionaries works
@@ -1339,15 +1299,8 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
     auto dictionary = makeFlatVector<StringView>(
         kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
 
-    BufferPtr indices =
-        AlignedBuffer::allocate<vector_size_t>(kBatchSize, leafPool_.get());
-    auto rawIndices = indices->asMutable<vector_size_t>();
-    for (vector_size_t i = 0; i < kBatchSize; ++i) {
-      rawIndices[i] = i % kDictSize;
-    }
-
-    auto dictVector = BaseVector::wrapInDictionary(
-        BufferPtr(nullptr), indices, kBatchSize, dictionary);
+    auto dictVector = makeDictionaryColumn(
+        kBatchSize, dictionary, [](auto row) { return row % kDictSize; });
     batches.push_back(makeRowVector({dictVector}));
   }
 
@@ -1390,33 +1343,15 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughWithNulls) {
   auto dictionary = makeFlatVector<StringView>(
       kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i % kDictSize;
-  }
-
   // Every 3rd element is null.
-  auto nulls = makeNulls(kSize, [](auto row) { return row % 3 == 0; });
-
-  auto dictVector =
-      BaseVector::wrapInDictionary(nulls, indices, kSize, dictionary);
+  auto dictVector = makeDictionaryColumn(
+      kSize,
+      dictionary,
+      [](auto row) { return row % kDictSize; },
+      makeNulls(kSize, [](auto row) { return row % 3 == 0; }));
   ASSERT_EQ(dictVector->encoding(), VectorEncoding::Simple::DICTIONARY);
 
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
 }
 
 /// Verifies that complex types (MAP, ARRAY, ROW) are written correctly without
@@ -1444,15 +1379,8 @@ TEST_F(ParquetWriterTest, complexTypesWithoutFlattening) {
       [](auto row) { return static_cast<int64_t>(row * 100); });
 
   auto data = makeRowVector({mapVector, arrayVector});
-  auto schema = asRowType(data->type());
 
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  assertFlattenedRoundTrip(data);
 }
 
 /// Verifies that a mix of dictionary-encoded scalar columns and flat complex
@@ -1470,14 +1398,8 @@ TEST_F(ParquetWriterTest, mixedDictionaryAndComplexTypes) {
   }
   auto dictionary = makeFlatVector<StringView>(
       kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i % kDictSize;
-  }
-  auto dictColumn = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
+  auto dictColumn = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
 
   // Flat ARRAY column.
   auto arrayColumn = makeArrayVector<int32_t>(
@@ -1488,20 +1410,7 @@ TEST_F(ParquetWriterTest, mixedDictionaryAndComplexTypes) {
   // Flat INTEGER column.
   auto intColumn = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
 
-  auto data = makeRowVector({dictColumn, arrayColumn, intColumn});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  // Expected: flatten the dictionary column, keep complex and flat as-is.
-  VectorPtr flatDictCol = dictColumn;
-  BaseVector::flattenVector(flatDictCol);
-  auto expected = makeRowVector({flatDictCol, arrayColumn, intColumn});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({dictColumn, arrayColumn, intColumn}));
 }
 
 /// Verifies that dictionary wrapping a complex type (ARRAY) is correctly
@@ -1515,30 +1424,13 @@ TEST_F(ParquetWriterTest, dictionaryWrappingComplexTypeFlattens) {
       [](auto row) { return row % 3 + 1; },
       [](auto row) { return static_cast<int32_t>(row); });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i;
-  }
-
-  auto dictOfArray = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, arrayVector);
+  auto dictOfArray =
+      makeDictionaryColumn(kSize, arrayVector, [](auto row) { return row; });
   ASSERT_EQ(dictOfArray->encoding(), VectorEncoding::Simple::DICTIONARY);
 
-  auto data = makeRowVector({dictOfArray});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
   // Expected output is the original unwrapped array (flattening removes the
   // identity dictionary wrapping).
-  auto expected = makeRowVector({arrayVector});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertRoundTrip(makeRowVector({dictOfArray}), makeRowVector({arrayVector}));
 }
 
 /// Verifies that dictionary-of-dictionary (nested wrapping) is correctly
@@ -1550,61 +1442,36 @@ TEST_F(ParquetWriterTest, dictionaryOfDictionaryFlattens) {
   auto dictionary =
       makeFlatVector<int32_t>(kDictSize, [](auto row) { return row * 11; });
 
-  BufferPtr innerIndices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawInner = innerIndices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawInner[i] = i % kDictSize;
-  }
-
-  auto innerDict = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), innerIndices, kSize, dictionary);
-
+  auto innerDict = makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; });
   // Wrap the dictionary in another dictionary layer.
-  BufferPtr outerIndices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawOuter = outerIndices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawOuter[i] = i;
-  }
-  auto dictOfDict = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), outerIndices, kSize, innerDict);
+  auto dictOfDict =
+      makeDictionaryColumn(kSize, innerDict, [](auto row) { return row; });
 
-  auto data = makeRowVector({dictOfDict});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatExpected = dictOfDict;
-  BaseVector::flattenVector(flatExpected);
-  auto expected = makeRowVector({flatExpected});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({dictOfDict}));
 }
 
-/// Verifies that a constant vector wrapping a dictionary is correctly
-/// flattened.  This exercises the CONSTANT branch in needFlatten().
+/// Verifies that a constant wrapping a dictionary is correctly flattened.
+/// wrapInConstant peels the scalar dictionary layers, so to keep a non-flat
+/// wrapped vector the dictionary wraps a complex (ARRAY) type. This exercises
+/// the CONSTANT branch in childNeedsFlatten(), which flattens a constant whose
+/// wrapped vector is not flat.
 TEST_F(ParquetWriterTest, constantWrappingDictionaryFlattens) {
   constexpr vector_size_t kSize = 500;
+  constexpr int kDictSize = 10;
 
-  auto constantInt = makeConstant(static_cast<int32_t>(42), kSize);
+  auto arrayVector = makeArrayVector<int32_t>(
+      kDictSize,
+      [](auto row) { return row % 3 + 1; },
+      [](auto row) { return static_cast<int32_t>(row); });
+  // Dictionary over the ARRAY, then wrap a single entry as a constant.
+  auto dictOfArray = makeDictionaryColumn(
+      kDictSize, arrayVector, [](auto row) { return row; });
+  auto constColumn = BaseVector::wrapInConstant(kSize, 0, dictOfArray);
+  ASSERT_EQ(constColumn->encoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_FALSE(constColumn->wrappedVector()->isFlatEncoding());
 
-  auto data = makeRowVector({constantInt});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatExpected = constantInt;
-  BaseVector::flattenVector(flatExpected);
-  auto expected = makeRowVector({flatExpected});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({constColumn}));
 }
 
 /// Verifies that an empty dictionary vector (0 rows) can be written without
@@ -1621,46 +1488,13 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughEmptyVector) {
   auto dictionary = makeFlatVector<StringView>(
       kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(0, leafPool_.get());
-
-  auto dictVector = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
+  auto dictVector =
+      makeDictionaryColumn(kSize, dictionary, [](auto row) { return row; });
 
   auto data = makeRowVector({dictVector});
 
   // Write should succeed without crashing.
   write(data, ParquetWriterOptions{});
-}
-
-/// Verifies that a single-row dictionary vector round-trips correctly.
-TEST_F(ParquetWriterTest, dictionaryPassthroughSingleRow) {
-  constexpr vector_size_t kSize = 1;
-
-  std::vector<std::string> dictStrings = {"only_value"};
-  auto dictionary = makeFlatVector<StringView>(
-      1, [&](auto row) { return StringView(dictStrings[row]); });
-
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  indices->asMutable<vector_size_t>()[0] = 0;
-
-  auto dictVector = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, kSize, dictionary);
-
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
 /// Verifies that a dictionary vector where every element is null round-trips.
@@ -1675,149 +1509,49 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughAllNulls) {
   auto dictionary = makeFlatVector<StringView>(
       kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
 
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIndices[i] = i % kDictSize;
-  }
-
   // Every element is null.
-  auto nulls = makeNulls(kSize, [](auto /*row*/) { return true; });
+  auto dictVector = makeDictionaryColumn(
+      kSize,
+      dictionary,
+      [](auto row) { return row % kDictSize; },
+      makeNulls(kSize, [](auto /*row*/) { return true; }));
 
-  auto dictVector =
-      BaseVector::wrapInDictionary(nulls, indices, kSize, dictionary);
-
-  auto data = makeRowVector({dictVector});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDict = dictVector;
-  BaseVector::flattenVector(flatDict);
-  auto expected = makeRowVector({flatDict});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({dictVector}));
 }
 
-/// Verifies that multiple dictionary-encoded columns in the same RowVector all
-/// pass through correctly.
-TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleColumns) {
-  constexpr vector_size_t kSize = 2'000;
+/// Verifies that a complex column that is flat at the top level but contains a
+/// dictionary-encoded descendant is flattened before Arrow export. Dictionary
+/// passthrough is only safe for top-level scalar VARCHAR/VARBINARY columns, so
+/// childNeedsFlatten() recurses into ARRAY/MAP/ROW children to catch nested
+/// dictionaries the bridge would otherwise export as DictionaryArrays.
+TEST_F(ParquetWriterTest, flatComplexWithEncodedDescendantFlattens) {
+  constexpr vector_size_t kSize = 1'000;
+  constexpr int kDictSize = 10;
 
-  // First dict column: VARCHAR, cardinality 5.
-  constexpr int kDictSize1 = 5;
-  std::vector<std::string> strings1(kDictSize1);
-  for (int i = 0; i < kDictSize1; ++i) {
-    strings1[i] = fmt::format("a_{}", i);
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("val_{}", i);
   }
-  auto dict1 = makeFlatVector<StringView>(
-      kDictSize1, [&](auto row) { return StringView(strings1[row]); });
-  BufferPtr idx1 =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto raw1 = idx1->asMutable<vector_size_t>();
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // ROW column: flat at the top level, with a dictionary-encoded child.
+  auto structColumn = makeRowVector({makeDictionaryColumn(
+      kSize, dictionary, [](auto row) { return row % kDictSize; })});
+  ASSERT_EQ(structColumn->encoding(), VectorEncoding::Simple::ROW);
+
+  // ARRAY column: flat at the top level, with dictionary-encoded elements.
+  // Each row holds two consecutive dictionary entries.
+  auto elements = makeDictionaryColumn(
+      kSize * 2, dictionary, [](auto row) { return row % kDictSize; });
+  std::vector<vector_size_t> offsets(kSize);
   for (vector_size_t i = 0; i < kSize; ++i) {
-    raw1[i] = i % kDictSize1;
+    offsets[i] = i * 2;
   }
-  auto col1 =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), idx1, kSize, dict1);
+  auto arrayColumn = makeArrayVector(offsets, elements);
+  ASSERT_EQ(arrayColumn->encoding(), VectorEncoding::Simple::ARRAY);
 
-  // Second dict column: VARCHAR, cardinality 20.
-  constexpr int kDictSize2 = 20;
-  std::vector<std::string> strings2(kDictSize2);
-  for (int i = 0; i < kDictSize2; ++i) {
-    strings2[i] = fmt::format("b_{}", i);
-  }
-  auto dict2 = makeFlatVector<StringView>(
-      kDictSize2, [&](auto row) { return StringView(strings2[row]); });
-  BufferPtr idx2 =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto raw2 = idx2->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    raw2[i] = i % kDictSize2;
-  }
-  auto col2 =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), idx2, kSize, dict2);
-
-  // Third dict column: INTEGER, cardinality 50.
-  constexpr int kDictSize3 = 50;
-  auto dict3 =
-      makeFlatVector<int32_t>(kDictSize3, [](auto row) { return row * 3; });
-  BufferPtr idx3 =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto raw3 = idx3->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    raw3[i] = i % kDictSize3;
-  }
-  auto col3 =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), idx3, kSize, dict3);
-
-  auto data = makeRowVector({col1, col2, col3});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flat1 = col1;
-  BaseVector::flattenVector(flat1);
-  VectorPtr flat2 = col2;
-  BaseVector::flattenVector(flat2);
-  VectorPtr flat3 = col3;
-  BaseVector::flattenVector(flat3);
-  auto expected = makeRowVector({flat1, flat2, flat3});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
-}
-
-/// Verifies dictionary passthrough for DOUBLE and BOOLEAN types.
-TEST_F(ParquetWriterTest, dictionaryPassthroughOtherPrimitiveTypes) {
-  constexpr vector_size_t kSize = 2'000;
-
-  // Dictionary DOUBLE column.
-  constexpr int kDoubleDictSize = 10;
-  auto doubleDictionary = makeFlatVector<double>(
-      kDoubleDictSize, [](auto row) { return row * 1.5; });
-  BufferPtr doubleIndices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawDoubleIdx = doubleIndices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawDoubleIdx[i] = i % kDoubleDictSize;
-  }
-  auto dictDouble = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), doubleIndices, kSize, doubleDictionary);
-
-  // Dictionary BOOLEAN column.
-  auto boolDictionary =
-      makeFlatVector<bool>(2, [](auto row) { return row == 1; });
-  BufferPtr boolIndices =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawBoolIdx = boolIndices->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawBoolIdx[i] = i % 2;
-  }
-  auto dictBool = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), boolIndices, kSize, boolDictionary);
-
-  auto data = makeRowVector({dictDouble, dictBool});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatDouble = dictDouble;
-  BaseVector::flattenVector(flatDouble);
-  VectorPtr flatBool = dictBool;
-  BaseVector::flattenVector(flatBool);
-  auto expected = makeRowVector({flatDouble, flatBool});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({structColumn, arrayColumn}));
 }
 
 /// Verifies selective per-column flattening: a dict-of-dict column (must
@@ -1836,51 +1570,19 @@ TEST_F(ParquetWriterTest, selectiveFlatteningMixedEncodings) {
   }
   auto dict = makeFlatVector<StringView>(
       kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
-  BufferPtr idx =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawIdx = idx->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawIdx[i] = i % kDictSize;
-  }
-  auto passthroughCol =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), idx, kSize, dict);
+  auto passthroughCol = makeDictionaryColumn(
+      kSize, dict, [](auto row) { return row % kDictSize; });
 
   // Column 1: dict-of-dict INTEGER (must flatten).
   constexpr int kInnerDictSize = 20;
   auto innerDict =
       makeFlatVector<int32_t>(kInnerDictSize, [](auto row) { return row * 5; });
-  BufferPtr innerIdx =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawInner = innerIdx->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawInner[i] = i % kInnerDictSize;
-  }
-  auto innerDictVec = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), innerIdx, kSize, innerDict);
-  BufferPtr outerIdx =
-      AlignedBuffer::allocate<vector_size_t>(kSize, leafPool_.get());
-  auto rawOuter = outerIdx->asMutable<vector_size_t>();
-  for (vector_size_t i = 0; i < kSize; ++i) {
-    rawOuter[i] = i;
-  }
-  auto nestedDictCol = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), outerIdx, kSize, innerDictVec);
+  auto innerDictVec = makeDictionaryColumn(
+      kSize, innerDict, [](auto row) { return row % kInnerDictSize; });
+  auto nestedDictCol =
+      makeDictionaryColumn(kSize, innerDictVec, [](auto row) { return row; });
 
-  auto data = makeRowVector({passthroughCol, nestedDictCol});
-  auto schema = asRowType(data->type());
-
-  auto* sinkPtr = write(data, ParquetWriterOptions{});
-
-  auto reader = createReaderInMemory(*sinkPtr);
-  ASSERT_EQ(reader->numberOfRows(), kSize);
-
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  VectorPtr flatPassthrough = passthroughCol;
-  BaseVector::flattenVector(flatPassthrough);
-  VectorPtr flatNested = nestedDictCol;
-  BaseVector::flattenVector(flatNested);
-  auto expected = makeRowVector({flatPassthrough, flatNested});
-  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+  assertFlattenedRoundTrip(makeRowVector({passthroughCol, nestedDictCol}));
 }
 
 TEST_F(ParquetWriterTest, allNulls) {
