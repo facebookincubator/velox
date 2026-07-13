@@ -1273,12 +1273,9 @@ class SubstrFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    cudf::numeric_scalar<cudf::size_type> startScalar(start_, true, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> endScalar(
-        hasEnd_ ? end_ : 0, hasEnd_, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
+    auto endOpt = hasEnd_ ? std::optional<cudf::size_type>(end_) : std::nullopt;
     return cudf::strings::slice_strings(
-        inputCol, startScalar, endScalar, stepScalar, stream, mr);
+        inputCol, start_, endOpt, 1, stream, mr);
   }
 
  private:
