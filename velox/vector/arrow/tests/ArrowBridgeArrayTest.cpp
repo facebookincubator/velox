@@ -1281,6 +1281,13 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       if (format[0] == 't' && format[1] == 't') {
         assertTimeVectorContent(
             inputValues, output, arrowArray.null_count, format);
+      } else if (format[0] == 'd') {
+        if constexpr (std::is_same_v<TInput, int32_t>) {
+          assertShortDecimalVectorContentFromInt32(
+              inputValues, output, arrowArray.null_count);
+        } else {
+          assertVectorContent(inputValues, output, arrowArray.null_count);
+        }
       } else {
         assertVectorContent(inputValues, output, arrowArray.null_count);
       }
@@ -1393,6 +1400,18 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     testArrowImport<int64_t, int128_t>(
         "d:5,2", {1, -1, 0, 12345, -12345, std::nullopt});
+    testArrowImport<int64_t, int32_t>(
+        "d:7,2,32", {1, -1, 0, 12345, -12345, std::nullopt});
+    testArrowImport<int64_t, int32_t>(
+        "d:9,1,32",
+        {10,
+         -10,
+         0,
+         123456789,
+         -123456789,
+         std::numeric_limits<int32_t>::max(),
+         std::numeric_limits<int32_t>::min(),
+         std::nullopt});
     testArrowImport<int128_t, int128_t>(
         "d:36,2",
         {HugeInt::parse("20000000000000000"),
@@ -1624,6 +1643,22 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
   // with the expected values.
   void assertShortDecimalVectorContent(
       const std::vector<std::optional<int128_t>>& expectedValues,
+      const VectorPtr& actual,
+      size_t nullCount) {
+    std::vector<std::optional<int64_t>> decValues;
+    decValues.reserve(expectedValues.size());
+    for (const auto& value : expectedValues) {
+      if (value) {
+        decValues.emplace_back(static_cast<int64_t>(*value));
+      } else {
+        decValues.emplace_back(std::nullopt);
+      }
+    }
+    assertVectorContent(decValues, actual, nullCount);
+  }
+
+  void assertShortDecimalVectorContentFromInt32(
+      const std::vector<std::optional<int32_t>>& expectedValues,
       const VectorPtr& actual,
       size_t nullCount) {
     std::vector<std::optional<int64_t>> decValues;
