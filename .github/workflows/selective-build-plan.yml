@@ -202,7 +202,7 @@ jobs:
 
       - name: Download cached graph
         if: steps.graph-artifact.outputs.available == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dependency-graph
           github-token: ${{ github.token }}
