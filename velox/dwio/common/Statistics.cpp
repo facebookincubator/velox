@@ -122,6 +122,7 @@ std::string IntegerColumnStatistics::toString() const {
       ", sum: ",
       toStringOr(sum_, kUnknown));
 }
+
 std::string TimestampColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
