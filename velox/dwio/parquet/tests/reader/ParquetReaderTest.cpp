@@ -1775,6 +1775,86 @@ TEST_F(ParquetReaderTest, columnStatisticsMultipleRowGroups) {
   EXPECT_EQ(intStats->getMaximum(), 50);
 }
 
+TEST_F(ParquetReaderTest, columnStatisticsTimestamp) {
+  auto data = makeRowVector(
+      {"ts"},
+      {
+          makeFlatVector<Timestamp>(
+              {Timestamp::fromMicros(1'000'000),
+               Timestamp::fromMicros(2'000'000),
+               Timestamp::fromMicros(3'000'000),
+               Timestamp::fromMicros(4'000'000),
+               Timestamp::fromMicros(5'000'000)}),
+      });
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  auto* sink = write(data, options, writerOptions);
+  auto reader = createReaderInMemory(*sink);
+  const auto& schema = reader->typeWithId();
+
+  auto stats = reader->columnStatistics(schema->childByName("ts")->id());
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getNumberOfValues(), 5);
+  EXPECT_FALSE(stats->hasNull().value());
+  auto* tsStats =
+      dynamic_cast<dwio::common::TimestampColumnStatistics*>(stats.get());
+  ASSERT_NE(tsStats, nullptr);
+  EXPECT_EQ(tsStats->getMinimum(), Timestamp::fromMicros(1'000'000));
+  EXPECT_EQ(tsStats->getMaximum(), Timestamp::fromMicros(5'000'000));
+}
+
+TEST_F(ParquetReaderTest, timestampRowGroupPruning) {
+  // Two row groups with non-overlapping timestamp ranges.
+  auto batch1 = makeRowVector(
+      {"ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp::fromMicros(1'000'000),
+           Timestamp::fromMicros(2'000'000),
+           Timestamp::fromMicros(3'000'000)})});
+  auto batch2 = makeRowVector(
+      {"ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp::fromMicros(10'000'000),
+           Timestamp::fromMicros(11'000'000),
+           Timestamp::fromMicros(12'000'000)})});
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<parquet::LambdaFlushPolicy>(
+        /*rowsInRowGroup=*/3,
+        /*bytesInRowGroup=*/1'024 * 1'024,
+        []() { return false; });
+  };
+  auto* sink = write({batch1, batch2}, options, writerOptions);
+  auto reader = createReaderInMemory(*sink);
+  ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
+
+  const auto rowType = ROW({"ts"}, {TIMESTAMP()});
+
+  // Filter matches only the second row group.
+  FilterMap filters;
+  filters.insert(
+      {"ts",
+       std::make_unique<common::TimestampRange>(
+           Timestamp::fromMicros(10'000'000),
+           Timestamp::fromMicros(12'000'000),
+           false)});
+  auto expected = makeRowVector(
+      {"ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp::fromMicros(10'000'000),
+           Timestamp::fromMicros(11'000'000),
+           Timestamp::fromMicros(12'000'000)})});
+  assertReadWithReaderAndFilters(
+      *reader, rowType, std::move(filters), expected);
+}
+
 TEST_F(ParquetReaderTest, readTimeMillis) {
   // Write TIME data using the parquet writer.
   // The writer exports Velox TIME as Arrow time32 with milliseconds unit,
