@@ -60,7 +60,6 @@ velox_link_libraries(
   velox_dwio_common_compression
   fmt::fmt
   arrow
-  lz4::lz4
   Snappy::snappy
   zstd::zstd
 )

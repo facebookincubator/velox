@@ -276,6 +276,49 @@ TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
   VELOX_ASSERT_THROW(pageReader->skip(1), "");
 }
 
+// Ensures the Snappy path validates the advertised uncompressed size against
+// the size embedded in the Snappy stream. A corrupt page whose declared
+// uncompressed_page_size is smaller than the embedded length must be rejected;
+// otherwise snappy::RawUncompress would write past the destination buffer. This
+// check must stay enabled in release builds, so the guard is a VELOX_CHECK
+// rather than a VELOX_DCHECK.
+TEST_F(ParquetPageReaderTest, snappyUncompressedSizeMismatch) {
+  constexpr int32_t kDeclaredUncompressedSize = 8;
+  // The page claims 10 values so that skip(1) reads and decompresses this page
+  // instead of skipping it.
+  constexpr int32_t kNumValues = 10;
+
+  // A minimal Snappy stream: a little-endian varint holding an uncompressed
+  // length of 300 (bytes 0xAC 0x02) followed by filler. GetUncompressedLength
+  // only parses the varint, so the filler content is irrelevant.
+  const std::string snappyData({'\xAC', '\x02', '\x00', '\x00'});
+  const auto kCompressedSize = static_cast<int32_t>(snappyData.size());
+
+  auto pageHeader = createDataPageV1Header(
+      kDeclaredUncompressedSize, kCompressedSize, kNumValues);
+  const std::string headerBytes = serializePageHeader(pageHeader);
+
+  std::string fullData = headerBytes + snappyData;
+
+  auto inputStream = std::make_unique<SeekableArrayInputStream>(
+      fullData.data(), fullData.size());
+
+  dwio::common::ColumnReaderStatistics stats;
+  auto pageReader = std::make_unique<PageReader>(
+      std::move(inputStream),
+      *leafPool_,
+      common::CompressionKind::CompressionKind_SNAPPY,
+      fullData.size(),
+      stats,
+      nullptr,
+      /*maxRepeat=*/0,
+      /*maxDefine=*/0);
+
+  // skip(1) triggers seekToPage() -> prepareDataPageV1() -> decompressData().
+  // The size check must fire before RawUncompress writes to the buffer.
+  VELOX_ASSERT_THROW(pageReader->skip(1), "300");
+}
+
 // Example test demonstrating proper FBThrift dictionary page creation.
 // This serves as a reference for converting any OSS-specific tests.
 TEST_F(ParquetPageReaderTest, dictionaryPageExample) {
