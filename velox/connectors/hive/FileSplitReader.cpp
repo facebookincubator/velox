@@ -383,6 +383,9 @@ void FileSplitReader::createRowReader(
   baseRowReaderOpts_.setNimblePreserveDictionaryEncoding(
       fileConfig_->nimblePreserveDictionaryEncoding(
           connectorQueryCtx_->sessionProperties()));
+  baseRowReaderOpts_.setNimbleCompactDictionaryAcrossChunks(
+      fileConfig_->nimbleCompactDictionaryAcrossChunks(
+          connectorQueryCtx_->sessionProperties()));
   baseRowReaderOpts_.setTrackRowSize(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled

@@ -117,6 +117,16 @@ class FileConfig {
       "Preserve dictionary encoding for Nimble string column reads.")
 
   VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleCompactDictionaryAcrossChunksSession,
+      kNimbleCompactDictionaryAcrossChunks,
+      nimbleCompactDictionaryAcrossChunks,
+      "nimble_compact_dictionary_across_chunks",
+      "nimble.compact-dictionary-across-chunks",
+      bool,
+      false,
+      "Deduplicate dictionary entries when merging alphabets across chunks.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
       nimbleLazyColumnIo,
