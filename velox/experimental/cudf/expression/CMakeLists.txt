@@ -19,15 +19,17 @@ add_library(
   CommonFunctions.cpp
   DateTruncFunction.cpp
   DecimalExpressionKernels.cpp
-  DecimalExpressionKernels.cu
+  DecimalExpressionKernelsGpu.cu
   ExpressionEvaluator.cpp
   JitExpression.cpp
+  NullMask.cpp
   PrestoFunctions.cpp
   prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/HashFunction.cpp
+  sparksql/SubStringFunction.cpp
   SubfieldFiltersToAst.cpp
 )
 
@@ -38,5 +40,3 @@ target_link_libraries(
 )
 
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)
-
-set_target_properties(velox_cudf_expression PROPERTIES CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON)

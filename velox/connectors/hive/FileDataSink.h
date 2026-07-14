@@ -414,6 +414,7 @@ class FileDataSink : public DataSink {
   // writers_ are both indexed by partitionId.
   std::vector<std::shared_ptr<WriterInfo>> writerInfo_;
   std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
+  folly::F14FastMap<std::string, RuntimeMetric> closedWriterStats_;
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and

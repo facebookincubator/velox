@@ -1447,7 +1447,7 @@ vector_size_t HiveIndexSource::evaluateRemainingFilter(
   uint64_t filterTimeNs{0};
   vector_size_t numRemainingRows{0};
   {
-    NanosecondTimer timer(&filterTimeNs);
+    NanosecondWallTimer timer(&filterTimeNs);
     expressionEvaluator_->evaluate(
         remainingFilterExprSet_.get(),
         remainingFilterRows_,

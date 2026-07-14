@@ -5,8 +5,10 @@ Conversion Functions
 .. spark:function:: cast(value AS type) -> type
 
     Explicitly cast a ``value`` to a specified ``type``.
-    Follows the behavior when Spark ANSI mode is disabled, and does not support
-    the behavior when ANSI is turned on:
+    For cast pairs with Velox Spark ANSI support, behavior follows Spark ANSI
+    mode. Currently, ANSI mode is supported for casting from string to boolean,
+    integral, and date types. Other cast pairs follow the behavior used when
+    Spark ANSI mode is disabled:
 
     * If the ``value`` exceeds the range of the ``type``, no error is raised.
       Instead, the ``value`` is "wrapped" around.
@@ -30,6 +32,16 @@ Conversion Functions
         SELECT try_cast(128 as tinyint); -- NULL
         SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint); -- NULL
         SELECT try_cast(1e12 as int); -- NULL
+
+Expression-level cast modes
+---------------------------
+
+``spark_ansi_cast`` and ``spark_legacy_cast`` are internal special form names
+registered with Spark SQL functions to preserve Spark's per-expression cast
+mode. These are not Spark SQL functions. ``spark_ansi_cast`` applies ANSI
+behavior for supported cast pairs regardless of the session ANSI setting.
+``spark_legacy_cast`` applies non-ANSI Spark cast behavior regardless of the
+session ANSI setting.
 
 Cast from UNKNOWN Type
 ----------------------
@@ -140,7 +152,13 @@ Valid examples
 From timestamp
 ^^^^^^^^^^^^^^
 
-Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
+*(ANSI compliant)*
+
+Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds,
+dividing by the number of microseconds in a second, and then rounding down to the nearest second since the
+epoch (1970-01-01 00:00:00 UTC).
+
+In ANSI mode, conversion overflow causes an exception to be thrown; otherwise, returns NULL.
 
 Valid examples
 
@@ -152,8 +170,13 @@ Valid examples
   SELECT cast(cast('2000-01-01 12:21:56' as timestamp) as bigint); -- 946684916
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as bigint); -- 1740470426
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as integer); -- 1740470426
-  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- 30874
-  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- -102
+
+Invalid examples
+
+::
+
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to Boolean
 ---------------
@@ -402,3 +425,38 @@ Valid examples
 
   SELECT cast(true as timestamp); -- 1970-01-01 00:00:00.000001
   SELECT cast(false as timestamp); -- 1970-01-01 00:00:00
+
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a TIMESTAMP_UTC to TIMESTAMP interprets the stored timestamp as a local
+timestamp in the session timezone and returns the corresponding UTC epoch. When
+the local timestamp falls in a DST spring-forward gap, Spark adjusts to the
+post-transition timestamp instead of throwing.
+
+Valid examples
+
+::
+
+  -- Stored epoch 1577808000 represents local 2019-12-31 16:00:00.
+  -- In America/Los_Angeles (UTC-8) that is 2020-01-01 00:00:00 UTC.
+  SELECT cast(TIMESTAMP_NTZ '2019-12-31 16:00:00' as timestamp); -- 2020-01-01 00:00:00
+
+Cast to TIMESTAMP UTC
+---------------------
+
+From TIMESTAMP
+^^^^^^^^^^^^^^
+
+Casting a TIMESTAMP to TIMESTAMP_UTC applies the session timezone offset so
+that the local timestamp is preserved. The stored epoch in TIMESTAMP_UTC
+represents the same timestamp fields as the local timestamp, treated as a UTC
+epoch. When no session timezone is configured the cast is an identity operation.
+
+Valid examples
+
+::
+
+  -- 2020-01-01 00:00:00 UTC in America/Los_Angeles is local 2019-12-31 16:00:00.
+  -- TIMESTAMP_UTC stores that local time as epoch 1577808000.
+  SELECT cast(timestamp '2020-01-01 00:00:00' as timestamp_ntz); -- 2019-12-31 16:00:00

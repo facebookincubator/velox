@@ -530,7 +530,7 @@ class PageReader {
   // Manages concatenating null flags read from multiple pages. If a
   // readWithVisitor is contined in one page, the visitor places the
   // nulls in the reader. If many pages are covered, some with and
-  // some without nulls, we must make a a concatenated null flags to
+  // some without nulls, we must make a concatenated null flags to
   // return to the caller.
   dwio::common::BitConcatenation nullConcatenation_;
 
@@ -565,7 +565,7 @@ getParquetDecompressionOptions(common::CompressionKind kind) {
     options.format.zlib.windowBits =
         dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
   } else if (
-      kind == common::CompressionKind_LZ4 ||
+      kind == common::CompressionKind_LZ4_HADOOP ||
       kind == common::CompressionKind_LZO) {
     options.format.lz4_lzo.isHadoopFrameFormat = true;
   }

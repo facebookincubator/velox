@@ -70,6 +70,8 @@ velox_add_library(
   TransformEvaluator.h
   TransformExprBuilder.h
   WriterOptionsAdapter.h
+  IcebergFieldId.h
+  IcebergFieldMetadata.h
 )
 
 velox_link_libraries(

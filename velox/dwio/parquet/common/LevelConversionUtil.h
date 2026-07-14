@@ -26,7 +26,12 @@
 #include "arrow/util/bitmap_writer.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/parquet/common/LevelComparison.h"
+
+#ifdef __BMI2__
+#include <immintrin.h>
+#endif
 
 namespace facebook::velox::parquet {
 
@@ -254,9 +259,18 @@ inline uint64_t ExtractBitsSoftware(uint64_t bitmap, uint64_t selectBitmap) {
 }
 
 using extractBitmapT = uint64_t;
+// Hardware PEXT dispatch for bit extraction in level conversion.
+// Enabled at compile time by __BMI2__, at runtime by FLAGS_bmi2=true (default).
+// On AMD Zen1/2 where PEXT is microcoded, set --bmi2=false to use the
+// software lookup table fallback (ExtractBitsSoftware).
 inline extractBitmapT ExtractBits(
     extractBitmapT bitmap,
     extractBitmapT selectBitmap) {
+#ifdef __BMI2__
+  if (FOLLY_LIKELY(process::hasBmi2())) {
+    return _pext_u64(bitmap, selectBitmap);
+  }
+#endif
   return ExtractBitsSoftware(bitmap, selectBitmap);
 }
 

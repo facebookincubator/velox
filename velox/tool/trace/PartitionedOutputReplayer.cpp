@@ -36,7 +36,7 @@ std::shared_ptr<core::QueryCtx> createQueryContext(
 }
 
 std::vector<std::unique_ptr<folly::IOBuf>> getData(
-    const std::shared_ptr<exec::OutputBufferManager>& bufferManager,
+    const std::shared_ptr<exec::DefaultOutputBufferManager>& bufferManager,
     const std::string& taskId,
     int destination,
     int64_t sequence,
@@ -64,7 +64,7 @@ std::vector<std::unique_ptr<folly::IOBuf>> getData(
 } // namespace
 
 void consumeAllData(
-    const std::shared_ptr<exec::OutputBufferManager>& bufferManager,
+    const std::shared_ptr<exec::DefaultOutputBufferManager>& bufferManager,
     const std::string& taskId,
     uint32_t numPartitions,
     folly::Executor* driverExecutor,

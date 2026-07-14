@@ -332,7 +332,7 @@ common::CompressionKind thriftCodecToCompressionKind(
     case thrift::CompressionCodec::LZO:
       return common::CompressionKind::CompressionKind_LZO;
     case thrift::CompressionCodec::LZ4:
-      return common::CompressionKind::CompressionKind_LZ4;
+      return common::CompressionKind::CompressionKind_LZ4_HADOOP;
     case thrift::CompressionCodec::ZSTD:
       return common::CompressionKind::CompressionKind_ZSTD;
     case thrift::CompressionCodec::LZ4_RAW:
@@ -448,6 +448,11 @@ int64_t ColumnChunkMetaDataPtr::totalCompressedSize() const {
 std::vector<thrift::Encoding> ColumnChunkMetaDataPtr::encodings() const {
   return *apache::thrift::can_throw(
       thriftColumnChunkPtr(ptr_)->meta_data()->encodings());
+}
+
+std::vector<std::string> ColumnChunkMetaDataPtr::pathInSchema() const {
+  return *apache::thrift::can_throw(
+      thriftColumnChunkPtr(ptr_)->meta_data()->path_in_schema());
 }
 
 int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {

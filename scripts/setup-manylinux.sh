@@ -71,6 +71,10 @@ function install_velox_deps_from_dnf {
     libsodium-devel zlib-devel gtest-devel gmock-devel xxhash-devel
 }
 
+function install_cxl_deps {
+  dnf_install numactl-devel
+}
+
 function install_conda {
   dnf_install conda
 }

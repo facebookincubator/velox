@@ -382,6 +382,22 @@ TEST(ColumnReaderStatisticsTest, MergeFromBothWithDecodingStats) {
   EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 3'000);
 }
 
+TEST(WithDecompressStatsTest, NonVoidWithCounter) {
+  facebook::velox::io::IoCounter counter;
+  int result = withDecompressStats(&counter, [] { return 42; });
+  EXPECT_EQ(result, 42);
+  EXPECT_EQ(counter.count(), 1);
+}
+
+TEST(WithDecompressStatsTest, NullCounter) {
+  int result = withDecompressStats(nullptr, [] { return 7; });
+  EXPECT_EQ(result, 7);
+
+  int sideEffect = 0;
+  withDecompressStats(nullptr, [&] { sideEffect = 3; });
+  EXPECT_EQ(sideEffect, 3);
+}
+
 TEST(ColumnReaderStatisticsTest, MergeFromWithoutDecodingStats) {
   ColumnReaderStatistics src;
   src.flattenStringDictionaryValues = 100;

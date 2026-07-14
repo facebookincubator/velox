@@ -33,6 +33,7 @@
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
+#include <cudf/io/parquet_metadata.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
@@ -107,9 +108,8 @@ void CudfSplitReader::prepareSplit(
   // Create a cuDF split reader
   if (useExperimentalCudfReader_) {
     createExperimentalReader();
-    hybridScanState_ = std::make_unique<HybridScanState>();
   } else {
-    createCudfReader(get_output_mr());
+    createCudfReader();
   }
 
   // Update runtime stats
@@ -119,18 +119,14 @@ void CudfSplitReader::prepareSplit(
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
     uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
-  VELOX_CHECK(
-      splitReader_ or exptSplitReader_,
-      "No Cudf Split reader present. Call prepareSplit() first.");
 
   // Record start time before reading chunk
   auto startTimeUs = getCurrentTimeMicro();
 
-  auto chunkOpt = readNextChunk(get_output_mr());
+  auto chunkOpt = readNextChunk();
   if (!chunkOpt.has_value()) {
     return std::nullopt;
   }
-  auto cudfTable = std::move(chunkOpt.value());
 
   TotalScanTimeCallbackData* callbackData =
       new TotalScanTimeCallbackData{startTimeUs, ioStatistics_};
@@ -139,11 +135,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
   cudaLaunchHostFunc(
       stream_.value(), &CudfSplitReader::totalScanTimeCalculator, callbackData);
 
-  return cudfTable;
+  return std::move(chunkOpt.value());
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
-    rmm::device_async_resource_ref output_mr) {
+std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
   if (!useExperimentalCudfReader_) {
     // Read table using the regular cudf parquet reader
     VELOX_CHECK_NOT_NULL(splitReader_, "cudf parquet reader not present");
@@ -152,9 +147,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
       return std::nullopt;
     }
 
-    auto tableWithMetadata = splitReader_->read_chunk();
-    return std::move(tableWithMetadata.tbl);
+    return std::move(splitReader_->read_chunk().tbl);
   }
+
+  auto output_mr = determineCudfMemoryResource();
 
   // Read table using the experimental parquet reader
   VELOX_CHECK_NOT_NULL(exptSplitReader_, "cuDF hybrid scan reader not present");
@@ -215,8 +211,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk(
     return std::nullopt;
   }
 
-  auto tableWithMetadata = exptSplitReader_->materialize_all_columns_chunk();
-  return std::move(tableWithMetadata.tbl);
+  return std::move(exptSplitReader_->materialize_all_columns_chunk().tbl);
 }
 
 void CudfSplitReader::resetSplit() {
@@ -224,6 +219,11 @@ void CudfSplitReader::resetSplit() {
   exptSplitReader_.reset();
   hybridScanState_.reset();
   dataSource_.reset();
+  fileMetaData_.clear();
+}
+
+cudf::ast::expression const* CudfSplitReader::subfieldFilter() {
+  return subfieldFilterExpr_;
 }
 
 void CudfSplitReader::setupCudfDataSource() {
@@ -344,8 +344,8 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_num_bytes(split_->size());
   }
 
-  if (subfieldFilterExpr_ != nullptr) {
-    readerOptions_.set_filter(*subfieldFilterExpr_);
+  if (auto* filter = subfieldFilter(); filter != nullptr) {
+    readerOptions_.set_filter(*filter);
   }
 
   // Set column projection if needed
@@ -354,11 +354,42 @@ void CudfSplitReader::setupReaderOptions() {
   }
 }
 
-void CudfSplitReader::createCudfReader(
-    rmm::device_async_resource_ref output_mr) {
-  // Setup datasource and reader options
+rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource() {
+  return get_output_mr();
+}
+
+void CudfSplitReader::fileMetaDatas() {
+  if (not fileMetaData_.empty()) {
+    return;
+  }
+
+  // Setup the datasource
   setupCudfDataSource();
+
+  // Check that the datasource is set up
+  VELOX_CHECK_NOT_NULL(
+      dataSource_,
+      "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
+
+  // Wrap the existing datasource without transferring ownership.
+  std::vector<std::unique_ptr<cudf::io::datasource>> sources;
+  sources.push_back(cudf::io::datasource::create(dataSource_.get()));
+  fileMetaData_ = cudf::io::read_parquet_footers(sources);
+  VELOX_CHECK_GE(
+      fileMetaData_.size(),
+      1,
+      "CudfSplitReader failed to read any parquet metadatas");
+}
+
+void CudfSplitReader::createCudfReader() {
+  // Read file metadatas
+  fileMetaDatas();
+
+  // Setup reader options
   setupReaderOptions();
+
+  std::vector<std::unique_ptr<cudf::io::datasource>> sources;
+  sources.push_back(cudf::io::datasource::create(dataSource_.get()));
 
   // Create a parquet reader
   splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
@@ -366,34 +397,43 @@ void CudfSplitReader::createCudfReader(
           connectorQueryCtx_->sessionProperties()),
       cudfHiveConfig_->maxPassReadLimitSession(
           connectorQueryCtx_->sessionProperties()),
+      std::move(sources),
+      std::move(fileMetaData_),
       readerOptions_,
       stream_,
-      output_mr);
+      determineCudfMemoryResource());
+
+  // Metadata ingested
+  fileMetaData_.clear();
 }
 
 void CudfSplitReader::createExperimentalReader() {
-  // Setup datasource and reader options
-  setupCudfDataSource();
+  // Read file metadatas
+  fileMetaDatas();
+
+  // Setup reader options
   setupReaderOptions();
+
+  VELOX_CHECK_EQ(
+      fileMetaData_.size(),
+      1,
+      "cuDF experimental reader requires exactly one parquet metadata");
 
   // Create a hybrid scan reader
   nvtxRangePush("hybridScanReader");
-  auto const footerBuffer = fetchFooterBytes(dataSource_);
-  auto reader =
-      std::make_unique<CudfHybridScanReader>(*footerBuffer, readerOptions_);
+  auto reader = std::make_unique<CudfHybridScanReader>(
+      std::move(fileMetaData_.front()), readerOptions_);
   nvtxRangePop();
 
-  // Setup page index if available
-  auto const pageIndexByteRange = reader->page_index_byte_range();
-  if (not pageIndexByteRange.is_empty()) {
-    nvtxRangePush("setupPageIndex");
-    auto const pageIndexBuffer =
-        fetchPageIndexBytes(dataSource_, pageIndexByteRange);
-    reader->setup_page_index(*pageIndexBuffer);
-    nvtxRangePop();
-  }
-
   exptSplitReader_ = std::move(reader);
+  hybridScanState_ = std::make_unique<HybridScanState>();
+
+  // Metadata ingested
+  fileMetaData_.clear();
+}
+
+bool CudfSplitReader::useExperimentalCudfReader() const {
+  return useExperimentalCudfReader_;
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {

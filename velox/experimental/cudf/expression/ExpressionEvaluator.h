@@ -84,12 +84,17 @@ using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr)>;
 
+// Optional function-specific eligibility check applied after signature
+// matching. Use this for semantic restrictions that cannot be expressed by a
+// FunctionSignature. Both FunctionExpression::canEvaluate and
+// createCudfFunction apply this filter.
 using CudfCanEvaluate =
-    std::function<bool(const std::shared_ptr<velox::exec::Expr>&)>;
+    std::function<bool(const std::shared_ptr<velox::exec::Expr>& expr)>;
 
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
   std::vector<exec::FunctionSignaturePtr> signatures;
+  // If set, this must return true before the factory is selected.
   CudfCanEvaluate canEvaluate;
 };
 
@@ -104,7 +109,8 @@ void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
+    bool overwrite = true,
+    CudfCanEvaluate canEvaluate = nullptr);
 
 /// Create a CudfFunction for the given name and expression.
 /// Returns nullptr if no registered function matches the expression's
