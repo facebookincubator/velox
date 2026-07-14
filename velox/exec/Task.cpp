@@ -27,6 +27,7 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
@@ -36,7 +37,6 @@
 #include "velox/exec/OperatorTraceCtx.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/OutputBufferManagerRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SpatialJoinBuild.h"
@@ -1342,7 +1342,7 @@ void Task::initializePartitionOutput() {
           *queryCtx_, std::string{core::TransportKind::kHttp});
     }
     if (!manager) {
-      manager = OutputBufferManager::getInstanceRef();
+      manager = DefaultOutputBufferManager::getInstanceRef();
     }
     VELOX_CHECK_NOT_NULL(
         manager,
@@ -2195,13 +2195,27 @@ BlockingReason Task::getSplitOrFuture(
     const ConnectorSplitPreloadFunc& preload,
     exec::Split& split,
     ContinueFuture& future) {
-  std::lock_guard<std::timed_mutex> l(mutex_);
-  auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-  auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
-  return splitsStore->nextSplit(
-             driverId, maxPreloadSplits, preload, split, future)
-      ? BlockingReason::kNotBlocked
-      : BlockingReason::kWaitForSplit;
+  EventCompletionNotifier stateChangeNotifier;
+  bool notBlocked{false};
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+    auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, splitGroupId);
+    const auto numQueuedBefore = taskStats_.numQueuedTableScanSplits;
+    notBlocked = splitsStore->nextSplit(
+        driverId, maxPreloadSplits, preload, split, future);
+    // Wake status waiters when the scan split queue drains while more splits
+    // may still arrive, so a coordinator can refill before the task starves.
+    // Once noMoreSplits has been signaled there is nothing left to refill, so
+    // the drain carries no actionable signal and is skipped.
+    if (numQueuedBefore > 0 && taskStats_.numQueuedTableScanSplits == 0 &&
+        !splitsState.noMoreSplits) {
+      stateChangeNotifier.activate(std::move(stateChangePromises_));
+    }
+  }
+  stateChangeNotifier.notify();
+  return notBlocked ? BlockingReason::kNotBlocked
+                    : BlockingReason::kWaitForSplit;
 }
 
 bool Task::testingHasDriverWaitForSplit() const {

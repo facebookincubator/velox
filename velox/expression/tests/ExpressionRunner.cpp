@@ -323,8 +323,18 @@ void ExpressionRunner::run(
       auto& testCase = inputTestCases[i];
       SelectivityVector rows = adjustRows(numRows, testCase.activeRows);
       std::cout << "Executing Input " << i << std::endl;
-      auto results = evaluateAndPrintResults(
-          *exprSet, testCase.inputVector, rows, execCtx);
+      RowVectorPtr inputVector;
+      if (mode == "simplified") {
+        // The verifier runs the simplified path on a compacted copy of the
+        // input when verifying layout invariance. Mirror that here so
+        // "simplified" mode reproduces the same evaluation.
+        inputVector = std::static_pointer_cast<RowVector>(
+            BaseVector::copy(*testCase.inputVector));
+      } else {
+        inputVector = testCase.inputVector;
+      }
+      auto results =
+          evaluateAndPrintResults(*exprSet, inputVector, rows, execCtx);
       if (!storeResultPath.empty()) {
         auto fileName = fmt::format("resultVector_{}", i);
         saveResults(results, storeResultPath, fileName);

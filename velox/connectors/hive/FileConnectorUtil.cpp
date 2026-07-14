@@ -116,6 +116,8 @@ void configureReaderOptions(
     readerOptions.setSelectiveNimbleReaderEnabled(
         connectorQueryCtx->selectiveNimbleReaderEnabled());
   }
+  readerOptions.setNimbleDirectBufferedInputEnabled(
+      fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
   readerOptions.setCacheMetadata(
       fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
@@ -201,6 +203,10 @@ void configureRowReaderOptions(
         fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setStringDecoderZeroCopy(
+        fileConfig->nimbleStringDecoderZeroCopy(sessionProperties));
+    rowReaderOptions.setNimblePreserveDictionaryEncoding(
+        fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
   }
 }
 
@@ -248,13 +254,31 @@ bool applyPartitionFilter(
       }
       return applyFilter(*filter, result.value());
     }
-    case TypeKind::VARCHAR: {
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
       return applyFilter(*filter, partitionValue);
     }
     default:
       VELOX_FAIL(
           "Bad type {} for partition value: {}", type->kind(), partitionValue);
   }
+}
+
+template <TypeKind kind>
+bool testFilterTyped(const common::Filter* filter, const VectorPtr& vec) {
+  using T = typename TypeTraits<kind>::NativeType;
+  return applyFilter(*filter, vec->as<SimpleVector<T>>()->valueAt(0));
+}
+
+// Tests a filter against a non-null constant vector value (e.g., an
+// initial-default column missing from the data file).
+bool testFilterOnConstantVector(
+    const common::Filter* filter,
+    const VectorPtr& constantVec) {
+  VELOX_CHECK_EQ(constantVec->size(), 1);
+  VELOX_CHECK(!constantVec->isNullAt(0));
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      testFilterTyped, constantVec->typeKind(), filter, constantVec);
 }
 
 } // namespace
@@ -291,9 +315,20 @@ bool testFilters(
               child->filter(),
               asLocalTime);
         }
-        // Column is missing, most likely due to schema evolution. Or it's a
-        // partition key but the partition value is NULL.
-        if (child->filter()->isDeterministic() &&
+        // Column is missing from the file. If it has a constant value (e.g.,
+        // an initial-default from schema evolution), test the filter against
+        // it. Otherwise treat the column as NULL.
+        bool filterMatchedConstant = false;
+        if (child->isConstant()) {
+          auto constantVec = child->constantValue();
+          if (!constantVec->isNullAt(0)) {
+            if (!testFilterOnConstantVector(child->filter(), constantVec)) {
+              return false;
+            }
+            filterMatchedConstant = true;
+          }
+        }
+        if (!filterMatchedConstant && child->filter()->isDeterministic() &&
             !child->filter()->testNull()) {
           VLOG(1) << "Skipping " << filePath
                   << " because the filter testNull() failed for column "

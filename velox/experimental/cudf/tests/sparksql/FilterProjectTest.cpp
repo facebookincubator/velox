@@ -199,6 +199,72 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
 }
 
+TEST_F(CudfFilterProjectTest, substringConstantStartAndLength) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abcdef", "spark", "", "über", std::nullopt});
+  auto data = makeRowVector({input});
+
+  // Use `substring` for CPU/GPU result comparison because the Velox Spark CPU
+  // registry resolves `substring`, but not the `substr` spelling. The `substr`
+  // cuDF registration is covered by the selection test.
+  for (const auto& expression : {
+           "substring(c0, 1)",
+           "substring(c0, 1, 3)",
+           "substring(c0, 0, 2)",
+           "substring(c0, -2, 2)",
+           "substring(c0, -100, 4)",
+           "substring(c0, 100, 2)",
+           "substring(c0, 1, 0)",
+           "substring(c0, 2, -1)",
+           "substring(c0, cast(-2147483648 as integer), 10)",
+           "substring(c0, 1, 2147483647)",
+           "substring(c0, cast(null as integer), 2)",
+           "substring(c0, 1, cast(null as integer))",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, data, data->rowType());
+  }
+}
+
+TEST_F(CudfFilterProjectTest, substringColumnStartAndLength) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abcdef",
+       "spark",
+       "",
+       "über",
+       "gpu",
+       std::nullopt,
+       "edge",
+       "zero",
+       "negative",
+       "short"});
+  auto starts = makeNullableFlatVector<int32_t>(
+      {1, 0, -2, std::nullopt, 2, 2, -2147483648, 1, 1, 100});
+  auto lengths = makeNullableFlatVector<int32_t>(
+      {3, 2, 5, 1, std::nullopt, 10, 10, 0, -1, 2});
+  auto data = makeRowVector({input, starts, lengths});
+
+  for (const auto& expression : {
+           "substring(c0, c1)",
+           "substring(c0, c1, c2)",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, data, data->rowType());
+  }
+}
+
+TEST_F(CudfFilterProjectTest, substringConstantInput) {
+  auto starts = makeNullableFlatVector<int32_t>({1, 2, 0, -2, std::nullopt, 1});
+  auto lengths =
+      makeNullableFlatVector<int32_t>({3, 10, 2, 2, 1, std::nullopt});
+  auto data = makeRowVector({starts, lengths});
+
+  assertExpressionMatchesCpu(
+      "substring('abcdef', c0, c1)", data, data->rowType());
+  assertExpressionMatchesCpu(
+      "substring(cast(null as varchar), c0, c1)", data, data->rowType());
+}
+
 TEST_F(CudfFilterProjectTest, getConstantIndex) {
   auto arrays = makeNullableArrayVector<int32_t>({
       {{10, 20, 30}},

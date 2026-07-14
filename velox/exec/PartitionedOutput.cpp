@@ -15,9 +15,9 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -48,7 +48,7 @@ BlockingReason Destination::advance(
     const RowVectorPtr& output,
     const row::CompactRow* outputCompactRow,
     const row::UnsafeRowFast* outputUnsafeRow,
-    OutputBufferManager& bufferManager,
+    DefaultOutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
     ContinueFuture* future,
@@ -121,7 +121,7 @@ void Destination::clearVectorStreamGroup() {
 }
 
 BlockingReason Destination::flush(
-    OutputBufferManager& bufferManager,
+    DefaultOutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
   if (!current_ || rowsInCurrent_ == 0) {
@@ -256,7 +256,8 @@ void PartitionedOutput::initialize() {
   auto manager = operatorCtx_->task()->outputBufferManager().lock();
   VELOX_CHECK_NOT_NULL(
       manager, "Task has no output buffer manager for partitioned output");
-  auto httpManager = std::dynamic_pointer_cast<OutputBufferManager>(manager);
+  auto httpManager =
+      std::dynamic_pointer_cast<DefaultOutputBufferManager>(manager);
   VELOX_CHECK_NOT_NULL(
       httpManager,
       "PartitionedOutput requires the default OutputBufferManager but the task "
@@ -448,7 +449,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   detail::Destination* blockedDestination = nullptr;
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
-      bufferManager, "OutputBufferManager was already destructed");
+      bufferManager, "DefaultOutputBufferManager was already destructed");
 
   // Limit serialized pages to 1MB.
   static const uint64_t kMaxPageSize = 1 << 20;

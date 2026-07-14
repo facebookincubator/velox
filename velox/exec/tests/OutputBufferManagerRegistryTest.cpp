@@ -23,8 +23,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/IOutputBufferManager.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/OutputBufferManagerRegistry.h"
 
 namespace facebook::velox::exec {
@@ -117,7 +117,7 @@ TEST(OutputBufferManagerRegistryTest, registryOperations) {
 TEST(OutputBufferManagerRegistryTest, selfRegistrationUsesHttpTransport) {
   // Calling getInstanceRef() triggers self-registration into the global
   // registry, even if a prior test cleared it via unregisterAll().
-  auto instance = OutputBufferManager::getInstanceRef();
+  auto instance = DefaultOutputBufferManager::getInstanceRef();
 
   auto httpMgr = OutputBufferManagerRegistry::tryGet(
       std::string(core::TransportKind::kHttp));

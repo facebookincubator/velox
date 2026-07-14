@@ -777,6 +777,30 @@ void registerBuiltins() {
       .costFunction(divCost)
       .registerOp();
 
+  // In-place (Tensor, Scalar). Same __*_ device functions; the scalar operand
+  // is cast to self's dtype via normalize, and no arithmeticPromotion so the
+  // result keeps self's dtype.
+  MetadataBuilder("torch.ops.aten.add_.Scalar")
+      .elementwiseFunc("__add_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Scalar")
+      .elementwiseFunc("__sub_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Scalar")
+      .elementwiseFunc("__mul_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Scalar")
+      .elementwiseFunc("__div_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(divCost)
+      .registerOp();
+
   // Binary arithmetic (Tensor, Scalar).
   MetadataBuilder("torch.ops.aten.add.Scalar")
       .elementwiseFunc("__add")
@@ -2472,6 +2496,13 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // The multi-block final stage's output is read cross-block by fused cat
+      // consumers (e.g. the exclusive-prefix cat([zeros[1], cumsum[:-1]]) and
+      // the outer cat of per-chain offsets). Without a launch boundary those
+      // reads are ordered only by intra-block __syncthreads(), which is
+      // insufficient across non-co-resident blocks. Gated by the runtime
+      // WaveConfig::scanOutputReturnBarrier toggle so the fix can be A/B'd.
+      .scanOutputReturnBarrier()
       .only1d()
       .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
@@ -2590,6 +2621,11 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // See cumsum_final: the multi-block final stage's output is read
+      // cross-block by fused cat consumers (the outer cat of per-chain offsets
+      // reads each chain's exclusive-prefix output), so it must end its launch.
+      // Gated by the WaveConfig::scanOutputReturnBarrier toggle.
+      .scanOutputReturnBarrier()
       .only1d()
       .outputConstraints(rank1Constraint)
       .registerOp();

@@ -20,7 +20,7 @@
 
 namespace facebook::velox::exec {
 
-class OutputBufferManager : public IOutputBufferManager {
+class DefaultOutputBufferManager : public IOutputBufferManager {
  public:
   /// Options for shuffle. This is initialized once and affects both
   /// PartitionedOutput and Exchange. This can be used for controlling
@@ -28,11 +28,11 @@ class OutputBufferManager : public IOutputBufferManager {
   /// agree.
   struct Options {};
 
-  explicit OutputBufferManager(Options) {}
+  explicit DefaultOutputBufferManager(Options) {}
 
-  static const std::shared_ptr<OutputBufferManager>& getInstanceRef();
+  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef();
 
-  static const std::shared_ptr<OutputBufferManager>& getInstanceRef(
+  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef(
       const Options& options);
 
   // Lifecycle.

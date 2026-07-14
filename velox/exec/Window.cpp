@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+
+#include <limits>
+
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -264,6 +268,22 @@ bool Window::supportRowsStreaming() {
 }
 
 void Window::addInput(RowVectorPtr input) {
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::Window::addInput", &numRows_);
+
+  // numRows_ is a vector_size_t (int32) that drives isFinished() / getOutput()
+  // accounting. Guard it before delegating to the build: this bounds the total
+  // row count, which in turn bounds every per-build int32 counter that only
+  // counts a subset of the fed rows. In particular RowsStreamingWindowBuild's
+  // pendingRowCount_ increments inside windowBuild_->addInput() and, for a
+  // RANGE frame with one huge peer group, never flushes - so guarding after
+  // delegation would be too late to keep it from overflowing.
+  VELOX_USER_CHECK_LE(
+      static_cast<int64_t>(numRows_) + input->size(),
+      std::numeric_limits<vector_size_t>::max(),
+      "Window operator cannot process more than {} rows",
+      std::numeric_limits<vector_size_t>::max());
+
   windowBuild_->addInput(input);
   numRows_ += input->size();
 }

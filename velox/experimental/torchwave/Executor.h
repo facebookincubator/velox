@@ -205,6 +205,13 @@ struct ExecutionState {
   // Standalone nodes skipped during step execution due to None inputs.
   std::vector<NodeCP>* deferredStandalones{nullptr};
 
+  // Fusion-coverage counters for the --trace summary: how many ops actually ran
+  // as eager single-op GPU standalones vs. metadata-only host shortcuts (each
+  // counted once, at its execution site, after the nodeOutputsComputed/None
+  // skip guards).  Reset at the start of each executeWave.
+  int64_t numStandalonesRun{0};
+  int64_t numShortcutsRun{0};
+
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
 
@@ -237,10 +244,13 @@ struct ExecutionState {
 };
 
 /// Executes a single node via its OpKernel with tracing and error logging.
+/// When 'traceState' is non-null, traces the node's input values before the op
+/// and its produced output values after, for any ids in --trace_values.
 void executeNode(
     NodeCP node,
     nativert::OpKernel* kernel,
-    nativert::ExecutionFrame& frame);
+    nativert::ExecutionFrame& frame,
+    TraceState* traceState = nullptr);
 
 /// Runs standalone launches by mapping each formal node to the actual node
 /// via OpInvocation::nodeMap(), executing it via the corresponding OpKernel.

@@ -1425,7 +1425,7 @@ TEST_F(Re2FunctionsTest, tryException) {
     auto result = evaluate("try(re2_extract(c0, c1))", input);
     assertEqualVectors(makeNullConstant(TypeKind::VARCHAR, 3), result);
 
-    // Atleast one non null result.
+    // At least one non null result.
     result = evaluate("try(re2_extract(c0, c1))", oneGoodInput);
     assertEqualVectors(
         makeNullableFlatVector<StringView>({std::nullopt, "mno", std::nullopt}),

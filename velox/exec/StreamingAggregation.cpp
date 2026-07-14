@@ -126,6 +126,11 @@ void StreamingAggregation::close() {
 }
 
 void StreamingAggregation::addInput(RowVectorPtr input) {
+  // needsInput() returns false while input_ is set, so the driver must drain
+  // the previous batch via getOutput() before feeding another. Fail loudly if
+  // that contract is violated rather than silently overwriting and dropping
+  // input_.
+  VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
 }
 

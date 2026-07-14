@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 #include "folly/synchronization/EventCount.h"
@@ -44,15 +44,15 @@ inline void PrintTo(const TestParam& param, std::ostream* os) {
   *os << fmt::format("{}_{}", param.outputKind, param.serdeKind);
 }
 
-class OutputBufferManagerTest : public testing::Test {
+class DefaultOutputBufferManagerTest : public testing::Test {
  protected:
-  OutputBufferManagerTest() : serdeKind_("Presto") {
+  DefaultOutputBufferManagerTest() : serdeKind_("Presto") {
     std::vector<std::string> names = {"c0", "c1"};
     std::vector<TypePtr> types = {BIGINT(), VARCHAR()};
     rowType_ = ROW(std::move(names), std::move(types));
   }
 
-  explicit OutputBufferManagerTest(std::string serdeKind)
+  explicit DefaultOutputBufferManagerTest(std::string serdeKind)
       : serdeKind_(serdeKind) {
     std::vector<std::string> names = {"c0", "c1"};
     std::vector<TypePtr> types = {BIGINT(), VARCHAR()};
@@ -65,7 +65,7 @@ class OutputBufferManagerTest : public testing::Test {
 
   void SetUp() override {
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
-    bufferManager_ = OutputBufferManager::getInstanceRef();
+    bufferManager_ = DefaultOutputBufferManager::getInstanceRef();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
@@ -446,12 +446,12 @@ class OutputBufferManagerTest : public testing::Test {
       std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency())};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
-  std::shared_ptr<OutputBufferManager> bufferManager_;
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_;
   RowTypePtr rowType_;
 };
 
-class OutputBufferManagerWithDifferentSerdeKindsTest
-    : public OutputBufferManagerTest,
+class DefaultOutputBufferManagerWithDifferentSerdeKindsTest
+    : public DefaultOutputBufferManagerTest,
       public testing::WithParamInterface<std::string> {
  public:
   static std::vector<std::string> getTestParams() {
@@ -461,8 +461,8 @@ class OutputBufferManagerWithDifferentSerdeKindsTest
   }
 };
 
-class AllOutputBufferManagerTest
-    : public OutputBufferManagerTest,
+class AllDefaultOutputBufferManagerTest
+    : public DefaultOutputBufferManagerTest,
       public testing::WithParamInterface<TestParam> {
  public:
   static std::vector<TestParam> getTestParams() {
@@ -479,15 +479,15 @@ class AllOutputBufferManagerTest
     return params;
   }
 
-  AllOutputBufferManagerTest()
-      : OutputBufferManagerTest(GetParam().serdeKind),
+  AllDefaultOutputBufferManagerTest()
+      : DefaultOutputBufferManagerTest(GetParam().serdeKind),
         outputKind_(GetParam().outputKind) {}
 
  protected:
   const PartitionedOutputNode::Kind outputKind_;
 };
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, arbitrayBuffer) {
+TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, arbitrayBuffer) {
   {
     ArbitraryBuffer buffer;
     ASSERT_TRUE(buffer.empty());
@@ -564,12 +564,13 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, arbitrayBuffer) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    OutputBufferManagerWithDifferentSerdeKindsTest,
-    OutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     testing::ValuesIn(
-        OutputBufferManagerWithDifferentSerdeKindsTest::getTestParams()));
+        DefaultOutputBufferManagerWithDifferentSerdeKindsTest::
+            getTestParams()));
 
-TEST_F(OutputBufferManagerTest, outputType) {
+TEST_F(DefaultOutputBufferManagerTest, outputType) {
   ASSERT_EQ(
       PartitionedOutputNode::toName(PartitionedOutputNode::Kind::kPartitioned),
       "PARTITIONED");
@@ -585,7 +586,9 @@ TEST_F(OutputBufferManagerTest, outputType) {
       "Invalid enum value: 100");
 }
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
+TEST_P(
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
+    destinationBuffer) {
   {
     ArbitraryBuffer buffer;
     DestinationBuffer destinationBuffer;
@@ -774,7 +777,9 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, destinationBuffer) {
   }
 }
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicPartitioned) {
+TEST_P(
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
+    basicPartitioned) {
   vector_size_t size = 100;
   std::string taskId = "t0";
   auto task = initializeTask(
@@ -854,7 +859,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicPartitioned) {
   EXPECT_TRUE(task->isFinished());
 }
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicBroadcast) {
+TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, basicBroadcast) {
   vector_size_t size = 100;
 
   std::string taskId = "t0";
@@ -925,7 +930,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicBroadcast) {
   EXPECT_TRUE(task->isFinished());
 }
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicArbitrary) {
+TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, basicArbitrary) {
   const vector_size_t size = 100;
   int numDestinations = 5;
   const std::string taskId = "t0";
@@ -1009,7 +1014,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, basicArbitrary) {
 }
 
 TEST_P(
-    OutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     inactiveDestinationBuffer) {
   const vector_size_t dataSize = 1'000;
   const int maxBytes = 1;
@@ -1148,7 +1153,7 @@ TEST_P(
 }
 
 TEST_P(
-    OutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     broadcastWithDynamicAddedDestination) {
   vector_size_t size = 100;
 
@@ -1194,7 +1199,7 @@ TEST_P(
 }
 
 TEST_P(
-    OutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     arbitraryWithDynamicAddedDestination) {
   const vector_size_t size = 100;
   int numDestinations = 5;
@@ -1251,7 +1256,7 @@ TEST_P(
   EXPECT_TRUE(task->isFinished());
 }
 
-TEST_P(AllOutputBufferManagerTest, maxBytes) {
+TEST_P(AllDefaultOutputBufferManagerTest, maxBytes) {
   const vector_size_t size = 100;
   const std::string taskId = "t0";
   initializeTask(taskId, rowType_, outputKind_, 1, 1);
@@ -1277,7 +1282,7 @@ TEST_P(AllOutputBufferManagerTest, maxBytes) {
   bufferManager_->removeTask(taskId);
 }
 
-TEST_P(AllOutputBufferManagerTest, outputBufferUtilization) {
+TEST_P(AllDefaultOutputBufferManagerTest, outputBufferUtilization) {
   const std::string taskId = std::to_string(rand());
   const auto destination = 0;
   auto task = initializeTask(taskId, rowType_, outputKind_, 1, 1);
@@ -1321,7 +1326,7 @@ TEST_P(AllOutputBufferManagerTest, outputBufferUtilization) {
   verifyOutputBuffer(task, OutputBufferStatus::kFinished);
 }
 
-TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
+TEST_P(AllDefaultOutputBufferManagerTest, outputBufferStats) {
   const vector_size_t vectorSize = 100;
   const std::string taskId = std::to_string(folly::Random::rand32());
   initializeTask(taskId, rowType_, outputKind_, 1, 1);
@@ -1417,7 +1422,7 @@ TEST_P(AllOutputBufferManagerTest, outputBufferStats) {
   ASSERT_FALSE(bufferManager_->stats(taskId).has_value());
 }
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, outOfOrderAcks) {
+TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, outOfOrderAcks) {
   const vector_size_t size = 100;
   const std::string taskId = "t0";
   auto task = initializeTask(
@@ -1448,7 +1453,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, outOfOrderAcks) {
   bufferManager_->removeTask(taskId);
 }
 
-TEST_F(OutputBufferManagerTest, errorInQueue) {
+TEST_F(DefaultOutputBufferManagerTest, errorInQueue) {
   auto queue = std::make_shared<ExchangeQueue>(1, 0);
   queue->setError("Forced failure");
 
@@ -1462,7 +1467,7 @@ TEST_F(OutputBufferManagerTest, errorInQueue) {
 }
 
 TEST_P(
-    OutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     setQueueErrorWithPendingPages) {
   const uint64_t kBufferSize = 128;
   auto iobuf = folly::IOBuf::create(kBufferSize);
@@ -1492,7 +1497,9 @@ TEST_P(
       "Forced failure");
 }
 
-TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, getDataOnFailedTask) {
+TEST_P(
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
+    getDataOnFailedTask) {
   // Fetching data on a task which was either never initialized in the buffer
   // manager or was removed by a parallel thread must return false. The
   // `notify` callback must not be registered.
@@ -1510,7 +1517,7 @@ TEST_P(OutputBufferManagerWithDifferentSerdeKindsTest, getDataOnFailedTask) {
 }
 
 TEST_P(
-    OutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     updateBrodcastBufferOnFailedTask) {
   // Updating broadcast buffer count in the buffer manager for a given unknown
   // task must not throw exception, instead must return FALSE.
@@ -1520,7 +1527,7 @@ TEST_P(
       false));
 }
 
-TEST_P(AllOutputBufferManagerTest, multiFetchers) {
+TEST_P(AllDefaultOutputBufferManagerTest, multiFetchers) {
   const std::vector<bool> earlyTerminations = {false, true};
   for (const auto earlyTermination : earlyTerminations) {
     SCOPED_TRACE(fmt::format("earlyTermination {}", earlyTermination));
@@ -1612,6 +1619,6 @@ TEST_P(AllOutputBufferManagerTest, multiFetchers) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    AllOutputBufferManagerTestSuite,
-    AllOutputBufferManagerTest,
-    testing::ValuesIn(AllOutputBufferManagerTest::getTestParams()));
+    AllDefaultOutputBufferManagerTestSuite,
+    AllDefaultOutputBufferManagerTest,
+    testing::ValuesIn(AllDefaultOutputBufferManagerTest::getTestParams()));

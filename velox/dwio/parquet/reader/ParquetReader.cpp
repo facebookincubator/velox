@@ -1734,8 +1734,11 @@ std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
     if (!columnChunk.hasStatistics()) {
       return nullptr;
     }
-    auto rowGroupStats =
-        columnChunk.getColumnStatistics(parquetNode.type(), rowGroup.numRows());
+    auto rowGroupStats = columnChunk.getColumnStatistics(
+        parquetNode.type(),
+        rowGroup.numRows(),
+        parquetNode.convertedType_,
+        parquetNode.logicalType_);
     builder->merge(*rowGroupStats);
   }
 

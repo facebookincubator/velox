@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Making OpenZL Available in Nimble OSS](https://velox-lib.io/blog/openzl-in-nimble-oss) (2026-07-05)
+- [Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox](https://velox-lib.io/blog/right-semi-join-performance) (2026-06-26)
 - [From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox](https://velox-lib.io/blog/parquet-delta-decoding) (2026-06-17)
-- [FlatMapVector Adoption for Scaling High-Performance AI/ML Data Pre-Processing](https://velox-lib.io/blog/flatmapvector) (2026-05-01)
-- [Nimble Cluster Index: Efficient Indexed Lookups on Columnar Data](https://velox-lib.io/blog/nimble-cluster-index) (2026-04-27)
 
 ## Community
 
@@ -248,18 +248,9 @@ disable grouping on Linux, pass `-DVELOX_ENABLE_GROUPED_TESTS=OFF` via
 
 Note that,
 * Velox requires a compiler at the minimum GCC 11.0 or Clang 15.0.
-* Velox requires the CPU to support instruction sets:
-  * bmi
-  * bmi2
-  * f16c
-* Velox tries to use the following (or equivalent) instruction sets where available:
-  * On Intel CPUs
-    * avx
-    * avx2
-    * sse
-  * On ARM
-    * Neon
-    * Neon64
+* On x86 CPUs, Velox requires BMI, BMI2, and F16C, and uses AVX, AVX2,
+  and SSE where available.
+* On Arm CPUs, Velox uses Neon and Neon64 where available.
 
 Build metrics for Velox are published at <https://facebookincubator.github.io/velox/bm-report/>
 
