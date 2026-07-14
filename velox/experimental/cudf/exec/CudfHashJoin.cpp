@@ -670,7 +670,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
   // Using output_mr here to allow spilling queued up large tables
   auto tbl = getConcatenatedTable(
       std::exchange(inputs_, {}),
-      joinNode_->sources()[1]->outputType(),
+      probeType_,
       stream,
       get_output_mr());
 
@@ -681,10 +681,11 @@ void CudfHashJoinProbe::doNoMoreInput() {
     VLOG(1) << "Probe table number of rows: " << tbl->num_rows();
   }
 
-  // Store the concatenated table in input_
+  // This intermediate is still the complete probe input. The right-semi
+  // output schema applies only after rightSemiFilterJoin gathers build rows.
   input_ = std::make_shared<CudfVector>(
       operatorCtx_->pool(),
-      joinNode_->outputType(),
+      probeType_,
       tbl->num_rows(),
       std::move(tbl),
       stream);
