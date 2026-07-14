@@ -32,6 +32,11 @@ namespace {
 __int128_t getDecimalScalarValue(
     const cudf::scalar& s,
     rmm::cuda_stream_view stream) {
+  if (s.type().id() == cudf::type_id::DECIMAL32) {
+    auto const& dec =
+        static_cast<cudf::fixed_point_scalar<numeric::decimal32> const&>(s);
+    return static_cast<__int128_t>(static_cast<int64_t>(dec.value(stream)));
+  }
   if (s.type().id() == cudf::type_id::DECIMAL64) {
     auto const& dec =
         static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(s);
@@ -56,7 +61,8 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
 void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   VELOX_CHECK(
       inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
-      "Unsupported input type for decimal divide");
+      "Unsupported input type for decimal divide; DECIMAL32 operands must be "
+      "widened before calling decimalDivide");
   if (inType == cudf::type_id::DECIMAL64) {
     VELOX_CHECK(
         outType == cudf::type_id::DECIMAL64 ||
