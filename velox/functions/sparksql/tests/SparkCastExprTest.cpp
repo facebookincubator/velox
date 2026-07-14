@@ -1242,45 +1242,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              720'000'000'000},
             DECIMAL(20, 10)));
   }
-
-  template <typename T>
-  void testIntegralToDecimalOverflowThrow() {
-    // The value does not fit in the allowed integer digits (precision - scale)
-    // of the target.
-    testThrow<T>(
-        CppToType<T>::create(),
-        DECIMAL(3, 1),
-        {std::numeric_limits<T>::min()},
-        fmt::format(
-            "Cannot cast {} '{}' to DECIMAL(3, 1)",
-            CppToType<T>::name,
-            std::to_string(std::numeric_limits<T>::min())));
-    testThrow<T>(
-        CppToType<T>::create(),
-        DECIMAL(17, 16),
-        {-100},
-        fmt::format(
-            "Cannot cast {} '-100' to DECIMAL(17, 16)", CppToType<T>::name));
-    testThrow<T>(
-        CppToType<T>::create(),
-        DECIMAL(17, 16),
-        {100},
-        fmt::format(
-            "Cannot cast {} '100' to DECIMAL(17, 16)", CppToType<T>::name));
-  }
-
-  template <typename T>
-  void testIntegralToDecimalOverflowNull() {
-    testCast<T, int64_t>(
-        CppToType<T>::create(),
-        DECIMAL(3, 1),
-        {std::numeric_limits<T>::min()},
-        {std::nullopt});
-    testCast<T, int64_t>(
-        CppToType<T>::create(), DECIMAL(17, 16), {-100}, {std::nullopt});
-    testCast<T, int64_t>(
-        CppToType<T>::create(), DECIMAL(17, 16), {100}, {std::nullopt});
-  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -2152,10 +2113,34 @@ TEST_F(SparkCastExprTestAnsiOn, integralToDecimal) {
   testIntegralToDecimal<int64_t>();
 
   // Under ANSI ON, inputs that overflow the target precision/scale throw.
-  testIntegralToDecimalOverflowThrow<int8_t>();
-  testIntegralToDecimalOverflowThrow<int16_t>();
-  testIntegralToDecimalOverflowThrow<int32_t>();
-  testIntegralToDecimalOverflowThrow<int64_t>();
+  // The value does not fit in the allowed integer digits (precision - scale)
+  // of the target.
+  auto testOverflowThrow = [&]<typename T>() {
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(3, 1),
+        {std::numeric_limits<T>::min()},
+        fmt::format(
+            "Cannot cast {} '{}' to DECIMAL(3, 1)",
+            CppToType<T>::name,
+            std::to_string(std::numeric_limits<T>::min())));
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(17, 16),
+        {-100},
+        fmt::format(
+            "Cannot cast {} '-100' to DECIMAL(17, 16)", CppToType<T>::name));
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(17, 16),
+        {100},
+        fmt::format(
+            "Cannot cast {} '100' to DECIMAL(17, 16)", CppToType<T>::name));
+  };
+  testOverflowThrow.operator()<int8_t>();
+  testOverflowThrow.operator()<int16_t>();
+  testOverflowThrow.operator()<int32_t>();
+  testOverflowThrow.operator()<int64_t>();
 }
 
 TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
@@ -2255,10 +2240,21 @@ TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
 
   // Under ANSI OFF, the same overflowing inputs return NULL instead of
   // throwing.
-  testIntegralToDecimalOverflowNull<int8_t>();
-  testIntegralToDecimalOverflowNull<int16_t>();
-  testIntegralToDecimalOverflowNull<int32_t>();
-  testIntegralToDecimalOverflowNull<int64_t>();
+  auto testOverflowNull = [&]<typename T>() {
+    testCast<T, int64_t>(
+        CppToType<T>::create(),
+        DECIMAL(3, 1),
+        {std::numeric_limits<T>::min()},
+        {std::nullopt});
+    testCast<T, int64_t>(
+        CppToType<T>::create(), DECIMAL(17, 16), {-100}, {std::nullopt});
+    testCast<T, int64_t>(
+        CppToType<T>::create(), DECIMAL(17, 16), {100}, {std::nullopt});
+  };
+  testOverflowNull.operator()<int8_t>();
+  testOverflowNull.operator()<int16_t>();
+  testOverflowNull.operator()<int32_t>();
+  testOverflowNull.operator()<int64_t>();
 }
 
 } // namespace
