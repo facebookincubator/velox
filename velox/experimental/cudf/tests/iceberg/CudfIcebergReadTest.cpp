@@ -895,7 +895,7 @@ TEST_F(CudfIcebergReadTest, allInjectedProjectionWithPositionalDeletes) {
       2,
       getFileSize(deleteFilePath->getPath()));
 
-  auto tableType = ROW({"c0", "country"}, {BIGINT(), VARCHAR()});
+  auto tableType = ROW({"country", "c0"}, {VARCHAR(), BIGINT()});
   auto outputType = ROW({"country"}, {VARCHAR()});
   facebook::velox::connector::ColumnHandleMap assignments;
   assignments["country"] = std::make_shared<HiveColumnHandle>(
@@ -923,8 +923,7 @@ TEST_F(CudfIcebergReadTest, allInjectedProjectionWithPositionalDeletes) {
           makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
       .assertResults({expected});
 
-  // Read a physical column with prepended row indices. Filter is still deferred
-  // but row indices are contiguous.
+  // Push the physical predicate and defer the injected predicate.
   assignments["c0"] = std::make_shared<HiveColumnHandle>(
       "c0",
       HiveColumnHandle::ColumnType::kRegular,
@@ -937,19 +936,33 @@ TEST_F(CudfIcebergReadTest, allInjectedProjectionWithPositionalDeletes) {
                        .outputType(tableType)
                        .dataColumns(tableType)
                        .assignments(assignments)
-                       .subfieldFilter("country = 'US'")
+                       .subfieldFilters({"c0 != 20", "country = 'US'"})
                        .endTableScan()
                        .planNode();
   auto mixedExpected = makeRowVector(
-      {"c0", "country"},
+      {"country", "c0"},
       {
-          makeFlatVector<int64_t>({20, 40, 50}),
-          makeFlatVector<std::string>({"US", "US", "US"}),
+          makeFlatVector<std::string>({"US", "US"}),
+          makeFlatVector<int64_t>({40, 50}),
       });
   AssertQueryBuilder(mixedPlan)
       .splits(
           makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
       .assertResults({mixedExpected});
+
+  // The original filter removes rows that pass the pushed physical predicate
+  // when the injected predicate does not match.
+  std::unordered_map<std::string, std::optional<std::string>> caPartition = {
+      {"country", "CA"}};
+  auto emptyExpected = makeRowVector(
+      {"country", "c0"},
+      {
+          makeFlatVector<std::string>({}),
+          makeFlatVector<int64_t>({}),
+      });
+  AssertQueryBuilder(mixedPlan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}, caPartition))
+      .assertResults({emptyExpected});
 }
 
 /// Verifies a deletion vector with an injected-only projection.

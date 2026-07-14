@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergExpressionTransformers.hpp"
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -110,6 +111,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
   // Returns whether cuDF must prepend absolute file row positions.
   bool needPrependedRowIndex() const;
+
+  // Prepares a filter over columns read from the data file.
+  void prepareSubfieldFilter();
 
   // Removes and returns the prepended row-index column.
   std::unique_ptr<cudf::column> extractRowIndex(
@@ -212,8 +216,11 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   bool noColumnsToRead_{false};
   bool syntheticTableProduced_{false};
 
-  // Whether the subfield filter is deferred to post table read
+  // Whether the original subfield filter is deferred to post table read.
   bool deferSubfieldFilter_{false};
+
+  // Transformed filter pushed to the cuDF reader with injected columns removed.
+  std::unique_ptr<CudfIcebergExpressionTransformer> pushdownFilter_;
 
   // Top-level column names and total row count from the file metadata
   std::unordered_set<std::string> fileColumnNames_;
