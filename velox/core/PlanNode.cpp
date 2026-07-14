@@ -3074,7 +3074,8 @@ TableWriteNode::TableWriteNode(
     bool hasPartitioningScheme,
     RowTypePtr outputType,
     connector::CommitStrategy commitStrategy,
-    const PlanNodePtr& source)
+    const PlanNodePtr& source,
+    std::optional<std::vector<std::string>> notNullColumnNames)
     : PlanNode(id),
       sources_{source},
       columns_{columns},
@@ -3083,7 +3084,8 @@ TableWriteNode::TableWriteNode(
       insertTableHandle_(std::move(insertTableHandle)),
       hasPartitioningScheme_(hasPartitioningScheme),
       outputType_(std::move(outputType)),
-      commitStrategy_(commitStrategy) {
+      commitStrategy_(commitStrategy),
+      notNullColumnNames_(std::move(notNullColumnNames)) {
   VELOX_USER_CHECK_NOT_NULL(sources_[0]);
   VELOX_USER_CHECK_NOT_NULL(insertTableHandle_);
   VELOX_USER_CHECK_EQ(columns_->size(), columnNames_.size());
@@ -3092,6 +3094,16 @@ TableWriteNode::TableWriteNode(
         sources_[0]->outputType()->containsChild(column),
         "Column not found in TableWrite input: {}",
         column);
+  }
+  if (notNullColumnNames_.has_value()) {
+    const folly::F14FastSet<std::string> columnNameSet(
+        columnNames_.begin(), columnNames_.end());
+    for (const auto& name : notNullColumnNames_.value()) {
+      VELOX_USER_CHECK(
+          columnNameSet.count(name) > 0,
+          "NOT NULL column is not in the table schema: {}",
+          name);
+    }
   }
   if (columnStatsSpec_.has_value()) {
     VELOX_USER_CHECK(
@@ -3147,6 +3159,10 @@ void TableWriteNode::addDetails(std::stringstream& stream) const {
   if (columnStatsSpec_.has_value()) {
     stream << ", ";
     addStatsSpecDetails(stream, columnStatsSpec_);
+  }
+  if (notNullColumnNames_.has_value()) {
+    stream << ", notNullColumns: ["
+           << folly::join(", ", notNullColumnNames_.value()) << "]";
   }
 }
 
@@ -3223,6 +3239,10 @@ folly::dynamic TableWriteNode::serialize() const {
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] =
       std::string(connector::CommitStrategyName::toName(commitStrategy_));
+  if (notNullColumnNames_.has_value()) {
+    obj["notNullColumnNames"] =
+        ISerializable::serialize(notNullColumnNames_.value());
+  }
   return obj;
 }
 
@@ -3250,6 +3270,11 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("columnStatsSpec") != 0) {
     columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
   }
+  std::optional<std::vector<std::string>> notNullColumnNames;
+  if (obj.count("notNullColumnNames") != 0) {
+    notNullColumnNames = ISerializable::deserialize<std::vector<std::string>>(
+        obj["notNullColumnNames"]);
+  }
   return std::make_shared<TableWriteNode>(
       id,
       columns,
@@ -3260,7 +3285,8 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
       hasPartitioningScheme,
       outputType,
       commitStrategy,
-      deserializeSingleSource(obj, context));
+      deserializeSingleSource(obj, context),
+      std::move(notNullColumnNames));
 }
 
 TableWriteMergeNode::TableWriteMergeNode(

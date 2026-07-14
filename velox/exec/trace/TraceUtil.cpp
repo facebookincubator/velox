@@ -408,7 +408,8 @@ core::PlanNodePtr getTraceNode(
         core::TableWriteTraits::outputType(tableWriteNode->columnStatsSpec()),
         tableWriteNode->commitStrategy(),
         std::make_shared<DummySourceNode>(
-            tableWriteNode->sources().front()->outputType()));
+            tableWriteNode->sources().front()->outputType()),
+        tableWriteNode->notNullColumnNames());
   }
 
   if (const auto* unnestNode =

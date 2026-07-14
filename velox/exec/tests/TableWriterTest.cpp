@@ -105,6 +105,239 @@ TEST_F(BasicTableWriterTest, roundTrip) {
   assertEqualResults({data}, {copy});
 }
 
+TEST_F(BasicTableWriterTest, notNullConstraintPasses) {
+  const vector_size_t size = 100;
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row * 2; }),
+      });
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .notNullColumnNames({"c0", "c1"})
+                  .endTableWriter()
+                  .planNode();
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  auto rowCount = results->childAt(TableWriteTraits::kRowCountChannel)
+                      ->as<FlatVector<int64_t>>();
+  ASSERT_FALSE(rowCount->isNullAt(0));
+  ASSERT_EQ(size, rowCount->valueAt(0));
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintInvalidColumnThrows) {
+  const vector_size_t size = 10;
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row * 2; }),
+      });
+
+  auto directory = TempDirectoryPath::create();
+
+  VELOX_ASSERT_USER_THROW(
+      PlanBuilder()
+          .values({data})
+          .startTableWriter()
+          .outputDirectoryPath(directory->getPath())
+          .notNullColumnNames({"c99"})
+          .endTableWriter(),
+      "NOT NULL column is not in the table schema: c99");
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintThrowsOnNull) {
+  const vector_size_t size = 10;
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              size, [](auto row) { return row; }, nullEvery(3)),
+      });
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .notNullColumnNames({"c1"})
+                  .endTableWriter()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "NULL value not allowed for NOT NULL column: c1");
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintThrowsOnDictionaryEncodedNull) {
+  // Dictionary wrapping can hide nulls in the base vector with no
+  // top-level nulls buffer.
+  const vector_size_t size = 10;
+  auto base =
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }, nullEvery(3));
+  auto indices = makeIndices(size, [](auto row) { return row; });
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          wrapInDictionary(indices, size, base),
+      });
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .notNullColumnNames({"c1"})
+                  .endTableWriter()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "NULL value not allowed for NOT NULL column: c1");
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintThrowsOnConstantNull) {
+  // Large batch confirms enforcement isn't limited to the first rows.
+  const vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeNullConstant(TypeKind::INTEGER, size),
+      });
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .notNullColumnNames({"c1"})
+                  .endTableWriter()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "NULL value not allowed for NOT NULL column: c1");
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintIgnoresNullsBeyondBatchSize) {
+  // Like Limit's output: RowVector size smaller than its children's. The NOT
+  // NULL check must ignore nulls past the batch's own rows.
+  const vector_size_t childSize = 10;
+  const vector_size_t batchSize = 4;
+  auto indices = makeIndices(childSize, [](auto row) { return row; });
+  auto base = makeFlatVector<int32_t>(
+      childSize,
+      [](auto row) { return row; },
+      [batchSize](auto row) { return row >= batchSize; });
+  auto data = std::make_shared<RowVector>(
+      pool(),
+      ROW({"c0", "c1"}, {INTEGER(), INTEGER()}),
+      nullptr,
+      batchSize,
+      std::vector<VectorPtr>{
+          makeFlatVector<int32_t>(childSize, [](auto row) { return row; }),
+          wrapInDictionary(indices, childSize, base),
+      });
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .notNullColumnNames({"c1"})
+                  .endTableWriter()
+                  .planNode();
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  auto rowCount = results->childAt(TableWriteTraits::kRowCountChannel)
+                      ->as<FlatVector<int64_t>>();
+  ASSERT_FALSE(rowCount->isNullAt(0));
+  ASSERT_EQ(batchSize, rowCount->valueAt(0));
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintNulloptAllowsNulls) {
+  const vector_size_t size = 20;
+  auto data = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int32_t>(
+          size, [](auto row) { return row; }, nullEvery(5))});
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .endTableWriter()
+                  .planNode();
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  auto rowCount = results->childAt(TableWriteTraits::kRowCountChannel)
+                      ->as<FlatVector<int64_t>>();
+  ASSERT_FALSE(rowCount->isNullAt(0));
+  ASSERT_EQ(size, rowCount->valueAt(0));
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintEmptyListAllowsNulls) {
+  // An explicit empty list behaves like std::nullopt: no constraints
+  // enforced.
+  const vector_size_t size = 20;
+  auto data = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int32_t>(
+          size, [](auto row) { return row; }, nullEvery(5))});
+
+  auto directory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .notNullColumnNames({})
+                  .endTableWriter()
+                  .planNode();
+
+  auto results = AssertQueryBuilder(plan).copyResults(pool());
+  auto rowCount = results->childAt(TableWriteTraits::kRowCountChannel)
+                      ->as<FlatVector<int64_t>>();
+  ASSERT_FALSE(rowCount->isNullAt(0));
+  ASSERT_EQ(size, rowCount->valueAt(0));
+}
+
+TEST_F(BasicTableWriterTest, notNullConstraintWithReorderedColumns) {
+  // Non-identity 'inputMapping_': write targets c2, c0 in that order.
+  const vector_size_t size = 10;
+  auto data = makeRowVector(
+      {"c0", "c1", "c2"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(size, [](auto row) { return row * 2; }),
+          makeFlatVector<int32_t>(
+              size, [](auto row) { return row * 3; }, nullEvery(3)),
+      });
+
+  auto directory = TempDirectoryPath::create();
+  auto columns = ROW({"c2", "c0"}, {INTEGER(), INTEGER()});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .startTableWriter()
+                  .outputDirectoryPath(directory->getPath())
+                  .outputType(columns)
+                  .notNullColumnNames({"c2"})
+                  .endTableWriter()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "NULL value not allowed for NOT NULL column: c2");
+}
+
 // Generates a struct (row), write it as a flap map, and check that it is read
 // back as a map.
 TEST_F(BasicTableWriterTest, structAsMap) {
