@@ -46,6 +46,10 @@ memory::MemoryPool* OperatorCtx::customPool(std::string_view tag) const {
   return it == customPools_.end() ? nullptr : it->second;
 }
 
+core::QueryCtx* OperatorCtx::queryCtx() const {
+  return driverCtx_->task->queryCtx().get();
+}
+
 core::ExecCtx* OperatorCtx::execCtx() const {
   if (!execCtx_) {
     execCtx_ = std::make_unique<core::ExecCtx>(

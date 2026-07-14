@@ -454,6 +454,15 @@ add_test(
 
 target_link_libraries(velox_driver_test velox_exec velox_exec_test_lib GTest::gtest)
 
+add_executable(velox_operator_registry_test OperatorRegistryTest.cpp Main.cpp)
+add_test(
+  NAME velox_operator_registry_test
+  COMMAND velox_operator_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(velox_operator_registry_test velox_exec velox_exec_test_lib GTest::gtest)
+
 add_executable(velox_adaptive_prefetch_test AdaptivePrefetchTest.cpp)
 add_test(
   NAME velox_adaptive_prefetch_test

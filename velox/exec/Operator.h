@@ -16,7 +16,9 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <string_view>
+#include <typeindex>
 #include <unordered_map>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
@@ -70,6 +72,58 @@ class OperatorCtx {
   /// 'tag', or nullptr if no such custom root is registered on this query.
   velox::memory::MemoryPool* customPool(std::string_view tag) const;
 
+  /// Stores a per-operator registry override, shadowing any query-level entry
+  /// under the same key. Each subsystem defines its own key; the value is
+  /// stored type-erased and callers must use the same type T for setRegistry
+  /// and registry with the same key. Returns true if the key was newly
+  /// inserted. Throws if the key already exists unless 'overwrite' is true, in
+  /// which case the existing entry is replaced and false is returned. Intended
+  /// to be called before the driver starts running, e.g. by a DriverAdapter on
+  /// a replacement operator.
+  template <typename T>
+  bool setRegistry(
+      std::string_view key,
+      std::shared_ptr<T> registry,
+      bool overwrite = false) {
+    return registries_.withWLock([&](auto& map) {
+      auto it = map.find(std::string(key));
+      if (it != map.end()) {
+        VELOX_CHECK(overwrite, "Registry already set: {}", key);
+        it->second = {std::move(registry), std::type_index(typeid(T))};
+        return false;
+      }
+      map.emplace(
+          std::string(key),
+          RegistryEntry{std::move(registry), std::type_index(typeid(T))});
+      return true;
+    });
+  }
+
+  /// Retrieves a registry entry, checking the operator scope first and falling
+  /// through to the query scope. Returns nullptr if neither scope has an entry
+  /// for 'key'. Asserts that the stored type matches T.
+  template <typename T>
+  std::shared_ptr<T> registry(std::string_view key) const {
+    auto local =
+        registries_.withRLock([&](const auto& map) -> std::shared_ptr<T> {
+          auto it = map.find(std::string(key));
+          if (it == map.end()) {
+            return nullptr;
+          }
+          VELOX_CHECK(
+              it->second.type == std::type_index(typeid(T)),
+              "Registry type mismatch for key '{}': expected {}, got {}",
+              key,
+              typeid(T).name(),
+              it->second.type.name());
+          return std::static_pointer_cast<T>(it->second.ptr);
+        });
+    if (local) {
+      return local;
+    }
+    return queryCtx()->registry<T>(key);
+  }
+
   const core::PlanNodeId& planNodeId() const {
     return planNodeId_;
   }
@@ -101,6 +155,11 @@ class OperatorCtx {
       const common::SpillConfig* spillConfig = nullptr) const;
 
  private:
+  // Returns the query context of the task running this operator. Defined
+  // out-of-line because Task is incomplete in this header; used by registry()
+  // to fall through to the query-level registries.
+  core::QueryCtx* queryCtx() const;
+
   DriverCtx* const driverCtx_;
   const core::PlanNodeId planNodeId_;
   int32_t operatorId_;
@@ -111,6 +170,17 @@ class OperatorCtx {
   // custom root pool. Empty when no custom pools are registered.
   const std::unordered_map<std::string, velox::memory::MemoryPool*>
       customPools_;
+
+  // Type-erased registry entry for per-operator overrides.
+  struct RegistryEntry {
+    std::shared_ptr<void> ptr;
+    std::type_index type;
+  };
+
+  // Per-operator registry overrides keyed by subsystem name. Checked before
+  // falling through to the query-level registries on QueryCtx.
+  folly::Synchronized<folly::F14FastMap<std::string, RegistryEntry>>
+      registries_;
 
   // These members are created on demand.
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
@@ -392,6 +462,25 @@ class Operator : public BaseRuntimeStatWriter {
   /// 'tag', or nullptr if no such custom root is registered.
   velox::memory::MemoryPool* customPool(std::string_view tag) const {
     return operatorCtx_->customPool(tag);
+  }
+
+  /// Stores a per-operator registry override on this operator's context. May
+  /// be called by a DriverAdapter on a replacement operator before execution
+  /// starts. See OperatorCtx::setRegistry.
+  template <typename T>
+  bool setRegistry(
+      std::string_view key,
+      std::shared_ptr<T> registry,
+      bool overwrite = false) {
+    return operatorCtx_->setRegistry<T>(key, std::move(registry), overwrite);
+  }
+
+  /// Retrieves a registry entry visible to this operator, checking the
+  /// operator scope first and falling through to the query scope. See
+  /// OperatorCtx::registry.
+  template <typename T>
+  std::shared_ptr<T> registry(std::string_view key) const {
+    return operatorCtx_->registry<T>(key);
   }
 
   /// Returns true if the operator is reclaimable. Currently, we only support
