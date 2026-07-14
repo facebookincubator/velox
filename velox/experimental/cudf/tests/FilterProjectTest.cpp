@@ -29,8 +29,9 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
-#include <limits>
 #include <folly/ScopeGuard.h>
+
+#include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
