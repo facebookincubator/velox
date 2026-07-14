@@ -73,9 +73,11 @@ void PageReader::seekToPage(int64_t row) {
               inputStream_.get(),
               bufferStart_,
               bufferEnd_);
+          ++stats_.skippedPages;
           continue;
         }
         prepareDictionary(pageHeader);
+        ++stats_.processedPages;
         continue;
       default:
         break; // ignore INDEX page type and any other custom extensions
@@ -271,9 +273,11 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
         bufferStart_,
         bufferEnd_);
 
+    ++stats_.skippedPages;
     return;
   }
   pageData_ = readBytes(*pageHeader.compressed_page_size(), pageBuffer_);
+  ++stats_.processedPages;
   pageData_ = decompressData(
       pageData_,
       *pageHeader.compressed_page_size(),
@@ -350,6 +354,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
         inputStream_.get(),
         bufferStart_,
         bufferEnd_);
+    ++stats_.skippedPages;
     return;
   }
 
@@ -367,6 +372,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
       defineLength,
       bytes);
   pageData_ = readBytes(bytes, pageBuffer_);
+  ++stats_.processedPages;
 
   if (repeatLength) {
     repeatDecoder_ = std::make_unique<RleDecoder>(

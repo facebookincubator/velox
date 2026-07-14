@@ -22,6 +22,7 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/Filter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -2114,4 +2115,56 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, pageSkipStats) {
+  constexpr int kNumWrittenRows = 100'000;
+  constexpr int kNumResultRows = 200;
+
+  auto rowType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+
+  auto a = makeFlatVector<int64_t>(kNumWrittenRows, [](auto i) { return i; });
+  auto b = makeFlatVector<int64_t>(
+      kNumWrittenRows, [](auto i) { return (i * 7919) % kNumWrittenRows; });
+  auto data = makeRowVector({"a", "b"}, {a, b});
+
+  auto run = [&](bool useDataPageV2) {
+    ParquetWriterOptions writerOptions;
+    writerOptions.dataPageSize = 256;
+    writerOptions.enableDictionary = false;
+    writerOptions.useParquetDataPageV2 = useDataPageV2;
+
+    auto* sink = write(data, writerOptions);
+    auto reader = createReaderInMemory(*sink);
+
+    FilterMap filters;
+    filters.emplace(
+        "a",
+        std::make_unique<BigintRange>(
+            kNumWrittenRows - kNumResultRows, kNumWrittenRows - 1, false));
+
+    auto scanSpec = makeScanSpec(rowType);
+    for (auto& [col, f] : filters) {
+      scanSpec->getOrCreateChild(Subfield(col))->setFilter(std::move(f));
+    }
+    auto rowReaderOpts = makeRowReaderOpts(rowType);
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    uint64_t totalRows = 0;
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    while (rowReader->next(1000, result)) {
+      totalRows += result->size();
+      LazyVector::ensureLoadedRows(result, SelectivityVector(result->size()));
+    }
+    EXPECT_EQ(totalRows, kNumResultRows);
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_GT(stats.columnReaderStats.processedPages, 0);
+    EXPECT_GT(stats.columnReaderStats.skippedPages, 0);
+  };
+
+  for (const auto useDataPageV2 : {false, true}) {
+    run(useDataPageV2);
+  }
 }

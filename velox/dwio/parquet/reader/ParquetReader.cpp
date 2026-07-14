@@ -1596,8 +1596,7 @@ class ParquetRowReader::Impl {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
     stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
-    stats.columnReaderStats.pageLoadTimeNs.merge(
-        columnReaderStats_.pageLoadTimeNs);
+    stats.columnReaderStats.mergeFrom(columnReaderStats_);
   }
 
   void resetFilterCaches() {
