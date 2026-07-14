@@ -378,6 +378,65 @@ BENCHMARK(MapVarcharInt_10Entries) {
   benchMapColumn(10);
 }
 
+BENCHMARK_DRAW_LINE();
+
+// -- Parallel column writing benchmarks --
+// Compare serial vs parallel writing with ZSTD compression.
+
+void writeParquetWithOptions(
+    const RowVectorPtr& data,
+    memory::MemoryPool* rootPool,
+    bool parallel,
+    common::CompressionKind compression) {
+  auto leafPool = rootPool->addLeafChild("sink");
+  auto sink = std::make_unique<MemorySink>(
+      kSinkSize, FileSink::Options{.pool = leafPool.get()});
+  WriterOptions options;
+  options.memoryPool = rootPool;
+  options.compressionKind = compression;
+  auto parquetOpts = std::make_shared<ParquetWriterOptions>();
+  parquetOpts->enableParallelWrite = parallel;
+  options.formatSpecificOptions = parquetOpts;
+  auto writer = std::make_unique<parquet::Writer>(
+      std::move(sink), options, asRowType(data->type()));
+  writer->write(data);
+  writer->close();
+}
+
+void benchParallelWrite(int32_t numCols, bool parallel) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+  constexpr vector_size_t kParBatchSize = 100'000;
+
+  std::vector<VectorPtr> columns;
+  std::vector<std::string> names;
+
+  for (int32_t i = 0; i < numCols; ++i) {
+    columns.push_back(makeDictVarchar(kParBatchSize, 100, leafPool.get()));
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto data = maker.rowVector(std::move(names), columns);
+
+  suspender.dismiss();
+  writeParquetWithOptions(
+      data, rootPool.get(), parallel, common::CompressionKind_ZSTD);
+}
+
+BENCHMARK(Serial_10Cols_Zstd) {
+  benchParallelWrite(10, false);
+}
+BENCHMARK(Parallel_10Cols_Zstd) {
+  benchParallelWrite(10, true);
+}
+BENCHMARK(Serial_20Cols_Zstd) {
+  benchParallelWrite(20, false);
+}
+BENCHMARK(Parallel_20Cols_Zstd) {
+  benchParallelWrite(20, true);
+}
+
 } // namespace
 
 int32_t main(int32_t argc, char* argv[]) {

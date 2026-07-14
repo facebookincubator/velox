@@ -166,6 +166,17 @@ class ParquetConfig {
       "Write batch size for the Parquet writer.")
   static constexpr std::string_view kWriterBatchSize = "writer.batch-size";
 
+  VELOX_PARQUET_CONFIG_PROPERTY(
+      kWriterEnableParallelWriteSession,
+      "writer_enable_parallel_write",
+      bool,
+      false,
+      "Write Parquet columns in parallel using Arrow's internal thread pool. "
+      "Do not enable when writing multiple files in the same executor to "
+      "avoid deadlocks.")
+  static constexpr std::string_view kWriterEnableParallelWrite =
+      "writer.enable-parallel-write";
+
   static constexpr std::string_view kWriterCreatedBy = "writer.created-by";
 
   // Writer config accessors expect format-scoped configs. Connector prefixes
@@ -231,6 +242,15 @@ class ParquetConfig {
     return connectorConfig.get<std::string>(std::string(kWriterCreatedBy));
   }
 
+  static std::optional<std::string> writerEnableParallelWrite(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterEnableParallelWriteSession,
+        connectorConfig,
+        kWriterEnableParallelWrite);
+  }
+
   /// Serde parameter key for overriding the Parquet writer timestamp unit.
   /// Accepts numeric values 3 (milliseconds), 6 (microseconds), and 9
   /// (nanoseconds).
@@ -265,6 +285,8 @@ class ParquetConfig {
         properties, sessionPrefix);
     registerProperty<kWriterPageSizeSessionProperty>(properties, sessionPrefix);
     registerProperty<kWriterBatchSizeSessionProperty>(
+        properties, sessionPrefix);
+    registerProperty<kWriterEnableParallelWriteSessionProperty>(
         properties, sessionPrefix);
   }
 

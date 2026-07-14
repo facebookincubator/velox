@@ -148,6 +148,12 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
 
+  /// Write columns in parallel using Arrow's internal thread pool.
+  /// Compression and encoding of different columns proceed concurrently.
+  /// Default is false. Do not enable when writing multiple files in the same
+  /// executor to avoid deadlocks.
+  bool enableParallelWrite = false;
+
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
 
   /// Optional field IDs to assign to columns in the Parquet schema.
@@ -229,6 +235,9 @@ class Writer : public dwio::common::Writer {
 
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;
+
+  // Whether to write columns in parallel using Arrow's thread pool.
+  bool enableParallelWrite_;
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {
