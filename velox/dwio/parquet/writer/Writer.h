@@ -33,6 +33,10 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/arrow/Bridge.h"
 
+namespace arrow::internal {
+class ThreadPool;
+} // namespace arrow::internal
+
 namespace facebook::velox::parquet {
 
 using facebook::velox::parquet::arrow::util::CodecOptions;
@@ -148,11 +152,12 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
 
-  /// Write columns in parallel using Arrow's internal thread pool.
-  /// Compression and encoding of different columns proceed concurrently.
-  /// Default is false. Do not enable when writing multiple files in the same
-  /// executor to avoid deadlocks.
-  bool enableParallelWrite = false;
+  /// Number of threads used to compress and encode Parquet columns
+  /// concurrently. Values greater than 1 enable parallel column writing via a
+  /// dedicated Arrow thread pool owned by the writer. The pool is separate from
+  /// the executor driving write() calls, so it cannot deadlock. Default 1
+  /// (serial).
+  int32_t columnWriteParallelism = 1;
 
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
 
@@ -236,8 +241,14 @@ class Writer : public dwio::common::Writer {
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;
 
-  // Whether to write columns in parallel using Arrow's thread pool.
-  bool enableParallelWrite_;
+  // Number of threads used for parallel column writing; 1 means serial.
+  int32_t columnWriteParallelism_;
+
+  // Dedicated Arrow thread pool for parallel column writing, created only when
+  // columnWriteParallelism_ > 1. Owned by the writer and kept alive for the
+  // lifetime of the Arrow writer that references it. Separate from the executor
+  // driving write() calls, so column tasks cannot deadlock against it.
+  std::shared_ptr<::arrow::internal::ThreadPool> columnWriteExecutor_;
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {

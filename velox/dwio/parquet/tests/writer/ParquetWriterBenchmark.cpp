@@ -93,6 +93,27 @@ VectorPtr makeFlatVarchar(vector_size_t numRows, memory::MemoryPool* pool) {
   });
 }
 
+// Builds a flat VARCHAR column with ~128 bytes of per-row varied content.
+// Unlike the low-cardinality generators, this produces a large compressible
+// payload so that compression, not coordination, dominates write time. Used to
+// contrast a compression-bound workload against the dictionary cases.
+VectorPtr makeFlatHighEntropyVarchar(
+    vector_size_t numRows,
+    memory::MemoryPool* pool) {
+  test::VectorMaker maker(pool);
+  return maker.flatVector<std::string>(numRows, [](vector_size_t i) {
+    std::string value;
+    value.reserve(128);
+    for (int32_t j = 0; j < 16; ++j) {
+      value += fmt::format(
+          "{:08x}",
+          (static_cast<uint32_t>(i) * 2654435761u) ^
+              (static_cast<uint32_t>(j) * 40503u));
+    }
+    return value;
+  });
+}
+
 // Builds a flat INTEGER column (control case).
 VectorPtr makeFlatInteger(vector_size_t numRows, memory::MemoryPool* pool) {
   test::VectorMaker maker(pool);
@@ -381,12 +402,13 @@ BENCHMARK(MapVarcharInt_10Entries) {
 BENCHMARK_DRAW_LINE();
 
 // -- Parallel column writing benchmarks --
-// Compare serial vs parallel writing with ZSTD compression.
+// Compare serial vs parallel writing with ZSTD compression across thread
+// counts to show where the speedup plateaus.
 
 void writeParquetWithOptions(
     const RowVectorPtr& data,
     memory::MemoryPool* rootPool,
-    bool parallel,
+    int32_t parallelism,
     common::CompressionKind compression) {
   auto leafPool = rootPool->addLeafChild("sink");
   auto sink = std::make_unique<MemorySink>(
@@ -395,7 +417,7 @@ void writeParquetWithOptions(
   options.memoryPool = rootPool;
   options.compressionKind = compression;
   auto parquetOpts = std::make_shared<ParquetWriterOptions>();
-  parquetOpts->enableParallelWrite = parallel;
+  parquetOpts->columnWriteParallelism = parallelism;
   options.formatSpecificOptions = parquetOpts;
   auto writer = std::make_unique<parquet::Writer>(
       std::move(sink), options, asRowType(data->type()));
@@ -403,7 +425,7 @@ void writeParquetWithOptions(
   writer->close();
 }
 
-void benchParallelWrite(int32_t numCols, bool parallel) {
+void benchParallelWrite(int32_t numCols, int32_t parallelism) {
   folly::BenchmarkSuspender suspender;
   auto leafPool = rootPool->addLeafChild("bench");
   test::VectorMaker maker(leafPool.get());
@@ -421,20 +443,64 @@ void benchParallelWrite(int32_t numCols, bool parallel) {
 
   suspender.dismiss();
   writeParquetWithOptions(
-      data, rootPool.get(), parallel, common::CompressionKind_ZSTD);
+      data, rootPool.get(), parallelism, common::CompressionKind_ZSTD);
 }
 
-BENCHMARK(Serial_10Cols_Zstd) {
-  benchParallelWrite(10, false);
+// Same as benchParallelWrite but with compression-bound high-entropy flat
+// columns, where the parallelized compression is the dominant cost.
+void benchParallelFlatWrite(int32_t numCols, int32_t parallelism) {
+  folly::BenchmarkSuspender suspender;
+  auto leafPool = rootPool->addLeafChild("bench");
+  test::VectorMaker maker(leafPool.get());
+  constexpr vector_size_t kParBatchSize = 100'000;
+
+  std::vector<VectorPtr> columns;
+  std::vector<std::string> names;
+
+  for (int32_t i = 0; i < numCols; ++i) {
+    columns.push_back(
+        makeFlatHighEntropyVarchar(kParBatchSize, leafPool.get()));
+    names.push_back(fmt::format("c{}", i));
+  }
+
+  auto data = maker.rowVector(std::move(names), columns);
+
+  suspender.dismiss();
+  writeParquetWithOptions(
+      data, rootPool.get(), parallelism, common::CompressionKind_ZSTD);
 }
-BENCHMARK(Parallel_10Cols_Zstd) {
-  benchParallelWrite(10, true);
+
+BENCHMARK(Cols10_Threads1_Zstd) {
+  benchParallelWrite(10, 1);
 }
-BENCHMARK(Serial_20Cols_Zstd) {
-  benchParallelWrite(20, false);
+BENCHMARK(Cols10_Threads4_Zstd) {
+  benchParallelWrite(10, 4);
 }
-BENCHMARK(Parallel_20Cols_Zstd) {
-  benchParallelWrite(20, true);
+BENCHMARK_DRAW_LINE();
+BENCHMARK(Cols20_Threads1_Zstd) {
+  benchParallelWrite(20, 1);
+}
+BENCHMARK(Cols20_Threads2_Zstd) {
+  benchParallelWrite(20, 2);
+}
+BENCHMARK(Cols20_Threads4_Zstd) {
+  benchParallelWrite(20, 4);
+}
+BENCHMARK(Cols20_Threads8_Zstd) {
+  benchParallelWrite(20, 8);
+}
+BENCHMARK_DRAW_LINE();
+BENCHMARK(FlatCols20_Threads1_Zstd) {
+  benchParallelFlatWrite(20, 1);
+}
+BENCHMARK(FlatCols20_Threads2_Zstd) {
+  benchParallelFlatWrite(20, 2);
+}
+BENCHMARK(FlatCols20_Threads4_Zstd) {
+  benchParallelFlatWrite(20, 4);
+}
+BENCHMARK(FlatCols20_Threads8_Zstd) {
+  benchParallelFlatWrite(20, 8);
 }
 
 } // namespace

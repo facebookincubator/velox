@@ -22,6 +22,7 @@
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
+#include <arrow/util/thread_pool.h>
 #include "velox/common/Casts.h"
 #include "velox/common/base/Pointers.h"
 #include "velox/common/config/Config.h"
@@ -369,6 +370,18 @@ std::optional<int64_t> toParquetBatchSize(
   }
 }
 
+int32_t toColumnWriteParallelism(std::optional<std::string> parallelism) {
+  if (!parallelism) {
+    return 1;
+  }
+  try {
+    return std::max<int32_t>(folly::to<int32_t>(*parallelism), 1);
+  } catch (const std::exception& e) {
+    VELOX_USER_FAIL(
+        "Invalid parquet writer column write parallelism: {}", e.what());
+  }
+}
+
 } // namespace
 
 Writer::Writer(
@@ -429,7 +442,13 @@ Writer::Writer(
       getArrowParquetWriterOptions(options, parquetWriterOptions, flushPolicy_);
   setMemoryReclaimers();
   writeInt96AsTimestamp_ = parquetWriterOptions.writeInt96AsTimestamp;
-  enableParallelWrite_ = parquetWriterOptions.enableParallelWrite;
+  columnWriteParallelism_ =
+      std::max<int32_t>(parquetWriterOptions.columnWriteParallelism, 1);
+  if (columnWriteParallelism_ > 1) {
+    PARQUET_ASSIGN_OR_THROW(
+        columnWriteExecutor_,
+        ::arrow::internal::ThreadPool::Make(columnWriteParallelism_));
+  }
   arrowMemoryPool_ = parquetWriterOptions.arrowMemoryPool;
   parquetFieldIds_ = parquetWriterOptions.parquetFieldIds;
 }
@@ -514,8 +533,12 @@ void Writer::write(const VectorPtr& data) {
     if (writeInt96AsTimestamp_) {
       builder.enableDeprecatedInt96Timestamps();
     }
-    if (enableParallelWrite_) {
+    if (columnWriteExecutor_) {
+      // Compress and encode columns concurrently on a dedicated thread pool
+      // that Velox owns. It is distinct from the executor driving write(), so
+      // column tasks cannot deadlock against the writers waiting on them.
       builder.setUseThreads(true);
+      builder.setExecutor(columnWriteExecutor_.get());
     }
     auto arrowProperties = builder.build();
     PARQUET_ASSIGN_OR_THROW(
@@ -640,11 +663,8 @@ ParquetWriterFactory::createFormatOptions(
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
-  parquetOptions->enableParallelWrite =
-      toBoolConfigValue(
-          ParquetConfig::writerEnableParallelWrite(connectorConfig, session),
-          "enable parallel write")
-          .value_or(false);
+  parquetOptions->columnWriteParallelism = toColumnWriteParallelism(
+      ParquetConfig::writerColumnWriteParallelism(connectorConfig, session));
   return parquetOptions;
 }
 

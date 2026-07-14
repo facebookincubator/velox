@@ -184,7 +184,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
       {"hive.parquet.writer.enable-dictionary", "true"},
       {"hive.parquet.writer.page-size", "2KB"},
       {"hive.parquet.writer.created-by", "test-writer"},
-      {"hive.parquet.writer.enable-parallel-write", "true"},
+      {"hive.parquet.writer.column-write-parallelism", "4"},
       {"iceberg.parquet.writer.page-size", "4KB"},
   });
   config::ConfigBase session({
@@ -206,7 +206,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   EXPECT_EQ(parquetOptions->dataPageSize.value(), 2 * 1024);
   EXPECT_EQ(parquetOptions->batchSize.value(), 97);
   EXPECT_EQ(parquetOptions->createdBy.value(), "test-writer");
-  EXPECT_TRUE(parquetOptions->enableParallelWrite);
+  EXPECT_EQ(parquetOptions->columnWriteParallelism, 4);
 
   config::ConfigBase icebergConnectorConfig(
       rawConnectorConfig.rawConfigsWithPrefix("iceberg.parquet."));
@@ -1195,7 +1195,7 @@ TEST_F(ParquetWriterTest, allNulls) {
 }
 
 // Verifies that parallel column writing produces correct results by
-// round-tripping data through write and read with enableParallelWrite=true.
+// round-tripping data through write and read with columnWriteParallelism > 1.
 TEST_F(ParquetWriterTest, parallelColumnWriteCorrectness) {
   constexpr vector_size_t kSize = 10'000;
   constexpr int kDictSize = 20;
@@ -1232,7 +1232,7 @@ TEST_F(ParquetWriterTest, parallelColumnWriteCorrectness) {
   options.memoryPool = rootPool_.get();
   options.compressionKind = common::CompressionKind_ZSTD;
   auto parquetOpts = std::make_shared<ParquetWriterOptions>();
-  parquetOpts->enableParallelWrite = true;
+  parquetOpts->columnWriteParallelism = 4;
   options.formatSpecificOptions = parquetOpts;
   auto writer =
       std::make_unique<parquet::Writer>(std::move(sink), options, schema);
@@ -1267,7 +1267,7 @@ TEST_F(ParquetWriterTest, parallelColumnWriteMultiBatch) {
   dwio::common::WriterOptions options;
   options.memoryPool = rootPool_.get();
   auto parquetOpts = std::make_shared<ParquetWriterOptions>();
-  parquetOpts->enableParallelWrite = true;
+  parquetOpts->columnWriteParallelism = 4;
   options.formatSpecificOptions = parquetOpts;
   auto writer =
       std::make_unique<parquet::Writer>(std::move(sink), options, schema);

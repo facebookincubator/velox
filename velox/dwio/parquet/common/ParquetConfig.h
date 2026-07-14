@@ -167,15 +167,17 @@ class ParquetConfig {
   static constexpr std::string_view kWriterBatchSize = "writer.batch-size";
 
   VELOX_PARQUET_CONFIG_PROPERTY(
-      kWriterEnableParallelWriteSession,
-      "writer_enable_parallel_write",
-      bool,
-      false,
-      "Write Parquet columns in parallel using Arrow's internal thread pool. "
-      "Do not enable when writing multiple files in the same executor to "
-      "avoid deadlocks.")
-  static constexpr std::string_view kWriterEnableParallelWrite =
-      "writer.enable-parallel-write";
+      kWriterColumnWriteParallelismSession,
+      "writer_column_write_parallelism",
+      std::string_view,
+      "1",
+      "Number of threads used to compress and encode Parquet columns in "
+      "parallel. Values greater than 1 enable concurrent column writing using "
+      "a dedicated thread pool owned by the writer. The pool is separate from "
+      "the executor driving write() calls, so it cannot deadlock. Default 1 "
+      "(serial).")
+  static constexpr std::string_view kWriterColumnWriteParallelism =
+      "writer.column-write-parallelism";
 
   static constexpr std::string_view kWriterCreatedBy = "writer.created-by";
 
@@ -242,13 +244,13 @@ class ParquetConfig {
     return connectorConfig.get<std::string>(std::string(kWriterCreatedBy));
   }
 
-  static std::optional<std::string> writerEnableParallelWrite(
+  static std::optional<std::string> writerColumnWriteParallelism(
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) {
     return session.getLegacyWithFallback<std::string>(
-        kWriterEnableParallelWriteSession,
+        kWriterColumnWriteParallelismSession,
         connectorConfig,
-        kWriterEnableParallelWrite);
+        kWriterColumnWriteParallelism);
   }
 
   /// Serde parameter key for overriding the Parquet writer timestamp unit.
@@ -286,7 +288,7 @@ class ParquetConfig {
     registerProperty<kWriterPageSizeSessionProperty>(properties, sessionPrefix);
     registerProperty<kWriterBatchSizeSessionProperty>(
         properties, sessionPrefix);
-    registerProperty<kWriterEnableParallelWriteSessionProperty>(
+    registerProperty<kWriterColumnWriteParallelismSessionProperty>(
         properties, sessionPrefix);
   }
 
