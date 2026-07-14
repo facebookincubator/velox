@@ -494,7 +494,10 @@ void IcebergSplitReader::prepareSplit(
 
         deletionVectorReaders_.push_back(
             std::make_unique<DeletionVectorReader>(
-                deleteFile, splitOffset_, connectorQueryCtx_->memoryPool()));
+                deleteFile,
+                splitOffset_,
+                connectorQueryCtx_->memoryPool(),
+                fileConfig_->config()));
       }
     } else {
       VELOX_NYI(
