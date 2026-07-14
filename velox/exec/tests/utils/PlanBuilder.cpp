@@ -485,7 +485,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       false,
       TableWriteTraits::outputType(columnStatsSpec),
       commitStrategy_,
-      upstreamNode);
+      upstreamNode,
+      notNullColumnNames_);
   VELOX_CHECK(!writeNode->supportsBarrier());
   return writeNode;
 }
