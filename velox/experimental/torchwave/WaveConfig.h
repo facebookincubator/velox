@@ -130,6 +130,11 @@ struct WaveConfig {
   // correctness fix); the race harness flips it off for the racy A/B arm.
   bool scanOutputReturnBarrier{true};
 
+  // If true, release the frame tensors of each ProjectNode's last-use values
+  // right after that node's composite invocation executes, instead of keeping
+  // them until the whole graph finishes. Off by default.
+  bool freeIntermediates{false};
+
   /// Not thread-safe. All mutations must happen before concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
     static WaveConfig instance;

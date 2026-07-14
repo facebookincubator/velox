@@ -17,6 +17,7 @@
 #include "velox/experimental/torchwave/Executor.h"
 
 #include <ATen/ATen.h>
+#include <c10/core/CachingDeviceAllocator.h>
 #include <folly/ScopeGuard.h>
 #include <folly/chrono/Hardware.h>
 #include <gflags/gflags.h>
@@ -24,7 +25,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <unordered_set>
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Standalones.h"
@@ -42,6 +46,15 @@
 // CUDA headers; the symbol resolves from the CUDA runtime linked into the final
 // binary. PyTorch dispatches eager standalone ops to the default stream.
 extern "C" int cudaStreamSynchronize(void* stream);
+
+// current_device() is a non-inline C10_CUDA_API symbol resolved at final link
+// (same rationale as cudaStreamSynchronize: this TU has no CUDA headers).
+// Allocator peak stats are read/reset through the CPU-safe, device-agnostic
+// c10::getDeviceAllocator(CUDA) interface
+// (<c10/core/CachingDeviceAllocator.h>).
+namespace c10::cuda {
+c10::DeviceIndex current_device();
+} // namespace c10::cuda
 
 namespace torch::wave {
 
@@ -70,6 +83,25 @@ thread_local WaveThreadInfo threadInfo;
 // ops are dispatched, so they are complete before executeWave returns.
 void syncTorchDefaultStream() {
   cudaStreamSynchronize(nullptr);
+}
+
+// Resets the torch CUDA caching allocator's peak stats on the active device so
+// the peak read back after a run reflects only that run.
+void resetPeakAllocatedBytes() {
+  c10::getDeviceAllocator(c10::DeviceType::CUDA)
+      ->resetPeakStats(c10::cuda::current_device());
+}
+
+// Peak bytes allocated by the torch CUDA caching allocator since the last
+// resetPeakStats, on the active device. Captures the transient intra-run
+// high-water mark, not just per-step samples.
+int64_t peakAllocatedBytes() {
+  auto* allocator = c10::getDeviceAllocator(c10::DeviceType::CUDA);
+  auto stats = allocator->getDeviceStats(c10::cuda::current_device());
+  return stats
+      .allocated_bytes[static_cast<size_t>(
+          c10::CachingAllocator::StatType::AGGREGATE)]
+      .peak;
 }
 
 // TSC ticks per microsecond, calibrated once. folly::hardware_timestamp()
@@ -663,11 +695,11 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   }
 
   // tryMoveUserOutputs moves the output IValues out of the frame, decoupling
-  // them so the frame can be safely returned to the pool. However, it does
-  // not move outputs whose graph-level default is Constant(None) — in that
-  // case the result slot stays None even though the frame has a computed
-  // tensor (e.g. dynamic-shape outputs computed on device). The loop below
-  // copies these non-moved outputs from the frame into the results.
+  // them so the frame can be safely returned to the pool. However, it does not
+  // move outputs whose graph-level default is Constant(None) -- in that case
+  // the result slot stays None even though the frame has a computed tensor
+  // (e.g. dynamic-shape outputs computed on device). The loop below copies
+  // these non-moved outputs from the frame into the results.
   auto results = frame.tryMoveUserOutputs();
   auto outputValues = graph_.outputs();
   for (size_t i = 0; i < results.size() && i < outputValues.size(); ++i) {
@@ -679,7 +711,215 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
       }
     }
   }
+
+  // A user output can still be None here when it is an elided no-op /
+  // metadata-only view (e.g. view(x, [-1]) of an already-contiguous tensor):
+  // wave aliases such a view to its input and never writes the view's own
+  // value, so a graph-output view stays None even though its input tensor is
+  // present. The loop above cannot reach these when userOutputs() is longer
+  // than the output-node operand list (graph_.outputs()), so recover them here
+  // directly from the flattened user-output list, materializing the view from
+  // its input.
+  const auto& userOutputs = graph_.userOutputs();
+  for (size_t i = 0; i < results.size() && i < userOutputs.size(); ++i) {
+    if (!results.at(i).isNone()) {
+      continue;
+    }
+    const auto* valuePtr = std::get_if<nativert::Value*>(&userOutputs[i]);
+    if (valuePtr == nullptr || *valuePtr == nullptr) {
+      continue;
+    }
+    const nativert::Value* v = *valuePtr;
+    const auto& iv = frame.getIValue(v->id());
+    if (!iv.isNone()) {
+      results.at(i) = iv;
+      continue;
+    }
+    const auto* prod = v->producer();
+    if (prod == nullptr || prod->inputs().empty()) {
+      continue;
+    }
+    const auto tgt = prod->target();
+    bool viewLike = tgt.find("view") != std::string_view::npos ||
+        tgt.find("reshape") != std::string_view::npos ||
+        tgt.find("flatten") != std::string_view::npos;
+    if (!viewLike) {
+      continue;
+    }
+    const auto* inputVal = prod->inputs()[0].value;
+    if (inputVal == nullptr) {
+      continue;
+    }
+    const auto& inIv = frame.getIValue(inputVal->id());
+    if (inIv.isTensor() && inIv.toTensor().defined()) {
+      // Observed elided views are all view(x, [-1]) (flatten); reshape(-1)
+      // reproduces them and is a no-op when the input is already 1-D.
+      results.at(i) = inIv.toTensor().reshape(-1);
+      LOG(WARNING) << "Recovered elided view output %" << v->id()
+                   << " (producer " << tgt << ") from input %"
+                   << inputVal->id();
+    }
+  }
   return results;
+}
+
+// Releases a frame value. Under debug_single_ops, if this frame slot is the
+// sole owner of the tensor's storage (no live view/alias references it), the
+// whole storage -- not just this tensor's possibly-partial view -- is filled
+// with 0xdd before it is dropped, so any use-after-free of a released buffer
+// reads an obvious poison pattern instead of stale-but-valid data.
+void freeFrameValue(
+    nativert::ExecutionFrame& frame,
+    nativert::ValueId id,
+    facebook::velox::wave::Stream* stream) {
+  if (WaveConfig::get().debugSingleOps) {
+    const auto& iv = frame.getIValue(id);
+    if (iv.isTensor()) {
+      const at::Tensor& t = iv.toTensor();
+      // Poison only if this frame slot is the sole owner: no other frame slot
+      // holds the same TensorImpl (use_count==1 -- in-place/aliasing ops like
+      // index_put/masked_put put the same tensor in the result slot too), and
+      // no other tensor references the storage (a view would keep
+      // storage.use_count > 1 while TensorImpl.use_count stays 1). Both must
+      // hold, else a live value still sees this storage.
+      if (t.defined() && t.has_storage() && t.use_count() == 1 &&
+          t.storage().use_count() == 1) {
+        const auto& storage = t.storage();
+        void* ptr = storage.mutable_data();
+        auto nbytes = static_cast<size_t>(storage.nbytes());
+        if (ptr != nullptr && nbytes > 0) {
+          if (t.is_cuda() && stream != nullptr) {
+            // Enqueue the poison on the wave stream: it is ordered after the
+            // kernels that used this buffer and before any later wave op that
+            // reuses it, so it can't race buffer reuse (a default-stream memset
+            // would). A genuine use-after-free on the wave stream still reads
+            // 0xdd; a legitimate reuse overwrites the poison first.
+            stream->memset(ptr, 0xdd, nbytes);
+          } else {
+            std::memset(ptr, 0xdd, nbytes);
+          }
+        }
+      }
+    }
+  }
+  frame.setIValue(id, c10::IValue());
+}
+
+// If a reference frame is loaded, compares the current contents of frame value
+// 'id' against the recorded reference just before it is freed. A mismatch means
+// the value was already corrupted (a stray write, or an aliased premature free
+// of an overlapping buffer) BEFORE this free -- pinpointing which value went
+// bad and at which free point, to compare against its intended last use.
+void checkValueBeforeFree(
+    nativert::ExecutionFrame& frame,
+    nativert::ValueId id) {
+  auto* ref = WaveConfig::get().referenceFrame;
+  if (ref == nullptr) {
+    return;
+  }
+  auto it = ref->find(id);
+  if (it == ref->end() || !it->second.isTensor()) {
+    return;
+  }
+  const auto& iv = frame.getIValue(id);
+  std::optional<at::Tensor> actual = iv.isTensor()
+      ? std::optional<at::Tensor>(iv.toTensor())
+      : scalarLikeToTensor(iv);
+  if (!actual || !actual->defined() || actual->numel() == 0) {
+    return;
+  }
+  const auto& refTensor = it->second.toTensor();
+  if (!tensorsMatch(*actual, refTensor)) {
+    auto limit = WaveConfig::get().tensorPrintElementLimit;
+    LOG(ERROR) << "REF-BEFORE-FREE mismatch value %" << id << "\n  "
+               << firstDifference(*actual, refTensor)
+               << "\n  expected: " << tensorDebugString(refTensor, limit)
+               << "\n  actual:   " << tensorDebugString(*actual, limit);
+  }
+}
+
+void advanceSyncedStages(ExecutionState& state) {
+  // Stage tracking exists only to bundle intermediate freeing with syncs, so
+  // there is nothing to do (and no cost to pay) when freeing is off.
+  if (!WaveConfig::get().freeIntermediates) {
+    return;
+  }
+  auto& frame = *state.frame;
+
+  // In debug_single_ops mode (or when a reference frame is loaded for the
+  // before-free check), sync BOTH the wave stream and the default stream (eager
+  // standalones run there) before freeing, so all kernels that could read a
+  // buffer have finished. Any later access to a freed buffer is then a genuine
+  // use-after-free, the poison memset cannot race an in-flight kernel, and the
+  // before-free reference check reads settled data.
+  if (WaveConfig::get().debugSingleOps ||
+      WaveConfig::get().referenceFrame != nullptr) {
+    if (state.stream != nullptr) {
+      state.stream->wait();
+    }
+    cudaStreamSynchronize(nullptr);
+  }
+
+  // kFrame trace: collect the graph-output value ids (outputNode's inputs), so
+  // the free trace can flag if any of them is ever freed -- they must not be.
+  const bool traceFrame = (WaveConfig::get().trace & WaveConfig::kFrame) != 0;
+  std::unordered_set<nativert::ValueId> graphOutputs;
+  if (traceFrame && state.waveGraph != nullptr) {
+    if (auto* outputNode = state.waveGraph->graph()->outputNode()) {
+      for (const auto& input : outputNode->inputs()) {
+        if (input.value != nullptr) {
+          graphOutputs.insert(input.value->id());
+        }
+      }
+    }
+  }
+  auto traceFree =
+      [&](nativert::ValueId id, const char* kind, size_t seq, size_t step) {
+        if (!traceFrame) {
+          return;
+        }
+        const auto& iv = frame.getIValue(id);
+        int64_t useCount = -1;
+        uintptr_t storagePtr = 0;
+        int64_t storageBytes = 0;
+        if (iv.isTensor() && iv.toTensor().defined() &&
+            iv.toTensor().has_storage()) {
+          const auto& st = iv.toTensor().storage();
+          useCount = st.use_count();
+          storagePtr = reinterpret_cast<uintptr_t>(st.data());
+          storageBytes = static_cast<int64_t>(st.nbytes());
+        }
+        LOG(INFO) << "TWFREE " << kind << " %" << id << " storage=0x"
+                  << std::hex << storagePtr << std::dec
+                  << " size=" << storageBytes << " node=" << seq
+                  << " step=" << step << " use_count=" << useCount
+                  << (graphOutputs.count(id) != 0 ? "  <-- GRAPH OUTPUT" : "");
+      };
+
+  for (size_t seq = 0; seq < state.stepVectors.size(); ++seq) {
+    auto& steps = state.stepVectors[seq];
+    for (size_t step = 0; step < steps.size(); ++step) {
+      auto& sv = steps[step];
+      if (sv.executionStage != ExecutionStage::kAllocated) {
+        continue;
+      }
+      // The wave stream was just waited on, so this step's kernels are done and
+      // its freeable buffers can be released.
+      sv.executionStage = ExecutionStage::kSynced;
+      // The node's last-use tensors were stamped onto its last step; they go
+      // free in this same sync (no dedicated sync of their own).
+      for (auto id : sv.lastUseIds) {
+        traceFree(id, "lastUse", seq, step);
+        checkValueBeforeFree(frame, id);
+        freeFrameValue(frame, id, state.stream.get());
+      }
+    }
+  }
+}
+
+void syncWaveStream(ExecutionState& state) {
+  state.stream->wait();
+  advanceSyncedStages(state);
 }
 
 void WaveGraphExecutor::executeWave(
@@ -765,6 +1005,23 @@ void WaveGraphExecutor::executeWave(
   state.deferredStandalones = &deferredStandalones;
   state.numStandalonesRun = 0;
   state.numShortcutsRun = 0;
+
+  // Reset the allocator's peak so the peak read back after the run reflects
+  // only this run's transient high-water mark.
+  if (WaveConfig::get().trace & WaveConfig::kTiming) {
+    resetPeakAllocatedBytes();
+  }
+
+  // Reset per-step lifecycle stages (step vectors are pooled across runs) so
+  // freeIntermediates freeing only ever fires for this run's steps.
+  if (WaveConfig::get().freeIntermediates) {
+    for (auto& steps : state.stepVectors) {
+      for (auto& sv : steps) {
+        sv.executionStage = ExecutionStage::kNotStarted;
+        sv.lastUseIds.clear();
+      }
+    }
+  }
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
   }
@@ -832,7 +1089,7 @@ void WaveGraphExecutor::executeWave(
   // the two are otherwise unordered. Both must complete before executeWave
   // returns so all results this invocation produced are visible to the
   // caller.
-  state.stream->wait();
+  syncWaveStream(state);
   syncTorchDefaultStream();
   auto wallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - wallStart)
@@ -844,6 +1101,10 @@ void WaveGraphExecutor::executeWave(
     }
     threadInfo.errors = errorString();
     if (WaveConfig::get().trace & WaveConfig::kTiming) {
+      // Peak allocated GPU memory over this run, from the allocator's own
+      // high-water mark (reset at the start of the run above), so it captures
+      // transient intra-step peaks rather than just the per-step samples.
+      threadInfo.peakBytes = peakAllocatedBytes();
       threadInfo.perfReport = makePerfReport(state, wallUs);
     }
     if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
@@ -903,6 +1164,7 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.noDtoH = sv.noDtoH;
         meta.inputBytes = sv.inputBytes;
         meta.outputBytes = sv.outputBytes;
+        meta.currentBytes = sv.currentBytes;
         meta.refCheckUs = sv.refCheckUs;
       }
     }
@@ -1116,6 +1378,8 @@ std::string WaveGraphExecutor::makePerfReport(
         dataGBs,
         totalDataBytes / 1e6);
   }
+  ss << fmt::format(
+      "Peak GPU RAM: {}\n", facebook::velox::succinctBytes(info.peakBytes));
 
   // Time split across all steps: kernel (GPU), standalone (eager ATen on the
   // default stream), and interpretation (gather + grid + alloc + fill = the
@@ -1238,9 +1502,10 @@ std::string WaveGraphExecutor::makePerfReport(
               state.stepVectors[seq][step].shortcutStandalones.size());
         }
         ss << fmt::format(
-            "  step {}: {} standalones  {} us",
+            "  step {}: {} standalones  GPU RAM={}  {} us",
             m.stepIdx,
             numStandalones,
+            facebook::velox::succinctBytes(m.currentBytes),
             m.standaloneUs);
         ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx) << "\n";
         continue;
@@ -1249,10 +1514,11 @@ std::string WaveGraphExecutor::makePerfReport(
       double bytesTotal = m.inputBytes + m.outputBytes;
       double gbps = m.kernelUs > 0 ? bytesTotal / (m.kernelUs * 1e3) : 0.0;
       ss << fmt::format(
-          "  step {}: {} us  blocks={}  in={:.1f}KB out={:.1f}KB  {:.1f} GB/s",
+          "  step {}: {} us  blocks={}  GPU RAM={}  in={:.1f}KB out={:.1f}KB  {:.1f} GB/s",
           m.stepIdx,
           stepUs,
           m.numBlocks,
+          facebook::velox::succinctBytes(m.currentBytes),
           m.inputBytes / 1024.0,
           m.outputBytes / 1024.0,
           gbps);
