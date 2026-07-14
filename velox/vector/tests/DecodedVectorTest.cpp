@@ -1434,6 +1434,175 @@ TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {
   decodeAndCheckNulls(dict);
 }
 
+TEST_F(DecodedVectorTest, forEachNullNotNull) {
+  // forEachNull/forEachNotNull must visit exactly the null / non-null rows in
+  // [begin, end), in order. Cross-check against isNullAt for every encoding so
+  // the assertion holds regardless of which internal branch (bulk scan vs
+  // per-row) is taken.
+  auto verify = [&](const VectorPtr& vector) {
+    SelectivityVector rows(vector->size());
+    DecodedVector decoded(*vector, rows);
+
+    auto collect = [&](bool wantNull, vector_size_t begin, vector_size_t end) {
+      std::vector<vector_size_t> visited;
+      auto push = [&](vector_size_t row) { visited.push_back(row); };
+      if (wantNull) {
+        decoded.forEachNull(begin, end, push);
+      } else {
+        decoded.forEachNotNull(begin, end, push);
+      }
+      return visited;
+    };
+    auto expected = [&](bool wantNull, vector_size_t begin, vector_size_t end) {
+      std::vector<vector_size_t> result;
+      for (vector_size_t row = begin; row < end; ++row) {
+        if (decoded.isNullAt(row) == wantNull) {
+          result.push_back(row);
+        }
+      }
+      return result;
+    };
+    auto check = [&](vector_size_t begin, vector_size_t end) {
+      EXPECT_EQ(collect(true, begin, end), expected(true, begin, end));
+      EXPECT_EQ(collect(false, begin, end), expected(false, begin, end));
+    };
+
+    const auto size = vector->size();
+    check(0, size);
+    // Interior sub-range: only rows inside [begin, end), nothing outside.
+    ASSERT_GE(size, 4);
+    check(1, size - 1);
+  };
+
+  auto identity = [](auto row) { return row; };
+
+  // Flat: some nulls, no nulls, all null.
+  verify(makeFlatVector<int64_t>(64, identity, nullEvery(7)));
+  verify(makeFlatVector<int64_t>(64, identity));
+  verify(makeFlatVector<int64_t>(64, identity, nullEvery(1)));
+
+  // Dictionary inheriting base nulls through indirection (per-row index path).
+  // Reverse indices ensure the scan must translate indices_[row] rather than
+  // iterating top-level row numbers (which would give the wrong null bits).
+  {
+    auto base = makeFlatVector<int64_t>(64, identity, nullEvery(5));
+    auto indices = makeIndicesInReverse(64);
+    verify(BaseVector::wrapInDictionary(nullptr, indices, 64, base));
+  }
+
+  // Dictionary adding its own nulls over a null-free base (combined-nulls
+  // path).
+  {
+    auto base = makeFlatVector<int64_t>(64, identity);
+    auto indices = makeIndices(64, identity);
+    auto nulls = makeNulls(64, nullEvery(3));
+    verify(BaseVector::wrapInDictionary(nulls, indices, 64, base));
+  }
+
+  // Constant: null and non-null.
+  verify(makeNullConstant(TypeKind::BIGINT, 16));
+  verify(makeConstant<int64_t>(42, 16));
+}
+
+TEST_F(DecodedVectorTest, hasNulls) {
+  auto identity = [](auto row) { return row; };
+
+  // Flat, null buffer present but every bit set (no row null): hasNulls() is
+  // false and normalizes away the null view; values are untouched.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity);
+    flat->mutableRawNulls(); // Allocate an all-non-null (all-set) null buffer.
+    DecodedVector decoded(*flat);
+    ASSERT_TRUE(decoded.mayHaveNulls());
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls()); // Side effect: cleared.
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_FALSE(decoded.isNullAt(i));
+      EXPECT_EQ(decoded.valueAt<int64_t>(i), i);
+    }
+  }
+
+  // Same, but nulls() is materialized first: hasNulls() must invalidate the
+  // cached combined bitmap so a later nulls() does not return a stale one.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity);
+    flat->mutableRawNulls();
+    DecodedVector decoded(*flat);
+    ASSERT_NE(decoded.nulls(), nullptr); // Populate the allNulls_ cache.
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_EQ(decoded.nulls(), nullptr);
+  }
+
+  // Flat with real nulls: hasNulls() is true and the null view is preserved.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity, nullEvery(7));
+    DecodedVector decoded(*flat);
+    EXPECT_TRUE(decoded.hasNulls());
+    EXPECT_TRUE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_EQ(decoded.isNullAt(i), (i % 7) == 0);
+    }
+  }
+
+  // No null buffer at all: false, no-op.
+  {
+    auto flat = makeFlatVector<int64_t>(64, identity);
+    DecodedVector decoded(*flat);
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls());
+  }
+
+  // Combined-nulls (hasExtraNulls) dictionary with every bit set: bulk-scanned,
+  // false, and normalized (the combined bitmap is indexed by decoded row).
+  {
+    auto base = makeFlatVector<int64_t>(64, identity);
+    auto indices = makeIndices(64, identity);
+    auto nulls =
+        makeNulls(64, [](auto) { return false; }); // All-set, no nulls.
+    auto dict = BaseVector::wrapInDictionary(nulls, indices, 64, base);
+    DecodedVector decoded(*dict);
+    ASSERT_TRUE(decoded.hasExtraNulls());
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls());
+    EXPECT_FALSE(decoded.hasExtraNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_FALSE(decoded.isNullAt(i));
+    }
+  }
+
+  // Dictionary without extra nulls over an all-set base (per-row confirm path):
+  // hasNulls() resolves each index, finds none, and normalizes.
+  {
+    auto base = makeFlatVector<int64_t>(64, identity);
+    base->mutableRawNulls(); // All-set base null buffer.
+    auto indices = makeIndicesInReverse(64);
+    auto dict = BaseVector::wrapInDictionary(nullptr, indices, 64, base);
+    DecodedVector decoded(*dict);
+    ASSERT_FALSE(decoded.isIdentityMapping());
+    ASSERT_TRUE(decoded.mayHaveNulls());
+    EXPECT_FALSE(decoded.hasNulls());
+    EXPECT_FALSE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_FALSE(decoded.isNullAt(i));
+    }
+  }
+
+  // Dictionary without extra nulls over a base that has nulls (per-row confirm
+  // path finds one): hasNulls() is true and the view is preserved.
+  {
+    auto base = makeFlatVector<int64_t>(64, identity, nullEvery(5));
+    auto indices = makeIndicesInReverse(64);
+    auto dict = BaseVector::wrapInDictionary(nullptr, indices, 64, base);
+    DecodedVector decoded(*dict);
+    ASSERT_FALSE(decoded.isIdentityMapping());
+    EXPECT_TRUE(decoded.hasNulls());
+    EXPECT_TRUE(decoded.mayHaveNulls());
+    for (vector_size_t i = 0; i < 64; ++i) {
+      EXPECT_EQ(decoded.isNullAt(i), ((64 - i - 1) % 5) == 0);
+    }
+  }
+}
+
 TEST_F(DecodedVectorTest, dictionaryWrapping) {
   constexpr vector_size_t baseVectorSize{100};
   constexpr vector_size_t innerDictSize{30};

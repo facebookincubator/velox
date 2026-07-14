@@ -73,6 +73,16 @@ JSON Functions
         * Whitespace is allowed **after the dot** and **before the field name**, e.g., "$.  field".
         * Trailing whitespace after '$' is allowed, e.g., "$   ".
 
+    When ``path`` resolves to an object or array, characters in the Unicode
+    supplementary planes (code points >= U+10000, e.g. emoji) are escaped as
+    ``\uXXXX\uXXXX`` UTF-16 surrogate pairs, while Basic Multilingual Plane
+    (BMP) characters (e.g. Chinese/Japanese/Korean, CJK) are left literal.
+    Scalar string results are returned literal. ::
+
+        SELECT get_json_object('{"a":{"n":"🧧会员"}}', '$.a'); -- '{"n":"\uD83E\uDDE7会员"}'
+        SELECT get_json_object('{"a":["🥇"]}', '$.a'); -- '["\uD83E\uDD47"]'
+        SELECT get_json_object('{"a":"🥇"}', '$.a'); -- '🥇'
+
 .. spark:function:: json_array_length(jsonString) -> integer
 
     Returns the number of elements in the outermost JSON array from ``jsonString``.
@@ -97,7 +107,11 @@ JSON Functions
 
 .. spark:function:: to_json(jsonObject) -> jsonString
 
-    Converts a Json object (ROW, ARRAY or MAP) into a JSON string. ::
+    Converts a JSON object (ROW, ARRAY, or MAP) into a JSON string.
+
+    Supported primitive types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
+    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, VARCHAR, and VARBINARY. ROW, ARRAY,
+    and MAP can be nested. ::
 
         SELECT to_json(named_struct('c0', 1, 'c1', 'a')); -- {"c0":1,"c1":"a"}
         SELECT to_json(ARRAY(1, 2, 3)); -- [1,2,3]

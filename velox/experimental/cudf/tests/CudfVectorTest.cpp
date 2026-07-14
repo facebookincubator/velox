@@ -156,6 +156,22 @@ std::unique_ptr<cudf::table> makeTable(
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
+std::unique_ptr<cudf::packed_table> makePackedTable(
+    rmm::cuda_stream_view stream,
+    RecordingAsyncDeviceResource& resource) {
+  auto table = makeTable(stream, cudf::get_current_device_resource_ref());
+  auto packedColumns = cudf::pack(
+      table->view(),
+      stream,
+      rmm::to_device_async_resource_ref_checked(&resource));
+  // CudfVector does not join producer streams. Synchronize the packing stream
+  // before handing the packed table to CudfVector.
+  stream.synchronize();
+  auto tableView = cudf::unpack(packedColumns);
+  return std::make_unique<cudf::packed_table>(
+      cudf::packed_table{tableView, std::move(packedColumns)});
+}
+
 class CudfVectorTest : public ::testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
@@ -192,17 +208,7 @@ TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
   RecordingAsyncDeviceResource resource;
-
-  auto table = makeTable(
-      allocationStream.view(), cudf::get_current_device_resource_ref());
-  auto packedColumns = cudf::pack(
-      table->view(),
-      allocationStream.view(),
-      rmm::to_device_async_resource_ref_checked(&resource));
-  allocationStream.view().synchronize();
-  auto tableView = cudf::unpack(packedColumns);
-  auto packedTable = std::make_unique<cudf::packed_table>(
-      cudf::packed_table{tableView, std::move(packedColumns)});
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
 
   // Model the intra-node UCX path: the packed buffer was allocated on
   // allocationStream, but downstream work is associated with targetStream.
@@ -222,6 +228,32 @@ TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
 
   EXPECT_GT(resource.deallocationCount(), 0);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
+}
+
+TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream targetStream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
+
+  // CudfVector::release materializes from a table_view that points into the
+  // packed buffer. The packed buffer must be freed on the materialization
+  // stream, not the original packing stream.
+  CudfVector vector(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      targetStream.view());
+  resource.reset();
+
+  auto materialized = vector.release();
+
+  EXPECT_GT(resource.deallocationCount(), 0);
+  EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
+  targetStream.view().synchronize();
+  EXPECT_EQ(materialized->num_columns(), 1);
+  EXPECT_EQ(materialized->num_rows(), 4);
 }
 
 } // namespace

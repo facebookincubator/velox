@@ -200,7 +200,7 @@ Generic<T1> input types are implemented using GenericView that supports the foll
 - std::optional<int64_t> **compare** (const GenericView& other, const CompareFlags flags) const : comparison with another GenericView
 - TypeKind **kind** () const : returns TypeKind of the value
 - const TypePtr& **type** () const : returns Velox type of the value
-- std::string **toString** () const : returns string representaion of the value for logging and debugging
+- std::string **toString** () const : returns string representation of the value for logging and debugging
 - template <typename ToType> typename VectorReader<ToType>::exec_in_t **castTo** () const : cast to concrete view type
 - template <typename ToType> std::optional<typename VectorReader<ToType>::exec_in_t> **tryCastTo** () const : best-effort attempt to cast to a concrete view type
 

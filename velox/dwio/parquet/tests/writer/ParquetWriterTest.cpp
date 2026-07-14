@@ -175,6 +175,7 @@ std::vector<CompressionKind> params = {
     CompressionKind::CompressionKind_SNAPPY,
     CompressionKind::CompressionKind_ZSTD,
     CompressionKind::CompressionKind_LZ4,
+    CompressionKind::CompressionKind_LZ4_HADOOP,
     CompressionKind::CompressionKind_GZIP,
 };
 
@@ -765,6 +766,94 @@ TEST_F(ParquetWriterTest, writerMagic) {
 
   EXPECT_EQ("PAR1", std::string(fileData.data(), 4));
   EXPECT_EQ("PAR1", std::string(fileData.data() + fileData.size() - 4, 4));
+}
+
+TEST_F(ParquetWriterTest, flushWhenStreamBuffersGrow) {
+  constexpr int64_t kNumRows = 200;
+
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  writerOptions.enableDictionary = false;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory =
+      []() -> std::unique_ptr<dwio::common::FlushPolicy> {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1,
+        /*bytesInRowGroup=*/4 * 1024);
+  };
+
+  const auto schema = ROW({"c0"}, {BIGINT()});
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  options.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(writerOptions);
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), options, schema);
+  const auto data = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+
+  writer->write(data);
+
+  // Data should be flushed into the FileSink by acculumated closed row groups.
+  EXPECT_GT(sinkPtr->size(), 0);
+
+  writer->close();
+
+  const auto reader = createReaderInMemory(*sinkPtr);
+  EXPECT_EQ(kNumRows, reader->numberOfRows());
+  EXPECT_EQ(kNumRows, reader->fileMetaData().numRowGroups());
+}
+
+TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/10'000,
+        /*bytesInRowGroup=*/200);
+  };
+
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto testBatches =
+      [&](int numBatches, int expectedNumRowGroups, int expectedNumRows) {
+        std::vector<RowVectorPtr> batches;
+        for (int i = 0; i < numBatches; ++i) {
+          batches.push_back(
+              makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+        }
+
+        const auto* sinkPtr = write(batches, options, writerOptions);
+        const auto reader = createReaderInMemory(*sinkPtr);
+        EXPECT_EQ(expectedNumRowGroups, reader->fileMetaData().numRowGroups());
+        EXPECT_EQ(expectedNumRows, reader->numberOfRows());
+      };
+
+  testBatches(10, 1, 50);
+  testBatches(20, 2, 100);
+}
+
+TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
+  ParquetWriterOptions writerOptions;
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/50,
+        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
+  };
+
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 10; ++i) {
+    batches.push_back(
+        makeRowVector({makeFlatVector<int32_t>({1, 1, 1, 1, 1})}));
+  }
+
+  const auto* sinkPtr = write(batches, options, writerOptions);
+  const auto reader = createReaderInMemory(*sinkPtr);
+  EXPECT_EQ(1, reader->fileMetaData().numRowGroups());
+  EXPECT_EQ(50, reader->numberOfRows());
 }
 
 TEST_F(ParquetWriterTest, largeMetadata) {

@@ -49,8 +49,9 @@ target_link_libraries(
 #   IndexLookupJoinTest 783s, MultiFragmentTest 599s,
 #   HashJoinTestExtra ~585s, SpillerTest 584s, HashJoinTest ~575s,
 #   TableWriterTest 225s, TableScanTest 189s, IndexLookupJoinTestExtra 188s,
-#   MergeJoinTest 111s, AggregationTest 105s, OutputBufferManagerTest 98s,
-#   ScaleWriterLocalPartitionTest 96s, OrderByTest 71s, TopNRowNumberTest 64s,
+#   MergeJoinTest 111s, AggregationTest 105s,
+#   DefaultOutputBufferManagerTest 98s, ScaleWriterLocalPartitionTest 96s,
+#   OrderByTest 71s, TopNRowNumberTest 64s,
 #   HashTableTest 60s, StreamingAggregationTest 58s, ExchangeClientTest 54s,
 #   RowNumberTest 42s.
 #
@@ -112,10 +113,10 @@ set(
   ProbeOperatorStateTest.cpp
   MarkDistinctTest.cpp
   MergeTest.cpp
-  # group5 (~445s): TableWriterTest 225 + OutputBufMgr 98
+  # group5 (~445s): TableWriterTest 225 + DefaultOutputBufMgr 98
   # + TopNRowNumber 64 + StreamingAgg 58
   TableWriterTest.cpp
-  OutputBufferManagerTest.cpp
+  DefaultOutputBufferManagerTest.cpp
   TopNRowNumberTest.cpp
   StreamingAggregationTest.cpp
   ContainerRowSerdeTest.cpp

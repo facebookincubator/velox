@@ -369,7 +369,7 @@ class SimpleFunctionAdapter : public VectorFunction {
 
     if constexpr (fastPathIteration) {
       // If result is resuing one of the inputs we do not clear nulls, instead
-      // we do that after the the input is read. It is safe because reuse only
+      // we do that after the input is read. It is safe because reuse only
       // happens when the function does not generate null.
       if (!isResultReused) {
         (*reusableResult)->clearNulls(rows);

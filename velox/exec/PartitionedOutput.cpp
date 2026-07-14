@@ -15,9 +15,9 @@
  */
 
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -48,7 +48,7 @@ BlockingReason Destination::advance(
     const RowVectorPtr& output,
     const row::CompactRow* outputCompactRow,
     const row::UnsafeRowFast* outputUnsafeRow,
-    OutputBufferManager& bufferManager,
+    DefaultOutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
     ContinueFuture* future,
@@ -121,7 +121,7 @@ void Destination::clearVectorStreamGroup() {
 }
 
 BlockingReason Destination::flush(
-    OutputBufferManager& bufferManager,
+    DefaultOutputBufferManager& bufferManager,
     const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
   if (!current_ || rowsInCurrent_ == 0) {
@@ -215,7 +215,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(OutputBufferManager::getInstanceRef()),
+      bufferManager_(DefaultOutputBufferManager::getInstanceRef()),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -429,7 +429,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   detail::Destination* blockedDestination = nullptr;
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
-      bufferManager, "OutputBufferManager was already destructed");
+      bufferManager, "DefaultOutputBufferManager was already destructed");
 
   // Limit serialized pages to 1MB.
   static const uint64_t kMaxPageSize = 1 << 20;
