@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -232,6 +233,9 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   auto cudfTable = std::move(chunkOpt.value());
   auto stream = cudfSplitReader_->stream();
 
+  cudfTable = alignTableColumnsToOutputType(
+      std::move(cudfTable), getTableRowType(), stream, get_output_mr());
+
   uint64_t filterTimeUs{0};
   if (remainingFilterExprSet_) {
     MicrosecondWallTimer filterTimer(&filterTimeUs);
@@ -306,13 +310,27 @@ const RowTypePtr CudfHiveDataSource::getTableRowType() {
   if (cachedTableRowType_) {
     return cachedTableRowType_;
   }
-  if (tableHandle_->dataColumns()) {
+  const auto& dataColumns = tableHandle_->dataColumns();
+  if (dataColumns) {
     std::vector<std::string> names;
     std::vector<TypePtr> types;
+    names.reserve(readColumnNames_.size());
+    types.reserve(readColumnNames_.size());
     for (const auto& name : readColumnNames_) {
-      auto parsedType = tableHandle_->dataColumns()->findChild(name);
-      names.emplace_back(std::move(name));
-      types.push_back(parsedType);
+      TypePtr columnType;
+      if (dataColumns->containsChild(name)) {
+        columnType = dataColumns->findChild(name);
+      } else if (outputType_->containsChild(name)) {
+        // Partition, info, and schema-evolution columns are projected in
+        // outputType but omitted from dataColumns (file schema only).
+        columnType = outputType_->findChild(name);
+      } else {
+        VELOX_USER_FAIL(
+            "Column {} is missing from dataColumns and outputType",
+            name);
+      }
+      names.emplace_back(name);
+      types.push_back(std::move(columnType));
     }
     cachedTableRowType_ = ROW(std::move(names), std::move(types));
     return cachedTableRowType_;

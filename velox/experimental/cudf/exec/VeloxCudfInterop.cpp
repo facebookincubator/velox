@@ -37,6 +37,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string>
+
+#include <fmt/format.h>
 
 namespace facebook::velox::cudf_velox {
 
@@ -179,14 +182,16 @@ std::unique_ptr<cudf::table> toCudfTable(
 
 namespace {
 
-void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
+void overrideArrowSchemaFromVeloxType(
+    ArrowSchema* schema,
+    const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ROW: {
       if (schema->n_children != static_cast<int64_t>(type->size())) {
         break;
       }
       for (size_t i = 0; i < type->size(); ++i) {
-        setArrowFormatBackToVarbinary(schema->children[i], type->childAt(i));
+        overrideArrowSchemaFromVeloxType(schema->children[i], type->childAt(i));
       }
       break;
     }
@@ -201,6 +206,28 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
       auto* buffer = static_cast<char*>(std::malloc(bufferLen));
       VELOX_CHECK_NOT_NULL(buffer);
       std::memcpy(buffer, kVarbinaryArrowFormat, bufferLen);
+      schema->format = buffer;
+      break;
+    }
+    case TypeKind::BIGINT:
+    case TypeKind::HUGEINT: {
+      if (!type->isDecimal()) {
+        break;
+      }
+      // cuDF DECIMAL64/128 Arrow export uses libcudf default precision (e.g.
+      // d:18,s,64). Restore the Velox logical precision before import.
+      const auto [precision, scale] = getDecimalPrecisionScale(*type);
+      const int bitWidth = type->isShortDecimal() ? 64 : 128;
+      const auto formatStr =
+          fmt::format("d:{},{},{}", precision, scale, bitWidth);
+      if (schema->format != nullptr) {
+        std::free(const_cast<char*>(schema->format));
+        schema->format = nullptr;
+      }
+      const size_t bufferLen = formatStr.size() + 1;
+      auto* buffer = static_cast<char*>(std::malloc(bufferLen));
+      VELOX_CHECK_NOT_NULL(buffer);
+      std::memcpy(buffer, formatStr.c_str(), bufferLen);
       schema->format = buffer;
       break;
     }
@@ -235,14 +262,11 @@ RowVectorPtr toVeloxColumn(
   ArrowSchema schemaCopy = *arrowSchema;
   arrowSchema->release = nullptr;
 
-  // Override schema type recursively with outputType if provided. This is
-  // needed for some types like VARBINARY which are exported as STRING (the
-  // format is overridden to "z" when the exportVarbinaryAsString option is set
-  // to true in the exportToArrow() call) because cuDF does not have a VARBINARY
-  // type. This code implements the other side of the conversion, to change the
-  // format back to "z" so that the data re-imports as VARBINARY.
+  // Override schema types recursively with outputType when provided. Needed
+  // for VARBINARY (cuDF STRING export) and for decimals where cuDF Arrow
+  // export uses libcudf default precision instead of the Velox logical type.
   if (outputType) {
-    setArrowFormatBackToVarbinary(&schemaCopy, *outputType);
+    overrideArrowSchemaFromVeloxType(&schemaCopy, *outputType);
   }
 
   auto veloxTable = importFromArrowAsOwner(schemaCopy, arrayCopy, pool);
