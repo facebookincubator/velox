@@ -1580,5 +1580,64 @@ TEST_F(CudfDecimalTest, decimalCoalesceStopsAtFirstLiteral) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+TEST_F(CudfDecimalTest, lowPrecisionDecimal7p2Arithmetic) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>({1111, 2222, -3333, 0}, DECIMAL(7, 2)),
+          makeFlatVector<int64_t>({100, 50, 200, 1}, DECIMAL(7, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a + b AS sum72",
+                      "a - b AS diff72",
+                      "a * b AS mul72",
+                      "a / b AS div72",
+                      "a > b AS gt72",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+TEST_F(CudfDecimalTest, lowPrecisionDecimal9p2Arithmetic) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {1'000'000, 2'500'000, -100}, DECIMAL(9, 2)),
+          makeFlatVector<int64_t>({250'000, 500'000, 4}, DECIMAL(9, 2)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a + b AS sum92",
+                      "a - b AS diff92",
+                      "a * CAST(2 AS DECIMAL(9, 2)) AS dbl92",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 } // namespace
 } // namespace facebook::velox::cudf_velox

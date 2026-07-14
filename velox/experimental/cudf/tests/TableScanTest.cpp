@@ -45,6 +45,7 @@
 
 #include <cudf/io/parquet.hpp>
 
+#include <filesystem>
 #include <fmt/ranges.h>
 
 using namespace facebook::velox;
@@ -87,6 +88,19 @@ StatsFilterMetrics readParquetWithStatsFilter(
       result.metadata.num_input_row_groups,
       result.metadata.num_row_groups_after_stats_filter,
       result.tbl->num_rows()};
+}
+
+std::string getExampleParquetPath(const std::string& fileName) {
+  const std::string relativePath =
+      "../../../dwio/parquet/tests/examples/" + fileName;
+  auto path = facebook::velox::test::getDataFilePath(
+      "velox/experimental/cudf/tests", relativePath);
+  if (std::filesystem::exists(path)) {
+    return path;
+  }
+  return (std::filesystem::current_path() / relativePath)
+      .lexically_normal()
+      .string();
 }
 } // namespace
 
@@ -785,6 +799,41 @@ TEST_F(TableScanTest, decimalSubfieldFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+TEST_F(TableScanTest, decimalDictParquetInt32Physical) {
+  const auto filePath = getExampleParquetPath("decimal_dict.parquet");
+  if (!std::filesystem::exists(filePath)) {
+    GTEST_SKIP() << "Missing fixture: " << filePath;
+  }
+
+  auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(14, 2)});
+  auto expected = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(
+              {1111, 1111, 2222, 2222, 3333, 3333}, DECIMAL(7, 2)),
+          makeFlatVector<int64_t>(
+              {1111, 1111, 2222, 2222, 3333, 3333}, DECIMAL(14, 2)),
+      });
+
+  auto tableHandle = makeTableHandle("parquet_table", rowType, {}, nullptr);
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  // DuckDB's appender crashes on DECIMAL(7, 2); compare against fixture values.
+  AssertQueryBuilder(plan)
+      .splits({makeCudfHiveSplit(filePath)})
+      .assertResults(expected);
 }
 
 TEST_F(TableScanTest, decimalRemainingFilter) {

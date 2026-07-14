@@ -14,9 +14,19 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+#include <cudf/column/column_factories.hpp>
+#include <cudf/unary.hpp>
+#include <cudf/utilities/default_stream.hpp>
+
+#include <cuda_runtime_api.h>
+
+#include <vector>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -449,6 +459,84 @@ TEST_F(InteropTest, constant) {
   auto child = makeConstant<int64_t>(10, 5);
   auto input = makeRowVector({child});
   roundTrip(input);
+}
+
+// ========== Decimal types ==========
+
+TEST_F(InteropTest, shortDecimal5p2) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(
+          {100, -250, 0, 12345, -9999}, DECIMAL(5, 2))});
+  roundTrip(input);
+}
+
+TEST_F(InteropTest, shortDecimal9p2) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(
+          {1'111'111'111,
+           -2'222'222'222,
+           0,
+           9'999'999'999,
+           -9'999'999'999},
+          DECIMAL(9, 2))});
+  roundTrip(input);
+}
+
+TEST_F(InteropTest, shortDecimalWithNulls) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeNullableFlatVector<int64_t>(
+          {100, std::nullopt, -250, std::nullopt, 0}, DECIMAL(5, 2))});
+  roundTrip(input);
+}
+
+TEST_F(InteropTest, decimal32WidenedToVeloxShortDecimal) {
+  int deviceCount = 0;
+  if (cudaGetDeviceCount(&deviceCount) != cudaSuccess || deviceCount == 0) {
+    GTEST_SKIP() << "CUDA device required";
+  }
+  VELOX_CHECK_EQ(0, static_cast<int>(cudaSetDevice(0)));
+
+  const cudf::data_type srcType{cudf::type_id::DECIMAL32, -2};
+  const cudf::data_type dstType{cudf::type_id::DECIMAL64, -2};
+  if (!cudf::is_supported_cast(srcType, dstType)) {
+    GTEST_SKIP() << "libcudf does not support DECIMAL32 to DECIMAL64 cast";
+  }
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  const std::vector<int32_t> hostValues = {500, -700, 1234};
+  auto col = cudf::make_fixed_width_column(
+      srcType,
+      static_cast<cudf::size_type>(hostValues.size()),
+      cudf::mask_state::UNALLOCATED,
+      stream);
+  auto status = cudaMemcpyAsync(
+      col->mutable_view().data<int32_t>(),
+      hostValues.data(),
+      hostValues.size() * sizeof(int32_t),
+      cudaMemcpyHostToDevice,
+      stream.value());
+  VELOX_CHECK_EQ(0, static_cast<int>(status));
+  stream.synchronize();
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(std::move(col));
+  auto table = std::make_unique<cudf::table>(std::move(columns));
+
+  auto outputType = ROW({"c0"}, {DECIMAL(5, 2)});
+  auto aligned =
+      alignTableColumnsToOutputType(std::move(table), outputType, stream, mr);
+
+  auto expected = makeRowVector(
+      {"c0"}, {makeFlatVector<int64_t>({500, -700, 1234}, DECIMAL(5, 2))});
+  auto result = with_arrow::toVeloxColumn(
+      aligned->view(), pool_.get(), outputType, stream, mr);
+  stream.synchronize();
+  test::assertEqualVectors(expected, result);
 }
 
 } // namespace
