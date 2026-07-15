@@ -1143,29 +1143,52 @@ class GreatestLeastFunction : public CudfFunction {
   std::vector<size_t> order_;
 };
 
+// Dispatches the four cudf::copy_if_else overloads over the {scalar, column}
+// shapes of the then/else operands. Exactly one of (thenScalar, thenView) and
+// one of (elseScalar, elseView) is set. Shared by SwitchFunction and
+// CaseFunction.
+static std::unique_ptr<cudf::column> copyIfElse(
+    const cudf::scalar* thenScalar,
+    const std::optional<cudf::column_view>& thenView,
+    const cudf::scalar* elseScalar,
+    const std::optional<cudf::column_view>& elseView,
+    cudf::column_view condition,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (thenView.has_value() && elseView.has_value()) {
+    return cudf::copy_if_else(*thenView, *elseView, condition, stream, mr);
+  }
+  if (thenView.has_value()) {
+    return cudf::copy_if_else(*thenView, *elseScalar, condition, stream, mr);
+  }
+  if (elseView.has_value()) {
+    return cudf::copy_if_else(*thenScalar, *elseView, condition, stream, mr);
+  }
+  return cudf::copy_if_else(*thenScalar, *elseScalar, condition, stream, mr);
+}
+
+// Evaluates a searched CASE / switch of any arity as a right-fold of
+// cudf::copy_if_else. Velox lays inputs out as
+// [cond0, res0, cond1, res1, ..., (else)?]; an odd input count carries a
+// trailing ELSE, an even count yields NULL for unmatched rows. Constant inputs
+// are stripped from the evaluated input list (see FunctionExpression::create),
+// so constants are pre-folded into cuDF scalars here and non-constant operands
+// are pulled from inputColumns in input order at eval time.
 class SwitchFunction : public CudfFunction {
  public:
-  SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    VELOX_CHECK_EQ(
-        expr->inputs().size(), 3, "case when expects exactly 3 inputs");
-    VELOX_CHECK_EQ(
-        expr->inputs()[0]->type()->kind(),
-        TypeKind::BOOLEAN,
-        "The switch condition result type should be boolean");
-    VELOX_CHECK_NULL(
-        std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr),
-        "The condition should not be constant");
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[1])) {
-      auto constValue = constExpr->value();
-      left_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
-    }
-    if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-            expr->inputs()[2])) {
-      auto constValue = constExpr->value();
-      right_ = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          createCudfScalar, constValue->typeKind(), constValue);
+  explicit SwitchFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    const auto& inputs = expr->inputs();
+    VELOX_CHECK_GE(inputs.size(), 2, "switch expects at least 2 inputs");
+    numInputs_ = inputs.size();
+    resultType_ = cudf_velox::veloxToCudfDataType(expr->type());
+    constants_.resize(numInputs_);
+    for (size_t i = 0; i < numInputs_; ++i) {
+      if (auto constExpr =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(inputs[i])) {
+        auto constValue = constExpr->value();
+        constants_[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createCudfScalar, constValue->typeKind(), constValue);
+      }
     }
   }
 
@@ -1173,32 +1196,171 @@ class SwitchFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    if (left_ == nullptr && right_ == nullptr) {
-      return cudf::copy_if_else(
-          asView(inputColumns[1]),
-          asView(inputColumns[2]),
-          asView(inputColumns[0]),
-          stream,
-          mr);
-    } else if (left_ == nullptr) {
-      return cudf::copy_if_else(
-          asView(inputColumns[1]),
-          *right_,
-          asView(inputColumns[0]),
-          stream,
-          mr);
-    } else if (right_ == nullptr) {
-      return cudf::copy_if_else(
-          *left_, asView(inputColumns[1]), asView(inputColumns[0]), stream, mr);
+    // Resolve each input to either its folded constant scalar or the next
+    // non-constant column, preserving input order.
+    std::vector<const cudf::scalar*> scalars(numInputs_, nullptr);
+    std::vector<std::optional<cudf::column_view>> views(numInputs_);
+    size_t nextColumn = 0;
+    for (size_t i = 0; i < numInputs_; ++i) {
+      if (constants_[i] != nullptr) {
+        scalars[i] = constants_[i].get();
+      } else {
+        views[i] = asView(inputColumns[nextColumn++]);
+      }
     }
-    // right != null and left != null
-    return cudf::copy_if_else(
-        *left_, *right_, asView(inputColumns[0]), stream, mr);
+
+    const bool hasElse = (numInputs_ % 2) == 1;
+    const size_t numBranches = numInputs_ / 2;
+
+    // Seed the accumulator with the ELSE operand, or a null scalar of the
+    // result type when there is no ELSE.
+    std::unique_ptr<cudf::scalar> nullSeed;
+    const cudf::scalar* accScalar = nullptr;
+    std::optional<cudf::column_view> accView;
+    if (hasElse) {
+      const size_t elseIndex = numInputs_ - 1;
+      accScalar = scalars[elseIndex];
+      accView = views[elseIndex];
+    } else {
+      nullSeed = cudf::make_default_constructed_scalar(resultType_, stream, mr);
+      nullSeed->set_valid_async(false, stream);
+      accScalar = nullSeed.get();
+    }
+
+    // Fold branches right-to-left: acc = copy_if_else(result, acc, condition).
+    std::unique_ptr<cudf::column> accColumn;
+    for (size_t b = numBranches; b-- > 0;) {
+      const size_t conditionIndex = 2 * b;
+      const size_t resultIndex = 2 * b + 1;
+      // Conditions are guaranteed non-constant by canEvaluate.
+      const cudf::column_view condition = views[conditionIndex].value();
+      accColumn = copyIfElse(
+          scalars[resultIndex],
+          views[resultIndex],
+          accScalar,
+          accView,
+          condition,
+          stream,
+          mr);
+      accScalar = nullptr;
+      accView = accColumn->view();
+    }
+    return accColumn;
   }
 
  private:
-  std::unique_ptr<cudf::scalar> left_;
-  std::unique_ptr<cudf::scalar> right_;
+  size_t numInputs_{0};
+  cudf::data_type resultType_{};
+  // Folded scalar for each constant input; nullptr for non-constant inputs.
+  std::vector<std::unique_ptr<cudf::scalar>> constants_;
+};
+
+// Evaluates a `case` special form (Velox CaseExpr, #17445) on the GPU. Velox's
+// parser emits `case` (not `switch`) when every WHEN compares a common subject
+// by equality, and for the simple `CASE x WHEN v THEN r` form. Layout:
+//   inputs[0]      = subject (already cast to the common comparison type)
+//   inputs[2i + 1] = WHEN value for case i
+//   inputs[2i + 2] = THEN result for case i
+//   inputs.back()  = ELSE result (present when the input count is even)
+// The subject is compared to each WHEN via cudf EQUAL (a null result means the
+// row is not matched, matching SQL), and results combine by the same
+// right-fold of copy_if_else used for `switch`. Constant inputs are stripped
+// from the evaluated input list, so constants are pre-folded into scalars here.
+class CaseFunction : public CudfFunction {
+ public:
+  explicit CaseFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    const auto& inputs = expr->inputs();
+    VELOX_CHECK_GE(inputs.size(), 3, "case expects at least 3 inputs");
+    numInputs_ = inputs.size();
+    resultType_ = cudf_velox::veloxToCudfDataType(expr->type());
+    constants_.resize(numInputs_);
+    for (size_t i = 0; i < numInputs_; ++i) {
+      if (auto constExpr =
+              std::dynamic_pointer_cast<velox::exec::ConstantExpr>(inputs[i])) {
+        auto constValue = constExpr->value();
+        constants_[i] = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createCudfScalar, constValue->typeKind(), constValue);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    // Resolve each input to a folded constant scalar or the next non-constant
+    // column, preserving input order.
+    std::vector<const cudf::scalar*> scalars(numInputs_, nullptr);
+    std::vector<std::optional<cudf::column_view>> views(numInputs_);
+    size_t nextColumn = 0;
+    for (size_t i = 0; i < numInputs_; ++i) {
+      if (constants_[i] != nullptr) {
+        scalars[i] = constants_[i].get();
+      } else {
+        views[i] = asView(inputColumns[nextColumn++]);
+      }
+    }
+
+    // The subject is guaranteed non-constant by canEvaluate.
+    const cudf::column_view subject = views[0].value();
+    const bool hasElse = (numInputs_ % 2) == 0;
+    const size_t numCases = (numInputs_ - 1) / 2;
+
+    // Seed with the ELSE operand, or a null scalar of the result type.
+    std::unique_ptr<cudf::scalar> nullSeed;
+    const cudf::scalar* accScalar = nullptr;
+    std::optional<cudf::column_view> accView;
+    if (hasElse) {
+      const size_t elseIndex = numInputs_ - 1;
+      accScalar = scalars[elseIndex];
+      accView = views[elseIndex];
+    } else {
+      nullSeed = cudf::make_default_constructed_scalar(resultType_, stream, mr);
+      nullSeed->set_valid_async(false, stream);
+      accScalar = nullSeed.get();
+    }
+
+    // Fold cases right-to-left so the first matching WHEN wins:
+    //   acc = copy_if_else(then_i, acc, eq(subject, when_i)).
+    std::unique_ptr<cudf::column> accColumn;
+    const cudf::data_type boolType{cudf::type_id::BOOL8};
+    for (size_t c = numCases; c-- > 0;) {
+      const size_t whenIndex = 2 * c + 1;
+      const size_t thenIndex = 2 * c + 2;
+      std::unique_ptr<cudf::column> mask = views[whenIndex].has_value()
+          ? cudf::binary_operation(
+                subject,
+                views[whenIndex].value(),
+                cudf::binary_operator::EQUAL,
+                boolType,
+                stream,
+                mr)
+          : cudf::binary_operation(
+                subject,
+                *scalars[whenIndex],
+                cudf::binary_operator::EQUAL,
+                boolType,
+                stream,
+                mr);
+      accColumn = copyIfElse(
+          scalars[thenIndex],
+          views[thenIndex],
+          accScalar,
+          accView,
+          mask->view(),
+          stream,
+          mr);
+      accScalar = nullptr;
+      accView = accColumn->view();
+    }
+    return accColumn;
+  }
+
+ private:
+  size_t numInputs_{0};
+  cudf::data_type resultType_{};
+  // Folded scalar for each constant input; nullptr for non-constant inputs.
+  std::vector<std::unique_ptr<cudf::scalar>> constants_;
 };
 
 class CoalesceFunction : public CudfFunction {
@@ -2416,19 +2578,60 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("varchar")
            .build()});
 
-  // No prefix because switch and if are special form
-  registerCudfFunctions(
-      {"switch", "if"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SwitchFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .typeVariable("T")
-           .returnType("T")
-           .argumentType("boolean")
-           .argumentType("T")
-           .argumentType("T")
-           .build()});
+  // No prefix because switch and if are special forms. Registered with empty
+  // signatures plus a structural canEvaluate so a switch of any branch count
+  // binds: the FunctionSignature binder cannot express the alternating
+  // boolean/T argument pattern of a multi-branch CASE.
+  auto switchFactory = [](const std::string&,
+                          const std::shared_ptr<velox::exec::Expr>& expr) {
+    return std::make_shared<SwitchFunction>(expr);
+  };
+  auto switchCanEvaluate =
+      [](const std::shared_ptr<velox::exec::Expr>& expr) -> bool {
+    const auto& inputs = expr->inputs();
+    if (inputs.size() < 2) {
+      return false;
+    }
+    // Conditions occupy the even indices (the trailing ELSE, if any, is odd).
+    // Each must be boolean and non-constant: a constant condition would be
+    // stripped from the evaluated inputs and break positional mask indexing.
+    for (size_t i = 0; i + 1 < inputs.size(); i += 2) {
+      if (inputs[i]->type()->kind() != TypeKind::BOOLEAN) {
+        return false;
+      }
+      if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(inputs[i])) {
+        return false;
+      }
+    }
+    return true;
+  };
+  registerCudfFunction(
+      "switch", switchFactory, {}, /*overwrite=*/true, switchCanEvaluate);
+  registerCudfFunction(
+      "if", switchFactory, {}, /*overwrite=*/true, switchCanEvaluate);
+
+  // CaseExpr special form (Velox #17445): emitted for simple CASE and searched
+  // CASE whose WHENs all compare a common subject by equality. Empty signatures
+  // + structural canEvaluate, like switch/if.
+  auto caseFactory = [](const std::string&,
+                        const std::shared_ptr<velox::exec::Expr>& expr) {
+    return std::make_shared<CaseFunction>(expr);
+  };
+  auto caseCanEvaluate =
+      [](const std::shared_ptr<velox::exec::Expr>& expr) -> bool {
+    const auto& inputs = expr->inputs();
+    if (inputs.size() < 3) {
+      return false;
+    }
+    // The subject is compared per-row against each WHEN, so it must arrive as a
+    // column; a constant subject is folded away by Velox before the GPU path.
+    if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(inputs[0])) {
+      return false;
+    }
+    return true;
+  };
+  registerCudfFunction(
+      "case", caseFactory, {}, /*overwrite=*/true, caseCanEvaluate);
 
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.
