@@ -29,6 +29,8 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+using EqualityDeleteFieldPath = std::vector<std::string>;
+
 /// Reads an Iceberg equality delete file and filters base data rows whose
 /// equality delete column values match any row in the delete file.
 ///
@@ -41,8 +43,7 @@ namespace facebook::velox::connector::hive::iceberg {
 /// delete set. The reader eagerly loads all delete key tuples from the file
 /// into an in-memory hash set during construction.
 ///
-/// The equality delete column names are resolved from equalityFieldIds via
-/// the table schema provided by the caller.
+/// Equality fields may be top-level or nested in structs.
 class EqualityDeleteFileReader {
  public:
   /// Constructs a reader for a single equality delete file.
@@ -54,10 +55,9 @@ class EqualityDeleteFileReader {
   /// @param deleteFile Metadata about the equality delete file. Must have
   ///   content == FileContent::kEqualityDeletes and non-empty
   ///   equalityFieldIds.
-  /// @param equalityColumnNames Ordered column names corresponding to
+  /// @param deleteFileSchema Projection containing the equality fields.
+  /// @param equalityFieldPaths Ordered name paths corresponding to
   ///   equalityFieldIds, resolved by the caller from the table schema.
-  /// @param equalityColumnTypes Ordered column types corresponding to
-  ///   equalityFieldIds.
   /// @param baseFilePath Path of the base data file being read.
   /// @param fileHandleFactory Factory for creating file handles.
   /// @param connectorQueryCtx Query context for memory and config.
@@ -69,8 +69,8 @@ class EqualityDeleteFileReader {
   /// @param connectorId Connector identifier.
   EqualityDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
-      const std::vector<std::string>& equalityColumnNames,
-      const std::vector<TypePtr>& equalityColumnTypes,
+      const RowTypePtr& deleteFileSchema,
+      const std::vector<EqualityDeleteFieldPath>& equalityFieldPaths,
       const std::string& baseFilePath,
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -103,16 +103,20 @@ class EqualityDeleteFileReader {
   }
 
  private:
-  // Resolves column indices for the given row type, caching the result in
-  // outputColumnIndices_ for reuse across rows.
-  const std::vector<column_index_t>& resolveOutputColumnIndices(
+  // Resolves field paths to column-index paths for the given row type.
+  std::vector<std::vector<column_index_t>> resolveColumnIndices(
+      const RowType& rowType) const;
+
+  // Resolves column-index paths for the output row type, caching the result
+  // for reuse across rows.
+  const std::vector<std::vector<column_index_t>>& resolveOutputColumnIndices(
       const RowVectorPtr& row) const;
 
   // Hashes a single row's equality delete columns into a uint64_t key.
   uint64_t hashRow(
       const RowVectorPtr& row,
       vector_size_t index,
-      const std::vector<column_index_t>& colIndices) const;
+      const std::vector<std::vector<column_index_t>>& colIndices) const;
 
   // Checks whether two rows are equal on all equality delete columns.
   bool equalRows(
@@ -121,16 +125,15 @@ class EqualityDeleteFileReader {
       const RowVectorPtr& right,
       vector_size_t rightIndex) const;
 
-  // Column names and types for equality delete comparison.
-  std::vector<std::string> equalityColumnNames_;
-  std::vector<TypePtr> equalityColumnTypes_;
+  // Name paths for the primitive equality fields.
+  std::vector<EqualityDeleteFieldPath> equalityFieldPaths_;
 
-  // Column indices in the delete file output vector.
-  std::vector<column_index_t> deleteColumnIndices_;
+  // Column-index paths in the delete file output vector.
+  std::vector<std::vector<column_index_t>> deleteColumnIndices_;
 
-  // Cached column indices for the output (probe) row type. Resolved lazily
+  // Cached column-index paths for the output (probe) row type. Resolved lazily
   // on first applyDeletes() call to avoid repeated name lookups per row.
-  mutable std::vector<column_index_t> outputColumnIndices_;
+  mutable std::vector<std::vector<column_index_t>> outputColumnIndices_;
 
   // All rows read from the equality delete file, stored for equality
   // comparison during probing.
