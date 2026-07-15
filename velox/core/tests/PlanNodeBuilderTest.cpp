@@ -1067,13 +1067,11 @@ TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {
 TEST_F(PlanNodeBuilderTest, assignUniqueIdNode) {
   const PlanNodeId id = "assign_unique_id_id";
   const std::string idName = "unique_id";
-  const int32_t taskUniqueId = 42;
 
   const auto verify =
       [&](const std::shared_ptr<const AssignUniqueIdNode>& node) {
         EXPECT_EQ(node->id(), id);
         EXPECT_EQ(node->outputType()->names().back(), idName);
-        EXPECT_EQ(node->taskUniqueId(), taskUniqueId);
         EXPECT_EQ(node->sources().size(), 1);
         EXPECT_EQ(node->sources()[0], source_);
       };
@@ -1081,7 +1079,6 @@ TEST_F(PlanNodeBuilderTest, assignUniqueIdNode) {
   const auto node = AssignUniqueIdNode::Builder()
                         .id(id)
                         .idName(idName)
-                        .taskUniqueId(taskUniqueId)
                         .source(source_)
                         .build();
   verify(node);

@@ -834,7 +834,7 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    // `mask` is NOT supported (in testing do not appear to be be applied and
+    // `mask` is NOT supported (in testing do not appear to be applied and
     // return incorrect results )
     if (aggregate.mask) {
       return false;

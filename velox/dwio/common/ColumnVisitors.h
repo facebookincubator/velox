@@ -617,8 +617,6 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::addOutputRow(
   reader_->addOutputRow(row);
 }
 
-enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
-
 namespace detail {
 
 template <typename T, typename A>
@@ -1387,6 +1385,11 @@ class StringDictionaryColumnVisitor
     }
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
+    // TODO: This inline SIMD loop duplicates the shared
+    // filterDictionaryRunSimd() free function in DecoderUtil.h; rewire
+    // processRun to call it in a follow-up diff. The dedup is split out to keep
+    // this DWRF change separate from the Nimble post-hoc dictionary filter
+    // feature.
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     for (auto i = 0; i < numInput; i += kWidth) {
       auto indices = xsimd::load_unaligned(input + i);

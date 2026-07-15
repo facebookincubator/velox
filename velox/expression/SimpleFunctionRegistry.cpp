@@ -247,7 +247,16 @@ SimpleFunctionRegistry::resolveFunction(
 
       if (!candidates.empty()) {
         if (allowCoercion) {
-          if (auto index = Coercion::pickLowestCost(candidates)) {
+          auto index = Coercion::pickLowestCost(
+              candidates, argTypes, [&](size_t candidateIndex) {
+                return Coercion::CandidateMetadata{
+                    .returnType = candidates[candidateIndex].second.second,
+                    .nullOnNull = candidates[candidateIndex]
+                                      .second.first->getMetadata()
+                                      .defaultNullBehavior()};
+              });
+
+          if (index) {
             selectedCandidate = candidates[index.value()].second;
 
             const auto& selectedCoercions = candidates[index.value()].first;

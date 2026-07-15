@@ -172,7 +172,11 @@ bool tensorMetaCompatible(
 bool isParamPresent(NodeCP node, std::string_view name) {
   for (const auto& input : node->inputs()) {
     if (input.name == name) {
-      return true;
+      // A None-typed input slot represents an absent optional argument (e.g.
+      // clamp(self, min=None, max=5)).  It must NOT count as present, otherwise
+      // the op selects the wrong presence template (e.g. __clamp<true, true>
+      // reading a None->0 min) and dedup merges it with present-arg ops.
+      return input.value->type().kind() != nativert::Type::Kind::None;
     }
   }
   const auto* attr = node->tryGetAttribute(std::string(name));
@@ -923,7 +927,10 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     pushdownStandalone(node);
     return thisContext;
   }
-  if (meta->isKernelBreak(isSingleBlock_, isCgGrid_)) {
+  if (meta->isKernelBreak(
+          isSingleBlock_,
+          isCgGrid_,
+          WaveConfig::get().scanOutputReturnBarrier)) {
     pushdownFused(node);
     return Context::kFusedBreak;
   }
@@ -1560,7 +1567,6 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     return result;
   }
   const auto& schemaArgs = meta.functionSchema->arguments();
-  const auto& nodeInputs = node->inputs();
   for (size_t i = 0; i < schemaArgs.size(); ++i) {
     if (i >= meta.argumentMeta.size() ||
         !meta.argumentMeta[i].hasPresentTemplateParam) {
@@ -1569,21 +1575,9 @@ std::string presentTemplateParams(const Metadata& meta, NodeCP node) {
     if (!result.empty()) {
       result += ", ";
     }
-    bool present = false;
-    const auto& argName = schemaArgs[i].name();
-    for (const auto& input : nodeInputs) {
-      if (input.name == argName) {
-        present = true;
-        break;
-      }
-    }
-    if (!present) {
-      const auto* attr = node->tryGetAttribute(argName);
-      if (attr && !std::holds_alternative<nativert::None>(attr->value)) {
-        present = true;
-      }
-    }
-    result += present ? "true" : "false";
+    // Use the same presence rule as dedup (isParamPresent), which treats a
+    // None-typed input slot as absent.
+    result += isParamPresent(node, schemaArgs[i].name()) ? "true" : "false";
   }
   return result;
 }
@@ -1848,8 +1842,18 @@ void CompileCtx::emitCopy(
     const std::string& destOffsetExpr,
     const std::string& cudaTypeName) {
   auto& op = *generatingOp_;
-  code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
-        << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  auto srcTypeName = cudaType(source);
+  if (srcTypeName != cudaTypeName) {
+    // Mixed-dtype cat element (e.g. an int64 cumsum slice copied into a float
+    // cat output, where torch type-promotes the element): value-convert rather
+    // than bit-copy, which would reinterpret the source bytes.
+    code_ << "  __copyConvert<" << srcTypeName << ", " << cudaTypeName << ">("
+          << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  } else {
+    code_ << "  __copy<" << cudaTypeName << ">(" << param(source, op) << ", "
+          << "storage<" << cudaTypeName << ">(" << param(dest, op) << ")";
+  }
   if (!destOffsetExpr.empty()) {
     code_ << " + " << destOffsetExpr;
   }
@@ -2163,11 +2167,19 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   }
   auto compositeKernel = std::make_unique<CompositeKernel>(
       std::move(opStorage_), std::move(kernelOpStorage_), includes_);
+  // Values whose last use is in this node (graph outputs already excluded);
+  // WaveConfig::freeIntermediates releases their frame tensors after execute().
+  std::vector<nativert::ValueId> lastUseIds;
+  lastUseIds.reserve(project.lastUse.size());
+  for (auto* value : project.lastUse) {
+    lastUseIds.push_back(value->id());
+  }
   auto invocation = std::make_unique<CompositeInvocation>(
       std::move(compositeKernel),
       std::move(ops_),
       std::move(ivalueStorage_),
-      waveGraph_.nextCompositeInvocationId());
+      waveGraph_.nextCompositeInvocationId(),
+      std::move(lastUseIds));
   placed_.insert(nodes.begin(), nodes.end());
   return std::make_unique<CompiledNode>(std::move(invocation));
 }

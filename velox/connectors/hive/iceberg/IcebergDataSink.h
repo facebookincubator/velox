@@ -27,6 +27,10 @@
 #include "velox/connectors/hive/iceberg/IcebergDataFileStatistics.h"
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
+#ifdef VELOX_ENABLE_NIMBLE
+#include "velox/connectors/hive/iceberg/fb/IcebergNimbleStatsCollector.h"
+#endif
+
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergPartitionName.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
@@ -35,9 +39,50 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+class IcebergFileNameGenerator : public FileNameGenerator {
+ public:
+  IcebergFileNameGenerator() {}
+
+  std::pair<std::string, std::string> gen(
+      std::optional<uint32_t> bucketId,
+      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx,
+      uint32_t maxNumBuckets,
+      bool commitRequired) const override;
+
+  static void registerSerDe();
+
+  folly::dynamic serialize() const override;
+
+  std::string toString() const override;
+
+  static std::shared_ptr<IcebergFileNameGenerator> deserialize(
+      const folly::dynamic& obj,
+      void* context);
+};
+
 /// Represents a request for Iceberg write.
 class IcebergInsertTableHandle final : public HiveInsertTableHandle {
  public:
+  /// Descriptor for a deletion vector that already exists for a data file at
+  /// plan time. Used by IcebergDeletionVectorSink to seed a new DV's roaring
+  /// bitmap with the prior DV's positions so the emitted Puffin holds the
+  /// union of old and newly-deleted positions. Iceberg V3 allows at most one
+  /// DV per data file, so a repeated mutation of a data file that already has
+  /// a DV must replace it with the union rather than add a second DV.
+  struct ExistingDeletionVector {
+    /// Path of the Puffin file holding the existing DV blob.
+    std::string puffinPath;
+    /// Byte offset of the DV blob within the Puffin file.
+    int64_t contentOffset{0};
+    /// Length in bytes of the DV blob within the Puffin file.
+    int64_t contentLength{0};
+    /// Number of deleted positions encoded in the existing DV blob.
+    int64_t recordCount{0};
+    /// Total size in bytes of the Puffin file.
+    int64_t fileSizeInBytes{0};
+  };
+
   /// Identifies which kind of file the sink should produce. Used by
   /// IcebergConnector::createDataSink to dispatch between:
   ///  - the data-file IcebergDataSink (kData, INSERT and UPDATE-insert
@@ -80,6 +125,13 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// @param writeKind Selects between data-file emission (default) and V3
   /// deletion-vector emission. The default preserves existing INSERT
   /// semantics.
+  /// @param fileNameGenerator File name generator for generating unique file
+  /// names for data files. Defaults to IcebergFileNameGenerator.
+  /// @param existingDeletionVectors Map from referenced data-file path to the
+  /// descriptor of a deletion vector that already exists for it. Empty for
+  /// INSERT and for first-time mutations; populated by the coordinator for a
+  /// V3 repeated mutation so the deletion-vector sink seeds the new DV with
+  /// the prior DV's positions.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
@@ -87,7 +139,11 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       IcebergPartitionSpecPtr partitionSpec,
       std::optional<common::CompressionKind> compressionKind = {},
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
-      WriteKind writeKind = WriteKind::kData);
+      WriteKind writeKind = WriteKind::kData,
+      std::unordered_map<std::string, ExistingDeletionVector>
+          existingDeletionVectors = {},
+      std::shared_ptr<const FileNameGenerator> fileNameGenerator =
+          std::make_shared<const IcebergFileNameGenerator>());
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -101,9 +157,19 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return writeKind_;
   }
 
+  /// Returns the map from referenced data-file path to the descriptor of the
+  /// deletion vector that already exists for it. Empty unless this is a V3
+  /// repeated mutation that must union with a prior DV.
+  const std::unordered_map<std::string, ExistingDeletionVector>&
+  existingDeletionVectors() const {
+    return existingDeletionVectors_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
   const WriteKind writeKind_;
+  const std::unordered_map<std::string, ExistingDeletionVector>
+      existingDeletionVectors_;
 };
 
 using IcebergInsertTableHandlePtr =

@@ -124,7 +124,7 @@ uint64_t SerializedPageFileWriter::flush() {
       *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
   uint64_t flushTimeNs{0};
   {
-    NanosecondTimer timer(&flushTimeNs);
+    NanosecondWallTimer timer(&flushTimeNs);
     batch_->flush(&out);
   }
   batch_.reset();
@@ -133,7 +133,7 @@ uint64_t SerializedPageFileWriter::flush() {
   uint64_t writtenBytes{0};
   auto iobuf = out.getIOBuf();
   {
-    NanosecondTimer timer(&writeTimeNs);
+    NanosecondWallTimer timer(&writeTimeNs);
     writtenBytes = file->write(std::move(iobuf));
   }
   updateWriteStats(writtenBytes, flushTimeNs, writeTimeNs);
@@ -151,7 +151,7 @@ uint64_t SerializedPageFileWriter::write(
 
   uint64_t timeNs{0};
   {
-    NanosecondTimer timer(&timeNs);
+    NanosecondWallTimer timer(&timeNs);
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
       batch_->createStreamTree(
@@ -210,7 +210,7 @@ bool SerializedPageFileReader::nextBatch(RowVectorPtr& rowVector) {
 
   uint64_t timeNs{0};
   {
-    NanosecondTimer timer{&timeNs};
+    NanosecondWallTimer timer{&timeNs};
     VectorStreamGroup::read(
         input_.get(), pool_, type_, serde_, &rowVector, readOptions_.get());
   }

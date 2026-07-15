@@ -17,8 +17,11 @@
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
 
 #include "velox/common/base/Exceptions.h"
+#ifdef VELOX_ENABLE_NIMBLE
+#include "velox/connectors/hive/iceberg/fb/NimbleWriterOptionsAdapter.h"
+#endif
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/parquet/writer/WriterConfig.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -43,15 +46,13 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     // - Timestamps must NOT be adjusted to UTC; written as-is without
     //   timezone conversion (empty string disables conversion).
     //
-    // Settings are routed through serdeParameters to avoid pulling in
-    // parquet-specific headers. Keys must match
-    // kParquetSerdeTimestampUnit and kParquetSerdeTimestampTimezone in
-    // velox/dwio/parquet/writer/Writer.h. The value "6" represents
-    // microseconds (TimestampPrecision::kMicroseconds).
-    options.serdeParameters[parquet::WriterConfig::kParquetSerdeTimestampUnit] =
-        "6";
-    options.serdeParameters
-        [parquet::WriterConfig::kParquetSerdeTimestampTimezone] = "";
+    // Settings are routed through serdeParameters so the common writer options
+    // can carry them until the Parquet writer constructor reads them. The value
+    // "6" represents microseconds (TimestampPrecision::kMicroseconds).
+    options.serdeParameters[std::string(
+        parquet::ParquetConfig::kWriterSerdeTimestampUnit)] = "6";
+    options.serdeParameters[std::string(
+        parquet::ParquetConfig::kWriterSerdeTimestampTimezone)] = "";
   }
 };
 
@@ -76,22 +77,12 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
   }
 };
 
-class NimbleWriterOptionsAdapter : public WriterOptionsAdapter {
- public:
-  // Reports NIMBLE files as ORC in the manifest so cross-engine readers
-  // (Presto coordinator, catalog) can interpret the commit message. The
-  // actual on-disk format is identified at read time via the file
-  // extension and on-disk magic bytes, not via this string.
-  std::string manifestFormatString() const override {
-    return std::string{kOrcManifestFormat};
-  }
-};
-
 } // namespace
 
 std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
-    dwio::common::FileFormat format) {
-  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+    dwio::common::FileFormat format,
+    IcebergFieldId icebergFieldIds,
+    IcebergFieldMetadata icebergMetadata) {
   switch (format) {
     case dwio::common::FileFormat::PARQUET:
       return std::make_unique<ParquetWriterOptionsAdapter>();
@@ -103,8 +94,11 @@ std::unique_ptr<WriterOptionsAdapter> createWriterOptionsAdapter(
       // with the Java planner (see FileFormat.DWRF.toIceberg() in
       // presto-facebook-iceberg).
       return std::make_unique<DwrfWriterOptionsAdapter>();
+#ifdef VELOX_ENABLE_NIMBLE
     case dwio::common::FileFormat::NIMBLE:
-      return std::make_unique<NimbleWriterOptionsAdapter>();
+      return createNimbleWriterOptionsAdapter(
+          std::move(icebergFieldIds), std::move(icebergMetadata));
+#endif
     default:
       return nullptr;
   }

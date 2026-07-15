@@ -1422,23 +1422,7 @@ using AggregationNodePtr = std::shared_ptr<const AggregationNode>;
 inline std::ostream& operator<<(
     std::ostream& out,
     const AggregationNode::Step& step) {
-  switch (step) {
-    case AggregationNode::Step::kFinal:
-      return out << "FINAL";
-    case AggregationNode::Step::kIntermediate:
-      return out << "INTERMEDIATE";
-    case AggregationNode::Step::kPartial:
-      return out << "PARTIAL";
-    case AggregationNode::Step::kSingle:
-      return out << "SINGLE";
-  }
-  VELOX_UNREACHABLE();
-}
-
-inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
-  std::stringstream ss;
-  ss << step;
-  return ss.str();
+  return out << AggregationNode::toName(step);
 }
 
 /// Specify the column stats collection by aggregation. This is used by table
@@ -4999,18 +4983,17 @@ using EnforceSingleRowNodePtr = std::shared_ptr<const EnforceSingleRowNode>;
 /// with unique int64_t value per input row.
 ///
 /// 64-bit unique id is built in following way:
-///  - first 24 bits - task unique id
-///  - next 40 bits - operator counter value
+///  - high 24 bits - task unique id
+///  - low 40 bits - operator counter value
 ///
-/// The task unique id is added to ensure the generated id is unique
-/// across all the nodes executing the same query stage in a distributed
-/// query execution.
+/// The task unique id ensures the generated id is unique across all the tasks
+/// executing the same query stage in a distributed query. It is supplied by the
+/// executing Task via PlanFragment::taskUniqueId.
 class AssignUniqueIdNode : public PlanNode {
  public:
   AssignUniqueIdNode(
       const PlanNodeId& id,
       const std::string& idName,
-      const int32_t taskUniqueId,
       PlanNodePtr source);
 
   bool supportsBarrier() const override {
@@ -5024,7 +5007,6 @@ class AssignUniqueIdNode : public PlanNode {
     explicit Builder(const AssignUniqueIdNode& other) {
       id_ = other.id();
       idName_ = other.outputType()->names().back();
-      taskUniqueId_ = other.taskUniqueId();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -5039,11 +5021,6 @@ class AssignUniqueIdNode : public PlanNode {
       return *this;
     }
 
-    Builder& taskUniqueId(int32_t taskUniqueId) {
-      taskUniqueId_ = taskUniqueId;
-      return *this;
-    }
-
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -5054,18 +5031,15 @@ class AssignUniqueIdNode : public PlanNode {
       VELOX_USER_CHECK(
           idName_.has_value(), "AssignUniqueIdNode idName not set");
       VELOX_USER_CHECK(
-          taskUniqueId_.has_value(), "AssignUniqueIdNode taskUniqueId not set");
-      VELOX_USER_CHECK(
           source_.has_value(), "AssignUniqueIdNode source is not set");
 
       return std::make_shared<AssignUniqueIdNode>(
-          id_.value(), idName_.value(), taskUniqueId_.value(), source_.value());
+          id_.value(), idName_.value(), source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<std::string> idName_;
-    std::optional<int32_t> taskUniqueId_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -5088,21 +5062,22 @@ class AssignUniqueIdNode : public PlanNode {
     return taskUniqueId_;
   }
 
-  const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
-    return uniqueIdCounter_;
-  }
-
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  // Builds the output row type: the source columns followed by the BIGINT id
+  // column named 'idName'.
+  static RowTypePtr makeOutputType(
+      const PlanNodePtr& source,
+      const std::string& idName);
+
   void addDetails(std::stringstream& stream) const override;
 
   const int32_t taskUniqueId_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
-  std::shared_ptr<std::atomic_int64_t> uniqueIdCounter_;
 };
 
 using AssignUniqueIdNodePtr = std::shared_ptr<const AssignUniqueIdNode>;

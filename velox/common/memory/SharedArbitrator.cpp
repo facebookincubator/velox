@@ -1089,7 +1089,7 @@ void SharedArbitrator::runGlobalArbitration() {
   for (;; ++round) {
     uint64_t arbitrationTimeNs{0};
     {
-      NanosecondTimer timer(&arbitrationTimeNs);
+      NanosecondWallTimer timer(&arbitrationTimeNs);
       const uint64_t targetBytes = getGlobalArbitrationTarget();
       if (targetBytes == 0) {
         break;
@@ -1395,7 +1395,7 @@ uint64_t SharedArbitrator::reclaim(
   uint64_t reclaimedBytes{0};
   MemoryReclaimer::Stats stats;
   {
-    NanosecondTimer reclaimTimer(&reclaimTimeNs);
+    NanosecondWallTimer reclaimTimer(&reclaimTimeNs);
     reclaimedBytes = participant->reclaim(targetBytes, timeoutNs, stats);
   }
   // NOTE: if memory reclaim fails, then the participant is also aborted. If

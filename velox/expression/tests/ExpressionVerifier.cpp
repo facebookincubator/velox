@@ -114,11 +114,16 @@ RowVectorPtr reduceToSelectedRows(
   if (rows.isAllSelected()) {
     return rowVector;
   }
+  // The fuzzer can generate a test case whose active rows select nothing.
+  // Return an empty RowVector so callers compare zero rows.
+  if (!rows.hasSelections()) {
+    return std::dynamic_pointer_cast<RowVector>(
+        BaseVector::create(rowVector->type(), 0, rowVector->pool()));
+  }
   BufferPtr indices = allocateIndices(rows.end(), rowVector->pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
   vector_size_t cnt = 0;
   rows.applyToSelected([&](vector_size_t row) { rawIndices[cnt++] = row; });
-  VELOX_CHECK_GT(cnt, 0);
   indices->setSize(cnt * sizeof(vector_size_t));
   // Top level row vector is not expected to be encoded, therefore we copy
   // instead of wrapping in the indices.
@@ -499,10 +504,16 @@ ExpressionVerifier::verify(
     } else {
       VLOG(1) << "Execute with simplified expression eval path.";
       try {
+        // Normalize the input for the simplified path: deep-copy produces a
+        // flat vector with contiguous array/map elements and no garbage behind
+        // nulls, so the common-vs-simplified comparison also flags any result
+        // that depends on the input's physical layout.
+        RowVectorPtr simplifiedInput =
+            std::static_pointer_cast<RowVector>(BaseVector::copy(*rowVector));
         exec::EvalCtx evalCtxSimplified(
-            execCtx_, &exprSetSimplified, rowVector.get());
+            execCtx_, &exprSetSimplified, simplifiedInput.get());
 
-        auto copy = BaseVector::copy(*rowVector);
+        auto copy = BaseVector::copy(*simplifiedInput);
         exprSetSimplified.eval(
             0,
             exprSetSimplified.size(),
@@ -515,7 +526,7 @@ ExpressionVerifier::verify(
         // nested.
         fuzzer::compareVectors(
             copy,
-            BaseVector::copy(*rowVector),
+            BaseVector::copy(*simplifiedInput),
             "Copy of original input",
             "Input after simplified",
             rows);

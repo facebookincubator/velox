@@ -133,6 +133,18 @@ struct ArgumentMeta {
   /// on device side results from another.
   bool linkOnly{false};
 
+  /// Set for an output produced by a non-last part of a root op that was split
+  /// into several kernel ops (e.g. tw.group_length_guard_head, whose length
+  /// outputs are consumed by tw.group_length_guard_final). Such an output is a
+  /// real output of the original op, so it must never be released as a per-op
+  /// freeable intermediate, even though its producing node is not the kernel
+  /// op's root expr. We flag this statically at registration rather than
+  /// deciding from downstream uses on purpose: a ProjectOperation is
+  /// deduplicated and reused across actual subgraphs, some of which reference
+  /// this value externally and some of which do not, so a use-based decision
+  /// would be wrong for the shared op.
+  bool nonRootOutput{false};
+
   /// Marks that for an elementwise operation, we want the whole tensor as
   /// opposed to its element for this lane.
   bool wholeTensor{false};
@@ -196,6 +208,14 @@ struct Metadata {
   /// an opBarrier is emitted instead so the next op stays in the same kernel.
   /// In single-block mode the flag is ignored.
   bool multiBlockReturnBarrier{false};
+
+  /// Like multiBlockReturnBarrier, but only takes effect when the runtime
+  /// WaveConfig::scanOutputReturnBarrier toggle is enabled (passed in as the
+  /// scanOutputReturnBarrierEnabled argument to isKernelBreak). Set on scan ops
+  /// whose multi-block output is read cross-block by fused cat consumers so the
+  /// scan ends its launch and the consumer reads a materialized buffer from a
+  /// later stream-ordered launch.
+  bool scanOutputReturnBarrier{false};
 
   /// If true, the operation always uses the single block grid variant
   /// regardless of input size.
@@ -417,7 +437,10 @@ struct Metadata {
       bool callerIsElementwise)>
       setOutputs;
 
-  bool isKernelBreak(bool isSingleBlock, bool isCgGrid = false) const {
+  bool isKernelBreak(
+      bool isSingleBlock,
+      bool isCgGrid = false,
+      bool scanOutputReturnBarrierEnabled = false) const {
     for (auto& rm : returnMeta) {
       if (rm.neededOnHost) {
         return true;
@@ -426,7 +449,8 @@ struct Metadata {
     if (isSingleBlock || isCgGrid) {
       return false;
     }
-    return multiBlockReturnBarrier;
+    return multiBlockReturnBarrier ||
+        (scanOutputReturnBarrier && scanOutputReturnBarrierEnabled);
   }
 };
 
@@ -492,6 +516,7 @@ class MetadataBuilder {
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
+  MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(

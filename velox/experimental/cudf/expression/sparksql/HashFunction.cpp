@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/expression/sparksql/HashFunction.h"
 
 #include "velox/expression/ConstantExpr.h"
@@ -34,6 +35,20 @@ cudf::table_view convertToTableView(std::vector<ColumnOrView>& inputColumns) {
 }
 
 } // namespace
+
+bool HashFunction::canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (expr->inputs().size() < 2) {
+    return false;
+  }
+
+  // Multi-column hash_with_seed runs on GPU via cuDF murmurhash3_x86_32, which
+  // combines columns with a constant seed (hash_combine) instead of Spark's
+  // iterative seed-chaining (rapidsai/cudf#21720). When CPU fallback is
+  // allowed, reject this shape so it stays on CPU; when fallback is disabled,
+  // preserve the existing forced-GPU behavior.
+  const bool hasMultipleDataColumns = expr->inputs().size() > 2;
+  return !hasMultipleDataColumns || !CudfConfig::getInstance().allowCpuFallback;
+}
 
 HashFunction::HashFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
   using velox::exec::ConstantExpr;

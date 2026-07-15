@@ -20,7 +20,7 @@
 namespace facebook::velox::exec::test {
 
 /// Given taskId that starts with local:// returns an instance of ExchangeSource
-/// that fetches data from local OutputBufferManager.
+/// that fetches data from local DefaultOutputBufferManager.
 std::unique_ptr<exec::ExchangeSource> createLocalExchangeSource(
     const std::string& taskId,
     int destination,

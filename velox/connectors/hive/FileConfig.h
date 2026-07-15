@@ -231,6 +231,17 @@ class FileConfig {
       true,
       "Enable selective Nimble reader.")
 
+  VELOX_HIVE_CONFIG(
+      kNimbleDirectBufferedInputEnabledSession,
+      nimbleDirectBufferedInputEnabled,
+      "nimble_direct_buffered_input_enabled",
+      bool,
+      false,
+      "Use DirectBufferedInput for Nimble reads. Loads streams in quanta "
+      "(loadQuantum-sized chunks) instead of full-stream reads. The first "
+      "quantum per stream is always issued; subsequent quanta are loaded on "
+      "demand. Small streams that fit in one quantum see no reduction. "
+      "Streams coalesced with eager columns may also be loaded early.")
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(
@@ -255,7 +266,7 @@ class FileConfig {
       "reader.timestamp_unit",
       uint8_t,
       3,
-      "Unit for reading timestamps (0=second, 3=millisecond, 6=microsecond, 9=nanosecond).")
+      "Unit for reading timestamps (3=millisecond, 6=microsecond, 9=nanosecond).")
   static constexpr const char* kReadTimestampUnit = "reader.timestamp-unit";
 
   // --- Server-only properties (no macro) ---

@@ -31,7 +31,7 @@ using facebook::velox::common::testutil::TempFilePath;
 namespace facebook::velox::cudf_velox::exec::test {
 
 /// End-to-end tests for equality deletes via the CudfIcebergSplitReader.
-/// These tests write DWRF and Parquet data files and and DWRF delete files,
+/// These tests write DWRF and Parquet data files and DWRF delete files,
 /// then execute table scans verifying that matching rows are filtered out.
 class CudfEqualityDeleteFileReaderTest
     : public CudfIcebergTestBase,

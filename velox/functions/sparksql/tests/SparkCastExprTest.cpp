@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -25,6 +27,9 @@ using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::test {
 namespace {
+
+constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
 
 class SparkCastExprTest : public functions::test::CastBaseTest {
  protected:
@@ -38,6 +43,17 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
           std::to_string(value)}});
+  }
+
+  VectorPtr evaluateCastModeSpecialForm(
+      const std::string& castName,
+      const TypePtr& toType,
+      const VectorPtr& input) {
+    auto inputField =
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0");
+    auto cast = std::make_shared<const core::CallTypedExpr>(
+        toType, std::vector<core::TypedExprPtr>{inputField}, castName);
+    return evaluate(cast, makeRowVector({input}));
   }
 
   void testBoolToTimestamp() {
@@ -384,8 +400,11 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         }));
   }
 
+  // Overflow cases for casting timestamp to tinyint/smallint/integer. Under
+  // ANSI OFF (or try_cast), values that do not fit the target type return NULL.
   template <typename T>
-  void testTimestampToIntegralCastOverflow(std::vector<T> expected) {
+  void testTimestampToIntegralCastOverflow(
+      std::vector<std::optional<T>> expected) {
     testCast(
         makeFlatVector<Timestamp>({
             Timestamp(1740470426, 0),
@@ -393,7 +412,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             Timestamp(9223372036854, 775'807'000),
             Timestamp(-9223372036855, 224'192'000),
         }),
-        makeFlatVector<T>(expected));
+        makeNullableFlatVector<T>(expected));
   }
 
   void testTimestampToInt() {
@@ -1054,6 +1073,152 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         }),
         true);
   }
+
+  // Regular (valid) varchar-to-decimal cast cases. These produce identical
+  // results regardless of ANSI mode, so they are shared between the ANSI ON
+  // and ANSI OFF tests.
+  void testVarcharToDecimal() {
+    testCast(
+        makeFlatVector<StringView>(
+            {"9999999999.99",
+             "15",
+             "1.5",
+             "-1.5",
+             "1.556",
+             "1.554",
+             ("1.556" + std::string(32, '1')).data(),
+             ("1.556" + std::string(32, '9')).data(),
+             "0000.123",
+             ".12300000000",
+             "+09",
+             "9.",
+             ".9",
+             "3E2",
+             "-3E+2",
+             "3E+2",
+             "3E+00002",
+             "3E-2",
+             "3e+2",
+             "3e-2",
+             "3.5E-2",
+             "3.4E-2",
+             "3.5E+2",
+             "3.4E+2",
+             "31.423e+2",
+             "31.423e-2",
+             "31.523e-2",
+             "-3E-00000"}),
+        makeFlatVector<int64_t>(
+            {999'999'999'999,
+             1500,
+             150,
+             -150,
+             156,
+             155,
+             156,
+             156,
+             12,
+             12,
+             900,
+             900,
+             90,
+             30000,
+             -30000,
+             30000,
+             30000,
+             3,
+             30000,
+             3,
+             4,
+             3,
+             35000,
+             34000,
+             314230,
+             31,
+             32,
+             -300},
+            DECIMAL(12, 2)));
+
+    // Truncates the fractional digits with exponent.
+    testCast(
+        makeFlatVector<StringView>(
+            {"112345612.23e-6",
+             "112345662.23e-6",
+             "1.23e-6",
+             "1.23e-3",
+             "1.26e-3",
+             "1.23456781e3",
+             "1.23456789e3",
+             "1.23456789123451789123456789e9",
+             "1.23456789123456789123456789e9"}),
+        makeFlatVector<int128_t>(
+            {1123456,
+             1123457,
+             0,
+             12,
+             13,
+             12345678,
+             12345679,
+             12345678912345,
+             12345678912346},
+            DECIMAL(20, 4)));
+
+    const auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
+    const auto maxDecimalStr = std::string(36, '9') + '.' + "99";
+    testCast(
+        makeFlatVector<StringView>(
+            {StringView(minDecimalStr),
+             StringView(maxDecimalStr),
+             "123456789012345678901234.567"}),
+        makeFlatVector<int128_t>(
+            {
+                DecimalUtil::kLongDecimalMin,
+                DecimalUtil::kLongDecimalMax,
+                HugeInt::build(
+                    669260,
+                    10962463713375599297U), // 12345678901234567890123457
+            },
+            DECIMAL(38, 2)));
+
+    const std::string fractionLarge = "1.9" + std::string(67, '9');
+    const std::string fractionLargeExp = "1.9" + std::string(67, '9') + "e2";
+    const std::string fractionLargeNegExp =
+        "1000.9" + std::string(67, '9') + "e-2";
+    testCast(
+        makeFlatVector<StringView>(
+            {StringView(('-' + std::string(38, '9')).data()),
+             StringView(std::string(38, '9').data()),
+             StringView(fractionLarge),
+             StringView(fractionLargeExp),
+             StringView(fractionLargeNegExp)}),
+        makeFlatVector<int128_t>(
+            {DecimalUtil::kLongDecimalMin,
+             DecimalUtil::kLongDecimalMax,
+             2,
+             200,
+             10},
+            DECIMAL(38, 0)));
+
+    const std::string fractionRoundDown = "0." + std::string(38, '9') + "2";
+    const std::string fractionRoundDownExp =
+        "99." + std::string(36, '9') + "2e-2";
+    testCast(
+        makeFlatVector<StringView>(
+            {StringView(fractionRoundDown), StringView(fractionRoundDownExp)}),
+        makeConstant<int128_t>(
+            DecimalUtil::kLongDecimalMax, 2, DECIMAL(38, 38)));
+
+    // Spark trims leading/trailing whitespace before casting, so these are
+    // valid. Interior whitespace (e.g. "1. 23") remains invalid.
+    testCast<std::string, int128_t>(
+        "decimal(38, 0)", {"1.23 "}, {1}, VARCHAR(), DECIMAL(38, 0));
+    testCast<std::string, int128_t>(
+        "decimal(38, 0)", {" 1.23"}, {1}, VARCHAR(), DECIMAL(38, 0));
+    testCast<std::string, int64_t>(
+        "decimal(12, 2)", {"-3E+2 "}, {-30000}, VARCHAR(), DECIMAL(12, 2));
+    testCast<std::string, int64_t>(
+        "decimal(12, 2)", {" -3E+2"}, {-30000}, VARCHAR(), DECIMAL(12, 2));
+  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -1071,6 +1236,29 @@ class SparkCastExprTestAnsiOff : public SparkCastExprTest {
     setAnsiSupport(false);
   }
 };
+
+TEST_F(SparkCastExprTest, ansiCastModeIgnoresSessionAnsiOff) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          INTEGER(),
+          makeFlatVector<std::string>({"2147483648"})),
+      "Cannot cast");
+}
+
+TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
+  setAnsiSupport(true);
+
+  auto result = evaluateCastModeSpecialForm(
+      kSparkLegacyCast,
+      INTEGER(),
+      makeFlatVector<std::string>({"2147483648", "123"}));
+  auto expected =
+      makeNullableFlatVector<int32_t>({std::nullopt, 123}, INTEGER());
+  assertEqualVectors(expected, result);
+}
 
 // ============================================================================
 // ANSI ON Tests
@@ -1118,6 +1306,22 @@ TEST_F(SparkCastExprTestAnsiOn, doubleToTimestamp) {
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToInt) {
   testTimestampToInt();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToIntOverflow) {
+  // Under ANSI ON, values that overflow the target type throw instead of
+  // returning NULL.
+  auto testOverflowThrows = [this](const std::string& type, Timestamp value) {
+    auto input = makeRowVector({makeFlatVector<Timestamp>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate(fmt::format("cast(c0 as {})", type), input)),
+        "due to an overflow");
+  };
+
+  testOverflowThrows("tinyint", Timestamp(1740470426, 0));
+  testOverflowThrows("smallint", Timestamp(1740470426, 0));
+  testOverflowThrows("integer", Timestamp(9223372036854, 775'807'000));
+  testOverflowThrows("integer", Timestamp(-9223372036855, 224'192'000));
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
@@ -1385,23 +1589,24 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToInt) {
   testTimestampToInt();
   testCast<Timestamp, int64_t>(
       "bigint", {Timestamp(9223372036856, 0)}, {std::nullopt});
+  // Values that overflow the target type return NULL when ANSI is off.
   testTimestampToIntegralCastOverflow<int8_t>({
-      -102,
-      -1,
-      -10,
-      9,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
   });
   testTimestampToIntegralCastOverflow<int16_t>({
-      30874,
-      -1,
-      23286,
-      -23287,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
   });
   testTimestampToIntegralCastOverflow<int32_t>({
       1740470426,
       2147483647,
-      2077252342,
-      -2077252343,
+      std::nullopt,
+      std::nullopt,
   });
 }
 
@@ -1655,5 +1860,315 @@ TEST_F(SparkCastExprTestAnsiOn, dateToTimestampTimezoneGap) {
       makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
   testCast(input, expected);
 }
+
+// Cast TIMESTAMP → TIMESTAMP_UTC: applies the session timezone offset so the
+// local timestamp is preserved as a UTC epoch in TIMESTAMP_UTC.
+TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
+  // No session timezone: identity cast.
+  testCast(
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()));
+
+  // America/Los_Angeles (PST = UTC-8): 2020-01-01 00:00:00 UTC
+  // → local 2019-12-31 16:00:00 → stored as epoch 1577808000.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()));
+
+  // Asia/Kolkata (IST = UTC+5:30): epoch 0 → local 05:30:00
+  // → stored as epoch 19800.
+  setTimezone("Asia/Kolkata");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>({Timestamp(19'800, 0)}, TIMESTAMP_UTC()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToTimestampUtc) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()));
+}
+
+// Cast TIMESTAMP_UTC → TIMESTAMP: converts from the stored local timestamp
+// epoch back to a UTC epoch using the session timezone.
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
+  // No session timezone: identity cast.
+  testCast(
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()));
+
+  // America/Los_Angeles (PST = UTC-8): stored epoch 1577808000
+  // → local 2019-12-31 16:00:00 → UTC 2020-01-01 00:00:00 = epoch 1577836800.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()));
+
+  // Asia/Kolkata (IST = UTC+5:30): stored epoch 19800
+  // → local 05:30:00 → UTC 00:00:00 = epoch 0.
+  setTimezone("Asia/Kolkata");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(19'800, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestamp) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()));
+}
+
+// Verify that casting TIMESTAMP_UTC to TIMESTAMP in a timezone where the
+// stored local time falls in a DST gap does not throw.
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
+  // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
+  // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
+  // 1941-12-24 15:30:00 UTC.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("Asia/Hong_Kong");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(-884'248'200, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestampDSTGap) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("Asia/Hong_Kong");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(-884'248'200, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, varcharToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testVarcharToDecimal();
+
+  // Under ANSI ON, invalid or overflowing inputs throw.
+
+  // Overflows when parsing whole digits.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {std::string(280, '9')},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 0). Value too large.",
+          std::string(280, '9')));
+
+  // Overflows when parsing fractional digits.
+  const std::string fractionOverflow = std::string(36, '9') + '.' + "23456";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 10),
+      {fractionOverflow},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 10). Value too large.",
+          fractionOverflow));
+
+  const std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {fractionRoundUp},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 38). Value too large.",
+          fractionRoundUp));
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"0.0444a"},
+      "Cannot cast VARCHAR '0.0444a' to DECIMAL(38, 0). Value is not a number.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {""},
+      "Cannot cast VARCHAR '' to DECIMAL(38, 0). Value is not a number. Input is empty.");
+
+  // Exponent > LongDecimalType::kMaxPrecision.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1.23e67"},
+      "Cannot cast VARCHAR '1.23e67' to DECIMAL(38, 0). Value too large.");
+
+  // Forcing the scale to be zero overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"20908.23e35"},
+      "Cannot cast VARCHAR '20908.23e35' to DECIMAL(38, 0). Value too large.");
+
+  // Rescale overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {"111111111111111111.23"},
+      "Cannot cast VARCHAR '111111111111111111.23' to DECIMAL(38, 38). Value too large.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"23e-5d"},
+      "Cannot cast VARCHAR '23e-5d' to DECIMAL(38, 0). Value is not a number. Non-digit character is not allowed in the exponent part.");
+
+  // Whitespaces.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1. 23"},
+      "Cannot cast VARCHAR '1. 23' to DECIMAL(38, 0). Value is not a number.");
+  // Interior whitespace stays invalid; leading/trailing cases are valid and
+  // covered in testVarcharToDecimal().
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+ 2"},
+      "Cannot cast VARCHAR '-3E+ 2' to DECIMAL(12, 2). Value is not a number. Non-digit character is not allowed in the exponent part.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+2.1"},
+      "Cannot cast VARCHAR '-3E+2.1' to DECIMAL(12, 2). Value is not a number. Non-digit character is not allowed in the exponent part.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+"},
+      "Cannot cast VARCHAR '-3E+' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E-"},
+      "Cannot cast VARCHAR '-3E-' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"9e"},
+      "Cannot cast VARCHAR '9e' to DECIMAL(12, 2). Value is not a number. The exponent part is empty.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"09{xi+yD"},
+      "Cannot cast VARCHAR '09{xi+yD' to DECIMAL(12, 2). Value is not a number. Chars are invalid.");
+}
+
+TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testVarcharToDecimal();
+
+  // Under ANSI OFF, the same invalid or overflowing inputs return NULL instead
+  // of throwing.
+
+  // Overflows when parsing whole digits.
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)",
+      {std::string(280, '9')},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 0));
+
+  // Overflows when parsing fractional digits.
+  const std::string fractionOverflow = std::string(36, '9') + '.' + "23456";
+  testCast<std::string, int128_t>(
+      "decimal(38, 10)",
+      {fractionOverflow},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 10));
+
+  const std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
+  testCast<std::string, int128_t>(
+      "decimal(38, 38)",
+      {fractionRoundUp},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 38));
+
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"0.0444a"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {""}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  // Exponent > LongDecimalType::kMaxPrecision.
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"1.23e67"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  // Forcing the scale to be zero overflows.
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)",
+      {"20908.23e35"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 0));
+
+  // Rescale overflows.
+  testCast<std::string, int128_t>(
+      "decimal(38, 38)",
+      {"111111111111111111.23"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 38));
+
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"23e-5d"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  // Interior whitespace stays invalid; leading/trailing cases are valid and
+  // covered in testVarcharToDecimal().
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"1. 23"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E+ 2"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E+2.1"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E+"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E-"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"9e"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)",
+      {"09{xi+yD"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(12, 2));
+}
+
 } // namespace
 } // namespace facebook::velox::test
