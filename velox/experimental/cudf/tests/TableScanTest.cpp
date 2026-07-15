@@ -901,3 +901,30 @@ TEST_F(TableScanTest, arrayDecimalScan) {
   auto vector = makeRowVector({"a"}, {makeArrayVector({0, 2}, elements)});
   assertDecimalScanRoundTrip(vector, rowType);
 }
+
+// Exercises the recursive cast through struct -> struct -> list nesting so a
+// decimal buried several levels deep is normalized. Schema:
+// struct<int, decimal, struct<int, list<decimal>>>.
+TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
+  auto rowType = ROW(
+      {"s"},
+      {ROW(
+          {"x", "d", "nested"},
+          {INTEGER(),
+           DECIMAL(7, 2),
+           ROW({"y", "a"}, {INTEGER(), ARRAY(DECIMAL(7, 2))})})});
+  auto listElements = makeNullableFlatVector<int64_t>(
+      {100, 200, std::nullopt, 300, 400}, DECIMAL(7, 2));
+  auto vector = makeRowVector(
+      {"s"},
+      {makeRowVector(
+          {"x", "d", "nested"},
+          {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
+           makeNullableFlatVector<int64_t>(
+               {100, std::nullopt, -200}, DECIMAL(7, 2)),
+           makeRowVector(
+               {"y", "a"},
+               {makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
+                makeArrayVector({0, 2, 4}, listElements)})})});
+  assertDecimalScanRoundTrip(vector, rowType);
+}
