@@ -113,6 +113,11 @@ nativert::Node* makeCumsumVariant(NodeCP single, WaveGraph* waveGraph) {
   if (dimAttr) {
     finalNode->addAttribute({dimAttr->name, std::get<int64_t>(dimAttr->value)});
   }
+  // The op input feeds both head and final, and the head counts feed both
+  // add_sizes and final: each is consumed by more than one part of this
+  // expansion, so it must not be freed as a per-op intermediate.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -139,6 +144,10 @@ nativert::Node* makeExclusiveSumVariant(NodeCP single, WaveGraph* waveGraph) {
        {"counts", headOutput},
        {"link", addSizesOutput}});
   finalNode->addAttribute({"dtype", dtypeStr});
+  // Consumed by more than one part of this expansion (input by head+final,
+  // counts by add_sizes+final); keep out of the freeable intermediates.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -164,6 +173,12 @@ nativert::Node* makeMaskedSelectVariant(NodeCP single, WaveGraph* waveGraph) {
        {"mask", single->inputs()[1].value},
        {"counts", headOutput},
        {"total", addSizesOutput}});
+  // input, mask and counts are each consumed by more than one part of this
+  // expansion (input/mask by head+final, counts by add_sizes+final); keep them
+  // out of the freeable intermediates.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[1].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -774,6 +789,30 @@ void registerBuiltins() {
       .registerOp();
   MetadataBuilder("torch.ops.aten.div_.Tensor")
       .elementwise()
+      .costFunction(divCost)
+      .registerOp();
+
+  // In-place (Tensor, Scalar). Same __*_ device functions; the scalar operand
+  // is cast to self's dtype via normalize, and no arithmeticPromotion so the
+  // result keeps self's dtype.
+  MetadataBuilder("torch.ops.aten.add_.Scalar")
+      .elementwiseFunc("__add_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.sub_.Scalar")
+      .elementwiseFunc("__sub_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(arithmeticCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.mul_.Scalar")
+      .elementwiseFunc("__mul_")
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(mulCost)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.div_.Scalar")
+      .elementwiseFunc("__div_")
+      .normalize(castScalarAttrsToInputDtype)
       .costFunction(divCost)
       .registerOp();
 
@@ -2472,6 +2511,13 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // The multi-block final stage's output is read cross-block by fused cat
+      // consumers (e.g. the exclusive-prefix cat([zeros[1], cumsum[:-1]]) and
+      // the outer cat of per-chain offsets). Without a launch boundary those
+      // reads are ordered only by intra-block __syncthreads(), which is
+      // insufficient across non-co-resident blocks. Gated by the runtime
+      // WaveConfig::scanOutputReturnBarrier toggle so the fix can be A/B'd.
+      .scanOutputReturnBarrier()
       .only1d()
       .templateAttrs({"dim"})
       .outputConstraints(rank1Constraint)
@@ -2590,6 +2636,11 @@ void registerBuiltins() {
       .hasBarrier()
       .hasDtypeTemplateParam()
       .hasBlockSizeTemplateParam()
+      // See cumsum_final: the multi-block final stage's output is read
+      // cross-block by fused cat consumers (the outer cat of per-chain offsets
+      // reads each chain's exclusive-prefix output), so it must end its launch.
+      // Gated by the WaveConfig::scanOutputReturnBarrier toggle.
+      .scanOutputReturnBarrier()
       .only1d()
       .outputConstraints(rank1Constraint)
       .registerOp();

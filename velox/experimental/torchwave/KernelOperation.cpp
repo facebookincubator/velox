@@ -482,6 +482,7 @@ KernelOperation::KernelOperation(
       waveGraph_{&compileCtx.waveGraph()},
       inputs_{sg.inputs.begin(), sg.inputs.end()},
       orderedInputs_{sg.inputs},
+      inputTypes_{sg.inputTypes},
       numInputs_(static_cast<int32_t>(sg.inputs.size())) {
   flattenScalarListInputs(inputs_, orderedInputs_);
   numInputs_ = static_cast<int32_t>(orderedInputs_.size());
@@ -733,6 +734,18 @@ void KernelOperation::setCode(std::stringstream& code) {
     }
   }
 
+  // The loop above collects ordering inputs from this op's (possibly lowered)
+  // variant nodes.  When an op is lowered to tw.* helpers, a boundary tensor
+  // input can be read only via reserveShape / sizeExpr at gatherLaunches time
+  // rather than as a tracked variant node input, so its id is missing here.
+  // Add the op's actual boundary inputs (orderedInputs_) so placeKernelLaunch
+  // orders this op after their producers -- otherwise a standalone producer can
+  // be co-scheduled in the same step and its output read during gatherLaunches
+  // before the standalone has run.
+  for (int32_t i = 0; i < numInputs_; ++i) {
+    orderingInputs_.insert(orderedInputs_[i]->id());
+  }
+
   for (size_t i = 0; i < outputDescs_.size(); ++i) {
     if (outputDescs_[i].shapeSetOnDevice) {
       continue;
@@ -959,6 +972,9 @@ void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
   if (src.isList) {
     dst.isList = true;
   }
+  if (src.nonRootOutput) {
+    dst.nonRootOutput = true;
+  }
   if (src.byLargestInput) {
     dst.byLargestInput = true;
   }
@@ -995,6 +1011,10 @@ bool addOrUpdateOutput(
         OutputDesc elemDesc;
         elemDesc.delegated = true;
         elemDesc.shapeSetOnDevice = desc.shapeSetOnDevice;
+        // Propagate nonRootOutput so a list result of a split root op (e.g.
+        // tw.group_length_guard_head) keeps its unpacked elements out of the
+        // freeable intermediates list as well, not just the list value.
+        elemDesc.nonRootOutput = desc.nonRootOutput;
         outputValues.push_back(elem);
         outputDescs.push_back(std::move(elemDesc));
       }
@@ -1012,6 +1032,7 @@ OutputDesc KernelOperation::makeOutputDesc(
   OutputDesc desc;
   desc.shapeSetOnDevice = returnMeta.shapeSetOnDevice;
   desc.neededOnHost = returnMeta.neededOnHost;
+  desc.nonRootOutput = returnMeta.nonRootOutput;
   desc.sizeExpr.op = returnMeta.sizeShortcut;
 
   // Expand sizeArgs ordinals to ValueIds from the node's inputs.
@@ -1047,6 +1068,17 @@ OutputDesc KernelOperation::makeOutputDesc(
   }
 
   return desc;
+}
+
+bool KernelOperation::isMultiUseInput(nativert::ValueId id) const {
+  // Read from the WaveGraph (persists to execution), not compileCtx_, which is
+  // a stack temporary destroyed after compilation. LaunchData calls this while
+  // gathering launches at execution time.
+  return waveGraph_ != nullptr && waveGraph_->isMultiUseInput(id);
+}
+
+bool KernelOperation::isGraphOutput(nativert::ValueId id) const {
+  return waveGraph_ != nullptr && waveGraph_->isGraphOutput(id);
 }
 
 void KernelOperation::setOutputs(

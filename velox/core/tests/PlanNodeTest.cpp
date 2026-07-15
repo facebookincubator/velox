@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -732,6 +733,200 @@ TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
   EXPECT_EQ(
       promptVec->as<ConstantVector<StringView>>()->valueAt(0).str(),
       "You are helpful.");
+}
+
+// The FixedPointNode constructor and the state declarations validate their
+// inputs up front, so a malformed plan fails at construction rather than at
+// execution.
+TEST_F(PlanNodeTest, fixedPointValidation) {
+  auto vecSchema = ROW("x", BIGINT());
+  auto htSchema = ROW({"k", "v"}, BIGINT());
+
+  // A single body that reads the output entry -- the minimal valid body, reused
+  // as the valid baseline that each case mutates one field of.
+  auto body =
+      std::make_shared<StateSourceNode>("b", "n", vecSchema, /*delta=*/true);
+  auto vectorN = [&] {
+    return std::make_shared<VectorStateDeclaration>(
+        "n", vecSchema, /*initialPlan=*/nullptr, /*append=*/true);
+  };
+
+  // maxIterations must be positive.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 0, .errorWhenMaxIterationReached = false},
+          "n"),
+      "maxIterations must be positive");
+
+  // A hash table needs at least one key column, and every key must be in the
+  // schema -- checked when the declaration is built.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{}),
+      "at least one key column");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{"missing"}),
+      "key column is not in the schema");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{"k", "k"}),
+      "key columns must be unique");
+
+  // StateHashJoin needs a non-null probe source and at least one probe key.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<StateHashJoinNode>(
+          "j", "h", std::vector<std::string>{"k"}, htSchema, nullptr),
+      "non-null probe source");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<StateHashJoinNode>(
+          "j", "h", std::vector<std::string>{}, htSchema, body),
+      "at least one probe key");
+
+  // State declaration names must be unique across all kinds.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<VectorStateDeclaration>("n", vecSchema)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "duplicate state declaration name");
+
+  // A StateSource must reference a declared vector entry.
+  auto typoBody =
+      std::make_shared<StateSourceNode>("b", "typo", vecSchema, /*delta=*/true);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{typoBody},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "StateSource references no declared vector state entry");
+
+  // errorWhenMaxIterationReached requires a convergence plan (a null plan never
+  // converges, so it would always fail).
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = true},
+          "n"),
+      "errorWhenMaxIterationReached requires a convergence plan");
+
+  // A convergence plan must emit exactly one BOOLEAN column.
+  auto nonBoolConvergence =
+      std::make_shared<StateSourceNode>("c", "n", vecSchema, /*delta=*/false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{.plan = nonBoolConvergence, .maxIterations = 5},
+          "n"),
+      "convergence plan output column must be BOOLEAN");
+
+  auto twoColSchema = ROW({"a", "b"}, BOOLEAN());
+  auto twoColConvergence = std::make_shared<StateSourceNode>(
+      "c", "flags", twoColSchema, /*delta=*/false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<VectorStateDeclaration>("flags", twoColSchema)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{.plan = twoColConvergence, .maxIterations = 5},
+          "n"),
+      "exactly one output column");
+
+  // A StateHashJoin output arity must equal probe columns plus the hash table's
+  // payload columns.
+  auto badArityJoin = std::make_shared<StateHashJoinNode>(
+      "j",
+      "h",
+      std::vector<std::string>{"x"},
+      vecSchema,
+      std::make_shared<StateSourceNode>("b", "n", vecSchema, /*delta=*/true));
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<HashTableStateDeclaration>(
+                  "h", htSchema, std::vector<std::string>{"k"})},
+          std::vector<PlanNodePtr>{badArityJoin},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "output arity must equal probe columns plus hash table payload columns");
+
+  // A StateHashJoin's leading probe key column types must match the hash
+  // table's build key types (keys-first on both sides).
+  auto varcharProbe = ROW("k", VARCHAR());
+  auto badKeyTypeJoin = std::make_shared<StateHashJoinNode>(
+      "j",
+      "h",
+      std::vector<std::string>{"k"},
+      ROW({"k", "v"}, {VARCHAR(), BIGINT()}),
+      std::make_shared<StateSourceNode>(
+          "s", "probe", varcharProbe, /*delta=*/true));
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              std::make_shared<VectorStateDeclaration>("probe", varcharProbe),
+              std::make_shared<HashTableStateDeclaration>(
+                  "h", htSchema, std::vector<std::string>{"k"})},
+          std::vector<PlanNodePtr>{badKeyTypeJoin},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "probe"),
+      "probe key column type at channel 0 must match the hash table build key");
+
+  // A null body plan is rejected with a clean error rather than crashing.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{nullptr},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "plan 0 must not be null");
+
+  // Hash table key columns must be the leading schema columns (keys-first).
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", ROW({"v", "k"}, BIGINT()), std::vector<std::string>{"k"}),
+      "leading schema columns in order");
+
+  // An initial plan must not read state -- it runs in Phase 1 before state
+  // exists.
+  auto stateReadingInitial =
+      std::make_shared<StateSourceNode>("s", "n", vecSchema, /*delta=*/true);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              std::make_shared<VectorStateDeclaration>(
+                  "n", vecSchema, stateReadingInitial, /*append=*/true)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "initial plan must not read state");
 }
 
 } // namespace

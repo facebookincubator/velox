@@ -919,7 +919,7 @@ jobs:
       failed-cases: ${{ steps.tests.outputs.failed-cases }}
       failure-details: ${{ steps.tests.outputs.failure-details }}
     concurrency:
-      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.event.pull_request.number }}
+      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.head_ref || github.sha }}
       cancel-in-progress: true
     steps:
       - name: Free Disk Space

@@ -16,8 +16,8 @@
 #pragma once
 
 #include <folly/Random.h>
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/row/CompactRow.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/VectorStream.h"
@@ -28,7 +28,7 @@ namespace detail {
 class Destination {
  public:
   /// @param recordEnqueued Should be called to record each call to
-  /// OutputBufferManager::enqueue. Takes number of bytes and rows.
+  /// DefaultOutputBufferManager::enqueue. Takes number of bytes and rows.
   Destination(
       const std::string& taskId,
       int destination,
@@ -62,14 +62,14 @@ class Destination {
       const RowVectorPtr& output,
       const row::CompactRow* outputCompactRow,
       const row::UnsafeRowFast* outputUnsafeRow,
-      OutputBufferManager& bufferManager,
+      DefaultOutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
       bool* atEnd,
       ContinueFuture* future,
       Scratch& scratch);
 
   BlockingReason flush(
-      OutputBufferManager& bufferManager,
+      DefaultOutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
       ContinueFuture* future);
 
@@ -234,7 +234,7 @@ class PartitionedOutput : public Operator {
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
   // Empty if column order in the output is exactly the same as in input.
   const std::vector<column_index_t> outputChannels_;
-  const std::weak_ptr<exec::OutputBufferManager> bufferManager_;
+  const std::weak_ptr<exec::DefaultOutputBufferManager> bufferManager_;
   const std::function<void()> bufferReleaseFn_;
   const int64_t maxBufferedBytes_;
   const bool eagerFlush_;

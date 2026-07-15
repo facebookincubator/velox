@@ -29,6 +29,8 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <folly/ScopeGuard.h>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -893,6 +895,65 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.filter);
     assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+// Comparing a timestamp column against a timestamp literal must work under
+// every value cudf.timestamp_unit accepts. Regression test for the
+// millisecond and second units, whose constant scalars previously fell
+// through to VELOX_FAIL("Unsupported timestamp unit").
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  struct Unit {
+    cudf::type_id id;
+    std::string name;
+  };
+  // event_ts and the literals are whole seconds, so the coarsest unit
+  // (seconds) is lossless and the expected result is identical for all units.
+  const std::vector<Unit> units{
+      {cudf::type_id::TIMESTAMP_SECONDS, "s"},
+      {cudf::type_id::TIMESTAMP_MILLISECONDS, "ms"},
+      {cudf::type_id::TIMESTAMP_MICROSECONDS, "us"},
+      {cudf::type_id::TIMESTAMP_NANOSECONDS, "ns"}};
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  for (const auto& unit : units) {
+    config.timestampUnit = unit.id;
+    for (const auto& testCase : cases) {
+      SCOPED_TRACE("unit=" + unit.name + " filter=" + testCase.filter);
+      assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+    }
   }
 }
 

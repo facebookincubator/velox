@@ -636,7 +636,7 @@ class RowReaderOptions {
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
   // This is a bit of a hack as there is (by design) no good way
-  // To propogate information from column reader to Koski
+  // To propagate information from column reader to Koski
   std::function<void(
       facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback_;
@@ -751,6 +751,14 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Sets the per-type attribute key under which the file encodes field ids
+  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// columnMappingMode() == kFieldId.
+  ReaderOptions& setFieldIdAttributeKey(std::string key) {
+    fieldIdAttributeKey_ = std::move(key);
+    return *this;
+  }
+
   ReaderOptions& setSessionTimezone(const tz::TimeZone* sessionTimezone) {
     sessionTimezone_ = sessionTimezone;
     return *this;
@@ -793,6 +801,13 @@ class ReaderOptions : public io::ReaderOptions {
   /// Gets the requested schema field ids for ColumnMappingMode::kFieldId.
   const std::vector<ParquetFieldId>& fieldIds() const {
     return fieldIds_;
+  }
+
+  /// Gets the per-type attribute key under which the file encodes field ids
+  /// (e.g. Iceberg's "iceberg.id"). Consumed when
+  /// columnMappingMode() == kFieldId.
+  const std::string& fieldIdAttributeKey() const {
+    return fieldIdAttributeKey_;
   }
 
   SerDeOptions& serDeOptions() {
@@ -861,6 +876,18 @@ class ReaderOptions : public io::ReaderOptions {
 
   void setSelectiveNimbleReaderEnabled(bool value) {
     selectiveNimbleReaderEnabled_ = value;
+  }
+
+  /// If true, Nimble reads use DirectBufferedInput, which loads each stream
+  /// quantum-by-quantum (loadQuantum-sized) on demand instead of fetching the
+  /// whole stream up front. When false, Nimble uses BufferedInput and fetches
+  /// each stream in one piece.
+  bool nimbleDirectBufferedInputEnabled() const {
+    return nimbleDirectBufferedInputEnabled_;
+  }
+
+  void setNimbleDirectBufferedInputEnabled(bool value) {
+    nimbleDirectBufferedInputEnabled_ = value;
   }
 
   /// Whether to cache file metadata (footer, stripes, index) in the
@@ -991,6 +1018,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   std::vector<ParquetFieldId> fieldIds_;
+  std::string fieldIdAttributeKey_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
@@ -1004,6 +1032,7 @@ class ReaderOptions : public io::ReaderOptions {
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool nimbleDirectBufferedInputEnabled_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};

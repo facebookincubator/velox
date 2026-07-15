@@ -1365,6 +1365,88 @@ PlanBuilder& PlanBuilder::limit(int64_t offset, int64_t count, bool isPartial) {
   return *this;
 }
 
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    std::vector<core::PlanNodePtr> plans,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(plans),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry));
+  return *this;
+}
+
+namespace {
+// Resolves the implicit output state entry: the name of the last
+// VectorStateDeclaration in 'declarations'.  Used when fixedPoint() is called
+// without an explicit outputStateEntry.
+std::string defaultOutputStateEntry(
+    const std::vector<core::StateDeclarationPtr>& declarations) {
+  for (auto it = declarations.rbegin(); it != declarations.rend(); ++it) {
+    if (auto vector =
+            std::dynamic_pointer_cast<const core::VectorStateDeclaration>(
+                *it)) {
+      return vector->name();
+    }
+  }
+  VELOX_USER_FAIL(
+      "fixedPoint requires at least one VectorStateDeclaration to use as the "
+      "output state entry");
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    const PlanBuilder& body,
+    core::ConvergenceConfig convergenceConfig,
+    std::optional<std::string> outputStateEntry) {
+  auto entry = outputStateEntry.has_value()
+      ? std::move(outputStateEntry).value()
+      : defaultOutputStateEntry(stateDeclarations);
+  return fixedPoint(
+      std::move(stateDeclarations),
+      std::vector<core::PlanNodePtr>{body.planNode()},
+      std::move(convergenceConfig),
+      std::move(entry));
+}
+
+PlanBuilder& PlanBuilder::fixedPoint(
+    core::StateDeclarationPtr stateDeclaration,
+    const PlanBuilder& body,
+    core::ConvergenceConfig convergenceConfig,
+    std::optional<std::string> outputStateEntry) {
+  return fixedPoint(
+      std::vector<core::StateDeclarationPtr>{std::move(stateDeclaration)},
+      body,
+      std::move(convergenceConfig),
+      std::move(outputStateEntry));
+}
+
+PlanBuilder& PlanBuilder::stateSource(
+    const std::string& stateName,
+    const RowTypePtr& outputType,
+    bool delta) {
+  VELOX_CHECK_NULL(planNode_, "StateSource must be the source node");
+  planNode_ = std::make_shared<core::StateSourceNode>(
+      nextPlanNodeId(), stateName, outputType, delta);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::stateHashJoin(
+    const std::string& stateName,
+    std::vector<std::string> probeKeys,
+    const RowTypePtr& outputType) {
+  VELOX_CHECK_NOT_NULL(planNode_, "StateHashJoin cannot be the source node");
+  planNode_ = std::make_shared<core::StateHashJoinNode>(
+      nextPlanNodeId(), stateName, std::move(probeKeys), outputType, planNode_);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::enforceSingleRow() {
   planNode_ =
       std::make_shared<core::EnforceSingleRowNode>(nextPlanNodeId(), planNode_);

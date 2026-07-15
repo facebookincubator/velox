@@ -1895,4 +1895,30 @@ TEST_F(AggregationTest, maskedMinMaxGlobalAllExcluded) {
           "SELECT min(v) FILTER (WHERE m), max(v) FILTER (WHERE m) FROM tmp");
 }
 
+// Test that zero-column rows flow correctly through CudfFromVelox.
+// project({}) produces zero-column output; localPartitionRoundRobin is a CPU
+// operator that forces CudfFromVelox insertion before the GPU aggregation.
+// Without the zero-column fix in CudfFromVelox, this crashes with:
+//   "Operator::getOutput() must return nullptr or a non-empty vector"
+// because toCudfTable loses the row count for zero-column tables.
+TEST_F(AggregationTest, zeroColumnThroughCudfFromVelox) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3, 4}),
+  });
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("c0 > 0")
+                  .project({})
+                  .localPartitionRoundRobin()
+                  .singleAggregation({}, {"count(*)"})
+                  .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2")
+      .plan(plan)
+      .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
+}
+
 } // namespace facebook::velox::exec::test

@@ -88,6 +88,17 @@ FOLLY_ALWAYS_INLINE int validateAndGetNextUtf8Length(
 /// -1 for invalid UTF-8 first byte.
 int firstByteCharLength(const char* u_input);
 
+/// Writes `value` as a '\uXXXX' escape (backslash, 'u', then 4 uppercase hex
+/// digits) and advances `out` past the 6 written bytes. The caller must ensure
+/// `out` has room for 6 bytes.
+void writeUtf16Escape(char16_t value, char*& out);
+
+/// Encodes `codePoint` as a JSON '\u' escape and advances `out`: a single
+/// '\uXXXX' for a Basic Multilingual Plane code point, or a '\uXXXX\uXXXX'
+/// UTF-16 surrogate pair for a supplementary-plane code point (>= U+10000). The
+/// caller must ensure `out` has room (6 bytes for BMP, 12 for supplementary).
+void encodeUtf16Hex(char32_t codePoint, char*& out);
+
 /// Invalid character replacement matrix.
 constexpr std::array<std::string_view, 6> kReplacementCharacterStrings{
     "\xef\xbf\xbd",
