@@ -448,9 +448,12 @@ Mathematical Functions
 
     Returns the hyperbolic tangent of ``x``.
 
-.. spark:function:: unaryminus(x) -> [same as x]
+.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the negative of ``x``. Corresponds to Spark's operator ``-``.
+    When ``x`` is the minimum value of an integral type, returns the same value
+    as ``x`` following the behavior when Spark ANSI mode is disabled, and throws
+    an exception when Spark ANSI mode is enabled.
 
 .. spark:function:: unhex(x) -> varbinary
 
