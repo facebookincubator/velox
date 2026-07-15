@@ -599,7 +599,7 @@ class BinaryFunction : public CudfFunction {
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
         return decimalDivide(
-            lhsView, rhsView, type_, aRescale, decimalPrecision_, stream, mr);
+            lhsView, rhsView, type_, aRescale, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       auto rhsView = asView(inputColumns[1]);
@@ -680,7 +680,7 @@ class BinaryFunction : public CudfFunction {
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
         return decimalDivide(
-            lhsView, *right_, type_, aRescale, decimalPrecision_, stream, mr);
+            lhsView, *right_, type_, aRescale, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       if (isComparisonOp(op_) && cudf::is_fixed_point(lhsView.type()) &&
@@ -759,7 +759,7 @@ class BinaryFunction : public CudfFunction {
       auto outScale = -type_.scale();
       auto aRescale = outScale - lhsScale + rhsScale;
       return decimalDivide(
-          *left_, rhsView, type_, aRescale, decimalPrecision_, stream, mr);
+          *left_, rhsView, type_, aRescale, stream, mr);
     }
     auto rhsView = asView(inputColumns[0]);
     if (isComparisonOp(op_) && cudf::is_fixed_point(left_->type()) &&

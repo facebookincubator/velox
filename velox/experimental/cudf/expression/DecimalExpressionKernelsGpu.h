@@ -15,14 +15,55 @@
  */
 #pragma once
 
+#include <cudf/binaryop.hpp>
+#include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
 #include <cstdint>
+#include <memory>
+#include <utility>
 
-namespace facebook::velox::cudf_velox::detail {
+namespace facebook::velox::cudf_velox {
+
+// CUDA implementations that return {result, didOverflow}. Overflow is tracked
+// with a single device-side flag (set via atomicOr by any overflowing row),
+// matching the fail-fast semantics of Presto / Velox CPU decimal arithmetic;
+// no per-row (O(n)) overflow column is allocated.
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
+    const cudf::column_view& lhs,
+    const cudf::column_view& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
+    const cudf::column_view& lhs,
+    const cudf::scalar& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+std::pair<std::unique_ptr<cudf::column>, bool>
+decimalBinaryOperationWithOverflow(
+    const cudf::scalar& lhs,
+    const cudf::column_view& rhs,
+    cudf::binary_operator op,
+    cudf::data_type outputType,
+    int32_t outputPrecision,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+namespace detail {
 
 /**
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
@@ -103,4 +144,5 @@ bool decimalDivideScalarColumn(
     __int128_t rescaleFactor,
     rmm::cuda_stream_view stream);
 
-} // namespace facebook::velox::cudf_velox::detail
+} // namespace detail
+} // namespace facebook::velox::cudf_velox
