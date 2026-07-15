@@ -15,6 +15,7 @@
  */
 #include "velox/exec/VectorHasher.h"
 #include <gtest/gtest.h>
+#include <array>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
@@ -763,6 +764,160 @@ TEST_F(VectorHasherTest, mergeMaxNumDistinct) {
 TEST_F(VectorHasherTest, computeValueIdsBigint) {
   testComputeValueIds<int64_t>(false);
   testComputeValueIds<int64_t>(true);
+}
+
+TEST_F(VectorHasherTest, computeValueIdsHugeint) {
+  const auto valueWithLowBits = HugeInt::build(1, 42);
+  const auto anotherValueWithSameLowBits = HugeInt::build(2, 42);
+  const auto negativeValueWithSameLowBits =
+      HugeInt::build(std::numeric_limits<uint64_t>::max(), 42);
+  const auto newValue = HugeInt::build(3, 42);
+
+  auto vector = makeNullableFlatVector<int128_t>(
+      {std::nullopt,
+       valueWithLowBits,
+       anotherValueWithSameLowBits,
+       valueWithLowBits,
+       negativeValueWithSameLowBits,
+       anotherValueWithSameLowBits},
+      DECIMAL(38, 0));
+
+  auto hasher = exec::VectorHasher::create(vector->type(), 0);
+  SelectivityVector rows(vector->size());
+  raw_vector<uint64_t> result(vector->size());
+  std::fill(result.begin(), result.end(), 0);
+
+  hasher->decode(*vector, rows);
+  ASSERT_FALSE(hasher->computeValueIds(rows, result));
+
+  uint64_t rangeSize;
+  uint64_t distinctSize;
+  hasher->cardinality(0, rangeSize, distinctSize);
+  ASSERT_EQ(VectorHasher::kRangeTooLarge, rangeSize);
+  ASSERT_EQ(4, distinctSize);
+
+  ASSERT_EQ(4, hasher->enableValueIds(1, 0));
+
+  hasher->decode(*vector, rows);
+  ASSERT_TRUE(hasher->computeValueIds(rows, result));
+  EXPECT_EQ(0, result[0]);
+  EXPECT_EQ(result[1], result[3]);
+  EXPECT_EQ(result[2], result[5]);
+  EXPECT_NE(result[1], result[2]);
+  EXPECT_NE(result[1], result[4]);
+  EXPECT_NE(result[2], result[4]);
+
+  auto outOfRangeVector = makeFlatVector<int128_t>(
+      {valueWithLowBits,
+       anotherValueWithSameLowBits,
+       negativeValueWithSameLowBits,
+       newValue},
+      DECIMAL(38, 0));
+  SelectivityVector outOfRangeRows(outOfRangeVector->size());
+  result.resize(outOfRangeVector->size());
+  std::fill(result.begin(), result.end(), 0);
+  hasher->decode(*outOfRangeVector, outOfRangeRows);
+  ASSERT_FALSE(hasher->computeValueIds(outOfRangeRows, result));
+}
+
+TEST_F(VectorHasherTest, hugeintFilter) {
+  const auto first = HugeInt::build(1, 42);
+  const auto second = HugeInt::build(2, 42);
+  const auto third = HugeInt::build(3, 42);
+  const auto missing = HugeInt::build(4, 42);
+
+  auto vector =
+      makeFlatVector<int128_t>({first, second, first, third}, DECIMAL(38, 0));
+
+  auto hasher = exec::VectorHasher::create(vector->type(), 0);
+  SelectivityVector rows(vector->size());
+  raw_vector<uint64_t> hashes(vector->size());
+
+  hasher->decode(*vector, rows);
+  hasher->computeValueIds(rows, hashes);
+
+  auto filter = hasher->getFilter(false);
+  ASSERT_NE(nullptr, filter);
+
+  auto* hugeintValues =
+      dynamic_cast<common::HugeintValuesUsingHashTable*>(filter.get());
+  ASSERT_NE(nullptr, hugeintValues);
+  ASSERT_FALSE(hugeintValues->testNull());
+  EXPECT_TRUE(hugeintValues->testInt128(first));
+  EXPECT_TRUE(hugeintValues->testInt128(second));
+  EXPECT_TRUE(hugeintValues->testInt128(third));
+  EXPECT_FALSE(hugeintValues->testInt128(missing));
+
+  auto filterWithNull = hasher->getFilter(true);
+  ASSERT_TRUE(filterWithNull->testNull());
+  EXPECT_TRUE(filterWithNull->testInt128(first));
+  EXPECT_FALSE(filterWithNull->testInt128(missing));
+}
+
+TEST_F(VectorHasherTest, int128BoundaryCollisions) {
+  vector_size_t size = 100;
+  auto vector = makeFlatVector<int128_t>(size, [](vector_size_t row) {
+    int64_t baseValue = row % 10;
+    int128_t highBits = static_cast<int128_t>(row / 10) << 64;
+    return highBits + baseValue;
+  });
+
+  auto hasher = exec::VectorHasher::create(HUGEINT(), 0);
+  SelectivityVector allRows(size);
+  raw_vector<uint64_t> result(size);
+
+  // Verify decoded vector path keeps the high bits when collecting distincts.
+  hasher->decode(*vector, allRows);
+  hasher->computeValueIds(allRows, result);
+
+  uint64_t asRange;
+  uint64_t asDistinct;
+  hasher->cardinality(0, asRange, asDistinct);
+  ASSERT_EQ(size + 1, asDistinct)
+      << "Expected " << (size + 1)
+      << " distinct values (100 values + 1 for null), but got " << asDistinct
+      << ". This indicates hash collisions for int128_t values that differ "
+         "only in high bits.";
+}
+
+TEST_F(VectorHasherTest, int128BoundaryCollisionsForRows) {
+  constexpr int32_t kNumGroups = 100;
+  constexpr int32_t kValueOffset = 0;
+  constexpr int32_t kNullByte = sizeof(int128_t);
+  constexpr int32_t kRowSize = sizeof(int128_t) + 1;
+  constexpr uint8_t kNullMask = 1;
+
+  std::vector<std::array<char, kRowSize>> rowData(kNumGroups);
+  std::vector<char*> groups(kNumGroups);
+  for (auto row = 0; row < kNumGroups; ++row) {
+    rowData[row].fill(0);
+    groups[row] = rowData[row].data();
+
+    int64_t baseValue = row % 10;
+    int128_t highBits = static_cast<int128_t>(row / 10) << 64;
+    HugeInt::serialize(highBits + baseValue, groups[row] + kValueOffset);
+  }
+
+  auto rowHasher = exec::VectorHasher::create(HUGEINT(), 0);
+  raw_vector<uint64_t> rowResult(kNumGroups);
+
+  // Verify row-wise path used by hash table modes maps 128-bit values exactly.
+  rowHasher->analyze(
+      groups.data(), kNumGroups, kValueOffset, kNullByte, kNullMask);
+  rowHasher->enableValueIds(1, 0);
+  ASSERT_TRUE(rowHasher->computeValueIdsForRows(
+      groups.data(),
+      kNumGroups,
+      kValueOffset,
+      kNullByte,
+      kNullMask,
+      rowResult));
+
+  for (auto row = 0; row < kNumGroups; ++row) {
+    ASSERT_EQ(row + 1, rowResult[row])
+        << "Expected a distinct value id for an int128_t value that differs "
+           "only in high bits.";
+  }
 }
 
 TEST_F(VectorHasherTest, computeValueIdsInteger) {

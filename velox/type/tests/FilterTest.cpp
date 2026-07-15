@@ -258,6 +258,18 @@ TEST(FilterTest, hugeintRangeBoundaryOverflow) {
   EXPECT_FALSE(filter->testInt128(0));
 }
 
+TEST(FilterTest, createHugeintValuesEmpty) {
+  auto filter = createHugeintValues({}, false);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(0));
+
+  filter = createHugeintValues({}, true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(0));
+}
+
 TEST(FilterTest, negatedBigintRange) {
   auto filter = notEqual(1, false);
   EXPECT_FALSE(filter->testNull());
