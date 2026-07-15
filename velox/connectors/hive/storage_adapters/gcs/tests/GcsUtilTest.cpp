@@ -20,6 +20,8 @@
 #include <utility>
 #include <vector>
 
+#include "velox/common/base/tests/GTestUtils.h"
+
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
