@@ -44,6 +44,22 @@ template <TypeKind kind>
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
+// Forward declarations of the complex-type specializations. Nested complex
+// types dispatch through these before their definitions appear below, so the
+// declarations must precede any such instantiation.
+template <>
+::duckdb::Value duckValueAt<TypeKind::ARRAY>(
+    const VectorPtr& vector,
+    int32_t row);
+template <>
+::duckdb::Value duckValueAt<TypeKind::ROW>(
+    const VectorPtr& vector,
+    int32_t row);
+template <>
+::duckdb::Value duckValueAt<TypeKind::MAP>(
+    const VectorPtr& vector,
+    int32_t row);
+
 template <>
 ::duckdb::Value duckValueAt<TypeKind::TINYINT>(
     const VectorPtr& vector,
@@ -183,7 +199,7 @@ template <>
       array.emplace_back(
           ::duckdb::Value(duckdb::fromVeloxType(elements->type())));
     } else {
-      array.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      array.emplace_back(VELOX_DYNAMIC_TYPE_DISPATCH(
           duckValueAt, elements->typeKind(), elements, innerRow));
     }
   }
@@ -206,7 +222,7 @@ template <>
     } else {
       fields.push_back(
           {rowType->nameOf(i),
-           VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+           VELOX_DYNAMIC_TYPE_DISPATCH(
                duckValueAt,
                rowType->childAt(i)->kind(),
                rowVector->childAt(i),
