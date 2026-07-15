@@ -236,6 +236,8 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
+  auto output_mr = determineCudfMemoryResource();
+
   if (!useExperimentalCudfReader_) {
     // Read table using the regular cudf parquet reader
     VELOX_CHECK_NOT_NULL(splitReader_, "cudf parquet reader not present");
@@ -248,8 +250,6 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     return castDecimalColumnsToVeloxTypes(
         std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
   }
-
-  auto output_mr = determineCudfMemoryResource();
 
   // Read table using the experimental parquet reader
   VELOX_CHECK_NOT_NULL(exptSplitReader_, "cuDF hybrid scan reader not present");
