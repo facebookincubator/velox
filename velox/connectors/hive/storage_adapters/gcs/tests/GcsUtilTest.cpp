@@ -16,6 +16,10 @@
 
 #include "velox/connectors/hive/storage_adapters/gcs/GcsUtil.h"
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
@@ -33,4 +37,51 @@ TEST(GcsUtilTest, setBucketAndKeyFromGcsPath) {
   setBucketAndKeyFromGcsPath(path, bucket, key);
   EXPECT_EQ(bucket, "bucket");
   EXPECT_EQ(key, "file.txt");
+}
+
+TEST(GcsUtilTest, errorString) {
+  using google::cloud::StatusCode;
+
+  const std::vector<std::pair<StatusCode, std::string>> testCases{
+      {StatusCode::kOk, "No error"},
+      {StatusCode::kCancelled, "Request cancelled"},
+      {StatusCode::kUnknown, "Unknown error"},
+      {StatusCode::kInvalidArgument, "Invalid argument"},
+      {StatusCode::kDeadlineExceeded, "Deadline exceeded"},
+      {StatusCode::kNotFound, "Resource not found"},
+      {StatusCode::kAlreadyExists, "Resource already exists"},
+      {StatusCode::kPermissionDenied, "Access denied"},
+      {StatusCode::kResourceExhausted, "Resource exhausted"},
+      {StatusCode::kFailedPrecondition, "Failed precondition"},
+      {StatusCode::kAborted, "Request aborted"},
+      {StatusCode::kOutOfRange, "Out of range"},
+      {StatusCode::kUnimplemented, "Operation not implemented"},
+      {StatusCode::kInternal, "Internal error"},
+      {StatusCode::kUnavailable, "Service unavailable"},
+      {StatusCode::kDataLoss, "Data loss"},
+      {StatusCode::kUnauthenticated, "Unauthenticated"},
+  };
+
+  for (const auto& [statusCode, expectedMessage] : testCases) {
+    EXPECT_EQ(getErrorStringFromGcsError(statusCode), expectedMessage);
+  }
+
+  EXPECT_EQ(
+      getErrorStringFromGcsError(static_cast<StatusCode>(123)),
+      "UNEXPECTED_STATUS_CODE=123");
+}
+
+TEST(GcsUtilTest, statusError) {
+  const google::cloud::Status status{
+      google::cloud::StatusCode::kResourceExhausted,
+      "Quota exceeded",
+      google::cloud::ErrorInfo{
+          "RATE_LIMIT_EXCEEDED",
+          "storage.googleapis.com",
+          {},
+      }};
+
+  VELOX_ASSERT_THROW(
+      checkGcsStatus(status, "Failed to read GCS object", "bucket", "key"),
+      "Failed to read GCS object due to: Path:'gs://bucket/key', GCS Status Code:Resource exhausted, Error Domain:'storage.googleapis.com', Error Reason:'RATE_LIMIT_EXCEEDED', Message:'Quota exceeded' This GCS error is transient. Consider increasing 'hive.gcs.max-retry-count' or 'hive.gcs.max-retry-time'.");
 }
