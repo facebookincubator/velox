@@ -31,6 +31,7 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
 
@@ -1180,6 +1181,67 @@ TEST_F(CudfIcebergReadTest, remainingFilterOnInjectedColumn) {
       .splits(makeIcebergSplits(dataFile->getPath(), {}, caPartition))
       .assertResults(
           {makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30, 40})})});
+}
+
+// TODO: Enable after cuDF Hive timestamp pushdown converts Presto
+// TIMESTAMP WITH TIME ZONE bounds to the Parquet reader's timestamp unit.
+TEST_F(CudfIcebergReadTest, DISABLED_timestampWithTimeZonePushdown) {
+  const Timestamp cutoff{1'764'547'200, 0};
+  auto data = makeRowVector(
+      {"id", "usageStartTime"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<Timestamp>(
+              {
+                  Timestamp{1'764'547'199, 999'000'000},
+                  cutoff,
+                  Timestamp{1'764'633'600, 0},
+              },
+              TIMESTAMP()),
+      });
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto tableType =
+      ROW({"id", "partitionDate", "usageStartTime"},
+          {BIGINT(), DATE(), TIMESTAMP_WITH_TIME_ZONE()});
+  auto outputType = ROW({"id"}, {BIGINT()});
+  facebook::velox::connector::ColumnHandleMap assignments;
+  assignments["id"] = std::make_shared<HiveColumnHandle>(
+      "id",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{});
+
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield{"partitionDate"},
+      std::make_unique<common::BigintRange>(
+          20'423, 20'423, /*nullAllowed=*/false));
+  filters.emplace(
+      common::Subfield{"usageStartTime"},
+      std::make_unique<common::BigintRange>(
+          facebook::velox::pack(cutoff, /*timeZoneKey=*/0),
+          std::numeric_limits<int64_t>::max(),
+          /*nullAllowed=*/false));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(outputType)
+                  .dataColumns(tableType)
+                  .assignments(assignments)
+                  .subfieldFiltersMap(filters)
+                  .endTableScan()
+                  .planNode();
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys = {
+      {"partitionDate", "2025-12-01"}};
+  AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults(
+          {makeRowVector({"id"}, {makeFlatVector<int64_t>({2, 3})})});
 }
 
 // A timezone-less TIMESTAMP partition value is
