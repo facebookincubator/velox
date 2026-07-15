@@ -103,6 +103,27 @@ vector_size_t filteredOutputNumRows(
           ->value(stream));
 }
 
+/// Get row indices where mask is true.
+/// Returns a column of size_type indices.
+std::unique_ptr<cudf::column> getIndicesWhere(
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Create sequence [0, 1, 2, ..., mask.size()-1]
+  auto seq = cudf::sequence(
+      mask.size(),
+      cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr),
+      cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr),
+      stream,
+      mr);
+
+  // Filter to keep only indices where mask is true
+  auto indicesTable = cudf::apply_boolean_mask(
+      cudf::table_view{{seq->view()}}, mask, stream, mr);
+
+  return std::move(indicesTable->release()[0]);
+}
+
 } // namespace
 
 void CudfHashJoinProbe::doClose() {
@@ -925,6 +946,36 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
+  auto numProbeRows = leftTableView.num_rows();
+
+  // Track which probe rows matched in any build batch so that unmatched probe
+  // rows can be emitted with NULL build columns after the loop.
+  auto falseScalar =
+      cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+  auto matchCol = cudf::make_column_from_scalar(
+      falseScalar, numProbeRows, stream, get_temp_mr());
+  auto probeRowIndices = cudf::sequence(
+      numProbeRows,
+      cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
+      cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
+      stream,
+      get_temp_mr());
+
+  // Helper to accumulate probe-side match flags from a column of matched
+  // probe indices.
+  auto updateMatchCol = [&](cudf::column_view matchedLeftIndices) {
+    auto matchedInBatch = cudf::contains(
+        matchedLeftIndices, probeRowIndices->view(), stream, get_temp_mr());
+    auto updatedMatch = cudf::binary_operation(
+        matchCol->view(),
+        matchedInBatch->view(),
+        cudf::binary_operator::BITWISE_OR,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        get_temp_mr());
+    stream.synchronize();
+    matchCol = std::move(updatedMatch);
+  };
 
   // Precompute left (probe) table columns if needed (once, outside loop)
   std::vector<ColumnOrView> leftPrecomputed;
@@ -940,52 +991,77 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
     extendedLeftView = createExtendedTableView(leftTableView, leftPrecomputed);
   }
 
-  for (auto i = 0; i < rightTables.size(); i++) {
-    auto rightTableView = rightTables[i]->view();
-    auto& hb = hbs[i];
-
-    // Use cached precomputed columns for right (build) table
-    cudf::table_view extendedRightView =
-        (joinNode_->filter() && !rightPrecomputeInstructions_.empty())
-        ? cachedExtendedRightViews_[i]
-        : rightTableView;
-
-    VELOX_CHECK_NOT_NULL(hb);
-    auto [leftJoinIndices, rightJoinIndices] = hb->left_join(
-        leftTableView.select(leftKeyIndices_),
-        std::nullopt,
-        stream,
-        get_temp_mr());
-
-    auto leftIndicesSpan =
-        cudf::device_span<cudf::size_type const>{*leftJoinIndices};
-    auto rightIndicesSpan =
-        cudf::device_span<cudf::size_type const>{*rightJoinIndices};
-    auto leftIndicesCol = cudf::column_view{leftIndicesSpan};
-    auto rightIndicesCol = cudf::column_view{rightIndicesSpan};
-    std::vector<std::unique_ptr<cudf::column>> joinedCols;
-
+  // Processes a build batch of join indices: applies the filter (if any),
+  // updates matchCol from post-filter left indices, and appends the result to
+  // cudfOutputs.
+  auto processBatch = [&](cudf::column_view leftIndicesCol,
+                          cudf::column_view rightIndicesCol,
+                          cudf::table_view rightTableView,
+                          size_t buildBatchIdx) {
     if (joinNode_->filter()) {
+      cudf::table_view extendedRightView =
+          !rightPrecomputeInstructions_.empty()
+          ? cachedExtendedRightViews_[buildBatchIdx]
+          : rightTableView;
+
       if (useAstFilter_) {
-        cudfOutputs.push_back(filteredOutputIndices(
-            leftTableView,
-            leftIndicesCol,
-            rightTableView,
-            rightIndicesCol,
-            extendedLeftView,
-            extendedRightView,
-            cudf::join_kind::LEFT_JOIN,
-            stream));
+        // Inline filter_join_indices so we can access post-filter left indices
+        // for match tracking.
+        auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
+            cudf::filter_join_indices(
+                extendedLeftView,
+                extendedRightView,
+                leftIndicesCol,
+                rightIndicesCol,
+                tree_.back(),
+                cudf::join_kind::INNER_JOIN,
+                stream,
+                get_temp_mr());
+
+        if (filteredLeftJoinIndices->size() > 0) {
+          auto filteredLeftSpan = cudf::device_span<cudf::size_type const>{
+              *filteredLeftJoinIndices};
+          auto filteredRightSpan = cudf::device_span<cudf::size_type const>{
+              *filteredRightJoinIndices};
+          auto filteredLeftCol = cudf::column_view{filteredLeftSpan};
+          auto filteredRightCol = cudf::column_view{filteredRightSpan};
+
+          updateMatchCol(filteredLeftCol);
+
+          cudfOutputs.push_back(unfilteredOutput(
+              leftTableView,
+              filteredLeftCol,
+              rightTableView,
+              filteredRightCol,
+              stream));
+        }
       } else {
+        auto leftIndicesSpanCopy =
+            cudf::device_span<cudf::size_type const>(leftIndicesCol);
         auto filterFunc =
-            [stream](
+            [&updateMatchCol, leftIndicesSpanCopy, stream](
                 std::vector<std::unique_ptr<cudf::column>>&& joinedCols,
                 cudf::column_view filterColumn) {
               auto filterTable =
                   std::make_unique<cudf::table>(std::move(joinedCols));
               auto filteredTable = cudf::apply_boolean_mask(
                   *filterTable, filterColumn, stream, get_output_mr());
-              return filteredTable->release();
+              joinedCols = filteredTable->release();
+
+              // Filter left join indices with the same mask to track which
+              // probe rows passed the filter.
+              auto leftIdxCol = cudf::column_view{leftIndicesSpanCopy};
+              auto filteredIdxTable = cudf::apply_boolean_mask(
+                  cudf::table_view{
+                      std::vector<cudf::column_view>{leftIdxCol}},
+                  filterColumn,
+                  stream,
+                  get_temp_mr());
+              auto filteredLeftIdxCol =
+                  std::move(filteredIdxTable->release()[0]);
+              updateMatchCol(filteredLeftIdxCol->view());
+
+              return std::move(joinedCols);
             };
         cudfOutputs.push_back(filteredOutput(
             leftTableView,
@@ -996,6 +1072,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
             stream));
       }
     } else {
+      updateMatchCol(leftIndicesCol);
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
           leftIndicesCol,
@@ -1003,7 +1080,75 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
           rightIndicesCol,
           stream));
     }
+  };
+
+  for (auto i = 0; i < rightTables.size(); i++) {
+    auto rightTableView = rightTables[i]->view();
+    auto& hb = hbs[i];
+
+    // Use inner_join to get only real matched pairs. Unmatched probe rows are
+    // emitted separately after the loop.
+    VELOX_CHECK_NOT_NULL(hb);
+    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
+        leftTableView.select(leftKeyIndices_),
+        std::nullopt,
+        stream,
+        get_temp_mr());
+
+    if (leftJoinIndices->size() == 0) {
+      continue;
+    }
+
+    auto leftIndicesSpan =
+        cudf::device_span<cudf::size_type const>{*leftJoinIndices};
+    auto rightIndicesSpan =
+        cudf::device_span<cudf::size_type const>{*rightJoinIndices};
+    auto leftIndicesCol = cudf::column_view{leftIndicesSpan};
+    auto rightIndicesCol = cudf::column_view{rightIndicesSpan};
+
+    processBatch(leftIndicesCol, rightIndicesCol, rightTableView, i);
   }
+
+  // Emit unmatched probe rows. Build a synthetic batch where left indices are
+  // the unmatched probe row indices and right indices are all -1 (out of
+  // bounds), so the gather with NULLIFY produces NULL build columns. This also
+  // correctly applies any filter to the unmatched rows.
+  auto unmatchedMask = cudf::unary_operation(
+      matchCol->view(), cudf::unary_operator::NOT, stream, get_temp_mr());
+  auto unmatchedIndices =
+      getIndicesWhere(unmatchedMask->view(), stream, get_temp_mr());
+
+  if (unmatchedIndices->size() > 0) {
+    auto unmatchedLeftCol = unmatchedIndices->view();
+    // Create right indices filled with cudf::JoinNoMatch so that gather with
+    // NULLIFY produces NULL build columns.
+    auto sentinelScalar = cudf::numeric_scalar<cudf::size_type>(
+        cudf::JoinNoMatch, true, stream, get_temp_mr());
+    auto unmatchedRightIndices = cudf::make_column_from_scalar(
+        sentinelScalar,
+        unmatchedIndices->size(),
+        stream,
+        get_temp_mr());
+    auto unmatchedRightCol = unmatchedRightIndices->view();
+
+    // Emit unmatched rows directly via unfilteredOutput for two reasons:
+    // (1) We cannot use filteredOutputIndices with LEFT_JOIN here because
+    //     filter_join_indices(LEFT_JOIN) ensures every row in the left *table*
+    //     appears at least once. Since our left indices are a subset of probe
+    //     rows (only the unmatched ones), LEFT_JOIN would re-add all the
+    //     matched probe rows that are absent from this subset.
+    // (2) Using unfilteredOutput is safe because all right indices are
+    //     JoinNoMatch. Per filter_join_indices semantics, input pairs with
+    //     JoinNoMatch in either position pass through unchanged (the predicate
+    //     cannot be evaluated), so filtering would be a no-op anyway.
+    cudfOutputs.push_back(unfilteredOutput(
+        leftTableView,
+        unmatchedLeftCol,
+        rightTables[0]->view(),
+        unmatchedRightCol,
+        stream));
+  }
+
   return cudfOutputs;
 }
 
@@ -1150,57 +1295,86 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;
+  auto numProbeRows = leftTableView.num_rows();
 
   // For now, AST support is necessary to filter join output
   if (joinNode_->filter() && !useAstFilter_) {
     VELOX_NYI("Full join requires AST support for filtering");
   }
 
+  // Track which probe rows matched in any build batch so that unmatched probe
+  // rows can be emitted with NULL build columns after the loop.
+  auto falseScalar =
+      cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+  auto probeMatchCol = cudf::make_column_from_scalar(
+      falseScalar, numProbeRows, stream, get_temp_mr());
+  auto probeRowIndices = cudf::sequence(
+      numProbeRows,
+      cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
+      cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
+      stream,
+      get_temp_mr());
+
+  // Helper to accumulate probe-side match flags from a column of matched
+  // probe indices.
+  auto updateProbeMatchCol = [&](cudf::column_view matchedLeftIndices) {
+    auto matchedInBatch = cudf::contains(
+        matchedLeftIndices, probeRowIndices->view(), stream, get_temp_mr());
+    auto updatedMatch = cudf::binary_operation(
+        probeMatchCol->view(),
+        matchedInBatch->view(),
+        cudf::binary_operator::BITWISE_OR,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        get_temp_mr());
+    stream.synchronize();
+    probeMatchCol = std::move(updatedMatch);
+  };
+
+  // Helper to accumulate build-side (right) match flags for a build batch.
+  auto updateRightMatchedFlags =
+      [&](size_t batchIdx, cudf::column_view matchedRightIndices,
+          cudf::size_type numBuildRows) {
+        auto buildRowIndices = cudf::sequence(
+            numBuildRows,
+            cudf::numeric_scalar<cudf::size_type>(
+                0, true, stream, get_temp_mr()),
+            cudf::numeric_scalar<cudf::size_type>(
+                1, true, stream, get_temp_mr()),
+            stream,
+            get_temp_mr());
+        auto matchedInBatch = cudf::contains(
+            matchedRightIndices,
+            buildRowIndices->view(),
+            stream,
+            get_temp_mr());
+        auto updatedFlags = cudf::binary_operation(
+            rightMatchedFlags_[batchIdx]->view(),
+            matchedInBatch->view(),
+            cudf::binary_operator::BITWISE_OR,
+            cudf::data_type{cudf::type_id::BOOL8},
+            stream,
+            get_temp_mr());
+        stream.synchronize();
+        rightMatchedFlags_[batchIdx] = std::move(updatedFlags);
+      };
+
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
     auto& hb = hbs[i];
 
+    // Use inner_join to get only real matched pairs. Unmatched probe rows are
+    // emitted separately after the loop. Unmatched build rows are emitted in
+    // doGetOutput via rightMatchedFlags_.
     VELOX_CHECK_NOT_NULL(hb);
-    // Use left_join to get all probe rows (matched + unmatched).
-    // Track matched build rows in rightMatchedFlags_ for last driver to emit
-    // unmatched build rows at the end.
-    auto [leftJoinIndices, rightJoinIndices] = hb->left_join(
+    auto [leftJoinIndices, rightJoinIndices] = hb->inner_join(
         leftTableView.select(leftKeyIndices_),
         std::nullopt,
         stream,
         get_temp_mr());
-    if (!joinNode_->filter()) {
-      // Mark matched build rows by checking which row indices appear in
-      // rightJoinIndices. Use contains to avoid scatter with duplicate indices.
-      auto rightIdxCol = cudf::column_view{
-          cudf::device_span<cudf::size_type const>{*rightJoinIndices}};
 
-      // Create sequence [0, 1, ..., n-1] for build table row indices
-      auto n = rightTableView.num_rows();
-      auto rowIndices = cudf::sequence(
-          n,
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
-          cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
-          stream,
-          get_temp_mr());
-
-      // Check which build row indices are present in the join result
-      auto matchedInBatch = cudf::contains(
-          rightIdxCol, rowIndices->view(), stream, get_temp_mr());
-
-      // OR with existing flags to accumulate matches across batches
-      auto updatedFlags = cudf::binary_operation(
-          rightMatchedFlags_[i]->view(),
-          matchedInBatch->view(),
-          cudf::binary_operator::BITWISE_OR,
-          cudf::data_type{cudf::type_id::BOOL8},
-          stream,
-          get_temp_mr());
-      // binary_operation is async on `stream`; the old column destructs via
-      // cudaFreeAsync on its allocation stream (not `stream`), so the free
-      // can race the kernel. Drain `stream` before the move-assign.
-      stream.synchronize();
-      rightMatchedFlags_[i] = std::move(updatedFlags);
+    if (leftJoinIndices->size() == 0) {
+      continue;
     }
 
     auto leftIndicesSpan =
@@ -1211,9 +1385,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
     auto rightIndicesCol = cudf::column_view{rightIndicesSpan};
 
     if (joinNode_->filter()) {
-      // Use filter_join_indices with LEFT_JOIN to get proper full join probe
-      // semantics: all probe rows are kept, build columns are NULL when filter
-      // fails or no match.
+      // Apply filter and keep only pairs where the predicate passes.
       auto [filteredLeftJoinIndices, filteredRightJoinIndices] =
           cudf::filter_join_indices(
               leftTableView,
@@ -1221,57 +1393,34 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
               leftIndicesCol,
               rightIndicesCol,
               tree_.back(),
-              cudf::join_kind::LEFT_JOIN,
+              cudf::join_kind::INNER_JOIN,
               stream,
               get_temp_mr());
 
-      // Track matched build rows for unmatched row emission at end.
-      // Use contains to check which build row indices passed the filter.
-      auto& rightMatchedFlags = rightMatchedFlags_[i];
-      auto filteredRightIndicesSpan =
-          cudf::device_span<cudf::size_type const>{*filteredRightJoinIndices};
-      auto filteredRightIdxCol = cudf::column_view{filteredRightIndicesSpan};
+      if (filteredLeftJoinIndices->size() > 0) {
+        auto filteredLeftSpan = cudf::device_span<cudf::size_type const>{
+            *filteredLeftJoinIndices};
+        auto filteredRightSpan = cudf::device_span<cudf::size_type const>{
+            *filteredRightJoinIndices};
+        auto filteredLeftCol = cudf::column_view{filteredLeftSpan};
+        auto filteredRightCol = cudf::column_view{filteredRightSpan};
 
-      // Create sequence [0, 1, ..., n-1] for build table row indices
-      auto n = rightTableView.num_rows();
-      auto rowIndices = cudf::sequence(
-          n,
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
-          cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
-          stream,
-          get_temp_mr());
+        updateProbeMatchCol(filteredLeftCol);
+        updateRightMatchedFlags(
+            i, filteredRightCol, rightTableView.num_rows());
 
-      // Check which build row indices are present in the filtered join result
-      auto matchedInBatch = cudf::contains(
-          filteredRightIdxCol, rowIndices->view(), stream, get_temp_mr());
-
-      // OR with existing flags to accumulate matches across batches
-      auto updatedFlags = cudf::binary_operation(
-          rightMatchedFlags->view(),
-          matchedInBatch->view(),
-          cudf::binary_operator::BITWISE_OR,
-          cudf::data_type{cudf::type_id::BOOL8},
-          stream,
-          get_temp_mr());
-      // binary_operation is async on `stream`; the old column destructs via
-      // cudaFreeAsync on its allocation stream (not `stream`), so the free
-      // can race the kernel. Drain `stream` before the move-assign.
-      stream.synchronize();
-      rightMatchedFlags = std::move(updatedFlags);
-
-      // Build output using filtered indices
-      auto filteredLeftIndicesSpan =
-          cudf::device_span<cudf::size_type const>{*filteredLeftJoinIndices};
-      auto filteredLeftIndicesCol = cudf::column_view{filteredLeftIndicesSpan};
-      auto filteredRightIndicesCol =
-          cudf::column_view{filteredRightIndicesSpan};
-      cudfOutputs.push_back(unfilteredOutput(
-          leftTableView,
-          filteredLeftIndicesCol,
-          rightTableView,
-          filteredRightIndicesCol,
-          stream));
+        cudfOutputs.push_back(unfilteredOutput(
+            leftTableView,
+            filteredLeftCol,
+            rightTableView,
+            filteredRightCol,
+            stream));
+      }
     } else {
+      updateProbeMatchCol(leftIndicesCol);
+      updateRightMatchedFlags(
+          i, rightIndicesCol, rightTableView.num_rows());
+
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
           leftIndicesCol,
@@ -1280,6 +1429,47 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
           stream));
     }
   }
+
+  // Emit unmatched probe rows. Build a synthetic batch where left indices are
+  // the unmatched probe row indices and right indices are all -1 (out of
+  // bounds), so the gather with NULLIFY produces NULL build columns.
+  auto unmatchedMask = cudf::unary_operation(
+      probeMatchCol->view(),
+      cudf::unary_operator::NOT,
+      stream,
+      get_temp_mr());
+  auto unmatchedIndices =
+      getIndicesWhere(unmatchedMask->view(), stream, get_temp_mr());
+
+  if (unmatchedIndices->size() > 0) {
+    auto unmatchedLeftCol = unmatchedIndices->view();
+    auto sentinelScalar = cudf::numeric_scalar<cudf::size_type>(
+        cudf::JoinNoMatch, true, stream, get_temp_mr());
+    auto unmatchedRightIndices = cudf::make_column_from_scalar(
+        sentinelScalar,
+        unmatchedIndices->size(),
+        stream,
+        get_temp_mr());
+    auto unmatchedRightCol = unmatchedRightIndices->view();
+
+    // Emit unmatched rows directly via unfilteredOutput for two reasons:
+    // (1) We cannot use filteredOutputIndices with LEFT_JOIN here because
+    //     filter_join_indices(LEFT_JOIN) ensures every row in the left *table*
+    //     appears at least once. Since our left indices are a subset of probe
+    //     rows (only the unmatched ones), LEFT_JOIN would re-add all the
+    //     matched probe rows that are absent from this subset.
+    // (2) Using unfilteredOutput is safe because all right indices are
+    //     JoinNoMatch. Per filter_join_indices semantics, input pairs with
+    //     JoinNoMatch in either position pass through unchanged (the predicate
+    //     cannot be evaluated), so filtering would be a no-op anyway.
+    cudfOutputs.push_back(unfilteredOutput(
+        leftTableView,
+        unmatchedLeftCol,
+        rightTables[0]->view(),
+        unmatchedRightCol,
+        stream));
+  }
+
   return cudfOutputs;
 }
 
@@ -1374,27 +1564,6 @@ std::unique_ptr<cudf::column> applyNullMask(
   // copy_if_else: where nullMask is true, use nullScalar (NULL); else use col
   // value
   return cudf::copy_if_else(nullScalar, col, nullMask, stream, mr);
-}
-
-/// Get row indices where mask is true.
-/// Returns a column of size_type indices.
-std::unique_ptr<cudf::column> getIndicesWhere(
-    cudf::column_view mask,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // Create sequence [0, 1, 2, ..., mask.size()-1]
-  auto seq = cudf::sequence(
-      mask.size(),
-      cudf::numeric_scalar<cudf::size_type>(0, true, stream, mr),
-      cudf::numeric_scalar<cudf::size_type>(1, true, stream, mr),
-      stream,
-      mr);
-
-  // Filter to keep only indices where mask is true
-  auto indicesTable = cudf::apply_boolean_mask(
-      cudf::table_view{{seq->view()}}, mask, stream, mr);
-
-  return std::move(indicesTable->release()[0]);
 }
 
 /// Create cross-product of two index columns.

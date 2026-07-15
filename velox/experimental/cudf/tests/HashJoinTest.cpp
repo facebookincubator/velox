@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
@@ -1749,6 +1750,330 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
         ASSERT_EQ(nullJoinBuildKeyCount, 33 * GetParam().numDrivers);
         ASSERT_EQ(nullJoinProbeKeyCount, 34 * GetParam().numDrivers);
       })
+      .run();
+}
+
+TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuild) {
+  // Build side has 3 input vectors of 10 rows each. With batch size max = 10,
+  // each becomes a separate build batch. Only the last batch has keys matching
+  // the probe side. Probe side includes matched keys [0..4], unmatched keys
+  // [100..102], and a null key — testing matched, unmatched, and null-key paths
+  // across multiple build batches.
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1", "row_number"},
+      {
+          makeNullableFlatVector<int32_t>(
+              {0, 1, 2, 3, 4, 100, 101, 102, std::nullopt}),
+          makeFlatVector<int32_t>({10, 11, 12, 13, 14, 15, 16, 17, 18}),
+          makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8}),
+      })};
+
+  // Build side: 3 batches of 10 rows each. First two batches have keys
+  // [200..219] (no probe match), last batch has keys [0..9] (keys 0-4 match
+  // probe).
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(3, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [batchIdx](auto row) {
+              return batchIdx < 2 ? 200 + batchIdx * 10 + row : row;
+            }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kLeft)
+      .joinOutputLayout({"row_number", "c0", "c1", "u_c0"})
+      .referenceQuery(
+          "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 = u.c0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// Probe rows match in different build batches, testing that matchCol
+// accumulates correctly via BITWISE_OR across batches.
+TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildMatchesAcrossBatches) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  // Probe keys [0..9]. Even keys match batch 0, odd keys match batch 1.
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(10, [](auto row) { return row * 10; }),
+      })};
+
+  // Build batch 0: even keys [0, 2, 4, 6, 8, 200..204]
+  // Build batch 1: odd keys [1, 3, 5, 7, 9, 300..304]
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(2, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [batchIdx](auto row) {
+              return row < 5 ? batchIdx + row * 2
+                             : (batchIdx + 2) * 100 + row;
+            }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kLeft)
+      .joinOutputLayout({"c0", "c1", "u_c0", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// A single probe key matches rows in multiple build batches. Verifies that
+// all matched pairs appear and no spurious unmatched-with-NULL row is emitted.
+TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildDuplicateMatches) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  // Probe has a single key=1.
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>({1}),
+          makeFlatVector<int32_t>({10}),
+      })};
+
+  // Both build batches contain key=1 (among others).
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(2, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kLeft)
+      .joinOutputLayout({"c0", "c1", "u_c0", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// Left join with an AST-compatible filter and multiple build batches.
+TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithFilter) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  // Probe keys [0..9] with c1 values.
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+      })};
+
+  // Build: 3 batches of 10 rows. All batches have keys [0..9] so every
+  // probe row has key matches in every batch. The filter will select only
+  // some of the matched pairs.
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(3, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 10 + row; }),
+        });
+      });
+
+  // Filter: (c1 + u_c1) % 2 = 1. Some probe rows will have matches that
+  // pass, some won't. Probe rows whose matches all fail should appear with
+  // NULL build columns.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kLeft)
+      .joinFilter("(c1 + u_c1) % 2 = 1")
+      .joinOutputLayout({"c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0 "
+          "AND (t.c1 + u.c1) % 2 = 1")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// Left join with a non-AST filter (lower() is not supported by cuDF AST)
+// and multiple build batches. Tests the filterFunc lambda match tracking path.
+TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithNonAstFilter) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+          makeFlatVector<std::string>(
+              10, [](auto row) { return row % 2 == 0 ? "HELLO" : "world"; }),
+      })};
+
+  // Build: 2 batches. Batch 0 has keys [0..9] with "hello", batch 1 has
+  // keys [0..9] with "WORLD". lower(t1)=lower(u1) matches "HELLO"/"hello"
+  // for even probe rows in batch 0, and "world"/"WORLD" for odd probe rows
+  // in batch 1.
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(2, [&](int32_t batchIdx) {
+        return makeRowVector(
+            {"u0", "u1"},
+            {
+                makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+                makeFlatVector<std::string>(10, [batchIdx](auto /*row*/) {
+                  return batchIdx == 0 ? "hello" : "WORLD";
+                }),
+            });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"t0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kLeft)
+      .joinFilter("lower(t1) = lower(u1)")
+      .joinOutputLayout({"t0", "t1", "u0", "u1"})
+      .referenceQuery(
+          "SELECT t.t0, t.t1, u.u0, u.u1 FROM t LEFT JOIN u "
+          "ON t.t0 = u.u0 AND lower(t.t1) = lower(u.u1)")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// Full join with multiple build batches. Tests both probe-side and build-side
+// unmatched row emission.
+TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuild) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  // Probe keys [0..4, 100..102]. Keys 0-4 match build, 100-102 don't.
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>({0, 1, 2, 3, 4, 100, 101, 102}),
+          makeFlatVector<int32_t>({10, 11, 12, 13, 14, 15, 16, 17}),
+      })};
+
+  // Build: 3 batches of 10 rows. Batch 0 has keys [200..209] (no probe
+  // match), batch 1 has keys [0..9] (keys 0-4 match probe, 5-9 don't),
+  // batch 2 has keys [300..309] (no probe match). Build keys 5-9, 200-209,
+  // 300-309 are unmatched and should appear with NULL probe columns.
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(3, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [batchIdx](auto row) {
+              if (batchIdx == 1) {
+                return static_cast<int32_t>(row);
+              }
+              return static_cast<int32_t>(
+                  (batchIdx == 0 ? 200 : 300) + row);
+            }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kFull)
+      .joinOutputLayout({"c0", "c1", "u_c0", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c0, u.c1 FROM t FULL OUTER JOIN u "
+          "ON t.c0 = u.c0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
+      .run();
+}
+
+// Full join with AST filter and multiple build batches.
+TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuildWithFilter) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  cudfConfig.batchSizeMinThreshold = 10;
+  cudfConfig.batchSizeMaxThreshold = 10;
+
+  // Probe keys [0..7].
+  std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"c0", "c1"},
+      {
+          makeFlatVector<int32_t>(8, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(8, [](auto row) { return row; }),
+      })};
+
+  // Build: 2 batches of 10 rows each. Both have keys [0..9]. The filter
+  // will select only some pairs.
+  std::vector<RowVectorPtr> buildVectors =
+      makeBatches(2, [&](int32_t batchIdx) {
+        return makeRowVector({
+            makeFlatVector<int32_t>(10, [](auto row) { return row; }),
+            makeFlatVector<int32_t>(
+                10, [batchIdx](auto row) { return batchIdx * 10 + row; }),
+        });
+      });
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(numDrivers_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u_c0"})
+      .buildVectors(std::move(buildVectors))
+      .buildProjections({"c0 AS u_c0", "c1 AS u_c1"})
+      .joinType(core::JoinType::kFull)
+      .joinFilter("(c1 + u_c1) % 2 = 1")
+      .joinOutputLayout({"c0", "c1", "u_c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1, u.c1 FROM t FULL OUTER JOIN u ON t.c0 = u.c0 "
+          "AND (t.c1 + u.c1) % 2 = 1")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
       .run();
 }
 
