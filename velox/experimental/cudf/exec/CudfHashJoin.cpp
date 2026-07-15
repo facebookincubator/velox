@@ -999,8 +999,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
                           cudf::table_view rightTableView,
                           size_t buildBatchIdx) {
     if (joinNode_->filter()) {
-      cudf::table_view extendedRightView =
-          !rightPrecomputeInstructions_.empty()
+      cudf::table_view extendedRightView = !rightPrecomputeInstructions_.empty()
           ? cachedExtendedRightViews_[buildBatchIdx]
           : rightTableView;
 
@@ -1052,8 +1051,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
               // probe rows passed the filter.
               auto leftIdxCol = cudf::column_view{leftIndicesSpanCopy};
               auto filteredIdxTable = cudf::apply_boolean_mask(
-                  cudf::table_view{
-                      std::vector<cudf::column_view>{leftIdxCol}},
+                  cudf::table_view{std::vector<cudf::column_view>{leftIdxCol}},
                   filterColumn,
                   stream,
                   get_temp_mr());
@@ -1125,10 +1123,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::leftJoin(
     auto sentinelScalar = cudf::numeric_scalar<cudf::size_type>(
         cudf::JoinNoMatch, true, stream, get_temp_mr());
     auto unmatchedRightIndices = cudf::make_column_from_scalar(
-        sentinelScalar,
-        unmatchedIndices->size(),
-        stream,
-        get_temp_mr());
+        sentinelScalar, unmatchedIndices->size(), stream, get_temp_mr());
     auto unmatchedRightCol = unmatchedRightIndices->view();
 
     // Emit unmatched rows directly via unfilteredOutput for two reasons:
@@ -1332,32 +1327,27 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
   };
 
   // Helper to accumulate build-side (right) match flags for a build batch.
-  auto updateRightMatchedFlags =
-      [&](size_t batchIdx, cudf::column_view matchedRightIndices,
-          cudf::size_type numBuildRows) {
-        auto buildRowIndices = cudf::sequence(
-            numBuildRows,
-            cudf::numeric_scalar<cudf::size_type>(
-                0, true, stream, get_temp_mr()),
-            cudf::numeric_scalar<cudf::size_type>(
-                1, true, stream, get_temp_mr()),
-            stream,
-            get_temp_mr());
-        auto matchedInBatch = cudf::contains(
-            matchedRightIndices,
-            buildRowIndices->view(),
-            stream,
-            get_temp_mr());
-        auto updatedFlags = cudf::binary_operation(
-            rightMatchedFlags_[batchIdx]->view(),
-            matchedInBatch->view(),
-            cudf::binary_operator::BITWISE_OR,
-            cudf::data_type{cudf::type_id::BOOL8},
-            stream,
-            get_temp_mr());
-        stream.synchronize();
-        rightMatchedFlags_[batchIdx] = std::move(updatedFlags);
-      };
+  auto updateRightMatchedFlags = [&](size_t batchIdx,
+                                     cudf::column_view matchedRightIndices,
+                                     cudf::size_type numBuildRows) {
+    auto buildRowIndices = cudf::sequence(
+        numBuildRows,
+        cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
+        cudf::numeric_scalar<cudf::size_type>(1, true, stream, get_temp_mr()),
+        stream,
+        get_temp_mr());
+    auto matchedInBatch = cudf::contains(
+        matchedRightIndices, buildRowIndices->view(), stream, get_temp_mr());
+    auto updatedFlags = cudf::binary_operation(
+        rightMatchedFlags_[batchIdx]->view(),
+        matchedInBatch->view(),
+        cudf::binary_operator::BITWISE_OR,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        get_temp_mr());
+    stream.synchronize();
+    rightMatchedFlags_[batchIdx] = std::move(updatedFlags);
+  };
 
   for (auto i = 0; i < rightTables.size(); i++) {
     auto rightTableView = rightTables[i]->view();
@@ -1398,16 +1388,15 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
               get_temp_mr());
 
       if (filteredLeftJoinIndices->size() > 0) {
-        auto filteredLeftSpan = cudf::device_span<cudf::size_type const>{
-            *filteredLeftJoinIndices};
-        auto filteredRightSpan = cudf::device_span<cudf::size_type const>{
-            *filteredRightJoinIndices};
+        auto filteredLeftSpan =
+            cudf::device_span<cudf::size_type const>{*filteredLeftJoinIndices};
+        auto filteredRightSpan =
+            cudf::device_span<cudf::size_type const>{*filteredRightJoinIndices};
         auto filteredLeftCol = cudf::column_view{filteredLeftSpan};
         auto filteredRightCol = cudf::column_view{filteredRightSpan};
 
         updateProbeMatchCol(filteredLeftCol);
-        updateRightMatchedFlags(
-            i, filteredRightCol, rightTableView.num_rows());
+        updateRightMatchedFlags(i, filteredRightCol, rightTableView.num_rows());
 
         cudfOutputs.push_back(unfilteredOutput(
             leftTableView,
@@ -1418,8 +1407,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
       }
     } else {
       updateProbeMatchCol(leftIndicesCol);
-      updateRightMatchedFlags(
-          i, rightIndicesCol, rightTableView.num_rows());
+      updateRightMatchedFlags(i, rightIndicesCol, rightTableView.num_rows());
 
       cudfOutputs.push_back(unfilteredOutput(
           leftTableView,
@@ -1434,10 +1422,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
   // the unmatched probe row indices and right indices are all -1 (out of
   // bounds), so the gather with NULLIFY produces NULL build columns.
   auto unmatchedMask = cudf::unary_operation(
-      probeMatchCol->view(),
-      cudf::unary_operator::NOT,
-      stream,
-      get_temp_mr());
+      probeMatchCol->view(), cudf::unary_operator::NOT, stream, get_temp_mr());
   auto unmatchedIndices =
       getIndicesWhere(unmatchedMask->view(), stream, get_temp_mr());
 
@@ -1446,10 +1431,7 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
     auto sentinelScalar = cudf::numeric_scalar<cudf::size_type>(
         cudf::JoinNoMatch, true, stream, get_temp_mr());
     auto unmatchedRightIndices = cudf::make_column_from_scalar(
-        sentinelScalar,
-        unmatchedIndices->size(),
-        stream,
-        get_temp_mr());
+        sentinelScalar, unmatchedIndices->size(), stream, get_temp_mr());
     auto unmatchedRightCol = unmatchedRightIndices->view();
 
     // Emit unmatched rows directly via unfilteredOutput for two reasons:

@@ -1778,9 +1778,11 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuild) {
   std::vector<RowVectorPtr> buildVectors =
       makeBatches(3, [&](int32_t batchIdx) {
         return makeRowVector({
-            makeFlatVector<int32_t>(10, [batchIdx](auto row) {
-              return batchIdx < 2 ? 200 + batchIdx * 10 + row : row;
-            }),
+            makeFlatVector<int32_t>(
+                10,
+                [batchIdx](auto row) {
+                  return batchIdx < 2 ? 200 + batchIdx * 10 + row : row;
+                }),
             makeFlatVector<int32_t>(
                 10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
         });
@@ -1822,10 +1824,12 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildMatchesAcrossBatches) {
   std::vector<RowVectorPtr> buildVectors =
       makeBatches(2, [&](int32_t batchIdx) {
         return makeRowVector({
-            makeFlatVector<int32_t>(10, [batchIdx](auto row) {
-              return row < 5 ? batchIdx + row * 2
-                             : (batchIdx + 2) * 100 + row;
-            }),
+            makeFlatVector<int32_t>(
+                10,
+                [batchIdx](auto row) {
+                  return row < 5 ? batchIdx + row * 2
+                                 : (batchIdx + 2) * 100 + row;
+                }),
             makeFlatVector<int32_t>(
                 10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
         });
@@ -1960,9 +1964,11 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithNonAstFilter) {
             {"u0", "u1"},
             {
                 makeFlatVector<int64_t>(10, [](auto row) { return row; }),
-                makeFlatVector<std::string>(10, [batchIdx](auto /*row*/) {
-                  return batchIdx == 0 ? "hello" : "WORLD";
-                }),
+                makeFlatVector<std::string>(
+                    10,
+                    [batchIdx](auto /*row*/) {
+                      return batchIdx == 0 ? "hello" : "WORLD";
+                    }),
             });
       });
 
@@ -2005,13 +2011,15 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuild) {
   std::vector<RowVectorPtr> buildVectors =
       makeBatches(3, [&](int32_t batchIdx) {
         return makeRowVector({
-            makeFlatVector<int32_t>(10, [batchIdx](auto row) {
-              if (batchIdx == 1) {
-                return static_cast<int32_t>(row);
-              }
-              return static_cast<int32_t>(
-                  (batchIdx == 0 ? 200 : 300) + row);
-            }),
+            makeFlatVector<int32_t>(
+                10,
+                [batchIdx](auto row) {
+                  if (batchIdx == 1) {
+                    return static_cast<int32_t>(row);
+                  }
+                  return static_cast<int32_t>(
+                      (batchIdx == 0 ? 200 : 300) + row);
+                }),
             makeFlatVector<int32_t>(
                 10, [batchIdx](auto row) { return batchIdx * 100 + row; }),
         });
