@@ -18,6 +18,8 @@
 #include "folly/container/F14Map.h"
 #include "velox/common/base/Exceptions.h"
 
+#include <unordered_map>
+
 namespace facebook::velox {
 
 struct Enums {
@@ -25,7 +27,8 @@ struct Enums {
   template <typename EnumType, typename StringType>
   static auto invertMap(
       const folly::F14FastMap<EnumType, StringType>& mapping) {
-    folly::F14FastMap<StringType, EnumType> inverted;
+    std::unordered_map<StringType, EnumType> inverted;
+    inverted.reserve(mapping.size());
     for (const auto& [key, value] : mapping) {
       const bool emplaced = inverted.emplace(value, key).second;
       VELOX_USER_CHECK(

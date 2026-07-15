@@ -20,7 +20,8 @@ namespace facebook::velox {
 
 uint64_t StringIdMap::id(std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto it = stringToId_.find(string);
+  const std::string key(string);
+  auto it = stringToId_.find(key);
   if (it != stringToId_.end()) {
     return it->second;
   }
@@ -56,7 +57,8 @@ void StringIdMap::addReference(uint64_t id) {
 
 uint64_t StringIdMap::makeId(std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto it = stringToId_.find(string);
+  std::string key(string);
+  auto it = stringToId_.find(key);
   if (it != stringToId_.end()) {
     auto entry = idToEntry_.find(it->second);
     VELOX_CHECK(entry != idToEntry_.end());
@@ -66,7 +68,7 @@ uint64_t StringIdMap::makeId(std::string_view string) {
   }
 
   Entry entry;
-  entry.string = string;
+  entry.string = std::move(key);
   // Check that we do not use an id twice. In practice this never
   // happens because the int64 counter would have to wrap around for
   // this. Even if this happened, the time spent in the loop would
@@ -76,16 +78,18 @@ uint64_t StringIdMap::makeId(std::string_view string) {
     entry.id = ++lastId_;
   } while (idToEntry_.find(entry.id) != idToEntry_.end());
   entry.numInUse = 1;
-  pinnedSize_ += string.size();
+  pinnedSize_ += entry.string.size();
   const auto id = entry.id;
-  idToEntry_[id] = std::move(entry);
-  stringToId_[string] = id;
-  return lastId_;
+  auto [entryIt, inserted] = idToEntry_.emplace(id, std::move(entry));
+  VELOX_DCHECK(inserted);
+  stringToId_.emplace(entryIt->second.string, id);
+  return id;
 }
 
 uint64_t StringIdMap::recoverId(uint64_t id, std::string_view string) {
   std::lock_guard<std::mutex> l(mutex_);
-  auto it = stringToId_.find(string);
+  std::string key(string);
+  auto it = stringToId_.find(key);
   if (it != stringToId_.end()) {
     VELOX_CHECK_EQ(
         id, it->second, "Multiple recover ids assigned to {}", string);
@@ -104,13 +108,14 @@ uint64_t StringIdMap::recoverId(uint64_t id, std::string_view string) {
       string);
 
   Entry entry;
-  entry.string = string;
+  entry.string = std::move(key);
   entry.id = id;
   lastId_ = std::max(lastId_, id);
   entry.numInUse = 1;
-  pinnedSize_ += string.size();
-  idToEntry_[id] = std::move(entry);
-  stringToId_[string] = id;
+  pinnedSize_ += entry.string.size();
+  auto [entryIt, inserted] = idToEntry_.emplace(id, std::move(entry));
+  VELOX_DCHECK(inserted);
+  stringToId_.emplace(entryIt->second.string, id);
   return id;
 }
 } // namespace facebook::velox
