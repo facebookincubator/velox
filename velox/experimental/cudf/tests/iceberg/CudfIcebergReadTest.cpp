@@ -992,10 +992,15 @@ TEST_F(CudfIcebergReadTest, deletionVectorWithInjectedOnlyProjection) {
 
 /// Verifies sub-splits over an all-injected projection.
 TEST_F(CudfIcebergReadTest, subSplitAllInjectedProjection) {
-  auto firstRowGroup =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({10, 20, 30})});
-  auto secondRowGroup =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({40, 50})});
+  auto firstRowGroup = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(10'000, [](vector_size_t row) {
+        return (static_cast<int64_t>(row) * 1'000'003) % 10'000'019;
+      })});
+  auto secondRowGroup = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(
+          makeContinuousIncreasingValues(10'000, 10'001))});
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), {firstRowGroup, secondRowGroup});
 
@@ -1022,8 +1027,9 @@ TEST_F(CudfIcebergReadTest, subSplitAllInjectedProjection) {
 
   // Without deletes.
   auto expected = makeRowVector(
-      {"country"},
-      {makeFlatVector<std::string>({"US", "US", "US", "US", "US"})});
+      {"country"}, {makeFlatVector<std::string>(10'001, [](vector_size_t) {
+        return "US";
+      })});
   AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(
           dataFile->getPath(), {}, partitionKeys, /*splitCount=*/2))
@@ -1041,7 +1047,7 @@ TEST_F(CudfIcebergReadTest, subSplitAllInjectedProjection) {
           {
               makeFlatVector<std::string>(
                   2, [&](vector_size_t) { return dataFile->getPath(); }),
-              makeFlatVector<int64_t>({0, 4}),
+              makeFlatVector<int64_t>({0, 10'000}),
           })});
   IcebergDeleteFile deleteFile(
       FileContent::kPositionalDeletes,
@@ -1051,7 +1057,8 @@ TEST_F(CudfIcebergReadTest, subSplitAllInjectedProjection) {
       getFileSize(deleteFilePath->getPath()));
 
   auto expectedWithDeletes = makeRowVector(
-      {"country"}, {makeFlatVector<std::string>({"US", "US", "US"})});
+      {"country"},
+      {makeFlatVector<std::string>(9'999, [](vector_size_t) { return "US"; })});
   AssertQueryBuilder(plan)
       .splits(makeIcebergSplits(
           dataFile->getPath(),
