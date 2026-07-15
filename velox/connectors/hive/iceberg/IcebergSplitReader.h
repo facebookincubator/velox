@@ -131,11 +131,11 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Resolves equality-delete field IDs to column names and types using the
-  // table handle's full-schema field IDs. Falls back to the legacy one-based
-  // ordinal mapping when those IDs are unavailable or incomplete.
-  std::pair<std::vector<std::string>, std::vector<TypePtr>>
-  resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
+  // Resolves equality-delete field IDs to primitive subfields using Iceberg
+  // column metadata. Top-level fields fall back to the table handle's
+  // full-schema field IDs, or to legacy one-based ordinals when unavailable.
+  std::vector<common::Subfield> resolveEqualityFields(
+      const IcebergDeleteFile& deleteFile) const;
 
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
@@ -209,6 +209,9 @@ class IcebergSplitReader : public FileSplitReader {
   /// Readers for equality delete files.
   std::list<std::unique_ptr<EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
+
+  // Resolved equality fields indexed by delete-file position.
+  std::vector<std::vector<common::Subfield>> equalityFieldsByDeleteFile_;
 
   /// Column handles map shared with IcebergDataSource.
   /// Used for accessing column metadata including initial-default values.
