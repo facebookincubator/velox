@@ -256,7 +256,7 @@ void ColumnReaderStatistics::toRuntimeMetrics(
   }
   if (pageLoadTimeNs.sum() > 0) {
     result.emplace(
-        "pageLoadTimeNs",
+        "pageLoadTimeNanos",
         RuntimeMetric(
             pageLoadTimeNs.sum(),
             pageLoadTimeNs.count(),
