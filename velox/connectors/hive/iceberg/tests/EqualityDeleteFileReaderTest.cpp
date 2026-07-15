@@ -19,6 +19,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -132,10 +133,30 @@ class EqualityDeleteFileReaderTest : public HiveConnectorTestBase {
   core::PlanNodePtr makeTableScanPlan(
       const RowTypePtr& outputType,
       const RowTypePtr& dataColumns) {
+    connector::ColumnHandleMap assignments;
+    for (size_t i = 0; i < dataColumns->size(); ++i) {
+      const auto& name = dataColumns->nameOf(i);
+      const auto& type = dataColumns->childAt(i);
+      assignments.emplace(
+          name,
+          std::make_shared<const IcebergColumnHandle>(
+              name,
+              FileColumnHandle::ColumnType::kRegular,
+              type,
+              parquet::ParquetFieldId{static_cast<int32_t>(i + 1), {}}));
+    }
+    return makeTableScanPlan(outputType, dataColumns, std::move(assignments));
+  }
+
+  core::PlanNodePtr makeTableScanPlan(
+      const RowTypePtr& outputType,
+      const RowTypePtr& dataColumns,
+      connector::ColumnHandleMap assignments) {
     return PlanBuilder()
         .startTableScan(kIcebergConnectorId)
         .outputType(outputType)
         .dataColumns(dataColumns)
+        .assignments(std::move(assignments))
         .endTableScan()
         .planNode();
   }
@@ -602,10 +623,24 @@ TEST_F(EqualityDeleteFileReaderTest, equalityFilterOnlyColumnNotInProjection) {
   // WHERE id >= 3 keeps rows {3,4,5,6,7,8,9} from the file; the equality
   // delete then removes id=4 and id=8, leaving values {d->skipped} no, we
   // expect surviving values for ids {3,5,6,7,9}, projected as 'value' only.
+  connector::ColumnHandleMap assignments{
+      {"id",
+       std::make_shared<const IcebergColumnHandle>(
+           "id",
+           FileColumnHandle::ColumnType::kRegular,
+           BIGINT(),
+           parquet::ParquetFieldId{1, {}})},
+      {"value",
+       std::make_shared<const IcebergColumnHandle>(
+           "value",
+           FileColumnHandle::ColumnType::kRegular,
+           VARCHAR(),
+           parquet::ParquetFieldId{2, {}})}};
   auto plan = PlanBuilder()
                   .startTableScan(kIcebergConnectorId)
                   .outputType(outputType)
                   .dataColumns(tableType)
+                  .assignments(std::move(assignments))
                   .subfieldFilter("id >= 3")
                   .endTableScan()
                   .planNode();
@@ -860,6 +895,83 @@ TEST_F(EqualityDeleteFileReaderTest, stringColumnDelete) {
       {
           makeFlatVector<std::string>({"alice", "charlie"}),
           makeFlatVector<int32_t>({25, 35}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
+TEST_F(EqualityDeleteFileReaderTest, nestedPrimitiveColumnDelete) {
+  auto detailsType = ROW({"code", "label"}, {INTEGER(), VARCHAR()});
+  auto rowType = ROW({"id", "details"}, {BIGINT(), detailsType});
+
+  auto baseDetails = makeRowVector(
+      {"code", "label"},
+      {
+          makeNullableFlatVector<int32_t>({10, 20, 10, 40, std::nullopt, 60}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e", "f"}),
+      },
+      [](vector_size_t row) { return row == 5; });
+  auto baseData = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+          baseDetails,
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  auto deleteDetails = makeRowVector(
+      {"code"},
+      {
+          makeNullableFlatVector<int32_t>({10, std::nullopt}),
+      },
+      [](vector_size_t row) { return row == 1; });
+  auto deleteData = makeRowVector(
+      {"details"},
+      {
+          deleteDetails,
+      });
+  auto eqDeleteFile = writeEqDeleteFile({deleteData});
+
+  const IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{17});
+
+  auto splits = makeSplits(dataFile->getPath(), {icebergDeleteFile});
+  // Non-sequential IDs verify that field 17 resolves to details.code through
+  // Iceberg metadata rather than an ordinal.
+  connector::ColumnHandleMap assignments{
+      {"id",
+       std::make_shared<const IcebergColumnHandle>(
+           "id",
+           FileColumnHandle::ColumnType::kRegular,
+           BIGINT(),
+           parquet::ParquetFieldId{101, {}})},
+      {"details",
+       std::make_shared<const IcebergColumnHandle>(
+           "details",
+           FileColumnHandle::ColumnType::kRegular,
+           detailsType,
+           parquet::ParquetFieldId{
+               102,
+               {
+                   parquet::ParquetFieldId{17, {}},
+                   parquet::ParquetFieldId{18, {}},
+               }})}};
+  auto plan = makeTableScanPlan(rowType, rowType, std::move(assignments));
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({2, 4}),
+          makeRowVector(
+              {"code", "label"},
+              {makeFlatVector<int32_t>({20, 40}),
+               makeFlatVector<std::string>({"b", "d"})}),
       });
 
   assertEqualResults({expected}, {result});
