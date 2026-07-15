@@ -602,7 +602,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     if (isParquetReservedKeyword(name, parentSchemaIdx, curSchemaIdx)) {
       columnNames.push_back(name);
     }
-  } else {
+  } else if (columnNames.size() == curSchemaIdx) {
     columnNames.push_back(name);
   }
 
@@ -674,6 +674,15 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
                   requestedRowType->childAt(requestedIndex->second);
               childRequestedFieldIds =
                   &requestedFieldIds->children[requestedIndex->second];
+            } else if (
+                curSchemaIdx != 0 && requestedType->isRow() &&
+                children.empty()) {
+              // Keep a physical child for the struct's nulls.
+              auto name = fmt::format("$parquet_unselected_{}", schemaIdx);
+              while (requestedRowType->containsChild(name)) {
+                name += '_';
+              }
+              columnNames.push_back(std::move(name));
             } else {
               followChild = false;
             }

@@ -184,7 +184,14 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_,
-      columnHandles_);
+      columnHandles_,
+      equalityDeleteSchema_);
+}
+
+void IcebergDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
+  auto* icebergSource = checkedPointerCast<IcebergDataSource>(source.get());
+  equalityDeleteSchema_ = std::move(icebergSource->equalityDeleteSchema_);
+  HiveDataSource::setFromDataSource(std::move(source));
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

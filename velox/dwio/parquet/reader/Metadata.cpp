@@ -611,6 +611,14 @@ int64_t FileMetaDataPtr::numRows() const {
   return *thriftFileMetaDataPtr(ptr_)->num_rows();
 }
 
+std::optional<int32_t> FileMetaDataPtr::fieldId(uint32_t nodeId) const {
+  return thriftFileMetaDataPtr(ptr_)
+      ->schema()
+      ->at(nodeId)
+      .field_id()
+      .to_optional();
+}
+
 int FileMetaDataPtr::numRowGroups() const {
   return thriftFileMetaDataPtr(ptr_)->row_groups()->size();
 }

@@ -102,7 +102,11 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_PARQUET)
-  velox_link_libraries(velox_hive_iceberg_splitreader velox_dwio_arrow_parquet_writer)
+  velox_link_libraries(
+    velox_hive_iceberg_splitreader
+    velox_dwio_arrow_parquet_writer
+    velox_dwio_native_parquet_reader
+  )
 endif()
 
 if(VELOX_ENABLE_GEO)

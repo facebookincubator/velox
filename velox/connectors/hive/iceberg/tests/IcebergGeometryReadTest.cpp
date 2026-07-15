@@ -387,17 +387,10 @@ TEST_F(IcebergGeometryReadTest, equalityDeleteOnGeometryColumn) {
   // Equality-delete file: one row carrying G_match as ISO WKB, exactly as
   // another engine would have written it. Written as Parquet like the base
   // file, so this test stays inside the PR's Parquet-only geometry scope.
-  auto deleteDirectory = test::TempDirectoryPath::create();
   auto deleteData =
       makeRowVector({"geom"}, {makeVarbinaryVector({toWkb(matchWkt)})});
-  auto deleteSink =
-      createDataSinkAndAppendData({deleteData}, deleteDirectory->getPath());
-  deleteSink->close();
-  deleteSink.reset();
-  auto deleteSplits = createSplitsForDirectory(deleteDirectory->getPath());
-  ASSERT_EQ(deleteSplits.size(), 1);
-  const auto deleteFilePath =
-      std::dynamic_pointer_cast<HiveConnectorSplit>(deleteSplits[0])->filePath;
+  auto deleteFile = writeParquetFile({deleteData}, {2});
+  const auto& deleteFilePath = deleteFile->getPath();
 
   // Field id 2 is the second top-level column, "geom".
   IcebergDeleteFile equalityDelete(
@@ -413,6 +406,7 @@ TEST_F(IcebergGeometryReadTest, equalityDeleteOnGeometryColumn) {
                   .startTableScan(test::kIcebergConnectorId)
                   .outputType(tableSchema)
                   .dataColumns(tableSchema)
+                  .dataColumnFieldIds({1, 2})
                   .endTableScan()
                   .planNode();
 

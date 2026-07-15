@@ -59,6 +59,8 @@ class IcebergDataSource : public HiveDataSource {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
+  void setFromDataSource(std::unique_ptr<DataSource> source) override;
+
  protected:
   /// Creates an IcebergSplitReader (regular) or IcebergChangelogSplitReader
   /// (changelog) depending on the table handle's isChangelogQuery() flag.
@@ -70,6 +72,9 @@ class IcebergDataSource : public HiveDataSource {
   /// queries these are the changelog output column handles
   /// (operation/ordinal/snapshotid/rowdata).
   std::shared_ptr<ColumnHandleMap> columnHandles_;
+
+  std::shared_ptr<EqualityDeleteSchema> equalityDeleteSchema_ =
+      std::make_shared<EqualityDeleteSchema>();
 
   /// Changelog-only: scan state shared across splits (nullopt for regular
   /// queries).

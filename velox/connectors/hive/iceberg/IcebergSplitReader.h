@@ -29,6 +29,13 @@ namespace facebook::velox::connector::hive::iceberg {
 struct HiveIcebergSplit;
 struct IcebergDeleteFile;
 
+struct EqualityDeleteSchema {
+  RowTypePtr type;
+  std::vector<dwio::common::ParquetFieldId> fieldIds;
+  std::unordered_map<column_index_t, TypePtr> outputTypes;
+  folly::F14FastSet<common::ScanSpec*> missingColumns;
+};
+
 class IcebergSplitReader : public FileSplitReader {
  public:
   IcebergSplitReader(
@@ -44,7 +51,8 @@ class IcebergSplitReader : public FileSplitReader {
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      std::shared_ptr<ColumnHandleMap> columnHandles);
+      std::shared_ptr<ColumnHandleMap> columnHandles,
+      std::shared_ptr<EqualityDeleteSchema> equalityDeleteSchema = nullptr);
 
   ~IcebergSplitReader() override = default;
 
@@ -131,11 +139,14 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Resolves equality-delete field IDs to column names and types using the
-  // table handle's full-schema field IDs. Falls back to the legacy one-based
-  // ordinal mapping when those IDs are unavailable or incomplete.
-  std::pair<std::vector<std::string>, std::vector<TypePtr>>
-  resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
+  void prepareEqualityDeleteSchema(
+      const folly::F14FastMap<std::string, std::string>& fileReadOps);
+
+  // Resolves equality-delete field IDs to field paths using schema metadata.
+  // Falls back to the delete-file schema when that metadata is incomplete.
+  std::vector<common::Subfield> resolveEqualityFields(
+      const IcebergDeleteFile& deleteFile,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps);
 
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
@@ -151,12 +162,12 @@ class IcebergSplitReader : public FileSplitReader {
   void configureEqualityDeleteColumns();
 
   // Fails if the reader tree for the current split cannot supply one of
-  // 'equalityColumnNames', which would silently match no row to delete.
+  // 'equalityFields', which would silently match no row to delete.
   // 'configureEqualityDeleteColumns' establishes what is checked, so a failure
   // is an internal error. Reads subscripts the reader tree assigns, so call it
   // only once 'nextRowNumber()' has loaded the first stripe or row group.
   void checkEqualityDeleteColumnsAreReadable(
-      const std::vector<std::string>& equalityColumnNames) const;
+      const std::vector<common::Subfield>& equalityFields) const;
 
   // Names of scan-spec children that 'configureEqualityDeleteColumns'
   // pre-installed a partition-value constant on for the current split.
@@ -225,6 +236,10 @@ class IcebergSplitReader : public FileSplitReader {
   /// Readers for equality delete files.
   std::list<std::unique_ptr<EqualityDeleteFileReader>>
       equalityDeleteFileReaders_;
+
+  std::vector<std::vector<common::Subfield>> equalityFieldsByDeleteFile_;
+
+  const std::shared_ptr<EqualityDeleteSchema> equalityDeleteSchema_;
 
   /// Column handles map shared with IcebergDataSource.
   /// Used for accessing column metadata including initial-default values.

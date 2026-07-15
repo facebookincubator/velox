@@ -458,6 +458,14 @@ core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
     const std::string& remainingFilter) {
   VELOX_CHECK_NOT_NULL(dataColumns);
 
+  // Supply fixture field IDs for unprojected columns too.
+  auto fieldIds = dataColumnFieldIds;
+  if (fieldIds.empty()) {
+    for (uint32_t i = 0; i < dataColumns->size(); ++i) {
+      fieldIds.push_back(static_cast<int32_t>(i + 1));
+    }
+  }
+
   // Build IcebergColumnHandle assignments for each output-projected column.
   // The Iceberg field ID is taken from dataColumnFieldIds when available,
   // otherwise it defaults to the 1-based ordinal position in dataColumns.
@@ -471,9 +479,7 @@ core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
         tableIdx.has_value(),
         "Output column '{}' not found in dataColumns.",
         name);
-    const int32_t fieldId = !dataColumnFieldIds.empty()
-        ? dataColumnFieldIds[*tableIdx]
-        : static_cast<int32_t>(*tableIdx + 1);
+    const int32_t fieldId = fieldIds[*tableIdx];
     assignments.emplace(
         name,
         std::make_shared<IcebergColumnHandle>(
@@ -510,9 +516,7 @@ core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
         continue;
       }
       const auto& type = dataColumns->childAt(i);
-      const int32_t fieldId = !dataColumnFieldIds.empty()
-          ? dataColumnFieldIds[i]
-          : static_cast<int32_t>(i + 1);
+      const int32_t fieldId = fieldIds[i];
       filterHandles.push_back(
           std::make_shared<IcebergColumnHandle>(
               name,
@@ -528,7 +532,7 @@ core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
       .dataColumns(dataColumns)
       .subfieldFilters(subfieldFilters)
       .remainingFilter(remainingFilter)
-      .dataColumnFieldIds(dataColumnFieldIds)
+      .dataColumnFieldIds(fieldIds)
       .filterColumnHandles(std::move(filterHandles))
       .assignments(assignments)
       .endTableScan()

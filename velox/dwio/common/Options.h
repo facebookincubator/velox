@@ -781,6 +781,16 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Use names instead of positions for ORC/DWRF files without field IDs.
+  ReaderOptions& setUseColumnNamesForMissingFieldIds(bool value) {
+    useColumnNamesForMissingFieldIds_ = value;
+    return *this;
+  }
+
+  bool useColumnNamesForMissingFieldIds() const {
+    return useColumnNamesForMissingFieldIds_;
+  }
+
   /// Sets the per-type attribute key under which the file encodes field ids
   /// (e.g. Iceberg's "iceberg.id"). Consumed when
   /// columnMappingMode() == kFieldId.
@@ -1059,6 +1069,7 @@ class ReaderOptions : public io::ReaderOptions {
   FileFormat fileFormat_{FileFormat::UNKNOWN};
   RowTypePtr fileSchema_;
   std::vector<ParquetFieldId> fieldIds_;
+  bool useColumnNamesForMissingFieldIds_{false};
   std::string fieldIdAttributeKey_;
   SerDeOptions serDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};

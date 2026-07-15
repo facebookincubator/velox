@@ -174,6 +174,8 @@ class FileMetaDataPtr {
   /// The total number of rows.
   int64_t numRows() const;
 
+  std::optional<int32_t> fieldId(uint32_t nodeId) const;
+
   /// The number of row groups in the file.
   int numRowGroups() const;
 
