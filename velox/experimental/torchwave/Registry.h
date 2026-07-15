@@ -133,6 +133,18 @@ struct ArgumentMeta {
   /// on device side results from another.
   bool linkOnly{false};
 
+  /// Set for an output produced by a non-last part of a root op that was split
+  /// into several kernel ops (e.g. tw.group_length_guard_head, whose length
+  /// outputs are consumed by tw.group_length_guard_final). Such an output is a
+  /// real output of the original op, so it must never be released as a per-op
+  /// freeable intermediate, even though its producing node is not the kernel
+  /// op's root expr. We flag this statically at registration rather than
+  /// deciding from downstream uses on purpose: a ProjectOperation is
+  /// deduplicated and reused across actual subgraphs, some of which reference
+  /// this value externally and some of which do not, so a use-based decision
+  /// would be wrong for the shared op.
+  bool nonRootOutput{false};
+
   /// Marks that for an elementwise operation, we want the whole tensor as
   /// opposed to its element for this lane.
   bool wholeTensor{false};

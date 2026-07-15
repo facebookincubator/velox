@@ -972,6 +972,9 @@ void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
   if (src.isList) {
     dst.isList = true;
   }
+  if (src.nonRootOutput) {
+    dst.nonRootOutput = true;
+  }
   if (src.byLargestInput) {
     dst.byLargestInput = true;
   }
@@ -1008,6 +1011,10 @@ bool addOrUpdateOutput(
         OutputDesc elemDesc;
         elemDesc.delegated = true;
         elemDesc.shapeSetOnDevice = desc.shapeSetOnDevice;
+        // Propagate nonRootOutput so a list result of a split root op (e.g.
+        // tw.group_length_guard_head) keeps its unpacked elements out of the
+        // freeable intermediates list as well, not just the list value.
+        elemDesc.nonRootOutput = desc.nonRootOutput;
         outputValues.push_back(elem);
         outputDescs.push_back(std::move(elemDesc));
       }
@@ -1025,6 +1032,7 @@ OutputDesc KernelOperation::makeOutputDesc(
   OutputDesc desc;
   desc.shapeSetOnDevice = returnMeta.shapeSetOnDevice;
   desc.neededOnHost = returnMeta.neededOnHost;
+  desc.nonRootOutput = returnMeta.nonRootOutput;
   desc.sizeExpr.op = returnMeta.sizeShortcut;
 
   // Expand sizeArgs ordinals to ValueIds from the node's inputs.
@@ -1060,6 +1068,17 @@ OutputDesc KernelOperation::makeOutputDesc(
   }
 
   return desc;
+}
+
+bool KernelOperation::isMultiUseInput(nativert::ValueId id) const {
+  // Read from the WaveGraph (persists to execution), not compileCtx_, which is
+  // a stack temporary destroyed after compilation. LaunchData calls this while
+  // gathering launches at execution time.
+  return waveGraph_ != nullptr && waveGraph_->isMultiUseInput(id);
+}
+
+bool KernelOperation::isGraphOutput(nativert::ValueId id) const {
+  return waveGraph_ != nullptr && waveGraph_->isGraphOutput(id);
 }
 
 void KernelOperation::setOutputs(

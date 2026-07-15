@@ -107,7 +107,11 @@ JSON Functions
 
 .. spark:function:: to_json(jsonObject) -> jsonString
 
-    Converts a Json object (ROW, ARRAY or MAP) into a JSON string. ::
+    Converts a JSON object (ROW, ARRAY, or MAP) into a JSON string.
+
+    Supported primitive types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
+    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, VARCHAR, and VARBINARY. ROW, ARRAY,
+    and MAP can be nested. ::
 
         SELECT to_json(named_struct('c0', 1, 'c1', 'a')); -- {"c0":1,"c1":"a"}
         SELECT to_json(ARRAY(1, 2, 3)); -- [1,2,3]
