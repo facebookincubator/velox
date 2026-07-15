@@ -744,10 +744,8 @@ void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
 
 std::pair<std::size_t, std::size_t>
 CudfIcebergSplitReader::computeSplitRowRange() const {
-  if (split_->start == 0) {
-    return {0, static_cast<std::size_t>(fileMetaData_.front().num_rows)};
-  }
-
+  // Note: This function implements the same logic as cuDF's hybrid scan
+  // reader's `filter_row_groups_with_byte_range()` API
   const auto rowGroupOffset = [](const auto& rowGroup) {
     if (rowGroup.file_offset.has_value()) {
       return rowGroup.file_offset.value();
@@ -767,9 +765,7 @@ CudfIcebergSplitReader::computeSplitRowRange() const {
     const auto offset = rowGroupOffset(rowGroup);
     if (offset < split_->start) {
       startRow += rowGroup.num_rows;
-    } else if (
-        split_->size() == std::numeric_limits<uint64_t>::max() or
-        offset < split_->start + split_->size()) {
+    } else if (offset - split_->start < split_->size()) {
       numRows += rowGroup.num_rows;
     }
   }
@@ -791,6 +787,7 @@ void CudfIcebergSplitReader::adaptColumns() {
     const auto& fieldName = readColumnNames_[i];
     const TypePtr veloxType = [&]() -> TypePtr {
       if (i < outputType_->size()) {
+        VELOX_DCHECK_EQ(fieldName, outputType_->nameOf(i));
         return outputType_->childAt(i);
       }
       // Filter-only column beyond the output projection.
