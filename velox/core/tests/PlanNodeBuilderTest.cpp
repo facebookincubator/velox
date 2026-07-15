@@ -1044,6 +1044,17 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
 
   const auto node2 = UnnestNode::Builder(*node).build();
   verify(node2);
+
+  // A wrong number of unnest names is rejected: one per array, two per map.
+  VELOX_ASSERT_THROW(
+      UnnestNode::Builder()
+          .id(id)
+          .replicateVariables(replicateVariables)
+          .unnestVariables(unnestVariables)
+          .unnestNames({"b", "extra"})
+          .source(source_)
+          .build(),
+      "one name per array");
 }
 
 TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {
