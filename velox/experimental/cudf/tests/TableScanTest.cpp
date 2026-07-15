@@ -906,13 +906,13 @@ TEST_F(TableScanTest, arrayDecimalScan) {
 // decimal buried several levels deep is normalized. Schema:
 // struct<int, decimal, struct<int, list<decimal>>>.
 TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
-  auto rowType = ROW(
-      {"s"},
-      {ROW(
-          {"x", "d", "nested"},
-          {INTEGER(),
-           DECIMAL(7, 2),
-           ROW({"y", "a"}, {INTEGER(), ARRAY(DECIMAL(7, 2))})})});
+  auto rowType =
+      ROW({"s"},
+          {ROW(
+              {"x", "d", "nested"},
+              {INTEGER(),
+               DECIMAL(7, 2),
+               ROW({"y", "a"}, {INTEGER(), ARRAY(DECIMAL(7, 2))})})});
   auto listElements = makeNullableFlatVector<int64_t>(
       {100, 200, std::nullopt, 300, 400}, DECIMAL(7, 2));
   auto vector = makeRowVector(
