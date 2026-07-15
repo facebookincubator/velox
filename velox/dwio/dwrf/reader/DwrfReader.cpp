@@ -1052,14 +1052,9 @@ void DwrfReader::updateColumnNamesFromFieldIds() {
   // either the DWRF or ORC proto variant (Iceberg manifest-tags DWRF as ORC).
   const auto attributesByNode = ProtoUtils::readAttributes(footer);
   if (attributesByNode.empty()) {
-    // The file carries no Iceberg field-id attributes (written before field-id
-    // support, by a non-Iceberg writer, or a Hive-migrated table). Field-id
-    // resolution is impossible, so fall back to position-based name mapping
-    // (rename file columns to the requested table names by position), matching
-    // the behavior used for non-field-id column mapping. This keeps
-    // physically-present columns bound to the file instead of being treated as
-    // missing and wrongly filled with defaults/nulls.
-    updateColumnNamesFromTableSchema();
+    if (!options.useColumnNamesForMissingFieldIds()) {
+      updateColumnNamesFromTableSchema();
+    }
     return;
   }
 

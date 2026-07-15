@@ -16,7 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/file/LocalFile.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/dwio/common/WriterFactory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -52,6 +55,50 @@ struct FileWriteMode {
 // ---------------------------------------------------------------------------
 class EqualityDeleteFileReaderTest : public IcebergTestBase {
  protected:
+  std::shared_ptr<common::testutil::TempFilePath> writeNestedFile(
+      const RowVectorPtr& data,
+      const std::vector<parquet::ParquetFieldId>& fields,
+      const FileWriteMode& mode) {
+    if (!mode.withFieldIds) {
+      return writeDataFile({data});
+    }
+    auto file = common::testutil::TempFilePath::create();
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::make_unique<LocalWriteFile>(file->getPath(), true, false),
+        file->getPath());
+    auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
+    writerOptions->schema = data->type();
+    auto writerPool = rootPool_->addAggregateChild("nestedEqualityWriter");
+    writerOptions->memoryPool = writerPool.get();
+    if (mode.format == dwio::common::FileFormat::PARQUET) {
+#ifdef VELOX_ENABLE_PARQUET
+      auto options = std::make_shared<parquet::ParquetWriterOptions>();
+      options->parquetFieldIds = fields;
+      writerOptions->formatSpecificOptions = std::move(options);
+#endif
+    } else {
+      auto options = std::make_shared<dwrf::DwrfWriterOptions>();
+      uint32_t nodeId = 1;
+      auto addField = [&](const auto& self,
+                          const parquet::ParquetFieldId& field) -> void {
+        options->schemaAttributes[nodeId++] = {
+            {"iceberg.id", std::to_string(field.fieldId)}};
+        for (const auto& child : field.children) {
+          self(self, child);
+        }
+      };
+      for (const auto& field : fields) {
+        addField(addField, field);
+      }
+      writerOptions->formatSpecificOptions = std::move(options);
+    }
+    auto writer = dwio::common::getWriterFactory(mode.format)
+                      ->createWriter(std::move(sink), writerOptions);
+    writer->write(data);
+    writer->close();
+    return file;
+  }
+
   /// Writes a file in the format described by 'mode'. When
   /// Writes a file according to 'mode':
   ///   DWRF  + withFieldIds=false  — plain DWRF, no iceberg.id attributes
@@ -1263,6 +1310,131 @@ TEST_F(
           makeNullableFlatVector<std::string>({std::nullopt}),
       });
   assertEqualResults({expected}, {result});
+}
+
+TEST_P(EqualityDeleteFileReaderTestP, nestedPrimitiveColumnDelete) {
+  const auto& mode = GetParam();
+  const auto detailsField = parquet::ParquetFieldId{
+      102, {parquet::ParquetFieldId{18, {}}, parquet::ParquetFieldId{17, {}}}};
+  auto detailsType = ROW({"label", "code"}, {VARCHAR(), INTEGER()});
+  auto rowType = ROW({"id", "details"}, {BIGINT(), detailsType});
+
+  auto baseDetails = makeRowVector(
+      {"label", "code"},
+      {
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e", "f"}),
+          makeNullableFlatVector<int32_t>({10, 20, 10, 40, std::nullopt, 60}),
+      },
+      [](vector_size_t row) { return row == 5; });
+  auto baseData = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+          baseDetails,
+      });
+  auto dataFile = writeNestedFile(
+      baseData, {parquet::ParquetFieldId{101, {}}, detailsField}, mode);
+
+  auto deleteDetails = makeRowVector(
+      {mode.withFieldIds ? "old_code" : "code"},
+      {
+          makeNullableFlatVector<int32_t>({10, std::nullopt}),
+      },
+      [](vector_size_t row) { return row == 1; });
+  auto deleteData = makeRowVector(
+      {mode.withFieldIds ? "old_details" : "details"},
+      {
+          deleteDetails,
+      });
+  auto eqDeleteFile = writeNestedFile(
+      deleteData,
+      {parquet::ParquetFieldId{102, {parquet::ParquetFieldId{17, {}}}}},
+      mode);
+
+  const IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      mode.format,
+      2,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{17});
+
+  auto splits = [&] {
+    return makeSplits(
+        dataFile->getPath(),
+        /*partitionKeys=*/{},
+        mode,
+        {icebergDeleteFile});
+  };
+  const auto idHandle = std::make_shared<const IcebergColumnHandle>(
+      "id",
+      FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      parquet::ParquetFieldId{101, {}});
+  const auto detailsHandle = std::make_shared<const IcebergColumnHandle>(
+      "details",
+      FileColumnHandle::ColumnType::kRegular,
+      detailsType,
+      detailsField);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .dataColumnFieldIds({101, 102})
+                  .assignments({{"id", idHandle}, {"details", detailsHandle}})
+                  .endTableScan()
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).splits(splits()).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({2, 4}),
+          makeRowVector(
+              {"label", "code"},
+              {makeFlatVector<std::string>({"b", "d"}),
+               makeFlatVector<int32_t>({20, 40})}),
+      });
+
+  assertEqualResults({expected}, {result});
+
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.emplace_back("details.label");
+  const auto prunedDetailsHandle = std::make_shared<const IcebergColumnHandle>(
+      "details",
+      FileColumnHandle::ColumnType::kRegular,
+      detailsType,
+      detailsField,
+      std::move(requiredSubfields));
+  plan = exec::test::PlanBuilder()
+             .startTableScan(kIcebergConnectorId)
+             .outputType(rowType)
+             .dataColumns(rowType)
+             .dataColumnFieldIds({101, 102})
+             .assignments({{"id", idHandle}, {"details", prunedDetailsHandle}})
+             .endTableScan()
+             .project({"id", "details.label"})
+             .planNode();
+  result = AssertQueryBuilder(plan).splits(splits()).copyResults(pool());
+  assertEqualResults(
+      {makeRowVector({
+          makeFlatVector<int64_t>({2, 4}),
+          makeFlatVector<std::string>({"b", "d"}),
+      })},
+      {result});
+
+  plan = exec::test::PlanBuilder()
+             .startTableScan(kIcebergConnectorId)
+             .outputType(ROW({"id"}, {BIGINT()}))
+             .dataColumns(rowType)
+             .dataColumnFieldIds({101, 102})
+             .assignments({{"id", idHandle}})
+             .filterColumnHandles({detailsHandle})
+             .endTableScan()
+             .planNode();
+  result = AssertQueryBuilder(plan).splits(splits()).copyResults(pool());
+  assertEqualResults(
+      {makeRowVector({makeFlatVector<int64_t>({2, 4})})}, {result});
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test
