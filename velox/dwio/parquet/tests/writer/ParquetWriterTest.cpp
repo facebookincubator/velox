@@ -1329,6 +1329,113 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
+// Verifies a multi-batch write where a passthrough VARCHAR dictionary batch is
+// followed by a flat VARCHAR batch. The first batch caches a DictionaryType
+// Arrow schema; flattenIfNeeded() must rewrite the cached field to the value
+// type so the flat second batch imports and writes correctly (a dictionary
+// field expects 2 buffers while flat string data produces 3).
+TEST_F(ParquetWriterTest, multiBatchDictionaryThenFlat) {
+  constexpr vector_size_t kBatchSize = 2'000;
+  constexpr int kDictSize = 8;
+  auto schema = ROW({"c0"}, {VARCHAR()});
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("dict_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // Batch 0: passthrough dictionary.
+  auto dictBatch = makeRowVector({makeDictionaryColumn(
+      kBatchSize, dictionary, [](auto row) { return row % kDictSize; })});
+  ASSERT_EQ(
+      dictBatch->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  // Batch 1: flat.
+  std::vector<std::string> flatStrings(kBatchSize);
+  for (int i = 0; i < kBatchSize; ++i) {
+    flatStrings[i] = fmt::format("flat_{}", i);
+  }
+  auto flatBatch = makeRowVector({makeFlatVector<StringView>(
+      kBatchSize, [&](auto row) { return StringView(flatStrings[row]); })});
+  ASSERT_EQ(flatBatch->childAt(0)->encoding(), VectorEncoding::Simple::FLAT);
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.schema = schema;
+  auto* sinkPtr =
+      write({dictBatch, flatBatch}, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
+
+  const auto total = kBatchSize * 2;
+  auto expected =
+      makeRowVector({makeFlatVector<StringView>(total, [&](auto row) {
+        return row < kBatchSize ? StringView(dictStrings[row % kDictSize])
+                                : StringView(flatStrings[row - kBatchSize]);
+      })});
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
+// Verifies a multi-batch write where a passthrough VARCHAR dictionary batch is
+// followed by a dictionary batch that must be force-flattened (dict-of-dict).
+// The second batch is still DICTIONARY-encoded at the top level, so the reverse
+// schema fixup (which only fires for non-dictionary input) does not apply on
+// its own; flattenIfNeeded() must still rewrite the cached DictionaryType field
+// to the value type because the column is flattened before export. Otherwise
+// ImportRecordBatch() would receive flat buffers described by a dictionary
+// schema.
+TEST_F(ParquetWriterTest, multiBatchDictionaryThenForcedFlattenDictionary) {
+  constexpr vector_size_t kBatchSize = 2'000;
+  constexpr int kDictSize = 8;
+  auto schema = ROW({"c0"}, {VARCHAR()});
+
+  std::vector<std::string> dictStrings(kDictSize);
+  for (int i = 0; i < kDictSize; ++i) {
+    dictStrings[i] = fmt::format("dict_{}", i);
+  }
+  auto dictionary = makeFlatVector<StringView>(
+      kDictSize, [&](auto row) { return StringView(dictStrings[row]); });
+
+  // Batch 0: passthrough dictionary.
+  auto dictBatch = makeRowVector({makeDictionaryColumn(
+      kBatchSize, dictionary, [](auto row) { return row % kDictSize; })});
+  ASSERT_EQ(
+      dictBatch->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  // Batch 1: dictionary-of-dictionary. Top-level encoding is DICTIONARY but the
+  // inner vector is not flat, so childNeedsFlatten() forces a flatten while the
+  // top-level encoding stays DICTIONARY.
+  auto innerDict = makeDictionaryColumn(
+      kBatchSize, dictionary, [](auto row) { return row % kDictSize; });
+  auto nestedDict =
+      makeDictionaryColumn(kBatchSize, innerDict, [](auto row) { return row; });
+  auto nestedBatch = makeRowVector({nestedDict});
+  ASSERT_EQ(
+      nestedBatch->childAt(0)->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.schema = schema;
+  auto* sinkPtr =
+      write({dictBatch, nestedBatch}, options, ParquetWriterOptions{});
+
+  auto reader = createReaderInMemory(*sinkPtr);
+  ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
+
+  // Both batches resolve to dictStrings[row % kDictSize].
+  const auto total = kBatchSize * 2;
+  auto expected =
+      makeRowVector({makeFlatVector<StringView>(total, [&](auto row) {
+        return StringView(dictStrings[(row % kBatchSize) % kDictSize]);
+      })});
+  auto rowReader = createRowReaderFromReader(*reader, schema);
+  assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
+}
+
 // Verifies that DictionaryVector with nulls round-trips correctly.
 TEST_F(ParquetWriterTest, dictionaryPassthroughWithNulls) {
   constexpr vector_size_t kSize = 5'000;

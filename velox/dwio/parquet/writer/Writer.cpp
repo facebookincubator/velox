@@ -676,14 +676,43 @@ VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
 
   const auto& children = rowVector->children();
 
-  // Reverse schema consistency: if the cached schema expects a dictionary
-  // type for a column but the current data is not dictionary-encoded, update
-  // the cached schema field to use the dictionary's value type. This prevents
-  // import errors when buffer counts don't match (dict schema expects 2
-  // buffers but flat data produces 3).
+  // Decide per-column whether it must be flattened before Arrow export. A
+  // column is flattened when childNeedsFlatten() requires it, or when the
+  // cached schema from an earlier batch expects a non-dictionary type but the
+  // current column is dictionary-encoded (the encoding changed across batches).
+  std::vector<bool> needsFlatten(children.size(), false);
+  bool anyNeedsFlatten = false;
+  for (size_t i = 0; i < children.size(); ++i) {
+    bool flatten = childNeedsFlatten(children[i]);
+    // Schema consistency: if the schema is already cached and expects a
+    // non-dictionary type for this column, flatten any dictionary vector to
+    // avoid import errors from schema/data encoding mismatch across batches.
+    if (!flatten && arrowContext_->schema &&
+        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+        arrowContext_->schema->field(i)->type()->id() !=
+            ::arrow::Type::DICTIONARY) {
+      flatten = true;
+    }
+    needsFlatten[i] = flatten;
+    anyNeedsFlatten |= flatten;
+  }
+
+  // Reconcile the cached schema with the encoding that will actually be
+  // exported. A column is exported as an Arrow DictionaryArray only when it is
+  // dictionary-encoded AND is not being flattened. For every column that will
+  // NOT be a dictionary but whose cached schema field is still DictionaryType,
+  // rewrite the cached field to the dictionary value type. This covers both a
+  // later batch arriving flat and a later batch arriving as a dictionary that
+  // must be flattened (e.g. dict values gained nulls). Without this,
+  // ImportRecordBatch() would receive flat buffers described by a dictionary
+  // schema (buffer-count mismatch: a dictionary field expects 2 buffers but
+  // flat string data produces 3).
   if (arrowContext_->schema) {
     for (size_t i = 0; i < children.size(); ++i) {
-      if (children[i]->encoding() != VectorEncoding::Simple::DICTIONARY &&
+      const bool exportsAsDictionary =
+          children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
+          !needsFlatten[i];
+      if (!exportsAsDictionary &&
           arrowContext_->schema->field(i)->type()->id() ==
               ::arrow::Type::DICTIONARY) {
         auto dictType = std::static_pointer_cast<::arrow::DictionaryType>(
@@ -699,24 +728,6 @@ VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
     }
   }
 
-  bool anyNeedsFlatten = false;
-  for (size_t i = 0; i < children.size(); ++i) {
-    if (childNeedsFlatten(children[i])) {
-      anyNeedsFlatten = true;
-      break;
-    }
-    // Schema consistency: if the schema is already cached and expects a
-    // non-dictionary type for this column, flatten any dictionary vector
-    // to avoid import errors from schema/data encoding mismatch across batches.
-    if (arrowContext_->schema &&
-        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
-        arrowContext_->schema->field(i)->type()->id() !=
-            ::arrow::Type::DICTIONARY) {
-      anyNeedsFlatten = true;
-      break;
-    }
-  }
-
   if (!anyNeedsFlatten) {
     return data;
   }
@@ -724,20 +735,9 @@ VectorPtr Writer::flattenIfNeeded(const VectorPtr& data) const {
   // Selectively flatten only the columns that need it.
   std::vector<VectorPtr> newChildren(children.size());
   for (size_t i = 0; i < children.size(); ++i) {
-    bool needsFlatten = childNeedsFlatten(children[i]);
-    // Also flatten if the cached schema does not expect a dictionary for this
-    // column (prevents schema/data mismatch on subsequent batches).
-    if (!needsFlatten && arrowContext_->schema &&
-        children[i]->encoding() == VectorEncoding::Simple::DICTIONARY &&
-        arrowContext_->schema->field(i)->type()->id() !=
-            ::arrow::Type::DICTIONARY) {
-      needsFlatten = true;
-    }
-    if (needsFlatten) {
-      newChildren[i] = children[i];
+    newChildren[i] = children[i];
+    if (needsFlatten[i]) {
       BaseVector::flattenVector(newChildren[i]);
-    } else {
-      newChildren[i] = children[i];
     }
   }
 
