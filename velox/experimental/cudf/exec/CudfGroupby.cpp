@@ -847,8 +847,7 @@ cudf::column_view GroupbyAggregator::materializeMaskedInput(
     return tbl.column(valueIdx);
   }
   VELOX_CHECK(exec::isRawInput(step), "mask only valid at raw-input steps");
-  maskedValues_ =
-      applyMask(tbl.column(valueIdx), tbl.column(*maskIndex), stream, mr);
+  maskedValues_ = materializeMaskedColumn(tbl, valueIdx, maskIndex, stream, mr);
   return maskedValues_->view();
 }
 

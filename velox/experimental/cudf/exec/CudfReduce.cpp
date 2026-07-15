@@ -83,14 +83,8 @@ using facebook::velox::cudf_velox::validateIntermediateColumnType;
          injected column owns the lifetime through cudf::reduce. cudf          \
          reduce(SUM/MIN/MAX) over an all-null group yields a null              \
          scalar -> NULL, matching Velox all-excluded semantics. */             \
-      std::unique_ptr<cudf::column> injected;                                  \
-      if (maskIndex.has_value()) {                                             \
-        injected = cudf_velox::applyMask(                                      \
-            input.column(inputIndex),                                          \
-            input.column(*maskIndex),                                          \
-            stream,                                                            \
-            get_temp_mr());                                                    \
-      }                                                                        \
+      auto const injected = cudf_velox::materializeMaskedColumn(               \
+          input, inputIndex, maskIndex, stream, get_temp_mr());                \
       auto const reduceInput =                                                 \
           injected ? injected->view() : input.column(inputIndex);              \
       auto const resultScalar = cudf::reduce(                                  \
@@ -143,19 +137,14 @@ struct ReduceCountAggregator : ReduceAggregator {
               input.num_columns(),
               0,
               "count(column) requires at least one input column");
-          if (maskIndex.has_value()) {
-            // count(col) FILTER(WHERE m): null-inject col so validity =
-            // m && valid(col), then count valid entries.
-            auto injected = cudf_velox::applyMask(
-                input.column(inputIndex),
-                input.column(*maskIndex),
-                stream,
-                get_temp_mr());
-            count = injected->size() - injected->null_count();
-          } else {
-            auto inputCol = input.column(inputIndex);
-            count = inputCol.size() - inputCol.null_count();
-          }
+          // count(col) FILTER(WHERE m): null-inject col so validity =
+          // m && valid(col), then count valid entries. Without a mask, count
+          // the input column's valid entries directly.
+          auto const injected = cudf_velox::materializeMaskedColumn(
+              input, inputIndex, maskIndex, stream, get_temp_mr());
+          auto const countCol =
+              injected ? injected->view() : input.column(inputIndex);
+          count = countCol.size() - countCol.null_count();
           break;
         }
         default:
@@ -474,16 +463,13 @@ struct ReduceDecimalSumAggregator : ReduceAggregator {
       vector_size_t /* inputRowCount */,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) override {
-    cudf::column_view inputCol = input.column(inputIndex);
     // Mask applies only at raw-input steps (kSingle/kPartial), where maskIndex
     // is set. Null-inject masked rows so cuDF's null-excluding sum and count
     // honor the mask; the injected column owns the lifetime through doReduce.
-    std::unique_ptr<cudf::column> injected;
-    if (maskIndex.has_value()) {
-      injected = cudf_velox::applyMask(
-          inputCol, input.column(*maskIndex), stream, get_temp_mr());
-      inputCol = injected->view();
-    }
+    auto const injected = cudf_velox::materializeMaskedColumn(
+        input, inputIndex, maskIndex, stream, get_temp_mr());
+    cudf::column_view inputCol =
+        injected ? injected->view() : input.column(inputIndex);
     switch (step) {
       case core::AggregationNode::Step::kSingle:
         return singleOrRawDecimalSumWithCast(inputCol, outputType, stream, mr);

@@ -45,11 +45,11 @@ core::AggregationNode::Step getCompanionStep(
 std::string getOriginalName(const std::string& kind);
 
 // Returns true if the cuDF aggregator for 'aggregateName' honors a FILTER mask.
-// Only sum/count/min/max apply the mask (masked rows are excluded via
-// null-injection, or via the validity column for count(*)/count(const)); every
+// Eligibility is declared at registration (maskSupportedAggregations) rather
+// than hardcoded here: sum/count/min/max opt in, so masked rows are excluded
+// via null-injection (or the validity column for count(*)/count(const)); every
 // other aggregate ignores the mask and would silently produce an unmasked
-// result, so callers must fall back to CPU for them. Centralizes the
-// supported-family list so groupby and reduce validation agree.
+// result, so callers must fall back to CPU for them.
 bool aggregationSupportsMask(const std::string& aggregateName);
 
 // Returns true if cuDF can honor 'aggregate's FILTER mask at 'step' (no mask is
@@ -108,6 +108,19 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
 std::unique_ptr<cudf::column> applyMask(
     cudf::column_view values,
     cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+// Materializes the masked raw-input value column for an aggregate: when
+// 'maskIndex' is set, returns applyMask(values, mask); when it is unset,
+// returns nullptr (callers then use input.column(inputIndex) directly). Returns
+// the OWNING column so both callers manage its lifetime — groupby stores it in
+// a member, reduce keeps it as a local through the reduce call. Shared by
+// groupby and reduce so both materialize masked input the same way.
+std::unique_ptr<cudf::column> materializeMaskedColumn(
+    cudf::table_view const& input,
+    uint32_t inputIndex,
+    std::optional<uint32_t> maskIndex,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 

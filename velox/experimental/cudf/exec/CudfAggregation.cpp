@@ -98,14 +98,13 @@ std::string getOriginalName(const std::string& kind) {
 }
 
 bool aggregationSupportsMask(const std::string& aggregateName) {
-  // TODO: Support masked avg/stddev (needs partial-struct null handling).
-  // Match exact names, not prefixes: a prefix match would also accept
-  // max_by/min_by/count_if/sum_data_size and drift wider than the supported
-  // set the moment such a family member is registered.
-  const auto originalName = getOriginalName(aggregateName);
-  const auto prefix = CudfConfig::getInstance().functionNamePrefix;
-  return originalName == prefix + "sum" || originalName == prefix + "count" ||
-      originalName == prefix + "min" || originalName == prefix + "max";
+  // Mask eligibility is declared at registration (see
+  // maskSupportedAggregations() populated in
+  // registerCommonAggregationFunctions), so no aggregate names are hardcoded
+  // here. getOriginalName strips the _partial/_merge companion suffixes to the
+  // registered name before lookup.
+  const auto& supported = maskSupportedAggregations();
+  return supported.count(getOriginalName(aggregateName)) > 0;
 }
 
 bool maskSupportedByCudf(
@@ -172,6 +171,19 @@ std::unique_ptr<cudf::column> applyMask(
       cudf::make_default_constructed_scalar(values.type(), stream, mr);
   nullScalar->set_valid_async(false, stream);
   return cudf::copy_if_else(values, *nullScalar, mask, stream, mr);
+}
+
+std::unique_ptr<cudf::column> materializeMaskedColumn(
+    cudf::table_view const& input,
+    uint32_t inputIndex,
+    std::optional<uint32_t> maskIndex,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (!maskIndex.has_value()) {
+    return nullptr;
+  }
+  return applyMask(
+      input.column(inputIndex), input.column(*maskIndex), stream, mr);
 }
 
 std::unique_ptr<cudf::column> maskToValidityColumn(
