@@ -1770,9 +1770,10 @@ int64_t TimeMilliPrecisionType::valueToTime(
 }
 
 int64_t TimeMicroPrecisionUtcType::valueToTime(
-    const StringView& timeStr) const {
+    const StringView& timeStr,
+    bool requireSeconds) const {
   auto componentsResult = util::parseTimeComponents(
-      timeStr.data(), timeStr.size(), /*requireSeconds=*/true, 6);
+      timeStr.data(), timeStr.size(), requireSeconds, 6);
   if (componentsResult.hasError()) {
     VELOX_USER_FAIL("{}", componentsResult.error().message());
   }
@@ -1790,17 +1791,20 @@ int64_t TimeMicroPrecisionUtcType::valueToTime(
       components.second >= 0 && components.second < util::kSecsPerMinute,
       "Invalid second value: {}",
       components.second);
+  // parseTimeComponents scales the fractional part to the requested
+  // precision, so with precision 6 TimeComponents::millis holds microseconds.
+  const int32_t micros = components.millis;
   VELOX_USER_CHECK(
-      components.millis >= 0 && components.millis < util::kMicrosPerSec,
+      micros >= 0 && micros < util::kMicrosPerSec,
       "Invalid microsecond value: {}",
-      components.millis);
+      micros);
 
   constexpr int64_t kMicrosPerDay = util::kMicrosPerSec * util::kSecsPerDay;
   const int64_t result =
       static_cast<int64_t>(components.hour) * util::kMicrosPerHour +
       static_cast<int64_t>(components.minute) * util::kMicrosPerMinute +
       static_cast<int64_t>(components.second) * util::kMicrosPerSec +
-      static_cast<int64_t>(components.millis);
+      static_cast<int64_t>(micros);
 
   VELOX_USER_CHECK(
       result >= 0 && result < kMicrosPerDay,

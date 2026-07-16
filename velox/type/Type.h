@@ -1791,9 +1791,12 @@ class TimeMicroPrecisionUtcType final
   /// - 86'399'999'999 -> "23:59:59.999999"
   static std::string toCompactIso8601(int64_t microseconds);
 
-  /// Parses a time string in H:m:s[.SSSSSS] format and returns microseconds
+  /// Parses a time string in H:m[:s[.SSSSSS]] format and returns microseconds
   /// since midnight.
-  int64_t valueToTime(const StringView& timeStr) const;
+  /// @param requireSeconds If true, the seconds component is mandatory and
+  /// strings like "10:30" are rejected. Callers pass the policy of their
+  /// engine (e.g. Spark requires an explicit seconds component).
+  int64_t valueToTime(const StringView& timeStr, bool requireSeconds) const;
 
  private:
   constexpr TimeMicroPrecisionUtcType() = default;
