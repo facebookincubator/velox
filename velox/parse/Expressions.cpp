@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <typeinfo>
+
 #include "velox/parse/Expressions.h"
 
 #include "velox/common/EnumDefine.h"
@@ -130,6 +132,14 @@ std::string CallExpr::toString() const {
 
 bool AggregateCallExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kAggregate)) {
+    return false;
+  }
+
+  // Require the exact concrete type so equality stays symmetric with subclasses
+  // that carry extra state. Without this a base AggregateCallExpr could compare
+  // equal to a subclass instance while the subclass's operator== returns false
+  // for the reverse comparison.
+  if (typeid(*this) != typeid(other)) {
     return false;
   }
 
