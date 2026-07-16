@@ -892,7 +892,7 @@ TEST_F(AvroReaderTest, usesSchemaOverride) {
       "type": "record",
       "name": "WriterRecord",
       "fields": [
-        {"name": "a", "type": "float"}
+        {"name": "a", "type": "float"},
         {"name": "b", "type": "long"}
       ]
     })JSON";
@@ -1033,6 +1033,20 @@ TEST_F(AvroReaderTest, readsAllTypesData) {
       makeFlatVector<int64_t>({6789, -1357}, DECIMAL(7, 3)),
   });
   assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, createsMultipleRowReaders) {
+  const auto filePath = writeAllTypesRecord();
+  auto reader = createReader(filePath);
+
+  auto firstRowReader = createRowReader(*reader);
+  auto secondRowReader = createRowReader(*reader);
+
+  VectorPtr firstResult;
+  ASSERT_EQ(firstRowReader->next(1, firstResult), 1);
+  VectorPtr secondResult;
+  ASSERT_EQ(secondRowReader->next(1, secondResult), 1);
+  assertEqualVectors(firstResult, secondResult);
 }
 
 TEST_F(AvroReaderTest, readsComplexNestedData) {

@@ -19,7 +19,12 @@ if(VELOX_ENABLE_AVRO)
   endif()
 endif()
 
-velox_add_library(velox_dwio_avro_reader_register RegisterAvroReader.cpp)
+velox_add_library(
+  velox_dwio_avro_reader_register
+  RegisterAvroReader.cpp
+  HEADERS
+  RegisterAvroReader.h
+)
 
 if(VELOX_ENABLE_AVRO)
   velox_link_libraries(velox_dwio_avro_reader_register velox_dwio_avro_reader)

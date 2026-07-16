@@ -68,7 +68,8 @@ uint64_t loadAvroScanBatchBytes(const dwio::common::RowReaderOptions& options) {
       bytes,
       0,
       "Invalid value for '{}': '{}'. Expected a positive integer number of bytes.",
-      kAvroScanBatchBytesKey);
+      kAvroScanBatchBytesKey,
+      it->second);
   return bytes;
 }
 
@@ -1548,22 +1549,36 @@ VectorPtr projectAvroColumns(
 struct AvroFileContents {
   AvroFileContents(
       std::shared_ptr<AvroTypeInfo> typeInfoIn,
-      std::unique_ptr<::avro::DataFileReader<::avro::GenericDatum>> readerIn,
+      std::shared_ptr<dwio::common::ReadFileInputStream> readFileInputIn,
+      uint64_t lengthIn,
+      ::avro::ValidSchema avroSchemaIn,
       std::shared_ptr<const RowType> rowTypeIn,
       std::shared_ptr<const TypeWithId> schemaWithIdIn,
       memory::MemoryPool& poolIn)
       : typeInfo(std::move(typeInfoIn)),
-        avroReader(std::move(readerIn)),
+        readFileInput(std::move(readFileInputIn)),
+        length(lengthIn),
+        avroSchema(std::move(avroSchemaIn)),
         rowType(std::move(rowTypeIn)),
         schemaWithId(std::move(schemaWithIdIn)),
         pool(poolIn) {}
 
   std::shared_ptr<AvroTypeInfo> typeInfo;
-  std::unique_ptr<::avro::DataFileReader<::avro::GenericDatum>> avroReader;
+  std::shared_ptr<dwio::common::ReadFileInputStream> readFileInput;
+  uint64_t length;
+  ::avro::ValidSchema avroSchema;
   std::shared_ptr<const RowType> rowType;
   std::shared_ptr<const TypeWithId> schemaWithId;
   memory::MemoryPool& pool;
 };
+
+std::unique_ptr<::avro::DataFileReader<::avro::GenericDatum>>
+createAvroDataFileReader(const AvroFileContents& contents) {
+  auto stream = std::make_unique<ReadFileAvroInputStream>(
+      contents.readFileInput, 0, contents.length, contents.pool);
+  return std::make_unique<::avro::DataFileReader<::avro::GenericDatum>>(
+      std::move(stream), contents.avroSchema);
+}
 
 // AvroRowReader's read schema follows requestedType and ScanSpec:
 // - neither: use the file schema.
@@ -1606,13 +1621,10 @@ AvroReader::AvroReader(
     const ReaderOptions& options) {
   auto readFileInput = input->getInputStream();
   auto length = readFileInput->getLength();
-  auto stream = std::make_unique<ReadFileAvroInputStream>(
-      readFileInput, 0, length, options.memoryPool());
 
   // Reader schema precedence: user-configured `avro.schema.literal`,
   // otherwise the schema embedded in the Avro file.
   ::avro::ValidSchema avroSchema;
-  std::unique_ptr<::avro::DataFileReader<::avro::GenericDatum>> avroReader;
   if (options.serDeOptions().avroSchema.has_value()) {
     std::istringstream schemaStream(options.serDeOptions().avroSchema.value());
     try {
@@ -1623,12 +1635,11 @@ AvroReader::AvroReader(
           options.serDeOptions().kAvroSchema,
           e.what());
     }
-    avroReader = std::make_unique<::avro::DataFileReader<::avro::GenericDatum>>(
-        std::move(stream), avroSchema);
   } else {
-    avroReader = std::make_unique<::avro::DataFileReader<::avro::GenericDatum>>(
-        std::move(stream));
-    avroSchema = avroReader->readerSchema();
+    auto stream = std::make_unique<ReadFileAvroInputStream>(
+        readFileInput, 0, length, options.memoryPool());
+    ::avro::DataFileReader<::avro::GenericDatum> avroReader(std::move(stream));
+    avroSchema = avroReader.readerSchema();
   }
 
   auto avroSchemaRoot = avroSchema.root();
@@ -1646,7 +1657,9 @@ AvroReader::AvroReader(
 
   contents_ = std::make_shared<AvroFileContents>(
       std::move(typeInfo),
-      std::move(avroReader),
+      std::move(readFileInput),
+      length,
+      std::move(avroSchema),
       std::move(rowType),
       std::move(schemaWithId),
       options.memoryPool());
@@ -1678,7 +1691,7 @@ AvroRowReader::AvroRowReader(
     std::shared_ptr<AvroFileContents> contents,
     const dwio::common::RowReaderOptions& options)
     : contents_(std::move(contents)),
-      reader_(std::move(contents_->avroReader)),
+      reader_(createAvroDataFileReader(*contents_)),
       datum_(std::make_unique<::avro::GenericDatum>(reader_->readerSchema())),
       splitLimit_(
           options.limit() >= static_cast<uint64_t>(kMaxSafeAvroReaderPosition)
