@@ -50,6 +50,14 @@ class IcebergColumnHandle : public HiveColumnHandle {
     return initialDefaultValue_;
   }
 
+  std::string toString() const override;
+
+  folly::dynamic serialize() const override;
+
+  static ColumnHandlePtr create(const folly::dynamic& obj);
+
+  static void registerSerDe();
+
  private:
   const parquet::ParquetFieldId field_;
   const std::optional<std::string> initialDefaultValue_;
