@@ -476,7 +476,7 @@ Metadata IO stats (footer, stripe groups, index) use a ``metadata.`` prefix
 (e.g., ``metadata.storageReadBytes``, ``metadata.ramReadBytes``). Reader
 format-specific stats are prefixed with the file format name
 (e.g., ``dwrf.flattenStringDictionaryValues``,
-``parquet.pageLoadTimeNs``).
+``parquet.pageLoadTimeNanos``).
 
 .. list-table::
    :widths: 50 25 50
@@ -547,7 +547,7 @@ format-specific stats are prefixed with the file format name
      -
      - The number of rows returned by the DWRF string dictionary reader that
        were flattened instead of keeping dictionary encoding.
-   * - parquet.pageLoadTimeNs
+   * - parquet.pageLoadTimeNanos
      - nanos
      - The total time spent loading Parquet pages.
    * - parquet.footerEstimatedBytes

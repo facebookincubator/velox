@@ -58,9 +58,9 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
   ASSERT_TRUE(
-      stats.formatSpecificStats.find("pageLoadTimeNs") !=
+      stats.formatSpecificStats.find("pageLoadTimeNanos") !=
       stats.formatSpecificStats.end());
-  EXPECT_GT(stats.formatSpecificStats.at("pageLoadTimeNs").sum, 0);
+  EXPECT_GT(stats.formatSpecificStats.at("pageLoadTimeNanos").sum, 0);
 }
 
 TEST_F(ParquetPageReaderTest, largePage) {
@@ -93,9 +93,9 @@ TEST_F(ParquetPageReaderTest, largePage) {
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
   ASSERT_TRUE(
-      stats.formatSpecificStats.find("pageLoadTimeNs") !=
+      stats.formatSpecificStats.find("pageLoadTimeNanos") !=
       stats.formatSpecificStats.end());
-  EXPECT_GT(stats.formatSpecificStats.at("pageLoadTimeNs").sum, 0);
+  EXPECT_GT(stats.formatSpecificStats.at("pageLoadTimeNanos").sum, 0);
 }
 
 TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
