@@ -133,10 +133,8 @@ const cudf::ast::expression& createTimestampRangeExpr(
     }
     case common::FilterKind::kBigintRange: {
       const auto& range = static_cast<const common::BigintRange&>(filter);
-      isLowerUnbounded =
-          range.lower() == std::numeric_limits<int64_t>::min();
-      isUpperUnbounded =
-          range.upper() == std::numeric_limits<int64_t>::max();
+      isLowerUnbounded = range.lower() == std::numeric_limits<int64_t>::min();
+      isUpperUnbounded = range.upper() == std::numeric_limits<int64_t>::max();
       lower =
           isLowerUnbounded ? Timestamp{} : unpackTimestampUtc(range.lower());
       upper =
