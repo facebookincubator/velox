@@ -1117,8 +1117,8 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAfterVarbinaryRoundTrip) {
 
   auto rowType = ROW({{"state", VARBINARY()}});
   cudf::table_view stateTable({stateCol->view()});
-  auto velox = with_arrow::toVeloxColumn(
-      stateTable, pool(), rowType, "rt_", stream, mr);
+  auto velox =
+      with_arrow::toVeloxColumn(stateTable, pool(), rowType, "rt_", stream, mr);
   auto cudfAgain = with_arrow::toCudfTable(velox, pool(), stream, mr);
 
   cudf::strings_column_view strings(cudfAgain->view().column(0));
