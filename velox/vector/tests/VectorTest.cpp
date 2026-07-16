@@ -2354,6 +2354,21 @@ TEST_F(VectorTest, dictionaryResize) {
       EXPECT_EQ(rawIndices[i], 3);
     }
   }
+
+  {
+    SCOPED_TRACE("empty base");
+    auto emptyBase = BaseVector::create(INTEGER(), 0, pool());
+    auto allNullDictionary = BaseVector::wrapInDictionary(
+        makeNulls(size, nullEvery(1)),
+        allocateIndices(size, pool()),
+        size,
+        emptyBase);
+    allNullDictionary->resize(size * 2);
+    allNullDictionary->validate();
+    for (auto i = 0; i < allNullDictionary->size(); ++i) {
+      EXPECT_TRUE(allNullDictionary->isNullAt(i));
+    }
+  }
 }
 
 TEST_F(VectorTest, acquireSharedStringBuffers) {
