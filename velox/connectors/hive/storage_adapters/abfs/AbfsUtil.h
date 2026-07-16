@@ -18,6 +18,8 @@
 
 #include <azure/storage/common/storage_exception.hpp>
 #include <fmt/format.h>
+#include <folly/hash/Hash.h>
+#include <vector>
 #include "velox/common/file/File.h"
 
 namespace facebook::velox::filesystems {
@@ -29,12 +31,47 @@ constexpr std::string_view kAbfssScheme{"abfss://"};
 class ConfigBase;
 
 struct CacheKey {
-  const std::string accountName;
+  const std::string accountNameWithSuffix;
   const std::string authType;
 
-  CacheKey(std::string_view accountName, std::string_view authType)
-      : accountName(accountName), authType(authType) {}
+  CacheKey(std::string_view accountNameWithSuffix, std::string_view authType)
+      : accountNameWithSuffix(accountNameWithSuffix), authType(authType) {}
+
+  bool operator==(const CacheKey& other) const {
+    return accountNameWithSuffix == other.accountNameWithSuffix &&
+        authType == other.authType;
+  }
 };
+
+} // namespace facebook::velox::filesystems
+
+// Specialize std::hash for CacheKey and vector<CacheKey> to enable their use
+// in unordered_map
+namespace std {
+template <>
+struct hash<facebook::velox::filesystems::CacheKey> {
+  size_t operator()(const facebook::velox::filesystems::CacheKey& key) const {
+    return folly::hash::hash_combine(
+        std::hash<std::string>{}(key.accountNameWithSuffix),
+        std::hash<std::string>{}(key.authType));
+  }
+};
+
+template <>
+struct hash<std::vector<facebook::velox::filesystems::CacheKey>> {
+  size_t operator()(
+      const std::vector<facebook::velox::filesystems::CacheKey>& keys) const {
+    size_t seed = 0;
+    for (const auto& key : keys) {
+      seed = folly::hash::hash_combine(
+          seed, std::hash<facebook::velox::filesystems::CacheKey>{}(key));
+    }
+    return seed;
+  }
+};
+} // namespace std
+
+namespace facebook::velox::filesystems {
 
 inline bool isAbfsFile(const std::string_view filename) {
   return filename.find(kAbfsScheme) == 0 || filename.find(kAbfssScheme) == 0;

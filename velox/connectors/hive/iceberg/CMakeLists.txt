@@ -23,11 +23,13 @@ set(
   IcebergDataSink.cpp
   IcebergDataSource.cpp
   IcebergDeletionVectorSink.cpp
+  IcebergDwrfStatsCollector.cpp
   IcebergMergeProcessor.cpp
   IcebergMergeSink.cpp
   IcebergPartitionName.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
+  IcebergStatsCollector.cpp
   PartitionSpec.cpp
   PositionalDeleteFileReader.cpp
   TransformEvaluator.cpp
@@ -43,6 +45,7 @@ velox_add_library(
   velox_hive_iceberg_splitreader
   ${ICEBERG_SOURCES}
   HEADERS
+  DeletionVectorFormat.h
   DeletionVectorReader.h
   DeletionVectorWriter.h
   EqualityDeleteFileReader.h
@@ -54,6 +57,7 @@ velox_add_library(
   IcebergDataSource.h
   IcebergDeleteFile.h
   IcebergDeletionVectorSink.h
+  IcebergDwrfStatsCollector.h
   IcebergMergeProcessor.h
   IcebergMergeSink.h
   IcebergMetadataColumns.h
@@ -61,11 +65,14 @@ velox_add_library(
   IcebergPartitionName.h
   IcebergSplit.h
   IcebergSplitReader.h
+  IcebergStatsCollector.h
   PartitionSpec.h
   PositionalDeleteFileReader.h
   TransformEvaluator.h
   TransformExprBuilder.h
   WriterOptionsAdapter.h
+  IcebergFieldId.h
+  IcebergFieldMetadata.h
 )
 
 velox_link_libraries(

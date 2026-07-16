@@ -194,6 +194,21 @@ class PARQUET_EXPORT ColumnWriter {
   /// totalBytesWritten().
   virtual int64_t totalCompressedBytesWritten() const = 0;
 
+  /// Estimated size of the values that are not written to a page yet.
+  virtual int64_t estimatedBufferedValueBytes() const = 0;
+
+  /// \brief Estimated size of the definition levels that are not written to a
+  /// page yet.
+  virtual int64_t estimatedBufferedDefLevelBytes() const = 0;
+
+  /// \brief Estimated size of the repetition levels that are not written to a
+  /// page yet.
+  virtual int64_t estimatedBufferedRepLevelBytes() const = 0;
+
+  /// \brief Estimated size of the dictionary that are not written to a page
+  /// yet.
+  virtual int64_t estimatedBufferedDictBytes() const = 0;
+
   /// \brief The file-level writer properties.
   virtual const WriterProperties* properties() = 0;
 

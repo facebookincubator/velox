@@ -1422,23 +1422,7 @@ using AggregationNodePtr = std::shared_ptr<const AggregationNode>;
 inline std::ostream& operator<<(
     std::ostream& out,
     const AggregationNode::Step& step) {
-  switch (step) {
-    case AggregationNode::Step::kFinal:
-      return out << "FINAL";
-    case AggregationNode::Step::kIntermediate:
-      return out << "INTERMEDIATE";
-    case AggregationNode::Step::kPartial:
-      return out << "PARTIAL";
-    case AggregationNode::Step::kSingle:
-      return out << "SINGLE";
-  }
-  VELOX_UNREACHABLE();
-}
-
-inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
-  std::stringstream ss;
-  ss << step;
-  return ss.str();
+  return out << AggregationNode::toName(step);
 }
 
 /// Specify the column stats collection by aggregation. This is used by table
@@ -3309,7 +3293,8 @@ class HashJoinNode : public AbstractJoinNode {
       PlanNodePtr right,
       RowTypePtr outputType,
       bool useHashTableCache = false,
-      bool nullAsValue = false)
+      bool nullAsValue = false,
+      std::optional<std::string> cacheKey = std::nullopt)
       : AbstractJoinNode(
             id,
             joinType,
@@ -3321,12 +3306,19 @@ class HashJoinNode : public AbstractJoinNode {
             std::move(outputType)),
         nullAware_{nullAware},
         nullAsValue_{nullAsValue},
-        useHashTableCache_{useHashTableCache} {
+        useHashTableCache_{useHashTableCache},
+        cacheKey_{std::move(cacheKey)} {
     validate();
 
     VELOX_USER_CHECK(
         !nullAware || !nullAsValue,
         "nullAware and nullAsValue are mutually exclusive");
+    VELOX_USER_CHECK(
+        !cacheKey_.has_value() || useHashTableCache_,
+        "cacheKey can only be set when useHashTableCache is enabled");
+    VELOX_USER_CHECK(
+        !cacheKey_.has_value() || !cacheKey_->empty(),
+        "cacheKey must be non-empty if set");
 
     if (isCountingJoin()) {
       VELOX_USER_CHECK(
@@ -3358,6 +3350,7 @@ class HashJoinNode : public AbstractJoinNode {
       nullAware_ = other.isNullAware();
       nullAsValue_ = other.isNullAsValue();
       useHashTableCache_ = other.useHashTableCache();
+      cacheKey_ = other.cacheKey();
     }
 
     Builder& nullAware(bool value) {
@@ -3372,6 +3365,11 @@ class HashJoinNode : public AbstractJoinNode {
 
     Builder& useHashTableCache(bool value) {
       useHashTableCache_ = value;
+      return *this;
+    }
+
+    Builder& cacheKey(std::optional<std::string> value) {
+      cacheKey_ = std::move(value);
       return *this;
     }
 
@@ -3403,13 +3401,15 @@ class HashJoinNode : public AbstractJoinNode {
           right_.value(),
           outputType_.value(),
           useHashTableCache_.value_or(false),
-          nullAsValue_.value_or(false));
+          nullAsValue_.value_or(false),
+          cacheKey_);
     }
 
    private:
     std::optional<bool> nullAware_;
     std::optional<bool> nullAsValue_;
     std::optional<bool> useHashTableCache_;
+    std::optional<std::string> cacheKey_;
   };
 
   std::string_view name() const override {
@@ -3449,6 +3449,10 @@ class HashJoinNode : public AbstractJoinNode {
     return useHashTableCache_;
   }
 
+  const std::optional<std::string>& cacheKey() const {
+    return cacheKey_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -3459,6 +3463,7 @@ class HashJoinNode : public AbstractJoinNode {
   const bool nullAware_;
   const bool nullAsValue_;
   const bool useHashTableCache_;
+  const std::optional<std::string> cacheKey_;
 };
 
 using HashJoinNodePtr = std::shared_ptr<const HashJoinNode>;
@@ -4741,6 +4746,7 @@ class UnnestNode : public PlanNode {
       unnestVariables_ = other.unnestVariables();
       unnestNames_ = other.unnestNames_;
       ordinalityName_ = other.ordinalityName_;
+      markerName_ = other.markerName_;
       splitOutput_ = other.splitOutput_;
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
@@ -4978,18 +4984,17 @@ using EnforceSingleRowNodePtr = std::shared_ptr<const EnforceSingleRowNode>;
 /// with unique int64_t value per input row.
 ///
 /// 64-bit unique id is built in following way:
-///  - first 24 bits - task unique id
-///  - next 40 bits - operator counter value
+///  - high 24 bits - task unique id
+///  - low 40 bits - operator counter value
 ///
-/// The task unique id is added to ensure the generated id is unique
-/// across all the nodes executing the same query stage in a distributed
-/// query execution.
+/// The task unique id ensures the generated id is unique across all the tasks
+/// executing the same query stage in a distributed query. It is supplied by the
+/// executing Task via PlanFragment::taskUniqueId.
 class AssignUniqueIdNode : public PlanNode {
  public:
   AssignUniqueIdNode(
       const PlanNodeId& id,
       const std::string& idName,
-      const int32_t taskUniqueId,
       PlanNodePtr source);
 
   bool supportsBarrier() const override {
@@ -5003,7 +5008,6 @@ class AssignUniqueIdNode : public PlanNode {
     explicit Builder(const AssignUniqueIdNode& other) {
       id_ = other.id();
       idName_ = other.outputType()->names().back();
-      taskUniqueId_ = other.taskUniqueId();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -5018,11 +5022,6 @@ class AssignUniqueIdNode : public PlanNode {
       return *this;
     }
 
-    Builder& taskUniqueId(int32_t taskUniqueId) {
-      taskUniqueId_ = taskUniqueId;
-      return *this;
-    }
-
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -5033,18 +5032,15 @@ class AssignUniqueIdNode : public PlanNode {
       VELOX_USER_CHECK(
           idName_.has_value(), "AssignUniqueIdNode idName not set");
       VELOX_USER_CHECK(
-          taskUniqueId_.has_value(), "AssignUniqueIdNode taskUniqueId not set");
-      VELOX_USER_CHECK(
           source_.has_value(), "AssignUniqueIdNode source is not set");
 
       return std::make_shared<AssignUniqueIdNode>(
-          id_.value(), idName_.value(), taskUniqueId_.value(), source_.value());
+          id_.value(), idName_.value(), source_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<std::string> idName_;
-    std::optional<int32_t> taskUniqueId_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -5067,21 +5063,22 @@ class AssignUniqueIdNode : public PlanNode {
     return taskUniqueId_;
   }
 
-  const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
-    return uniqueIdCounter_;
-  }
-
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
 
  private:
+  // Builds the output row type: the source columns followed by the BIGINT id
+  // column named 'idName'.
+  static RowTypePtr makeOutputType(
+      const PlanNodePtr& source,
+      const std::string& idName);
+
   void addDetails(std::stringstream& stream) const override;
 
   const int32_t taskUniqueId_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
-  std::shared_ptr<std::atomic_int64_t> uniqueIdCounter_;
 };
 
 using AssignUniqueIdNodePtr = std::shared_ptr<const AssignUniqueIdNode>;

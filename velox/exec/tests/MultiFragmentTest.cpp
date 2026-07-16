@@ -20,8 +20,8 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
@@ -262,8 +262,8 @@ class MultiFragmentTest : public HiveConnectorTestBase,
   std::unordered_map<std::string, std::string> configSettings_;
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
-  std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstanceRef()};
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_{
+      DefaultOutputBufferManager::getInstanceRef()};
 };
 
 TEST_P(MultiFragmentTest, aggregationSingleKey) {
@@ -2648,8 +2648,8 @@ class DataFetcher {
   /// Used to notify DataFetcher that one of the above bool flags has been set.
   folly::EventCount bufferFullOrDoneWait_;
 
-  std::shared_ptr<OutputBufferManager> bufferManager_{
-      OutputBufferManager::getInstanceRef()};
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_{
+      DefaultOutputBufferManager::getInstanceRef()};
 };
 
 /// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB

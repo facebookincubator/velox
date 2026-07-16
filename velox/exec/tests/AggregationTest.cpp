@@ -360,7 +360,7 @@ class AggregationTest : public HiveConnectorTestBase {
   }
 
   // Makes batches which reference rows in 'rows' via dictionary. The
-  // dictionary indices are given by 'order', wich has values with
+  // dictionary indices are given by 'order', which has values with
   // indices plus random bits so as to create randomly scattered,
   // sometimes repeated values.
   void makeBatches(
@@ -1635,6 +1635,95 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
           makeFlatVector<int64_t>({0, 1}),
           makeAllNullArrayVector(2, VARCHAR()),
       }));
+}
+
+// Multi-driver empty input emits exactly one grand-total default row for the ()
+// set, not one per empty driver. The barrier fires on both the single-step and
+// the partial step.
+TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
+  auto data = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4})});
+
+  // One default row: a null for the () set, group_id 1, count 0.
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{1}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{0}),
+  });
+
+  // A local partition fans the empty GroupId output across drivers. When
+  // 'split' is true, a partial + final aggregation also exercises the partial
+  // step.
+  auto run = [&](bool split) {
+    core::PlanNodeId rawInputAggId;
+    PlanBuilder builder(std::make_shared<core::PlanNodeIdGenerator>());
+    builder.values({data})
+        .filter("a < 0")
+        .groupId({"a"}, {{"a"}, {}}, {})
+        .localPartition({"a", "group_id"});
+    if (split) {
+      builder.partialAggregation({"a", "group_id"}, {"count(1) as count_1"}, {})
+          .capturePlanNodeId(rawInputAggId)
+          .localPartition({})
+          .finalAggregation();
+    } else {
+      builder.singleAggregation({"a", "group_id"}, {"count(1) as count_1"})
+          .capturePlanNodeId(rawInputAggId);
+    }
+    auto task = AssertQueryBuilder(builder.planNode())
+                    .maxDrivers(4)
+                    .assertResults(expected);
+    // The raw-input aggregation must run on multiple drivers to exercise the
+    // peer barrier.
+    EXPECT_GT(toPlanStats(task->taskStats()).at(rawInputAggId).numDrivers, 1)
+        << (split ? "partial+final" : "single-step");
+  };
+  run(/*split=*/false);
+  run(/*split=*/true);
+}
+
+// Skewed non-empty input (all rows on one key) must not emit a spurious
+// count==0 default row from the starved drivers, for either the single-step or
+// the partial + final aggregation.
+TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
+  auto data = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1})});
+
+  // Two rows: per-key (1, 0, 4) and grand total (null, 1, 4). No count==0 row.
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, std::nullopt}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{0, 1}),
+      makeFlatVector<int64_t>(std::vector<int64_t>{4, 4}),
+  });
+
+  // A local partition fans the GroupId output across drivers. When 'split' is
+  // true, a partial + final aggregation also exercises the partial step.
+  auto run = [&](bool split) {
+    core::PlanNodeId rawInputAggId;
+    PlanBuilder builder(std::make_shared<core::PlanNodeIdGenerator>());
+    builder.values({data})
+        .filter("a >= 0")
+        .groupId({"a"}, {{"a"}, {}}, {})
+        .localPartition({"a", "group_id"});
+    if (split) {
+      builder.partialAggregation({"a", "group_id"}, {"count(1) as count_1"}, {})
+          .capturePlanNodeId(rawInputAggId)
+          .localPartition({})
+          .finalAggregation();
+    } else {
+      builder.singleAggregation({"a", "group_id"}, {"count(1) as count_1"})
+          .capturePlanNodeId(rawInputAggId);
+    }
+    auto task = AssertQueryBuilder(builder.planNode())
+                    .maxDrivers(4)
+                    .assertResults(expected);
+    // The raw-input aggregation must run on multiple drivers to exercise the
+    // peer barrier.
+    EXPECT_GT(toPlanStats(task->taskStats()).at(rawInputAggId).numDrivers, 1)
+        << (split ? "partial+final" : "single-step");
+  };
+  run(/*split=*/false);
+  run(/*split=*/true);
 }
 
 TEST_F(AggregationTest, disableNonBooleanMasks) {

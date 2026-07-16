@@ -131,4 +131,8 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
       static_cast<int32_t>(icebergInsertHandle->writeKind()));
 }
 
+void IcebergConnector::registerSerDe() {
+  IcebergFileNameGenerator::registerSerDe();
+}
+
 } // namespace facebook::velox::connector::hive::iceberg

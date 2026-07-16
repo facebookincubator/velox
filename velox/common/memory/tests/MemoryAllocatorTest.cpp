@@ -479,6 +479,34 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
   }
 }
 
+TEST_P(MemoryAllocatorTest, onMapWithArena) {
+  if (!useMmap_) {
+    return;
+  }
+  std::vector<size_t> mappedBytes;
+  MemoryAllocator::Options options;
+  options.capacity = kCapacityBytes;
+  options.useMmapArena = true;
+  options.mmapArenaCapacityRatio = 1;
+  options.onMap = [&](void* /*address*/, size_t bytes) {
+    mappedBytes.push_back(bytes);
+  };
+  auto allocator = std::make_shared<MmapAllocator>(options);
+
+  // Construction binds each size class and the initial arena region.
+  const size_t numBindingsAfterInit = mappedBytes.size();
+  EXPECT_GT(numBindingsAfterInit, 0);
+
+  // A large allocation is served from the already-bound arena, so it must not
+  // trigger another onMap call.
+  ContiguousAllocation large;
+  const auto kLargePages = allocator->largestSizeClass() * 2;
+  ASSERT_TRUE(allocator->allocateContiguous(kLargePages, nullptr, large));
+  EXPECT_EQ(mappedBytes.size(), numBindingsAfterInit);
+
+  allocator->freeContiguous(large);
+}
+
 TEST_P(MemoryAllocatorTest, allocationPool) {
   const size_t kNumLargeAllocPages = instance_->largestSizeClass() * 2;
   const size_t kLarge = kNumLargeAllocPages * AllocationTraits::kPageSize;
@@ -1875,6 +1903,34 @@ TEST_F(MmapArenaTest, managedMmapArenas) {
     managedArenas->allocate(kAllocSize * 2);
     EXPECT_EQ(managedArenas->arenas().size(), 2);
   }
+}
+
+TEST_F(MmapArenaTest, managedMmapArenasOnMap) {
+  std::vector<std::pair<void*, size_t>> mapped;
+  auto onMap = [&](void* address, size_t bytes) {
+    mapped.emplace_back(address, bytes);
+  };
+  auto managedArenas =
+      std::make_unique<ManagedMmapArenas>(kArenaCapacityBytes, onMap);
+
+  // The first arena is bound at construction.
+  ASSERT_THAT(mapped, testing::SizeIs(1));
+  EXPECT_EQ(
+      mapped[0].first, managedArenas->arenas().begin()->second->address());
+  EXPECT_EQ(mapped[0].second, kArenaCapacityBytes);
+
+  // Sub-allocations from an existing arena do not remap, so no further calls.
+  void* alloc1 = managedArenas->allocate(kArenaCapacityBytes);
+  EXPECT_THAT(mapped, testing::SizeIs(1));
+
+  // Exhausting the arena spins up a new one, which is bound in turn.
+  void* alloc2 = managedArenas->allocate(kArenaCapacityBytes);
+  ASSERT_EQ(managedArenas->arenas().size(), 2);
+  ASSERT_THAT(mapped, testing::SizeIs(2));
+  EXPECT_EQ(mapped[1].second, kArenaCapacityBytes);
+
+  managedArenas->free(alloc1, kArenaCapacityBytes);
+  managedArenas->free(alloc2, kArenaCapacityBytes);
 }
 
 TEST_F(MmapArenaTest, managedMmapArenasFree) {

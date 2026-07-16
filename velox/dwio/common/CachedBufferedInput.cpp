@@ -183,7 +183,7 @@ void CachedBufferedInput::preload() {
     if (preloadPin_.empty()) {
       uint64_t waitUs{0};
       {
-        MicrosecondTimer timer(&waitUs);
+        MicrosecondWallTimer timer(&waitUs);
         std::move(waitFuture).wait();
       }
       ioStatistics_->queryThreadIoLatencyUs().increment(waitUs);
@@ -207,7 +207,7 @@ void CachedBufferedInput::preload() {
   auto ranges = entry->dataRanges(fileSize_);
   uint64_t storageReadUs{0};
   {
-    MicrosecondTimer timer(&storageReadUs);
+    MicrosecondWallTimer timer(&storageReadUs);
     input_->read(ranges, 0, LogType::FILE);
   }
   ioStatistics_->read().increment(fileSize_);
@@ -743,7 +743,7 @@ std::optional<CachedRegion> CachedBufferedInput::findCachedRegion(
     // Entry is exclusive — wait for it to become shared, then retry.
     uint64_t waitUs{0};
     {
-      MicrosecondTimer timer(&waitUs);
+      MicrosecondWallTimer timer(&waitUs);
       std::move(waitFuture)
           .via(&folly::QueuedImmediateExecutor::instance())
           .wait();

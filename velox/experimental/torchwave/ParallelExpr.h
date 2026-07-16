@@ -41,6 +41,11 @@ class ParallelNodes {
       const NodeSet& topExprs,
       std::vector<NodeCP> orderedExprs = {});
 
+  /// After the graph is split into layers, fills each ProjectNode's lastUse
+  /// (alias-corrected) and reusableValues_ sets by scanning every layer's
+  /// boundary-value accesses and view/list aliases in execution order.
+  void computeLastUse(const nativert::Graph& graph);
+
   std::vector<std::unique_ptr<ProjectNode>> projectNodes_;
   int32_t nextId_{0};
 };
