@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
+#include <algorithm>
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -89,6 +90,16 @@ std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
 
+bool containsFieldId(const parquet::ParquetFieldId& field, int32_t fieldId) {
+  return field.fieldId == fieldId ||
+      std::any_of(
+             field.children.begin(),
+             field.children.end(),
+             [&](const auto& child) {
+               return containsFieldId(child, fieldId);
+             });
+}
+
 } // namespace
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
@@ -137,6 +148,7 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     WriteKind writeKind,
+    std::vector<int32_t> equalityFieldIds,
     std::unordered_map<std::string, ExistingDeletionVector>
         existingDeletionVectors,
     std::shared_ptr<const FileNameGenerator> fileNameGenerator)
@@ -154,16 +166,25 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
       writeKind_(writeKind),
+      equalityFieldIds_(std::move(equalityFieldIds)),
       existingDeletionVectors_(std::move(existingDeletionVectors)) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The
   // deletion-vector path passes a synthetic (file_path, pos) row that is
   // intentionally narrower, so skip the inputColumns check for that path.
-  if (writeKind_ == WriteKind::kData || writeKind_ == WriteKind::kMerge) {
+  if (writeKind_ == WriteKind::kData ||
+      writeKind_ == WriteKind::kEqualityDelete ||
+      writeKind_ == WriteKind::kMerge) {
     VELOX_USER_CHECK(
         !inputColumns_.empty(),
         "Input columns cannot be empty for Iceberg tables.");
+  }
+  if (writeKind_ == WriteKind::kEqualityDelete) {
+    VELOX_USER_CHECK(
+        !equalityFieldIds_.empty(),
+        "Equality field IDs cannot be empty for Iceberg equality-delete "
+        "writes.");
   }
   VELOX_USER_CHECK_NOT_NULL(
       locationHandle_, "Location handle is required for Iceberg tables.");
@@ -275,7 +296,8 @@ folly::dynamic buildIcebergCommitData(
     folly::dynamic metrics,
     int32_t partitionSpecId,
     std::string fileFormat,
-    bool isDeletionVector) {
+    IcebergInsertTableHandle::WriteKind writeKind,
+    const std::vector<int32_t>& equalityFieldIds) {
   folly::dynamic commitData = folly::dynamic::object;
   commitData["path"] = std::move(path);
   commitData["fileSizeInBytes"] = fileSizeInBytes;
@@ -284,7 +306,26 @@ folly::dynamic buildIcebergCommitData(
   // Sort order evolution is not supported. Default id 0 (unsorted order).
   commitData["sortOrderId"] = 0;
   commitData["fileFormat"] = std::move(fileFormat);
-  commitData["content"] = isDeletionVector ? "POSITION_DELETES" : "DATA";
+  switch (writeKind) {
+    case IcebergInsertTableHandle::WriteKind::kData:
+      commitData["content"] = "DATA";
+      break;
+    case IcebergInsertTableHandle::WriteKind::kEqualityDelete: {
+      commitData["content"] = "EQUALITY_DELETES";
+      folly::dynamic ids = folly::dynamic::array;
+      for (const auto fieldId : equalityFieldIds) {
+        ids.push_back(fieldId);
+      }
+      commitData["equalityFieldIds"] = std::move(ids);
+      break;
+    }
+    case IcebergInsertTableHandle::WriteKind::kDeletionVector:
+    case IcebergInsertTableHandle::WriteKind::kPositionDelete:
+      commitData["content"] = "POSITION_DELETES";
+      break;
+    case IcebergInsertTableHandle::WriteKind::kMerge:
+      VELOX_UNREACHABLE("IcebergMergeSink must commit its sub-sink files.");
+  }
   return commitData;
 }
 
@@ -403,8 +444,8 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
               ? icebergInsertTableHandle_->partitionSpec()->specId
               : 0,
           toManifestFormatString(icebergInsertTableHandle_->storageFormat()),
-          icebergInsertTableHandle_->writeKind() ==
-              IcebergInsertTableHandle::WriteKind::kDeletionVector);
+          icebergInsertTableHandle_->writeKind(),
+          icebergInsertTableHandle_->equalityFieldIds());
       if (!commitPartitionValue_.empty() &&
           !commitPartitionValue_[i].isNull()) {
         commitData["partitionDataJson"] = folly::toJson(
