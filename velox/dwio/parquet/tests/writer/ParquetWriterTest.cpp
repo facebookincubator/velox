@@ -834,6 +834,54 @@ TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
   testBatches(20, 2, 100);
 }
 
+TEST_F(ParquetWriterTest, flushRowGroupByMaxTargetFileSize) {
+  constexpr int64_t kNumRows = 64;
+  const std::string payload(512, 'x');
+
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableDictionary = false;
+
+  dwio::common::WriterOptions options;
+  options.memoryPool = rootPool_.get();
+  options.compressionKind = CompressionKind::CompressionKind_NONE;
+  options.maxTargetFileSizeBytes = 8 * 1024;
+  options.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/1'024 * 1'024,
+        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
+  };
+
+  const auto schema = ROW({"id", "payload"}, {BIGINT(), VARCHAR()});
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+  options.formatSpecificOptions =
+      std::make_shared<ParquetWriterOptions>(writerOptions);
+  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+      std::move(sink), options, schema);
+
+  const auto makeBatch = [&]() {
+    return makeRowVector(
+        {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+         makeFlatVector<StringView>(
+             kNumRows, [&](auto /*row*/) { return StringView(payload); })});
+  };
+
+  writer->write(makeBatch());
+
+  // The writer should flush the current row group early so file-size-based
+  // rotation can observe written bytes even though the row-group target is
+  // much larger than maxTargetFileSizeBytes.
+  EXPECT_GT(sinkPtr->size(), 0);
+
+  writer->write(makeBatch());
+  writer->close();
+
+  const auto reader = createReaderInMemory(*sinkPtr);
+  EXPECT_EQ(2 * kNumRows, reader->numberOfRows());
+  EXPECT_GE(reader->fileMetaData().numRowGroups(), 2);
+}
+
 TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
   ParquetWriterOptions writerOptions;
   dwio::common::WriterOptions options;
