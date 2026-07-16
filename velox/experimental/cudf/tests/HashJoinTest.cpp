@@ -903,9 +903,14 @@ TEST_P(
       .run();
 }
 
+// Regression test for #18124: an empty right-semi probe must be materialized
+// with the probe schema, not the build/output schema. The probe key sits at
+// ordinal 2, past the build side's column count (2). If doNoMoreInput builds a
+// build-shaped empty table, selecting the key column throws an out-of-range
+// error; a probe-shaped empty table has the column and the join returns empty.
 TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyProbe) {
-  auto probeType = ROW(
-      {{"t0", INTEGER()}, {"t1", BIGINT()}, {"t2", DOUBLE()}});
+  auto probeType =
+      ROW({{"t0", BIGINT()}, {"t1", DOUBLE()}, {"t2", INTEGER()}});
   auto buildVectors = makeBatches(2, [&](int32_t batch) {
     return makeRowVector(
         {"u0", "u1"},
@@ -920,12 +925,12 @@ TEST_P(MultiThreadedHashJoinTest, rightSemiJoinFilterWithEmptyProbe) {
       .numDrivers(numDrivers_)
       .probeType(probeType)
       .probeVectors(0, 3)
-      .probeKeys({"t0"})
+      .probeKeys({"t2"})
       .buildKeys({"u0"})
       .buildVectors(std::move(buildVectors))
       .joinType(core::JoinType::kRightSemiFilter)
       .joinOutputLayout({"u1"})
-      .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t.t0 FROM t)")
+      .referenceQuery("SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t.t2 FROM t)")
       .run();
 }
 
