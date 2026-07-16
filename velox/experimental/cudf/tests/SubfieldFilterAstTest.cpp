@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
@@ -152,6 +153,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
             veloxExpected = filter.testBytes(sv.data(), sv.size());
             break;
           }
+          case TypeKind::TIMESTAMP: {
+            auto value = fieldVec->asFlatVector<Timestamp>()->valueAt(i);
+            veloxExpected = filter.testTimestamp(value);
+            break;
+          }
           default:
             veloxExpected = true;
         }
@@ -182,6 +188,52 @@ TEST_F(SubfieldFilterAstTest, Int32RangeInclusive) {
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
   testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, timestampRangeUsesReaderTimestampUnit) {
+  const std::string columnName{"timestamp"};
+  const auto cutoff = Timestamp{1'735'689'600, 0};
+  const auto rowType = ROW({{columnName, TIMESTAMP()}});
+  const auto vector = makeRowVector(
+      {columnName},
+      {makeFlatVector<Timestamp>(
+          {
+              Timestamp{1'735'689'599, 999'000'000},
+              cutoff,
+              Timestamp{1'735'776'000, 0},
+          },
+          TIMESTAMP())});
+  const common::TimestampRange filter{
+      cutoff, Timestamp::max(), /*nullAllowed=*/false};
+  const common::Subfield subfield{columnName};
+
+  const std::vector<cudf::type_id> timestampUnits{
+      cudf::type_id::TIMESTAMP_MILLISECONDS,
+      cudf::type_id::TIMESTAMP_MICROSECONDS,
+      cudf::type_id::TIMESTAMP_NANOSECONDS,
+  };
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  for (const auto timestampUnit : timestampUnits) {
+    SCOPED_TRACE(static_cast<int>(timestampUnit));
+    config.timestampUnit = timestampUnit;
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const auto& expression =
+        facebook::velox::cudf_velox::createAstFromSubfieldFilter(
+            subfield,
+            filter,
+            tree,
+            scalars,
+            rowType,
+            cudf::data_type{timestampUnit});
+
+    testFilterExecution(rowType, columnName, filter, vector, expression);
+  }
 }
 
 TEST_F(SubfieldFilterAstTest, DoubleRange) {

@@ -40,6 +40,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
@@ -510,6 +511,52 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT count(*) FROM tmp");
 #endif
+}
+
+TEST_F(TableScanTest, timestampWithTimeZoneFilterPushdown) {
+  const auto cutoff = Timestamp{1'764'547'200, 0};
+  const auto tableType =
+      ROW({"id", "usage_start_time"}, {BIGINT(), TIMESTAMP_WITH_TIME_ZONE()});
+  const auto vector = makeRowVector(
+      {"id", "usage_start_time"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<Timestamp>(
+              {
+                  Timestamp{1'764'547'199, 999'000'000},
+                  cutoff,
+                  Timestamp{1'764'633'600, 0},
+              },
+              TIMESTAMP()),
+      });
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vector);
+
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield{"usage_start_time"},
+      std::make_unique<common::BigintRange>(
+          pack(cutoff, /*timeZoneKey=*/0),
+          std::numeric_limits<int64_t>::max(),
+          /*nullAllowed=*/false));
+  auto tableHandle =
+      makeTableHandle("parquet_table", tableType, std::move(filters), nullptr);
+
+  facebook::velox::connector::ColumnHandleMap assignments;
+  assignments["id"] = HiveConnectorTestBase::regularColumn("id", BIGINT());
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({"id"}, {BIGINT()}))
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT id FROM tmp WHERE usage_start_time >= "
+      "TIMESTAMP '2025-12-01 00:00:00'");
 }
 
 // Disable this test and the one below for now, pending a CUDF fix.

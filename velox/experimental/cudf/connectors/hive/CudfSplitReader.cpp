@@ -333,7 +333,8 @@ void CudfSplitReader::setupReaderOptions() {
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
-          .timestamp_type(cudfHiveConfig_->timestampType())
+          .timestamp_type(cudfHiveConfig_->timestampTypeSession(
+              connectorQueryCtx_->sessionProperties()))
           .build();
 
   // Set skip_bytes and num_bytes if available

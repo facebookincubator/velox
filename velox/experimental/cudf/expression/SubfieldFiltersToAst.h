@@ -23,6 +23,7 @@
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace cudf {
@@ -39,7 +40,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    std::optional<cudf::data_type> timestampType = std::nullopt);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
@@ -48,6 +50,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    std::optional<cudf::data_type> timestampType = std::nullopt);
 
 } // namespace facebook::velox::cudf_velox
