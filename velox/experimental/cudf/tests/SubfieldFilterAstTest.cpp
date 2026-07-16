@@ -1419,9 +1419,19 @@ TEST_F(SubfieldFilterAstTest, TimestampRangeWithNulls) {
 
 // --- kNegatedBigintRange tests ---
 
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeBigint) {
+// The rejected-range behavior is identical across integer column types, so it
+// is parametrized over the C++ column type. The reject range [10, 20] and the
+// sample values all fit int8_t, so every instantiation shares the same data.
+template <typename T>
+class NegatedBigintRangeTypedTest : public SubfieldFilterAstTest {};
+
+using NegatedBigintRangeTypes =
+    ::testing::Types<int8_t, int16_t, int32_t, int64_t>;
+TYPED_TEST_SUITE(NegatedBigintRangeTypedTest, NegatedBigintRangeTypes);
+
+TYPED_TEST(NegatedBigintRangeTypedTest, rejectsRange) {
   const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, BIGINT()}});
+  auto rowType = ROW({{columnName, CppToType<TypeParam>::create()}});
 
   // Reject values in [10, 20].
   auto filter = std::make_unique<common::NegatedBigintRange>(
@@ -1436,33 +1446,11 @@ TEST_F(SubfieldFilterAstTest, NegatedBigintRangeBigint) {
 
   EXPECT_GT(tree.size(), 0UL);
 
-  auto values = makeFlatVector<int64_t>({-1, 0, 9, 10, 15, 20, 21, 100});
-  auto vec = makeRowVector({columnName}, {values});
+  auto values =
+      this->template makeFlatVector<TypeParam>({-1, 0, 9, 10, 15, 20, 21, 100});
+  auto vec = this->makeRowVector({columnName}, {values});
 
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-}
-
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeInteger) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, INTEGER()}});
-
-  // Reject values in [100, 200].
-  auto filter = std::make_unique<common::NegatedBigintRange>(
-      100, 200, /*nullAllowed*/ false);
-
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-  const auto& expr =
-      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-
-  EXPECT_GT(tree.size(), 0UL);
-
-  auto values = makeFlatVector<int32_t>({-50, 0, 99, 100, 150, 200, 201, 1000});
-  auto vec = makeRowVector({columnName}, {values});
-
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
+  this->testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
 TEST_F(SubfieldFilterAstTest, NegatedBigintRangeSingleValue) {
@@ -1512,52 +1500,6 @@ TEST_F(SubfieldFilterAstTest, NegatedBigintRangeAtBounds) {
        1,
        100,
        std::numeric_limits<int32_t>::max()});
-  auto vec = makeRowVector({columnName}, {values});
-
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-}
-
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeSmallint) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, SMALLINT()}});
-
-  // Reject values in [100, 200].
-  auto filter = std::make_unique<common::NegatedBigintRange>(
-      100, 200, /*nullAllowed*/ false);
-
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-  const auto& expr =
-      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-
-  EXPECT_GT(tree.size(), 0UL);
-
-  auto values = makeFlatVector<int16_t>({-50, 0, 99, 100, 150, 200, 201, 1000});
-  auto vec = makeRowVector({columnName}, {values});
-
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-}
-
-TEST_F(SubfieldFilterAstTest, NegatedBigintRangeTinyint) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, TINYINT()}});
-
-  // Reject values in [10, 20].
-  auto filter = std::make_unique<common::NegatedBigintRange>(
-      10, 20, /*nullAllowed*/ false);
-
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-  const auto& expr =
-      createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
-
-  EXPECT_GT(tree.size(), 0UL);
-
-  auto values = makeFlatVector<int8_t>({-1, 0, 9, 10, 15, 20, 21, 100});
   auto vec = makeRowVector({columnName}, {values});
 
   testFilterExecution(rowType, columnName, *filter, vec, expr);
