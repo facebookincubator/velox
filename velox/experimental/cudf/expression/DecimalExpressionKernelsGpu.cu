@@ -37,7 +37,6 @@
 #include <cub/device/device_for.cuh>
 #include <cuda/iterator>
 #include <cuda_runtime.h>
-#include <thrust/iterator/counting_iterator.h>
 
 #include <concepts>
 #include <cstdint>
@@ -62,8 +61,12 @@ constexpr __int128_t kLongDecimalPowerOfTen38 = 1'000'000'000'000'000'000LL *
 constexpr __int128_t kLongDecimalMax = kLongDecimalPowerOfTen38 - 1;
 constexpr __int128_t kLongDecimalMin = -kLongDecimalPowerOfTen38 + 1;
 
-// Device threads cannot throw; record overflow for launchDecimalDivide to
-// report to the host caller, matching Velox CPU decimal divide errors.
+// Device threads cannot throw, so overflow is recorded in a single per-launch
+// device flag that launchOverflowChecked reports back to the host. Presto /
+// Velox CPU decimal arithmetic is fail-fast (any overflow fails the whole
+// expression), so every overflowing row simply ORs into one shared flag and no
+// per-row (O(n)) overflow column is required. Shared by the divide and
+// ADD/SUB/MUL/MOD kernels.
 __device__ inline void markDecimalOverflow(int32_t* overflowFlag) {
   atomicOr(overflowFlag, 1);
 }
@@ -108,7 +111,7 @@ __device__ inline bool fitsRepresentableInt128(
 // matches Velox CPU DecimalUtil::divideWithRoundUp (increment unsigned
 // quotient, then apply sign), not Java/Hive HALF_UP toward +infinity on ties.
 // Overflow on rescale multiply, round-up, or out-of-range results sets
-// overflowFlag (see launchDecimalDivide); intermediate math uses unsigned
+// overflowFlag (see launchOverflowChecked); intermediate math uses unsigned
 // magnitudes so multiply, divide, mod, and abs never hit signed overflow UB.
 template <typename OutT>
 __device__ OutT decimalDivideImpl(
@@ -217,21 +220,24 @@ struct DivideRhsScalarFunctor {
   }
 };
 
-// Returns false if any row set overflowFlag during the kernel.
+// Runs buildOp(flag) across [0, size) rows behind a single per-launch overflow
+// flag and reports whether any row overflowed. Shared by the divide and
+// ADD/SUB/MUL/MOD kernels; buildOp receives the device flag pointer and returns
+// the per-row functor. Returns true if any row set the overflow flag.
 template <typename BuildOp>
-bool launchDecimalDivide(
+bool launchOverflowChecked(
     cudf::size_type size,
     BuildOp buildOp,
     rmm::cuda_stream_view stream) {
   if (size == 0) {
-    return true;
+    return false;
   }
   rmm::device_scalar<int32_t> overflowFlag{0, stream};
   auto op = buildOp(overflowFlag.data());
   cub::DeviceFor::ForEachN(
       cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.value());
   CUDF_CUDA_TRY(cudaGetLastError());
-  return overflowFlag.value(stream) == 0;
+  return overflowFlag.value(stream) != 0;
 }
 
 } // namespace
@@ -257,7 +263,7 @@ struct divideColumnColumnKernel {
     auto lhsDev = cudf::column_device_view::create(lhs, stream);
     auto rhsDev = cudf::column_device_view::create(rhs, stream);
     auto outDev = cudf::mutable_column_device_view::create(out, stream);
-    return launchDecimalDivide(
+    return !launchOverflowChecked(
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideFunctor<InT, OutT>{
@@ -286,7 +292,7 @@ struct divideColumnScalarKernel {
   bool operator()() const {
     auto lhsDev = cudf::column_device_view::create(lhs, stream);
     auto outDev = cudf::mutable_column_device_view::create(out, stream);
-    return launchDecimalDivide(
+    return !launchOverflowChecked(
         lhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideRhsScalarFunctor<InT, OutT>{
@@ -315,7 +321,7 @@ struct divideScalarColumnKernel {
   bool operator()() const {
     auto rhsDev = cudf::column_device_view::create(rhs, stream);
     auto outDev = cudf::mutable_column_device_view::create(out, stream);
-    return launchDecimalDivide(
+    return !launchOverflowChecked(
         rhs.size(),
         [&](int32_t* overflowFlag) {
           return DivideLhsScalarFunctor<InT, OutT>{
@@ -374,6 +380,19 @@ bool decimalDivideScalarColumn(
       divideScalarColumnKernel{lhsValue, rhs, out, rescaleFactor, stream});
 }
 
+__int128_t getDecimalScalarValue(
+    const cudf::scalar& s,
+    rmm::cuda_stream_view stream) {
+  if (s.type().id() == cudf::type_id::DECIMAL64) {
+    auto const& dec =
+        static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(s);
+    return static_cast<__int128_t>(static_cast<int64_t>(dec.value(stream)));
+  }
+  auto const& dec =
+      static_cast<cudf::fixed_point_scalar<numeric::decimal128> const&>(s);
+  return static_cast<__int128_t>(dec.value(stream));
+}
+
 } // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -386,14 +405,6 @@ bool decimalDivideScalarColumn(
 namespace {
 
 using errc = cudf::errc;
-
-// Sets the single per-launch overflow flag. Because Presto / Velox CPU
-// semantics are fail-fast (any overflow fails the whole expression), every
-// thread that detects an overflow simply ORs into one shared device flag.
-// No per-row (O(n)) overflow column is required.
-__device__ inline void flagOverflow(int32_t* overflowFlag) {
-  atomicOr(overflowFlag, 1);
-}
 
 __device__ inline bool
 isRowActive(cudf::bitmask_type const* nullMask, bool hasNullMask, int32_t idx) {
@@ -461,14 +472,14 @@ __device__ void evalDecimalBinaryRow(
     int32_t* overflowFlag) {
   auto opResult = applyCheckedBinOp<Rep>(op, lhsDec, rhsDec);
   if (!opResult.has_value()) {
-    flagOverflow(overflowFlag);
+    markDecimalOverflow(overflowFlag);
     out[idx] = OutRep{0};
     return;
   }
 
   auto rescaled = checkedRescale<Rep>(opResult.value(), outScale);
   if (!rescaled.has_value()) {
-    flagOverflow(overflowFlag);
+    markDecimalOverflow(overflowFlag);
     out[idx] = OutRep{0};
     return;
   }
@@ -476,7 +487,7 @@ __device__ void evalDecimalBinaryRow(
   auto precisionChecked =
       cudf::detail::ops::check_precision(rescaled.value(), outPrecision);
   if (!precisionChecked.has_value()) {
-    flagOverflow(overflowFlag);
+    markDecimalOverflow(overflowFlag);
     out[idx] = OutRep{0};
     return;
   }
@@ -577,108 +588,96 @@ struct DecimalBinaryRhsScalarFunctor {
 };
 
 template <typename InRep, typename OutRep>
-void launchDecimalBinaryColColKernel(
+bool launchDecimalBinaryColColKernel(
     cudf::column_view const& lhs,
     cudf::column_view const& rhs,
     cudf::mutable_column_view out,
-    int32_t* overflowFlag,
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
-  if (lhs.size() == 0) {
-    return;
-  }
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
   auto const* nullMask = out.null_mask();
-  DecimalBinaryColColFunctor<InRep, OutRep> functor{
-      lhs.data<InRep>(),
-      rhs.data<InRep>(),
-      out.data<OutRep>(),
-      overflowFlag,
-      lhsScale,
-      rhsScale,
-      outScale,
-      outPrecision,
-      op,
-      nullMask,
-      nullMask != nullptr};
-  cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+  return launchOverflowChecked(
       lhs.size(),
-      functor,
-      stream.value());
+      [&](int32_t* overflowFlag) {
+        return DecimalBinaryColColFunctor<InRep, OutRep>{
+            lhs.data<InRep>(),
+            rhs.data<InRep>(),
+            out.data<OutRep>(),
+            overflowFlag,
+            lhsScale,
+            rhsScale,
+            outScale,
+            outPrecision,
+            op,
+            nullMask,
+            nullMask != nullptr};
+      },
+      stream);
 }
 
 template <typename InRep, typename OutRep>
-void launchDecimalBinaryRhsScalarKernel(
+bool launchDecimalBinaryRhsScalarKernel(
     cudf::column_view const& lhs,
     InRep rhsValue,
     numeric::scale_type rhsScale,
     cudf::mutable_column_view out,
-    int32_t* overflowFlag,
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
-  if (lhs.size() == 0) {
-    return;
-  }
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
   auto const* nullMask = out.null_mask();
-  DecimalBinaryRhsScalarFunctor<InRep, OutRep> functor{
-      lhs.data<InRep>(),
-      rhsValue,
-      out.data<OutRep>(),
-      overflowFlag,
-      lhsScale,
-      rhsScale,
-      outScale,
-      outPrecision,
-      op,
-      nullMask,
-      nullMask != nullptr};
-  cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+  return launchOverflowChecked(
       lhs.size(),
-      functor,
-      stream.value());
+      [&](int32_t* overflowFlag) {
+        return DecimalBinaryRhsScalarFunctor<InRep, OutRep>{
+            lhs.data<InRep>(),
+            rhsValue,
+            out.data<OutRep>(),
+            overflowFlag,
+            lhsScale,
+            rhsScale,
+            outScale,
+            outPrecision,
+            op,
+            nullMask,
+            nullMask != nullptr};
+      },
+      stream);
 }
 
 template <typename InRep, typename OutRep>
-void launchDecimalBinaryLhsScalarKernel(
+bool launchDecimalBinaryLhsScalarKernel(
     InRep lhsValue,
     numeric::scale_type lhsScale,
     cudf::column_view const& rhs,
     cudf::mutable_column_view out,
-    int32_t* overflowFlag,
     cudf::binary_operator op,
     int32_t outPrecision,
     rmm::cuda_stream_view stream) {
-  if (rhs.size() == 0) {
-    return;
-  }
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   auto const outScale = numeric::scale_type{out.type().scale()};
   auto const* nullMask = out.null_mask();
-  DecimalBinaryLhsScalarFunctor<InRep, OutRep> functor{
-      lhsValue,
-      rhs.data<InRep>(),
-      out.data<OutRep>(),
-      overflowFlag,
-      lhsScale,
-      rhsScale,
-      outScale,
-      outPrecision,
-      op,
-      nullMask,
-      nullMask != nullptr};
-  cub::DeviceFor::ForEachN(
-      thrust::counting_iterator<int32_t>(0),
+  return launchOverflowChecked(
       rhs.size(),
-      functor,
-      stream.value());
+      [&](int32_t* overflowFlag) {
+        return DecimalBinaryLhsScalarFunctor<InRep, OutRep>{
+            lhsValue,
+            rhs.data<InRep>(),
+            out.data<OutRep>(),
+            overflowFlag,
+            lhsScale,
+            rhsScale,
+            outScale,
+            outPrecision,
+            op,
+            nullMask,
+            nullMask != nullptr};
+      },
+      stream);
 }
 
 void validateDecimalBinaryOp(cudf::binary_operator op) {
@@ -714,16 +713,8 @@ std::pair<std::unique_ptr<cudf::column>, bool> decimalBinaryOperationColColImpl(
   auto result = makeResultColumn(
       lhs.size(), outputType, std::move(nullMask), nullCount, stream, mr);
 
-  rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
-  launchDecimalBinaryColColKernel<InRep, OutRep>(
-      lhs,
-      rhs,
-      result->mutable_view(),
-      overflowFlag.data(),
-      op,
-      outputPrecision,
-      stream);
-  bool const didOverflow = overflowFlag.value(stream) != 0;
+  bool const didOverflow = launchDecimalBinaryColColKernel<InRep, OutRep>(
+      lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
   return {std::move(result), didOverflow};
 }
 
@@ -750,27 +741,14 @@ dispatchDecimalBinaryOperationColCol(
       lhs, rhs, op, outputType, outputPrecision, stream, mr);
 }
 
-__int128_t getDecimalScalarValue(
-    const cudf::scalar& s,
-    rmm::cuda_stream_view stream) {
-  if (s.type().id() == cudf::type_id::DECIMAL64) {
-    auto const& dec =
-        static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(s);
-    return static_cast<__int128_t>(static_cast<int64_t>(dec.value(stream)));
-  }
-  auto const& dec =
-      static_cast<cudf::fixed_point_scalar<numeric::decimal128> const&>(s);
-  return static_cast<__int128_t>(dec.value(stream));
-}
-
 template <typename InRep>
 InRep getTypedDecimalScalarValue(
     const cudf::scalar& s,
     rmm::cuda_stream_view stream) {
   if constexpr (std::is_same_v<InRep, int64_t>) {
-    return static_cast<int64_t>(getDecimalScalarValue(s, stream));
+    return static_cast<int64_t>(detail::getDecimalScalarValue(s, stream));
   }
-  return static_cast<InRep>(getDecimalScalarValue(s, stream));
+  return static_cast<InRep>(detail::getDecimalScalarValue(s, stream));
 }
 
 } // namespace
@@ -807,45 +785,23 @@ decimalBinaryOperationWithOverflow(
       lhs.null_count(),
       stream,
       mr);
-  rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
 
+  bool didOverflow = false;
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   if (lhs.type().id() == cudf::type_id::DECIMAL64) {
     auto const rhsValue = getTypedDecimalScalarValue<int64_t>(rhs, stream);
     if (outputType.id() == cudf::type_id::DECIMAL64) {
-      launchDecimalBinaryRhsScalarKernel<int64_t, int64_t>(
-          lhs,
-          rhsValue,
-          rhsScale,
-          result->mutable_view(),
-          overflowFlag.data(),
-          op,
-          outputPrecision,
-          stream);
+      didOverflow = launchDecimalBinaryRhsScalarKernel<int64_t, int64_t>(
+          lhs, rhsValue, rhsScale, result->mutable_view(), op, outputPrecision, stream);
     } else {
-      launchDecimalBinaryRhsScalarKernel<int64_t, __int128_t>(
-          lhs,
-          rhsValue,
-          rhsScale,
-          result->mutable_view(),
-          overflowFlag.data(),
-          op,
-          outputPrecision,
-          stream);
+      didOverflow = launchDecimalBinaryRhsScalarKernel<int64_t, __int128_t>(
+          lhs, rhsValue, rhsScale, result->mutable_view(), op, outputPrecision, stream);
     }
   } else {
     auto const rhsValue = getTypedDecimalScalarValue<__int128_t>(rhs, stream);
-    launchDecimalBinaryRhsScalarKernel<__int128_t, __int128_t>(
-        lhs,
-        rhsValue,
-        rhsScale,
-        result->mutable_view(),
-        overflowFlag.data(),
-        op,
-        outputPrecision,
-        stream);
+    didOverflow = launchDecimalBinaryRhsScalarKernel<__int128_t, __int128_t>(
+        lhs, rhsValue, rhsScale, result->mutable_view(), op, outputPrecision, stream);
   }
-  bool const didOverflow = overflowFlag.value(stream) != 0;
   return {std::move(result), didOverflow};
 }
 
@@ -867,45 +823,23 @@ decimalBinaryOperationWithOverflow(
       rhs.null_count(),
       stream,
       mr);
-  rmm::device_scalar<int32_t> overflowFlag(0, stream, mr);
 
+  bool didOverflow = false;
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   if (rhs.type().id() == cudf::type_id::DECIMAL64) {
     auto const lhsValue = getTypedDecimalScalarValue<int64_t>(lhs, stream);
     if (outputType.id() == cudf::type_id::DECIMAL64) {
-      launchDecimalBinaryLhsScalarKernel<int64_t, int64_t>(
-          lhsValue,
-          lhsScale,
-          rhs,
-          result->mutable_view(),
-          overflowFlag.data(),
-          op,
-          outputPrecision,
-          stream);
+      didOverflow = launchDecimalBinaryLhsScalarKernel<int64_t, int64_t>(
+          lhsValue, lhsScale, rhs, result->mutable_view(), op, outputPrecision, stream);
     } else {
-      launchDecimalBinaryLhsScalarKernel<int64_t, __int128_t>(
-          lhsValue,
-          lhsScale,
-          rhs,
-          result->mutable_view(),
-          overflowFlag.data(),
-          op,
-          outputPrecision,
-          stream);
+      didOverflow = launchDecimalBinaryLhsScalarKernel<int64_t, __int128_t>(
+          lhsValue, lhsScale, rhs, result->mutable_view(), op, outputPrecision, stream);
     }
   } else {
     auto const lhsValue = getTypedDecimalScalarValue<__int128_t>(lhs, stream);
-    launchDecimalBinaryLhsScalarKernel<__int128_t, __int128_t>(
-        lhsValue,
-        lhsScale,
-        rhs,
-        result->mutable_view(),
-        overflowFlag.data(),
-        op,
-        outputPrecision,
-        stream);
+    didOverflow = launchDecimalBinaryLhsScalarKernel<__int128_t, __int128_t>(
+        lhsValue, lhsScale, rhs, result->mutable_view(), op, outputPrecision, stream);
   }
-  bool const didOverflow = overflowFlag.value(stream) != 0;
   return {std::move(result), didOverflow};
 }
 

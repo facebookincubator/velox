@@ -66,6 +66,20 @@ decimalBinaryOperationWithOverflow(
 namespace detail {
 
 /**
+ * @brief Decodes a cuDF decimal scalar into a raw __int128_t payload.
+ *
+ * Shared by the divide (host) and binary-op (device-launch) paths so the
+ * DECIMAL64/DECIMAL128 scalar unpacking lives in exactly one place.
+ *
+ * @param s DECIMAL64 or DECIMAL128 fixed-point scalar.
+ * @param stream CUDA stream used to read the device-resident scalar value.
+ * @return The scalar's underlying integer representation as __int128_t.
+ */
+__int128_t getDecimalScalarValue(
+    const cudf::scalar& s,
+    rmm::cuda_stream_view stream);
+
+/**
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
  *
  * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
