@@ -196,7 +196,7 @@ TEST(DecodingStatsSetTest, ToRuntimeMetricsWithDecodeTime) {
 
 TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   RuntimeStatistics stats;
-  stats.columnReaderStats = ColumnReaderStatistics{kExampleFormat};
+  SplitStats splitStats{kExampleFormat};
 
   // Empty stats produces empty result.
   EXPECT_TRUE(stats.toRuntimeMetricMap().empty());
@@ -207,14 +207,16 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   stats.skippedStrides = 10;
   stats.processedStrides = 30;
   stats.numStripes = 4;
-  stats.columnReaderStats.accumulateFormatStat(kExampleFormatMetric, 1'000);
+  splitStats.columnReaderStats.accumulateFormatSpecificStat(
+      kExampleFormatMetric, 1'000);
 
   // Add per-column stats with type.
-  stats.columnReaderStats.decodingStatsSet.emplace();
-  auto* colStats = stats.columnReaderStats.decodingStatsSet->getOrCreate(
+  splitStats.columnReaderStats.decodingStatsSet.emplace();
+  auto* colStats = splitStats.columnReaderStats.decodingStatsSet->getOrCreate(
       1, TypeKind::BIGINT);
   colStats->decompressCPUTimeNanos.increment(5'000);
   colStats->decodeCPUTimeNanos.increment(12'000);
+  stats.mergeFrom(splitStats);
 
   auto result = stats.toRuntimeMetricMap();
 
@@ -223,10 +225,13 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   EXPECT_EQ(result["skippedStrides"].sum, 10);
   EXPECT_EQ(result["processedStrides"].sum, 30);
   EXPECT_EQ(result["numStripes"].sum, 4);
-  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
-  EXPECT_EQ(result["column_1.BIGINT.decompressCPUTimeNanos"].count, 1);
-  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].sum, 12'000);
-  EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 1);
+  const auto prefix =
+      fmt::format("{}.", FileFormatName::toName(kExampleFormat));
+  EXPECT_EQ(
+      result[prefix + "column_1.BIGINT.decompressCPUTimeNanos"].sum, 5'000);
+  EXPECT_EQ(result[prefix + "column_1.BIGINT.decompressCPUTimeNanos"].count, 1);
+  EXPECT_EQ(result[prefix + "column_1.BIGINT.decodeCPUTimeNanos"].sum, 12'000);
+  EXPECT_EQ(result[prefix + "column_1.BIGINT.decodeCPUTimeNanos"].count, 1);
   EXPECT_EQ(result[std::string(kExampleQualifiedFormatMetricName)].sum, 1'000);
 }
 
@@ -323,22 +328,22 @@ TEST(DecodingStatsSetTest, MergeFromEmpty) {
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromWithDecodingStats) {
-  ColumnReaderStatistics src{kExampleFormat};
-  src.accumulateFormatStat(kExampleFormatMetric, 100);
+  ColumnReaderStatistics src;
+  src.accumulateFormatSpecificStat(kExampleFormatMetric, 100);
   src.decodingStatsSet.emplace();
   src.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(1'000);
 
   // Merge into stats without decodingStatsSet - creates and populates it.
-  ColumnReaderStatistics dst{kExampleFormat};
-  dst.accumulateFormatStat(kExampleFormatMetric, 50);
+  ColumnReaderStatistics dst;
+  dst.accumulateFormatSpecificStat(kExampleFormatMetric, 50);
   dst.mergeFrom(src);
 
   ASSERT_NE(
-      dst.formatStats.find(std::string(kExampleQualifiedFormatMetricName)),
-      dst.formatStats.end());
+      dst.formatSpecificStats.find(std::string(kExampleFormatMetricName)),
+      dst.formatSpecificStats.end());
   EXPECT_EQ(
-      dst.formatStats.at(std::string(kExampleQualifiedFormatMetricName)).sum,
+      dst.formatSpecificStats.at(std::string(kExampleFormatMetricName)).sum,
       150);
   ASSERT_TRUE(dst.decodingStatsSet.has_value());
 
@@ -348,14 +353,14 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithDecodingStats) {
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromBothWithDecodingStats) {
-  ColumnReaderStatistics src{kExampleFormat};
-  src.accumulateFormatStat(kExampleFormatMetric, 100);
+  ColumnReaderStatistics src;
+  src.accumulateFormatSpecificStat(kExampleFormatMetric, 100);
   src.decodingStatsSet.emplace();
   src.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(1'000);
 
-  ColumnReaderStatistics dst{kExampleFormat};
-  dst.accumulateFormatStat(kExampleFormatMetric, 50);
+  ColumnReaderStatistics dst;
+  dst.accumulateFormatSpecificStat(kExampleFormatMetric, 50);
   dst.decodingStatsSet.emplace();
   dst.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(2'000);
@@ -363,10 +368,10 @@ TEST(ColumnReaderStatisticsTest, MergeFromBothWithDecodingStats) {
   dst.mergeFrom(src);
 
   ASSERT_NE(
-      dst.formatStats.find(std::string(kExampleQualifiedFormatMetricName)),
-      dst.formatStats.end());
+      dst.formatSpecificStats.find(std::string(kExampleFormatMetricName)),
+      dst.formatSpecificStats.end());
   EXPECT_EQ(
-      dst.formatStats.at(std::string(kExampleQualifiedFormatMetricName)).sum,
+      dst.formatSpecificStats.at(std::string(kExampleFormatMetricName)).sum,
       150);
   ASSERT_TRUE(dst.decodingStatsSet.has_value());
 
@@ -392,11 +397,11 @@ TEST(WithDecompressStatsTest, NullCounter) {
 }
 
 TEST(ColumnReaderStatisticsTest, MergeFromWithoutDecodingStats) {
-  ColumnReaderStatistics src{kExampleFormat};
-  src.accumulateFormatStat(kExampleFormatMetric, 100);
+  ColumnReaderStatistics src;
+  src.accumulateFormatSpecificStat(kExampleFormatMetric, 100);
 
-  ColumnReaderStatistics dst{kExampleFormat};
-  dst.accumulateFormatStat(kExampleFormatMetric, 50);
+  ColumnReaderStatistics dst;
+  dst.accumulateFormatSpecificStat(kExampleFormatMetric, 50);
   dst.decodingStatsSet.emplace();
   dst.decodingStatsSet->getOrCreate(1, TypeKind::BIGINT)
       ->decompressCPUTimeNanos.increment(1'000);
@@ -404,10 +409,10 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithoutDecodingStats) {
   dst.mergeFrom(src);
 
   ASSERT_NE(
-      dst.formatStats.find(std::string(kExampleQualifiedFormatMetricName)),
-      dst.formatStats.end());
+      dst.formatSpecificStats.find(std::string(kExampleFormatMetricName)),
+      dst.formatSpecificStats.end());
   EXPECT_EQ(
-      dst.formatStats.at(std::string(kExampleQualifiedFormatMetricName)).sum,
+      dst.formatSpecificStats.at(std::string(kExampleFormatMetricName)).sum,
       150);
   ASSERT_TRUE(dst.decodingStatsSet.has_value());
 

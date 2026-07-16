@@ -2061,15 +2061,12 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
 
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
-  EXPECT_GT(stats.parquetFooterEstimatedBytes, 0);
 
   auto metrics = stats.toRuntimeMetricMap();
-  ASSERT_TRUE(metrics.count("parquetFooterEstimatedBytes"));
+  ASSERT_TRUE(metrics.count("parquet.footerEstimatedBytes"));
+  EXPECT_GT(metrics["parquet.footerEstimatedBytes"].sum, 0);
   EXPECT_EQ(
-      metrics["parquetFooterEstimatedBytes"].sum,
-      stats.parquetFooterEstimatedBytes);
-  EXPECT_EQ(
-      metrics["parquetFooterEstimatedBytes"].unit,
+      metrics["parquet.footerEstimatedBytes"].unit,
       RuntimeCounter::Unit::kBytes);
 }
 
@@ -2084,10 +2081,9 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
 
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
-  EXPECT_EQ(stats.parquetFooterEstimatedBytes, 0);
 
   auto metrics = stats.toRuntimeMetricMap();
-  EXPECT_EQ(metrics.count("parquetFooterEstimatedBytes"), 0);
+  EXPECT_EQ(metrics.count("parquet.footerEstimatedBytes"), 0);
 }
 
 // Verifies that without setting the threshold the tracking path is

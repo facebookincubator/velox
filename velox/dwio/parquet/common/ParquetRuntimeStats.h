@@ -30,6 +30,15 @@ struct ParquetRuntimeStats {
   /// Describes the page-load-time runtime metric.
   inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
       kPageLoadTimeNsMetric = {kPageLoadTimeNs, RuntimeCounter::Unit::kNanos};
+
+  /// Estimated memory used by the deserialized Parquet footer in bytes.
+  inline static constexpr std::string_view kFooterEstimatedBytes =
+      "footerEstimatedBytes";
+
+  inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
+      kFooterEstimatedBytesMetric = {
+          kFooterEstimatedBytes,
+          RuntimeCounter::Unit::kBytes};
 };
 
 } // namespace facebook::velox::parquet

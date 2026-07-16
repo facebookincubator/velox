@@ -62,10 +62,6 @@ class PageReader {
         nullConcatenation_(pool_),
         stats_(stats),
         sessionTimezone_(sessionTimezone) {
-    VELOX_CHECK_EQ(
-        stats_.format(),
-        std::optional{dwio::common::FileFormat::PARQUET},
-        "PageReader requires ColumnReaderStatistics bound to PARQUET");
     type_->makeLevelInfo(leafInfo_);
   }
 
@@ -88,12 +84,7 @@ class PageReader {
         chunkSize_(chunkSize),
         nullConcatenation_(pool_),
         stats_(stats),
-        sessionTimezone_(sessionTimezone) {
-    VELOX_CHECK_EQ(
-        stats_.format(),
-        std::optional{dwio::common::FileFormat::PARQUET},
-        "PageReader requires ColumnReaderStatistics bound to PARQUET");
-  }
+        sessionTimezone_(sessionTimezone) {}
 
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);

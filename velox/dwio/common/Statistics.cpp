@@ -221,21 +221,10 @@ void DecodingStatsSet::toRuntimeMetrics(
   }
 }
 
-std::string ColumnReaderStatistics::formatStatName(
-    std::string_view name) const {
-  if (!format_.has_value()) {
-    return std::string{name};
-  }
-  return fmt::format("{}.{}", FileFormatName::toName(*format_), name);
-}
-
-void ColumnReaderStatistics::accumulateFormatStat(
+void ColumnReaderStatistics::accumulateFormatSpecificStat(
     const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
     int64_t value) {
-  VELOX_CHECK(
-      format_.has_value(),
-      "ColumnReaderStatistics format must be set before accumulating format stats");
-  auto [it, inserted] = formatStats.try_emplace(formatStatName(stat.first));
+  auto [it, inserted] = formatSpecificStats.try_emplace(stat.first);
   if (inserted) {
     it->second.unit = stat.second;
   } else {
@@ -255,8 +244,8 @@ void ColumnReaderStatistics::initColumnStatsCollection(
 }
 
 void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
-  for (const auto& [name, metric] : other.formatStats) {
-    auto [it, inserted] = formatStats.emplace(name, metric);
+  for (const auto& [name, metric] : other.formatSpecificStats) {
+    auto [it, inserted] = formatSpecificStats.emplace(name, metric);
     if (!inserted) {
       it->second.merge(metric);
     }
@@ -271,10 +260,34 @@ void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
 
 void ColumnReaderStatistics::toRuntimeMetrics(
     std::unordered_map<std::string, RuntimeMetric>& result) const {
-  result.insert(formatStats.begin(), formatStats.end());
+  result.insert(formatSpecificStats.begin(), formatSpecificStats.end());
   if (decodingStatsSet) {
     decodingStatsSet->toRuntimeMetrics(result);
   }
+}
+
+void SplitStats::accumulateFormatSpecificStat(
+    const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+    int64_t value) {
+  auto [it, inserted] = formatSpecificStats.try_emplace(stat.first);
+  if (inserted) {
+    it->second.unit = stat.second;
+  } else {
+    VELOX_CHECK_EQ(it->second.unit, stat.second);
+  }
+  it->second.addValue(value);
+}
+
+void RuntimeStatistics::mergeFrom(const SplitStats& split) {
+  auto& target = formatSpecificStats[split.format];
+  for (const auto& [name, metric] : split.formatSpecificStats) {
+    auto [it, inserted] = target.emplace(name, metric);
+    if (!inserted) {
+      VELOX_CHECK_EQ(it->second.unit, metric.unit);
+      it->second.merge(metric);
+    }
+  }
+  columnReaderStats[split.format].mergeFrom(split.columnReaderStats);
 }
 
 void ColumnReaderStatistics::registerDecodingStatsImpl(const TypeWithId& node) {
@@ -325,13 +338,20 @@ RuntimeStatistics::toRuntimeMetricMap() const {
   if (numStripes > 0) {
     result.emplace("numStripes", RuntimeMetric(numStripes));
   }
-  if (parquetFooterEstimatedBytes > 0) {
-    result.emplace(
-        "parquetFooterEstimatedBytes",
-        RuntimeMetric(
-            parquetFooterEstimatedBytes, RuntimeCounter::Unit::kBytes));
+  for (const auto& [format, metrics] : formatSpecificStats) {
+    for (const auto& [name, metric] : metrics) {
+      result.emplace(
+          fmt::format("{}.{}", FileFormatName::toName(format), name), metric);
+    }
   }
-  columnReaderStats.toRuntimeMetrics(result);
+  for (const auto& [format, stats] : columnReaderStats) {
+    std::unordered_map<std::string, RuntimeMetric> metrics;
+    stats.toRuntimeMetrics(metrics);
+    for (const auto& [name, metric] : metrics) {
+      result.emplace(
+          fmt::format("{}.{}", FileFormatName::toName(format), name), metric);
+    }
+  }
   return result;
 }
 } // namespace facebook::velox::dwio::common

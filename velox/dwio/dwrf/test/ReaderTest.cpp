@@ -2867,8 +2867,8 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   dwio::common::RuntimeStatistics stats;
   rowReader->updateRuntimeStats(stats);
   ASSERT_EQ(
-      stats.columnReaderStats.formatStats.contains(
-          "dwrf.flattenStringDictionaryValues"),
+      stats.columnReaderStats.at(FileFormat::DWRF)
+          .formatSpecificStats.contains("flattenStringDictionaryValues"),
       0);
   spec->childByName("c0")->setFilter(
       std::make_unique<common::BytesValues>(
@@ -2880,11 +2880,12 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
   stats = dwio::common::RuntimeStatistics();
   rowReader->updateRuntimeStats(stats);
-  ASSERT_TRUE(stats.columnReaderStats.formatStats.contains(
-      "dwrf.flattenStringDictionaryValues"));
+  ASSERT_TRUE(
+      stats.columnReaderStats.at(FileFormat::DWRF)
+          .formatSpecificStats.contains("flattenStringDictionaryValues"));
   ASSERT_EQ(
-      stats.columnReaderStats.formatStats
-          .at("dwrf.flattenStringDictionaryValues")
+      stats.columnReaderStats.at(FileFormat::DWRF)
+          .formatSpecificStats.at("flattenStringDictionaryValues")
           .sum,
       1);
 }

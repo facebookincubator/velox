@@ -1059,7 +1059,7 @@ Parquet Options (prefix ``hive.parquet.``)
        silently over-consuming. The reservation shrinks as row groups are
        skipped by filterRowGroups and is released in full when the reader
        is destroyed. When tracking engages, the estimate is also surfaced
-       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       per scan via the runtime stat ``parquet.footerEstimatedBytes`` so
        operators can compare it against actual pool usage. Session: ``parquet_footer_memory_tracking_threshold``.
    * - ``writer.max-target-file-size``
      - capacity

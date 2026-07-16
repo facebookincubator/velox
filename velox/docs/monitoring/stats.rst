@@ -550,3 +550,7 @@ format-specific stats are prefixed with the file format name
    * - parquet.pageLoadTimeNs
      - nanos
      - The total time spent loading Parquet pages.
+   * - parquet.footerEstimatedBytes
+     - bytes
+     - The estimated memory used by the deserialized Parquet footer when
+       footer memory tracking is enabled.

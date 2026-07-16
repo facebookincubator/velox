@@ -512,19 +512,7 @@ struct DecodingStatsSet {
 
 /// Collects runtime metrics produced while reading columns.
 struct ColumnReaderStatistics {
-  explicit ColumnReaderStatistics(
-      std::optional<FileFormat> format = std::nullopt)
-      : format_(format) {}
-
-  /// Returns the bound file format if set.
-  std::optional<FileFormat> format() const {
-    return format_;
-  }
-
-  /// Stores whole-reader named counters keyed by metric name.
-  ///
-  /// Use this for format-specific metrics accumulated ad hoc while reading.
-  folly::F14FastMap<std::string, RuntimeMetric> formatStats;
+  folly::F14FastMap<std::string, RuntimeMetric> formatSpecificStats;
 
   /// Stores per-column decode and decompress timing keyed by column node id.
   ///
@@ -537,8 +525,7 @@ struct ColumnReaderStatistics {
       const TypeWithId& schema,
       const RowReaderOptions& options);
 
-  /// Accumulates a named format-specific runtime metric.
-  void accumulateFormatStat(
+  void accumulateFormatSpecificStat(
       const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
       int64_t value);
 
@@ -550,11 +537,21 @@ struct ColumnReaderStatistics {
       std::unordered_map<std::string, RuntimeMetric>& result) const;
 
  private:
-  std::string formatStatName(std::string_view name) const;
-
-  std::optional<FileFormat> format_;
-
   void registerDecodingStatsImpl(const TypeWithId& node);
+};
+
+struct SplitStats {
+  explicit SplitStats(FileFormat format) : format{format} {
+    VELOX_CHECK_NE(format, FileFormat::UNKNOWN);
+  }
+
+  const FileFormat format;
+  folly::F14FastMap<std::string, RuntimeMetric> formatSpecificStats;
+  ColumnReaderStatistics columnReaderStats;
+
+  void accumulateFormatSpecificStat(
+      const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+      int64_t value);
 };
 
 /// Aggregates runtime statistics collected while processing a split.
@@ -586,17 +583,13 @@ struct RuntimeStatistics {
   // Counts stripes observed in the file.
   int64_t numStripes{0};
 
-  // Estimated bytes reported to the memory pool for the deserialized
-  // Parquet file footer, when the parquet reader's footer-memory
-  // tracking path is engaged. Lets operators compare the estimate
-  // against actual pool usage. 0 when the reader did not engage
-  // tracking (e.g. footer below threshold or non-parquet format).
-  int64_t parquetFooterEstimatedBytes{0};
-
   // Stores unit-loader runtime metrics.
   UnitLoaderStats unitLoaderStats;
-  // Stores reader-side column runtime metrics.
-  ColumnReaderStatistics columnReaderStats;
+  folly::F14FastMap<FileFormat, folly::F14FastMap<std::string, RuntimeMetric>>
+      formatSpecificStats;
+  folly::F14FastMap<FileFormat, ColumnReaderStatistics> columnReaderStats;
+
+  void mergeFrom(const SplitStats& split);
 
   // Exports collected counters as runtime metrics.
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;

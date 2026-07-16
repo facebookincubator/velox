@@ -20,6 +20,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/StatisticsBuilder.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
@@ -1408,7 +1409,7 @@ class ParquetRowReader::Impl {
         currentRowGroupPtr_{nullptr},
         rowsInCurrentRowGroup_{0},
         currentRowInGroup_{0},
-        columnReaderStats_{dwio::common::FileFormat::PARQUET} {
+        splitStats_{dwio::common::FileFormat::PARQUET} {
     // Validate the requested type is compatible with what's in the file
     std::function<std::string()> createExceptionContext = [&]() {
       std::string exceptionMessageContext = fmt::format(
@@ -1426,9 +1427,14 @@ class ParquetRowReader::Impl {
       return; // TODO
     }
     parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
+    if (readerBase_->initialThriftSize() > 0) {
+      splitStats_.accumulateFormatSpecificStat(
+          ParquetRuntimeStats::kFooterEstimatedBytesMetric,
+          readerBase_->initialThriftSize());
+    }
     ParquetParams params(
         pool_,
-        columnReaderStats_,
+        splitStats_.columnReaderStats,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
         options_.timestampPrecision());
@@ -1601,8 +1607,7 @@ class ParquetRowReader::Impl {
   void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
-    stats.parquetFooterEstimatedBytes += readerBase_->initialThriftSize();
-    stats.columnReaderStats.mergeFrom(columnReaderStats_);
+    stats.mergeFrom(splitStats_);
   }
 
   void resetFilterCaches() {
@@ -1653,7 +1658,7 @@ class ParquetRowReader::Impl {
   TypePtr requestedType_;
   ParquetStatsContext parquetStatsContext_;
 
-  dwio::common::ColumnReaderStatistics columnReaderStats_;
+  dwio::common::SplitStats splitStats_;
 
   mutable std::optional<size_t> estimatedRowSize_;
   mutable int32_t lastRowGroupWithRowEstimate_{-1};
