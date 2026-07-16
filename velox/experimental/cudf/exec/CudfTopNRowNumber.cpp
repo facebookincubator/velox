@@ -23,6 +23,8 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
+#include <cudf/merge.hpp>
 #include <cudf/rolling.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -47,6 +49,44 @@ cudf::table_view makePartitionKeys(
   return cudf::table_view{{singlePartitionCol->view()}};
 }
 
+// Computes row_number() over `view` grouped by the columns at
+// `partitionKeyIndices` (or a single implicit partition if empty), assuming
+// `view` is already sorted by partition+ordering keys. The value column fed
+// to grouped_rolling_window is arbitrary (row_number ignores it); column(0)
+// is used for convenience.
+std::unique_ptr<cudf::column> computeRowNumbers(
+    cudf::table_view view,
+    const std::vector<cudf::size_type>& partitionKeyIndices,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  std::unique_ptr<cudf::column> singlePartitionCol;
+  auto partKeys = makePartitionKeys(
+      view, partitionKeyIndices, stream, mr, singlePartitionCol);
+  auto firstCol = view.column(0);
+  auto rowNumberAgg =
+      cudf::make_row_number_aggregation<cudf::rolling_aggregation>();
+  auto unbounded = cudf::window_bounds::unbounded();
+  auto currentRow = cudf::window_bounds::get(0);
+  return cudf::grouped_rolling_window(
+      partKeys, firstCol, unbounded, currentRow, 1, *rowNumberAgg, stream, mr);
+}
+
+// Filters `rowNums` to <= limit and returns the resulting boolean mask.
+std::unique_ptr<cudf::column> makeLimitMask(
+    const cudf::column& rowNums,
+    int32_t limit,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto limitScalar = cudf::numeric_scalar<int64_t>(limit, true, stream, mr);
+  return cudf::binary_operation(
+      rowNums.view(),
+      limitScalar,
+      cudf::binary_operator::LESS_EQUAL,
+      cudf::data_type(cudf::type_id::BOOL8),
+      stream,
+      mr);
+}
+
 } // namespace
 
 CudfTopNRowNumber::CudfTopNRowNumber(
@@ -65,16 +105,17 @@ CudfTopNRowNumber::CudfTopNRowNumber(
           node),
       node_(node),
       limit_(node->limit()),
-      generateRowNumber_(node->generateRowNumber()) {
+      generateRowNumber_(node->generateRowNumber()),
+      inputType_(node->sources()[0]->outputType()),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   VELOX_CHECK_EQ(
       node->rankFunction(),
       core::TopNRowNumberNode::RankFunction::kRowNumber,
       "CudfTopNRowNumber only supports row_number");
 
-  const auto inputType = node->sources()[0]->outputType();
   partitionKeyIndices_.reserve(node->partitionKeys().size());
   for (const auto& key : node->partitionKeys()) {
-    partitionKeyIndices_.push_back(exec::exprToChannel(key.get(), inputType));
+    partitionKeyIndices_.push_back(exec::exprToChannel(key.get(), inputType_));
   }
 
   sortKeyIndices_.reserve(node->sortingKeys().size());
@@ -82,7 +123,7 @@ CudfTopNRowNumber::CudfTopNRowNumber(
   nullOrders_.reserve(node->sortingKeys().size());
   for (size_t i = 0; i < node->sortingKeys().size(); ++i) {
     sortKeyIndices_.push_back(
-        exec::exprToChannel(node->sortingKeys()[i].get(), inputType));
+        exec::exprToChannel(node->sortingKeys()[i].get(), inputType_));
     const auto& order = node->sortingOrders()[i];
     sortOrders_.push_back(
         order.isAscending() ? cudf::order::ASCENDING : cudf::order::DESCENDING);
@@ -91,20 +132,122 @@ CudfTopNRowNumber::CudfTopNRowNumber(
             ? cudf::null_order::BEFORE
             : cudf::null_order::AFTER);
   }
+
+  allSortKeys_.reserve(partitionKeyIndices_.size() + sortKeyIndices_.size());
+  allOrders_.reserve(partitionKeyIndices_.size() + sortKeyIndices_.size());
+  allNullOrders_.reserve(partitionKeyIndices_.size() + sortKeyIndices_.size());
+  localPartitionKeyIndices_.reserve(partitionKeyIndices_.size());
+
+  for (size_t i = 0; i < partitionKeyIndices_.size(); ++i) {
+    allSortKeys_.push_back(partitionKeyIndices_[i]);
+    allOrders_.push_back(cudf::order::ASCENDING);
+    allNullOrders_.push_back(cudf::null_order::BEFORE);
+    localPartitionKeyIndices_.push_back(static_cast<cudf::size_type>(i));
+  }
+  for (size_t i = 0; i < sortKeyIndices_.size(); ++i) {
+    allSortKeys_.push_back(sortKeyIndices_[i]);
+    allOrders_.push_back(sortOrders_[i]);
+    allNullOrders_.push_back(nullOrders_[i]);
+  }
+}
+
+CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
+    const CudfVectorPtr& cudfInput,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto inputView = cudfInput->getTableView();
+  auto keyTable = inputView.select(allSortKeys_);
+  auto indices = cudf::stable_sorted_order(
+      keyTable, allOrders_, allNullOrders_, stream, mr);
+  auto sortedKeyTable = cudf::gather(
+      keyTable,
+      indices->view(),
+      cudf::out_of_bounds_policy::DONT_CHECK,
+      cudf::negative_index_policy::NOT_ALLOWED,
+      stream,
+      mr);
+  auto rowNums = computeRowNumbers(
+      sortedKeyTable->view(), localPartitionKeyIndices_, stream, mr);
+  auto mask = makeLimitMask(*rowNums, limit_, stream, mr);
+
+  // Filter the sort permutation to the surviving rows before gathering the
+  // full payload, so batches with many rows per partition don't pay for
+  // materializing rows that will be pruned immediately after.
+  auto filteredIndicesTable = cudf::apply_boolean_mask(
+      cudf::table_view{{indices->view()}}, mask->view(), stream, mr);
+  auto filteredIndices = filteredIndicesTable->view().column(0);
+
+  auto localCandidatesTable = cudf::gather(
+      inputView,
+      filteredIndices,
+      cudf::out_of_bounds_policy::DONT_CHECK,
+      cudf::negative_index_policy::NOT_ALLOWED,
+      stream,
+      mr);
+  auto const size = localCandidatesTable->num_rows();
+  return std::make_shared<CudfVector>(
+      cudfInput->pool(),
+      inputType_,
+      size,
+      std::move(localCandidatesTable),
+      stream);
+}
+
+CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
+    const CudfVectorPtr& previous,
+    const CudfVectorPtr& incoming,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  std::vector<rmm::cuda_stream_view> inputStreams{
+      previous->stream(), incoming->stream()};
+  cudf::detail::join_streams(inputStreams, stream);
+
+  std::vector<cudf::table_view> tableViews{
+      previous->getTableView(), incoming->getTableView()};
+  auto merged = cudf::merge(
+      tableViews, allSortKeys_, allOrders_, allNullOrders_, stream, mr);
+
+  // Ensure input-stream deallocations don't race with the merge kernel.
+  streamsWaitForStream(*cudaEvent_, inputStreams, stream);
+
+  auto rowNums =
+      computeRowNumbers(merged->view(), partitionKeyIndices_, stream, mr);
+  auto mask = makeLimitMask(*rowNums, limit_, stream, mr);
+  auto pruned =
+      cudf::apply_boolean_mask(merged->view(), mask->view(), stream, mr);
+
+  auto const size = pruned->num_rows();
+  return std::make_shared<CudfVector>(
+      previous->pool(), inputType_, size, std::move(pruned), stream);
 }
 
 void CudfTopNRowNumber::doAddInput(RowVectorPtr input) {
-  if (input->size() == 0) {
+  if (limit_ == 0 || input->size() == 0) {
     return;
   }
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfInput, "CudfTopNRowNumber expects CudfVector");
-  inputBatches_.push_back(std::move(cudfInput));
+
+  auto mr = get_output_mr();
+  auto localCandidates =
+      reduceBatchToLocalCandidates(cudfInput, cudfInput->stream(), mr);
+
+  if (candidates_ == nullptr) {
+    candidates_ = std::move(localCandidates);
+    return;
+  }
+
+  // Merge on a fresh stream (rather than either input's stream) so the
+  // merge/prune work can be scheduled independently of both producers; see
+  // CudfTopN::mergeTopK for the same pattern.
+  auto mergeStream = cudfGlobalStreamPool().get_stream();
+  candidates_ =
+      mergeAndPruneCandidates(candidates_, localCandidates, mergeStream, mr);
 }
 
 void CudfTopNRowNumber::doNoMoreInput() {
   Operator::noMoreInput();
-  if (inputBatches_.empty()) {
+  if (candidates_ == nullptr) {
     finished_ = true;
   }
 }
@@ -117,110 +260,34 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
   if (finished_ || !noMoreInput_) {
     return nullptr;
   }
-  if (inputBatches_.empty()) {
-    finished_ = true;
+  finished_ = true;
+  if (candidates_ == nullptr) {
     return nullptr;
   }
 
-  auto stream = cudfGlobalStreamPool().get_stream();
+  if (!generateRowNumber_) {
+    return std::move(candidates_);
+  }
+
+  auto stream = candidates_->stream();
   auto mr = get_output_mr();
-  auto pool = inputBatches_[0]->pool();
-  const auto inputType = node_->sources()[0]->outputType();
-
-  auto allData = getConcatenatedTable(
-      std::exchange(inputBatches_, {}), inputType, stream, mr);
-  auto allView = allData->view();
-
-  std::vector<cudf::size_type> allSortKeys;
-  std::vector<cudf::order> allOrders;
-  std::vector<cudf::null_order> allNullOrders;
-  allSortKeys.reserve(partitionKeyIndices_.size() + sortKeyIndices_.size());
-  allOrders.reserve(partitionKeyIndices_.size() + sortKeyIndices_.size());
-  allNullOrders.reserve(partitionKeyIndices_.size() + sortKeyIndices_.size());
-
-  for (auto idx : partitionKeyIndices_) {
-    allSortKeys.push_back(idx);
-    allOrders.push_back(cudf::order::ASCENDING);
-    allNullOrders.push_back(cudf::null_order::BEFORE);
-  }
-  for (size_t i = 0; i < sortKeyIndices_.size(); ++i) {
-    allSortKeys.push_back(sortKeyIndices_[i]);
-    allOrders.push_back(sortOrders_[i]);
-    allNullOrders.push_back(nullOrders_[i]);
+  auto rowNums = computeRowNumbers(
+      candidates_->getTableView(), partitionKeyIndices_, stream, mr);
+  // cuDF row_number is int32; Velox expects bigint.
+  const auto rowNumberCudfType = cudf_velox::veloxToCudfDataType(
+      outputType_->childAt(outputType_->size() - 1));
+  if (rowNums->type() != rowNumberCudfType) {
+    rowNums = cudf::cast(*rowNums, rowNumberCudfType, stream, mr);
   }
 
-  auto keyTable = allView.select(allSortKeys);
-  auto indices =
-      cudf::stable_sorted_order(keyTable, allOrders, allNullOrders, stream, mr);
-  auto sortedData = cudf::gather(
-      allView,
-      indices->view(),
-      cudf::out_of_bounds_policy::DONT_CHECK,
-      cudf::negative_index_policy::NOT_ALLOWED,
-      stream,
-      mr);
-  auto sortedView = sortedData->view();
+  auto pool = candidates_->pool();
+  auto const size = candidates_->size();
+  auto cols = candidates_->release()->release();
+  cols.push_back(std::move(rowNums));
+  auto finalTable = std::make_unique<cudf::table>(std::move(cols));
 
-  std::unique_ptr<cudf::column> singlePartitionCol;
-  auto partKeys = makePartitionKeys(
-      sortedView, partitionKeyIndices_, stream, mr, singlePartitionCol);
-  auto firstCol = sortedView.column(0);
-  auto rowNumberAgg =
-      cudf::make_row_number_aggregation<cudf::rolling_aggregation>();
-  auto unbounded = cudf::window_bounds::unbounded();
-  auto currentRow = cudf::window_bounds::get(0);
-  auto rowNums = cudf::grouped_rolling_window(
-      partKeys, firstCol, unbounded, currentRow, 1, *rowNumberAgg, stream, mr);
-
-  auto limitScalar = cudf::numeric_scalar<int64_t>(limit_, true, stream, mr);
-  auto mask = cudf::binary_operation(
-      rowNums->view(),
-      limitScalar,
-      cudf::binary_operator::LESS_EQUAL,
-      cudf::data_type(cudf::type_id::BOOL8),
-      stream,
-      mr);
-  auto filteredTable =
-      cudf::apply_boolean_mask(sortedView, mask->view(), stream, mr);
-
-  if (generateRowNumber_) {
-    auto filteredView = filteredTable->view();
-    std::unique_ptr<cudf::column> filteredSinglePartitionCol;
-    auto filtPartKeys = makePartitionKeys(
-        filteredView,
-        partitionKeyIndices_,
-        stream,
-        mr,
-        filteredSinglePartitionCol);
-    auto filtFirstCol = filteredView.column(0);
-    auto filtRowNums = cudf::grouped_rolling_window(
-        filtPartKeys,
-        filtFirstCol,
-        unbounded,
-        currentRow,
-        1,
-        *rowNumberAgg,
-        stream,
-        mr);
-    // cuDF row_number is int32; Velox expects bigint.
-    const auto rowNumberCudfType = cudf_velox::veloxToCudfDataType(
-        outputType_->childAt(outputType_->size() - 1));
-    if (filtRowNums->type() != rowNumberCudfType) {
-      filtRowNums = cudf::cast(*filtRowNums, rowNumberCudfType, stream, mr);
-    }
-
-    auto cols = filteredTable->release();
-    cols.push_back(std::move(filtRowNums));
-    filteredTable = std::make_unique<cudf::table>(std::move(cols));
-  }
-
-  finished_ = true;
   return std::make_shared<CudfVector>(
-      pool,
-      outputType_,
-      filteredTable->num_rows(),
-      std::move(filteredTable),
-      stream);
+      pool, outputType_, size, std::move(finalTable), stream);
 }
 
 } // namespace facebook::velox::cudf_velox

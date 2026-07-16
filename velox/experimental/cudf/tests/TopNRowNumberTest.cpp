@@ -196,6 +196,75 @@ TEST_F(TopNRowNumberTest, multiBatch) {
       "WHERE row_number <= 3");
 }
 
+TEST_F(TopNRowNumberTest, multiBatchWithRowNumber) {
+  // Same shape as multiBatch, but with generateRowNumber=true so the
+  // row_number column must be recomputed correctly across the incremental
+  // merge/prune steps in CudfTopNRowNumber::mergeAndPruneCandidates, not just
+  // the filtered row set.
+  const vector_size_t batchSize = 1000;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < 3; ++batch) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            batchSize,
+            [&](vector_size_t row) { return (batch * batchSize + row) % 5; }),
+        makeFlatVector<int64_t>(
+            batchSize,
+            [&](vector_size_t row) { return batch * batchSize + row; }),
+        makeFlatVector<int64_t>(
+            batchSize, [&](vector_size_t row) { return row; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .topNRowNumber({"c0"}, {"c1"}, 3, true)
+                  .planNode();
+  assertGpuTopNRowNumber(
+      plan,
+      "SELECT * FROM (SELECT *, row_number() over (partition by c0 order by c1) as row_number FROM tmp) "
+      "WHERE row_number <= 3");
+}
+
+TEST_F(TopNRowNumberTest, manySmallBatchesStaggeredPartitions) {
+  // Exercises the per-batch merge/prune path many times (one merge per
+  // batch) with partitions that only start appearing partway through the
+  // stream, and with candidate state from earlier batches getting displaced
+  // by later, better-ranked rows within the same partition.
+  const vector_size_t batchSize = 20;
+  const int32_t numBatches = 15;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < numBatches; ++batch) {
+    // Partition 'batch % 4' only starts contributing rows once 'batch' is at
+    // least that value, e.g. partition 3 first appears in batch 3.
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            batchSize, [&](vector_size_t row) { return (batch + row) % 4; }),
+        // Descending c1 so later batches (smaller multiplier applied via
+        // batch-dependent offset) sometimes outrank earlier candidates,
+        // forcing candidates_ to be displaced during merges.
+        makeFlatVector<int64_t>(
+            batchSize,
+            [&](vector_size_t row) {
+              return (numBatches - batch) * 1000 + row;
+            }),
+        makeFlatVector<int64_t>(
+            batchSize, [&](vector_size_t row) { return row; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .topNRowNumber({"c0"}, {"c1"}, 4, true)
+                  .planNode();
+  assertGpuTopNRowNumber(
+      plan,
+      "SELECT * FROM (SELECT *, row_number() over (partition by c0 order by c1) as row_number FROM tmp) "
+      "WHERE row_number <= 4");
+}
+
 TEST_F(TopNRowNumberTest, rankFallsBackToCpu) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 1, 2, 2}),
