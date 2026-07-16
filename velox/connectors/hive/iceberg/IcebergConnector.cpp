@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergDeletionVectorSink.h"
 #include "velox/connectors/hive/iceberg/IcebergMergeSink.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -132,7 +133,9 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
 }
 
 void IcebergConnector::registerSerDe() {
+  IcebergColumnHandle::registerSerDe();
   IcebergFileNameGenerator::registerSerDe();
+  IcebergTableHandle::registerSerDe();
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

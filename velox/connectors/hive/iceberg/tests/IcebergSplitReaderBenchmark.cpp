@@ -18,6 +18,7 @@
 #include <filesystem>
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -280,8 +281,8 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
 
   core::TypedExprPtr remainingFilterExpr;
 
-  std::shared_ptr<HiveTableHandle> hiveTableHandle =
-      std::make_shared<HiveTableHandle>(
+  std::shared_ptr<IcebergTableHandle> icebergTableHandle =
+      std::make_shared<IcebergTableHandle>(
           "kHiveConnectorId",
           "tableName",
           std::move(filters),
@@ -337,7 +338,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
     std::unique_ptr<IcebergSplitReader> icebergSplitReader =
         std::make_unique<IcebergSplitReader>(
             icebergSplit,
-            hiveTableHandle,
+            icebergTableHandle,
             nullptr,
             connectorQueryCtx_.get(),
             hiveConfig,

@@ -19,6 +19,7 @@ set(
   IcebergColumnHandle.cpp
   IcebergConfig.cpp
   IcebergConnector.cpp
+  IcebergTableHandle.cpp
   IcebergDataFileStatistics.cpp
   IcebergDataSink.cpp
   IcebergDataSource.cpp
@@ -52,6 +53,7 @@ velox_add_library(
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h
+  IcebergTableHandle.h
   IcebergDataFileStatistics.h
   IcebergDataSink.h
   IcebergDataSource.h

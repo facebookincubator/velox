@@ -624,7 +624,7 @@ IcebergSplitReader::resolveEqualityColumns(
   VELOX_CHECK(
       dataColumns != nullptr,
       "Iceberg equality delete file '{}' cannot be processed because "
-      "table data columns are not available in HiveTableHandle.",
+      "table data columns are not available in IcebergTableHandle.",
       deleteFile.filePath);
   for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
     // Field IDs are 1-based sequential for non-evolved schemas.
