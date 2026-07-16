@@ -1760,8 +1760,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuild) {
   // [100..102], and a null key — testing matched, unmatched, and null-key paths
   // across multiple build batches.
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
       {"c0", "c1", "row_number"},
@@ -1808,8 +1814,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuild) {
 // accumulates correctly via BITWISE_OR across batches.
 TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildMatchesAcrossBatches) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   // Probe keys [0..9]. Even keys match batch 0, odd keys match batch 1.
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
@@ -1855,8 +1867,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildMatchesAcrossBatches) {
 // all matched pairs appear and no spurious unmatched-with-NULL row is emitted.
 TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildDuplicateMatches) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   // Probe has a single key=1.
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
@@ -1895,8 +1913,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildDuplicateMatches) {
 // Left join with an AST-compatible filter and multiple build batches.
 TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithFilter) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   // Probe keys [0..9] with c1 values.
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
@@ -1943,8 +1967,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithFilter) {
 // and multiple build batches. Tests the filterFunc lambda match tracking path.
 TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithNonAstFilter) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
       {"t0", "t1"},
@@ -1993,8 +2023,14 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinBatchedBuildWithNonAstFilter) {
 // unmatched row emission.
 TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuild) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   // Probe keys [0..4, 100..102]. Keys 0-4 match build, 100-102 don't.
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
@@ -2045,8 +2081,14 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuild) {
 // Full join with AST filter and multiple build batches.
 TEST_P(MultiThreadedHashJoinTest, fullJoinBatchedBuildWithFilter) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
   cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
 
   // Probe keys [0..7].
   std::vector<RowVectorPtr> probeVectors = {makeRowVector(
