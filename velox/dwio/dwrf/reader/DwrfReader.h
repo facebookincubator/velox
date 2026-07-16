@@ -115,13 +115,12 @@ class DwrfRowReader : public StrideIndexProvider,
       VectorPtr& result,
       const dwio::common::Mutation* = nullptr) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override {
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += processedStrides_;
     stats.footerBufferOverread += getReader().footerBufferOverread();
     stats.numStripes += stripeCeiling_ - firstStripe_;
-    stats.columnReaderStats.mergeFrom(*columnReaderStats_);
+    stats.mergeFrom(*splitStats_);
     stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
@@ -230,7 +229,7 @@ class DwrfRowReader : public StrideIndexProvider,
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
 
-  std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats_;
+  std::shared_ptr<dwio::common::SplitStats> splitStats_;
 
   std::optional<int64_t> nextRowNumber_;
 

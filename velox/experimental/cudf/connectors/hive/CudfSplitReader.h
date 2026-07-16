@@ -67,7 +67,7 @@ class CudfSplitReader : public NvtxHelper {
 
   /// Prepare the split: open cudf reader, set up data source and options.
   /// @param runtimeStats Reference to the DataSource's runtime statistics
-  void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats);
+  void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
 
   /// Read the next raw cudf table chunk. Returns nullopt when done.
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
@@ -79,8 +79,7 @@ class CudfSplitReader : public NvtxHelper {
 
  protected:
   // Performs split-specific setup after base reader state is reset.
-  virtual void prepareSplitInternal(
-      dwio::common::RuntimeStatistics& runtimeStats);
+  virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
   // Setup the cuDF reader.
   virtual void setupReader();

@@ -126,7 +126,7 @@ int ParquetReaderBenchmark::read(
     std::shared_ptr<ScanSpec> scanSpec,
     uint32_t nextSize) {
   auto rowReader = createReader(scanSpec, rowType);
-  runtimeStats_ = dwio::common::RuntimeStatistics();
+  runtimeStats_ = dwio::common::RuntimeStats();
 
   rowReader->resetFilterCaches();
   auto result = BaseVector::create(rowType, 1, leafPool_.get());

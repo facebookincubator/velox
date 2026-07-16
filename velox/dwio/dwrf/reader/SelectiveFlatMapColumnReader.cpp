@@ -165,7 +165,7 @@ std::vector<KeyNode<T>> getKeyNodes(
         DwrfParams childParams(
             stripe,
             labels,
-            params.runtimeStatistics(),
+            params.splitStats(),
             FlatMapContext{
                 .sequence = sequence,
                 .inMapDecoder = inMapDecoder.get(),
