@@ -25,7 +25,7 @@ constexpr int32_t kDebugNoOp = -1;
 /// Header for host to torch::wave kernel communication. Included in both host
 /// and device code.
 
-constexpr int kMaxDims = 3;
+constexpr int kMaxDims = 4;
 
 // ScalarType constants matching c10::ScalarType enum values. Defined here so
 // device code can switch on element types without including c10 headers.

@@ -23,6 +23,8 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
@@ -35,6 +37,16 @@ class TableEvolutionFuzzer {
     int evolutionCount;
     std::vector<dwio::common::FileFormat> formats;
     memory::MemoryPool* pool;
+
+    /// Returns extra writer serde params to merge for one file, or none when
+    /// unset. Called once per written file with the file's format and the
+    /// fuzzer rng, so a driver can exercise format-specific write options,
+    /// randomized yet reproducible from the seed. The core stays
+    /// format-agnostic.
+    std::function<std::unordered_map<std::string, std::string>(
+        dwio::common::FileFormat,
+        FuzzerGenerator&)>
+        extraWriteSerdeParams;
   };
 
   explicit TableEvolutionFuzzer(const Config& config);
@@ -108,7 +120,8 @@ class TableEvolutionFuzzer {
       bool enableFlatMap,
       folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
-      std::vector<int>& globallyCompatibleFlatmapColumns);
+      std::vector<int>& globallyCompatibleFlatmapColumns,
+      const std::unordered_map<std::string, std::string>& extraSerdeParams);
 
   template <typename To, typename From>
   VectorPtr liftToPrimitiveType(
@@ -123,9 +136,7 @@ class TableEvolutionFuzzer {
       const PushdownConfig& pushdownConfig,
       bool useFiltersAsNode,
       bool insertProjectToBlockPushdown,
-      const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
-          globalMapColumnKeys = {},
-      const std::vector<int>& globallyCompatibleFlatmapColumns = {});
+      const RowTypePtr& fullOutSchema);
 
   /// Builds schema for flatmap as struct reading by converting selected map
   /// columns to struct types.

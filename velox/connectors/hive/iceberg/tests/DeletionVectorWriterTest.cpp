@@ -18,7 +18,11 @@
 
 #include <fstream>
 
+#include <folly/hash/Checksum.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
+
+#include <cstring>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -107,7 +111,7 @@ class DeletionVectorWriterTest : public ::testing::Test {
         lowerBounds,
         upperBounds);
 
-    DeletionVectorReader reader(dvFile, 0, pool_.get());
+    DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
     // Collect all set bits across batches.
     std::vector<uint64_t> allSetBits;
@@ -216,7 +220,7 @@ TEST_F(DeletionVectorWriterTest, duplicatePositions) {
       lowerBounds,
       upperBounds);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(20);
   reader.readDeletePositions(0, 20, bitmap);
@@ -267,12 +271,18 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
   auto sink = dwio::common::FileSink::create(
       "file:" + puffinPath, {.pool = pool_.get()});
   VELOX_CHECK_NOT_NULL(sink);
-  auto [blobOffset, blobLength] =
-      writePuffinFile(*sink, *pool_, blobData, "/data/test-data-file.parquet");
+  auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
   sink->close();
 
-  EXPECT_EQ(blobOffset, 4); // After "PUF1" magic.
-  EXPECT_EQ(blobLength, blobData.size());
+  EXPECT_EQ(blobOffset, 4); // After "PFA1" magic.
+  // blobLength is the framed deletion-vector-v1 blob: 4B length + 4B magic +
+  // bitmap + 4B CRC-32.
+  EXPECT_EQ(blobLength, blobData.size() + 12);
 
   // Read the blob back from the Puffin file using DeletionVectorReader.
   std::unordered_map<int32_t, std::string> lowerBounds;
@@ -296,13 +306,65 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
       lowerBounds,
       upperBounds);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(200);
   reader.readDeletePositions(0, 200, bitmap);
 
   auto setBits = getSetBits(bitmap, 200);
   EXPECT_EQ(setBits, (std::vector<uint64_t>{3, 7, 42, 100}));
+}
+
+// Verifies the on-disk deletion-vector-v1 blob matches the Iceberg V3 spec
+// frame: [length: 4B BE][magic D1 D3 39 64][bitmap][CRC-32: 4B BE], where the
+// length and CRC-32 cover the magic + bitmap. This is what makes the DV
+// interoperable with spec-compliant Iceberg engines.
+TEST_F(DeletionVectorWriterTest, deletionVectorV1FrameLayout) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  const auto bitmap = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/frame.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  const auto [blobOffset, blobLength] = writePuffinFile(
+      *sink, *pool_, bitmap, "/data/f.parquet", /*cardinality=*/4);
+  sink->close();
+
+  std::ifstream in(puffinPath, std::ios::binary);
+  const std::string bytes((std::istreambuf_iterator<char>(in)), {});
+
+  // File starts with the Puffin magic "PFA1".
+  EXPECT_EQ(bytes.substr(0, 4), std::string("PFA1"));
+
+  const std::string blob = bytes.substr(blobOffset, blobLength);
+  ASSERT_EQ(blob.size(), bitmap.size() + 12);
+
+  auto readBigEndian = [](const char* p) {
+    uint32_t value;
+    std::memcpy(&value, p, sizeof(value));
+    return folly::Endian::big(value);
+  };
+
+  // [length: 4B BE] covers magic (4) + bitmap.
+  const uint32_t magicAndVectorLength = readBigEndian(blob.data());
+  EXPECT_EQ(magicAndVectorLength, bitmap.size() + 4);
+
+  // [magic: D1 D3 39 64].
+  const std::string magic = blob.substr(4, 4);
+  EXPECT_EQ(magic, std::string({'\xD1', '\xD3', '\x39', '\x64'}));
+
+  // [bitmap] matches the writer's serialize() output.
+  EXPECT_EQ(blob.substr(8, bitmap.size()), bitmap);
+
+  // [CRC-32: 4B BE] over magic + bitmap.
+  const uint32_t storedCrc =
+      readBigEndian(blob.data() + 4 + magicAndVectorLength);
+  const uint32_t expectedCrc = folly::crc32(
+      reinterpret_cast<const uint8_t*>(blob.data() + 4), magicAndVectorLength);
+  EXPECT_EQ(storedCrc, expectedCrc);
 }
 
 /// Verifies 64-bit positions (>4 billion) serialize and deserialize correctly.

@@ -129,7 +129,7 @@ jobs:
       failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
       failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -543,7 +543,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -584,7 +584,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           path: velox
           persist-credentials: false
@@ -775,7 +775,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -919,7 +919,7 @@ jobs:
       failed-cases: ${{ steps.tests.outputs.failed-cases }}
       failure-details: ${{ steps.tests.outputs.failure-details }}
     concurrency:
-      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.event.pull_request.number }}
+      group: ${{ github.workflow }}-asan-ubsan-adapters-${{ github.head_ref || github.sha }}
       cancel-in-progress: true
     steps:
       - name: Free Disk Space
@@ -937,7 +937,7 @@ jobs:
           # Show after
           echo "New available disk space: " $(getAvailableSpace)
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 2
           persist-credentials: false

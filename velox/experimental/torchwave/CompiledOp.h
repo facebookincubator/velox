@@ -322,16 +322,12 @@ class CompositeInvocation {
       std::vector<OpInvocation> ops,
       std::deque<c10::IValue> ivalueStorage,
       int32_t sequenceNumber,
+      std::vector<nativert::ValueId> lastUseIds,
       std::vector<Launch> prePassStandalones = {});
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
   void execute(ExecutionState& state);
-
-  /// Runs pre-pass standalones that were skipped during execute() because
-  /// their inputs were None.  Called after all PNs have executed so that
-  /// cross-PN values are available.
-  void runDeferredStandalones(ExecutionState& state);
 
   std::string toString(Listing mode = kExprs, int32_t ordinal = 0) const;
 
@@ -388,9 +384,10 @@ class CompositeInvocation {
   std::deque<c10::IValue> ivalueStorage_;
   int32_t sequenceNumber_;
 
-  // Grid standalones skipped during execute() due to None inputs.
-  // Re-run by runDeferredStandalones() after all PNs execute.
-  std::vector<NodeCP> deferredStandalones_;
+  // Frame value ids whose last use across the graph is in this node (graph
+  // outputs excluded). When WaveConfig::freeIntermediates is set, their frame
+  // tensors are released at the end of execute().
+  std::vector<nativert::ValueId> lastUseIds_;
 
   // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
   // start of execute() before any kernel step, so their outputs are
@@ -408,9 +405,6 @@ class CompiledNode {
 
   /// Executes this node using the given execution state.
   void execute(ExecutionState& state);
-
-  /// Runs deferred standalone ops after all PNs have executed.
-  void runDeferredStandalones(ExecutionState& state);
 
   const CompositeInvocation* kernels() const {
     return kernels_.get();

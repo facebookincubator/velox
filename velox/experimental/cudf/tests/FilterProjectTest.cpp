@@ -29,6 +29,8 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <folly/ScopeGuard.h>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -893,6 +895,65 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.filter);
     assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+// Comparing a timestamp column against a timestamp literal must work under
+// every value cudf.timestamp_unit accepts. Regression test for the
+// millisecond and second units, whose constant scalars previously fell
+// through to VELOX_FAIL("Unsupported timestamp unit").
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  struct Unit {
+    cudf::type_id id;
+    std::string name;
+  };
+  // event_ts and the literals are whole seconds, so the coarsest unit
+  // (seconds) is lossless and the expected result is identical for all units.
+  const std::vector<Unit> units{
+      {cudf::type_id::TIMESTAMP_SECONDS, "s"},
+      {cudf::type_id::TIMESTAMP_MILLISECONDS, "ms"},
+      {cudf::type_id::TIMESTAMP_MICROSECONDS, "us"},
+      {cudf::type_id::TIMESTAMP_NANOSECONDS, "ns"}};
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  for (const auto& unit : units) {
+    config.timestampUnit = unit.id;
+    for (const auto& testCase : cases) {
+      SCOPED_TRACE("unit=" + unit.name + " filter=" + testCase.filter);
+      assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+    }
   }
 }
 
@@ -2366,6 +2427,135 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
       makeNullableFlatVector<bool>({true, false, false, false}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // round(double) with no scale (defaults to 0)
+  auto data = makeRowVector(
+      {makeFlatVector<double>({3.14159, 2.71828, -1.5, 0.5, 100.999})});
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0) as c1"})
+                  .planNode();
+  auto expected =
+      makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, 2)
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -1) — round to nearest 10
+  data =
+      makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -3) — round to nearest 1000
+  data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Large values
+  data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Corner cases: IEEE-754 half-way values and representation artifacts.
+  // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
+  // (std::round(x * factor) / factor), so the result depends on the actual
+  // binary value of the input and on any rounding introduced by the factor
+  // multiply. For example, 2.675 is stored as 2.6749999999999998 but
+  // multiplied by 100 lands on the exactly-representable 267.5 tie, which
+  // std::round rounds away from zero to 268 -> 2.68. By contrast, 1.005 is
+  // stored as 1.0049999999999999 and multiplied by 100 falls just below
+  // 100.5, which rounds down to 100 -> 1.00.
+  data = makeRowVector({makeFlatVector<double>({
+      // HALF_UP ties at integer magnitudes.
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.675,
+      0.1,
+      0.3,
+      1.005,
+      1.0000000000000002,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.675,
+      -1.6,
+      -1.645,
+      0.125,
+      1e-10,
+      999999999999999.5,
+  })});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
+      1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.68,
+      0.1,
+      0.3,
+      1.0,
+      1.0,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.68,
+      -1.6,
+      -1.65,
+      0.13,
+      0.0,
+      999999999999999.5,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 } // namespace

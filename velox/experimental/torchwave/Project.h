@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -68,6 +69,30 @@ class ProjectNode {
 
   void distinctFunctions(
       std::unordered_map<std::string, int32_t>& counts) const;
+
+  /// Values whose last access across all ProjectNodes happens in this node, so
+  /// their buffers may be released after this node executes. Graph outputs are
+  /// excluded (they escape the graph). Alias-corrected: a value kept alive by a
+  /// view or by membership in a prim.ListPack is not listed until its last
+  /// alias dies. Populated by ParallelNodes::computeLastUse.
+  std::unordered_set<ValueCP> lastUse;
+
+  /// For each top-level expr (parallel to nodes()), the lastUse values that are
+  /// a boundary input of only that expr in this layer. A kernel op for the expr
+  /// may reuse such a value's buffer in place, since nothing else reads it here
+  /// or later (directly or via any alias). Populated by
+  /// ParallelNodes::computeLastUse.
+  std::vector<std::vector<ValueCP>> reusableValues_;
+
+  /// True if 'value' is a reusable input of any expr in this node.
+  bool isReusableInput(ValueCP value) const {
+    for (const auto& perExpr : reusableValues_) {
+      if (std::find(perExpr.begin(), perExpr.end(), value) != perExpr.end()) {
+        return true;
+      }
+    }
+    return false;
+  }
 
  private:
   std::vector<NodeCP> nodes_;

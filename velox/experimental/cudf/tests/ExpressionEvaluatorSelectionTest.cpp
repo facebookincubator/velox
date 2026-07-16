@@ -383,6 +383,10 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
+  // The default parser keeps integer literals as BIGINT, which exercises the
+  // existing Presto-compatible `substr` candidate. Spark-specific coverage is
+  // below, using INTEGER literals or INTEGER columns.
+
   // OK: 2-arg substr with constant start
   auto ok2 = compileExecExpr("substr(name, 1)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok2, /*deep=*/true));
@@ -391,9 +395,28 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   auto ok3 = compileExecExpr("substr(name, 1, 5)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok3, /*deep=*/true));
 
-  // Bad: start must be constant
-  auto badConst = compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
-  ASSERT_FALSE(canBeEvaluatedByCudf(badConst, /*deep=*/true));
+  // OK: Spark substring registers integer positions and lengths.
+  parse::ParseOptions sparkLiteralOptions;
+  sparkLiteralOptions.parseIntegerAsBigint = false;
+  auto okSparkLiteralArgs = compileExecExpr(
+      "substring(name, 1, 5)", rowType_, execCtx_.get(), sparkLiteralOptions);
+  ASSERT_TRUE(canBeEvaluatedByCudf(okSparkLiteralArgs, /*deep=*/true));
+
+  // OK: Spark substring supports integer start and length columns. This also
+  // verifies that the cuDF `substr` function name routes to Spark semantics
+  // when Spark functions are registered.
+  auto okStartColumn =
+      compileExecExpr("substr(name, c)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okStartColumn, /*deep=*/true));
+
+  auto okStartAndLengthColumns =
+      compileExecExpr("substring(name, c, c)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okStartAndLengthColumns, /*deep=*/true));
+
+  // Bad: Spark substr accepts integer positions, not bigint positions.
+  auto badBigintStart =
+      compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badBigintStart, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {

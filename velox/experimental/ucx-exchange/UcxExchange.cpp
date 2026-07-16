@@ -44,6 +44,7 @@ UcxExchange::UcxExchange(
           fmt::format("[{}]", planNode->id())),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
+      closeExchangeClientOnClose_{ucxExchangeClient == nullptr},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
       driverId_{driverCtx->driverId} {
@@ -217,7 +218,9 @@ void UcxExchange::close() {
   currentData_.reset();
   if (exchangeClient_) {
     recordExchangeClientStats();
-    exchangeClient_->close();
+    if (closeExchangeClientOnClose_) {
+      exchangeClient_->close();
+    }
   }
   exchangeClient_ = nullptr;
 }

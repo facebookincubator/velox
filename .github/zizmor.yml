@@ -15,6 +15,9 @@ rules:
   use-trusted-publishing:
     ignore:
       - build_pyvelox.yml
+  adhoc-packages:
+    ignore:
+      - linux-build-base.yml
   dangerous-triggers:
     ignore:
       - selective-build-comment.yml
