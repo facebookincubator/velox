@@ -333,6 +333,94 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
+// Push one Timestamp bound as an AST literal at the given cuDF resolution. The
+// four resolutions differ only in the scalar type and the Timestamp accessor,
+// so the emplace / synchronize / push body lives here once.
+template <typename CudfScalarT>
+const cudf::ast::expression& pushTimestampLiteral(
+    int64_t ticks,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  scalars.emplace_back(std::make_unique<CudfScalarT>(ticks, true, stream, mr));
+  stream.synchronize();
+  return tree.push(
+      cudf::ast::literal{*static_cast<CudfScalarT*>(scalars.back().get())});
+}
+
+// Convert a TimestampRange to an AST expression at the reader's configured
+// timestamp resolution. An open side is encoded with the Timestamp min/max
+// sentinel; it is skipped so the sentinel is never converted, which would
+// overflow the accessor (e.g. Timestamp::max().toMillis() throws).
+const cudf::ast::expression& buildTimestampRangeExpr(
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    cudf::type_id timestampUnit,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto* tsRange = static_cast<const common::TimestampRange*>(&filter);
+
+  auto pushBound = [&](const Timestamp& ts) -> const cudf::ast::expression& {
+    switch (timestampUnit) {
+      case cudf::type_id::TIMESTAMP_NANOSECONDS:
+        return pushTimestampLiteral<cudf::timestamp_scalar<cudf::timestamp_ns>>(
+            ts.toNanos(), tree, scalars, stream, mr);
+      case cudf::type_id::TIMESTAMP_MICROSECONDS:
+        return pushTimestampLiteral<cudf::timestamp_scalar<cudf::timestamp_us>>(
+            ts.toMicros(), tree, scalars, stream, mr);
+      case cudf::type_id::TIMESTAMP_MILLISECONDS:
+        return pushTimestampLiteral<cudf::timestamp_scalar<cudf::timestamp_ms>>(
+            ts.toMillis(), tree, scalars, stream, mr);
+      case cudf::type_id::TIMESTAMP_SECONDS:
+        return pushTimestampLiteral<cudf::timestamp_scalar<cudf::timestamp_s>>(
+            ts.getSeconds(), tree, scalars, stream, mr);
+      default:
+        VELOX_FAIL(
+            "Unsupported timestamp unit: {}", static_cast<int>(timestampUnit));
+    }
+  };
+
+  const auto lower = tsRange->lower();
+  const auto upper = tsRange->upper();
+
+  if (tsRange->isSingleValue()) {
+    return tree.push(Operation{Op::EQUAL, columnRef, pushBound(lower)});
+  }
+
+  const bool lowerUnbounded = lower == std::numeric_limits<Timestamp>::min();
+  const bool upperUnbounded = upper == std::numeric_limits<Timestamp>::max();
+
+  const cudf::ast::expression* lowerExpr = nullptr;
+  const cudf::ast::expression* upperExpr = nullptr;
+
+  if (!lowerUnbounded) {
+    lowerExpr =
+        &tree.push(Operation{Op::GREATER_EQUAL, columnRef, pushBound(lower)});
+  }
+
+  if (!upperUnbounded) {
+    upperExpr =
+        &tree.push(Operation{Op::LESS_EQUAL, columnRef, pushBound(upper)});
+  }
+
+  if (lowerExpr && upperExpr) {
+    return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+  } else if (lowerExpr) {
+    return *lowerExpr;
+  } else if (upperExpr) {
+    return *upperExpr;
+  }
+
+  // Both bounds unbounded => pass-through filter (everything).
+  return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+}
+
 } // namespace
 
 // Convert subfield filters to cudf AST
@@ -508,110 +596,9 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       return *result;
     }
 
-    case common::FilterKind::kTimestampRange: {
-      auto* tsRange = static_cast<const common::TimestampRange*>(&filter);
-
-      // Convert Velox Timestamp to the cuDF timestamp resolution configured
-      // in CudfConfig (defaults to nanoseconds), and push as an AST literal.
-      auto pushTimestampLiteral =
-          [&](const Timestamp& ts) -> const cudf::ast::expression& {
-        switch (timestampUnit) {
-          case cudf::type_id::TIMESTAMP_NANOSECONDS: {
-            auto nanos = ts.toNanos();
-            scalars.emplace_back(
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ns>>(
-                    nanos, true, stream, mr));
-            stream.synchronize();
-            return tree.push(
-                cudf::ast::literal{
-                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_ns>*>(
-                        scalars.back().get())});
-          }
-          case cudf::type_id::TIMESTAMP_MICROSECONDS: {
-            auto micros = ts.toMicros();
-            scalars.emplace_back(
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_us>>(
-                    micros, true, stream, mr));
-            stream.synchronize();
-            return tree.push(
-                cudf::ast::literal{
-                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_us>*>(
-                        scalars.back().get())});
-          }
-          case cudf::type_id::TIMESTAMP_MILLISECONDS: {
-            auto millis = ts.toMillis();
-            scalars.emplace_back(
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_ms>>(
-                    millis, true, stream, mr));
-            stream.synchronize();
-            return tree.push(
-                cudf::ast::literal{
-                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_ms>*>(
-                        scalars.back().get())});
-          }
-          case cudf::type_id::TIMESTAMP_SECONDS: {
-            auto secs = ts.getSeconds();
-            scalars.emplace_back(
-                std::make_unique<cudf::timestamp_scalar<cudf::timestamp_s>>(
-                    secs, true, stream, mr));
-            stream.synchronize();
-            return tree.push(
-                cudf::ast::literal{
-                    *static_cast<cudf::timestamp_scalar<cudf::timestamp_s>*>(
-                        scalars.back().get())});
-          }
-          default:
-            VELOX_FAIL(
-                "Unsupported timestamp unit: {}",
-                static_cast<int>(timestampUnit));
-        }
-      };
-
-      const auto lower = tsRange->lower();
-      const auto upper = tsRange->upper();
-
-      if (tsRange->isSingleValue()) {
-        const auto& literal = pushTimestampLiteral(lower);
-        return tree.push(Operation{Op::EQUAL, columnRef, literal});
-      }
-
-      // TimestampRange has no unbounded flags: an open side is encoded with the
-      // Timestamp min/max sentinel (a one-sided `<`/`>`/`>=`/`<=` comparison
-      // produces one). Skip a sentinel bound -- converting it to the configured
-      // unit overflows (e.g. Timestamp::max().toMillis() throws "Could not
-      // convert Timestamp(9223372036854775, 999999999) to milliseconds").
-      const bool lowerUnbounded =
-          lower == std::numeric_limits<Timestamp>::min();
-      const bool upperUnbounded =
-          upper == std::numeric_limits<Timestamp>::max();
-
-      const cudf::ast::expression* lowerExpr = nullptr;
-      const cudf::ast::expression* upperExpr = nullptr;
-
-      if (!lowerUnbounded) {
-        const auto& lowerLiteral = pushTimestampLiteral(lower);
-        lowerExpr =
-            &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
-      }
-
-      if (!upperUnbounded) {
-        const auto& upperLiteral = pushTimestampLiteral(upper);
-        upperExpr =
-            &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
-      }
-
-      if (lowerExpr && upperExpr) {
-        return tree.push(
-            Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
-      } else if (lowerExpr) {
-        return *lowerExpr;
-      } else if (upperExpr) {
-        return *upperExpr;
-      }
-
-      // Both bounds unbounded => pass-through filter (everything).
-      return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
-    }
+    case common::FilterKind::kTimestampRange:
+      return buildTimestampRangeExpr(
+          filter, tree, scalars, columnRef, timestampUnit, stream, mr);
 
     case common::FilterKind::kNegatedBigintRange: {
       auto* negRange = static_cast<const common::NegatedBigintRange*>(&filter);
