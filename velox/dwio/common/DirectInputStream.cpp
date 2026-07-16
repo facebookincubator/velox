@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 
 #include "velox/common/time/Timer.h"
@@ -178,6 +179,20 @@ void DirectInputStream::loadPosition() {
       {
         MicrosecondWallTimer timer(&loadUs);
         if (!load->loadOrFuture(&waitFuture)) {
+          // The driver parks here on-thread waiting for a prefetch running on
+          // another thread. Suspend it (via the operator pool's reclaimer) so a
+          // concurrent memory-arbitration reclaim can pause this task instead
+          // of dead-locking on numThreads_ > 0. No-op off a driver thread or
+          // when the pool has no suspending reclaimer.
+          auto* reclaimer = bufferedInput_->pool()->reclaimer();
+          if (reclaimer != nullptr) {
+            reclaimer->enterArbitration();
+          }
+          auto leaveGuard = folly::makeGuard([reclaimer]() {
+            if (reclaimer != nullptr) {
+              reclaimer->leaveArbitration();
+            }
+          });
           waitFuture.wait();
         }
         loadedRegion_.offset = region_.offset;
