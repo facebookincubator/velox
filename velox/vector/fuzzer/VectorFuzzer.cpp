@@ -141,7 +141,8 @@ VectorPtr fuzzConstantPrimitiveImpl(
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
   } else if (type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()) || type->equivalent(*TIME_MICRO_UTC()));
+    VELOX_DCHECK(
+        type->equivalent(*TIME()) || type->equivalent(*TIME_MICRO_UTC()));
     return std::make_shared<ConstantVector<int64_t>>(
         pool, size, false, type, randTime(rng, type));
   } else {

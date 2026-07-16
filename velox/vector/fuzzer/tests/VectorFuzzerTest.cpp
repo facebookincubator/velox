@@ -906,8 +906,7 @@ TEST_F(VectorFuzzerTest, time) {
   opts.vectorSize = vectorSize;
   VectorFuzzer fuzzer(opts, pool());
 
-  for (const auto& timeType :
-       std::vector<TypePtr>{TIME(), TIME_MICRO_UTC()}) {
+  for (const auto& timeType : std::vector<TypePtr>{TIME(), TIME_MICRO_UTC()}) {
     const int64_t minTime = timeType->equivalent(*TIME())
         ? TIME()->getMin()
         : TIME_MICRO_UTC()->getMin();
