@@ -575,15 +575,42 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
         return tree.push(Operation{Op::EQUAL, columnRef, literal});
       }
 
-      const auto& lowerLiteral = pushTimestampLiteral(lower);
-      const auto& lowerExpr =
-          tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+      // TimestampRange has no unbounded flags: an open side is encoded with the
+      // Timestamp min/max sentinel (a one-sided `<`/`>`/`>=`/`<=` comparison
+      // produces one). Skip a sentinel bound -- converting it to the configured
+      // unit overflows (e.g. Timestamp::max().toMillis() throws "Could not
+      // convert Timestamp(9223372036854775, 999999999) to milliseconds").
+      const bool lowerUnbounded =
+          lower == std::numeric_limits<Timestamp>::min();
+      const bool upperUnbounded =
+          upper == std::numeric_limits<Timestamp>::max();
 
-      const auto& upperLiteral = pushTimestampLiteral(upper);
-      const auto& upperExpr =
-          tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+      const cudf::ast::expression* lowerExpr = nullptr;
+      const cudf::ast::expression* upperExpr = nullptr;
 
-      return tree.push(Operation{Op::NULL_LOGICAL_AND, lowerExpr, upperExpr});
+      if (!lowerUnbounded) {
+        const auto& lowerLiteral = pushTimestampLiteral(lower);
+        lowerExpr =
+            &tree.push(Operation{Op::GREATER_EQUAL, columnRef, lowerLiteral});
+      }
+
+      if (!upperUnbounded) {
+        const auto& upperLiteral = pushTimestampLiteral(upper);
+        upperExpr =
+            &tree.push(Operation{Op::LESS_EQUAL, columnRef, upperLiteral});
+      }
+
+      if (lowerExpr && upperExpr) {
+        return tree.push(
+            Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+      } else if (lowerExpr) {
+        return *lowerExpr;
+      } else if (upperExpr) {
+        return *upperExpr;
+      }
+
+      // Both bounds unbounded => pass-through filter (everything).
+      return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
     }
 
     case common::FilterKind::kNegatedBigintRange: {
