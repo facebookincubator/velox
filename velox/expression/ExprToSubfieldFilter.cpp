@@ -802,6 +802,8 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
       values.emplace_back(filter->as<common::BigintRange>()->lower());
     }
 
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
     return common::createBigintValues(values, isNullAllowed(disjuncts));
   }
 
