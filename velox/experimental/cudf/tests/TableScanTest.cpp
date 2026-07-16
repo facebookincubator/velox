@@ -552,6 +552,7 @@ TEST_F(TableScanTest, timestampWithTimeZoneFilterPushdown) {
                   .endTableScan()
                   .planNode();
 
+  createDuckDbTable({vector});
   assertQuery(
       plan,
       {filePath},
