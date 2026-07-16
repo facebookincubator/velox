@@ -38,46 +38,7 @@ bool isRetryableGcsStatus(google::cloud::StatusCode code) {
 } // namespace
 
 std::string getErrorStringFromGcsError(const google::cloud::StatusCode& code) {
-  using ::google::cloud::StatusCode;
-
-  switch (code) {
-    case StatusCode::kOk:
-      return "No error";
-    case StatusCode::kCancelled:
-      return "Request cancelled";
-    case StatusCode::kUnknown:
-      return "Unknown error";
-    case StatusCode::kInvalidArgument:
-      return "Invalid argument";
-    case StatusCode::kDeadlineExceeded:
-      return "Deadline exceeded";
-    case StatusCode::kNotFound:
-      return "Resource not found";
-    case StatusCode::kAlreadyExists:
-      return "Resource already exists";
-    case StatusCode::kPermissionDenied:
-      return "Access denied";
-    case StatusCode::kResourceExhausted:
-      return "Resource exhausted";
-    case StatusCode::kFailedPrecondition:
-      return "Failed precondition";
-    case StatusCode::kAborted:
-      return "Request aborted";
-    case StatusCode::kOutOfRange:
-      return "Out of range";
-    case StatusCode::kUnimplemented:
-      return "Operation not implemented";
-    case StatusCode::kInternal:
-      return "Internal error";
-    case StatusCode::kUnavailable:
-      return "Service unavailable";
-    case StatusCode::kDataLoss:
-      return "Data loss";
-    case StatusCode::kUnauthenticated:
-      return "Unauthenticated";
-    default:
-      return google::cloud::StatusCodeToString(code);
-  }
+  return google::cloud::StatusCodeToString(code);
 }
 
 void checkGcsStatus(
