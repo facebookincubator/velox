@@ -25,8 +25,10 @@ add_library(
   NullMask.cpp
   PrestoFunctions.cpp
   prestosql/DateAddFunction.cpp
+  prestosql/DateDiffFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
   prestosql/TimezoneFunctions.cpp
+  prestosql/ToUnixtimeFunction.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/HashFunction.cpp
