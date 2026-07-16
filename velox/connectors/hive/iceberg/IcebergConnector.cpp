@@ -77,6 +77,7 @@ std::unique_ptr<DataSink> IcebergConnector::createDataSink(
 
   switch (icebergInsertHandle->writeKind()) {
     case IcebergInsertTableHandle::WriteKind::kData:
+    case IcebergInsertTableHandle::WriteKind::kEqualityDelete:
       return std::make_unique<IcebergDataSink>(
           inputType,
           icebergInsertHandle,
