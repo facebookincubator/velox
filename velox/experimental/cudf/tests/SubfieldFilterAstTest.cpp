@@ -1069,42 +1069,17 @@ TEST_F(SubfieldFilterAstTest, EmptyMultiRangeThrows) {
 
 // --- kTimestampRange tests ---
 
-TEST_F(SubfieldFilterAstTest, TimestampRangeNanoseconds) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, TIMESTAMP()}});
+// Bounded two-sided range at each cuDF timestamp resolution. These cases differ
+// only by the unit, so they are parametrized over the type_id. Whole-second
+// sample values are used so nothing truncates differently across units (the
+// sub-second cases are covered separately below and in
+// TimestampRangeBoundaryTruncation).
+class TimestampRangeUnitTest
+    : public SubfieldFilterAstTest,
+      public testing::WithParamInterface<cudf::type_id> {};
 
-  auto filter = std::make_unique<common::TimestampRange>(
-      Timestamp(100, 0), Timestamp(200, 0), /*nullAllowed*/ false);
-
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-  const auto& expr = createAstFromSubfieldFilter(
-      subfield,
-      *filter,
-      tree,
-      scalars,
-      rowType,
-      cudf::type_id::TIMESTAMP_NANOSECONDS);
-
-  EXPECT_GT(tree.size(), 0UL);
-  EXPECT_EQ(scalars.size(), 2UL);
-
-  auto timestamps = makeFlatVector<Timestamp>(
-      {Timestamp(50, 0),
-       Timestamp(100, 0),
-       Timestamp(150, 0),
-       Timestamp(200, 0),
-       Timestamp(250, 0),
-       Timestamp(100, 500'000'000),
-       Timestamp(199, 999'999'999)});
-  auto vec = makeRowVector({columnName}, {timestamps});
-
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-}
-
-TEST_F(SubfieldFilterAstTest, TimestampRangeMicroseconds) {
+TEST_P(TimestampRangeUnitTest, boundedRange) {
+  const auto unit = GetParam();
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, TIMESTAMP()}});
 
@@ -1113,19 +1088,17 @@ TEST_F(SubfieldFilterAstTest, TimestampRangeMicroseconds) {
 
   auto& config = CudfConfig::getInstance();
   auto prevUnit = config.timestampUnit;
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  config.timestampUnit = unit;
+  SCOPE_EXIT {
+    config.timestampUnit = prevUnit;
+  };
 
   common::Subfield subfield(columnName);
   cudf::ast::tree tree;
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
 
   const auto& expr = createAstFromSubfieldFilter(
-      subfield,
-      *filter,
-      tree,
-      scalars,
-      rowType,
-      cudf::type_id::TIMESTAMP_MICROSECONDS);
+      subfield, *filter, tree, scalars, rowType, unit);
 
   EXPECT_GT(tree.size(), 0UL);
   EXPECT_EQ(scalars.size(), 2UL);
@@ -1139,11 +1112,20 @@ TEST_F(SubfieldFilterAstTest, TimestampRangeMicroseconds) {
   auto vec = makeRowVector({columnName}, {timestamps});
 
   testFilterExecution(rowType, columnName, *filter, vec, expr);
-
-  config.timestampUnit = prevUnit;
 }
 
-TEST_F(SubfieldFilterAstTest, TimestampRangeMilliseconds) {
+INSTANTIATE_TEST_SUITE_P(
+    Units,
+    TimestampRangeUnitTest,
+    testing::Values(
+        cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS));
+
+// Sub-second nanosecond values that the whole-second parametrized fixture does
+// not exercise; retained from the original nanosecond test.
+TEST_F(SubfieldFilterAstTest, TimestampRangeSubSecondNanoseconds) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, TIMESTAMP()}});
 
@@ -1152,46 +1134,7 @@ TEST_F(SubfieldFilterAstTest, TimestampRangeMilliseconds) {
 
   auto& config = CudfConfig::getInstance();
   auto prevUnit = config.timestampUnit;
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
-
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-  const auto& expr = createAstFromSubfieldFilter(
-      subfield,
-      *filter,
-      tree,
-      scalars,
-      rowType,
-      cudf::type_id::TIMESTAMP_MILLISECONDS);
-
-  EXPECT_GT(tree.size(), 0UL);
-  EXPECT_EQ(scalars.size(), 2UL);
-
-  auto timestamps = makeFlatVector<Timestamp>(
-      {Timestamp(50, 0),
-       Timestamp(100, 0),
-       Timestamp(150, 0),
-       Timestamp(200, 0),
-       Timestamp(250, 0)});
-  auto vec = makeRowVector({columnName}, {timestamps});
-
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-
-  config.timestampUnit = prevUnit;
-}
-
-TEST_F(SubfieldFilterAstTest, TimestampRangeSeconds) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, TIMESTAMP()}});
-
-  auto filter = std::make_unique<common::TimestampRange>(
-      Timestamp(100, 0), Timestamp(200, 0), /*nullAllowed*/ false);
-
-  auto& config = CudfConfig::getInstance();
-  auto prevUnit = config.timestampUnit;
-  config.timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
   SCOPE_EXIT {
     config.timestampUnit = prevUnit;
   };
@@ -1206,19 +1149,18 @@ TEST_F(SubfieldFilterAstTest, TimestampRangeSeconds) {
       tree,
       scalars,
       rowType,
-      cudf::type_id::TIMESTAMP_SECONDS);
+      cudf::type_id::TIMESTAMP_NANOSECONDS);
 
-  EXPECT_GT(tree.size(), 0UL);
   EXPECT_EQ(scalars.size(), 2UL);
 
-  // Sub-second nanos are dropped at second precision: Timestamp(150, 9e8) ->
-  // 150s.
   auto timestamps = makeFlatVector<Timestamp>(
       {Timestamp(50, 0),
        Timestamp(100, 0),
-       Timestamp(150, 900'000'000),
+       Timestamp(150, 0),
        Timestamp(200, 0),
-       Timestamp(250, 0)});
+       Timestamp(250, 0),
+       Timestamp(100, 500'000'000),
+       Timestamp(199, 999'999'999)});
   auto vec = makeRowVector({columnName}, {timestamps});
 
   testFilterExecution(rowType, columnName, *filter, vec, expr);
