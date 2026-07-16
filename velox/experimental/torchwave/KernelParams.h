@@ -25,7 +25,7 @@ constexpr int32_t kDebugNoOp = -1;
 /// Header for host to torch::wave kernel communication. Included in both host
 /// and device code.
 
-constexpr int kMaxDims = 3;
+constexpr int kMaxDims = 4;
 
 // ScalarType constants matching c10::ScalarType enum values. Defined here so
 // device code can switch on element types without including c10 headers.
@@ -128,7 +128,11 @@ struct Tensor {
       unsigned int q, r;
       sizes[dim].divmod(linearIdx, q, r);
       linearIdx = q;
-      offset += r * strides[rank - 1 - dim];
+      // A size-1 dimension broadcasts: every output index along it maps to
+      // element 0, so its stride contributes nothing.  (When the output dim
+      // is also 1, r is already 0, so this is harmless.)
+      int32_t stride = dims[rank - 1 - dim] == 1 ? 0 : strides[rank - 1 - dim];
+      offset += r * stride;
     }
     return offset;
   }

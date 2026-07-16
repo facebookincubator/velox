@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include "velox/experimental/torchwave/Project.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
@@ -64,10 +65,12 @@ void formatTypeAnnotation(
     if (static_cast<size_t>(id) < types.types.size() && types.types[id]) {
       dl = dtypeLetter(types.types[id]->dtype());
     }
+    // '#' after the dtype letter marks a value not known to be contiguous.
+    const char* nc = types.contiguous(value) ? "" : "#";
     if (r < 0) {
-      ss << "(?" << dl << ")";
+      ss << "(?" << dl << nc << ")";
     } else {
-      ss << "(" << static_cast<int>(r) << "D" << dl << ")";
+      ss << "(" << static_cast<int>(r) << "D" << dl << nc << ")";
     }
   } else if (kind == nativert::Type::Kind::SymInt) {
     ss << "(L)";
@@ -229,6 +232,13 @@ void NodePrinter::printValueRef(std::stringstream& ss, ValueCP value) const {
   }
   if (options_.showTypes && options_.valueTypes) {
     formatTypeAnnotation(ss, value, *options_.valueTypes);
+  }
+  // Mark a reusable last use: the operand is a boundary input of only one expr
+  // in this ProjectNode and never read again (directly or via alias), so its
+  // buffer is free to mutate in place.
+  if (options_.projectNode != nullptr &&
+      options_.projectNode->isReusableInput(value)) {
+    ss << "& ";
   }
   if (options_.useGraphNames && options_.graph) {
     ss << leafValueString(value->name(), *options_.graph);
@@ -530,6 +540,11 @@ void NodePrinter::setDefaults(const PrintOptions& opts) {
 WithPrintOptions::WithPrintOptions(const std::string& opts)
     : previous_(threadLocalDefaults()),
       options_(NodePrinter::parsePrintOptions(opts)) {
+  threadLocalDefaults() = &options_;
+}
+
+WithPrintOptions::WithPrintOptions(PrintOptions opts)
+    : previous_(threadLocalDefaults()), options_(std::move(opts)) {
   threadLocalDefaults() = &options_;
 }
 

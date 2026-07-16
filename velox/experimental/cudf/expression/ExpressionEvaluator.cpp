@@ -18,9 +18,13 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/NullMask.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/EvalCtx.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
@@ -28,6 +32,7 @@
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
 
 #include <cudf/aggregation.hpp>
@@ -38,7 +43,6 @@
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
-#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/round.hpp>
@@ -52,10 +56,10 @@
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/replace.hpp>
-#include <cudf/strings/slice.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/types.hpp>
@@ -65,10 +69,25 @@
 #include <rmm/device_uvector.hpp>
 
 #include <cctype>
+#include <cmath>
 #include <memory>
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+cudf::size_type resolveFieldReferenceIndex(
+    velox::exec::FieldReference& fieldExpr,
+    const RowTypePtr& parentRowType) {
+  auto pool = memory::memoryManager()->addLeafPool();
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool.get(), queryCtx.get());
+  exec::ExprSet exprSet({}, &execCtx, /*enableConstantFolding=*/false);
+  auto row = RowVector::createEmpty(parentRowType, pool.get());
+  exec::EvalCtx evalCtx(&execCtx, &exprSet, row.get());
+  auto fieldIndex = fieldExpr.index(evalCtx);
+  VELOX_CHECK_GE(fieldIndex, 0);
+  return static_cast<cudf::size_type>(fieldIndex);
+}
 
 bool decimalScalarIsZero(
     const cudf::scalar& scalar,
@@ -262,7 +281,9 @@ static bool matchCallAgainstSignatures(
     const size_t fixed = std::min(constArgs.size(), n);
     bool ok = true;
     for (size_t i = 0; i < fixed; ++i) {
-      if (constArgs[i] && call.inputs()[i]->name() != "literal") {
+      if (constArgs[i] &&
+          !std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+              call.inputs()[i])) {
         ok = false;
         break;
       }
@@ -273,36 +294,6 @@ static bool matchCallAgainstSignatures(
     return true;
   }
   return false;
-}
-
-void mergeSecondaryNullsIntoResult(
-    cudf::column& result,
-    cudf::column_view secondaryColumn,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  // cuDF string pattern predicates already propagate input nulls to the result.
-  // Only merge the secondary-input nulls back when they are present so Velox
-  // CPU null propagation semantics are preserved without extra mask work unless
-  // it is required.
-  if (!secondaryColumn.has_nulls()) {
-    return;
-  }
-
-  if (!result.nullable()) {
-    result.set_null_mask(
-        cudf::copy_bitmask(secondaryColumn, stream, mr),
-        secondaryColumn.null_count());
-    return;
-  }
-
-  std::vector<cudf::bitmask_type const*> masks{
-      result.view().null_mask(),
-      secondaryColumn.null_mask(),
-  };
-  std::vector<cudf::size_type> beginBits{0, secondaryColumn.offset()};
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
-  result.set_null_mask(std::move(nullMask), nullCount);
 }
 
 } // namespace
@@ -387,6 +378,36 @@ class CardinalityFunction : public CudfFunction {
   }
 };
 
+class IsNullFunction : public CudfFunction {
+ public:
+  explicit IsNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
+    return cudf::is_null(asView(inputColumns[0]), stream, mr);
+  }
+};
+
+class IsNotNullFunction : public CudfFunction {
+ public:
+  explicit IsNotNullFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
+    VELOX_CHECK_EQ(expr->inputs().size(), 1, "isnotnull expects 1 input");
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
+    return cudf::is_valid(asView(inputColumns[0]), stream, mr);
+  }
+};
+
 class RoundFunction : public CudfFunction {
  public:
   explicit RoundFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -401,23 +422,94 @@ class RoundFunction : public CudfFunction {
       VELOX_CHECK_NOT_NULL(scaleExpr, "round scale must be a constant");
       scale_ = scaleExpr->value()->as<SimpleVector<int32_t>>()->valueAt(0);
     }
+    decimalsScalar_ = std::unique_ptr<cudf::numeric_scalar<int32_t>>(
+        static_cast<cudf::numeric_scalar<int32_t>*>(
+            makeScalarFromValue<int32_t>(INTEGER(), scale_, false).release()));
+    factorScalar_ = std::unique_ptr<cudf::numeric_scalar<double>>(
+        static_cast<cudf::numeric_scalar<double>*>(
+            makeScalarFromValue<double>(
+                DOUBLE(), std::pow(10.0, static_cast<double>(scale_)), false)
+                .release()));
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    auto inputCol = asView(inputColumns[0]);
+    auto inputTypeId = inputCol.type().id();
+
+    if (inputTypeId == cudf::type_id::FLOAT64) {
+      // JIT-compile a CUDA UDF that mirrors the Velox CPU round implementation
+      // (see velox/functions/prestosql/ArithmeticImpl.h). This makes
+      // Velox-cuDF produce bit-identical results to the Velox CPU path for
+      // round(double, scale) (e.g. round(2.675, 2) == 2.68) by relying on the
+      // same `round(x * factor) / factor` trick.
+      static constexpr char const* kUdf = R"***(
+__device__ void velox_round_double(
+    double* out, double number, int decimals, double factor) {
+  if (!isfinite(number)) { *out = number; return; }
+  if (decimals == 0) { *out = round(number); return; }
+  if (decimals < 0) {
+    *out = round(number * factor) / factor;
+    return;
+  }
+  const double truncated = trunc(number);
+  const double fraction = number - truncated;
+  if (fraction == 0.0) { *out = number; return; }
+  // Threshold matches Velox CPU: for small magnitudes the factor-multiply
+  // path has less precision loss than the truncate + fraction path.
+  if (fabs(number) < 17592186044415.0) {
+    *out = round(number * factor) / factor;
+    return;
+  }
+  const double roundedFractions = round(fraction * factor) / factor;
+  *out = truncated + roundedFractions;
+}
+)***";
+
+      // The scale-derived `decimals` and `factor` scalars are built once in
+      // the constructor (see makeScalarFromValue). Each eval only constructs
+      // two non-owning column_views over their device storage.
+      const cudf::column_view decimalsView{
+          cudf::data_type{cudf::type_id::INT32},
+          /*size=*/1,
+          decimalsScalar_->data(),
+          /*null_mask=*/nullptr,
+          /*null_count=*/0};
+      const cudf::column_view factorView{
+          cudf::data_type{cudf::type_id::FLOAT64},
+          1,
+          factorScalar_->data(),
+          nullptr,
+          0};
+
+      const cudf::transform_input transformInputs[] = {
+          inputCol,
+          cudf::scalar_column_view(decimalsView),
+          cudf::scalar_column_view(factorView),
+      };
+      return cudf::transform_extended(
+          transformInputs,
+          kUdf,
+          cudf::data_type{cudf::type_id::FLOAT64},
+          cudf::udf_source_type::CUDA,
+          std::nullopt,
+          cudf::null_aware::NO,
+          std::nullopt,
+          cudf::output_nullability::PRESERVE,
+          stream,
+          mr);
+    }
+
     return cudf::round_decimal(
-        asView(inputColumns[0]),
-        scale_,
-        cudf::rounding_method::HALF_UP,
-        stream,
-        mr);
-    ;
+        inputCol, scale_, cudf::rounding_method::HALF_UP, stream, mr);
   }
 
  private:
   int32_t scale_ = 0;
+  std::unique_ptr<cudf::numeric_scalar<int32_t>> decimalsScalar_;
+  std::unique_ptr<cudf::numeric_scalar<double>> factorScalar_;
 };
 
 class BinaryFunction : public CudfFunction {
@@ -1109,62 +1201,6 @@ class SwitchFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> right_;
 };
 
-class SubstrFunction : public CudfFunction {
- public:
-  SubstrFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
-    using velox::exec::ConstantExpr;
-
-    VELOX_CHECK_GE(
-        expr->inputs().size(), 2, "substr expects at least 2 inputs");
-    VELOX_CHECK_LE(expr->inputs().size(), 3, "substr expects at most 3 inputs");
-
-    auto startExpr = std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[1]);
-    VELOX_CHECK_NOT_NULL(startExpr, "substr start must be a constant");
-
-    auto startValue =
-        startExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
-    start_ = static_cast<cudf::size_type>(startValue);
-    if (startValue >= 1) {
-      // cuDF indexing starts at 0.
-      // Presto indexing starts at 1.
-      // Positive indices need to substract 1.
-      start_ = static_cast<cudf::size_type>(startValue - 1);
-    }
-
-    if (expr->inputs().size() > 2) {
-      auto lengthExpr =
-          std::dynamic_pointer_cast<ConstantExpr>(expr->inputs()[2]);
-      VELOX_CHECK_NOT_NULL(lengthExpr, "substr length must be a constant");
-
-      auto lengthValue =
-          lengthExpr->value()->as<SimpleVector<int64_t>>()->valueAt(0);
-      // cuDF uses indices [begin, end).
-      // Presto uses length as the length of the substring.
-      // We compute the end as start + length.
-      end_ = start_ + static_cast<cudf::size_type>(lengthValue);
-      hasEnd_ = true;
-    }
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref mr) const override {
-    auto inputCol = asView(inputColumns[0]);
-    cudf::numeric_scalar<cudf::size_type> startScalar(start_, true, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> endScalar(
-        hasEnd_ ? end_ : 0, hasEnd_, stream, mr);
-    cudf::numeric_scalar<cudf::size_type> stepScalar(1, true, stream, mr);
-    return cudf::strings::slice_strings(
-        inputCol, startScalar, endScalar, stepScalar, stream, mr);
-  }
-
- private:
-  cudf::size_type start_{0};
-  cudf::size_type end_{0};
-  bool hasEnd_{false};
-};
-
 class CoalesceFunction : public CudfFunction {
  public:
   CoalesceFunction(const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -1529,7 +1565,7 @@ class LikeFunction : public CudfFunction {
     // Velox returns null if either the input or pattern row is null. cuDF
     // already propagated input nulls into the result, so only merge the pattern
     // nulls back when needed.
-    mergeSecondaryNullsIntoResult(*result, patternCol, stream, mr);
+    mergeNullSourceNullsIntoResult(*result, patternCol, stream, mr);
     return result;
   }
 
@@ -1743,7 +1779,7 @@ class StringPatternPredicateFunction : public CudfFunction {
     // can return a valid false when the pattern row is null, but Velox returns
     // null if either side is null. cuDF already propagated input nulls into the
     // result, so only merge the pattern nulls back when needed.
-    mergeSecondaryNullsIntoResult(*result, patternCol, stream, mr);
+    mergeNullSourceNullsIntoResult(*result, patternCol, stream, mr);
     return result;
   }
 
@@ -1909,16 +1945,96 @@ class ConcatFunction : public CudfFunction {
   size_t numInputs_{0};
 };
 
+class RowConstructorFunction : public CudfFunction {
+ public:
+  explicit RowConstructorFunction(
+      const std::shared_ptr<velox::exec::Expr>& expr) {
+    using velox::exec::ConstantExpr;
+    VELOX_CHECK_GE(
+        expr->inputs().size(), 1, "row_constructor expects at least 1 input");
+    numInputs_ = expr->inputs().size();
+    bool hasNonLiteralInput = false;
+    literals_.reserve(numInputs_);
+    for (const auto& input : expr->inputs()) {
+      if (auto constant = std::dynamic_pointer_cast<ConstantExpr>(input)) {
+        literals_.push_back(makeScalarFromConstantExpr(constant));
+      } else {
+        hasNonLiteralInput = true;
+        literals_.push_back(nullptr);
+      }
+    }
+    if (!hasNonLiteralInput) {
+      VELOX_NYI("row_constructor with only literal inputs is not supported");
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK(
+        !inputColumns.empty(),
+        "row_constructor requires at least one non-literal input column");
+    const cudf::size_type outputSize = asView(inputColumns[0]).size();
+
+    std::vector<std::unique_ptr<cudf::column>> children;
+    children.reserve(numInputs_);
+
+    size_t nextInputColumnIndex = 0;
+    for (const auto& literal : literals_) {
+      if (literal) {
+        children.push_back(
+            cudf::make_column_from_scalar(*literal, outputSize, stream, mr));
+      } else {
+        VELOX_CHECK_LT(nextInputColumnIndex, inputColumns.size());
+        children.push_back(
+            makeOwnedColumn(inputColumns[nextInputColumnIndex++], stream, mr));
+      }
+    }
+
+    VELOX_CHECK_EQ(nextInputColumnIndex, inputColumns.size());
+    return cudf::make_structs_column(
+        outputSize, std::move(children), 0, rmm::device_buffer{}, stream, mr);
+  }
+
+ private:
+  static std::unique_ptr<cudf::column> makeOwnedColumn(
+      ColumnOrView& holder,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
+  std::vector<std::unique_ptr<cudf::scalar>> literals_;
+  size_t numInputs_{0};
+};
+
+std::unique_ptr<cudf::column> RowConstructorFunction::makeOwnedColumn(
+    ColumnOrView& holder,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return std::visit(
+      [&](auto& value) -> std::unique_ptr<cudf::column> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, cudf::column_view>) {
+          return std::make_unique<cudf::column>(value, stream, mr);
+        } else {
+          return std::move(value);
+        }
+      },
+      holder);
+}
+
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   auto& registry = getCudfFunctionRegistry();
   if (!overwrite && !registry[name].empty()) {
     return false;
   }
-  registry[name].push_back(CudfFunctionSpec{std::move(factory), signatures});
+  registry[name].push_back(
+      CudfFunctionSpec{std::move(factory), signatures, std::move(canEvaluate)});
   return true;
 }
 
@@ -1926,9 +2042,10 @@ void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite) {
+    bool overwrite,
+    CudfCanEvaluate canEvaluate) {
   for (const auto& name : aliases) {
-    registerCudfFunction(name, factory, signatures, overwrite);
+    registerCudfFunction(name, factory, signatures, overwrite, canEvaluate);
   }
 }
 
@@ -1945,6 +2062,9 @@ std::shared_ptr<CudfFunction> createCudfFunction(
     // the special case of cast.
     if (!spec.signatures.empty() &&
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
+      continue;
+    }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
       continue;
     }
     return spec.factory(name, expr);
@@ -1986,23 +2106,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("array(any)")
            .build()});
 
-  registerCudfFunctions(
-      {prefix + "substr", prefix + "substring"},
-      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return std::make_shared<SubstrFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .returnType("varchar")
-           .argumentType("varchar")
-           .constantArgumentType("bigint")
-           .build(),
-       FunctionSignatureBuilder()
-           .returnType("varchar")
-           .argumentType("varchar")
-           .constantArgumentType("bigint")
-           .constantArgumentType("bigint")
-           .build()});
-
   // Coalesce is special form and doesn't have a prefix in its name.
   registerCudfFunction(
       "coalesce",
@@ -2015,6 +2118,14 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("T")
            .variableArity("T")
            .build()});
+
+  // row_constructor is a special form and doesn't have a prefix in its name.
+  registerCudfFunction(
+      "row_constructor",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<RowConstructorFunction>(expr);
+      },
+      {});
 
   registerCudfFunction(
       "and",
@@ -2038,6 +2149,38 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("boolean")
            .argumentType("boolean")
            .variableArity("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "not",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<UnaryFunction>(expr, cudf::unary_operator::NOT);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("boolean")
+           .build()});
+
+  registerCudfFunction(
+      "is_null",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
+  registerCudfFunction(
+      "isnotnull",
+      [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
+        return std::make_shared<IsNotNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
            .build()});
 
   registerCudfFunction(
@@ -2092,6 +2235,15 @@ bool registerBuiltinFunctions(const std::string& prefix) {
        FunctionSignatureBuilder()
            .returnType("bigint")
            .argumentType("bigint")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("double")
            .constantArgumentType("integer")
            .build()});
 
@@ -2338,6 +2490,11 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
       FunctionSignatureBuilder()
           .returnType("boolean")
+          .argumentType("bigint")
+          .argumentType("bigint")
+          .build(),
+      FunctionSignatureBuilder()
+          .returnType("boolean")
           .argumentType("double")
           .argumentType("double")
           .build(),
@@ -2513,6 +2670,8 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const std::shared_ptr<velox::exec::Expr>& expr,
     const RowTypePtr& inputRowSchema) {
+  using velox::exec::FieldReference;
+
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
@@ -2520,9 +2679,24 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   auto name = expr->name();
   node->function_ = createCudfFunction(name, expr);
 
-  if (node->function_) {
+  if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr)) {
+    if (!fieldExpr->inputs().empty()) {
+      VELOX_CHECK_EQ(
+          fieldExpr->inputs().size(),
+          1,
+          "Nested field reference expects exactly one input");
+      auto parentRowType = asRowType(fieldExpr->inputs()[0]->type());
+      VELOX_CHECK_NOT_NULL(
+          parentRowType,
+          "Nested FieldReference parent must be a ROW: {}",
+          expr->toString());
+      node->fieldIndex_ = resolveFieldReferenceIndex(*fieldExpr, parentRowType);
+    }
+  }
+
+  if (node->function_ || std::dynamic_pointer_cast<FieldReference>(expr)) {
     for (const auto& input : expr->inputs()) {
-      if (input->name() != "literal") {
+      if (!std::dynamic_pointer_cast<velox::exec::ConstantExpr>(input)) {
         node->subexpressions_.push_back(
             createCudfExpression(input, inputRowSchema));
       }
@@ -2530,6 +2704,44 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   }
 
   return node;
+}
+
+std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
+    ColumnOrView& structColumn,
+    cudf::size_type childIndex,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  return std::visit(
+      [&](auto& value) -> std::unique_ptr<cudf::column> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, cudf::column_view>) {
+          VELOX_CHECK(
+              value.type().id() == cudf::type_id::STRUCT,
+              "Nested field reference expects a ROW input");
+          VELOX_CHECK_LT(static_cast<size_t>(childIndex), value.num_children());
+          auto const childView =
+              cudf::structs_column_view(value).get_sliced_child(
+                  childIndex, stream);
+          auto child = std::make_unique<cudf::column>(childView, stream, mr);
+          mergeNullSourceNullsIntoResult(*child, value, stream, mr);
+          return child;
+        } else {
+          auto const structView = value->view();
+          VELOX_CHECK(
+              structView.type().id() == cudf::type_id::STRUCT,
+              "Nested field reference expects a ROW input");
+          VELOX_CHECK_LT(
+              static_cast<size_t>(childIndex), structView.num_children());
+
+          // `structView` points into `value`. Keep `contents` alive until after
+          // merging parent nulls so structView's null mask remains valid.
+          auto contents = value->release();
+          auto child = std::move(contents.children[childIndex]);
+          mergeNullSourceNullsIntoResult(*child, structView, stream, mr);
+          return child;
+        }
+      },
+      structColumn);
 }
 
 ColumnOrView FunctionExpression::eval(
@@ -2540,9 +2752,27 @@ ColumnOrView FunctionExpression::eval(
   using velox::exec::FieldReference;
 
   if (auto fieldExpr = std::dynamic_pointer_cast<FieldReference>(expr_)) {
-    auto name = fieldExpr->name();
-    auto columnIndex = inputRowSchema_->getChildIdx(name);
-    return inputColumnViews[columnIndex];
+    if (fieldExpr->inputs().empty()) {
+      auto columnIndex = inputRowSchema_->getChildIdx(fieldExpr->name());
+      return inputColumnViews[columnIndex];
+    }
+
+    VELOX_CHECK_EQ(
+        fieldExpr->inputs().size(),
+        1,
+        "Nested field reference expects exactly one input");
+    VELOX_CHECK_EQ(
+        subexpressions_.size(),
+        1,
+        "Nested field reference expects exactly one subexpression");
+
+    auto parent = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+    VELOX_DCHECK_GE(fieldIndex_, 0);
+    auto child = FunctionExpression::makeStructChildColumn(
+        parent, static_cast<cudf::size_type>(fieldIndex_), stream, mr);
+    VELOX_DCHECK(
+        child->view().type() == cudf_velox::veloxToCudfDataType(expr_->type()));
+    return child;
   }
 
   if (function_) {
@@ -2603,6 +2833,9 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
         !matchCallAgainstSignatures(*expr, spec.signatures)) {
       continue;
     }
+    if (spec.canEvaluate && !spec.canEvaluate(expr)) {
+      continue;
+    }
     return true;
   }
   return false;
@@ -2610,6 +2843,7 @@ bool FunctionExpression::canEvaluate(std::shared_ptr<velox::exec::Expr> expr) {
 
 bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
   ensureBuiltinExpressionEvaluatorsRegistered();
+
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 
   bool supported = false;

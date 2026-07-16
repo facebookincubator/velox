@@ -65,6 +65,13 @@ struct SizeExpr {
   /// returns its product. Only meaningful for kMax.
   bool broadcast{false};
 
+  /// Constant shapes contributed by factory ops (zeros/ones/full) fused into an
+  /// elementwise subtree. Such ops have no tensor inputs, so their extent comes
+  /// from a `size` attribute rather than a frame value; it is broadcast in
+  /// alongside `values`/`args`. When non-empty, dims()/numElements() use the
+  /// broadcast (per-dimension max) path. Only meaningful for kMax.
+  std::vector<std::vector<Dim>> constShapes{};
+
   /// Accesses all Values and calls recursively on args and combines the
   /// results (numel() of Values) by 'op'. (max or sum). If largestOut is
   /// not null and op is kMax, assigns the ValueId with the largest numel.
@@ -124,6 +131,14 @@ struct OutputDesc {
   /// Shortcut for all elementwise, where we already know the largest input and
   /// can set the output shape by that.
   bool byLargestInput{false};
+
+  /// Propagated from ArgumentMeta::nonRootOutput: this output belongs to a
+  /// non-last part of a split root op and is a real output of the original op,
+  /// so it is excluded from the freeable intermediates list (LaunchData::
+  /// intermediates). Flagged statically at registration, not from downstream
+  /// uses, because a shared ProjectOperation may or may not reference the value
+  /// externally per actual use.
+  bool nonRootOutput{false};
 
   SizeExpr sizeExpr;
 
@@ -223,12 +238,28 @@ class KernelOperation {
     return expr_;
   }
 
+  /// True if the actual value 'id' is fed to more than one part of a multipart
+  /// expansion (WaveGraph::multiUseInputs). Such values are produced in one
+  /// part's kernel op but read by another, so they must not be freed as per-op
+  /// intermediates.
+  bool isMultiUseInput(nativert::ValueId id) const;
+
+  /// True if the actual value 'id' is a graph output (or a list-output
+  /// element), which escapes the graph and must not be freed as a per-op
+  /// intermediate.
+  bool isGraphOutput(nativert::ValueId id) const;
+
   int32_t numInputs() const {
     return numInputs_;
   }
 
   const std::vector<ValueCP>& orderedInputs() const {
     return orderedInputs_;
+  }
+
+  /// Returns the static tensor metadata of the subgraph leaf inputs.
+  const std::vector<const nativert::TensorMeta*>& inputTypes() const {
+    return inputTypes_;
   }
 
   bool isInput(ValueCP value) const {
@@ -418,6 +449,12 @@ class KernelOperation {
   std::string helperCode_;
 
   std::vector<ValueCP> orderedInputs_;
+
+  // Static tensor metadata of the subgraph leaf inputs (carried from Subgraph).
+  // Used to size the grid from a static shape when an input is an
+  // unmaterialized intermediate at host sizing time (e.g. a view-rooted op
+  // under a cooperative grid).
+  std::vector<const nativert::TensorMeta*> inputTypes_;
 
   // Assigns a param offset for 'value', expanding TensorList elements.
   void assignParamOffset(ValueCP value, int32_t& offset);

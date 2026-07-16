@@ -1008,6 +1008,8 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
   std::optional<std::string> ordinalityName =
       std::make_optional<std::string>("ord");
   std::optional<bool> splitOutput = false;
+  std::optional<std::string> markerName =
+      std::make_optional<std::string>("marker");
 
   const auto verify = [&](const std::shared_ptr<const UnnestNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -1016,19 +1018,24 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
     EXPECT_TRUE(node->hasOrdinality());
     EXPECT_EQ(node->sources()[0], source_);
     EXPECT_EQ(node->splitOutput(), splitOutput);
+    EXPECT_EQ(node->markerName(), markerName);
 
-    for (int i = 0; i < node->outputType()->size(); ++i) {
-      if (i < replicateVariables.size()) {
-        EXPECT_EQ(node->outputType()->nameOf(i), replicateVariables[i]->name());
-      } else if (i < replicateVariables.size() + unnestVariables.size()) {
-        EXPECT_EQ(
-            node->outputType()->nameOf(i),
-            unnestVariables[i - replicateVariables.size()]->name());
-      } else {
-        EXPECT_EQ(i, node->outputType()->size() - 1);
-        EXPECT_EQ(node->outputType()->nameOf(i), ordinalityName.value());
-      }
+    // Output columns: replicate columns, then the unnest names, then the
+    // optional ordinality and marker columns.
+    std::vector<std::string> expectedNames;
+    for (const auto& variable : replicateVariables) {
+      expectedNames.push_back(variable->name());
     }
+    for (const auto& name : unnestNames) {
+      expectedNames.push_back(name);
+    }
+    if (ordinalityName.has_value()) {
+      expectedNames.push_back(ordinalityName.value());
+    }
+    if (markerName.has_value()) {
+      expectedNames.push_back(markerName.value());
+    }
+    EXPECT_EQ(node->outputType()->names(), expectedNames);
   };
 
   const auto node = UnnestNode::Builder()
@@ -1037,6 +1044,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
                         .unnestVariables(unnestVariables)
                         .unnestNames(unnestNames)
                         .ordinalityName(ordinalityName)
+                        .markerName(markerName)
                         .source(source_)
                         .splitOutput(splitOutput)
                         .build();
@@ -1044,6 +1052,17 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
 
   const auto node2 = UnnestNode::Builder(*node).build();
   verify(node2);
+
+  // A wrong number of unnest names is rejected: one per array, two per map.
+  VELOX_ASSERT_THROW(
+      UnnestNode::Builder()
+          .id(id)
+          .replicateVariables(replicateVariables)
+          .unnestVariables(unnestVariables)
+          .unnestNames({"b", "extra"})
+          .source(source_)
+          .build(),
+      "one name per array");
 }
 
 TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {
@@ -1067,13 +1086,11 @@ TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {
 TEST_F(PlanNodeBuilderTest, assignUniqueIdNode) {
   const PlanNodeId id = "assign_unique_id_id";
   const std::string idName = "unique_id";
-  const int32_t taskUniqueId = 42;
 
   const auto verify =
       [&](const std::shared_ptr<const AssignUniqueIdNode>& node) {
         EXPECT_EQ(node->id(), id);
         EXPECT_EQ(node->outputType()->names().back(), idName);
-        EXPECT_EQ(node->taskUniqueId(), taskUniqueId);
         EXPECT_EQ(node->sources().size(), 1);
         EXPECT_EQ(node->sources()[0], source_);
       };
@@ -1081,7 +1098,6 @@ TEST_F(PlanNodeBuilderTest, assignUniqueIdNode) {
   const auto node = AssignUniqueIdNode::Builder()
                         .id(id)
                         .idName(idName)
-                        .taskUniqueId(taskUniqueId)
                         .source(source_)
                         .build();
   verify(node);

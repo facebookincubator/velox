@@ -308,6 +308,18 @@ std::string traceIValue(const c10::IValue& value) {
       s += std::to_string(t.size(d));
     }
     s += "]";
+    // For non-contiguous tensors also show the strides, since shape alone does
+    // not capture the layout.
+    if (t.defined() && !t.is_contiguous()) {
+      s += " strides[";
+      for (int64_t d = 0; d < t.dim(); ++d) {
+        if (d > 0) {
+          s += ", ";
+        }
+        s += std::to_string(t.stride(d));
+      }
+      s += "]";
+    }
     return s;
   }
   if (value.isList()) {
@@ -336,6 +348,43 @@ void setGraphDevice(nativert::Graph* graph, bool isCuda) {
       : c10::Device(c10::kCPU);
   nativert::Placement placement(target);
   graph->applyDevicePlacement(placement);
+
+  if (!isCuda) {
+    return;
+  }
+  // Factory ops (zeros, ones, full, empty, arange, ...) with a `device` schema
+  // parameter but no device attribute default to CPU.  applyDevicePlacement
+  // only rewrites existing device attributes, so their outputs would land on
+  // CPU and trip device-mismatch checks when combined with GPU tensors.  Inject
+  // device=target for any such node so the whole graph runs on the GPU.
+  for (auto& node : graph->nodes()) {
+    auto nodeTarget = node.target();
+    std::vector<std::string_view> atoms = c10::split(nodeTarget, '.');
+    if (atoms.size() < 3 || atoms[0] != "torch" || atoms[1] != "ops") {
+      continue;
+    }
+    if (node.tryGetAttribute("device") != nullptr ||
+        node.tryGetInput("device") != nullptr) {
+      continue;
+    }
+    auto schema = c10::Dispatcher::singleton().findSchema(
+        {fmt::format(
+             "{}::{}", atoms[atoms.size() - 3], atoms[atoms.size() - 2]),
+         std::string(atoms[atoms.size() - 1])});
+    if (!schema) {
+      continue;
+    }
+    bool hasDeviceArg = false;
+    for (const auto& arg : schema->schema().arguments()) {
+      if (arg.name() == "device") {
+        hasDeviceArg = true;
+        break;
+      }
+    }
+    if (hasDeviceArg) {
+      node.addAttribute(nativert::Attribute{"device", target});
+    }
+  }
 }
 
 namespace {
@@ -418,7 +467,13 @@ std::string tensorDebugString(const at::Tensor& t, int32_t maxElements) {
   auto limit = maxElements > 0 ? std::min<int64_t>(flat.numel(), maxElements)
                                : flat.numel();
   std::stringstream ss;
-  ss << "shape=" << t.sizes() << " dtype=" << t.dtype() << " [";
+  ss << "shape=" << t.sizes() << " dtype=" << t.dtype();
+  // For non-contiguous tensors also show the strides, since shape alone does
+  // not capture the layout.
+  if (t.defined() && !t.is_contiguous()) {
+    ss << " strides=" << t.strides();
+  }
+  ss << " [";
   for (int64_t i = 0; i < limit; ++i) {
     if (i > 0) {
       ss << ", ";
@@ -571,6 +626,39 @@ bool tensorsMatch(const at::Tensor& actual, const at::Tensor& expected) {
   return actual.cpu().equal(expected.cpu());
 }
 
+std::optional<at::Tensor> scalarLikeToTensor(const c10::IValue& iv) {
+  auto longOpts = at::TensorOptions().dtype(at::kLong).device(at::kCPU);
+  auto doubleOpts = at::TensorOptions().dtype(at::kDouble).device(at::kCPU);
+  if (iv.isInt()) {
+    return at::tensor(std::vector<int64_t>{iv.toInt()}, longOpts);
+  }
+  if (iv.isDouble()) {
+    return at::tensor(std::vector<double>{iv.toDouble()}, doubleOpts);
+  }
+  if (iv.isBool()) {
+    return at::tensor(std::vector<int64_t>{iv.toBool() ? 1 : 0}, longOpts)
+        .to(at::kBool);
+  }
+  if (iv.isIntList()) {
+    const auto& l = iv.toIntList();
+    return at::tensor(std::vector<int64_t>(l.begin(), l.end()), longOpts);
+  }
+  if (iv.isDoubleList()) {
+    const auto& l = iv.toDoubleList();
+    return at::tensor(std::vector<double>(l.begin(), l.end()), doubleOpts);
+  }
+  if (iv.isBoolList()) {
+    const auto& l = iv.toBoolList();
+    std::vector<int64_t> v;
+    v.reserve(l.size());
+    for (bool b : l) {
+      v.push_back(b ? 1 : 0);
+    }
+    return at::tensor(v, longOpts).to(at::kBool);
+  }
+  return std::nullopt;
+}
+
 std::string tensorToString(const at::Tensor& t) {
   auto cpu = t.cpu().contiguous();
   auto flat = cpu.flatten();
@@ -659,31 +747,24 @@ void serializeReferenceFrame(
   for (const auto& [id, iv] : items) {
     RefEntry e{};
     e.id = id;
+    // Tensors are stored as-is; scalars and scalar lists are wrapped into a 1-D
+    // tensor of the matching dtype so they live on the same (kRefTensor) path
+    // and can be compared element-wise at check time.
+    at::Tensor t;
     if (iv.isTensor()) {
-      auto t = iv.toTensor().cpu().contiguous();
-      heldTensors.push_back(t);
-      e.kind = kRefTensor;
-      e.scalarType = static_cast<int32_t>(t.scalar_type());
-      e.dims = t.sizes().vec();
-      e.length = static_cast<uint64_t>(t.nbytes());
-      blobs.push_back(t.data_ptr());
-    } else if (iv.isInt()) {
-      e.kind = kRefInt;
-      int64_t v = iv.toInt();
-      std::memcpy(&e.offset, &v, sizeof(int64_t));
-      blobs.push_back(nullptr);
-    } else if (iv.isDouble()) {
-      e.kind = kRefDouble;
-      double v = iv.toDouble();
-      std::memcpy(&e.offset, &v, sizeof(double));
-      blobs.push_back(nullptr);
-    } else if (iv.isBool()) {
-      e.kind = kRefBool;
-      e.offset = iv.toBool() ? 1 : 0;
-      blobs.push_back(nullptr);
+      t = iv.toTensor();
+    } else if (auto st = scalarLikeToTensor(iv)) {
+      t = *st;
     } else {
       continue;
     }
+    t = t.cpu().contiguous();
+    heldTensors.push_back(t);
+    e.kind = kRefTensor;
+    e.scalarType = static_cast<int32_t>(t.scalar_type());
+    e.dims = t.sizes().vec();
+    e.length = static_cast<uint64_t>(t.nbytes());
+    blobs.push_back(t.data_ptr());
     entries.push_back(std::move(e));
   }
 
@@ -783,7 +864,9 @@ void saveReferenceFrame(
       if (iv.toTensor().numel() > 0) {
         items.emplace_back(static_cast<int32_t>(id), iv);
       }
-    } else if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+    } else if (
+        iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(static_cast<int32_t>(id), iv);
     }
   }
@@ -804,7 +887,9 @@ void saveReferenceFrame(
       if (iv.toTensor().numel() > 0) {
         items.emplace_back(id, iv);
       }
-    } else if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+    } else if (
+        iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(id, iv);
     }
   }
@@ -832,7 +917,8 @@ void saveReferenceFrame(
       continue;
     }
     const auto& iv = frame.getIValue(value->id());
-    if (iv.isInt() || iv.isDouble() || iv.isBool()) {
+    if (iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
+        iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(static_cast<int32_t>(id), iv);
     }
   }
@@ -849,6 +935,23 @@ void saveTensorList(
     }
   }
   auto data = torch::jit::pickle_save(c10::IValue(list));
+  std::ofstream out(path, std::ios::binary);
+  out.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
+void saveIValueList(
+    const std::vector<c10::IValue>& values,
+    const std::string& path) {
+  // A tuple (not a typed list) so pickling emits no element type tag: a
+  // heterogeneous List[Any] fails pickleLoadWithTypes, but a tuple unpickles
+  // generically and loadReferenceValues flattens it back to these elements.
+  std::vector<c10::IValue> elems;
+  elems.reserve(values.size());
+  for (const auto& v : values) {
+    elems.push_back(v.isTensor() ? c10::IValue(v.toTensor().cpu()) : v);
+  }
+  auto data = torch::jit::pickle_save(
+      c10::IValue(c10::ivalue::Tuple::create(std::move(elems))));
   std::ofstream out(path, std::ios::binary);
   out.write(data.data(), static_cast<std::streamsize>(data.size()));
 }
@@ -1040,58 +1143,64 @@ bool aliasSetsIntersect(const c10::AliasInfo& a, const c10::AliasInfo& b) {
 }
 } // namespace
 
+ValueCP schemaAliasedInput(NodeCP node, ValueCP output) {
+  // The c10 FunctionSchema tells whether an output aliases (shares storage
+  // with) an input: a view annotates both as the same alias set 'a'
+  // (Tensor(a) self -> Tensor(a)), an in-place op as 'a!' (Tensor(a!) self ->
+  // Tensor(a!)). Return the aliased input value, or nullptr if the output is
+  // fresh (its return has no alias set, or no input shares it).
+  const auto* schema = findFunctionSchema(node->target());
+  if (schema == nullptr) {
+    return nullptr;
+  }
+  const auto& outputs = node->outputs();
+  int32_t outIdx = -1;
+  for (size_t i = 0; i < outputs.size(); ++i) {
+    if (outputs[i] == output) {
+      outIdx = static_cast<int32_t>(i);
+      break;
+    }
+  }
+  if (outIdx < 0 || static_cast<size_t>(outIdx) >= schema->returns().size()) {
+    return nullptr;
+  }
+  const auto* outAlias = schema->returns()[outIdx].alias_info();
+  if (outAlias == nullptr) {
+    return nullptr;
+  }
+  const auto& args = schema->arguments();
+  const auto& inputs = node->inputs();
+  for (size_t j = 0; j < inputs.size() && j < args.size(); ++j) {
+    const auto* inAlias = args[j].alias_info();
+    if (inAlias != nullptr && aliasSetsIntersect(*inAlias, *outAlias)) {
+      return inputs[j].value;
+    }
+  }
+  return nullptr;
+}
+
 ValueCP viewStorageBase(ValueCP value) {
-  // Follow storage-aliasing edges from a value to its base. Two kinds of edge
-  // alias an output to an input: a view (output is a view of input 'viewOfArg')
-  // and an in-place op (the FunctionSchema gives the output and the mutated
-  // self the same alias set, e.g. add_/clamp_ Tensor(a!) -> Tensor(a!)). Both
-  // must be followed so that a, a.view(), and a.add_(...) all resolve to the
-  // same base. Bounded by the graph's acyclicity.
+  // Follow storage-aliasing edges from a value to its base. An output aliases
+  // an input when they share a c10 alias set -- a view (Tensor(a) self ->
+  // Tensor(a)) or an in-place op (Tensor(a!) self -> Tensor(a!)). Prefer the
+  // c10 schema (authoritative), and fall back to the torchwave viewOfArg
+  // metadata for tw.* ops that have no c10 alias annotations. Follow so that a,
+  // a.view(), and a.add_(...) all resolve to the same base; bounded by graph
+  // acyclicity.
   while (value != nullptr) {
     auto* producer = value->producer();
     if (producer == nullptr) {
       break;
     }
-    ValueCP next = nullptr;
+    ValueCP next = schemaAliasedInput(producer, value);
 
-    // 1. torchwave view metadata (static op property, no thread WaveGraph
-    // needed, so this works in GraphTool too).
-    const auto* meta = Registry::metadata(producer->target());
-    if (meta != nullptr && meta->viewOfArg.has_value()) {
-      auto ordinal = *meta->viewOfArg;
-      if (ordinal >= 0 &&
-          static_cast<size_t>(ordinal) < producer->inputs().size()) {
-        next = producer->inputs()[ordinal].value;
-      }
-    }
-
-    // 2. Schema alias: the output 'value' shares an alias set with an input.
     if (next == nullptr) {
-      const auto* schema = findFunctionSchema(producer->target());
-      if (schema != nullptr) {
-        const auto& outputs = producer->outputs();
-        int32_t outIdx = -1;
-        for (size_t i = 0; i < outputs.size(); ++i) {
-          if (outputs[i] == value) {
-            outIdx = static_cast<int32_t>(i);
-            break;
-          }
-        }
-        if (outIdx >= 0 &&
-            static_cast<size_t>(outIdx) < schema->returns().size()) {
-          const auto* outAlias = schema->returns()[outIdx].alias_info();
-          if (outAlias != nullptr) {
-            const auto& args = schema->arguments();
-            const auto& inputs = producer->inputs();
-            for (size_t j = 0; j < inputs.size() && j < args.size(); ++j) {
-              const auto* inAlias = args[j].alias_info();
-              if (inAlias != nullptr &&
-                  aliasSetsIntersect(*inAlias, *outAlias)) {
-                next = inputs[j].value;
-                break;
-              }
-            }
-          }
+      const auto* meta = Registry::metadata(producer->target());
+      if (meta != nullptr && meta->viewOfArg.has_value()) {
+        auto ordinal = *meta->viewOfArg;
+        if (ordinal >= 0 &&
+            static_cast<size_t>(ordinal) < producer->inputs().size()) {
+          next = producer->inputs()[ordinal].value;
         }
       }
     }
@@ -1157,6 +1266,28 @@ bool baseMutatedAfter(
   return false;
 }
 
+bool isUnreadyNoneDependency(ValueCP value, nativert::ExecutionFrame& frame) {
+  // A value whose static type is None (an `asNone` optional argument) is
+  // legitimately None and will never be produced -- it must not block its
+  // consumer.  Only a runtime-None value with a non-None static type is an
+  // unready dependency awaiting a producer.
+  return value->type().kind() != nativert::Type::Kind::None &&
+      frame.getIValue(value->id()).isNone();
+}
+
+bool nodeOutputsComputed(NodeCP node, nativert::ExecutionFrame& frame) {
+  const auto& outputs = node->outputs();
+  if (outputs.empty()) {
+    return false;
+  }
+  for (auto* output : outputs) {
+    if (frame.getIValue(output->id()).isNone()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 TraceState parseTraceValues(const std::string& csv) {
   TraceState state;
   if (csv.empty()) {
@@ -1186,11 +1317,14 @@ void traceFrameValues(
       continue;
     }
     const auto& iv = frame.getIValue(id);
-    if (iv.isNone()) {
-      continue;
-    }
     traceState.markTraced(id);
-    if (iv.isTensor()) {
+    if (iv.isNone()) {
+      // Print a marker rather than skipping: an unset/freed value is exactly
+      // what we want to see when tracing (e.g. a user input read as null on a
+      // second run of a reused frame).
+      std::cout << "  trace " << label << " %" << id << ": <none/unset>"
+                << std::endl;
+    } else if (iv.isTensor()) {
       std::cout << "  trace " << label << " %" << id << ": "
                 << tensorDebugString(iv.toTensor(), maxElements) << std::endl;
     } else {

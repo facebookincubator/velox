@@ -1,0 +1,138 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Selective Build Comment
+
+# zizmor:disable:dangerous-triggers -- only reads an artifact and posts a comment, no PR code execution.
+#
+# Triggered by Linux Build using GCC. The selective-build-comment artifact
+# is uploaded by either decide-mode or prepare-slow inside
+# selective-build-plan.yml.
+on:
+  workflow_run:
+    workflows: [Linux Build using GCC]
+    types:
+      - completed
+
+permissions:
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  post-comment:
+    # Post on PR-related runs (not push). Trigger on both success and
+    # failure — when any build job fails, reviewers most need to see what
+    # was supposed to be built.
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      (github.event.workflow_run.conclusion == 'success' ||
+       github.event.workflow_run.conclusion == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      # workflow_run-triggered jobs start with an empty workspace; check
+      # out just the helper-scripts dir so the sourced gh-api-retry.sh
+      # is on disk for the Get-PR-number step. Sparse-checkout keeps
+      # this fast and the BASE-context default ref ensures we trust the
+      # helper from main rather than the PR head.
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      # The artifact may be missing if the upstream workflow failed before
+      # the `Upload comment artifact` step ran (e.g. plan crashed) or if
+      # the plan emitted mode=skip and uploaded nothing. continue-on-error
+      # lets us detect that and quietly bail out instead of failing.
+      - name: Download comment artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: selective-build-comment
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Get PR number
+        id: pr
+        if: steps.download.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          pr_number=$(gh_api \
+            "/repos/${REPO}/pulls?head=${HEAD_OWNER}:${HEAD_BRANCH}&state=open" \
+            -q '.[0].number // empty')
+
+          if [ -z "$pr_number" ]; then
+            echo "No open PR found for branch ${HEAD_BRANCH}"
+            exit 0
+          fi
+          echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update PR comment
+        if: steps.pr.outputs.number
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const comment = fs.readFileSync('comment.md', 'utf8');
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+
+            // Identify our previous comment via a unique HTML marker
+            // embedded in every comment we post. This is more precise
+            // than matching on the heading text because it cannot
+            // collide with other github-actions[bot] comments that
+            // happen to contain similar markdown.
+            const uniqueMarker = '<!-- velox-selective-build-plan-comment -->';
+            // Backwards-compat: also match the heading for in-flight PRs
+            // whose existing comment was posted before the marker was
+            // introduced. Safe to remove once all open PRs have refreshed.
+            const legacyHeadings = [
+              '## Selective Build Plan',
+              '## Build Impact Analysis',
+            ];
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(c => {
+              if (c.user.login !== 'github-actions[bot]') return false;
+              if (c.body.includes(uniqueMarker)) return true;
+              return legacyHeadings.some(h => c.body.includes(h));
+            });
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: comment,
+              });
+            }

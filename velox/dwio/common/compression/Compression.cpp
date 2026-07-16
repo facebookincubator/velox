@@ -739,6 +739,7 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
           streamDebugInfo);
       break;
     case CompressionKind::CompressionKind_LZ4:
+    case CompressionKind::CompressionKind_LZ4_HADOOP:
       decompressor = std::make_unique<Lz4Decompressor>(
           blockSize,
           options.format.lz4_lzo.isHadoopFrameFormat,

@@ -67,6 +67,20 @@ struct ElementwiseOp {
 /// largest input, as in all elementwise, kSum is concatenation.
 enum class SizeShortcut { kNone, kMax, kSum };
 
+/// Identifies a metadata-only standalone op (no real compute, only tensor
+/// metadata manipulation) so the executor can apply a host-side shortcut
+/// instead of a generic eager dispatch. kNone means no shortcut applies.
+enum class StandaloneShortcut {
+  kNone,
+  kListPack,
+  kView,
+  kSlice,
+  kSelectInt,
+  kUnsqueeze,
+  kTranspose,
+  kNarrow,
+};
+
 /// Specifies which arguments determine the number of elements a kernel
 /// processes.
 struct SizeArguments {
@@ -119,6 +133,18 @@ struct ArgumentMeta {
   /// on device side results from another.
   bool linkOnly{false};
 
+  /// Set for an output produced by a non-last part of a root op that was split
+  /// into several kernel ops (e.g. tw.group_length_guard_head, whose length
+  /// outputs are consumed by tw.group_length_guard_final). Such an output is a
+  /// real output of the original op, so it must never be released as a per-op
+  /// freeable intermediate, even though its producing node is not the kernel
+  /// op's root expr. We flag this statically at registration rather than
+  /// deciding from downstream uses on purpose: a ProjectOperation is
+  /// deduplicated and reused across actual subgraphs, some of which reference
+  /// this value externally and some of which do not, so a use-based decision
+  /// would be wrong for the shared op.
+  bool nonRootOutput{false};
+
   /// Marks that for an elementwise operation, we want the whole tensor as
   /// opposed to its element for this lane.
   bool wholeTensor{false};
@@ -146,6 +172,18 @@ struct Metadata {
 
   std::vector<ArgumentMeta> argumentMeta;
 
+  /// Positional argument names for schema-less ops (no functionSchema, e.g. the
+  /// Python _operator.* scalar ops). nativert splits a node's operands across
+  /// inputs() (symbolic operands, by name) and attributes() (constant literals,
+  /// by name); neither container preserves positional order, only the names do.
+  /// forArguments binds each position to the operand carrying argumentNames[i].
+  /// These are the Python signature parameter names ("a", "b", ... for the
+  /// _operator builtins). A registered name absent from the node, or an operand
+  /// the node carries that is not a registered name, is a fatal error, so an op
+  /// whose serialized argument names differ from those registered fails loudly
+  /// rather than silently miscomputing. Empty for schema-backed ops.
+  std::vector<std::string> argumentNames;
+
   std::vector<ArgumentMeta> returnMeta;
 
   /// True if all values to be computed by a block must be ready before calling.
@@ -171,6 +209,14 @@ struct Metadata {
   /// In single-block mode the flag is ignored.
   bool multiBlockReturnBarrier{false};
 
+  /// Like multiBlockReturnBarrier, but only takes effect when the runtime
+  /// WaveConfig::scanOutputReturnBarrier toggle is enabled (passed in as the
+  /// scanOutputReturnBarrierEnabled argument to isKernelBreak). Set on scan ops
+  /// whose multi-block output is read cross-block by fused cat consumers so the
+  /// scan ends its launch and the consumer reads a materialized buffer from a
+  /// later stream-ordered launch.
+  bool scanOutputReturnBarrier{false};
+
   /// If true, the operation always uses the single block grid variant
   /// regardless of input size.
   bool alwaysSingleBlock{false};
@@ -179,6 +225,14 @@ struct Metadata {
   /// computing on tensor data. When used as a size arg producer, it runs as
   /// a standalone rather than a fused op.
   bool isMetadataGetter{false};
+
+  /// If true, this is a scalar-producing elementwise op (e.g. the Python
+  /// _operator.* scalar arithmetic, or sym_size / sym_numel). Such ops have no
+  /// FunctionSchema; their operands and result are naked scalars (SymInt /
+  /// SymFloat), not tensors. When the top node of an elementwise kernel has
+  /// this flag, the elementwise loop runs a single iteration and assigns the
+  /// result to a scalar parameter instead of a tensor element.
+  bool isScalarElementwise{false};
 
   /// Translates a single node to a sequence of nodes that must be separated by
   /// kernel boundaries.
@@ -205,6 +259,13 @@ struct Metadata {
   /// If true, the op only supports 1-d (flat) inputs. Falls back to standalone
   /// when any input has rank > 1 or unknown rank.
   bool only1d{false};
+
+  /// If true, the op only manipulates tensor metadata (e.g. a view, slice, or
+  /// select) and does no real compute, so a standalone instance can be served
+  /// by a host-side shortcut. Set via the builder for known metadata-only ops.
+  /// prim.ListPack is also metadata-only but has no Metadata entry; that case
+  /// is handled directly where standalone Launches are built.
+  bool metadataOnly{false};
 
   /// If set, called to determine standalone status when isStandalone_ is false.
   std::function<bool(NodeCP, const ValueTypes&)> isStandaloneFunc;
@@ -376,7 +437,10 @@ struct Metadata {
       bool callerIsElementwise)>
       setOutputs;
 
-  bool isKernelBreak(bool isSingleBlock, bool isCgGrid = false) const {
+  bool isKernelBreak(
+      bool isSingleBlock,
+      bool isCgGrid = false,
+      bool scanOutputReturnBarrierEnabled = false) const {
     for (auto& rm : returnMeta) {
       if (rm.neededOnHost) {
         return true;
@@ -385,7 +449,8 @@ struct Metadata {
     if (isSingleBlock || isCgGrid) {
       return false;
     }
-    return multiBlockReturnBarrier;
+    return multiBlockReturnBarrier ||
+        (scanOutputReturnBarrier && scanOutputReturnBarrierEnabled);
   }
 };
 
@@ -430,13 +495,20 @@ class Registry {
 /// Fluent builder for constructing and registering Metadata entries.
 class MetadataBuilder {
  public:
+  /// Tag for registering an op that has no FunctionSchema (e.g. the Python
+  /// _operator.* scalar ops). The caller must set numArgs / argumentMeta /
+  /// returnMeta explicitly since they cannot be derived from a schema.
+  struct NoSchema {};
+
   explicit MetadataBuilder(std::string_view qualifiedName);
   explicit MetadataBuilder(std::unique_ptr<c10::FunctionSchema> schema);
+  MetadataBuilder(std::string_view qualifiedName, NoSchema);
 
   MetadataBuilder& sizeShortcut(SizeShortcut shortcut);
   MetadataBuilder& sizeOrdinal(std::vector<int32_t> ordinal);
   MetadataBuilder& sizeArgsList(std::vector<bool> isList);
   MetadataBuilder& argumentMeta(std::vector<ArgumentMeta> meta);
+  MetadataBuilder& argumentNames(std::vector<std::string> names);
   MetadataBuilder& defaultInputMeta();
   MetadataBuilder& returnMeta(std::vector<ArgumentMeta> meta);
   MetadataBuilder& defaultOutputMeta();
@@ -444,6 +516,7 @@ class MetadataBuilder {
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
+  MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
@@ -455,6 +528,7 @@ class MetadataBuilder {
   MetadataBuilder& inPlaceIfLastUse(bool val = true);
   MetadataBuilder& isStandalone(bool val = true);
   MetadataBuilder& only1d(bool val = true);
+  MetadataBuilder& metadataOnly(bool val = true);
   MetadataBuilder& isStandaloneFunc(
       std::function<bool(NodeCP, const ValueTypes&)> func);
   MetadataBuilder& cost(float val);
@@ -504,6 +578,7 @@ class MetadataBuilder {
   MetadataBuilder& hasIdxArg(bool val = true);
   MetadataBuilder& hasSizeArg(bool val = true);
   MetadataBuilder& hasBlockInfo(bool val = true);
+  MetadataBuilder& isScalarElementwise(bool val = true);
 
   Metadata build();
   void registerOp();

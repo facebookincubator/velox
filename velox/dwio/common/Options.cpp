@@ -47,6 +47,7 @@ const auto& columnMappingModeNames() {
       {ColumnMappingMode::kPosition, "POSITION"},
       {ColumnMappingMode::kName, "NAME"},
       {ColumnMappingMode::kParquetFieldId, "PARQUET_FIELD_ID"},
+      {ColumnMappingMode::kFieldId, "FIELD_ID"},
   };
   return kNames;
 }
@@ -61,6 +62,13 @@ FileFormat toFileFormat(std::string_view s) {
     return FileFormat::NIMBLE;
   }
   return FileFormatName::tryToFileFormat(s).value_or(FileFormat::UNKNOWN);
+}
+
+std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
+  if (fmt == FileFormat::UNKNOWN) {
+    return "";
+  }
+  return std::string(FileFormatName::toName(fmt)) + std::string(separator);
 }
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {

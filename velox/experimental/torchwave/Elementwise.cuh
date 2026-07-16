@@ -35,7 +35,16 @@ __device__ inline float arithCast(__nv_bfloat16 x) {
 }
 
 // Binary arithmetic.
-
+//
+// The return type is T, the FIRST operand's type, because GraphOptimizer's
+// promotion pass casts every tensor operand (and the output) to PyTorch's
+// promoted dtype before codegen. So a1 already carries the op's output dtype,
+// and returning T stores the result at that dtype. The other operands get
+// their own template types (T2, TAlpha) because they need not be tensors of
+// that dtype: the second operand of a *.Scalar op, and the alpha of add/sub,
+// are scalar constants emitted as C++ literals that the promotion pass does not
+// unify. They are folded in via arithCast + ordinary C++ promotion inside the
+// expression, then the result converts back to T on return.
 template <typename T, typename T2, typename TAlpha>
 __device__ inline T __add(T a1, T2 a2, TAlpha alpha) {
   return arithCast(a1) + arithCast(a2) * arithCast(alpha);
@@ -68,6 +77,36 @@ __device__ inline double __div(int64_t a1, int64_t a2) {
 
 __device__ inline double __div(int32_t a1, int32_t a2) {
   return static_cast<double>(a1) / static_cast<double>(a2);
+}
+
+// Python/_operator.floordiv on integers: floor(a / b), rounding toward
+// negative infinity (C++ integer division truncates toward zero, so adjust
+// when the remainder is nonzero and the operand signs differ).
+template <typename T, typename T2 = T>
+__device__ inline int64_t __floordiv(T a1, T2 a2) {
+  int64_t a = static_cast<int64_t>(a1);
+  int64_t b = static_cast<int64_t>(a2);
+  int64_t q = a / b;
+  if ((a % b != 0) && ((a < 0) != (b < 0))) {
+    --q;
+  }
+  return q;
+}
+
+// Two-arg add/sub for scalar Python _operator.add / _operator.sub, which have
+// no alpha (unlike aten.add/aten.sub). Unlike the tensor ops above there is no
+// promotion pass and no anchoring tensor, so the result takes the deduced
+// promoted type of the operands -- exactly what plain `a1 + a2` yields -- which
+// is correct for SymInt, SymFloat, and mixed int/float operands. Forcing a
+// fixed type (e.g. int64) here would truncate a SymFloat operand.
+template <typename T, typename T2 = T>
+__device__ inline auto __opadd(T a1, T2 a2) {
+  return arithCast(a1) + arithCast(a2);
+}
+
+template <typename T, typename T2 = T>
+__device__ inline auto __opsub(T a1, T2 a2) {
+  return arithCast(a1) - arithCast(a2);
 }
 
 // PyTorch remainder: result = a - floor(a/b) * b, same sign as divisor.
@@ -422,6 +461,32 @@ __device__ inline double __sigmoid(double a1) {
   return 1.0 / (1.0 + exp(-a1));
 }
 
+// logit (inverse sigmoid): log(z / (1 - z)). The optional aten eps clamps z to
+// [eps, 1 - eps]; a negative eps (set by resolveLogitDefault when eps is None)
+// means no clamp. Non-floating inputs are not meaningful for logit; the
+// template fallback is only there so codegen compiles for any T.
+template <typename T>
+__device__ inline T __logit(T a1, double /*eps*/) {
+  return a1;
+}
+
+__device__ inline float __logit(float a1, double eps) {
+  float z = a1;
+  if (eps >= 0.0) {
+    float e = static_cast<float>(eps);
+    z = fminf(fmaxf(a1, e), 1.0f - e);
+  }
+  return logf(z / (1.0f - z));
+}
+
+__device__ inline double __logit(double a1, double eps) {
+  double z = a1;
+  if (eps >= 0.0) {
+    z = fmin(fmax(a1, eps), 1.0 - eps);
+  }
+  return log(z / (1.0 - z));
+}
+
 template <
     bool kHasMin = true,
     bool kHasMax = true,
@@ -521,8 +586,18 @@ __device__ inline T __minimum(T a1, T a2) {
   return a1 < a2 ? a1 : a2;
 }
 
+template <typename T, typename U>
+__device__ inline auto __minimum(T a1, U a2) -> decltype(a1 + a2) {
+  return a1 < a2 ? a1 : a2;
+}
+
 template <typename T>
 __device__ inline T __maximum(T a1, T a2) {
+  return a1 > a2 ? a1 : a2;
+}
+
+template <typename T, typename U>
+__device__ inline auto __maximum(T a1, U a2) -> decltype(a1 + a2) {
   return a1 > a2 ? a1 : a2;
 }
 
@@ -572,7 +647,11 @@ __device__ inline T __arange(int64_t idx) {
 // Shape query.
 
 __device__ inline int64_t __sym_size(Tensor* self, int64_t dim) {
-  return self->dims[self->rank - 1 - dim];
+  return self->dims[dim < 0 ? dim + self->rank : dim];
+}
+
+__device__ inline int64_t __numel(Tensor* self) {
+  return self->numEl;
 }
 
 // Index gather: returns source[indices[0][i]] for 1D indexing.
@@ -661,6 +740,71 @@ __device__ inline T __index_put_elt_three(
     SET_MSG(block.debugInfo, "Bad idx\0");
   }
   return T();
+}
+
+// Fused slice_scatter along 'dim' (functional/out-of-place). The elementwise
+// loop iterates every element of the output (which has self's shape), so 'idx'
+// is the row-major offset of one output element and the device function returns
+// that element's value. Positions inside the slice [start, start + len*step)
+// along 'dim' (stride 'step') come from 'src'; all other positions pass through
+// 'self' unchanged. 'len' (the slice length) is taken from src, which is
+// authoritative. Both 'self' and 'src' are read at computed offsets through
+// their own strides, so non-contiguous operands (e.g. a column-slice view) are
+// handled; both are whole tensors and must be materialized before this op (the
+// randomAccess argument flag enforces that, as for the index-gather source).
+// The output is contiguous, so 'idx' decomposes directly into per-dim
+// coordinates via self's dims. A slice that does not fit in 'self' along 'dim'
+// (an out-of-range start/end, possibly injected) is reported like
+// __index_put_elt_*.
+template <typename T>
+__device__ inline T __slice_scatter(
+    uint32_t idx,
+    Tensor* self,
+    Tensor* src,
+    int32_t dim,
+    int32_t start,
+    int32_t /*end*/,
+    int32_t step,
+    BlockInfo& block) {
+  int64_t dimSize = self->dims[dim];
+  int64_t len = src->dims[dim];
+  int64_t st = static_cast<int64_t>(step) > 0 ? static_cast<int64_t>(step) : 1;
+  // The whole slice must fit in 'self' along 'dim'; otherwise report and pass
+  // self through unchanged. An empty slice is a no-op (all positions pass
+  // through).
+  int64_t lastPos = static_cast<int64_t>(start) + (len - 1) * st;
+  if (len >= 1 && (start < 0 || lastPos >= dimSize) && block.debugInfo) {
+    block.debugInfo->line = __LINE__;
+    block.debugInfo->extra[0] = dim;
+    block.debugInfo->extra[1] = start;
+    SET_MSG(block.debugInfo, "Bad idx\0");
+  }
+  // Decompose the contiguous output offset 'idx' into per-dim coordinates using
+  // the output dims (== self dims), innermost dim first.
+  int64_t coord[kMaxDims];
+  int64_t rem = static_cast<int64_t>(idx);
+  for (int d = self->rank - 1; d >= 0; --d) {
+    coord[d] = rem % self->dims[d];
+    rem /= self->dims[d];
+  }
+  int64_t pos = coord[dim];
+  int64_t rel = pos - static_cast<int64_t>(start);
+  bool inSlice = len >= 1 && start >= 0 && lastPos < dimSize && rel >= 0 &&
+      rel < len * st && rel % st == 0;
+  if (inSlice) {
+    int64_t sliceJ = rel / st;
+    int64_t srcOff = 0;
+    for (int d = 0; d < src->rank; ++d) {
+      int64_t c = d == dim ? sliceJ : coord[d];
+      srcOff += c * src->strides[d];
+    }
+    return storage<T>(src)[srcOff];
+  }
+  int64_t selfOff = 0;
+  for (int d = 0; d < self->rank; ++d) {
+    selfOff += coord[d] * self->strides[d];
+  }
+  return storage<T>(self)[selfOff];
 }
 
 // Elementwise index gather variants with scalar indices in registers.

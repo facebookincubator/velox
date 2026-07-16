@@ -20,6 +20,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@
 
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
+#include "velox/experimental/torchwave/tests/DataGen.h"
 
 namespace torch::wave {
 
@@ -90,6 +92,25 @@ std::vector<c10::IValue> loadReferenceValues(const std::string& path);
 std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
     std::vector<c10::IValue>& inputs);
 
+/// Inserts an `aten._to_copy(self, device=cpu)` node before every input
+/// argument flagged `cpuOnly` in its wave Metadata (e.g. the indices of
+/// `aten.tensor_split.tensor_indices_or_sections`), repointing just that edge.
+/// This lets the generic nativert executor run the graph on GPU: tensor_split
+/// reads its indices on the host and returns views of `self`, so `self` and the
+/// outputs stay on GPU and no move-back is needed. Mutates `graph` in place, so
+/// call it on a clone reserved for the nativert-GPU run (wave handles cpuOnly
+/// args itself at runtime and must keep its own copy-free graph). Returns the
+/// number of nodes inserted.
+int32_t insertCpuOnlyCopies(nativert::Graph& graph);
+
+/// Rewrites ops that have no CUDA implementation to a CUDA-capable equivalent
+/// so the generic nativert executor can run the graph on GPU. Currently
+/// rewrites `fb.simple_1d_concat` (CUDA registration is a throwing dummy) to
+/// `aten.cat.default(dim=0)`, mirroring wave's MoreBuiltins rewrite. Mutates
+/// `graph`; call on the nativert-GPU clone. Returns the number of nodes
+/// rewritten.
+int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph);
+
 /// Snapshots a frame: returns a map from value id to shape string (e.g.
 /// "[3,4]") for tensors, "scalar" for scalars. None slots are omitted.
 std::unordered_map<int32_t, std::string> snapshotFrame(
@@ -112,6 +133,16 @@ std::vector<c10::IValue> outputsToHost(
 /// Prints standalone execution times from a WaveGraphExecutor, sorted highest
 /// time first. Each node is serialized as in Launch::toString.
 void standaloneReport(WaveGraphExecutor& executor);
+
+/// Copies 'reader's records into a fresh archive at 'outPath', dropping the
+/// data sections (data/weights, data/constants, data/sample_inputs) so the
+/// result carries only the graph serialization and archive metadata. Used by
+/// --save_model to write a small, data-free graph archive (a .pt2 for a .pt2
+/// source, or the sigmoid graph for a sigmoid source) that --run_synthetic
+/// loads and pairs with synthetic weights and inputs from the spec.
+void saveModelArchive(
+    caffe2::serialize::PyTorchStreamReader& reader,
+    const std::string& outPath);
 
 /// Base test fixture for running .pt2 models through serial and wave executors.
 class ExecutorTestBase : public ::testing::Test {
@@ -144,6 +175,17 @@ class ExecutorTestBase : public ::testing::Test {
       const std::function<void(nativert::ExecutionFrame&)>& alterInputs =
           nullptr);
 
+  /// Runs only the wave path on 'fixture' (no serial run, no output
+  /// verification) for testing device-side error conditions. 'alterInputs' is
+  /// called after the frame is filled and before execution, so it can corrupt
+  /// an input (e.g. an out-of-range index) to trigger a device-side check.
+  /// Returns the formatted device error string (waveThreadInfo().errors), which
+  /// is empty if no block reported an error. throwOnError is forced off for the
+  /// run and restored afterwards.
+  std::string runWaveExpectError(
+      ModelFixture& fixture,
+      const std::function<void(nativert::ExecutionFrame&)>& alterInputs);
+
   /// Loads a .pt2 model and reference results, runs serial on CPU, serial on
   /// device and wave, and logs the run times for each.
   void runTest(
@@ -168,6 +210,56 @@ class ExecutorTestBase : public ::testing::Test {
   virtual std::string dataDir() const {
     return "velox/experimental/torchwave/tests";
   }
+
+  /// Loads the graph archive for --run_synthetic. The base loads a standard
+  /// .pt2 (JSON). The meta harness overrides this to also accept a sigmoid
+  /// (thrift) archive.
+  virtual std::unique_ptr<ModelFixture> loadSyntheticFixture(
+      const std::string& pt2Path);
+
+  /// Subclass hook applied to both the reference and wave graphs in
+  /// runSynthetic, before device placement, so the two runs use the same
+  /// kernels. The meta harness overrides this to rewrite
+  /// fused_datafm_merge_and_dedup_by_reference to its _tw variant (the
+  /// reference and _tw dedup implementations differ, so comparing them directly
+  /// produces spurious mismatches). Default: no-op.
+  virtual void applySyntheticGraphRewrites(nativert::Graph& /*graph*/) {}
+
+  /// --save_model: writes 'path.spec' (a DatasetSpec analyzed from 'inputs' and
+  /// the fixture's weights) and 'path.pt2' (a copy of the source archive).
+  void saveSyntheticModel(
+      ModelFixture& fixture,
+      const std::vector<c10::IValue>& inputs,
+      const std::string& path);
+
+  /// --run_synthetic: loads 'path.pt2' and 'path.spec', generates synthetic
+  /// data, runs the nativert GPU reference to produce reference outputs (and a
+  /// reference frame), then runs wave on the same data and verifies it against
+  /// both. 'seed' is optional; when unset the spec's seed is used.
+  void runSynthetic(
+      const std::string& path,
+      std::optional<uint64_t> seed = std::nullopt);
+
+  /// Runs 'fixture' through the nativert serial executor on GPU with explicit
+  /// 'inputs' (not loadSampleInputs). Applies applySyntheticGraphRewrites, then
+  /// GPU placement (setGraphDevice / rewriteGpuIncompatibleOps /
+  /// insertCpuOnlyCopies) so the reference runs on the same device and kernels
+  /// as wave. The fixture's weights must already be GPU-resident. Returns the
+  /// host outputs and, if 'refFramePath' is non-empty, saves the post-run frame
+  /// there as a reference frame.
+  std::vector<c10::IValue> runNativertReferenceWithInputs(
+      ModelFixture& fixture,
+      std::vector<c10::IValue> inputs,
+      const std::string& refFramePath);
+
+  /// Runs 'fixture' through the wave executor with explicit 'inputs' and
+  /// verifies against 'expected'. If 'refFramePath' is non-empty it is loaded
+  /// as the reference frame so wave checks intermediates too.
+  void runWaveWithInputs(
+      ModelFixture& fixture,
+      std::vector<c10::IValue> inputs,
+      const std::vector<c10::IValue>& expected,
+      const std::string& refFramePath);
 
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};

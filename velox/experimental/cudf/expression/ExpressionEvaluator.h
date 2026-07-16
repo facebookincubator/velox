@@ -74,22 +74,33 @@ using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr)>;
 
+// Optional function-specific eligibility check applied after signature
+// matching. Use this for semantic restrictions that cannot be expressed by a
+// FunctionSignature. Both FunctionExpression::canEvaluate and
+// createCudfFunction apply this filter.
+using CudfCanEvaluate =
+    std::function<bool(const std::shared_ptr<velox::exec::Expr>& expr)>;
+
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
   std::vector<exec::FunctionSignaturePtr> signatures;
+  // If set, this must return true before the factory is selected.
+  CudfCanEvaluate canEvaluate;
 };
 
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
+    bool overwrite = true,
+    CudfCanEvaluate canEvaluate = nullptr);
 
 void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
+    bool overwrite = true,
+    CudfCanEvaluate canEvaluate = nullptr);
 
 /// Create a CudfFunction for the given name and expression.
 /// Returns nullptr if no registered function matches the expression's
@@ -158,9 +169,17 @@ class FunctionExpression : public CudfExpression {
   static bool canEvaluate(std::shared_ptr<velox::exec::Expr> expr);
 
  private:
+  static std::unique_ptr<cudf::column> makeStructChildColumn(
+      ColumnOrView& structColumn,
+      cudf::size_type childIndex,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr);
+
   std::shared_ptr<velox::exec::Expr> expr_;
   std::shared_ptr<CudfFunction> function_;
   std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  // TODO: Remove once FieldReference can resolve index directly from RowType.
+  int32_t fieldIndex_{-1};
 
   RowTypePtr inputRowSchema_;
 };

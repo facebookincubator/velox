@@ -37,7 +37,7 @@ class SharedArbitratorTestHelper;
 /// memory pool exceeds its current memory capacity, the arbitrator tries to
 /// grow its capacity through memory arbitration. If the query memory pool
 /// exceeds its max memory capacity, then the arbitrator reclaims used memory
-/// from the the query itself which is the local arbitration. If not, the
+/// from the query itself which is the local arbitration. If not, the
 /// arbitrator tries to grow its capacity with the free unused capacity or
 /// reclaim the unused memory from other running queries. If there is still
 /// not enough free capacity, the arbitrator kicks off the global arbitration

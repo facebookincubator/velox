@@ -289,7 +289,7 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 /// to pause a task execution before reclaiming memory from its child pools.
 /// This avoids any potential race condition between concurrent memory
 /// reclamation operation and the task activities. An operator memory pool needs
-/// to to put the the associated task driver thread into suspension state before
+/// to put the associated task driver thread into suspension state before
 /// entering into an arbitration process. It is because the memory arbitrator
 /// needs to pause a task execution before reclaim memory from the task. It is
 /// possible that the memory arbitration tries to reclaim memory from the task

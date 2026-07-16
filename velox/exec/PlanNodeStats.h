@@ -157,6 +157,11 @@ struct PlanNodeStats {
     return operatorStats.size() > 1;
   }
 
+  /// Returns the stats for 'operatorType' from this node's per-operator
+  /// breakdown. The type must be present (a plan node can map to multiple
+  /// operator types, e.g. LocalPartition + LocalExchange).
+  const PlanNodeStats& operatorStatsFor(std::string_view operatorType) const;
+
  private:
   void addTotals(const OperatorStats& stats);
 };

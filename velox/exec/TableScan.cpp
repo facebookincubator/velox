@@ -218,7 +218,7 @@ RowVectorPtr TableScan::getOutput() {
     uint64_t ioTimeUs{0};
     std::optional<RowVectorPtr> dataOptional;
     {
-      MicrosecondTimer timer(&ioTimeUs);
+      MicrosecondWallTimer timer(&ioTimeUs);
       auto lk = driverCtx_->driver->pushdownFilters()->at(0).rlock();
       dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     }
@@ -414,7 +414,7 @@ bool TableScan::getSplit() {
   } else {
     uint64_t addSplitTimeUs{0};
     {
-      MicrosecondTimer timer(&addSplitTimeUs);
+      MicrosecondWallTimer timer(&addSplitTimeUs);
       auto lk = driverCtx_->driver->pushdownFilters()->at(0).rlock();
       dataSource_->addSplit(connectorSplit);
     }

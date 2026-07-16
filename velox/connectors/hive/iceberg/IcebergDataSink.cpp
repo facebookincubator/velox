@@ -31,6 +31,8 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldId.h"
+#include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/connectors/hive/iceberg/IcebergParquetStatsCollector.h"
@@ -39,6 +41,11 @@
 
 #include "velox/connectors/hive/iceberg/TransformExprBuilder.h"
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
+#include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/dwrf/common/Statistics.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/type/Type.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -78,27 +85,17 @@ folly::dynamic extractPartitionValue<TypeKind::TIMESTAMP>(
   return child->asChecked<SimpleVector<Timestamp>>()->valueAt(row).toMicros();
 }
 
-class IcebergFileNameGenerator : public FileNameGenerator {
- public:
-  std::pair<std::string, std::string> gen(
-      std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx,
-      bool commitRequired) const override;
-
-  folly::dynamic serialize() const override;
-
-  std::string toString() const override;
-};
-
 std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
+
+} // namespace
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
     const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
+    uint32_t /* maxNumBuckets */,
     bool commitRequired) const {
   auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
   if (targetFileName.empty()) {
@@ -120,7 +117,17 @@ std::string IcebergFileNameGenerator::toString() const {
   return "IcebergFileNameGenerator";
 }
 
-} // namespace
+std::shared_ptr<IcebergFileNameGenerator> IcebergFileNameGenerator::deserialize(
+    const folly::dynamic& /* obj */,
+    void* /* context */) {
+  return std::make_shared<IcebergFileNameGenerator>();
+}
+
+void IcebergFileNameGenerator::registerSerDe() {
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+  registry.Register(
+      "IcebergFileNameGenerator", IcebergFileNameGenerator::deserialize);
+}
 
 IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::vector<IcebergColumnHandlePtr> inputColumns,
@@ -129,7 +136,10 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     IcebergPartitionSpecPtr partitionSpec,
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    WriteKind writeKind)
+    WriteKind writeKind,
+    std::unordered_map<std::string, ExistingDeletionVector>
+        existingDeletionVectors,
+    std::shared_ptr<const FileNameGenerator> fileNameGenerator)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -141,9 +151,10 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           serdeParameters,
           nullptr,
           false,
-          std::make_shared<const HiveInsertFileNameGenerator>()),
+          std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
-      writeKind_(writeKind) {
+      writeKind_(writeKind),
+      existingDeletionVectors_(std::move(existingDeletionVectors)) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The
@@ -353,19 +364,19 @@ IcebergDataSink::IcebergDataSink(
       icebergInsertTableHandle_(insertTableHandle) {
   commitPartitionValue_.resize(maxOpenWriters_);
 
-#ifdef VELOX_ENABLE_PARQUET
-  // Only initialize Parquet stats collector for Parquet format tables
-  if (insertTableHandle->storageFormat() == dwio::common::FileFormat::PARQUET) {
-    std::vector<IcebergColumnHandlePtr> columnHandles;
-    columnHandles.reserve(insertTableHandle->inputColumns().size());
-    for (auto& column : insertTableHandle->inputColumns()) {
-      columnHandles.emplace_back(
-          checkedPointerCast<const IcebergColumnHandle>(column));
-    }
-    parquetStatsCollector_ = std::make_shared<IcebergParquetStatsCollector>(
-        std::move(columnHandles));
+  // Build the column handle list once for whichever format-specific stats
+  // collector applies.
+  std::vector<IcebergColumnHandlePtr> columnHandles;
+  columnHandles.reserve(insertTableHandle->inputColumns().size());
+  for (auto& column : insertTableHandle->inputColumns()) {
+    columnHandles.emplace_back(
+        checkedPointerCast<const IcebergColumnHandle>(column));
   }
-#endif
+
+  // Statistics extraction and field-id wiring are format-specific; the factory
+  // returns the matching collector, or nullptr for formats without support.
+  statsCollector_ = IcebergStatsCollector::create(
+      insertTableHandle->storageFormat(), columnHandles, inputType_);
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
@@ -445,28 +456,57 @@ std::shared_ptr<dwio::common::WriterOptions>
 IcebergDataSink::createWriterOptions(size_t writerIndex) const {
   auto options = HiveDataSink::createWriterOptions(writerIndex);
 
+  // Build a synthetic top-level IcebergFieldId tree from inputColumns_ to
+  // carry per-column Iceberg field IDs across the adapter boundary. This
+  // matches IcebergParquetStatsCollector's parquetFieldIds() shape: a
+  // root container whose `children` are one entry per input column. The
+  // tree is consumed by the format-specific adapter (NIMBLE today;
+  // others can opt in by overriding applyPostConfigs in their adapter).
+  IcebergFieldId icebergFieldIds{};
+  icebergFieldIds.children.reserve(
+      icebergInsertTableHandle_->inputColumns().size());
+  // Parallel Iceberg V3 type-attribute tree, one child per input column,
+  // drawn from each IcebergColumnHandle::icebergMetadata(). Walked in
+  // lockstep with icebergFieldIds by the NIMBLE adapter.
+  IcebergFieldMetadata icebergMetadata;
+  icebergMetadata.children.reserve(
+      icebergInsertTableHandle_->inputColumns().size());
+  for (const auto& column : icebergInsertTableHandle_->inputColumns()) {
+    const auto& icebergColumn =
+        checkedPointerCast<const IcebergColumnHandle>(column);
+    const auto& srcField = icebergColumn->field();
+    // Convert dwio ParquetFieldId to connector-local IcebergFieldId at
+    // boundary.
+    std::function<IcebergFieldId(const dwio::common::ParquetFieldId&)> convert =
+        [&](const dwio::common::ParquetFieldId& src) -> IcebergFieldId {
+      IcebergFieldId dst{};
+      dst.fieldId = src.fieldId;
+      dst.children.reserve(src.children.size());
+      for (const auto& child : src.children) {
+        dst.children.emplace_back(convert(child));
+      }
+      return dst;
+    };
+    icebergFieldIds.children.emplace_back(convert(srcField));
+    icebergMetadata.children.emplace_back(icebergColumn->icebergMetadata());
+  }
+
   // Dispatch format-specific Iceberg overrides through the adapter so each
   // supported format (Parquet, DWRF, Nimble) gets its pre/post-processConfigs
   // hooks applied uniformly.
-  const auto adapter =
-      createWriterOptionsAdapter(icebergInsertTableHandle_->storageFormat());
+  const auto adapter = createWriterOptionsAdapter(
+      icebergInsertTableHandle_->storageFormat(),
+      std::move(icebergFieldIds),
+      std::move(icebergMetadata));
   if (adapter != nullptr) {
     adapter->applyPreConfigs(*options);
   }
 
-#ifdef VELOX_ENABLE_PARQUET
-  // Iceberg-runtime stats collector is not a static config; wire it inline.
-  if (auto parquetOptions =
-          std::dynamic_pointer_cast<parquet::WriterOptions>(options)) {
-    if (parquetStatsCollector_) {
-      parquetOptions->parquetFieldIds =
-          parquetStatsCollector_->parquetFieldIds().children;
-    }
+  // Wire Iceberg field ids into the writer options. The collector applies the
+  // wiring only when 'options' matches its format and is a no-op otherwise.
+  if (statsCollector_ != nullptr) {
+    statsCollector_->configureWriterOptions(*options);
   }
-#endif
-
-  options->processConfigs(
-      *hiveConfig_->config(), *connectorQueryCtx_->sessionProperties());
 
   if (adapter != nullptr) {
     adapter->applyPostConfigs(*options);
@@ -501,19 +541,22 @@ void IcebergDataSink::closeWriterAndCollectStats(size_t index) {
   if (!fileAdded) {
     return;
   }
-#ifdef VELOX_ENABLE_PARQUET
-  if (parquetStatsCollector_) {
-    dataFileStats_[index].emplace_back(
-        parquetStatsCollector_->aggregate(std::move(metadata)));
-    return;
+  // Collect format-specific per-file statistics: DWRF/ORC read the live
+  // writer's footer, Parquet consumes the close() metadata. A null result
+  // falls through to the row-count-only estimate below.
+  if (statsCollector_ != nullptr) {
+    if (auto stats = statsCollector_->collect(*writers_[index], metadata)) {
+      dataFileStats_[index].emplace_back(std::move(stats));
+      return;
+    }
   }
-#endif
-  // ORC/DWRF (and any other format without a stats collector) path: we don't
-  // have file-level metadata that exposes row count, so derive it from
-  // writerInfo_->numWrittenRows. That counter accumulates across all files
-  // written by this writer (rotated files included), so compute per-file
-  // recordCount as the delta since the previous closeWriterAndCollectStats
-  // call for this writer index.
+
+  // Fallback path for any format without a usable stats collector or footer
+  // (e.g. ORC written by a non-dwrf writer): we don't have file-level metadata
+  // that exposes row count, so derive it from writerInfo_->numWrittenRows. That
+  // counter accumulates across all files written by this writer (rotated files
+  // included), so compute per-file recordCount as the delta since the previous
+  // closeWriterAndCollectStats call for this writer index.
   //
   // Without this, the manifest writes recordCount=0 for every DWRF/ORC file,
   // which makes the DELETE/UPDATE/MERGE planner believe each file is empty
@@ -527,10 +570,9 @@ void IcebergDataSink::closeWriterAndCollectStats(size_t index) {
 
   auto stats = std::make_shared<IcebergDataFileStatistics>();
   stats->numRecords = thisFileRows;
-  // Column-level stats (min/max/null counts) are still empty here. That only
-  // degrades predicate pruning (a perf optimization), not correctness. The
-  // proper fix is to add an IcebergDwrfStatsCollector that mirrors the
-  // Parquet path and consumes per-stripe stats from the DWRF writer footer.
+  // Column-level stats (min/max/null counts) are empty on this fallback path.
+  // That only degrades predicate pruning (a perf optimization), not
+  // correctness.
   dataFileStats_[index].emplace_back(std::move(stats));
 }
 

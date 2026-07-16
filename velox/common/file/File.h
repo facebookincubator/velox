@@ -41,6 +41,7 @@
 #include <folly/futures/Future.h>
 #include <folly/io/IOBuf.h>
 
+#include "velox/buffer/Buffer.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileIoTracer.h"
@@ -288,6 +289,13 @@ class InMemoryReadFile : public ReadFile {
   explicit InMemoryReadFile(std::string file)
       : ownedFile_(std::move(file)), file_(ownedFile_) {}
 
+  /// Constructs a file that takes ownership of 'buffer' and reads from it.
+  explicit InMemoryReadFile(BufferPtr buffer)
+      : ownedBuffer_(std::move(buffer)),
+        file_(
+            ownedBuffer_->as<char>(),
+            static_cast<size_t>(ownedBuffer_->size())) {}
+
   std::string_view pread(
       uint64_t offset,
       uint64_t length,
@@ -325,6 +333,11 @@ class InMemoryReadFile : public ReadFile {
   }
 
  private:
+  // Exactly one owning store is populated, depending on the constructor used:
+  // 'ownedBuffer_' (BufferPtr ctor) or 'ownedFile_' (std::string ctor); both
+  // stay empty for the non-owning string_view ctor. 'file_' views the active
+  // one.
+  const BufferPtr ownedBuffer_;
   const std::string ownedFile_;
   const std::string_view file_;
   bool shouldCoalesce_ = false;

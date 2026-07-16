@@ -177,6 +177,7 @@ Writer::Writer(
       options.adjustTimestampToTimezone,
       std::move(handler),
       options.memoryBudget);
+  writerBase_->setSchemaAttributes(options.schemaAttributes);
   auto& context = writerBase_->getContext();
   VELOX_CHECK_EQ(
       context.getTotalMemoryUsage(),
@@ -926,6 +927,13 @@ std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
 std::unique_ptr<dwio::common::WriterOptions>
 DwrfWriterFactory::createWriterOptions() {
   return std::make_unique<dwrf::WriterOptions>();
+}
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+DwrfWriterFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  return nullptr;
 }
 
 void WriterOptions::processConfigs(

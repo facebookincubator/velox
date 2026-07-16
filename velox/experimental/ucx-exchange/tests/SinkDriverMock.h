@@ -34,7 +34,7 @@ class SinkDriverMock {
   /// @brief Mocks the driver to execute a pipeline with a single exchange
   /// operator. One or more of these drivers may be used to driver multiple
   /// exchange operator instances in the same task. The driver will create the
-  /// exchange operator instance and drive it until is is finished or an error
+  /// exchange operator instance and drive it until is finished or an error
   /// occurs.
   /// @param task A pointer to the sink task.
   /// @param numDrivers The number of drivers used in running the exchange

@@ -48,12 +48,12 @@ Functions
     * ``sum`` - sum of all values
     * ``count`` - total count of values
 
-.. function:: destructure_tdigest(digest: tdigest<double>) -> row(means array<double>, counts array<integer>, compression double, min double, max double, sum double, count bigint)
+.. function:: destructure_tdigest(digest: tdigest<double>) -> row(centroid_means array<double>, centroid_weights array<integer>, compression double, min double, max double, sum double, count bigint)
 
     Destructures a T-digest into its component parts, returning a row containing:
 
-    * ``means`` - array of centroid means
-    * ``counts`` - array of centroid counts
+    * ``centroid_means`` - array of centroid means
+    * ``centroid_weights`` - array of centroid counts (weights)
     * ``compression`` - compression factor
     * ``min`` - minimum value
     * ``max`` - maximum value

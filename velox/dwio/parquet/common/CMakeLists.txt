@@ -25,6 +25,7 @@ velox_add_library(
   LevelComparison.h
   LevelConversion.h
   LevelConversionUtil.h
+  ParquetConfig.h
   RleEncodingInternal.h
   XxHasher.h
 )

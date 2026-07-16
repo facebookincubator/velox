@@ -45,9 +45,17 @@ class CompileCtx;
 class Optimizer;
 struct ExecutionState;
 
-/// Rank constraint for a graph value, used during optimization.
+/// Rank and layout constraints for a graph value, used during optimization.
 struct ValueConstraint {
   int8_t rank{-1};
+  /// True when the value is known at compile time to be row-major contiguous
+  /// (dense, standard strides). Defaults to false: a wrong `true` could let a
+  /// kernel read a strided tensor as dense and corrupt results, whereas a
+  /// conservative `false` only costs an unnecessary copy. Set true for ops that
+  /// always materialize a fresh dense output (elementwise, cumsum, masked
+  /// select, cat, clone, contiguous, factory ops, ...) and propagated by view
+  /// and reshape; computed per PyTorch semantics for slice/select.
+  bool contiguous{false};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.
@@ -63,6 +71,16 @@ struct ValueTypes {
         "Value id out of range: ",
         id);
     return constraints[id].rank;
+  }
+
+  /// Whether 'value' is known to be contiguous. Returns false (conservative)
+  /// for values with no tracked constraint.
+  bool contiguous(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].contiguous;
   }
 };
 
@@ -188,6 +206,11 @@ class WaveGraph {
       std::string_view name,
       c10::ScalarType dtype);
 
+  /// Adds a TensorList output to 'node' with the given name and registers it in
+  /// idToValue_. No TensorMeta is created (a list has no element-level meta);
+  /// element values are obtained via Value::getListElements().
+  nativert::Value* newListValue(nativert::Node* node, std::string_view name);
+
   /// Registers a TensorMeta entry for 'value' in types_ with the given dtype.
   void registerTensorMeta(ValueCP value, c10::ScalarType dtype);
 
@@ -267,6 +290,25 @@ class WaveGraph {
 
   CompileCtx* compileCtx() const {
     return compileCtx_;
+  }
+
+  /// Records that 'value' is consumed by more than one part of a multipart op
+  /// expansion (e.g. the shared input of cumsum_head and cumsum_final), so it
+  /// must not be released as a per-op freeable intermediate. Called by the
+  /// split / variant lowerings while generating the parts. The set lives here
+  /// (not on the transient CompileCtx) because it is consulted at execution
+  /// time, when LaunchData decides which kernel outputs are freeable.
+  void declareMultiplyReferencedInput(const nativert::Value* value);
+
+  bool isMultiUseInput(nativert::ValueId id) const {
+    return multiUseInputs_.count(id) != 0;
+  }
+
+  /// True if 'id' is a graph output value (or an element of a list-typed graph
+  /// output). Such values escape the graph and must never be released as a
+  /// per-op freeable intermediate.
+  bool isGraphOutput(nativert::ValueId id) const {
+    return graphOutputIds_.count(id) != 0;
   }
 
   /// Returns the ModelContext, or nullptr if none was provided.
@@ -355,6 +397,16 @@ class WaveGraph {
 
   // Set during construction, cleared after.
   CompileCtx* compileCtx_{nullptr};
+
+  // Values consumed by more than one part of a multipart op expansion; they
+  // must never be freed as per-op intermediates. Populated at compile time via
+  // declareMultiplyReferencedInput, read at execution time by LaunchData.
+  std::unordered_set<nativert::ValueId> multiUseInputs_;
+
+  // Graph output value ids (plus elements of list-typed outputs). Escaping
+  // values that must never be freed as per-op intermediates. Populated at the
+  // start of compile, read at execution time by LaunchData.
+  std::unordered_set<nativert::ValueId> graphOutputIds_;
 
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.

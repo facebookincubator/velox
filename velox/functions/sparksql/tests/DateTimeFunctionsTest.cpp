@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
@@ -990,6 +991,26 @@ TEST_F(DateTimeFunctionsTest, minute) {
   EXPECT_EQ(13, minute("1969-01-01 13:43:00.001"));
 }
 
+TEST_F(DateTimeFunctionsTest, minuteTimestampUtc) {
+  const auto minuteUtc = [&](StringView timestampStr) {
+    auto ts = std::make_optional(parseTimestamp(timestampStr));
+    return evaluateOnce<int32_t>("minute(c0)", TIMESTAMP_UTC(), ts);
+  };
+
+  EXPECT_EQ(23, minuteUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, minuteUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(10, minuteUtc("2015-04-08 13:10:15"));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  // Asia/Kolkata (UTC+5:30) has a 30-minute offset that would shift minutes
+  // for a regular TIMESTAMP.
+  setQueryTimeZone("Asia/Kolkata");
+
+  EXPECT_EQ(23, minuteUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, minuteUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(10, minuteUtc("2015-04-08 13:10:15"));
+}
+
 TEST_F(DateTimeFunctionsTest, second) {
   const auto second = [&](const StringView& timestampStr) {
     const auto timeStamp = std::make_optional(parseTimestamp(timestampStr));
@@ -1000,6 +1021,24 @@ TEST_F(DateTimeFunctionsTest, second) {
   EXPECT_EQ(59, second("2024-01-08 00:59:59.999"));
   EXPECT_EQ(15, second("2015-04-08 13:10:15"));
   EXPECT_EQ(0, second("1969-01-01 13:43:00.001"));
+}
+
+TEST_F(DateTimeFunctionsTest, secondTimestampUtc) {
+  const auto secondUtc = [&](StringView timestampStr) {
+    auto ts = std::make_optional(parseTimestamp(timestampStr));
+    return evaluateOnce<int32_t>("second(c0)", TIMESTAMP_UTC(), ts);
+  };
+
+  EXPECT_EQ(0, secondUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, secondUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(15, secondUtc("2015-04-08 13:10:15"));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(0, secondUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, secondUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(15, secondUtc("2015-04-08 13:10:15"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
@@ -1878,6 +1917,45 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
           "year",
           10,
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
+}
+
+TEST_F(DateTimeFunctionsTest, timestampAddTimestampUtc) {
+  const auto timestampAddUtc = [&](const std::string& unit,
+                                   std::optional<int32_t> value,
+                                   std::optional<Timestamp> ts) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("timestampadd('{}', c0, c1)", unit),
+        {INTEGER(), TIMESTAMP_UTC()},
+        value,
+        ts);
+  };
+
+  // 2019-02-28 10:00:00.500 UTC
+  auto base = std::make_optional(Timestamp(1551348000, 500'999'999));
+
+  EXPECT_EQ(
+      Timestamp(1551348010, 500'999'999), timestampAddUtc("second", 10, base));
+  EXPECT_EQ(
+      Timestamp(1551348060, 500'999'999), timestampAddUtc("minute", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551351600, 500'999'999), timestampAddUtc("hour", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999), timestampAddUtc("day", 1, base));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  SCOPE_EXIT {
+    setQueryTimeZone("");
+  };
+  setQueryTimeZone("America/Los_Angeles");
+
+  EXPECT_EQ(
+      Timestamp(1551348010, 500'999'999), timestampAddUtc("second", 10, base));
+  EXPECT_EQ(
+      Timestamp(1551348060, 500'999'999), timestampAddUtc("minute", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551351600, 500'999'999), timestampAddUtc("hour", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999), timestampAddUtc("day", 1, base));
 }
 
 TEST_F(DateTimeFunctionsTest, monthsBetween) {

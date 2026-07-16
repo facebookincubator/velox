@@ -45,6 +45,15 @@ struct Launch {
   NodeCP standalone{nullptr};
   KernelOperation* op{nullptr};
 
+  /// For a standalone metadata-only op, the specific host-side shortcut, or
+  /// kNone. Set from the node target in the standalone constructor.
+  StandaloneShortcut standaloneShortcut{StandaloneShortcut::kNone};
+
+  /// True if 'standalone' only manipulates tensor metadata (no real compute).
+  /// Initialized from the op's Metadata, or true for prim.ListPack (which has
+  /// no registry entry).
+  bool metadataOnly{false};
+
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
@@ -263,6 +272,17 @@ struct LaunchData {
   const Launch* launch{nullptr};
   OpInvocation* invocation{nullptr};
   NodeCP standalone{nullptr};
+
+  /// For a metadata-only standalone shortcut (launch->standaloneShortcut !=
+  /// kNone): the op's operands in c10 schema order (first-to-last for
+  /// prim.ListPack, which has no schema). args[i] is the value operand, or
+  /// nullptr when that operand is an integer constant -- in which case
+  /// intArgs[i] holds the constant. intList holds an all-integer list operand
+  /// (e.g. aten.view's size) for direct pass-through to the ATen primitive.
+  std::vector<ValueCP> args;
+  std::vector<int64_t> intArgs;
+  std::vector<int64_t> intList;
+
   SizeExpr sizeExpr;
   int64_t numElements{0};
   std::vector<nativert::ValueId> actualInputs;
@@ -279,6 +299,11 @@ struct LaunchData {
   folly::F14FastSet<size_t> shapeOnlyTensorIndices;
   std::vector<nativert::ValueId> scalarsInFrame;
   std::vector<int32_t> scalarOffsets;
+  /// Offsets of non-tensor (scalar) kernel outputs. These get a zero
+  /// placeholder before launch and are overwritten by the kernel; they must
+  /// never be filled from the frame (unlike scalarsInFrame, which are inputs),
+  /// since the frame slot is None until this kernel produces the value.
+  std::vector<int32_t> scalarOutputOffsets;
   std::vector<nativert::ValueId> returnValues;
   std::vector<int32_t> returnOffsets;
   /// Type kind for each return value, parallel to returnValues.
@@ -296,7 +321,9 @@ class CompositeInvocation {
       std::unique_ptr<CompositeKernel> kernel,
       std::vector<OpInvocation> ops,
       std::deque<c10::IValue> ivalueStorage,
-      int32_t sequenceNumber);
+      int32_t sequenceNumber,
+      std::vector<nativert::ValueId> lastUseIds,
+      std::vector<Launch> prePassStandalones = {});
 
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
@@ -356,6 +383,16 @@ class CompositeInvocation {
   std::vector<OpInvocation> ops_;
   std::deque<c10::IValue> ivalueStorage_;
   int32_t sequenceNumber_;
+
+  // Frame value ids whose last use across the graph is in this node (graph
+  // outputs excluded). When WaveConfig::freeIntermediates is set, their frame
+  // tensors are released at the end of execute().
+  std::vector<nativert::ValueId> lastUseIds_;
+
+  // Standalone ops from the maxFusedNodes pre-pass.  Executed at the
+  // start of execute() before any kernel step, so their outputs are
+  // available for SizeExpr evaluation.
+  std::vector<Launch> prePassStandalones_;
 };
 
 /// Represents a single ProjectNode in a stack of ProjectNodes. Contains a graph

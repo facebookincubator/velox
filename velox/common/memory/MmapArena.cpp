@@ -277,9 +277,15 @@ std::string MmapArena::toString() const {
       freeList_.size());
 }
 
-ManagedMmapArenas::ManagedMmapArenas(uint64_t singleArenaCapacity)
-    : singleArenaCapacity_(singleArenaCapacity) {
-  auto arena = std::make_shared<MmapArena>(singleArenaCapacity);
+ManagedMmapArenas::ManagedMmapArenas(
+    uint64_t singleArenaCapacity,
+    std::function<void(void* address, size_t bytes)> onMap)
+    : singleArenaCapacity_(singleArenaCapacity), onMap_(std::move(onMap)) {
+  auto arena = std::make_shared<MmapArena>(singleArenaCapacity_);
+
+  if (onMap_) {
+    onMap_(arena->address(), arena->byteSize());
+  }
   arenas_.emplace(reinterpret_cast<uintptr_t>(arena->address()), arena);
   currentArena_ = arena;
 }
@@ -294,6 +300,10 @@ void* ManagedMmapArenas::allocate(uint64_t bytes) {
   // it ever fails again then it means requested bytes is larger than a single
   // MmapArena's capacity. No further attempts will happen.
   auto newArena = std::make_shared<MmapArena>(singleArenaCapacity_);
+
+  if (onMap_) {
+    onMap_(newArena->address(), newArena->byteSize());
+  }
   arenas_.emplace(reinterpret_cast<uintptr_t>(newArena->address()), newArena);
   currentArena_ = newArena;
   return currentArena_->allocate(bytes);

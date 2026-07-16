@@ -837,7 +837,7 @@ class VectorTestBase {
     return pool_.get();
   }
 
-  // Create LazyVector that produces a flat vector and asserts that is is being
+  // Create LazyVector that produces a flat vector and asserts that is being
   // loaded for a specific set of rows.
   template <typename T>
   std::shared_ptr<LazyVector> makeLazyFlatVector(
