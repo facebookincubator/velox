@@ -159,6 +159,12 @@ class HiveColumnHandle : public FileColumnHandle {
 
   static void registerSerDe();
 
+ protected:
+  /// Emits the common column fields (columnType, dataType, requiredSubfields,
+  /// extractions) without a class-name prefix. Subclasses use this to build
+  /// their own toString() with the correct class name in the header.
+  std::string toStringFields() const;
+
  private:
   const std::string name_;
   const ColumnType columnType_;
@@ -268,6 +274,31 @@ class HiveTableHandle : public FileTableHandle {
       void* context);
 
   static void registerSerDe();
+
+ protected:
+  /// Serializes the Hive-common fields (tableName, subfieldFilters,
+  /// remainingFilter, sampleRate, dataColumns, tableParameters,
+  /// filterColumnHandles, indexColumns, dbName) into an object whose "name"
+  /// key is set to @p typeName. Subclasses call this instead of duplicating
+  /// the field list, then append their own keys.
+  folly::dynamic serializeHiveFields(const std::string& typeName) const;
+
+  /// Fills the common Hive fields from @p obj into the provided out-parameters.
+  /// Subclasses call this from their own create() and then parse only their
+  /// extra keys on top.
+  static void deserializeHiveFields(
+      const folly::dynamic& obj,
+      void* context,
+      std::string& connectorId,
+      std::string& tableName,
+      common::SubfieldFilters& subfieldFilters,
+      core::TypedExprPtr& remainingFilter,
+      double& sampleRate,
+      RowTypePtr& dataColumns,
+      std::unordered_map<std::string, std::string>& tableParameters,
+      std::vector<HiveColumnHandlePtr>& filterColumnHandles,
+      std::vector<std::string>& indexColumns,
+      std::string& dbName);
 
  private:
   const std::string tableName_;
