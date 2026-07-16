@@ -18,7 +18,6 @@
 
 #include <fmt/format.h>
 #include <folly/Hash.h>
-#include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <type_traits>
 #include <utility>
@@ -495,7 +494,7 @@ struct DecodingStats {
   void merge(const DecodingStats& other);
 };
 
-/// Thread-safe collection of per-column decoding statistics keyed by nodeId.
+/// Collection of per-column decoding statistics keyed by nodeId.
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
 struct DecodingStatsSet {
   /// Gets or creates a DecodingStats for a column. Sets typeKind when
@@ -513,9 +512,7 @@ struct DecodingStatsSet {
       std::unordered_map<std::string, RuntimeMetric>& result) const;
 
  private:
-  folly::Synchronized<
-      folly::F14FastMap<uint32_t, std::unique_ptr<DecodingStats>>>
-      map_;
+  folly::F14FastMap<uint32_t, std::unique_ptr<DecodingStats>> map_;
 };
 
 /// Collects runtime metrics produced while reading columns.

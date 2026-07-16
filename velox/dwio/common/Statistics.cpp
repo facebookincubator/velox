@@ -167,22 +167,18 @@ void DecodingStats::merge(const DecodingStats& other) {
 DecodingStats* DecodingStatsSet::getOrCreate(
     uint32_t nodeId,
     TypeKind typeKind) {
-  auto locked = map_.wlock();
-  auto it = locked->find(nodeId);
-  if (it == locked->end()) {
-    it = locked->emplace(nodeId, std::make_unique<DecodingStats>(typeKind))
-             .first;
+  auto it = map_.find(nodeId);
+  if (it == map_.end()) {
+    it = map_.emplace(nodeId, std::make_unique<DecodingStats>(typeKind)).first;
   }
   return it->second.get();
 }
 
 void DecodingStatsSet::mergeFrom(const DecodingStatsSet& other) {
-  auto srcLocked = other.map_.rlock();
-  auto dstLocked = map_.wlock();
-  for (const auto& [nodeId, srcStats] : *srcLocked) {
-    auto it = dstLocked->find(nodeId);
-    if (it == dstLocked->end()) {
-      it = dstLocked->emplace(nodeId, std::make_unique<DecodingStats>()).first;
+  for (const auto& [nodeId, srcStats] : other.map_) {
+    auto it = map_.find(nodeId);
+    if (it == map_.end()) {
+      it = map_.emplace(nodeId, std::make_unique<DecodingStats>()).first;
       it->second->typeKind = srcStats->typeKind;
     }
     it->second->merge(*srcStats);
@@ -191,8 +187,7 @@ void DecodingStatsSet::mergeFrom(const DecodingStatsSet& other) {
 
 void DecodingStatsSet::toRuntimeMetrics(
     std::unordered_map<std::string, RuntimeMetric>& result) const {
-  auto statsLocked = map_.rlock();
-  for (const auto& [nodeId, stats] : *statsLocked) {
+  for (const auto& [nodeId, stats] : map_) {
     // Export decompression timing.
     const auto& decompressCounter = stats->decompressCPUTimeNanos;
     if (decompressCounter.count() > 0) {

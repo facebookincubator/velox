@@ -213,40 +213,6 @@ TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
   EXPECT_EQ(result["column_1.BIGINT.decodeCPUTimeNanos"].count, 1);
 }
 
-TEST(DecodingStatsSetConcurrencyTest, ConcurrentGetOrCreate) {
-  DecodingStatsSet statsSet;
-  constexpr int kNumThreads = 4;
-  constexpr int kNumColumns = 10;
-
-  // Pre-populate columns with types before concurrent access.
-  for (uint32_t colId = 0; colId < kNumColumns; ++colId) {
-    statsSet.getOrCreate(colId, TypeKind::BIGINT);
-  }
-
-  std::vector<std::thread> threads;
-  threads.reserve(kNumThreads);
-  for (int i = 0; i < kNumThreads; ++i) {
-    threads.emplace_back([&statsSet]() {
-      for (uint32_t colId = 0; colId < kNumColumns; ++colId) {
-        auto* colStats = statsSet.getOrCreate(colId);
-        colStats->decompressCPUTimeNanos.increment(100);
-      }
-    });
-  }
-  for (auto& t : threads) {
-    t.join();
-  }
-
-  std::unordered_map<std::string, RuntimeMetric> result;
-  statsSet.toRuntimeMetrics(result);
-
-  for (uint32_t colId = 0; colId < kNumColumns; ++colId) {
-    auto key = fmt::format("column_{}.BIGINT.decompressCPUTimeNanos", colId);
-    EXPECT_EQ(result[key].sum, kNumThreads * 100);
-    EXPECT_EQ(result[key].count, kNumThreads);
-  }
-}
-
 TEST(IoCounterTest, MergeStats) {
   facebook::velox::io::IoCounter counter1;
   counter1.increment(5'000);
