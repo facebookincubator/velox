@@ -681,7 +681,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
     VLOG(1) << "Probe table number of rows: " << tbl->num_rows();
   }
 
-  // Store the concatenated probe table in input_.
+  // Store the concatenated table in input_
   input_ = std::make_shared<CudfVector>(
       operatorCtx_->pool(),
       probeType_,
