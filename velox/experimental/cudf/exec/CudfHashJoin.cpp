@@ -681,8 +681,7 @@ void CudfHashJoinProbe::doNoMoreInput() {
     VLOG(1) << "Probe table number of rows: " << tbl->num_rows();
   }
 
-  // This intermediate is still the complete probe input. The right-semi
-  // output schema applies only after rightSemiFilterJoin gathers build rows.
+  // Store the concatenated probe table in input_.
   input_ = std::make_shared<CudfVector>(
       operatorCtx_->pool(),
       probeType_,
