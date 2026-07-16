@@ -2285,6 +2285,116 @@ TEST_F(CudfFilterProjectTest, betweenDouble) {
   assertQuery(plan, "SELECT c0 BETWEEN 0.0 AND 2.0 AS result FROM tmp");
 }
 
+TEST_F(CudfFilterProjectTest, dateDiffDayDate) {
+  // Days since epoch: 2025-02-01=20120, 2025-02-10=20129, 2025-02-11=20130,
+  // 2025-01-01=20089, 2025-03-01=20148
+  auto dates = makeRowVector({
+      makeFlatVector<int32_t>({20120, 20129, 20089}, DATE()),
+      makeFlatVector<int32_t>({20130, 20129, 20148}, DATE()),
+  });
+  createDuckDbTable({dates});
+
+  auto plan = PlanBuilder()
+                  .values({dates})
+                  .project({"date_diff('day', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('day', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateDiffMonthDate) {
+  // 2019-02-28=17955, 2020-03-28=18349, 2023-06-01=19509, 2025-03-15=20162.
+  // Both rows use fromDay <= toDay, so DuckDB's simple calendar-month
+  // arithmetic agrees with Presto's day-of-month-corrected date_diff (see
+  // dateDiffMonthRespectsDayOfMonth in CudfSimpleFilterProjectTest below for
+  // a fromDay > toDay case verified against Presto CPU semantics directly,
+  // since DuckDB and Presto diverge there).
+  auto dates = makeRowVector({
+      makeFlatVector<int32_t>({17955, 19509}, DATE()),
+      makeFlatVector<int32_t>({18349, 20162}, DATE()),
+  });
+  createDuckDbTable({dates});
+
+  auto plan = PlanBuilder()
+                  .values({dates})
+                  .project({"date_diff('month', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('month', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateDiffDayTimestamp) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738381800, 0), Timestamp(1739955900, 0)}),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738556100, 0), Timestamp(1739987400, 0)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan = PlanBuilder()
+                  .values({timestamps})
+                  .project({"date_diff('day', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('day', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, dateDiffSecondTimestamp) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(1740733200, 500000000)}),
+      makeFlatVector<Timestamp>({Timestamp(1740819600, 500000000)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan = PlanBuilder()
+                  .values({timestamps})
+                  .project({"date_diff('second', c0, c1) AS result"})
+                  .planNode();
+
+  runTest(plan, "SELECT date_diff('second', c0, c1) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtime) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738568700, 0),
+           Timestamp(0, 0),
+           Timestamp(1740718800, 0)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan = PlanBuilder()
+                  .values({timestamps})
+                  .project({"to_unixtime(c0) AS result"})
+                  .planNode();
+
+  // DuckDB has no to_unixtime function (it's Presto-specific); epoch()
+  // returns the equivalent whole-seconds-since-epoch value, which matches
+  // for these inputs since they carry no sub-second component.
+  runTest(plan, "SELECT cast(epoch(c0) as double) AS result FROM tmp");
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtimeEpochDayPattern) {
+  auto timestamps = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1738568700, 0),
+           Timestamp(1739520600, 0),
+           Timestamp(1740555000, 0)}),
+  });
+  createDuckDbTable({timestamps});
+
+  auto plan =
+      PlanBuilder()
+          .values({timestamps})
+          .project({"cast(to_unixtime(c0) / 86400.0 as bigint) AS result"})
+          .planNode();
+
+  // See toUnixtime above for why DuckDB's epoch() stands in for to_unixtime.
+  runTest(
+      plan, "SELECT cast(epoch(c0) / 86400.0 as bigint) AS result FROM tmp");
+}
+
 class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
  protected:
   static void SetUpTestCase() {
@@ -2293,6 +2403,8 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
   }
 
   static void TearDownTestCase() {
@@ -2317,6 +2429,104 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
+
+// These tests mirror the CudfFilterProjectTest date_diff/to_unixtime tests
+// but use CudfSimpleFilterProjectTest (no DuckDB) so they work on aarch64
+// 64K-page kernels where DuckDB's allocator cannot initialize.
+TEST_F(CudfSimpleFilterProjectTest, dateDiffDayDate) {
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('day', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(20120),
+      std::optional<int32_t>(20130));
+  EXPECT_EQ(result, 10);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffMonthDate) {
+  // 2019-02-28 (17955) to 2020-03-28 (18349) = 13 months
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('month', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(17955),
+      std::optional<int32_t>(18349));
+  EXPECT_EQ(result, 13);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffUnitIsCaseInsensitive) {
+  // Same dates as dateDiffDayDate (2025-02-01 to 2025-02-11 = 10 days), but
+  // with a mixed-case unit string, matching Velox CPU's
+  // boost::algorithm::to_lower_copy in fromDateTimeUnitString.
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('Day', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(20120),
+      std::optional<int32_t>(20130));
+  EXPECT_EQ(result, 10);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffMonthRespectsDayOfMonth) {
+  // DATE '2019-01-30' (17926) to DATE '2020-02-28' (18320) = 12 months on
+  // Presto CPU: fromDay(30) > toDay(28) and toDay is not the last day of
+  // February 2020 (29, leap year), so the naive 13-month diff decrements.
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('month', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(17926),
+      std::optional<int32_t>(18320));
+  EXPECT_EQ(result, 12);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffYearRespectsMonthAndDay) {
+  // TIMESTAMP '2018-12-31' to TIMESTAMP '2019-01-01' = 0 years on Presto CPU
+  // (fromMonth(12) > toMonth(1) forces a decrement of the naive 1-year
+  // diff), even though the calendar year differs.
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(1546214400, 0)}),
+      makeFlatVector<Timestamp>({Timestamp(1546300800, 0)}),
+  });
+  auto exprSet =
+      compileExpression("date_diff('year', c0, c1)", asRowType(data->type()));
+  auto result = evaluate(*exprSet, data);
+  auto expected = makeFlatVector<int64_t>({0});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffWeekTruncatesTowardZero) {
+  // DATE '2020-02-29' (18321) to DATE '2020-02-25' (18317) = 0 weeks on
+  // Presto CPU: -4 days truncated toward zero is 0, not -1 as FLOOR_DIV
+  // (floor toward -infinity) would give.
+  auto result = evaluateOnce<int64_t, int32_t, int32_t>(
+      "date_diff('week', c0, c1)",
+      {DATE(), DATE()},
+      std::optional<int32_t>(18321),
+      std::optional<int32_t>(18317));
+  EXPECT_EQ(result, 0);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, dateDiffSecondTimestamp) {
+  // 86400 seconds apart
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(1740733200, 500000000)}),
+      makeFlatVector<Timestamp>({Timestamp(1740819600, 500000000)}),
+  });
+  auto exprSet =
+      compileExpression("date_diff('second', c0, c1)", asRowType(data->type()));
+  auto result = evaluate(*exprSet, data);
+  auto expected = makeFlatVector<int64_t>({86400});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, toUnixtime) {
+  auto result = evaluateOnce<double, Timestamp>(
+      "to_unixtime(c0)", std::optional<Timestamp>(Timestamp(1738568700, 0)));
+  EXPECT_DOUBLE_EQ(result.value(), 1738568700.0);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, toUnixtimeEpoch) {
+  auto result = evaluateOnce<double, Timestamp>(
+      "to_unixtime(c0)", std::optional<Timestamp>(Timestamp(0, 0)));
+  EXPECT_DOUBLE_EQ(result.value(), 0.0);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
