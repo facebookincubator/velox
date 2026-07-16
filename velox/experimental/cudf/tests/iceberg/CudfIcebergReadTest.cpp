@@ -993,8 +993,7 @@ TEST_F(CudfIcebergReadTest, deletionVectorWithInjectedOnlyProjection) {
 /// Verifies sub-splits over an all-injected projection.
 TEST_F(CudfIcebergReadTest, subSplitAllInjectedProjection) {
   auto firstRowGroup = makeRowVector(
-      {"c0"},
-      {makeFlatVector<int64_t>(10'000, [](vector_size_t row) {
+      {"c0"}, {makeFlatVector<int64_t>(10'000, [](vector_size_t row) {
         return (static_cast<int64_t>(row) * 1'000'003) % 10'000'019;
       })});
   auto secondRowGroup = makeRowVector(
