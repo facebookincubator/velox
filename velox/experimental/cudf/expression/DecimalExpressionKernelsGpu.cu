@@ -792,15 +792,33 @@ decimalBinaryOperationWithOverflow(
     auto const rhsValue = getTypedDecimalScalarValue<int64_t>(rhs, stream);
     if (outputType.id() == cudf::type_id::DECIMAL64) {
       didOverflow = launchDecimalBinaryRhsScalarKernel<int64_t, int64_t>(
-          lhs, rhsValue, rhsScale, result->mutable_view(), op, outputPrecision, stream);
+          lhs,
+          rhsValue,
+          rhsScale,
+          result->mutable_view(),
+          op,
+          outputPrecision,
+          stream);
     } else {
       didOverflow = launchDecimalBinaryRhsScalarKernel<int64_t, __int128_t>(
-          lhs, rhsValue, rhsScale, result->mutable_view(), op, outputPrecision, stream);
+          lhs,
+          rhsValue,
+          rhsScale,
+          result->mutable_view(),
+          op,
+          outputPrecision,
+          stream);
     }
   } else {
     auto const rhsValue = getTypedDecimalScalarValue<__int128_t>(rhs, stream);
     didOverflow = launchDecimalBinaryRhsScalarKernel<__int128_t, __int128_t>(
-        lhs, rhsValue, rhsScale, result->mutable_view(), op, outputPrecision, stream);
+        lhs,
+        rhsValue,
+        rhsScale,
+        result->mutable_view(),
+        op,
+        outputPrecision,
+        stream);
   }
   return {std::move(result), didOverflow};
 }
@@ -830,15 +848,33 @@ decimalBinaryOperationWithOverflow(
     auto const lhsValue = getTypedDecimalScalarValue<int64_t>(lhs, stream);
     if (outputType.id() == cudf::type_id::DECIMAL64) {
       didOverflow = launchDecimalBinaryLhsScalarKernel<int64_t, int64_t>(
-          lhsValue, lhsScale, rhs, result->mutable_view(), op, outputPrecision, stream);
+          lhsValue,
+          lhsScale,
+          rhs,
+          result->mutable_view(),
+          op,
+          outputPrecision,
+          stream);
     } else {
       didOverflow = launchDecimalBinaryLhsScalarKernel<int64_t, __int128_t>(
-          lhsValue, lhsScale, rhs, result->mutable_view(), op, outputPrecision, stream);
+          lhsValue,
+          lhsScale,
+          rhs,
+          result->mutable_view(),
+          op,
+          outputPrecision,
+          stream);
     }
   } else {
     auto const lhsValue = getTypedDecimalScalarValue<__int128_t>(lhs, stream);
     didOverflow = launchDecimalBinaryLhsScalarKernel<__int128_t, __int128_t>(
-        lhsValue, lhsScale, rhs, result->mutable_view(), op, outputPrecision, stream);
+        lhsValue,
+        lhsScale,
+        rhs,
+        result->mutable_view(),
+        op,
+        outputPrecision,
+        stream);
   }
   return {std::move(result), didOverflow};
 }
