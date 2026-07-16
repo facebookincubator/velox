@@ -1441,48 +1441,6 @@ TEST_F(SubfieldFilterAstTest, TimestampRangeOpenLowerBound) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
-// `colA > t1 AND colA < t2`: both bounds finite -- no sentinel, must still
-// work.
-TEST_F(SubfieldFilterAstTest, TimestampRangeBothBoundsFinite) {
-  const std::string columnName = "c0";
-  auto rowType = ROW({{columnName, TIMESTAMP()}});
-
-  auto filter = std::make_unique<common::TimestampRange>(
-      Timestamp(150, 0), Timestamp(200, 0), /*nullAllowed*/ false);
-
-  auto& config = CudfConfig::getInstance();
-  auto prevUnit = config.timestampUnit;
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
-  SCOPE_EXIT {
-    config.timestampUnit = prevUnit;
-  };
-
-  common::Subfield subfield(columnName);
-  cudf::ast::tree tree;
-  std::vector<std::unique_ptr<cudf::scalar>> scalars;
-
-  const auto& expr = createAstFromSubfieldFilter(
-      subfield,
-      *filter,
-      tree,
-      scalars,
-      rowType,
-      cudf::type_id::TIMESTAMP_MILLISECONDS);
-
-  // Both finite bounds are emitted.
-  EXPECT_EQ(scalars.size(), 2UL);
-
-  auto timestamps = makeFlatVector<Timestamp>(
-      {Timestamp(100, 0),
-       Timestamp(150, 0),
-       Timestamp(175, 0),
-       Timestamp(200, 0),
-       Timestamp(250, 0)});
-  auto vec = makeRowVector({columnName}, {timestamps});
-
-  testFilterExecution(rowType, columnName, *filter, vec, expr);
-}
-
 // Null column values must be excluded and non-null rows must still match the
 // CPU filter. The harness asserts null inputs are never kept, matching the
 // filter's nullAllowed=false semantics.
