@@ -24,6 +24,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorUtils.h"
@@ -9103,6 +9104,91 @@ TEST_F(HashJoinTest, emptyBuildWithDebugEnabled) {
           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
       .checkSpillStats(false)
       .run();
+}
+
+// Verify that cuDF hash join works correctly with mixed grouped execution.
+// In mixed mode the build runs ungrouped while the probe runs in grouped
+// split groups.  CudfHashJoinBuild/CudfHashJoinProbe use custom join bridges
+// (getCustomJoinBridge), which requires DriverFactory::needsCustomJoinBridges()
+// to correctly include the bridge for the ungrouped factory and exclude it from
+// grouped factories.  Without this, the probe hangs waiting on an empty bridge.
+TEST_F(HashJoinTest, mixedGroupedExecution) {
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  SCOPE_EXIT {
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+  };
+
+  auto vectors = makeVectors(probeType_, 4, 20);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanNodeId;
+  core::PlanNodeId buildScanNodeId;
+
+  PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
+  auto planFragment =
+      planBuilder.tableScan(probeType_)
+          .capturePlanNodeId(probeScanNodeId)
+          .project({"c0 as x"})
+          .hashJoin(
+              {"x"},
+              {"y"},
+              PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType_, {"c0 > 0"})
+                  .capturePlanNodeId(buildScanNodeId)
+                  .project({"c0 as y"})
+                  .planNode(),
+              "",
+              {"x", "y"})
+          .partitionedOutput({}, 1, {"x", "y"})
+          .planFragment();
+
+  // Configure mixed grouped execution: probe is grouped, build is ungrouped.
+  planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
+  planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
+  planFragment.numSplitGroups = 2;
+
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  auto task = exec::Task::create(
+      "0",
+      std::move(planFragment),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel,
+      /*consumer=*/Consumer{});
+
+  task->start(3, 1);
+
+  // Add ungrouped build split.
+  task->addSplit(
+      buildScanNodeId,
+      exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  // Add grouped probe splits.
+  task->addSplit(
+      probeScanNodeId,
+      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 0));
+  task->addSplit(
+      probeScanNodeId,
+      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 1));
+
+  task->noMoreSplits(buildScanNodeId);
+  task->noMoreSplitsForGroup(probeScanNodeId, 0);
+  task->noMoreSplitsForGroup(probeScanNodeId, 1);
+  task->noMoreSplits(probeScanNodeId);
+
+  // Wait for all drivers to finish.  Mixed mode with 2 split groups and
+  // 3 drivers per group: 3 (ungrouped build) + 2 * 3 (grouped probe) = 9.
+  for (int i = 0; i < 100 && task->numFinishedDrivers() < 9; ++i) {
+    /* sleep override */
+    usleep(100'000);
+  }
+  ASSERT_EQ(9, task->numFinishedDrivers());
+
+  auto outputBufferManager =
+      exec::DefaultOutputBufferManager::getInstanceRef();
+  outputBufferManager->deleteResults(task->taskId(), 0);
+  ASSERT_EQ(task->state(), exec::TaskState::kFinished);
 }
 
 } // namespace
