@@ -162,12 +162,14 @@ class Writer : public dwio::common::Writer {
  public:
   // Constructs a writer with output to 'sink'. 'options' carries common writer
   // options and Parquet-specific format options. For Parquet,
-  // 'options.flushPolicyFactory' must create a DefaultFlushPolicy (or a
-  // subclass). If not provided, the writer uses the default 128MB row-group
-  // byte target. 'options.maxTargetFileSizeBytes' is tracked independently so
-  // the writer can flush the current row group early and make file rotation
-  // visible to the caller. 'pool' is used for temporary memory. 'schema'
-  // specifies the file's overall schema, and it is always non-null.
+  // 'options.flushPolicyFactory' is a programmatic C++ hook and must create a
+  // DefaultFlushPolicy (or a subclass). If not provided, the writer uses its
+  // built-in row-group limits: a soft 128MB byte target and a hard row-count
+  // cap of DefaultFlushPolicy::kDefaultRowsInGroup (~1M rows).
+  // 'options.maxTargetFileSizeBytes' is tracked independently so the writer
+  // can flush the current row group early and make file rotation visible to
+  // the caller. 'pool' is used for temporary memory. 'schema' specifies the
+  // file's overall schema, and it is always non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
       const dwio::common::WriterOptions& options,

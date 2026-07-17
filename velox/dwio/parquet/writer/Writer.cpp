@@ -454,7 +454,7 @@ dwio::common::StripeProgress getStripeProgress(int64_t bufferedBytes) {
   return dwio::common::StripeProgress{.stripeSizeEstimate = bufferedBytes};
 }
 
-bool shouldFlushForTargetFileSize(
+bool stagedBytesReachTargetFileSize(
     uint64_t maxTargetFileSizeBytes,
     int64_t streamBytes,
     int64_t currentRowGroupBytes) {
@@ -538,7 +538,7 @@ void Writer::write(const VectorPtr& data) {
   // files based on raw written bytes won't observe the row group until the
   // next write.
   if (flushPolicy_->shouldFlush(getStripeProgress(currentRowGroupBytes)) ||
-      shouldFlushForTargetFileSize(
+      stagedBytesReachTargetFileSize(
           maxTargetFileSizeBytes_, streamBytes, currentRowGroupBytes)) {
     flush();
   } else if (flushPolicy_->bytesInRowGroup() <= stream_->bufferedBytes()) {
