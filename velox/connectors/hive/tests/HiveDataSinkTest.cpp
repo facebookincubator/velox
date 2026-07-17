@@ -1200,20 +1200,23 @@ TEST_F(
     maxTargetFileSizeDoesNotAffectBucketedParquetRowGroups) {
   connectorSessionProperties_->set(
       HiveConfig::kParquetMaxTargetFileSizeSession, "8KB");
+  constexpr uint64_t kMaxTargetFileSizeBytes = 8 * 1024;
 
   auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
   writeOptions->compressionKind = CompressionKind::CompressionKind_NONE;
 
+  auto rowType = ROW("payload", VARCHAR());
+
   auto bucketProperty = std::make_shared<HiveBucketProperty>(
       HiveBucketProperty::Kind::kHiveCompatible,
       1,
-      std::vector<std::string>{"c0"},
-      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::string>{"payload"},
+      std::vector<TypePtr>{VARCHAR()},
       std::vector<std::shared_ptr<const HiveSortingColumn>>{});
 
   const auto outputDirectory = TempDirectoryPath::create();
   auto dataSink = createDataSink(
-      rowType_,
+      rowType,
       outputDirectory->getPath(),
       dwio::common::FileFormat::PARQUET,
       {},
@@ -1221,23 +1224,16 @@ TEST_F(
       writeOptions);
 
   constexpr int32_t kNumRows = 500;
+  constexpr int32_t kNumBatches = 5;
   const std::string payload(512, 'x');
-  const auto makeBatch = [&]() {
-    return makeRowVector({
-        makeFlatVector<int64_t>(kNumRows, folly::identity),
-        makeFlatVector<int32_t>(kNumRows, [](auto row) { return row * 2; }),
-        makeFlatVector<int16_t>(kNumRows, [](auto row) { return row % 100; }),
-        makeFlatVector<float>(kNumRows, [](auto row) { return row * 1.0f; }),
-        makeFlatVector<double>(kNumRows, [](auto row) { return row * 1.0; }),
-        makeFlatVector<StringView>(
-            kNumRows, [&](auto /*row*/) { return StringView(payload); }),
-        makeFlatVector<bool>(kNumRows, [](auto row) { return row % 2 == 0; }),
-    });
-  };
+  auto batch = makeRowVector({makeFlatVector<std::string>(
+      kNumRows, [&](auto /*row*/) { return payload; })});
 
-  const int numBatches = 5;
-  for (int i = 0; i < numBatches; ++i) {
-    dataSink->appendData(makeBatch());
+  // About 2500 * 512B = 1.3MB is written here: far above the 8KB file-size
+  // target. Bucketed writes do not rotate, so row-group sizing must ignore the
+  // file-size target and keep all rows in one default-sized row group.
+  for (int i = 0; i < kNumBatches; ++i) {
+    dataSink->appendData(batch);
   }
   ASSERT_TRUE(dataSink->finish());
   dataSink->close();
@@ -1254,8 +1250,9 @@ TEST_F(
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::move(bufferedInput), readerOpts);
   auto fileMeta = reader->fileMetaData();
-  EXPECT_EQ(fileMeta.numRowGroups(), 1);
-  EXPECT_EQ(fileMeta.rowGroup(0).numRows(), kNumRows * numBatches);
+  EXPECT_GT(kNumRows * kNumBatches * payload.size(), kMaxTargetFileSizeBytes);
+  EXPECT_EQ(1, fileMeta.numRowGroups());
+  EXPECT_EQ(kNumRows * kNumBatches, fileMeta.rowGroup(0).numRows());
 }
 #endif
 
