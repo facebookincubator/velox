@@ -849,41 +849,36 @@ TEST_F(ParquetWriterTest, flushRowGroupByBufferedSize) {
 
 TEST_F(ParquetWriterTest, flushRowGroupByMaxTargetFileSize) {
   constexpr int64_t kNumRows = 64;
-  const std::string payload(512, 'x');
+  constexpr uint64_t kMaxTargetFileSizeBytes = 8 * 1024;
 
   dwio::common::WriterOptions options;
   options.memoryPool = rootPool_.get();
   options.compressionKind = CompressionKind::CompressionKind_NONE;
-  options.maxTargetFileSizeBytes = 8 * 1024;
-  options.flushPolicyFactory = []() {
-    return std::make_unique<DefaultFlushPolicy>(
-        /*rowsInRowGroup=*/1'024 * 1'024,
-        /*bytesInRowGroup=*/128 * 1'024 * 1'024);
-  };
+  options.maxTargetFileSizeBytes = kMaxTargetFileSizeBytes;
 
-  const auto schema = ROW({"payload"}, {VARCHAR()});
+  const auto schema = ROW("payload", VARCHAR());
   ParquetWriterOptions writerOptions;
   writerOptions.enableDictionary = false;
   auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
 
-  const auto makeBatch = [&]() {
-    return makeRowVector({makeFlatVector<StringView>(
-        kNumRows, [&](auto /*row*/) { return StringView(payload); })});
-  };
+  const std::string payload(512, 'x');
+  auto batch = makeRowVector({makeFlatVector<std::string>(
+      kNumRows, [&](auto /*row*/) { return payload; })});
 
-  writerWithSink.writer->write(makeBatch());
+  // Verify that maxTargetFileSizeBytes, not the default 128MB row-group
+  // target, closes the current row group so callers can observe file size.
+  // Each batch is roughly 64 * 512B = 32KB: well above the 8KB file-size
+  // target, but far below the default row-group byte target.
+  writerWithSink.writer->write(batch);
 
-  // The writer should flush the current row group early so file-size-based
-  // rotation can observe written bytes even though the row-group target is
-  // much larger than maxTargetFileSizeBytes.
-  EXPECT_GT(writerWithSink.sink->size(), options.maxTargetFileSizeBytes);
+  EXPECT_GT(writerWithSink.sink->size(), kMaxTargetFileSizeBytes);
 
-  writerWithSink.writer->write(makeBatch());
+  writerWithSink.writer->write(batch);
   writerWithSink.writer->close();
 
   const auto reader = createReaderInMemory(*writerWithSink.sink);
   EXPECT_EQ(2 * kNumRows, reader->numberOfRows());
-  EXPECT_EQ(reader->fileMetaData().numRowGroups(), 2);
+  EXPECT_EQ(2, reader->fileMetaData().numRowGroups());
 }
 
 TEST_F(ParquetWriterTest, flushEmptyRowGroup) {
