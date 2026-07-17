@@ -59,8 +59,7 @@ SelectiveColumnReader::SelectiveColumnReader(
   scanState_.rowsCopy = raw_vector<vector_size_t>(pool_);
   scanState_.filterCache = raw_vector<uint8_t>(pool_);
   // Initialize per-column decoding statistics if collection is enabled.
-  auto& stats =
-      params.runtimeStatistics(fileType_->id(), fileType_->type()->kind());
+  auto& stats = params.columnStats(fileType_->id(), fileType_->type()->kind());
   decodingStats_ = stats.decodingStats ? &*stats.decodingStats : nullptr;
 }
 

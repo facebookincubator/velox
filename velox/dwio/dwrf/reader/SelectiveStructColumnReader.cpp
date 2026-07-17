@@ -82,7 +82,7 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     auto childParams = DwrfParams(
         stripe,
         labels,
-        params.splitStatistics(),
+        params.splitStats(),
         FlatMapContext{
             .sequence = encodingKey.sequence(),
             .inMapDecoder = nullptr,

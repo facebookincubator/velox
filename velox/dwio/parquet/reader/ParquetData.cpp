@@ -28,7 +28,7 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
       type,
       metaData_,
       pool(),
-      runtimeStatistics(type->id(), type->type()->kind()),
+      columnStats(type->id(), type->type()->kind()),
       sessionTimezone_);
 }
 

@@ -161,12 +161,14 @@ class FormatParams {
   }
 
   /// Returns the runtime statistics for a column, creating them if necessary.
-  ColumnStats& runtimeStatistics(uint32_t nodeId, TypeKind typeKind) {
-    return stats_->getOrCreateColumnStats(nodeId, typeKind);
+  /// @param id Schema node ID identifying the column.
+  /// @param typeKind Logical column type to record in the statistics.
+  ColumnStats& columnStats(uint32_t id, TypeKind typeKind) {
+    return stats_->getOrCreateColumnStats(id, typeKind);
   }
 
   /// Returns the runtime statistics accumulator for the current split.
-  SplitStats& splitStatistics() {
+  SplitStats& splitStats() {
     return *stats_;
   }
 
