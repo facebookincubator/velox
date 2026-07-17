@@ -103,7 +103,7 @@ vector_size_t filteredOutputNumRows(
           ->value(stream));
 }
 
-/// Returns row indices where mask is true as a column of size_type.
+// Returns row indices where mask is true as a column of size_type.
 std::unique_ptr<cudf::column> getRetainedIndices(
     cudf::column_view mask,
     rmm::cuda_stream_view stream,
@@ -121,9 +121,9 @@ std::unique_ptr<cudf::column> getRetainedIndices(
   return std::move(indicesTable->release().front());
 }
 
-/// Tracks which probe rows have been matched across multiple build batches.
-/// Maintains a boolean column that accumulates matches via cudf::contains +
-/// BITWISE_OR, and provides a method to retrieve unmatched probe row indices.
+// Tracks which probe rows have been matched across multiple build batches.
+// Maintains a boolean column that accumulates matches via cudf::contains +
+// BITWISE_OR, and provides a method to retrieve unmatched probe row indices.
 class ProbeMatchTracker {
  public:
   ProbeMatchTracker(
@@ -141,7 +141,7 @@ class ProbeMatchTracker {
         mr);
   }
 
-  /// Mark probe rows present in matchedLeftIndices as matched.
+  // Mark probe rows present in matchedLeftIndices as matched.
   void update(
       cudf::column_view matchedLeftIndices,
       rmm::cuda_stream_view stream,
@@ -159,7 +159,7 @@ class ProbeMatchTracker {
     matchCol_ = std::move(updatedMatch);
   }
 
-  /// Returns indices of probe rows that were never matched.
+  // Returns indices of probe rows that were never matched.
   std::unique_ptr<cudf::column> getUnmatchedIndices(
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) {
@@ -1425,16 +1425,8 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
         sentinelScalar, unmatchedIndices->size(), stream, get_temp_mr());
     auto unmatchedRightCol = unmatchedRightIndices->view();
 
-    // Emit unmatched rows directly via unfilteredOutput for two reasons:
-    // (1) We cannot use filteredOutputIndices with LEFT_JOIN here because
-    //     filter_join_indices(LEFT_JOIN) ensures every row in the left *table*
-    //     appears at least once. Since our left indices are a subset of probe
-    //     rows (only the unmatched ones), LEFT_JOIN would re-add all the
-    //     matched probe rows that are absent from this subset.
-    // (2) Using unfilteredOutput is safe because all right indices are
-    //     JoinNoMatch. Per filter_join_indices semantics, input pairs with
-    //     JoinNoMatch in either position pass through unchanged (the predicate
-    //     cannot be evaluated), so filtering would be a no-op anyway.
+    // Use unfilteredOutput directly — see the matching comment in leftJoin()
+    // for why filteredOutputIndices cannot be used here.
     cudfOutputs.push_back(unfilteredOutput(
         leftTableView,
         unmatchedLeftCol,
