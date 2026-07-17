@@ -493,6 +493,7 @@ struct DecodingStats {
 
 /// Collects runtime metrics produced while reading one column.
 struct ColumnStats {
+  /// Creates statistics for a column of 'typeKind'.
   explicit ColumnStats(TypeKind typeKind) : typeKind{typeKind} {}
 
   // Logical type of this column.
@@ -520,6 +521,7 @@ struct ColumnStats {
 
 /// Collects format-specific statistics while processing one file split.
 struct SplitStats {
+  /// Creates an accumulator for a split of 'format'.
   explicit SplitStats(FileFormat format) : format{format} {
     VELOX_CHECK_NE(format, FileFormat::UNKNOWN);
   }

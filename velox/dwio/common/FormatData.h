@@ -160,10 +160,12 @@ class FormatParams {
     return *pool_;
   }
 
+  /// Returns the runtime statistics for a column, creating them if necessary.
   ColumnStats& runtimeStatistics(uint32_t nodeId, TypeKind typeKind) {
     return stats_->getOrCreateColumnStats(nodeId, typeKind);
   }
 
+  /// Returns the runtime statistics accumulator for the current split.
   SplitStats& splitStatistics() {
     return *stats_;
   }

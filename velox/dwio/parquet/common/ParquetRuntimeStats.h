@@ -23,6 +23,7 @@
 
 namespace facebook::velox::parquet {
 
+/// Names and descriptors for Parquet-specific runtime metrics.
 struct ParquetRuntimeStats {
   /// Time spent loading Parquet pages in nanoseconds.
   inline static constexpr std::string_view kPageLoadTimeNs =
@@ -36,6 +37,7 @@ struct ParquetRuntimeStats {
   inline static constexpr std::string_view kFooterEstimatedBytes =
       "footerEstimatedBytes";
 
+  /// Describes the estimated-footer-memory runtime metric.
   inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
       kFooterEstimatedBytesMetric = {
           kFooterEstimatedBytes,
