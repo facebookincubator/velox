@@ -126,12 +126,10 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return size;
   }
 
-  void cancel() override {
-    // cancel() is called from ~CoalescedLoad during BufferedInput
-    // teardown, which today
-    // runs on the consumer thread. If a future refactor ever moves
-    // BufferedInput destruction onto an executor thread, this DCHECK
-    // catches the self-deadlock risk on day one.
+  void cancel() {
+    // DirectBufferedInput calls cancel() during teardown on the consumer
+    // thread. If destruction moves onto an executor thread, this DCHECK catches
+    // the self-deadlock risk.
     DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
         << "DirectCoalescedLoad::cancel called on IO executor thread";
     folly::SemiFuture<bool> waitFuture(false);
