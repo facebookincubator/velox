@@ -24,7 +24,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorUtils.h"
@@ -9113,11 +9112,6 @@ TEST_F(HashJoinTest, emptyBuildWithDebugEnabled) {
 // to correctly include the bridge for the ungrouped factory and exclude it from
 // grouped factories.  Without this, the probe hangs waiting on an empty bridge.
 TEST_F(HashJoinTest, mixedGroupedExecution) {
-  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
-  SCOPE_EXIT {
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
-  };
-
   auto vectors = makeVectors(probeType_, 4, 20);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
@@ -9127,28 +9121,26 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
   core::PlanNodeId buildScanNodeId;
 
   PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
-  auto planFragment =
+  auto plan =
       planBuilder.tableScan(probeType_)
           .capturePlanNodeId(probeScanNodeId)
-          .project({"c0 as x"})
+          .project({"t_k1 as x"})
           .hashJoin(
               {"x"},
               {"y"},
               PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType_, {"c0 > 0"})
+                  .tableScan(probeType_)
                   .capturePlanNodeId(buildScanNodeId)
-                  .project({"c0 as y"})
+                  .project({"t_k1 as y"})
                   .planNode(),
               "",
               {"x", "y"})
-          .partitionedOutput({}, 1, {"x", "y"})
-          .planFragment();
+          .planNode();
 
-  // Configure mixed grouped execution: probe is grouped, build is ungrouped.
-  planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
-  planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
-  planFragment.numSplitGroups = 2;
+  auto planFragment = core::PlanFragment{
+      plan, core::ExecutionStrategy::kGrouped, 2, {probeScanNodeId}};
 
+  std::vector<RowVectorPtr> results;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   auto task = exec::Task::create(
       "0",
@@ -9156,7 +9148,12 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
       0,
       std::move(queryCtx),
       Task::ExecutionMode::kParallel,
-      /*consumer=*/Consumer{});
+      [&results](RowVectorPtr result, bool, ContinueFuture*) {
+        if (result) {
+          results.push_back(std::move(result));
+        }
+        return BlockingReason::kNotBlocked;
+      });
 
   task->start(3, 1);
 
@@ -9177,18 +9174,9 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
   task->noMoreSplitsForGroup(probeScanNodeId, 1);
   task->noMoreSplits(probeScanNodeId);
 
-  // Wait for all drivers to finish.  Mixed mode with 2 split groups and
-  // 3 drivers per group: 3 (ungrouped build) + 2 * 3 (grouped probe) = 9.
-  for (int i = 0; i < 100 && task->numFinishedDrivers() < 9; ++i) {
-    /* sleep override */
-    usleep(100'000);
-  }
-  ASSERT_EQ(9, task->numFinishedDrivers());
-
-  auto outputBufferManager =
-      exec::DefaultOutputBufferManager::getInstanceRef();
-  outputBufferManager->deleteResults(task->taskId(), 0);
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
   ASSERT_EQ(task->state(), exec::TaskState::kFinished);
+  ASSERT_FALSE(results.empty());
 }
 
 } // namespace
