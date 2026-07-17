@@ -31,7 +31,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()),
-      statistics_(params.runtimeStatistics()) {
+      statistics_(params.runtimeStatistics(fileType->id())) {
   auto& stripe = params.stripeStreams();
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   version_ = convertRleVersion(stripe, encodingKey);
@@ -286,7 +286,7 @@ void SelectiveStringDictionaryColumnReader::makeFlat(VectorPtr* result) {
       numValues_,
       std::move(values),
       std::move(stringBuffers));
-  statistics_.accumulateFormatSpecificStat(
+  statistics_.accumulateStat(
       DwrfRuntimeStats::kFlattenStringDictionaryValuesMetric, numValues_);
 }
 

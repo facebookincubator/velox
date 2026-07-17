@@ -1423,18 +1423,20 @@ class ParquetRowReader::Impl {
       return exceptionMessageContext;
     };
 
+    splitStats_.initColumnStatsCollection(
+        *readerBase_->schemaWithId(), options_);
     if (rowGroups_.empty()) {
       return; // TODO
     }
     parquetStatsContext_ = ParquetStatsContext(readerBase_->version());
     if (readerBase_->initialThriftSize() > 0) {
-      splitStats_.accumulateFormatSpecificStat(
+      splitStats_.accumulateStat(
           ParquetRuntimeStats::kFooterEstimatedBytesMetric,
           readerBase_->initialThriftSize());
     }
     ParquetParams params(
         pool_,
-        splitStats_.columnReaderStats,
+        splitStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
         options_.timestampPrecision());
@@ -1658,7 +1660,7 @@ class ParquetRowReader::Impl {
   TypePtr requestedType_;
   ParquetStatsContext parquetStatsContext_;
 
-  dwio::common::SplitStats splitStats_;
+  dwio::common::SplitStatistics splitStats_;
 
   mutable std::optional<size_t> estimatedRowSize_;
   mutable int32_t lastRowGroupWithRowEstimate_{-1};

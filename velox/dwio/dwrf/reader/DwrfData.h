@@ -127,7 +127,7 @@ class DwrfParams : public dwio::common::FormatParams {
   explicit DwrfParams(
       StripeStreams& stripeStreams,
       const StreamLabels& streamLabels,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::SplitStatistics& stats,
       FlatMapContext context = {})
       : FormatParams(stripeStreams.getMemoryPool(), stats),
         streamLabels_(streamLabels),

@@ -145,7 +145,7 @@ class FormatData {
 /// Base class for format-specific reader initialization arguments.
 class FormatParams {
  public:
-  FormatParams(memory::MemoryPool& pool, ColumnReaderStatistics& stats)
+  FormatParams(memory::MemoryPool& pool, SplitStatistics& stats)
       : pool_(&pool), stats_(&stats) {}
 
   virtual ~FormatParams() = default;
@@ -160,13 +160,17 @@ class FormatParams {
     return *pool_;
   }
 
-  ColumnReaderStatistics& runtimeStatistics() {
+  ColumnReaderStatistics& runtimeStatistics(uint32_t nodeId) {
+    return stats_->getOrCreateColumnStats(nodeId);
+  }
+
+  SplitStatistics& splitStatistics() {
     return *stats_;
   }
 
  private:
   memory::MemoryPool* const pool_;
-  ColumnReaderStatistics* const stats_;
+  SplitStatistics* const stats_;
 };
 
 } // namespace facebook::velox::dwio::common

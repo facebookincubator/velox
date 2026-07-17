@@ -34,7 +34,7 @@ class ParquetParams : public dwio::common::FormatParams {
  public:
   ParquetParams(
       memory::MemoryPool& pool,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::SplitStatistics& stats,
       const FileMetaDataPtr metaData,
       const tz::TimeZone* sessionTimezone,
       TimestampPrecision timestampPrecision)

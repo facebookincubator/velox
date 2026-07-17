@@ -220,7 +220,7 @@ class DwrfRowReader : public StrideIndexProvider,
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
 
-  std::shared_ptr<dwio::common::SplitStats> splitStats_;
+  std::shared_ptr<dwio::common::SplitStatistics> splitStats_;
 
   std::optional<int64_t> nextRowNumber_;
 

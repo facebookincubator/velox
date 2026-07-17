@@ -45,7 +45,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::SplitStats> splitStats,
+      std::shared_ptr<dwio::common::SplitStatistics> splitStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -103,7 +103,7 @@ class DwrfUnit : public LoadUnit {
   // ColumnReader::next(), where DwrfRowReader is guaranteed to be alive.
   const StrideIndexProvider& strideIndexProvider_;
 
-  const std::shared_ptr<dwio::common::SplitStats> splitStats_;
+  const std::shared_ptr<dwio::common::SplitStatistics> splitStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -169,7 +169,7 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
       stripeIndex_,
-      &splitStats_->columnReaderStats);
+      splitStats_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -185,7 +185,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        splitStats_->columnReaderStats,
+        *splitStats_,
         scanSpec,
         flatMapContext,
         /*isRoot=*/true);
@@ -269,11 +269,10 @@ DwrfRowReader::DwrfRowReader(
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
       splitStats_(
-          std::make_shared<dwio::common::SplitStats>(
+          std::make_shared<dwio::common::SplitStatistics>(
               dwio::common::FileFormat::DWRF)),
       currentUnit_{nullptr} {
-  splitStats_->columnReaderStats.initColumnStatsCollection(
-      *getReader().schemaWithId(), options_);
+  splitStats_->initColumnStatsCollection(*getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;

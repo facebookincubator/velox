@@ -123,7 +123,7 @@ PageHeader PageReader::readPageHeader() {
 
   updateBufferPointersAfterDeserialization(result);
 
-  stats_.accumulateFormatSpecificStat(
+  stats_.accumulateStat(
       ParquetRuntimeStats::kPageLoadTimeNsMetric, result.readNs);
   return pageHeader;
 }
@@ -166,8 +166,7 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
         bufferStart_,
         bufferEnd_);
   }
-  stats_.accumulateFormatSpecificStat(
-      ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
+  stats_.accumulateStat(ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
   return copy->as<char>();
 }
 
@@ -504,7 +503,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.accumulateFormatSpecificStat(
+        stats_.accumulateStat(
             ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       if (type_->type()->isShortDecimal() &&
@@ -545,7 +544,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.accumulateFormatSpecificStat(
+        stats_.accumulateStat(
             ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       // Expand the Parquet type length values to Velox type length.
@@ -579,7 +578,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           dwio::common::readBytes(
               numBytes, inputStream_.get(), strings, bufferStart_, bufferEnd_);
         }
-        stats_.accumulateFormatSpecificStat(
+        stats_.accumulateStat(
             ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       auto header = strings;
@@ -613,7 +612,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
               bufferStart_,
               bufferEnd_);
         }
-        stats_.accumulateFormatSpecificStat(
+        stats_.accumulateStat(
             ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
       if (type_->type()->isShortDecimal()) {

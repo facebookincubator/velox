@@ -487,71 +487,68 @@ struct DecodingStats {
 
   /// Merges stats from another DecodingStats instance.
   void merge(const DecodingStats& other);
-};
 
-/// Collection of per-column decoding statistics keyed by nodeId.
-/// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
-struct DecodingStatsSet {
-  /// Gets or creates a DecodingStats for a column. Sets typeKind when
-  /// creating.
-  DecodingStats* getOrCreate(
-      uint32_t nodeId,
-      TypeKind typeKind = TypeKind::INVALID);
-
-  /// Merges all column decoding statistics from another DecodingStatsSet
-  /// instance.
-  void mergeFrom(const DecodingStatsSet& other);
-
-  /// Exports per-column metrics into the runtime metrics result map.
+  /// Merges non-empty decoding counters into 'result' using 'prefix'.
   void toRuntimeMetrics(
+      std::string_view prefix,
       std::unordered_map<std::string, RuntimeMetric>& result) const;
-
- private:
-  folly::F14FastMap<uint32_t, std::unique_ptr<DecodingStats>> map_;
 };
 
-/// Collects runtime metrics produced while reading columns.
+/// Collects runtime metrics produced while reading one column.
 struct ColumnReaderStatistics {
-  folly::F14FastMap<std::string, RuntimeMetric> formatSpecificStats;
+  // Format-specific metrics for this column, keyed by metric name.
+  folly::F14FastMap<std::string, RuntimeMetric> columnMetrics;
 
-  /// Stores per-column decode and decompress timing keyed by column node id.
-  ///
-  /// Only populated when decoding stats collection is enabled.
-  std::optional<DecodingStatsSet> decodingStatsSet;
+  // Decoding counters and the column type, when collection is enabled.
+  std::optional<DecodingStats> decodingStats;
 
-  /// Initializes column stats collection for the given schema if enabled in
-  /// options. Recursively registers metrics for all columns in the type tree.
-  void initColumnStatsCollection(
-      const TypeWithId& schema,
-      const RowReaderOptions& options);
-
-  void accumulateFormatSpecificStat(
+  /// Adds one sample to a format-specific column metric.
+  void accumulateStat(
       const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
       int64_t value);
 
   /// Merges all stats from another ColumnReaderStatistics instance.
   void mergeFrom(const ColumnReaderStatistics& other);
 
-  /// Exports all metrics into the runtime metrics result map.
+  /// Merges this column's metrics into 'result' using 'prefix'.
   void toRuntimeMetrics(
+      std::string_view prefix,
       std::unordered_map<std::string, RuntimeMetric>& result) const;
-
- private:
-  void registerDecodingStatsImpl(const TypeWithId& node);
 };
 
-struct SplitStats {
-  explicit SplitStats(FileFormat format) : format{format} {
+/// Collects format-specific statistics while processing one file split.
+struct SplitStatistics {
+  explicit SplitStatistics(FileFormat format) : format{format} {
     VELOX_CHECK_NE(format, FileFormat::UNKNOWN);
   }
 
+  // File format shared by all metrics collected for this split.
   const FileFormat format;
-  folly::F14FastMap<std::string, RuntimeMetric> formatSpecificStats;
-  ColumnReaderStatistics columnReaderStats;
 
-  void accumulateFormatSpecificStat(
+  // Split-level format-specific metrics, keyed by metric name.
+  folly::F14FastMap<std::string, RuntimeMetric> splitMetrics;
+
+  // Per-column statistics keyed by schema node ID.
+  folly::F14FastMap<uint32_t, ColumnReaderStatistics> columnStats;
+
+  /// Returns the statistics for 'nodeId', creating them if necessary.
+  ColumnReaderStatistics& getOrCreateColumnStats(uint32_t nodeId);
+
+  /// Returns decoding statistics for 'nodeId', or nullptr if unavailable.
+  DecodingStats* decodingStats(uint32_t nodeId);
+
+  /// Registers every schema node and optionally enables decoding counters.
+  void initColumnStatsCollection(
+      const TypeWithId& schema,
+      const RowReaderOptions& options);
+
+  /// Adds one sample to a split-level format-specific metric.
+  void accumulateStat(
       const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
       int64_t value);
+
+ private:
+  void registerColumnStats(const TypeWithId& node, bool collectDecodingStats);
 };
 
 /// Aggregates runtime statistics collected while processing a split.
@@ -585,11 +582,19 @@ struct RuntimeStatistics {
 
   // Stores unit-loader runtime metrics.
   UnitLoaderStats unitLoaderStats;
+
+  // Split-level format-specific metrics aggregated by file format.
   folly::F14FastMap<FileFormat, folly::F14FastMap<std::string, RuntimeMetric>>
       formatSpecificStats;
-  folly::F14FastMap<FileFormat, ColumnReaderStatistics> columnReaderStats;
 
-  void mergeFrom(const SplitStats& split);
+  // Per-column statistics aggregated by schema node ID and file format.
+  folly::F14FastMap<
+      uint32_t,
+      folly::F14FastMap<FileFormat, ColumnReaderStatistics>>
+      columnStats;
+
+  /// Merges one split's format-specific and per-column statistics.
+  void mergeFrom(const SplitStatistics& split);
 
   // Exports collected counters as runtime metrics.
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;

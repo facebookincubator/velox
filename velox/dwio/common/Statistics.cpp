@@ -33,6 +33,16 @@ std::string toStringOr(
   return std::string{fallback};
 }
 
+void mergeRuntimeMetric(
+    std::string name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& result) {
+  auto [it, inserted] = result.emplace(std::move(name), metric);
+  if (!inserted) {
+    it->second.merge(metric);
+  }
+}
+
 } // namespace
 
 bool KeyInfo::operator==(const KeyInfo& other) const {
@@ -164,67 +174,31 @@ void DecodingStats::merge(const DecodingStats& other) {
   decodeCPUTimeNanos.merge(other.decodeCPUTimeNanos);
 }
 
-DecodingStats* DecodingStatsSet::getOrCreate(
-    uint32_t nodeId,
-    TypeKind typeKind) {
-  auto it = map_.find(nodeId);
-  if (it == map_.end()) {
-    it = map_.emplace(nodeId, std::make_unique<DecodingStats>(typeKind)).first;
-  }
-  return it->second.get();
-}
-
-void DecodingStatsSet::mergeFrom(const DecodingStatsSet& other) {
-  for (const auto& [nodeId, srcStats] : other.map_) {
-    auto it = map_.find(nodeId);
-    if (it == map_.end()) {
-      it = map_.emplace(nodeId, std::make_unique<DecodingStats>()).first;
-      it->second->typeKind = srcStats->typeKind;
-    }
-    it->second->merge(*srcStats);
-  }
-}
-
-void DecodingStatsSet::toRuntimeMetrics(
+void DecodingStats::toRuntimeMetrics(
+    std::string_view prefix,
     std::unordered_map<std::string, RuntimeMetric>& result) const {
-  for (const auto& [nodeId, stats] : map_) {
-    // Export decompression timing.
-    const auto& decompressCounter = stats->decompressCPUTimeNanos;
-    if (decompressCounter.count() > 0) {
-      result.emplace(
-          fmt::format(
-              "column_{}.{}.decompressCPUTimeNanos",
-              nodeId,
-              TypeKindName::toName(stats->typeKind)),
-          RuntimeMetric{
-              saturateCast(decompressCounter.sum()),
-              decompressCounter.count(),
-              saturateCast(decompressCounter.min()),
-              saturateCast(decompressCounter.max()),
-              RuntimeCounter::Unit::kNanos});
+  const auto addCounter = [&](std::string_view name, const auto& counter) {
+    if (counter.count() == 0) {
+      return;
     }
-    // Export decode timing.
-    const auto& decodeCounter = stats->decodeCPUTimeNanos;
-    if (decodeCounter.count() > 0) {
-      result.emplace(
-          fmt::format(
-              "column_{}.{}.decodeCPUTimeNanos",
-              nodeId,
-              TypeKindName::toName(stats->typeKind)),
-          RuntimeMetric{
-              saturateCast(decodeCounter.sum()),
-              decodeCounter.count(),
-              saturateCast(decodeCounter.min()),
-              saturateCast(decodeCounter.max()),
-              RuntimeCounter::Unit::kNanos});
-    }
-  }
+    mergeRuntimeMetric(
+        fmt::format("{}.{}", prefix, name),
+        RuntimeMetric{
+            saturateCast(counter.sum()),
+            counter.count(),
+            saturateCast(counter.min()),
+            saturateCast(counter.max()),
+            RuntimeCounter::Unit::kNanos},
+        result);
+  };
+  addCounter("decompressCPUTimeNanos", decompressCPUTimeNanos);
+  addCounter("decodeCPUTimeNanos", decodeCPUTimeNanos);
 }
 
-void ColumnReaderStatistics::accumulateFormatSpecificStat(
+void ColumnReaderStatistics::accumulateStat(
     const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
     int64_t value) {
-  auto [it, inserted] = formatSpecificStats.try_emplace(stat.first);
+  auto [it, inserted] = columnMetrics.try_emplace(stat.first);
   if (inserted) {
     it->second.unit = stat.second;
   } else {
@@ -233,43 +207,54 @@ void ColumnReaderStatistics::accumulateFormatSpecificStat(
   it->second.addValue(value);
 }
 
-void ColumnReaderStatistics::initColumnStatsCollection(
+ColumnReaderStatistics& SplitStatistics::getOrCreateColumnStats(
+    uint32_t nodeId) {
+  return columnStats[nodeId];
+}
+
+DecodingStats* SplitStatistics::decodingStats(uint32_t nodeId) {
+  const auto it = columnStats.find(nodeId);
+  return it != columnStats.end() && it->second.decodingStats
+      ? &*it->second.decodingStats
+      : nullptr;
+}
+
+void SplitStatistics::initColumnStatsCollection(
     const TypeWithId& schema,
     const RowReaderOptions& options) {
-  if (!options.collectColumnCpuMetrics()) {
-    return;
-  }
-  decodingStatsSet.emplace();
-  registerDecodingStatsImpl(schema);
+  registerColumnStats(schema, options.collectColumnCpuMetrics());
 }
 
 void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
-  for (const auto& [name, metric] : other.formatSpecificStats) {
-    auto [it, inserted] = formatSpecificStats.emplace(name, metric);
+  for (const auto& [name, metric] : other.columnMetrics) {
+    auto [it, inserted] = columnMetrics.emplace(name, metric);
     if (!inserted) {
       it->second.merge(metric);
     }
   }
-  if (other.decodingStatsSet) {
-    if (!decodingStatsSet) {
-      decodingStatsSet.emplace();
+  if (other.decodingStats) {
+    if (!decodingStats) {
+      decodingStats.emplace(other.decodingStats->typeKind);
     }
-    decodingStatsSet->mergeFrom(*other.decodingStatsSet);
+    decodingStats->merge(*other.decodingStats);
   }
 }
 
 void ColumnReaderStatistics::toRuntimeMetrics(
+    std::string_view prefix,
     std::unordered_map<std::string, RuntimeMetric>& result) const {
-  result.insert(formatSpecificStats.begin(), formatSpecificStats.end());
-  if (decodingStatsSet) {
-    decodingStatsSet->toRuntimeMetrics(result);
+  for (const auto& [name, metric] : columnMetrics) {
+    mergeRuntimeMetric(fmt::format("{}.{}", prefix, name), metric, result);
+  }
+  if (decodingStats) {
+    decodingStats->toRuntimeMetrics(prefix, result);
   }
 }
 
-void SplitStats::accumulateFormatSpecificStat(
+void SplitStatistics::accumulateStat(
     const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
     int64_t value) {
-  auto [it, inserted] = formatSpecificStats.try_emplace(stat.first);
+  auto [it, inserted] = splitMetrics.try_emplace(stat.first);
   if (inserted) {
     it->second.unit = stat.second;
   } else {
@@ -278,23 +263,30 @@ void SplitStats::accumulateFormatSpecificStat(
   it->second.addValue(value);
 }
 
-void RuntimeStatistics::mergeFrom(const SplitStats& split) {
+void RuntimeStatistics::mergeFrom(const SplitStatistics& split) {
   auto& target = formatSpecificStats[split.format];
-  for (const auto& [name, metric] : split.formatSpecificStats) {
+  for (const auto& [name, metric] : split.splitMetrics) {
     auto [it, inserted] = target.emplace(name, metric);
     if (!inserted) {
       VELOX_CHECK_EQ(it->second.unit, metric.unit);
       it->second.merge(metric);
     }
   }
-  columnReaderStats[split.format].mergeFrom(split.columnReaderStats);
+  for (const auto& [nodeId, stats] : split.columnStats) {
+    columnStats[nodeId][split.format].mergeFrom(stats);
+  }
 }
 
-void ColumnReaderStatistics::registerDecodingStatsImpl(const TypeWithId& node) {
-  decodingStatsSet->getOrCreate(node.id(), node.type()->kind());
+void SplitStatistics::registerColumnStats(
+    const TypeWithId& node,
+    bool collectDecodingStats) {
+  auto& stats = getOrCreateColumnStats(node.id());
+  if (collectDecodingStats && !stats.decodingStats) {
+    stats.decodingStats.emplace(node.type()->kind());
+  }
   for (uint32_t i = 0; i < node.size(); ++i) {
     if (const auto* child = node.childAt(i).get()) {
-      registerDecodingStatsImpl(*child);
+      registerColumnStats(*child, collectDecodingStats);
     }
   }
 }
@@ -344,12 +336,14 @@ RuntimeStatistics::toRuntimeMetricMap() const {
           fmt::format("{}.{}", FileFormatName::toName(format), name), metric);
     }
   }
-  for (const auto& [format, stats] : columnReaderStats) {
-    std::unordered_map<std::string, RuntimeMetric> metrics;
-    stats.toRuntimeMetrics(metrics);
-    for (const auto& [name, metric] : metrics) {
-      result.emplace(
-          fmt::format("{}.{}", FileFormatName::toName(format), name), metric);
+  for (const auto& [nodeId, statsByFormat] : columnStats) {
+    for (const auto& [format, stats] : statsByFormat) {
+      const auto formatPrefix = FileFormatName::toName(format);
+      const auto typeName = TypeKindName::toName(stats.decodingStats->typeKind);
+      const auto formatAndColumnPrefix =
+          fmt::format("{}.column_{}.{}", formatPrefix, nodeId, typeName);
+      stats.toRuntimeMetrics(formatPrefix, result);
+      stats.toRuntimeMetrics(formatAndColumnPrefix, result);
     }
   }
   return result;
