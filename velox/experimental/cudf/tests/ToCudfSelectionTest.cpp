@@ -218,6 +218,32 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
 
 TEST_F(
     ToCudfSelectionTest,
+    prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project(
+                      {"date_trunc('second', event_ts) AS second",
+                       "date_trunc('minute', event_ts) AS minute"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(
+    ToCudfSelectionTest,
     nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
   auto input = makeRowVector(
       {"event_ts"},

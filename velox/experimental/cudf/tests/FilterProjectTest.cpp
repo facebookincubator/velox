@@ -1292,7 +1292,7 @@ TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
 
 TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
   // Column value that exceeds int32 range; checked at eval time by
-  // checkScaledValueRange on the GPU.
+  // checkValueRange on the GPU.
   auto data = makeRowVector(
       {"event_date", "amount"},
       {makeFlatVector<int32_t>(
@@ -1307,6 +1307,43 @@ TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "date_add value is out of range");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2020-01-01"), std::nullopt, std::nullopt}, DATE()),
+       makeFlatVector<int64_t>(
+           {1,
+            std::numeric_limits<int64_t>::max(),
+            std::numeric_limits<int64_t>::min()})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, event_date) AS plus_day",
+      "date_add('month', amount, event_date) AS plus_month"};
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
+  constexpr int64_t kPositiveWeekOverflow =
+      std::numeric_limits<int32_t>::max() / 7LL + 1;
+  constexpr int64_t kNegativeWeekOverflow =
+      std::numeric_limits<int32_t>::min() / 7LL - 1;
+
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>({0, 0}, DATE()),
+       makeFlatVector<int64_t>(
+           {kPositiveWeekOverflow, kNegativeWeekOverflow})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('week', amount, event_date) AS column_value",
+      "date_add('week', 306783379, event_date) AS positive_literal",
+      "date_add('week', -306783379, event_date) AS negative_literal"};
+  assertProjectMatchesVelox(vectors, projections);
 }
 
 TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {

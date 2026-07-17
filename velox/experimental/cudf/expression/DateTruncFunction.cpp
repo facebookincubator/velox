@@ -63,6 +63,19 @@ bool DateTruncFunction::canEvaluate(
   return false;
 }
 
+bool DateTruncFunction::isTimezoneSensitive(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (!canEvaluate(expr) || !expr->inputs()[1]->type()->isTimestamp()) {
+    return false;
+  }
+
+  const auto unitString = constantVarcharValue(expr->inputs()[0]);
+  const auto unit = functions::fromDateTimeUnitString(*unitString, false);
+  return *unit == DateTimeUnit::kHour || *unit == DateTimeUnit::kDay ||
+      *unit == DateTimeUnit::kWeek || *unit == DateTimeUnit::kMonth ||
+      *unit == DateTimeUnit::kQuarter || *unit == DateTimeUnit::kYear;
+}
+
 DateTruncFunction::DateTruncFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
   VELOX_CHECK_EQ(

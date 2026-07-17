@@ -61,8 +61,7 @@ int32_t unitScale(DateTimeUnit unit) {
   }
 }
 
-// Multiplies value by scale and returns the result as int32_t, throwing if
-// either value or value*scale overflow int32_t.
+// Matches the CPU date_add policy: validate the raw value before unit scaling.
 void checkDateAddValueInInt32Range(int64_t value) {
   VELOX_USER_CHECK(
       value == static_cast<int32_t>(value), "date_add value is out of range");
@@ -70,26 +69,21 @@ void checkDateAddValueInInt32Range(int64_t value) {
 
 int32_t checkedScaleValue(int64_t value, int32_t scale) {
   checkDateAddValueInInt32Range(value);
-  const auto scaledValue = value * scale;
-  checkDateAddValueInInt32Range(scaledValue);
-  return static_cast<int32_t>(scaledValue);
+  return static_cast<int32_t>(value * scale);
 }
 
-// Throws if any non-null entry of valueCol would overflow int32_t when
-// multiplied by scale. The bound is computed in int64_t, so the predicate
-// itself cannot overflow.
-void checkScaledValueRange(
+// Throws if a non-null value outside int32_t corresponds to a non-null date.
+// Unit scaling happens after the cast to match the CPU date_add policy.
+void checkValueRange(
     cudf::column_view valueCol,
-    int32_t scale,
+    cudf::column_view dateCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   constexpr auto kMin = std::numeric_limits<int32_t>::min();
   constexpr auto kMax = std::numeric_limits<int32_t>::max();
-  const auto minValue = static_cast<int64_t>(kMin / scale);
-  const auto maxValue = static_cast<int64_t>(kMax / scale);
   const auto boolType = cudf::data_type(cudf::type_id::BOOL8);
 
-  cudf::numeric_scalar<int64_t> minScalar(minValue, true, stream, mr);
+  cudf::numeric_scalar<int64_t> minScalar(kMin, true, stream, mr);
   auto geMin = cudf::binary_operation(
       valueCol,
       minScalar,
@@ -98,7 +92,7 @@ void checkScaledValueRange(
       stream,
       mr);
 
-  cudf::numeric_scalar<int64_t> maxScalar(maxValue, true, stream, mr);
+  cudf::numeric_scalar<int64_t> maxScalar(kMax, true, stream, mr);
   auto leMax = cudf::binary_operation(
       valueCol,
       maxScalar,
@@ -114,18 +108,27 @@ void checkScaledValueRange(
       boolType,
       stream,
       mr);
-  checkAllTrue(inRange->view(), "date_add value is out of range", stream, mr);
+  auto dateIsNull = cudf::is_null(dateCol, stream, mr);
+  auto validOrDateNull = cudf::binary_operation(
+      inRange->view(),
+      dateIsNull->view(),
+      cudf::binary_operator::BITWISE_OR,
+      boolType,
+      stream,
+      mr);
+  checkAllTrue(
+      validOrDateNull->view(), "date_add value is out of range", stream, mr);
 }
 
-// Casts an int64 column to int32 and multiplies by scale, asserting the
-// scaled values fit int32 first. The range check runs on the int64 input
-// before the cast, so the cast itself cannot truncate.
+// Casts an int64 column to int32 after validating the raw values, then applies
+// unit scaling in int32 to match the CPU date_add implementation.
 std::unique_ptr<cudf::column> scaleToInt32(
     cudf::column_view valueCol,
+    cudf::column_view dateCol,
     int32_t scale,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
-  checkScaledValueRange(valueCol, scale, stream, mr);
+  checkValueRange(valueCol, dateCol, stream, mr);
 
   auto int32Type = cudf::data_type(cudf::type_id::INT32);
   auto int32Value = cudf::cast(valueCol, int32Type, stream, mr);
@@ -249,7 +252,7 @@ ColumnOrView DateAddFunction::evalDayBased(
         dateCol, days, cudf::binary_operator::ADD, outType, stream, mr);
   }
 
-  auto daysInt = scaleToInt32(*valueCol, scale, stream, mr);
+  auto daysInt = scaleToInt32(*valueCol, dateCol, scale, stream, mr);
   auto days = cudf::cast(
       daysInt->view(),
       cudf::data_type(cudf::type_id::DURATION_DAYS),
@@ -275,7 +278,7 @@ ColumnOrView DateAddFunction::evalMonthBased(
     return cudf::datetime::add_calendrical_months(dateCol, months, stream, mr);
   }
 
-  auto months = scaleToInt32(*valueCol, scale, stream, mr);
+  auto months = scaleToInt32(*valueCol, dateCol, scale, stream, mr);
   return cudf::datetime::add_calendrical_months(
       dateCol, months->view(), stream, mr);
 }

@@ -55,13 +55,10 @@ void debugPrintTree(
 
 bool isTimezoneSensitiveDateTrunc(
     const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (!DateTruncFunction::canEvaluate(expr) ||
-      !expr->inputs()[1]->type()->isTimestamp()) {
-    return false;
-  }
-
-  auto cudfFunction = createCudfFunction(expr->name(), expr);
-  return std::dynamic_pointer_cast<DateTruncFunction>(cudfFunction) != nullptr;
+  const auto dateTruncName =
+      CudfConfig::getInstance().functionNamePrefix + "date_trunc";
+  return expr->name() == dateTruncName &&
+      DateTruncFunction::isTimezoneSensitive(expr);
 }
 
 bool containsTimezoneSensitiveDateTrunc(

@@ -30,6 +30,9 @@ class DateTruncFunction : public CudfFunction {
  public:
   static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
 
+  static bool isTimezoneSensitive(
+      const std::shared_ptr<velox::exec::Expr>& expr);
+
   explicit DateTruncFunction(const std::shared_ptr<velox::exec::Expr>& expr);
 
   ColumnOrView eval(
