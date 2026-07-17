@@ -492,9 +492,9 @@ struct DecodingStats {
 };
 
 /// Collects runtime metrics produced while reading one column.
-struct ColumnStats {
+struct ColumnReadStats {
   /// Creates statistics for a column of 'typeKind'.
-  explicit ColumnStats(TypeKind typeKind) : typeKind{typeKind} {}
+  explicit ColumnReadStats(TypeKind typeKind) : typeKind{typeKind} {}
 
   // Logical type of this column.
   TypeKind typeKind{TypeKind::INVALID};
@@ -510,8 +510,8 @@ struct ColumnStats {
       const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
       int64_t value);
 
-  /// Merges all stats from another ColumnStats instance.
-  void mergeFrom(const ColumnStats& other);
+  /// Merges all stats from another ColumnReadStats instance.
+  void mergeFrom(const ColumnReadStats& other);
 
   /// Merges this column's metrics into 'result' using 'prefix'.
   void toRuntimeMetrics(
@@ -535,10 +535,10 @@ struct SplitStats {
   // Per-column statistics keyed by schema node ID.
   // TODO(#18171): Use a stable column ID rather than schema node ID
   //  which is not scan-stable.
-  folly::F14FastMap<uint32_t, ColumnStats> columnStats;
+  folly::F14FastMap<uint32_t, ColumnReadStats> columnStats;
 
   /// Returns the statistics for 'nodeId', creating them if necessary.
-  ColumnStats& getOrCreateColumnStats(uint32_t nodeId, TypeKind typeKind);
+  ColumnReadStats& getOrCreateColumnStats(uint32_t nodeId, TypeKind typeKind);
 
   /// Returns decoding statistics for 'nodeId', or nullptr if unavailable.
   DecodingStats* decodingStats(uint32_t nodeId);
@@ -596,7 +596,7 @@ struct RuntimeStats {
   // Per-column statistics aggregated by schema node ID and file format.
   // TODO(#18171): Use a stable column ID rather than schema node ID
   //  which is not scan-stable.
-  folly::F14FastMap<uint32_t, folly::F14FastMap<FileFormat, ColumnStats>>
+  folly::F14FastMap<uint32_t, folly::F14FastMap<FileFormat, ColumnReadStats>>
       columnStats;
 
   /// Merges one split's format-specific and per-column statistics.

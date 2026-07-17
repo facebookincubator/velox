@@ -96,7 +96,7 @@ class SelectiveStringDictionaryColumnReader
   RleVersion version_;
 
   const StrideIndexProvider& provider_;
-  dwio::common::ColumnStats& statistics_;
+  dwio::common::ColumnReadStats& statistics_;
 
   // lazy load the dictionary
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;

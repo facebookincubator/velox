@@ -100,14 +100,14 @@ TEST(DecodingStatsTest, ToRuntimeMetrics) {
   EXPECT_EQ(decode.unit, facebook::velox::RuntimeCounter::Unit::kNanos);
 }
 
-TEST(SplitStatisticsTest, ColumnStats) {
+TEST(SplitStatsTest, ColumnReadStats) {
   SplitStats stats{kExampleFormat};
   auto& column = stats.getOrCreateColumnStats(1, TypeKind::BIGINT);
   EXPECT_EQ(&stats.getOrCreateColumnStats(1, TypeKind::BIGINT), &column);
   EXPECT_NE(&stats.getOrCreateColumnStats(2, TypeKind::VARCHAR), &column);
 }
 
-TEST(RuntimeStatisticsTest, ExportWithoutColumnCpuMetrics) {
+TEST(RuntimeStatsTest, ExportWithoutColumnCpuMetrics) {
   const auto schema = TypeWithId::create(
       facebook::velox::ROW(
           {"bigint", "varchar"},
@@ -127,7 +127,7 @@ TEST(RuntimeStatisticsTest, ExportWithoutColumnCpuMetrics) {
   EXPECT_TRUE(stats.toRuntimeMetricMap().empty());
 }
 
-TEST(RuntimeStatisticsTest, ToRuntimeMetricMap) {
+TEST(RuntimeStatsTest, ToRuntimeMetricMap) {
   RuntimeStats stats;
   SplitStats splitStats{kExampleFormat};
 
@@ -222,14 +222,14 @@ TEST(IoCounterTest, MergeStats) {
   EXPECT_EQ(counter1.count(), 3);
 }
 
-TEST(ColumnReaderStatisticsTest, MergeFromWithDecodingStats) {
-  ColumnStats src{TypeKind::BIGINT};
+TEST(ColumnReadStatsTest, MergeFromWithDecodingStats) {
+  ColumnReadStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
   src.decodingStats.emplace();
   src.decodingStats->decompressCPUTimeNanos.increment(1'000);
 
   // Merge into stats without decoding stats creates and populates them.
-  ColumnStats dst{TypeKind::BIGINT};
+  ColumnReadStats dst{TypeKind::BIGINT};
   dst.accumulateStat(kExampleFormatMetric, 50);
   dst.mergeFrom(src);
 
@@ -243,13 +243,13 @@ TEST(ColumnReaderStatisticsTest, MergeFromWithDecodingStats) {
   EXPECT_EQ(dst.decodingStats->decompressCPUTimeNanos.sum(), 1'000);
 }
 
-TEST(ColumnReaderStatisticsTest, MergeFromBothWithDecodingStats) {
-  ColumnStats src{TypeKind::BIGINT};
+TEST(ColumnReadStatsTest, MergeFromBothWithDecodingStats) {
+  ColumnReadStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
   src.decodingStats.emplace();
   src.decodingStats->decompressCPUTimeNanos.increment(1'000);
 
-  ColumnStats dst{TypeKind::BIGINT};
+  ColumnReadStats dst{TypeKind::BIGINT};
   dst.accumulateStat(kExampleFormatMetric, 50);
   dst.decodingStats.emplace();
   dst.decodingStats->decompressCPUTimeNanos.increment(2'000);
@@ -281,11 +281,11 @@ TEST(WithDecompressStatsTest, NullCounter) {
   EXPECT_EQ(sideEffect, 3);
 }
 
-TEST(ColumnReaderStatisticsTest, MergeFromWithoutDecodingStats) {
-  ColumnStats src{TypeKind::BIGINT};
+TEST(ColumnReadStatsTest, MergeFromWithoutDecodingStats) {
+  ColumnReadStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
 
-  ColumnStats dst{TypeKind::BIGINT};
+  ColumnReadStats dst{TypeKind::BIGINT};
   dst.accumulateStat(kExampleFormatMetric, 50);
   dst.decodingStats.emplace();
   dst.decodingStats->decompressCPUTimeNanos.increment(1'000);

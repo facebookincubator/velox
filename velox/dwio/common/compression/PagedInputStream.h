@@ -189,8 +189,8 @@ class PagedInputStream : public dwio::common::SeekableInputStream {
   const std::string streamDebugInfo_;
 
  protected:
-  // Owned by ColumnStats. Valid for the lifetime of this stream
-  // because ColumnStats outlives all streams within a DwrfRowReader.
+  // Owned by ColumnReadStats. Valid for the lifetime of this stream
+  // because ColumnReadStats outlives all streams within a DwrfRowReader.
   io::IoCounter* const decompressCounter_{nullptr};
 };
 

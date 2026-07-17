@@ -163,7 +163,7 @@ class FormatParams {
   /// Returns the runtime statistics for a column, creating them if necessary.
   /// @param id Schema node ID identifying the column.
   /// @param typeKind Logical column type to record in the statistics.
-  ColumnStats& columnStats(uint32_t id, TypeKind typeKind) {
+  ColumnReadStats& columnStats(uint32_t id, TypeKind typeKind) {
     return stats_->getOrCreateColumnStats(id, typeKind);
   }
 
