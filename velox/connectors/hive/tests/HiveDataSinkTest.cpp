@@ -1194,6 +1194,69 @@ TEST_F(HiveDataSinkTest, flushPolicyWithParquet) {
   EXPECT_EQ(fileMeta.numRowGroups(), 10);
   EXPECT_EQ(fileMeta.rowGroup(0).numRows(), 500);
 }
+
+TEST_F(
+    HiveDataSinkTest,
+    maxTargetFileSizeDoesNotAffectBucketedParquetRowGroups) {
+  connectorSessionProperties_->set(
+      HiveConfig::kParquetMaxTargetFileSizeSession, "8KB");
+
+  auto writeOptions = std::make_shared<dwio::common::WriterOptions>();
+  writeOptions->compressionKind = CompressionKind::CompressionKind_NONE;
+
+  auto bucketProperty = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      1,
+      std::vector<std::string>{"c0"},
+      std::vector<TypePtr>{BIGINT()},
+      std::vector<std::shared_ptr<const HiveSortingColumn>>{});
+
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto dataSink = createDataSink(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      {},
+      bucketProperty,
+      writeOptions);
+
+  constexpr int32_t kNumRows = 500;
+  const std::string payload(512, 'x');
+  const auto makeBatch = [&]() {
+    return makeRowVector({
+        makeFlatVector<int64_t>(kNumRows, folly::identity),
+        makeFlatVector<int32_t>(kNumRows, [](auto row) { return row * 2; }),
+        makeFlatVector<int16_t>(kNumRows, [](auto row) { return row % 100; }),
+        makeFlatVector<float>(kNumRows, [](auto row) { return row * 1.0f; }),
+        makeFlatVector<double>(kNumRows, [](auto row) { return row * 1.0; }),
+        makeFlatVector<StringView>(
+            kNumRows, [&](auto /*row*/) { return StringView(payload); }),
+        makeFlatVector<bool>(kNumRows, [](auto row) { return row % 2 == 0; }),
+    });
+  };
+
+  const int numBatches = 5;
+  for (int i = 0; i < numBatches; ++i) {
+    dataSink->appendData(makeBatch());
+  }
+  ASSERT_TRUE(dataSink->finish());
+  dataSink->close();
+
+  dwio::common::ReaderOptions readerOpts(pool_.get());
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  const std::vector<std::string> filePaths =
+      listFiles(outputDirectory->getPath());
+  ASSERT_EQ(filePaths.size(), 1);
+
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
+  auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
+      std::move(bufferedInput), readerOpts);
+  auto fileMeta = reader->fileMetaData();
+  EXPECT_EQ(fileMeta.numRowGroups(), 1);
+  EXPECT_EQ(fileMeta.rowGroup(0).numRows(), kNumRows * numBatches);
+}
 #endif
 
 TEST_F(HiveDataSinkTest, flushPolicyWithDWRF) {

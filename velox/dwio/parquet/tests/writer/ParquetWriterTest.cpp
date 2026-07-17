@@ -109,6 +109,25 @@ class ParquetWriterTest : public ParquetTestBase {
 
   inline static const std::string kHiveConnectorId = "test-hive";
   dwio::common::ColumnReaderStatistics stats;
+
+  struct WriterWithSink {
+    std::unique_ptr<facebook::velox::parquet::Writer> writer;
+    MemorySink* sink;
+  };
+
+  WriterWithSink makeWriterWithSink(
+      const RowTypePtr& schema,
+      dwio::common::WriterOptions options,
+      const ParquetWriterOptions& writerOptions) {
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    options.formatSpecificOptions =
+        std::make_shared<ParquetWriterOptions>(writerOptions);
+    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
+        std::move(sink), options, schema);
+    return WriterWithSink{std::move(writer), sinkPtr};
+  }
 };
 
 class ArrowMemoryPool final : public ::arrow::MemoryPool {
@@ -783,24 +802,18 @@ TEST_F(ParquetWriterTest, flushWhenStreamBuffersGrow) {
   };
 
   const auto schema = ROW({"c0"}, {BIGINT()});
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-  auto* sinkPtr = sink.get();
-  options.formatSpecificOptions =
-      std::make_shared<ParquetWriterOptions>(writerOptions);
-  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), options, schema);
+  auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
   const auto data = makeRowVector(
       {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
 
-  writer->write(data);
+  writerWithSink.writer->write(data);
 
   // Data should be flushed into the FileSink by acculumated closed row groups.
-  EXPECT_GT(sinkPtr->size(), 0);
+  EXPECT_GT(writerWithSink.sink->size(), 0);
 
-  writer->close();
+  writerWithSink.writer->close();
 
-  const auto reader = createReaderInMemory(*sinkPtr);
+  const auto reader = createReaderInMemory(*writerWithSink.sink);
   EXPECT_EQ(kNumRows, reader->numberOfRows());
   EXPECT_EQ(kNumRows, reader->fileMetaData().numRowGroups());
 }
@@ -848,36 +861,27 @@ TEST_F(ParquetWriterTest, flushRowGroupByMaxTargetFileSize) {
         /*bytesInRowGroup=*/128 * 1'024 * 1'024);
   };
 
-  const auto schema = ROW({"id", "payload"}, {BIGINT(), VARCHAR()});
-  auto sink = std::make_unique<MemorySink>(
-      200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-  auto* sinkPtr = sink.get();
-
+  const auto schema = ROW({"payload"}, {VARCHAR()});
   ParquetWriterOptions writerOptions;
   writerOptions.enableDictionary = false;
-  options.formatSpecificOptions =
-      std::make_shared<ParquetWriterOptions>(writerOptions);
-  auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-      std::move(sink), options, schema);
+  auto writerWithSink = makeWriterWithSink(schema, options, writerOptions);
 
   const auto makeBatch = [&]() {
-    return makeRowVector(
-        {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
-         makeFlatVector<StringView>(
-             kNumRows, [&](auto /*row*/) { return StringView(payload); })});
+    return makeRowVector({makeFlatVector<StringView>(
+        kNumRows, [&](auto /*row*/) { return StringView(payload); })});
   };
 
-  writer->write(makeBatch());
+  writerWithSink.writer->write(makeBatch());
 
   // The writer should flush the current row group early so file-size-based
   // rotation can observe written bytes even though the row-group target is
   // much larger than maxTargetFileSizeBytes.
-  EXPECT_GT(sinkPtr->size(), options.maxTargetFileSizeBytes);
+  EXPECT_GT(writerWithSink.sink->size(), options.maxTargetFileSizeBytes);
 
-  writer->write(makeBatch());
-  writer->close();
+  writerWithSink.writer->write(makeBatch());
+  writerWithSink.writer->close();
 
-  const auto reader = createReaderInMemory(*sinkPtr);
+  const auto reader = createReaderInMemory(*writerWithSink.sink);
   EXPECT_EQ(2 * kNumRows, reader->numberOfRows());
   EXPECT_EQ(reader->fileMetaData().numRowGroups(), 2);
 }
