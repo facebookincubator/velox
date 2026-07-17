@@ -986,6 +986,26 @@ void ExecutorTestBase::runTest(
       std::move(fixture), expected, label.empty() ? pt2File : label);
 }
 
+ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
+    const std::string& pt2File) {
+  auto baseDir = dataDir();
+  auto pt2Path =
+      pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
+  auto fixture = ModelFixture::load(pt2Path);
+  TORCH_CHECK(fixture != nullptr, "compilePlans: failed to load ", pt2Path);
+  setGraphDevice(fixture->model.graph.get(), true);
+  // Constructing the executor compiles and places the graph, populating the
+  // grids CompiledPlan reads. CompiledPlan::from copies out plain strings, so
+  // the executor and its WaveGraph need not outlive this call.
+  WaveGraphExecutor waveExec(fixture->makeModelContext());
+  auto* wave = waveExec.waveGraph();
+  return {
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kMultiKernel),
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kSingleBlock),
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kCG),
+  };
+}
+
 void ExecutorTestBase::runTestWithFixture(
     std::unique_ptr<ModelFixture> fixture,
     const std::vector<c10::IValue>& expected,

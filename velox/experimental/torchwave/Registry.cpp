@@ -323,6 +323,11 @@ MetadataBuilder& MetadataBuilder::inPlaceIfLastUse(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::sizeFromOutput(bool val) {
+  md_.sizeFromOutput = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::isStandalone(bool val) {
   md_.isStandalone_ = val;
   return *this;
@@ -509,6 +514,11 @@ MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
   ensureElementwise().hasBlockInfo = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::hasOutputArg(bool val) {
+  ensureElementwise().hasOutputArg = val;
   return *this;
 }
 
