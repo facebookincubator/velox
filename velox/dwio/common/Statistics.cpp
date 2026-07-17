@@ -211,9 +211,12 @@ ColumnReadStats& SplitStats::getOrCreateColumnStats(
     uint32_t nodeId,
     TypeKind typeKind) {
   auto [it, inserted] = columnStats.try_emplace(nodeId, typeKind);
-  if (!inserted) {
-    VELOX_CHECK_EQ(it->second.typeKind, typeKind);
-  }
+  // TODO(#18171): We need to add the following check once we stable column
+  //  ID assignment. For now, we can have different typeKinds for the same
+  //  column ID.
+  // if (!inserted) {
+  //  VELOX_CHECK_EQ(it->second.typeKind, typeKind);
+  // }
   return it->second;
 }
 
@@ -231,7 +234,9 @@ void SplitStats::initColumnStatsCollection(
 }
 
 void ColumnReadStats::mergeFrom(const ColumnReadStats& other) {
-  VELOX_CHECK_EQ(typeKind, other.typeKind);
+  // TODO(#18171): Add the typeKind check once column ID assignment is stable.
+  //  For now, the same column ID can refer to different typeKinds.
+  // VELOX_CHECK_EQ(typeKind, other.typeKind);
   for (const auto& [name, metric] : other.columnMetrics) {
     auto [it, inserted] = columnMetrics.emplace(name, metric);
     if (!inserted) {
