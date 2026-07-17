@@ -31,6 +31,7 @@
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/datetime.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/scalar/scalar.hpp>
@@ -38,6 +39,7 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/combine.hpp>
+#include <cudf/strings/contains.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/extract.hpp>
@@ -791,6 +793,25 @@ void checkOffsetMagnitudeInRange(
       hi, 840, "Invalid timezone offset in from_iso8601_timestamp (minutes)");
 }
 
+// True if any row of the boolean mask is set. An empty or all-null mask -> false
+// (so a batch of only SQL-NULL rows raises no error).
+bool anyRowTrue(
+    const cudf::column_view& mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (mask.size() == 0) {
+    return false;
+  }
+  auto reduced = cudf::reduce(
+      mask,
+      *cudf::make_any_aggregation<cudf::reduce_aggregation>(),
+      cudf::data_type{kBool8},
+      stream,
+      mr);
+  auto& scalar = static_cast<cudf::numeric_scalar<bool>&>(*reduced);
+  return scalar.is_valid(stream) && scalar.value(stream);
+}
+
 // Maps captured offset groups (sign character, hours digits, minutes digits) to
 // a signed offset in whole minutes as an INT64 column. A null in the hours or
 // minutes group is treated as absent (contributes 0), and a null sign defaults
@@ -1189,17 +1210,35 @@ class FromIso8601Function : public CudfFunction {
         expr->inputs().size(),
         1,
         "from_iso8601_timestamp expects exactly 1 input");
-    // Permissive ISO8601: the year is required; month, day, the time fields,
-    // the fractional seconds and the zone suffix are all optional. Missing
-    // date/time components default to the start of the period (matching CPU).
-    // An explicit "Z" or "+/-HH:MM" suffix sets the zone; an absent suffix is
-    // GMT, or the session timezone when one is set (handled in eval). The whole
-    // suffix is captured (group 7) to tell an absent suffix from an explicit
-    // "Z"; the sign is captured on its own so a sub-hour offset like "-00:30"
-    // keeps it. The program is batch-independent, so build it once here.
+    // Permissive ISO8601 (date-anchored). The year is required; month, day, the
+    // time fields, the fractional seconds and the zone suffix are all optional,
+    // and missing components default to the start of the period (matching CPU).
+    // A 'T' may appear with no time after it ("2021-01-01T", "2021T+14:00"); the
+    // date/time separator is a literal 'T' only, since CPU rejects a space.
+    // Time-only inputs ("T11:38") carry no date; eval prefixes the epoch date
+    // "1970-01-01" to them before this program runs, so the single date-anchored
+    // program still covers them. The whole zone suffix is captured (group 7) to
+    // tell an absent suffix from an explicit "Z"; the sign is captured on its own
+    // (group 8) so a sub-hour offset like "-00:30" keeps it. Groups: 0 year, 1
+    // month, 2 day, 3 hour, 4 minute, 5 second, 6 fraction, 7 zone suffix, 8
+    // sign, 9 offset hours, 10 offset minutes. Batch-independent, so build once.
     isoProgram_ = cudf::strings::regex_program::create(
         "^([0-9]{4})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
-        "(?:[T ]([0-9]{2}))?(?::([0-9]{2}))?(?::([0-9]{2}))?"
+        "(?:T([0-9]{2})?(?::([0-9]{2}))?(?::([0-9]{2}))?)?"
+        "(?:[.,]([0-9]+))?"
+        "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
+    // Identifies a leading time-only form ("Thh...") so eval can prefix the
+    // epoch date "1970-01-01" and reuse the date-anchored program. A bare "T"
+    // (no digits) does not match, so it stays unprefixed and is later rejected
+    // as malformed, like CPU.
+    timeOnlyProgram_ = cudf::strings::regex_program::create("^T[0-9]{2}");
+    // Matches an otherwise-valid ISO8601 string whose year is signed or has 5+
+    // digits -- the CPU-valid extreme years cudf::strings::to_timestamps (int16
+    // %Y) cannot represent. Same tail as isoProgram_ so only the year token
+    // differs; used only as a match test (captures are ignored).
+    extremeProgram_ = cudf::strings::regex_program::create(
+        "^(?:[+-][0-9]{4,}|[0-9]{5,})(?:-([0-9]{2}))?(?:-([0-9]{2}))?"
+        "(?:T([0-9]{2})?(?::([0-9]{2}))?(?::([0-9]{2}))?)?"
         "(?:[.,]([0-9]+))?"
         "(Z|([+-])([0-9]{2})(?::?([0-9]{2}))?)?$");
   }
@@ -1210,10 +1249,34 @@ class FromIso8601Function : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
+    // Time-only inputs carry no date; CPU defaults them to 1970-01-01. Prefix
+    // that date to leading-'T' rows so the single date-anchored program (built
+    // in the ctor) handles them; every other row is passed through unchanged.
+    auto isTimeOnly = cudf::replace_nulls(
+        cudf::strings::matches_re(
+            cudf::strings_column_view(input), *timeOnlyProgram_, stream, mr)
+            ->view(),
+        cudf::numeric_scalar<bool>(false, true, stream),
+        stream,
+        mr);
+    auto epochDate = cudf::make_column_from_scalar(
+        cudf::string_scalar("1970-01-01", true, stream),
+        input.size(),
+        stream,
+        mr);
+    auto prefixed = cudf::strings::concatenate(
+        cudf::table_view{{epochDate->view(), input}},
+        cudf::string_scalar("", true, stream),
+        cudf::string_scalar("", false, stream),
+        cudf::strings::separator_on_nulls::YES,
+        stream,
+        mr);
+    auto work = cudf::copy_if_else(
+        prefixed->view(), input, isTimeOnly->view(), stream, mr);
+    auto workView = cudf::strings_column_view(work->view());
     // Extract the ISO8601 fields with the program built in the constructor; see
     // there for the field layout, and the group-column map just below.
-    auto groups = cudf::strings::extract(
-        cudf::strings_column_view(input), *isoProgram_, stream, mr);
+    auto groups = cudf::strings::extract(workView, *isoProgram_, stream, mr);
     auto g = groups->view();
     // Columns: 0 year, 1 month, 2 day, 3 hour, 4 minute, 5 second, 6 fraction,
     //          7 zone suffix, 8 sign, 9 offset hours, 10 offset minutes.
@@ -1225,14 +1288,44 @@ class FromIso8601Function : public CudfFunction {
           stream,
           mr);
     };
-    auto month = orDefault(1, "01");
-    auto day = orDefault(2, "01");
+    // cudf's extract yields an empty string (not a null) for an optional group
+    // that did not participate in an otherwise-matching row, so replace_nulls
+    // alone leaves an absent month or day empty. to_timestamps then reads the
+    // empty numeric field as 0 and underflows, e.g. "2021" (no month/day) parses
+    // as 2020-11-30 instead of 2021-01-01. Month and day must default to "01",
+    // so replace an empty (or null) capture explicitly. The time fields default
+    // to 0, which an empty string already yields, so they keep replace_nulls.
+    auto orFirstOfPeriod = [&](int index) {
+      auto filled = cudf::replace_nulls(
+          g.column(index),
+          cudf::string_scalar("01", true, stream),
+          stream,
+          mr);
+      auto length = cudf::strings::count_characters(
+          cudf::strings_column_view(filled->view()), stream, mr);
+      auto isEmpty = cudf::binary_operation(
+          length->view(),
+          cudf::numeric_scalar<cudf::size_type>(0, true, stream),
+          cudf::binary_operator::EQUAL,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      return cudf::copy_if_else(
+          cudf::string_scalar("01", true, stream),
+          filled->view(),
+          isEmpty->view(),
+          stream,
+          mr);
+    };
+    auto month = orFirstOfPeriod(1);
+    auto day = orFirstOfPeriod(2);
     auto hour = orDefault(3, "00");
     auto minute = orDefault(4, "00");
     auto second = orDefault(5, "00");
 
-    // Build "YYYY-MM-DDTHH:MM:SS". A non-matching row leaves the year null, so
-    // separator_on_nulls yields a null that parses to null.
+    // Build "YYYY-MM-DD" first; the throw block below and the canonical
+    // timestamp string both reuse it. A non-matching row leaves the year null,
+    // so separator_on_nulls yields a null that parses to null.
     auto ymd = cudf::strings::concatenate(
         cudf::table_view{{g.column(0), month->view(), day->view()}},
         cudf::string_scalar("-", true, stream),
@@ -1240,6 +1333,141 @@ class FromIso8601Function : public CudfFunction {
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
+
+    // Match CPU exactly for every non-null row: parse it, or throw. Genuine
+    // SQL-NULL rows are excluded via is_valid, so they keep propagating as NULL.
+    // A non-null row falls into one of three buckets:
+    //   - matches the in-range program (isoProgram_) and names a real calendar
+    //     date -> parsed normally below;
+    //   - matches neither program, or matches isoProgram_ but names a
+    //     nonexistent date (month/day out of range) -> malformed, exactly as
+    //     CPU's fromTimestampWithTimezoneString / isValidDate -> VELOX_USER_FAIL;
+    //   - matches only the extreme-year program -> CPU-valid but beyond what
+    //     to_timestamps (int16 %Y) can represent -> VELOX_NYI.
+    // Malformed is checked first so a batch mixing malformed + extreme rows
+    // reports the parse error, as CPU would.
+    {
+      const auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream);
+      const auto trueScalar = cudf::numeric_scalar<bool>(true, true, stream);
+      auto nonNull = cudf::is_valid(input, stream, mr);
+      auto tier1 = cudf::replace_nulls(
+          cudf::strings::matches_re(workView, *isoProgram_, stream, mr)->view(),
+          falseScalar,
+          stream,
+          mr);
+      auto extreme = cudf::replace_nulls(
+          cudf::strings::matches_re(workView, *extremeProgram_, stream, mr)
+              ->view(),
+          falseScalar,
+          stream,
+          mr);
+      auto known = cudf::binary_operation(
+          tier1->view(),
+          extreme->view(),
+          cudf::binary_operator::LOGICAL_OR,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto unknown =
+          cudf::unary_operation(known->view(), cudf::unary_operator::NOT, stream, mr);
+      auto malformedShape = cudf::binary_operation(
+          nonNull->view(),
+          unknown->view(),
+          cudf::binary_operator::LOGICAL_AND,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+
+      // cudf::strings::to_timestamps normalizes an out-of-range month or day
+      // (month 13 -> next year, day 30 in Feb -> March) instead of failing, so
+      // "2021-13-45" matches isoProgram_ yet is not a real date. Parse the date,
+      // read month and day back, and require they equal the parsed input. Any
+      // normalization moves the value into a different month (a day underflow or
+      // overflow always crosses a month boundary), so comparing month and day
+      // catches every invalid combination, including a non-leap Feb 29. The
+      // 4-digit year is regex-bounded to [0000, 9999], so it always round-trips.
+      const auto int16Type = cudf::data_type{cudf::type_id::INT16};
+      auto dateTs = cudf::strings::to_timestamps(
+          cudf::strings_column_view(ymd->view()),
+          cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+          "%Y-%m-%d",
+          stream,
+          mr);
+      auto backMonth = cudf::datetime::extract_datetime_component(
+          dateTs->view(),
+          cudf::datetime::datetime_component::MONTH,
+          stream,
+          mr);
+      auto backDay = cudf::datetime::extract_datetime_component(
+          dateTs->view(), cudf::datetime::datetime_component::DAY, stream, mr);
+      auto inMonth = cudf::strings::to_integers(
+          cudf::strings_column_view(month->view()), int16Type, stream, mr);
+      auto inDay = cudf::strings::to_integers(
+          cudf::strings_column_view(day->view()), int16Type, stream, mr);
+      auto monthOk = cudf::binary_operation(
+          backMonth->view(),
+          inMonth->view(),
+          cudf::binary_operator::EQUAL,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto dayOk = cudf::binary_operation(
+          backDay->view(),
+          inDay->view(),
+          cudf::binary_operator::EQUAL,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto dateOk = cudf::binary_operation(
+          monthOk->view(),
+          dayOk->view(),
+          cudf::binary_operator::LOGICAL_AND,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      // A non-tier1 row has a null date, hence a null dateOk; treat null as ok
+      // so only tier1 rows can be flagged here (also AND'd with tier1 below).
+      auto dateOkFilled =
+          cudf::replace_nulls(dateOk->view(), trueScalar, stream, mr);
+      auto dateInvalid = cudf::unary_operation(
+          dateOkFilled->view(), cudf::unary_operator::NOT, stream, mr);
+      auto tier1NonNull = cudf::binary_operation(
+          nonNull->view(),
+          tier1->view(),
+          cudf::binary_operator::LOGICAL_AND,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto calendarBad = cudf::binary_operation(
+          tier1NonNull->view(),
+          dateInvalid->view(),
+          cudf::binary_operator::LOGICAL_AND,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      auto malformed = cudf::binary_operation(
+          malformedShape->view(),
+          calendarBad->view(),
+          cudf::binary_operator::LOGICAL_OR,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      VELOX_USER_CHECK(
+          !anyRowTrue(malformed->view(), stream, mr),
+          "Unable to parse timestamp value in from_iso8601_timestamp");
+      auto extremeNonNull = cudf::binary_operation(
+          nonNull->view(),
+          extreme->view(),
+          cudf::binary_operator::LOGICAL_AND,
+          cudf::data_type{kBool8},
+          stream,
+          mr);
+      if (anyRowTrue(extremeNonNull->view(), stream, mr)) {
+        VELOX_NYI(
+            "from_iso8601_timestamp does not support years outside [0000, 9999] on GPU");
+      }
+    }
+
     auto hms = cudf::strings::concatenate(
         cudf::table_view{{hour->view(), minute->view(), second->view()}},
         cudf::string_scalar(":", true, stream),
@@ -1399,6 +1627,12 @@ class FromIso8601Function : public CudfFunction {
   // Compiled ISO8601 field-extraction program. Batch-independent, so it is
   // built once in the constructor and reused across eval calls.
   std::unique_ptr<cudf::strings::regex_program> isoProgram_;
+  // Recognizes a leading time-only form ("Thh...") so eval can prefix the epoch
+  // date and reuse isoProgram_.
+  std::unique_ptr<cudf::strings::regex_program> timeOnlyProgram_;
+  // Matches an ISO8601 string whose year is signed or 5+ digits -- CPU-valid
+  // but unrepresentable by to_timestamps; eval raises VELOX_NYI for these.
+  std::unique_ptr<cudf::strings::regex_program> extremeProgram_;
 };
 
 exec::FunctionSignaturePtr twtzArgSignature(const std::string& returnType) {

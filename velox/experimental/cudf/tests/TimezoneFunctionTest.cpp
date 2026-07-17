@@ -680,6 +680,124 @@ TEST_F(TimezoneFunctionTest, fromIso8601ZuluIgnoresSessionZone) {
       "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T02:00:00Z"));
 }
 
+// Trailing 'T' with no time component: CPU treats it as the date at midnight;
+// the current regex needs 2 digits after T -> NULL. (Oracle: DateTimeFunctions
+// fromIso8601Timestamp accepts "1970-01-01T"/"1970-01T"/"1970T".)
+TEST_F(TimezoneFunctionTest, fromIso8601TrailingT) {
+  assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021-01-01T"));
+}
+
+// Year-only and year-month: CPU -> start-of-period midnight GMT.
+TEST_F(TimezoneFunctionTest, fromIso8601YearOnly) {
+  assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021"));
+}
+TEST_F(TimezoneFunctionTest, fromIso8601YearMonth) {
+  assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021-07"));
+}
+
+// No time, explicit offset ("<date>T+01:00", "<year>T+14:00"): CPU applies the
+// offset to the start-of-period wall clock.
+TEST_F(TimezoneFunctionTest, fromIso8601DateThenOffset) {
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("2021-01-01T+01:00"));
+}
+
+// Time-only ("Thh[:mm[:ss[.fff]]]" [offset]): CPU defaults the date to
+// 1970-01-01; the date-anchored regex needs a leading year -> NULL today.
+TEST_F(TimezoneFunctionTest, fromIso8601TimeOnly) {
+  assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("T11:38:56"));
+}
+TEST_F(TimezoneFunctionTest, fromIso8601TimeOnlyHourOnly) {
+  assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("T11"));
+}
+TEST_F(TimezoneFunctionTest, fromIso8601TimeOnlyWithOffset) {
+  assertMatchesCpu(
+      "from_iso8601_timestamp(c0)", varcharInput("T11:38:56.123-14:00"));
+}
+
+// Malformed input: CPU (util::fromTimestampWithTimezoneString) throws; the GPU
+// must not silently return NULL. Red until the throw block lands.
+TEST_F(TimezoneFunctionTest, fromIso8601MalformedThrowsLikeCpu) {
+  auto input = varcharInput("not-a-timestamp");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Space separator: CPU rejects "yyyy-MM-dd HH:mm" (only 'T' is legal). GPU now
+// rejects it too (regex tightened to 'T'; unmatched non-null row -> throw).
+TEST_F(TimezoneFunctionTest, fromIso8601SpaceSeparatorThrowsLikeCpu) {
+  auto input = varcharInput("2021-01-02 11:38");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Empty string and a bare "T": both malformed on CPU.
+TEST_F(TimezoneFunctionTest, fromIso8601EmptyStringThrowsLikeCpu) {
+  auto input = varcharInput("");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+TEST_F(TimezoneFunctionTest, fromIso8601BareTThrowsLikeCpu) {
+  auto input = varcharInput("T");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Well-formed shape but a nonexistent calendar date: CPU rejects both
+// (isValidDate -- month > 12 / day past the month's length, leap year aware).
+// The regex alone accepts the two-digit fields, and cudf::to_timestamps would
+// silently normalize them (13 -> next year, Feb 30 -> March), so the GPU must
+// detect the normalization and throw rather than return a wrong value.
+TEST_F(TimezoneFunctionTest, fromIso8601InvalidMonthDayThrowsLikeCpu) {
+  auto input = varcharInput("2021-13-45");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+TEST_F(TimezoneFunctionTest, fromIso8601InvalidFebruaryThrowsLikeCpu) {
+  auto input = varcharInput("2021-02-30");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_ANY_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  EXPECT_ANY_THROW(evaluate(*exprSet, input));
+}
+
+// Extreme-but-valid years (5-digit / signed): CPU parses them; the GPU
+// (to_timestamps is int16, <=4-digit %Y) cannot, so it throws VELOX_NYI rather
+// than returning NULL or a wrong value -- the query stops (owner decision
+// 2026-07-16, no silent NULL). CPU is asserted to succeed to document the
+// divergence. Literals are the max/min still in CPU's non-overflow range.
+TEST_F(TimezoneFunctionTest, fromIso8601FiveDigitYearNyiOnGpu) {
+  auto input = varcharInput("73326-09-11T20:14:45.247");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_NO_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  VELOX_ASSERT_THROW(evaluate(*exprSet, input), "does not support years");
+}
+TEST_F(TimezoneFunctionTest, fromIso8601NegativeYearNyiOnGpu) {
+  auto input = varcharInput("-69387-04-22T03:45:14.752");
+  auto exprSet =
+      compileExpression("from_iso8601_timestamp(c0)", asRowType(input->type()));
+  EXPECT_NO_THROW(functions::test::FunctionBaseTest::evaluate(*exprSet, input));
+  VELOX_ASSERT_THROW(evaluate(*exprSet, input), "does not support years");
+}
+
+// Control: a genuine SQL NULL row stays NULL -- it must trip neither throw.
+TEST_F(TimezoneFunctionTest, fromIso8601NullRowStaysNull) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>({std::nullopt}, VARCHAR())});
+  assertMatchesCpu("from_iso8601_timestamp(c0)", input);
+}
+
 // now()/current_timestamp -> timestamp with time zone. now() is
 // non-deterministic -- a live CPU now() and a separate GPU now() observe
 // different instants -- so this cannot assert CPU == GPU against a live clock.
