@@ -323,6 +323,17 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   if (codec_ != common::CompressionKind::CompressionKind_NONE) {
     pageData_ =
         decompressData(pageData_, compressedPageSize, uncompressedPageSize);
+  } else {
+    // Without compression the page bytes are the data as-is. Bound the
+    // in-memory size by the bytes actually read so a corrupt page cannot make
+    // downstream reads run past the buffer. The old decompressData() path
+    // enforced this via SeekableInputStream::readFully.
+    VELOX_CHECK_LE(
+        uncompressedPageSize,
+        compressedPageSize,
+        "Uncompressed page size {} exceeds compressed page size {} for an uncompressed page (corrupt data page?)",
+        uncompressedPageSize,
+        compressedPageSize);
   }
   auto pageEnd = pageData_ + uncompressedPageSize;
   auto remainingBytes = uncompressedPageSize;
