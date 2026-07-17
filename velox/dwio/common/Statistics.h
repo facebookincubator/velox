@@ -479,9 +479,6 @@ auto withDecompressStats(io::IoCounter* counter, F&& func)
 /// different types of measurements (decompression, encoding, etc.).
 /// Can be used by any file format reader (DWRF, Nimble, Parquet, etc.).
 struct DecodingStats {
-  explicit DecodingStats(TypeKind type = TypeKind::INVALID) : typeKind(type) {}
-
-  TypeKind typeKind;
   io::IoCounter decompressCPUTimeNanos;
   io::IoCounter decodeCPUTimeNanos;
 
@@ -496,10 +493,15 @@ struct DecodingStats {
 
 /// Collects runtime metrics produced while reading one column.
 struct ColumnReaderStatistics {
+  explicit ColumnReaderStatistics(TypeKind typeKind) : typeKind{typeKind} {}
+
+  // Logical type of this column.
+  TypeKind typeKind{TypeKind::INVALID};
+
   // Format-specific metrics for this column, keyed by metric name.
   folly::F14FastMap<std::string, RuntimeMetric> columnMetrics;
 
-  // Decoding counters and the column type, when collection is enabled.
+  // Decoding counters, when collection is enabled.
   std::optional<DecodingStats> decodingStats;
 
   /// Adds one sample to a format-specific column metric.
@@ -532,7 +534,9 @@ struct SplitStatistics {
   folly::F14FastMap<uint32_t, ColumnReaderStatistics> columnStats;
 
   /// Returns the statistics for 'nodeId', creating them if necessary.
-  ColumnReaderStatistics& getOrCreateColumnStats(uint32_t nodeId);
+  ColumnReaderStatistics& getOrCreateColumnStats(
+      uint32_t nodeId,
+      TypeKind typeKind);
 
   /// Returns decoding statistics for 'nodeId', or nullptr if unavailable.
   DecodingStats* decodingStats(uint32_t nodeId);

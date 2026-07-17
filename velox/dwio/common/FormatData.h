@@ -160,8 +160,10 @@ class FormatParams {
     return *pool_;
   }
 
-  ColumnReaderStatistics& runtimeStatistics(uint32_t nodeId) {
-    return stats_->getOrCreateColumnStats(nodeId);
+  ColumnReaderStatistics& runtimeStatistics(
+      uint32_t nodeId,
+      TypeKind typeKind) {
+    return stats_->getOrCreateColumnStats(nodeId, typeKind);
   }
 
   SplitStatistics& splitStatistics() {

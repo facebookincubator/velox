@@ -31,7 +31,8 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()),
-      statistics_(params.runtimeStatistics(fileType->id())) {
+      statistics_(
+          params.runtimeStatistics(fileType->id(), fileType->type()->kind())) {
   auto& stripe = params.stripeStreams();
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   version_ = convertRleVersion(stripe, encodingKey);

@@ -25,7 +25,11 @@ std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
   return std::make_unique<ParquetData>(
-      type, metaData_, pool(), runtimeStatistics(type->id()), sessionTimezone_);
+      type,
+      metaData_,
+      pool(),
+      runtimeStatistics(type->id(), type->type()->kind()),
+      sessionTimezone_);
 }
 
 void ParquetData::filterRowGroups(

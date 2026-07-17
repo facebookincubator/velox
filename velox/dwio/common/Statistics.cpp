@@ -208,8 +208,13 @@ void ColumnReaderStatistics::accumulateStat(
 }
 
 ColumnReaderStatistics& SplitStatistics::getOrCreateColumnStats(
-    uint32_t nodeId) {
-  return columnStats[nodeId];
+    uint32_t nodeId,
+    TypeKind typeKind) {
+  auto [it, inserted] = columnStats.try_emplace(nodeId, typeKind);
+  if (!inserted) {
+    VELOX_CHECK_EQ(it->second.typeKind, typeKind);
+  }
+  return it->second;
 }
 
 DecodingStats* SplitStatistics::decodingStats(uint32_t nodeId) {
@@ -226,6 +231,7 @@ void SplitStatistics::initColumnStatsCollection(
 }
 
 void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
+  VELOX_CHECK_EQ(typeKind, other.typeKind);
   for (const auto& [name, metric] : other.columnMetrics) {
     auto [it, inserted] = columnMetrics.emplace(name, metric);
     if (!inserted) {
@@ -234,7 +240,7 @@ void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
   }
   if (other.decodingStats) {
     if (!decodingStats) {
-      decodingStats.emplace(other.decodingStats->typeKind);
+      decodingStats.emplace();
     }
     decodingStats->merge(*other.decodingStats);
   }
@@ -273,16 +279,18 @@ void RuntimeStatistics::mergeFrom(const SplitStatistics& split) {
     }
   }
   for (const auto& [nodeId, stats] : split.columnStats) {
-    columnStats[nodeId][split.format].mergeFrom(stats);
+    auto it =
+        columnStats[nodeId].try_emplace(split.format, stats.typeKind).first;
+    it->second.mergeFrom(stats);
   }
 }
 
 void SplitStatistics::registerColumnStats(
     const TypeWithId& node,
     bool collectDecodingStats) {
-  auto& stats = getOrCreateColumnStats(node.id());
+  auto& stats = getOrCreateColumnStats(node.id(), node.type()->kind());
   if (collectDecodingStats && !stats.decodingStats) {
-    stats.decodingStats.emplace(node.type()->kind());
+    stats.decodingStats.emplace();
   }
   for (uint32_t i = 0; i < node.size(); ++i) {
     if (const auto* child = node.childAt(i).get()) {
@@ -339,7 +347,7 @@ RuntimeStatistics::toRuntimeMetricMap() const {
   for (const auto& [nodeId, statsByFormat] : columnStats) {
     for (const auto& [format, stats] : statsByFormat) {
       const auto formatPrefix = FileFormatName::toName(format);
-      const auto typeName = TypeKindName::toName(stats.decodingStats->typeKind);
+      const auto typeName = TypeKindName::toName(stats.typeKind);
       const auto formatAndColumnPrefix =
           fmt::format("{}.column_{}.{}", formatPrefix, nodeId, typeName);
       stats.toRuntimeMetrics(formatPrefix, result);
