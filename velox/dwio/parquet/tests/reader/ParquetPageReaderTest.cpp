@@ -57,10 +57,12 @@ TEST_F(ParquetPageReaderTest, smallPage) {
   auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
+  const auto metricName =
+      std::string(ParquetRuntimeStats::kPageLoadTimeNs);
   ASSERT_TRUE(
-      stats.columnMetrics.find("pageLoadTimeNanos") !=
+      stats.columnMetrics.find(metricName) !=
       stats.columnMetrics.end());
-  EXPECT_GT(stats.columnMetrics.at("pageLoadTimeNanos").sum, 0);
+  EXPECT_GT(stats.columnMetrics.at(metricName).sum, 0);
 }
 
 TEST_F(ParquetPageReaderTest, largePage) {
@@ -92,10 +94,12 @@ TEST_F(ParquetPageReaderTest, largePage) {
   auto maxValue = *header.data_page_header()->statistics()->max_value();
   EXPECT_EQ(minValue, expectedMinValue);
   EXPECT_EQ(maxValue, expectedMaxValue);
+  const auto metricName =
+      std::string(ParquetRuntimeStats::kPageLoadTimeNs);
   ASSERT_TRUE(
-      stats.columnMetrics.find("pageLoadTimeNanos") !=
+      stats.columnMetrics.find(metricName) !=
       stats.columnMetrics.end());
-  EXPECT_GT(stats.columnMetrics.at("pageLoadTimeNanos").sum, 0);
+  EXPECT_GT(stats.columnMetrics.at(metricName).sum, 0);
 }
 
 TEST_F(ParquetPageReaderTest, corruptedPageHeader) {

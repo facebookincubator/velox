@@ -2877,13 +2877,15 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
   stats = dwio::common::RuntimeStats();
   rowReader->updateRuntimeStats(stats);
+  const auto metricName =
+      std::string(DwrfRuntimeStats::kFlattenStringDictionaryValues);
   ASSERT_TRUE(stats.columnStats.at(1)
                   .at(FileFormat::DWRF)
-                  .columnMetrics.contains("flattenStringDictionaryValues"));
+                  .columnMetrics.contains(metricName));
   ASSERT_EQ(
       stats.columnStats.at(1)
           .at(FileFormat::DWRF)
-          .columnMetrics.at("flattenStringDictionaryValues")
+          .columnMetrics.at(metricName)
           .sum,
       1);
 }
