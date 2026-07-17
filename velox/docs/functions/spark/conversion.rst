@@ -340,10 +340,16 @@ Cast to Decimal
 From varchar
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.
 
-Valid example
+When ANSI mode is enabled, casting from an invalid input value or a value that
+overflows the target precision and scale throws an error. Otherwise, such casts
+return NULL.
+
+Valid examples
 
 ::
 
@@ -353,6 +359,44 @@ Valid example
   SELECT cast(' -3E+2' as decimal(12, 2)); -- -300.00
   SELECT cast('-3E+2 ' as decimal(12, 2)); -- -300.00
   SELECT cast('  -3E+2  ' as decimal(12, 2)); -- -300.00
+
+Invalid examples
+
+::
+
+  SELECT cast('0.0444a' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not a number
+  SELECT cast('' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not a number
+  SELECT cast('1. 23' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Interior whitespace is invalid
+  SELECT cast('1.23e67' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast('111111111111111111.23' as decimal(38, 38)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+
+From integral types
+^^^^^^^^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting an integral value to a decimal of given precision and scale is allowed.
+Supported types are tinyint, smallint, integer and bigint.
+
+When ANSI mode is enabled, casting a value that overflows the target precision
+and scale throws an error. Otherwise, such casts return NULL.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(55 as tinyint) as decimal(6, 2)); -- 55.00
+  SELECT cast(cast(-3 as smallint) as decimal(6, 2)); -- -3.00
+  SELECT cast(cast(72 as integer) as decimal(20, 10)); -- 72.0000000000
+  SELECT cast(cast(0 as bigint) as decimal(6, 2)); -- 0.00
+
+Invalid examples
+
+::
+
+  SELECT cast(cast(-128 as tinyint) as decimal(3, 1)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(cast(100 as integer) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(cast(-100 as bigint) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
 Cast to Varbinary
 -----------------

@@ -116,6 +116,10 @@ enum class RPCErrorKind {
   kBackendError,
   /// Backend returned successfully but with no usable result.
   kEmptyResponse,
+  /// Backend rejected the request as invalid (e.g. malformed args, bad model).
+  /// Non-retryable: the same request will fail again, so the transport fails
+  /// fast rather than spending its retry budget.
+  kInvalidRequest,
 };
 
 /// Generic response structure from RPC calls.
