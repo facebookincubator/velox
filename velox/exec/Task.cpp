@@ -2504,10 +2504,9 @@ void Task::addCustomJoinBridgesLocked(
           continue;
         }
         if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
-          auto const inserted =
-              splitGroupState.customBridges
-                  .emplace(planNodeId, std::move(joinBridge))
-                  .second;
+          auto const inserted = splitGroupState.customBridges
+                                    .emplace(planNodeId, std::move(joinBridge))
+                                    .second;
           VELOX_CHECK(
               inserted,
               "Join bridge for node {} is already present",

@@ -9121,21 +9121,20 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
   core::PlanNodeId buildScanNodeId;
 
   PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
-  auto plan =
-      planBuilder.tableScan(probeType_)
-          .capturePlanNodeId(probeScanNodeId)
-          .project({"t_k1 as x"})
-          .hashJoin(
-              {"x"},
-              {"y"},
-              PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(probeType_)
-                  .capturePlanNodeId(buildScanNodeId)
-                  .project({"t_k1 as y"})
-                  .planNode(),
-              "",
-              {"x", "y"})
-          .planNode();
+  auto plan = planBuilder.tableScan(probeType_)
+                  .capturePlanNodeId(probeScanNodeId)
+                  .project({"t_k1 as x"})
+                  .hashJoin(
+                      {"x"},
+                      {"y"},
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .tableScan(probeType_)
+                          .capturePlanNodeId(buildScanNodeId)
+                          .project({"t_k1 as y"})
+                          .planNode(),
+                      "",
+                      {"x", "y"})
+                  .planNode();
 
   auto planFragment = core::PlanFragment{
       plan, core::ExecutionStrategy::kGrouped, 2, {probeScanNodeId}};
