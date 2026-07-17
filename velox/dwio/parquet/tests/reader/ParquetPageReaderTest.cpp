@@ -584,7 +584,7 @@ TEST_F(ParquetPageReaderTest, corruptUncompressedSizeSmallerThanLevelsV2) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnReadStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -629,7 +629,7 @@ TEST_F(ParquetPageReaderTest, corruptNegativeUncompressedSizeV2) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnReadStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
@@ -665,7 +665,7 @@ TEST_F(ParquetPageReaderTest, corruptNegativeCompressedSizeV1) {
   auto inputStream = std::make_unique<SeekableArrayInputStream>(
       fullData.data(), fullData.size());
 
-  dwio::common::ColumnReaderStatistics stats;
+  dwio::common::ColumnReadStats stats{TypeKind::BIGINT};
   auto pageReader = std::make_unique<PageReader>(
       std::move(inputStream),
       *leafPool_,
