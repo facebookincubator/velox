@@ -1069,16 +1069,19 @@ Parquet Options (prefix ``hive.parquet.``)
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
        sorted writes.
 
-       Parquet tracks row-group bytes and target file size independently. The
-       row-group byte target comes from ``WriterOptions.flushPolicyFactory`` if
-       provided, or falls back to the default 128MB. When this setting is
-       configured, the writer may also flush the current row group early so the
-       file size is visible to the caller and file rotation can happen once the
-       current file reaches ``writer.max-target-file-size``.
+      Parquet tracks row-group limits and target file size independently.
+      ``writer.max-target-file-size`` is configurable and controls file
+      rotation. Row-group limits are fixed and not user-configurable: a row
+      group is bounded by a soft byte target of about 128MB and a hard row
+      count cap of about 1M rows.
 
-       For Parquet, this row-group byte threshold is a soft target, not a hard bound: row groups may
-       exceed it slightly because the writer flushes after buffered bytes reach or exceed the target,
-       while Arrow enforces the row-count cap separately. Session:
+      When this setting is configured, the writer may also flush the current
+      row group early so the file size is visible to the caller and file
+      rotation can happen once the current file reaches
+      ``writer.max-target-file-size``. For Parquet, the row-group byte
+      threshold is a soft target, not a hard bound: row groups may exceed it
+      slightly because the writer flushes after buffered bytes reach or exceed
+      the target. The row-count cap is enforced as a hard bound. Session:
        ``parquet_writer_max_target_file_size``.
    * - ``writer.enable-dictionary``
      - bool
