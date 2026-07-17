@@ -919,6 +919,11 @@ struct DriverFactory {
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
 
+  /// Returns plan node IDs for which custom join bridges must be created
+  /// based on this pipeline.  Mirrors needsHashJoinBridges(): ungrouped
+  /// pipelines include mixed-mode join nodes, grouped pipelines exclude them.
+  std::vector<core::PlanNodeId> needsCustomJoinBridges() const;
+
   static std::vector<DriverAdapter> adapters;
 };
 

@@ -1488,7 +1488,7 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
         splitGroupId, factory->needsSpatialJoinBridges());
     addIndexLookupJoinBridgesLocked(
         splitGroupId, factory->needsIndexLookupJoinBridges());
-    addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
+    addCustomJoinBridgesLocked(splitGroupId, factory->needsCustomJoinBridges());
 
     core::PlanNodeId tableScanNodeId;
     if (queryCtx_->queryConfig().tableScanScaledProcessingEnabled() &&
@@ -2495,17 +2495,25 @@ void Task::addHashJoinBridgesLocked(
 
 void Task::addCustomJoinBridgesLocked(
     uint32_t splitGroupId,
-    const std::vector<core::PlanNodePtr>& planNodes) {
+    const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNode : planNodes) {
-    if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
-      auto const inserted = splitGroupState.customBridges
-                                .emplace(planNode->id(), std::move(joinBridge))
-                                .second;
-      VELOX_CHECK(
-          inserted,
-          "Join bridge for node {} is already present",
-          planNode->id());
+  for (const auto& planNodeId : planNodeIds) {
+    for (const auto& factory : driverFactories_) {
+      for (const auto& planNode : factory->planNodes) {
+        if (planNode->id() != planNodeId) {
+          continue;
+        }
+        if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
+          auto const inserted =
+              splitGroupState.customBridges
+                  .emplace(planNodeId, std::move(joinBridge))
+                  .second;
+          VELOX_CHECK(
+              inserted,
+              "Join bridge for node {} is already present",
+              planNodeId);
+        }
+      }
     }
   }
 }

@@ -855,6 +855,33 @@ std::vector<core::PlanNodeId> DriverFactory::needsIndexLookupJoinBridges()
   return planNodeIds;
 }
 
+std::vector<core::PlanNodeId> DriverFactory::needsCustomJoinBridges() const {
+  std::vector<core::PlanNodeId> planNodeIds;
+  folly::F14FastSet<core::PlanNodeId> mixedNodeIds;
+  mixedNodeIds.insert(
+      mixedExecutionModeHashJoinNodeIds.begin(),
+      mixedExecutionModeHashJoinNodeIds.end());
+  mixedNodeIds.insert(
+      mixedExecutionModeNestedLoopJoinNodeIds.begin(),
+      mixedExecutionModeNestedLoopJoinNodeIds.end());
+
+  // Ungrouped execution pipelines need to take care of cross-mode bridges.
+  if (!groupedExecution && !mixedNodeIds.empty()) {
+    planNodeIds.insert(
+        planNodeIds.end(), mixedNodeIds.begin(), mixedNodeIds.end());
+  }
+
+  for (const auto& planNode : planNodes) {
+    if (Operator::joinBridgeFromPlanNode(planNode)) {
+      // Grouped execution pipelines should not create cross-mode bridges.
+      if (!groupedExecution || !mixedNodeIds.contains(planNode->id())) {
+        planNodeIds.push_back(planNode->id());
+      }
+    }
+  }
+  return planNodeIds;
+}
+
 // static
 void DriverFactory::registerAdapter(DriverAdapter adapter) {
   adapters.push_back(std::move(adapter));
