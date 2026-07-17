@@ -756,6 +756,10 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
     case velox::rpc::RPCErrorKind::kNone:
     case velox::rpc::RPCErrorKind::kNullInput:
     case velox::rpc::RPCErrorKind::kEmptyResponse:
+    // A rejected request is a permanent client-side error, not a congestion
+    // signal, so it is not counted among the overload kinds above (it is
+    // tracked separately via a dedicated invalid-request counter).
+    case velox::rpc::RPCErrorKind::kInvalidRequest:
       break;
   }
 }

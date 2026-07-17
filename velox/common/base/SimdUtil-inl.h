@@ -1110,7 +1110,7 @@ uint8_t gather8BitsImpl(
     const xsimd::avx2&) {
   // Computes 8 byte addresses, and 8 bit masks.  The low bits of the
   // row select the bit mask, the rest of the bits are the byte
-  // offset.  There is an AND wich will be zero if the bit is not set.
+  // offset.  There is an AND which will be zero if the bit is not set.
   // This is finally converted to a mask with a negated SIMD
   // comparison with 0.
   static const xsimd::batch<int32_t, A> kByteBits = {

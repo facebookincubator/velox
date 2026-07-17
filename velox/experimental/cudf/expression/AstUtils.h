@@ -119,6 +119,20 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
           CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
       stream.synchronize();
       return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_MILLISECONDS) {
+      using CudfTimestampType = cudf::timestamp_ms;
+      auto millis = isNull ? 0 : value.toMillis();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_ms{millis}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
+    } else if (unit == cudf::type_id::TIMESTAMP_SECONDS) {
+      using CudfTimestampType = cudf::timestamp_s;
+      auto seconds = isNull ? 0 : value.getSeconds();
+      auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
+          CudfTimestampType{cudf::duration_s{seconds}}, !isNull, stream, mr);
+      stream.synchronize();
+      return scalar;
     } else {
       VELOX_FAIL("Unsupported timestamp unit: {}", static_cast<int32_t>(unit));
     }

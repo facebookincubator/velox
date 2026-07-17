@@ -440,7 +440,12 @@ void ReaderBase::loadFileMetaData() {
 
   uint32_t footerLength;
   std::memcpy(&footerLength, copy.data() + readSize - 8, sizeof(uint32_t));
-  VELOX_CHECK_LE(footerLength + 12, fileLength_);
+  VELOX_CHECK_LE(
+      static_cast<uint64_t>(footerLength) + 12,
+      fileLength_,
+      "Parquet file footer length is inconsistent with file length: footer length {}, file length {}",
+      footerLength,
+      fileLength_);
   int32_t footerOffsetInBuffer = readSize - 8 - footerLength;
   if (footerLength > readSize - 8) {
     footerOffsetInBuffer = 0;
@@ -2128,8 +2133,11 @@ std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
     if (!columnChunk.hasStatistics()) {
       return nullptr;
     }
-    auto rowGroupStats =
-        columnChunk.getColumnStatistics(parquetNode.type(), rowGroup.numRows());
+    auto rowGroupStats = columnChunk.getColumnStatistics(
+        parquetNode.type(),
+        rowGroup.numRows(),
+        parquetNode.convertedType_,
+        parquetNode.logicalType_);
     builder->merge(*rowGroupStats);
   }
 

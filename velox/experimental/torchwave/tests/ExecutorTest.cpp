@@ -478,6 +478,18 @@ TEST_F(ExecutorTest, catTest) {
   WaveConfig::get().isCg = true;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg");
   WaveConfig::get().isCg = std::nullopt;
+
+  // Plan structure: a masked_select feeding the 1-D cat (o3 = cat([ms1, ms2,
+  // ms3])) fuses into the same kernel as the cat. In the cg and single-block
+  // grids the whole masked_select fuses with the cat; in the multi-kernel grid
+  // the masked_select is decomposed, and its final (compaction) step fuses into
+  // the cat.
+  auto plans = compilePlans("data/cat_test.pt2");
+  EXPECT_TRUE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+  EXPECT_TRUE(plans.singleBlock.fuses(
+      {"aten.cat.default", "aten.masked_select.default"}));
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.cat.default", "tw.masked_select_final"}));
 }
 
 TEST_F(ExecutorTest, catTest2) {
@@ -490,6 +502,36 @@ TEST_F(ExecutorTest, catTest2) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/cat_test2.pt2", "data/cat_test2_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+// Composed masked_selects feeding an elementwise add:
+//   masked_select(masked_select(stuff, f1), f2) * 2 + masked_select(stuff,
+//   comp)
+// where f1 then f2 selects the same elements as comp, so both add operands have
+// equal length. A masked_select sets its length on device; fusing it into the
+// elementwise consumer (whose loop bound is that length) reads the length
+// before the masked_select kernel writes it, giving a too-long result -- unless
+// placeKernels puts a boundary between them (the fix).
+TEST_F(ExecutorTest, maskedSelectComposeTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/masked_select_compose_test.pt2",
+      "data/masked_select_compose_test_results.pt",
+      "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/masked_select_compose_test.pt2",
+      "data/masked_select_compose_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/masked_select_compose_test.pt2",
+      "data/masked_select_compose_test_results.pt",
+      "cg");
   WaveConfig::get().isCg = std::nullopt;
 }
 
@@ -731,6 +773,114 @@ TEST_F(ExecutorTest, maskedPutTest) {
 
 TEST_F(ExecutorTest, indexGetTest) {
   runTest("data/index_get_test.pt2", "data/index_get_test_results.pt");
+
+  // Plan structure: advanced indexing that gives an index tensor for *every*
+  // source dim lowers to the fused tw.index_elt_{one,two} -- a 1-D-source
+  // gather (source_a[idx]) and a 2-D coordinate gather (matrix[row, col]); the
+  // latter also fuses its trailing arithmetic (matrix[row, col] * 2 + 1).
+  auto plans = compilePlans("data/index_get_test.pt2");
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_one"}));
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_two"}));
+  EXPECT_TRUE(plans.multiKernel.fuses(
+      {"tw.index_elt_two", "aten.mul.Scalar", "aten.add.Scalar"}));
+}
+
+// aten.index.Tensor over cat(var, factory): cat([var, zeros])[idx] -- two
+// operands, the second a constant-fill factory -- rewrites to the fused
+// tw.index_elt_one_default (default 0, an out-of-range index reads the default
+// instead of erroring). cat([var, var2, zeros])[idx] has three operands, so it
+// does not match the pattern and stays a plain index over the materialized cat.
+TEST_F(ExecutorTest, indexEltDefaultTest) {
+  runTest(
+      "data/index_elt_default_test.pt2",
+      "data/index_elt_default_test_results.pt");
+
+  auto plans = compilePlans("data/index_elt_default_test.pt2");
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_one_default"}));
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_elt_one"}));
+}
+
+TEST_F(ExecutorTest, indexSelectTest) {
+  runTest("data/index_select_test.pt2", "data/index_select_test_results.pt");
+}
+
+// Advanced indexing (aten.index.Tensor): a single 1-D integer index selecting
+// one dimension is rewritten to the fused index_select; a separated multi-index
+// case (x[i, :, k]) falls back to the eager op.
+TEST_F(ExecutorTest, indexTensorTest) {
+  runTest("data/index_tensor_test.pt2", "data/index_tensor_test_results.pt");
+
+  // Prove the rewrite fired: corrupt one converted index per case out of range
+  // and confirm the device-side bounds check in __index_select reports the
+  // matching dimension. Only the fused index_select performs this check, so a
+  // "<dim> <badValue> Bad idx" error means x[sel] took the fused path (not the
+  // eager fallback). sel0/sel1/sel2 select dims 0/1/2 respectively.
+  constexpr int32_t kBadIndex = 999'999;
+  struct IndexErrorCase {
+    std::string indexInput;
+    int32_t expectedDim;
+  };
+  const std::vector<IndexErrorCase> indexErrorCases = {
+      {"sel0", 0},
+      {"sel1", 1},
+      {"sel2", 2},
+  };
+  for (const auto& errorCase : indexErrorCases) {
+    auto pt2Path = getDataFilePath(dataDir(), "data/index_tensor_test.pt2");
+    auto fixture = ModelFixture::load(pt2Path);
+    int32_t idxValueId = -1;
+    {
+      auto values = fixture->model.graph->userInputs();
+      auto names = fixture->model.graph->signature().userInputs();
+      for (size_t i = 0; i < values.size() && i < names.size(); ++i) {
+        if (names[i].find(errorCase.indexInput) != std::string::npos) {
+          idxValueId = values[i]->id();
+          break;
+        }
+      }
+    }
+    ASSERT_GE(idxValueId, 0) << "No " << errorCase.indexInput
+                             << " input found in index_tensor_test graph";
+    auto errors = runWaveExpectError(
+        *fixture, [idxValueId, kBadIndex](nativert::ExecutionFrame& frame) {
+          auto& iv = frame.getIValue(idxValueId);
+          if (iv.isTensor()) {
+            iv.toTensor().fill_(kBadIndex);
+          }
+        });
+    const std::string expected = std::to_string(errorCase.expectedDim) + " " +
+        std::to_string(kBadIndex) + " Bad idx";
+    EXPECT_NE(errors.find(expected), std::string::npos)
+        << "Case " << errorCase.indexInput << ": expected '" << expected
+        << "' in device errors, got:\n"
+        << errors;
+  }
+
+  // Plan structure: how aten.index.Tensor lowers, and how the placement of the
+  // bool-mask (masked_select) case differs across modes. Only the multi-kernel
+  // grid holds every op; the single-block and cg grids hold just the
+  // masked_select, which has those variants.
+  auto plans = compilePlans("data/index_tensor_test.pt2");
+
+  // Multi-kernel: a single-dim integer index (a=x[sel0], b=x[:,sel1],
+  // c=x[:,:,sel2]) fuses to tw.index_select. The separated-dim case
+  // (d=x[sep0,:,sep2]) cannot, so it stays the eager aten.index.Tensor behind a
+  // kernel boundary from the fused index_selects. The bool-mask case
+  // (e=x1d[mask]) becomes a multi-step masked_select: head -> add_sizes ->
+  // final.
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.index_select"}));
+  EXPECT_TRUE(plans.multiKernel.standalone("aten.index.Tensor"));
+  EXPECT_TRUE(plans.multiKernel.kernelBoundaryBetween(
+      "aten.index.Tensor", "tw.index_select"));
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_head"}));
+  EXPECT_TRUE(plans.multiKernel.inLaterStep(
+      "tw.masked_select_final", "tw.masked_select_head"));
+
+  // Single-block: masked_select fuses into one kernel instead of decomposing.
+  EXPECT_TRUE(plans.singleBlock.fuses({"aten.masked_select.default"}));
+
+  // Cooperative grid: masked_select uses its dedicated cg variant.
+  EXPECT_TRUE(plans.cg.fuses({"tw.masked_select_cg"}));
 }
 
 TEST_F(ExecutorTest, dedupTest) {

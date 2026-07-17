@@ -113,6 +113,11 @@ nativert::Node* makeCumsumVariant(NodeCP single, WaveGraph* waveGraph) {
   if (dimAttr) {
     finalNode->addAttribute({dimAttr->name, std::get<int64_t>(dimAttr->value)});
   }
+  // The op input feeds both head and final, and the head counts feed both
+  // add_sizes and final: each is consumed by more than one part of this
+  // expansion, so it must not be freed as a per-op intermediate.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -139,6 +144,10 @@ nativert::Node* makeExclusiveSumVariant(NodeCP single, WaveGraph* waveGraph) {
        {"counts", headOutput},
        {"link", addSizesOutput}});
   finalNode->addAttribute({"dtype", dtypeStr});
+  // Consumed by more than one part of this expansion (input by head+final,
+  // counts by add_sizes+final); keep out of the freeable intermediates.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -164,6 +173,12 @@ nativert::Node* makeMaskedSelectVariant(NodeCP single, WaveGraph* waveGraph) {
        {"mask", single->inputs()[1].value},
        {"counts", headOutput},
        {"total", addSizesOutput}});
+  // input, mask and counts are each consumed by more than one part of this
+  // expansion (input/mask by head+final, counts by add_sizes+final); keep them
+  // out of the freeable intermediates.
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[0].value);
+  waveGraph->declareMultiplyReferencedInput(single->inputs()[1].value);
+  waveGraph->declareMultiplyReferencedInput(headOutput);
   copyOriginalOutputs(finalNode, single, waveGraph);
   return finalNode;
 }
@@ -231,6 +246,44 @@ nativert::Value* inputAt(NodeCP node, size_t idx) {
       idx,
       " is missing");
   return inputs[idx].value;
+}
+
+// If 'value' is produced by a constant-fill factory (zeros/ones/full and their
+// _like / new_ variants), returns the scalar fill it produces, for use as the
+// out-of-range default of tw.index_elt_one_default. Returns nullopt otherwise.
+std::optional<nativert::Constant> factoryDefault(nativert::Value* value) {
+  auto* producer = value ? value->producer() : nullptr;
+  if (!producer) {
+    return std::nullopt;
+  }
+  const auto target = producer->target();
+  if (target == "torch.ops.aten.zeros.default" ||
+      target == "torch.ops.aten.zeros_like.default" ||
+      target == "torch.ops.aten.new_zeros.default") {
+    return nativert::Constant{int64_t{0}};
+  }
+  if (target == "torch.ops.aten.ones.default" ||
+      target == "torch.ops.aten.ones_like.default" ||
+      target == "torch.ops.aten.new_ones.default") {
+    return nativert::Constant{int64_t{1}};
+  }
+  if (target == "torch.ops.aten.full.default" ||
+      target == "torch.ops.aten.full_like.default" ||
+      target == "torch.ops.aten.new_full.default") {
+    const auto* fill = producer->tryGetAttribute("fill_value");
+    if (fill) {
+      if (std::holds_alternative<int64_t>(fill->value)) {
+        return nativert::Constant{std::get<int64_t>(fill->value)};
+      }
+      if (std::holds_alternative<double>(fill->value)) {
+        return nativert::Constant{std::get<double>(fill->value)};
+      }
+      if (std::holds_alternative<bool>(fill->value)) {
+        return nativert::Constant{std::get<bool>(fill->value)};
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 void resolveDtypeFromInput(nativert::Node* node, const ValueTypes& types) {
@@ -1459,12 +1512,11 @@ void registerBuiltins() {
     if (!tensor || !indices) {
       return 0;
     }
-    auto tensorId = tensor->id();
-    if (tensorId < 0 || static_cast<size_t>(tensorId) >= types.types.size() ||
-        !types.types[tensorId]) {
-      return 0;
-    }
-    auto rank = types.types[tensorId]->dim();
+    // Use the propagated constraint rank, not the archive TensorMeta dim(): the
+    // latter can be a stale rank-0 placeholder for data-dependent sources (the
+    // archive under-specifies their shape), while the constraint rank is
+    // inferred input-first and is correct by the time this rewrite runs.
+    int rank = types.rank(tensor);
     if (rank < 1 || rank > 3) {
       return 0;
     }
@@ -1574,17 +1626,217 @@ void registerBuiltins() {
       .multiBlockReturnBarrier()
       .registerOp();
 
-  // index.Tensor: gather elements by index. Rename to tw.idx_gather for
-  // any rank when all indices are int/long.
+  // masked_select: gathers the elements where the boolean mask is true into a
+  // fresh 1-D tensor (data-dependent length). Runs eager (standalone); it is
+  // the target of x[bool_mask] on a 1-D source (see the index.Tensor rewrite
+  // below).
+  MetadataBuilder("torch.ops.aten.masked_select.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP /*node*/,
+             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+            return {{.rank = 1, .contiguous = true}};
+          })
+      .registerOp();
+
+  // index.Tensor: gather elements by index.
+  //
+  // A single 1-D integer index that selects one dimension of a rank>1 source
+  // (x[idx], x[:, idx], x[:, :, idx]) is exactly index_select along that
+  // dimension, so rewrite it to the fused tw.index_select. When every dimension
+  // is indexed by an integer tensor (x[i, j, k] on a rank-3 source) the result
+  // is a scalar-per-index gather handled by tw.index_elt_{one,two,three}.
+  // Everything else -- several but not all dimensions indexed (x[i, :, k]), a
+  // multi-dimensional index, or a non-integer index -- falls through to the
+  // eager standalone op.
   MetadataBuilder("torch.ops.aten.index.Tensor")
       .sizeOrdinal({1, 0})
       .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            // Advanced indexing materializes a fresh dense tensor, so the eager
+            // output is contiguous. Its rank follows the numpy/torch rule:
+            // broadcastRank(index tensors) + (sourceRank - numIndexed), since
+            // each integer index consumes one source dim and the indices
+            // broadcast together, while None gaps and trailing dims are kept.
+            // Rank is left unknown when the source rank is unavailable or a
+            // non-integer (boolean-mask) index makes the count data-dependent;
+            // the output is contiguous either way.
+            auto* self = inputAt(node, 0);
+            int8_t sourceRank = types.rank(self);
+            auto* indices =
+                node->inputs().size() > 1 ? node->inputs()[1].value : nullptr;
+            auto* listPack = indices ? indices->producer() : nullptr;
+            if (sourceRank < 0 || !listPack ||
+                listPack->target() != "prim.ListPack") {
+              return {{.rank = -1, .contiguous = true}};
+            }
+            int32_t numIndexed = 0;
+            int32_t broadcastRank = 0;
+            for (const auto& entry : listPack->inputs()) {
+              auto* indexValue = entry.value;
+              if (!indexValue ||
+                  indexValue->type().kind() == nativert::Type::Kind::None) {
+                continue;
+              }
+              auto indexValueId = indexValue->id();
+              bool intIndex = indexValueId >= 0 &&
+                  static_cast<size_t>(indexValueId) < types.types.size() &&
+                  types.types[indexValueId] &&
+                  (types.types[indexValueId]->dtype() == c10::ScalarType::Int ||
+                   types.types[indexValueId]->dtype() == c10::ScalarType::Long);
+              if (!intIndex) {
+                return {{.rank = -1, .contiguous = true}};
+              }
+              ++numIndexed;
+              broadcastRank = std::max(
+                  broadcastRank,
+                  static_cast<int32_t>(types.types[indexValueId]->dim()));
+            }
+            int32_t rank = numIndexed == 0 ? sourceRank
+                                           : broadcastRank +
+                    (static_cast<int32_t>(sourceRank) - numIndexed);
+            return {{.rank = static_cast<int8_t>(rank), .contiguous = true}};
+          })
       .maybeReplace(
           [&isIntegerIndices](
-              NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
+              NodeCP node, ValueTypes& types, WaveGraph& waveGraph)
               -> std::vector<std::pair<ValueCP, ValueCP>> {
-            auto n =
-                isIntegerIndices(types, inputAt(node, 0), inputAt(node, 1));
+            auto* self = inputAt(node, 0);
+            auto* indices = inputAt(node, 1);
+            auto* listPack = indices ? indices->producer() : nullptr;
+            if (self && listPack && listPack->target() == "prim.ListPack") {
+              auto selfId = self->id();
+              // selfOk gates access to the source dtype (needed to type the new
+              // index_select value); the rank comes from the propagated
+              // constraint, which is correct even when the archive TensorMeta
+              // carries a stale rank-0 placeholder.
+              bool selfOk = selfId >= 0 &&
+                  static_cast<size_t>(selfId) < types.types.size() &&
+                  types.types[selfId];
+              int32_t sourceRank = types.rank(self);
+              // Scan the index list for exactly one 1-D integer index tensor,
+              // with every other entry a None gap.
+              const auto& idxInputs = listPack->inputs();
+              int32_t numIndices = 0;
+              int32_t dim = -1;
+              nativert::Value* idxVal = nullptr;
+              bool convertible = true;
+              for (size_t i = 0; i < idxInputs.size(); ++i) {
+                auto* indexValue = idxInputs[i].value;
+                if (!indexValue ||
+                    indexValue->type().kind() == nativert::Type::Kind::None) {
+                  continue;
+                }
+                auto indexValueId = indexValue->id();
+                bool is1dIntTensor =
+                    indexValue->type().kind() == nativert::Type::Kind::Tensor &&
+                    types.rank(indexValue) == 1 && indexValueId >= 0 &&
+                    static_cast<size_t>(indexValueId) < types.types.size() &&
+                    types.types[indexValueId] &&
+                    (types.types[indexValueId]->dtype() ==
+                         c10::ScalarType::Int ||
+                     types.types[indexValueId]->dtype() ==
+                         c10::ScalarType::Long);
+                if (!is1dIntTensor) {
+                  convertible = false;
+                  break;
+                }
+                ++numIndices;
+                dim = static_cast<int32_t>(i);
+                idxVal = indexValue;
+              }
+              if (selfOk && convertible && numIndices == 1 && sourceRank > 1 &&
+                  sourceRank <= 3) {
+                auto* graph = waveGraph.graph();
+                auto* newNode = graph->createNode(
+                    "tw.index_select", {{"self", self}, {"index", idxVal}});
+                newNode->addAttribute({"dim", static_cast<int64_t>(dim)});
+                graph->insertBefore(newNode, const_cast<nativert::Node*>(node));
+                auto* newOutput = waveGraph.newTensorValue(
+                    newNode, "index_select", types.types[selfId]->dtype());
+                return {{node->outputs()[0], newOutput}};
+              }
+              // x[bool_mask] with a 1-D source and a single 1-D boolean index
+              // is masked_select: a data-dependent 1-D gather of the positions
+              // where the mask is true. Retarget to the standalone
+              // masked_select op (a boolean mask is not a fusable gather).
+              if (selfOk && sourceRank == 1) {
+                nativert::Value* maskVal = nullptr;
+                int32_t numMask = 0;
+                for (const auto& idxEntry : idxInputs) {
+                  auto* maskValue = idxEntry.value;
+                  if (!maskValue ||
+                      maskValue->type().kind() == nativert::Type::Kind::None) {
+                    continue;
+                  }
+                  ++numMask;
+                  auto maskValueId = maskValue->id();
+                  if (maskValue->type().kind() ==
+                          nativert::Type::Kind::Tensor &&
+                      types.rank(maskValue) == 1 && maskValueId >= 0 &&
+                      static_cast<size_t>(maskValueId) < types.types.size() &&
+                      types.types[maskValueId] &&
+                      types.types[maskValueId]->dtype() ==
+                          c10::ScalarType::Bool) {
+                    maskVal = maskValue;
+                  }
+                }
+                if (numMask == 1 && maskVal) {
+                  auto* graph = waveGraph.graph();
+                  auto* newNode = graph->createNode(
+                      "torch.ops.aten.masked_select.default",
+                      {{"self", self}, {"mask", maskVal}});
+                  graph->insertBefore(
+                      newNode, const_cast<nativert::Node*>(node));
+                  auto* newOutput = waveGraph.newTensorValue(
+                      newNode, "masked_select", types.types[selfId]->dtype());
+                  return {{node->outputs()[0], newOutput}};
+                }
+              }
+            }
+            auto n = isIntegerIndices(types, self, indices);
+            // A single integer index over cat(var, factory) with exactly two
+            // cat operands, where the second is a constant-fill factory
+            // (zeros/ones/ full), is an index of 'var' with that constant as
+            // the out-of-range default. Rewrite to the fused
+            // tw.index_elt_one_default reading 'var' directly, so the cat and
+            // its padding never materialize.
+            if (n == 1) {
+              auto* catNode = self->producer();
+              if (catNode &&
+                  catNode->target() == "torch.ops.aten.cat.default" &&
+                  !catNode->inputs().empty()) {
+                auto* catList = catNode->inputs()[0].value;
+                auto* catListPack = catList ? catList->producer() : nullptr;
+                if (catListPack && catListPack->target() == "prim.ListPack" &&
+                    catListPack->inputs().size() == 2) {
+                  auto* dataArg = catListPack->inputs()[0].value;
+                  auto* padArg = catListPack->inputs()[1].value;
+                  auto deflt = factoryDefault(padArg);
+                  auto dataId = dataArg ? dataArg->id() : -1;
+                  bool dataOk = dataId >= 0 &&
+                      static_cast<size_t>(dataId) < types.types.size() &&
+                      types.types[dataId];
+                  if (deflt && dataOk) {
+                    auto* graph = waveGraph.graph();
+                    auto* newNode = graph->createNode(
+                        "tw.index_elt_one_default",
+                        {{"self", dataArg}, {"indices", indices}});
+                    newNode->addAttribute({"deflt", std::move(*deflt)});
+                    graph->insertBefore(
+                        newNode, const_cast<nativert::Node*>(node));
+                    auto* newOutput = waveGraph.newTensorValue(
+                        newNode,
+                        "index_elt_one_default",
+                        types.types[dataId]->dtype());
+                    return {{node->outputs()[0], newOutput}};
+                  }
+                }
+              }
+            }
             if (n > 0) {
               static const char* kNames[] = {
                   "tw.index_elt_one", "tw.index_elt_two", "tw.index_elt_three"};
@@ -1641,7 +1893,145 @@ void registerBuiltins() {
           .hasBlockInfo()
           .registerOp();
     }
+
+    // tw.index_elt_one_default: like tw.index_elt_one but returns a scalar
+    // default for an out-of-range index instead of erroring. The default's type
+    // is deduced as a second type template parameter after the source element
+    // type, so a scalar constant of a possibly different type converts to the
+    // element type. No BlockInfo: there is no error path.
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.index_elt_one_default",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("indices", c10::ListType::ofTensors()),
+                c10::Argument("deflt", c10::NumberType::get())},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .elementwiseFunc("__index_elt_one_default")
+        .argumentMeta(
+            {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+             {.isRegister = true},
+             {.isRegister = true}})
+        .returnMeta({{.isRegister = true, .reserveShape = indexEltReserve}})
+        .typeTemplateParams({0})
+        .registerOp();
   }
+
+  // tw.index_select: fused elementwise index_select along 'dim'. The rewrite
+  // below retargets aten.index_select (which names its operands self / dim /
+  // index) onto this op; forArguments binds by name, so the schema lists the
+  // two tensor operands before the scalar 'dim'. That order matters: the
+  // wholeTensor classification in codegen indexes argumentMeta by node input
+  // position, and a constant 'dim' is an attribute (not an input), so putting
+  // 'dim' last keeps self and index aligned with their argumentMeta entries.
+  // The loop iterates every element of the enclosing expression's output;
+  // __index_select maps each output element to a source element, taking the
+  // coordinate along 'dim' from 'index'. 'self' and 'index' are whole tensors
+  // read at computed offsets (randomAccess, forcing materialization before this
+  // op). The output shape is self's shape with 'dim' resized to the index
+  // length, computed at launch by indexSelectReserve. hasOutputArg passes the
+  // enclosing expression's output tensor so the device function knows the shape
+  // it iterates over, distinct from index_select's own (broadcast) shape.
+  {
+    auto indexSelectReserve =
+        [](NodeCP node,
+           nativert::ExecutionFrame& frame,
+           const FormalToActual& map,
+           NodeCP /*originalFormalNode*/,
+           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+      auto* selfValue = node->inputs()[0].value;
+      auto selfId = selfValue->id();
+      auto selfActual = map.find(selfId);
+      auto& selfTensor =
+          frame.getIValue(selfActual != map.end() ? selfActual->second : selfId)
+              .toTensor();
+      auto* indexValue = node->inputs()[1].value;
+      auto indexId = indexValue->id();
+      auto indexActual = map.find(indexId);
+      auto& indexTensor =
+          frame
+              .getIValue(
+                  indexActual != map.end() ? indexActual->second : indexId)
+              .toTensor();
+      auto dimOpt = constIntArg(node, "dim");
+      TORCH_CHECK(
+          dimOpt.has_value(), "tw.index_select requires a constant dim");
+      int64_t rank = selfTensor.dim();
+      int64_t dim = *dimOpt < 0 ? *dimOpt + rank : *dimOpt;
+      std::vector<Dim> shape(
+          selfTensor.sizes().begin(), selfTensor.sizes().end());
+      shape.at(dim) = static_cast<Dim>(indexTensor.numel());
+      return {shape};
+    };
+
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.index_select",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("index", c10::TensorType::get()),
+                c10::Argument("dim", c10::IntType::get())},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .elementwiseFunc("__index_select")
+        // index_select's output has a different element count than any input,
+        // so it must not reuse an input buffer as its output.
+        .inPlaceIfLastUse(false)
+        .sizeOrdinal({0})
+        .hasIdxArg()
+        .hasOutputArg()
+        .hasBlockInfo()
+        .outputConstraints(
+            [](NodeCP node,
+               const ValueTypes& types) -> std::vector<ValueConstraint> {
+              return {
+                  {.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+            })
+        .argumentMeta(
+            {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+             {.isRegister = false, .wholeTensor = true, .randomAccess = true},
+             {.isRegister = true}})
+        .returnMeta({{.isRegister = true, .reserveShape = indexSelectReserve}})
+        .typeTemplateParams({0})
+        // The output shape (source shape with 'dim' resized to the index
+        // length) is not derivable from the operands, so when fused the output
+        // is kept as a shape-only tensor and the enclosing expression is sized
+        // from it.
+        .sizeFromOutput()
+        // 'dim' is a compile-time template parameter: it selects different
+        // device code per axis and, because subgraphNodesMatch keys on
+        // templateAttrs, keeps index_selects along different dims as distinct
+        // ops. That prevents an op for one dim from being reused for another,
+        // which would make indexSelectReserve read the wrong (formal) dim.
+        .templateAttrs({"dim"})
+        .registerOp();
+  }
+
+  // index_select (functional, out-of-place): gather rows along 'dim' by index.
+  // Retarget to the fused elementwise tw.index_select when 'dim' is a
+  // statically-known constant; a dynamic dim falls back to the standalone op.
+  MetadataBuilder("torch.ops.aten.index_select.default")
+      .sizeOrdinal({0})
+      .isStandalone()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {{.rank = types.rank(inputAt(node, 0)), .contiguous = true}};
+          })
+      .maybeReplace(
+          [](NodeCP node, ValueTypes& /*types*/, WaveGraph& /*waveGraph*/)
+              -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (hasDynamicArg(node, "dim") ||
+                !constIntArg(node, "dim").has_value()) {
+              return {};
+            }
+            const_cast<nativert::Node*>(node)->setTarget("tw.index_select");
+            return {};
+          })
+      .registerOp();
 
   // index_put (functional, out-of-place): route through the in-place path.
   // Copy the first input with an aten.clone (unless it is already a clone with
