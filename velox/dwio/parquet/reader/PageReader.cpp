@@ -143,16 +143,24 @@ void PageReader::updateBufferPointersAfterDeserialization(
 
 const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
   if (bufferEnd_ == bufferStart_) {
-    const void* buffer = nullptr;
-    int32_t bufferSize = 0;
-    if (!inputStream_->Next(&buffer, &bufferSize)) {
-      VELOX_FAIL("Read past end");
+    // Refilling from the stream can perform real reads/load-position work, so
+    // time it and count it towards page-load time.
+    uint64_t readUs{0};
+    {
+      const MicrosecondWallTimer timer(&readUs);
+      const void* buffer = nullptr;
+      int32_t bufferSize = 0;
+      if (!inputStream_->Next(&buffer, &bufferSize)) {
+        VELOX_FAIL("Read past end");
+      }
+      bufferStart_ = reinterpret_cast<const char*>(buffer);
+      bufferEnd_ = bufferStart_ + bufferSize;
     }
-    bufferStart_ = reinterpret_cast<const char*>(buffer);
-    bufferEnd_ = bufferStart_ + bufferSize;
+    stats_.pageLoadTimeNs.increment(readUs * 1'000);
   }
   // Zero-copy fast path: return directly from the stream buffer when it has
-  // enough data plus SIMD padding. No timer overhead on this hot path.
+  // enough data plus SIMD padding. This path performs no I/O, so it stays off
+  // the timer to avoid steady_clock::now() overhead on the hot path.
   if (bufferEnd_ - bufferStart_ >= size + kPageReadPadding) {
     bufferStart_ += size;
     return bufferStart_ - size;
