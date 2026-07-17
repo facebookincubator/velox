@@ -59,6 +59,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -335,6 +336,23 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeWithZoneName) {
 TEST_F(TimezoneFunctionTest, fromUnixtimeWithHoursMinutes) {
   // from_unixtime(double, bigint, bigint) -> timestamp with time zone.
   assertMatchesCpu("from_unixtime(c0, 7, 30)", doubleInput(1'609'466'400.0));
+}
+
+// Reproducer: from_unixtime(double, bigint, bigint) computes the fixed offset as
+// hours*60 + minutes. INT64_MAX hours overflows that int64 product. CPU
+// (FromUnixtimeFunction) uses checkedMultiply/checkedPlus and throws; the GPU
+// registration multiplies unchecked, then casts to int32 -- on this platform the
+// UB wraps to -60, an in-range offset tz::getTimeZoneID happily accepts. Red
+// until the GPU mirrors CPU's checked arithmetic. compileExpression succeeds on
+// both (the CPU arithmetic error is a user error captured in initialize() and
+// re-thrown at eval); both throws carry "overflow".
+TEST_F(TimezoneFunctionTest, fromUnixtimeHoursMinutesOverflowRejectedLikeCpu) {
+  auto input = doubleInput(0.0);
+  auto exprSet = compileExpression(
+      "from_unixtime(c0, 9223372036854775807, 0)", asRowType(input->type()));
+  VELOX_ASSERT_THROW(
+      functions::test::FunctionBaseTest::evaluate(*exprSet, input), "overflow");
+  VELOX_ASSERT_THROW(evaluate(*exprSet, input), "overflow");
 }
 
 // Reproducer: from_unixtime of an out-of-range instant must throw to match CPU.
