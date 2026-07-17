@@ -114,7 +114,6 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
     COMMAND
       "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
     COMMAND
-      "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$ENV{LD_LIBRARY_PATH}"
       "${FBTHRIFT_COMPILER}"
       --legacy-strict
       --gen "mstch_cpp2:${GEN_ARG_STR}"
@@ -131,7 +130,17 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       "${FBTHRIFT_COMPILER}"
   )
 
-  add_library("${LIB_NAME}" STATIC ${generated_sources})
+  # Now emit the library rule to compile the sources
+  if (BUILD_SHARED_LIBS)
+    set(LIB_TYPE SHARED)
+  else ()
+    set(LIB_TYPE STATIC)
+  endif ()
+
+  add_library(
+    "${LIB_NAME}" ${LIB_TYPE}
+    ${generated_sources}
+  )
 
   target_include_directories(
     "${LIB_NAME}"
