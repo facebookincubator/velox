@@ -45,7 +45,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::SplitStatistics> splitStats,
+      std::shared_ptr<dwio::common::SplitStats> splitStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -103,7 +103,7 @@ class DwrfUnit : public LoadUnit {
   // ColumnReader::next(), where DwrfRowReader is guaranteed to be alive.
   const StrideIndexProvider& strideIndexProvider_;
 
-  const std::shared_ptr<dwio::common::SplitStatistics> splitStats_;
+  const std::shared_ptr<dwio::common::SplitStats> splitStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -269,7 +269,7 @@ DwrfRowReader::DwrfRowReader(
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
       splitStats_(
-          std::make_shared<dwio::common::SplitStatistics>(
+          std::make_shared<dwio::common::SplitStats>(
               dwio::common::FileFormat::DWRF)),
       currentUnit_{nullptr} {
   splitStats_->initColumnStatsCollection(*getReader().schemaWithId(), options_);

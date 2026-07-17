@@ -186,7 +186,7 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
 
 void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   // For NIMBLE splits, switch the reader to Iceberg field-id-based column
   // resolution. The NIMBLE per-SchemaNode `attributes` slot carries

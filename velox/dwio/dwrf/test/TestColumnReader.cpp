@@ -233,7 +233,7 @@ class ColumnReaderTestBase {
 
  private:
   std::unique_ptr<common::ScanSpec> scanSpec_;
-  SplitStatistics splitStatistics_{FileFormat::DWRF};
+  SplitStats splitStatistics_{FileFormat::DWRF};
 };
 
 struct StringReaderTestParams {

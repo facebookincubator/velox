@@ -492,8 +492,8 @@ struct DecodingStats {
 };
 
 /// Collects runtime metrics produced while reading one column.
-struct ColumnReaderStatistics {
-  explicit ColumnReaderStatistics(TypeKind typeKind) : typeKind{typeKind} {}
+struct ColumnStats {
+  explicit ColumnStats(TypeKind typeKind) : typeKind{typeKind} {}
 
   // Logical type of this column.
   TypeKind typeKind{TypeKind::INVALID};
@@ -509,8 +509,8 @@ struct ColumnReaderStatistics {
       const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
       int64_t value);
 
-  /// Merges all stats from another ColumnReaderStatistics instance.
-  void mergeFrom(const ColumnReaderStatistics& other);
+  /// Merges all stats from another ColumnStats instance.
+  void mergeFrom(const ColumnStats& other);
 
   /// Merges this column's metrics into 'result' using 'prefix'.
   void toRuntimeMetrics(
@@ -519,8 +519,8 @@ struct ColumnReaderStatistics {
 };
 
 /// Collects format-specific statistics while processing one file split.
-struct SplitStatistics {
-  explicit SplitStatistics(FileFormat format) : format{format} {
+struct SplitStats {
+  explicit SplitStats(FileFormat format) : format{format} {
     VELOX_CHECK_NE(format, FileFormat::UNKNOWN);
   }
 
@@ -531,12 +531,10 @@ struct SplitStatistics {
   folly::F14FastMap<std::string, RuntimeMetric> splitMetrics;
 
   // Per-column statistics keyed by schema node ID.
-  folly::F14FastMap<uint32_t, ColumnReaderStatistics> columnStats;
+  folly::F14FastMap<uint32_t, ColumnStats> columnStats;
 
   /// Returns the statistics for 'nodeId', creating them if necessary.
-  ColumnReaderStatistics& getOrCreateColumnStats(
-      uint32_t nodeId,
-      TypeKind typeKind);
+  ColumnStats& getOrCreateColumnStats(uint32_t nodeId, TypeKind typeKind);
 
   /// Returns decoding statistics for 'nodeId', or nullptr if unavailable.
   DecodingStats* decodingStats(uint32_t nodeId);
@@ -556,7 +554,7 @@ struct SplitStatistics {
 };
 
 /// Aggregates runtime statistics collected while processing a split.
-struct RuntimeStatistics {
+struct RuntimeStats {
   // Number of splits skipped based on statistics.
   int64_t skippedSplits{0};
 
@@ -592,13 +590,11 @@ struct RuntimeStatistics {
       formatSpecificStats;
 
   // Per-column statistics aggregated by schema node ID and file format.
-  folly::F14FastMap<
-      uint32_t,
-      folly::F14FastMap<FileFormat, ColumnReaderStatistics>>
+  folly::F14FastMap<uint32_t, folly::F14FastMap<FileFormat, ColumnStats>>
       columnStats;
 
   /// Merges one split's format-specific and per-column statistics.
-  void mergeFrom(const SplitStatistics& split);
+  void mergeFrom(const SplitStats& split);
 
   // Exports collected counters as runtime metrics.
   std::unordered_map<std::string, RuntimeMetric> toRuntimeMetricMap() const;

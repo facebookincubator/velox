@@ -76,7 +76,7 @@ PaimonSplitReader::PaimonSplitReader(
 
 void PaimonSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& /*fileReadOps*/) {
   // Save for re-use when advancing to subsequent files.
   metadataFilter_ = std::move(metadataFilter);

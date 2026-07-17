@@ -34,7 +34,7 @@ add_executable(
   BitConcatenationTest.cpp
   BitPackDecoderTest.cpp
   ChainedBufferTests.cpp
-  ColumnReaderStatisticsTests.cpp
+  ColumnStatsTests.cpp
   ColumnSelectorTests.cpp
   DataBufferTests.cpp
   DecoderUtilTest.cpp

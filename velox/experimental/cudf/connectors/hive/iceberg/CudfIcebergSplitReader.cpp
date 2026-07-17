@@ -111,7 +111,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
       hiveConfig_(hiveConfig) {}
 
 void CudfIcebergSplitReader::prepareSplit(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStats& runtimeStats) {
   // Reset the split
   resetSplit();
 
@@ -328,7 +328,7 @@ CudfIcebergSplitReader::readNextChunk() {
 }
 
 void CudfIcebergSplitReader::setupDeleteFileReaders(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+    dwio::common::RuntimeStats& runtimeStats) {
   // TODO(mh): We currently read a data files as a single split.
   constexpr uint64_t splitOffset = 0;
 

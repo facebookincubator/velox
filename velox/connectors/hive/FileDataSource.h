@@ -173,7 +173,7 @@ class FileDataSource : public DataSource {
   // post-read using the extraction chains.
   folly::F14FastMap<column_index_t, const FileColumnHandle*> extractionColumns_;
 
-  dwio::common::RuntimeStatistics runtimeStats_;
+  dwio::common::RuntimeStats runtimeStats_;
 
  private:
   // Configure extraction columns on the ScanSpec and build

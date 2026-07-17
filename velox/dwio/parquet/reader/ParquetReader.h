@@ -76,8 +76,7 @@ class ParquetRowReader : public dwio::common::RowReader {
       velox::VectorPtr& result,
       const dwio::common::Mutation* = nullptr) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override;
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override;
 
   void resetFilterCaches() override;
 

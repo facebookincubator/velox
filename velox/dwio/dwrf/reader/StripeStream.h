@@ -231,7 +231,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
       int64_t stripeNumberOfRows,
       const StrideIndexProvider& provider,
       uint32_t stripeIndex,
-      dwio::common::SplitStatistics* splitStats = nullptr)
+      dwio::common::SplitStats* splitStats = nullptr)
       : StripeStreamsBase{&readState->readerBase->memoryPool()},
         readState_(std::move(readState)),
         selector_{selector},
@@ -388,7 +388,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   const int64_t stripeNumberOfRows_;
   const StrideIndexProvider& provider_;
   const uint32_t stripeIndex_;
-  dwio::common::SplitStatistics* const splitStats_{nullptr};
+  dwio::common::SplitStats* const splitStats_{nullptr};
 
   bool readPlanLoaded_{false};
 

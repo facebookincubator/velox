@@ -2864,7 +2864,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(c0->encoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_TRUE(c0->valueVector()->isFlatEncoding());
   ASSERT_EQ(c0->valueVector()->size(), dictionary.size());
-  dwio::common::RuntimeStatistics stats;
+  dwio::common::RuntimeStats stats;
   rowReader->updateRuntimeStats(stats);
   ASSERT_FALSE(stats.columnStats.contains(1));
   spec->childByName("c0")->setFilter(
@@ -2875,7 +2875,7 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(rowReader->next(20, actual), 20);
   ASSERT_EQ(actual->size(), 1);
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
-  stats = dwio::common::RuntimeStatistics();
+  stats = dwio::common::RuntimeStats();
   rowReader->updateRuntimeStats(stats);
   ASSERT_TRUE(stats.columnStats.at(1)
                   .at(FileFormat::DWRF)

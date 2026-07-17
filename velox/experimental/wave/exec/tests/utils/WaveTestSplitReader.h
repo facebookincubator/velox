@@ -70,7 +70,7 @@ class WaveTestSplitReader : public WaveSplitReader {
   // First unscheduled row.
   int32_t nextRow_{0};
   int32_t scheduledRows_{0};
-  dwio::common::ColumnReaderStatistics readerStats_{TypeKind::ROW};
+  dwio::common::ColumnStats readerStats_{TypeKind::ROW};
   raw_vector<int32_t> rows_;
   FileHandleCachedPtr fileHandle_;
   FileInfo fileInfo_;

@@ -195,7 +195,7 @@ void DecodingStats::toRuntimeMetrics(
   addCounter("decodeCPUTimeNanos", decodeCPUTimeNanos);
 }
 
-void ColumnReaderStatistics::accumulateStat(
+void ColumnStats::accumulateStat(
     const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
     int64_t value) {
   auto [it, inserted] = columnMetrics.try_emplace(stat.first);
@@ -207,7 +207,7 @@ void ColumnReaderStatistics::accumulateStat(
   it->second.addValue(value);
 }
 
-ColumnReaderStatistics& SplitStatistics::getOrCreateColumnStats(
+ColumnStats& SplitStats::getOrCreateColumnStats(
     uint32_t nodeId,
     TypeKind typeKind) {
   auto [it, inserted] = columnStats.try_emplace(nodeId, typeKind);
@@ -217,20 +217,20 @@ ColumnReaderStatistics& SplitStatistics::getOrCreateColumnStats(
   return it->second;
 }
 
-DecodingStats* SplitStatistics::decodingStats(uint32_t nodeId) {
+DecodingStats* SplitStats::decodingStats(uint32_t nodeId) {
   const auto it = columnStats.find(nodeId);
   return it != columnStats.end() && it->second.decodingStats
       ? &*it->second.decodingStats
       : nullptr;
 }
 
-void SplitStatistics::initColumnStatsCollection(
+void SplitStats::initColumnStatsCollection(
     const TypeWithId& schema,
     const RowReaderOptions& options) {
   registerColumnStats(schema, options.collectColumnCpuMetrics());
 }
 
-void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
+void ColumnStats::mergeFrom(const ColumnStats& other) {
   VELOX_CHECK_EQ(typeKind, other.typeKind);
   for (const auto& [name, metric] : other.columnMetrics) {
     auto [it, inserted] = columnMetrics.emplace(name, metric);
@@ -246,7 +246,7 @@ void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
   }
 }
 
-void ColumnReaderStatistics::toRuntimeMetrics(
+void ColumnStats::toRuntimeMetrics(
     std::string_view prefix,
     std::unordered_map<std::string, RuntimeMetric>& result) const {
   for (const auto& [name, metric] : columnMetrics) {
@@ -257,7 +257,7 @@ void ColumnReaderStatistics::toRuntimeMetrics(
   }
 }
 
-void SplitStatistics::accumulateStat(
+void SplitStats::accumulateStat(
     const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
     int64_t value) {
   auto [it, inserted] = splitMetrics.try_emplace(stat.first);
@@ -269,7 +269,7 @@ void SplitStatistics::accumulateStat(
   it->second.addValue(value);
 }
 
-void RuntimeStatistics::mergeFrom(const SplitStatistics& split) {
+void RuntimeStats::mergeFrom(const SplitStats& split) {
   auto& target = formatSpecificStats[split.format];
   for (const auto& [name, metric] : split.splitMetrics) {
     auto [it, inserted] = target.emplace(name, metric);
@@ -285,7 +285,7 @@ void RuntimeStatistics::mergeFrom(const SplitStatistics& split) {
   }
 }
 
-void SplitStatistics::registerColumnStats(
+void SplitStats::registerColumnStats(
     const TypeWithId& node,
     bool collectDecodingStats) {
   auto& stats = getOrCreateColumnStats(node.id(), node.type()->kind());
@@ -300,7 +300,7 @@ void SplitStatistics::registerColumnStats(
 }
 
 std::unordered_map<std::string, RuntimeMetric>
-RuntimeStatistics::toRuntimeMetricMap() const {
+RuntimeStats::toRuntimeMetricMap() const {
   std::unordered_map<std::string, RuntimeMetric> result;
   for (const auto& [name, metric] : unitLoaderStats.stats()) {
     result.emplace(name, RuntimeMetric(metric.sum, metric.unit));

@@ -1606,7 +1606,7 @@ class ParquetRowReader::Impl {
     return estimatedRowSize_;
   }
 
-  void updateRuntimeStats(dwio::common::RuntimeStatistics& stats) const {
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += rowGroupIds_.size();
     stats.mergeFrom(splitStats_);
@@ -1660,7 +1660,7 @@ class ParquetRowReader::Impl {
   TypePtr requestedType_;
   ParquetStatsContext parquetStatsContext_;
 
-  dwio::common::SplitStatistics splitStats_;
+  dwio::common::SplitStats splitStats_;
 
   mutable std::optional<size_t> estimatedRowSize_;
   mutable int32_t lastRowGroupWithRowEstimate_{-1};
@@ -1692,7 +1692,7 @@ uint64_t ParquetRowReader::next(
 }
 
 void ParquetRowReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& stats) const {
+    dwio::common::RuntimeStats& stats) const {
   impl_->updateRuntimeStats(stats);
 }
 

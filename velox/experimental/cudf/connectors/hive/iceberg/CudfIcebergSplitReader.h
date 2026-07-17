@@ -67,7 +67,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   /// @param runtimeStats Reference to the DataSource's runtime statistics,
   /// passed through to delete file readers so they can accumulate stats
   /// directly into the DataSource's stats object.
-  void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats) override;
+  void prepareSplit(dwio::common::RuntimeStats& runtimeStats) override;
 
  protected:
   // Override to also clear delete readers and column injection
@@ -87,7 +87,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // and deletion vectors.
   // @param runtimeStats DataSource's runtime statistics, passed to delete
   // file readers for accumulation.
-  void setupDeleteFileReaders(dwio::common::RuntimeStatistics& runtimeStats);
+  void setupDeleteFileReaders(dwio::common::RuntimeStats& runtimeStats);
 
   // Apply deletion vector (V3).
   void applyDeletionVector(std::size_t numRows);
