@@ -112,6 +112,19 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         {std::nullopt, std::nullopt}, TIMESTAMP_WITH_TIME_ZONE())});
   }
 
+  // Builds a two-row TIMESTAMP WITH TIME ZONE column whose rows carry different
+  // zone keys, to exercise per-row (non-uniform) zone handling.
+  RowVectorPtr twoZoneTimestampWithTimeZoneInput(
+      int64_t millisUtcA,
+      const char* zoneA,
+      int64_t millisUtcB,
+      const char* zoneB) {
+    return makeRowVector({makeFlatVector<int64_t>(
+        {pack(millisUtcA, tz::getTimeZoneID(zoneA)),
+         pack(millisUtcB, tz::getTimeZoneID(zoneB))},
+        TIMESTAMP_WITH_TIME_ZONE())});
+  }
+
   // Builds a single-row double input column named c0.
   RowVectorPtr doubleInput(double value) {
     return makeRowVector({makeFlatVector<double>({value})});
@@ -234,6 +247,53 @@ TEST_F(TimezoneFunctionTest, timezoneMinutePropagatesNull) {
   assertMatchesCpu("timezone_minute(c0)", input);
 }
 
+// Reproducers: a TSWTZ column mixing zone keys must be handled per row (CPU
+// unpacks each row's own key). The GPU's uniformZoneKey VELOX_USER_CHECK-fails
+// on mixed zones (the "one zone per column" limitation). Red until the per-row
+// offset path lands.
+TEST_F(TimezoneFunctionTest, timezoneHourMixedZones) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'609'466'400'000,
+      "America/Los_Angeles",
+      1'609'466'400'000,
+      "Asia/Kolkata");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+TEST_F(TimezoneFunctionTest, timezoneMinuteMixedZones) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'609'466'400'000,
+      "America/Los_Angeles",
+      1'609'466'400'000,
+      "Asia/Kolkata");
+  assertMatchesCpu("timezone_minute(c0)", input);
+}
+
+// Mixed zones plus a null row: the null must stay null through the per-row path.
+TEST_F(TimezoneFunctionTest, timezoneHourMixedZonesWithNull) {
+  auto input = makeRowVector({makeNullableFlatVector<int64_t>(
+      {pack(1'609'466'400'000, tz::getTimeZoneID("America/Los_Angeles")),
+       pack(1'609'466'400'000, tz::getTimeZoneID("Asia/Kolkata")),
+       std::nullopt},
+      TIMESTAMP_WITH_TIME_ZONE())});
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
+// Mixed zones at a DST-varying instant: the per-row offset must be computed for
+// each row's own instant, not a uniform one. 2021-07-01T02:00:00Z puts
+// America/Los_Angeles in PDT (-07:00, not the -08:00 PST the January cases use)
+// while Asia/Kolkata is fixed at +05:30. The existing single-zone timezone_hour
+// test uses a January (PST) instant, so this is the only DST-active per-row
+// case.
+TEST_F(TimezoneFunctionTest, timezoneHourMixedZonesDst) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'625'104'800'000,
+      "America/Los_Angeles",
+      1'625'104'800'000,
+      "Asia/Kolkata");
+  assertMatchesCpu("timezone_hour(c0)", input);
+}
+
 TEST_F(TimezoneFunctionTest, toIso8601FromTimestampWithTimeZone) {
   // to_iso8601(timestamp with time zone) -> varchar.
   auto input =
@@ -248,6 +308,17 @@ TEST_F(TimezoneFunctionTest, toIso8601FromTimestampWithTimeZone) {
 // to_iso8601 test uses a non-zero offset, so it does not exercise this.)
 TEST_F(TimezoneFunctionTest, toIso8601RendersZForZeroOffset) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "UTC");
+  assertMatchesCpu("to_iso8601(c0)", input);
+}
+
+// to_iso8601 over mixed zones: each row renders its own offset (LA -08:00 vs
+// Kolkata +05:30 on the same UTC instant). Red until the per-row offset lands.
+TEST_F(TimezoneFunctionTest, toIso8601MixedZones) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'609'466'400'000,
+      "America/Los_Angeles",
+      1'609'466'400'000,
+      "Asia/Kolkata");
   assertMatchesCpu("to_iso8601(c0)", input);
 }
 
@@ -271,6 +342,19 @@ TEST_F(TimezoneFunctionTest, formatDatetimeOfTimestampWithTimeZone) {
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ')", input);
 }
 
+// format_datetime over mixed zones: the local wall clock and the numeric offset
+// token ('ZZ' -> "+HH:MM") are both per-row. This exercises localAndOffset
+// through the per-row offset path (LA -08:00 vs Kolkata +05:30 on the same UTC
+// instant give different local times and different rendered offsets).
+TEST_F(TimezoneFunctionTest, formatDatetimeMixedZones) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'609'466'400'000,
+      "America/Los_Angeles",
+      1'609'466'400'000,
+      "Asia/Kolkata");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ')", input);
+}
+
 // Reproducers for the Joda zone-token divergences. CPU (DateTimeFormatter)
 // distinguishes the run length and letter; the GPU collapses Z/z into one flag
 // and always emits '+HH:MM'. Only the (correct) ZZ case is covered above. Each
@@ -287,6 +371,20 @@ TEST_F(TimezoneFunctionTest, formatDatetimeSingleZNoColon) {
 // the numeric offset.
 TEST_F(TimezoneFunctionTest, formatDatetimeZoneIdToken) {
   auto input = timestampWithTimeZoneInput(1'609'466'400'000, "Asia/Kolkata");
+  assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZZ')", input);
+}
+
+// format_datetime zone-id token ('ZZZ' -> zone name) over mixed zones: each row
+// renders its own zone name (America/Los_Angeles vs Asia/Kolkata) via
+// perRowZoneName. formatDatetimeZoneIdToken above covers only a single zone;
+// this pins the per-row name path the owner scoped into this PR. Red until
+// perRowZoneName replaces the uniformZoneKey single-name render.
+TEST_F(TimezoneFunctionTest, formatDatetimeZoneIdMixedZones) {
+  auto input = twoZoneTimestampWithTimeZoneInput(
+      1'609'466'400'000,
+      "America/Los_Angeles",
+      1'609'466'400'000,
+      "Asia/Kolkata");
   assertMatchesCpu("format_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZZ')", input);
 }
 
