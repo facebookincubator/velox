@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
+#include "velox/common/base/Nulls.h"
+
 namespace facebook::velox::parquet {
 
 class BooleanDecoder {

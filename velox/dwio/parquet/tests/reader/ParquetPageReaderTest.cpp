@@ -439,10 +439,10 @@ TEST_F(ParquetPageReaderTest, corruptUncompressedSizeNoneV1) {
   constexpr int32_t kCompressedSize = 20;
   auto pageHeader =
       createDataPageV1Header(kUncompressedSize, kCompressedSize, 100);
-  std::string headerBytes = serializePageHeader(pageHeader);
+  const std::string headerBytes = serializePageHeader(pageHeader);
 
   // Only compressed_page_size bytes of page data are present.
-  std::string pageData(kCompressedSize, '\0');
+  const std::string pageData(kCompressedSize, '\0');
 
   // Combine header and page data.
   std::string fullData = headerBytes + pageData;

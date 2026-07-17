@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
+#include "velox/common/base/Nulls.h"
+#include "velox/common/base/SimdUtil.h"
+
 namespace facebook::velox::parquet {
 
 class StringDecoder {
