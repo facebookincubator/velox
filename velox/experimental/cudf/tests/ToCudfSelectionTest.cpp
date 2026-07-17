@@ -216,9 +216,7 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
-TEST_F(
-    ToCudfSelectionTest,
-    prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
+TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
