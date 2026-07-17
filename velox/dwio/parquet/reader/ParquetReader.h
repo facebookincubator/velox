@@ -50,6 +50,11 @@ class ParquetReaderOptions : public dwio::common::FormatSpecificOptions {
   bool allowInt32Narrowing{
       ParquetConfig::kAllowInt32NarrowingSessionProperty::defaultValue};
 
+  /// Enables dictionary-based row group skipping during filtering.
+  bool dictionaryRowGroupSkippingEnabled{
+      ParquetConfig::kDictionaryRowGroupSkippingEnabledSessionProperty::
+          defaultValue};
+
   /// Serialized footer size threshold above which heap tracking is enabled.
   uint64_t footerMemoryTrackingThreshold{
       ParquetConfig::kDefaultFooterMemoryTrackingThreshold};

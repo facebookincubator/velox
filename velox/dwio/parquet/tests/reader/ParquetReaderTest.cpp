@@ -72,6 +72,8 @@ TEST_F(ParquetReaderTest, createFormatOptions) {
       {std::string(ParquetConfig::kFooterSpeculativeIoSizeSession), "2"},
       {std::string(ParquetConfig::kAllowInt32NarrowingSession), "true"},
       {std::string(ParquetConfig::kFooterMemoryTrackingThresholdSession), "1"},
+      {std::string(ParquetConfig::kDictionaryRowGroupSkippingEnabledSession),
+       "true"},
   });
 
   ParquetReaderFactory factory;
@@ -81,6 +83,7 @@ TEST_F(ParquetReaderTest, createFormatOptions) {
   EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 2);
   EXPECT_TRUE(parquetOptions->allowInt32Narrowing);
   EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 1);
+  EXPECT_TRUE(parquetOptions->dictionaryRowGroupSkippingEnabled);
 }
 
 TEST_F(ParquetReaderTest, parseSample) {
@@ -2139,4 +2142,124 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
   }
 
   EXPECT_EQ(leafPool_->usedBytes(), initialUsage);
+}
+
+TEST_F(ParquetReaderTest, dictionaryEncodedComplexFilter) {
+  // Test using pre-created dictionary_rowgroup_skipping.parquet.
+  // The file has 3 row groups (1000 rows each, 3000 total) with
+  // dictionary-encoded region and product columns:
+  //   RG0: region dict={us-east, us-west},    [min=us-east,    max=us-west]
+  //   RG1: region dict={eu-central, us-west}, [min=eu-central, max=us-west]
+  //   RG2: region dict={eu-central, us-east}, [min=eu-central, max=us-east]
+  // All row groups have all 4 products (productA..D).
+  //
+  // Note: for region="us-east" all 3 row groups' [min,max] cover "us-east", so
+  // column-statistics filtering alone cannot skip any row group. Only the
+  // dictionary filter can prove RG1 has no "us-east" value, so a non-zero
+  // skippedStrides on Test 1 is direct evidence the dictionary skip is active.
+  const std::string fileName = "dictionary_rowgroup_skipping.parquet";
+  auto rowType =
+      ROW({"id", "region", "product", "amount"},
+          {BIGINT(), VARCHAR(), VARCHAR(), DOUBLE()});
+
+  // Builds reader options with dictionary-based row group skipping enabled.
+  auto makeSkippingOptions = [&] {
+    auto options = makeDefaultReaderOptions();
+    auto parquetOptions = std::make_shared<ParquetReaderOptions>();
+    parquetOptions->dictionaryRowGroupSkippingEnabled = true;
+    options.setFormatSpecificOptions(std::move(parquetOptions));
+    return options;
+  };
+
+  auto readAllRows = [&](auto& rowReader) -> uint64_t {
+    VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+    uint64_t totalRows = 0;
+    while (true) {
+      uint64_t rows = rowReader->next(1000, result);
+      if (rows == 0) {
+        break;
+      }
+      totalRows += rows;
+    }
+    return totalRows;
+  };
+
+  auto makeRegionRowReader = [&](const std::unique_ptr<ParquetReader>& reader,
+                                 const std::string& region) {
+    auto scanSpec = makeScanSpec(rowType);
+    scanSpec->getOrCreateChild(common::Subfield("region"))
+        ->setFilter(
+            std::make_unique<common::BytesRange>(
+                region, false, false, region, false, false, false));
+    auto rowReaderOpts = makeRowReaderOpts(rowType);
+    rowReaderOpts.setScanSpec(scanSpec);
+    return reader->createRowReader(rowReaderOpts);
+  };
+
+  // Test 1: Region filter — only the dictionary filter can skip RG1
+  // (column stats keep all three row groups).
+  {
+    auto reader = createReader(fileName, makeSkippingOptions());
+    auto rowReader = makeRegionRowReader(reader, "us-east");
+    EXPECT_EQ(readAllRows(rowReader), 2000);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    // RG1's dict has no "us-east", so it must be skipped. Column stats cannot
+    // skip any of the three row groups.
+    EXPECT_EQ(stats.skippedStrides, 1);
+    EXPECT_EQ(stats.processedStrides, 2);
+  }
+
+  // Test 2: Product filter — every row group's dict contains "productA",
+  // so no skipping should occur.
+  {
+    auto reader = createReader(fileName, makeSkippingOptions());
+    auto scanSpec = makeScanSpec(rowType);
+    scanSpec->getOrCreateChild(common::Subfield("product"))
+        ->setFilter(
+            std::make_unique<common::BytesRange>(
+                "productA", false, false, "productA", false, false, false));
+    auto rowReaderOpts = makeRowReaderOpts(rowType);
+    rowReaderOpts.setScanSpec(scanSpec);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+
+    EXPECT_EQ(readAllRows(rowReader), 3000);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_EQ(stats.skippedStrides, 0);
+    EXPECT_EQ(stats.processedStrides, 3);
+  }
+
+  // Test 3: Filter that matches no region — every row group should be
+  // skipped (RG0 by column stats, RG1 and RG2 by dictionary filter).
+  {
+    auto reader = createReader(fileName, makeSkippingOptions());
+    auto rowReader = makeRegionRowReader(reader, "nonexistent-region");
+    EXPECT_EQ(readAllRows(rowReader), 0);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_EQ(stats.skippedStrides, 3);
+    EXPECT_EQ(stats.processedStrides, 0);
+  }
+
+  // Test 4: Same region filter as Test 1, but with dictionary row group
+  // skipping disabled (the default). Column stats keep all three row groups and
+  // the dictionary filter is not consulted, so nothing is skipped even though
+  // RG1 has no "us-east" value. All three row groups are therefore scanned.
+  // next() returns the number of rows scanned (including rows filtered out), so
+  // readAllRows returns 3000 here, versus 2000 in Test 1 where RG1 is skipped —
+  // direct evidence the feature is inactive.
+  {
+    auto reader = createReader(fileName);
+    auto rowReader = makeRegionRowReader(reader, "us-east");
+    EXPECT_EQ(readAllRows(rowReader), 3000);
+
+    RuntimeStatistics stats;
+    rowReader->updateRuntimeStats(stats);
+    EXPECT_EQ(stats.skippedStrides, 0);
+    EXPECT_EQ(stats.processedStrides, 3);
+  }
 }

@@ -71,6 +71,13 @@ class ColumnChunkMetaDataPtr {
   /// Returns the list of encodings used for all pages in this column chunk.
   std::vector<thrift::Encoding> encodings() const;
 
+  /// Check the presence of per-page encoding statistics in the metadata.
+  bool hasEncodingStats() const;
+
+  /// Returns the per-page encoding statistics. Only valid when
+  /// hasEncodingStats() is true.
+  std::vector<thrift::PageEncodingStats> encodingStats() const;
+
   /// Returns the column's physical path in the file schema as ordered segments,
   /// e.g. {"tags", "list", "element"} or {"lookup", "key_value", "key"}. Unlike
   /// the logical row type, this includes the synthetic repeated-group levels
