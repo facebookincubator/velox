@@ -37,10 +37,6 @@ bool isRetryableGcsStatus(google::cloud::StatusCode code) {
 
 } // namespace
 
-std::string getErrorStringFromGcsError(const google::cloud::StatusCode& code) {
-  return google::cloud::StatusCodeToString(code);
-}
-
 void checkGcsStatus(
     const google::cloud::Status outcome,
     const std::string_view& errorMsgPrefix,
@@ -51,7 +47,7 @@ void checkGcsStatus(
         "{} due to: Path:'{}', GCS Status Code:{}, Error Domain:'{}', Error Reason:'{}', Message:'{}'",
         errorMsgPrefix,
         gcsURI(bucket, key),
-        getErrorStringFromGcsError(outcome.code()),
+        google::cloud::StatusCodeToString(outcome.code()),
         outcome.error_info().domain(),
         outcome.error_info().reason(),
         outcome.message());
