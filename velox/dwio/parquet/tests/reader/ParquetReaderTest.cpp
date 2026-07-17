@@ -2070,9 +2070,7 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
       ParquetRuntimeStats::kFooterEstimatedBytes);
   ASSERT_TRUE(metrics.count(metricName));
   EXPECT_GT(metrics[metricName].sum, 0);
-  EXPECT_EQ(
-      metrics[metricName].unit,
-      RuntimeCounter::Unit::kBytes);
+  EXPECT_EQ(metrics[metricName].unit, RuntimeCounter::Unit::kBytes);
 }
 
 // Verifies that without tracking the runtime stat stays at zero and
