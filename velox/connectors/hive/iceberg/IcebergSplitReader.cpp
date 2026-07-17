@@ -139,10 +139,18 @@ IcebergSplitReader::IcebergSplitReader(
 void IcebergSplitReader::configureBaseReaderOptions() {
   FileSplitReader::configureBaseReaderOptions();
   const auto fileFormat = fileSplit_->fileFormat;
+  if (fileFormat == dwio::common::FileFormat::PARQUET) {
+    auto fieldIds = buildFieldIds();
+    if (!fieldIds.empty()) {
+      baseReaderOpts_.setColumnMappingMode(
+          dwio::common::ColumnMappingMode::kParquetFieldId);
+      baseReaderOpts_.setParquetFieldIds(std::move(fieldIds));
+    }
+    return;
+  }
+
   if (fileFormat != dwio::common::FileFormat::DWRF &&
       fileFormat != dwio::common::FileFormat::ORC) {
-    // Parquet resolves field ids from physical metadata, not from the
-    // attribute-based kFieldId path.
     return;
   }
   auto fieldIds = buildFieldIds();
