@@ -41,6 +41,8 @@
 
 #include <cuda.h>
 
+#include <experimental/cudf/expression/PrestoFunctions.h>
+
 #include <iostream>
 
 static const std::string kCudfAdapterName = "cuDF";
@@ -310,6 +312,7 @@ void registerCudf() {
 
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
+  registerPrestoFunctions(prefix);
   registerPrestoAggregateFunctions(prefix);
 
   CUDF_FUNC_RANGE();
