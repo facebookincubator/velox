@@ -33,7 +33,7 @@ class JitExpression : public CudfExpression {
   JitExpression(
       std::shared_ptr<velox::exec::Expr> expr,
       const RowTypePtr& inputRowSchema,
-      const CudfExpressionContext& context);
+      const CudfDateTimeContext& context);
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(

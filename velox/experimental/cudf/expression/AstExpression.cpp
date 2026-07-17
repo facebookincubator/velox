@@ -36,7 +36,7 @@ cudf::ast::expression const& createAstTree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precomputeInstructions,
-    const CudfExpressionContext& context) {
+    const CudfDateTimeContext& context) {
   AstContext astContext{
       tree, scalars, {inputRowSchema}, {precomputeInstructions}, expr, context};
   return astContext.pushExprToTree(expr);
@@ -50,7 +50,7 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    const CudfExpressionContext& context) {
+    const CudfDateTimeContext& context) {
   AstContext astContext{
       tree,
       scalars,
@@ -64,7 +64,7 @@ cudf::ast::expression const& createAstTree(
 ASTExpression::ASTExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema,
-    const CudfExpressionContext& context)
+    const CudfDateTimeContext& context)
     : expr_(expr), inputRowSchema_(inputRowSchema) {
   createAstTree(
       expr,
@@ -145,7 +145,7 @@ void registerAstEvaluator(int priority) {
       },
       [](std::shared_ptr<velox::exec::Expr> expr,
          const RowTypePtr& row,
-         const CudfExpressionContext& context) {
+         const CudfDateTimeContext& context) {
         return std::make_shared<ASTExpression>(std::move(expr), row, context);
       },
       /*overwrite=*/false);
