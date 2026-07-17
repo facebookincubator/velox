@@ -418,7 +418,7 @@ struct AstContext {
   // Query-scoped context threaded into timezone-sensitive functions built on
   // the precompute path (e.g. date_format or a VARCHAR->TIMESTAMP cast inside a
   // join condition).
-  CudfExpressionContext context;
+  CudfDateTimeContext context;
   bool allowPureAstOnly;
 
   cudf::ast::expression const& pushExprToTree(

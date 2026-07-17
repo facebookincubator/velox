@@ -232,7 +232,7 @@ static void ensureBuiltinExpressionEvaluatorsRegistered() {
       },
       [](std::shared_ptr<velox::exec::Expr> expr,
          const RowTypePtr& row,
-         const CudfExpressionContext& context) {
+         const CudfDateTimeContext& context) {
         return FunctionExpression::create(std::move(expr), row, context);
       },
       /*overwrite=*/false);
@@ -264,8 +264,8 @@ getCudfFunctionRegistry() {
   return registry;
 }
 
-CudfExpressionContext contextFromConfig(const core::QueryConfig& config) {
-  return CudfExpressionContext{
+CudfDateTimeContext contextFromConfig(const core::QueryConfig& config) {
+  return CudfDateTimeContext{
       config.sessionTimezone(),
       config.adjustTimestampToTimezone(),
       config.sessionStartTimeMs(),
@@ -1320,7 +1320,7 @@ bool isSubDayTimestamp(cudf::data_type type) {
 // Returns nullptr when no conversion applies; callers then use the input view.
 std::unique_ptr<cudf::column> maybeConvertToSessionLocal(
     const cudf::column_view& input,
-    const CudfExpressionContext& context,
+    const CudfDateTimeContext& context,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   if (!context.appliesSessionTimezone() || !isSubDayTimestamp(input.type())) {
@@ -2142,7 +2142,7 @@ void registerCudfFunctions(
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr,
-    const CudfExpressionContext& context) {
+    const CudfDateTimeContext& context) {
   auto& registry = getCudfFunctionRegistry();
   auto it = registry.find(name);
   if (it == registry.end()) {
@@ -2770,7 +2770,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const std::shared_ptr<velox::exec::Expr>& expr,
     const RowTypePtr& inputRowSchema,
-    const CudfExpressionContext& context) {
+    const CudfDateTimeContext& context) {
   using velox::exec::FieldReference;
 
   auto node = std::make_shared<FunctionExpression>();
@@ -2982,7 +2982,7 @@ bool canBeEvaluatedByCudf(std::shared_ptr<velox::exec::Expr> expr, bool deep) {
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema,
-    const CudfExpressionContext& context) {
+    const CudfDateTimeContext& context) {
   ensureBuiltinExpressionEvaluatorsRegistered();
   const auto& registry = getCudfExpressionEvaluatorRegistry();
 

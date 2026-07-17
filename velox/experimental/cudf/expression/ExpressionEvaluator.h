@@ -71,7 +71,7 @@ inline std::vector<cudf::column_view> tableViewToColumnViews(
 /// attached to every CudfFunction so timezone-aware functions can match the CPU
 /// path. Defaults represent "no session timezone" (UTC/GMT), matching the CPU
 /// behavior when adjust_timestamp_to_session_timezone is off.
-struct CudfExpressionContext {
+struct CudfDateTimeContext {
   /// Session timezone name (QueryConfig::sessionTimezone), e.g.
   /// "America/Los_Angeles". Empty means none.
   std::string sessionTimezone;
@@ -89,12 +89,12 @@ struct CudfExpressionContext {
   }
 };
 
-/// Builds a CudfExpressionContext from the query config, copying the session
+/// Builds a CudfDateTimeContext from the query config, copying the session
 /// timezone, the adjust-to-session-timezone flag, and the session start time.
 /// Operators that construct cuDF expressions build the context here so the
 /// derivation lives in one place and timezone-aware functions match the CPU
 /// path.
-CudfExpressionContext contextFromConfig(const core::QueryConfig& config);
+CudfDateTimeContext contextFromConfig(const core::QueryConfig& config);
 
 class CudfFunction {
  public:
@@ -107,14 +107,14 @@ class CudfFunction {
 
   /// Attaches the query-scoped evaluation context. Called once after the
   /// function is created. Functions that do not need it simply ignore context_.
-  void setContext(const CudfExpressionContext& context) {
+  void setContext(const CudfDateTimeContext& context) {
     context_ = context;
   }
 
  protected:
   // Query-scoped evaluation context (session timezone and start time), attached
   // via setContext. Timezone-aware functions read it; others ignore it.
-  CudfExpressionContext context_;
+  CudfDateTimeContext context_;
 };
 
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
@@ -156,7 +156,7 @@ void registerCudfFunctions(
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr,
-    const CudfExpressionContext& context = {});
+    const CudfDateTimeContext& context = {});
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
@@ -182,7 +182,7 @@ using CudfExpressionEvaluatorCreate =
     std::function<std::shared_ptr<CudfExpression>(
         std::shared_ptr<velox::exec::Expr> expr,
         const RowTypePtr& inputRowSchema,
-        const CudfExpressionContext& context)>;
+        const CudfDateTimeContext& context)>;
 
 // Register a CudfExpression evaluator.
 // - name: unique identifier (e.g., "ast", "function", "my_custom").
@@ -202,7 +202,7 @@ class FunctionExpression : public CudfExpression {
   static std::shared_ptr<FunctionExpression> create(
       const std::shared_ptr<velox::exec::Expr>& expr,
       const RowTypePtr& inputRowSchema,
-      const CudfExpressionContext& context = {});
+      const CudfDateTimeContext& context = {});
 
   // TODO (dm): A storage for keeping results in case this is a multiply
   // referenced subexpression (to do CSE)
@@ -238,7 +238,7 @@ class FunctionExpression : public CudfExpression {
 std::shared_ptr<CudfExpression> createCudfExpression(
     std::shared_ptr<velox::exec::Expr> expr,
     const RowTypePtr& inputRowSchema,
-    const CudfExpressionContext& context = {});
+    const CudfDateTimeContext& context = {});
 
 /// Lightweight check if an expression tree is supported by any CUDF evaluator
 /// without initializing CudfExpression objects.

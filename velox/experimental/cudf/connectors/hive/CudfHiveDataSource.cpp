@@ -116,7 +116,7 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The connector exposes the session timezone directly rather than through a
     // QueryConfig. sessionStartTimeMs is unused for filter pushdown (no now() /
     // current_timestamp here), so it is left at 0.
-    const velox::cudf_velox::CudfExpressionContext context{
+    const velox::cudf_velox::CudfDateTimeContext context{
         connectorQueryCtx_->sessionTimezone(),
         connectorQueryCtx_->adjustTimestampToTimezone(),
         0,
