@@ -32,9 +32,11 @@
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
@@ -399,17 +401,40 @@ class SplitFunction : public CudfFunction {
 
 class CastFunction : public CudfFunction {
  public:
+  // Selects how eval interprets the cast. Only two modes exist on this branch:
+  // the default fixed-width cudf::cast, and the TIMESTAMP -> TIMESTAMP WITH TIME
+  // ZONE pack. The commit this was ported from (perfleap/velox 536467860) also
+  // carried kStringToTimestamp/kDateToString/kIntToString, which belong to
+  // velox#17942 and are deliberately NOT brought over: this base does not
+  // implement those conversions, and declaring them evaluable would make the AST
+  // builder precompute a cast eval() cannot perform.
+  enum class CastMode {
+    kFixedWidth,
+    kTimestampToTimestampWithTimeZone,
+  };
+
   CastFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
     targetCudfType_ = cudf_velox::veloxToCudfDataType(expr->type());
-    auto sourceType =
-        cudf_velox::veloxToCudfDataType(expr->inputs()[0]->type());
-    VELOX_CHECK(
-        cudf::is_supported_cast(sourceType, targetCudfType_),
-        "Cast from {} to {} is not supported",
-        expr->inputs()[0]->type()->toString(),
-        expr->type()->toString());
+    const auto& srcVeloxType = expr->inputs()[0]->type();
+    const auto& dstVeloxType = expr->type();
+
+    if (srcVeloxType->kind() == TypeKind::TIMESTAMP &&
+        isTimestampWithTimeZoneType(dstVeloxType)) {
+      // eval packs UTC millis with the session zone key; the session timezone
+      // and adjust flag live in context_, which is set after construction, so
+      // resolve them there rather than here.
+      castMode_ = CastMode::kTimestampToTimestampWithTimeZone;
+    } else {
+      castMode_ = CastMode::kFixedWidth;
+      auto sourceType = cudf_velox::veloxToCudfDataType(srcVeloxType);
+      VELOX_CHECK(
+          cudf::is_supported_cast(sourceType, targetCudfType_),
+          "Cast from {} to {} is not supported",
+          srcVeloxType->toString(),
+          dstVeloxType->toString());
+    }
   }
 
   ColumnOrView eval(
@@ -417,11 +442,70 @@ class CastFunction : public CudfFunction {
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::cast(inputCol, targetCudfType_, stream, mr);
+    switch (castMode_) {
+      case CastMode::kTimestampToTimestampWithTimeZone: {
+        // Mirror CPU castFromTimestamp. The session zone is the configured
+        // session timezone, or GMT (key 0) when unset. With
+        // adjust_timestamp_to_session_timezone off (the default), the TIMESTAMP
+        // is wall time in that zone, so shift it to UTC before reading millis
+        // (toGMT); with the flag on, the TIMESTAMP is already the UTC instant.
+        const bool gmtZone = context_.sessionTimezone.empty();
+        const int16_t zoneId =
+            gmtZone ? 0 : tz::getTimeZoneID(context_.sessionTimezone);
+        // toGMT(GMT) is a no-op, so only shift for a real (non-GMT) zone.
+        std::unique_ptr<cudf::column> shifted;
+        cudf::column_view utcTs = inputCol;
+        if (!context_.adjustTimestampToTimezone && !gmtZone) {
+          shifted =
+              toUtcTimestamp(inputCol, context_.sessionTimezone, stream, mr);
+          utcTs = shifted->view();
+        }
+        // Reduce to UTC milliseconds independent of the configured timestamp
+        // resolution, then reinterpret the millis timestamp as its int64
+        // payload without copying.
+        auto millisTs = cudf::cast(
+            utcTs,
+            cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+            stream,
+            mr);
+        auto millisView = millisTs->view();
+        cudf::column_view millisInt{
+            cudf::data_type{cudf::type_id::INT64},
+            millisView.size(),
+            millisView.head<int64_t>(),
+            millisView.null_mask(),
+            millisView.null_count(),
+            millisView.offset()};
+        // pack(millis, zone) = (millis << kMillisShift) | (zone &
+        // kTimezoneMask).
+        cudf::numeric_scalar<int64_t> shiftScalar(
+            kMillisShift, true, stream, mr);
+        auto packedMillis = cudf::binary_operation(
+            millisInt,
+            shiftScalar,
+            cudf::binary_operator::SHIFT_LEFT,
+            cudf::data_type{cudf::type_id::INT64},
+            stream,
+            mr);
+        cudf::numeric_scalar<int64_t> zoneScalar(
+            zoneId & kTimezoneMask, true, stream, mr);
+        return cudf::binary_operation(
+            packedMillis->view(),
+            zoneScalar,
+            cudf::binary_operator::BITWISE_OR,
+            cudf::data_type{cudf::type_id::INT64},
+            stream,
+            mr);
+      }
+      case CastMode::kFixedWidth:
+      default:
+        return cudf::cast(inputCol, targetCudfType_, stream, mr);
+    }
   }
 
  private:
   cudf::data_type targetCudfType_;
+  CastMode castMode_{CastMode::kFixedWidth};
 };
 
 class CardinalityFunction : public CudfFunction {
@@ -3018,6 +3102,15 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     const auto& dstType = expr->type();
     if (srcType == nullptr || dstType == nullptr) {
       return false;
+    }
+    // TIMESTAMP -> TIMESTAMP WITH TIME ZONE is handled by CastFunction, which
+    // shifts the wall-clock instant to UTC per the session timezone and packs
+    // the millis with the zone key into the BIGINT-backed physical value.
+    // cudf::cast cannot express it, so report it evaluable here to let the AST
+    // builder precompute the cast instead of failing on it.
+    if (srcType->kind() == TypeKind::TIMESTAMP &&
+        isTimestampWithTimeZoneType(dstType)) {
+      return true;
     }
     auto src = cudf_velox::veloxToCudfDataType(srcType);
     auto dst = cudf_velox::veloxToCudfDataType(dstType);

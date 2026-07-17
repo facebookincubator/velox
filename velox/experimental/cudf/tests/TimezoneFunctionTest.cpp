@@ -169,6 +169,47 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
+
+  // Sets the session start time (consumed by now()/current_timestamp) and the
+  // session timezone, with adjust-to-session-timezone on, for subsequent
+  // evaluate() calls. testingOverrideConfigUnsafe replaces the whole config, so
+  // all three keys are set together.
+  void setSessionStartTimeAndTimeZone(
+      int64_t startTimeMs,
+      const std::string& zone) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionStartTime, std::to_string(startTimeMs)},
+        {core::QueryConfig::kSessionTimezone, zone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
+
+  // Evaluates a TIMESTAMP WITH TIME ZONE-producing expression on GPU and CPU
+  // and asserts the packed results are bit-identical. assertEqualVectors
+  // compares TIMESTAMP WITH TIME ZONE by unpacked instant only
+  // (TimestampWithTimeZoneType::compare), so it would accept a wrong zone key;
+  // comparing the raw int64 checks both the instant and the zone key.
+  void assertPackedTimestampWithTimeZoneMatchesCpu(
+      const std::string& expr,
+      const RowVectorPtr& input) {
+    auto exprSet = compileExpression(expr, asRowType(input->type()));
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    ASSERT_TRUE(isTimestampWithTimeZoneType(actual->type()))
+        << "expected TIMESTAMP WITH TIME ZONE, got "
+        << actual->type()->toString();
+    ASSERT_EQ(actual->size(), expected->size());
+    auto* expectedInts = expected->as<SimpleVector<int64_t>>();
+    auto* actualInts = actual->as<SimpleVector<int64_t>>();
+    for (auto row = 0; row < expected->size(); ++row) {
+      ASSERT_EQ(expectedInts->isNullAt(row), actualInts->isNullAt(row));
+      if (!expectedInts->isNullAt(row)) {
+        EXPECT_EQ(expectedInts->valueAt(row), actualInts->valueAt(row))
+            << "row " << row;
+      }
+    }
+  }
 };
 
 // A TIMESTAMP WITH TIME ZONE column projected unchanged must round-trip through
@@ -1217,6 +1258,88 @@ TEST_F(TimezoneFunctionTest, fromIso8601ZuluIgnoresSessionZone) {
 // fromIso8601Timestamp accepts "1970-01-01T"/"1970-01T"/"1970T".)
 TEST_F(TimezoneFunctionTest, fromIso8601TrailingT) {
   assertMatchesCpu("from_iso8601_timestamp(c0)", varcharInput("2021-01-01T"));
+}
+
+// Guards against the Apptio q51 crash: CAST(<TIMESTAMP column> AS TIMESTAMP
+// WITH TIME ZONE) used inside a pushed-down comparison. The comparison is
+// AST-supported because both operands are the BIGINT-backed TIMESTAMP WITH TIME
+// ZONE, so the GPU takes the pure-AST path and recurses into the cast. The cast
+// is not AST-representable (its input is TIMESTAMP, which the AST/JIT path
+// rejects), so it must instead be precomputed on device; before the fix
+// FunctionExpression::canEvaluate returned false for TIMESTAMP -> TIMESTAMP
+// WITH TIME ZONE and the AST builder aborted with "Unsupported expression:
+// cast" (AstExpressionUtils.h). The cast is now GPU-evaluable, so the
+// comparison runs entirely on device with no CPU fallback. With no session
+// timezone the cast packs the UTC millis with the GMT zone key (0), matching
+// CPU's castFromTimestamp.
+TEST_F(TimezoneFunctionTest, castTimestampToTimestampWithTimeZone) {
+  auto input = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(1000, 0), Timestamp(3000, 0)}, TIMESTAMP()),
+       makeFlatVector<int64_t>(
+           {pack(2'000'000, 0), pack(2'000'000, 0)},
+           TIMESTAMP_WITH_TIME_ZONE())});
+  // The cast instants (1'000'000 and 3'000'000 ms) straddle the 2'000'000 ms
+  // threshold and carry the threshold's zone key, so the GPU's raw int64
+  // comparison agrees with CPU's instant-only TIMESTAMP WITH TIME ZONE compare.
+  assertMatchesCpu("cast(c0 as timestamp with time zone) >= c1", input);
+}
+
+// Verifies that with adjust_timestamp_to_session_timezone off, CAST(TIMESTAMP
+// AS TIMESTAMP WITH TIME ZONE) reads the TIMESTAMP as wall time in the session
+// zone and shifts it to UTC (Timestamp::toGMT), then packs with the session
+// zone key. America/Los_Angeles is a fixed -08:00 in January (no DST), so the
+// conversion is exact and independent of the DST machinery. The GPU cast
+// applies the same session-zone shift; the raw-int64 check also guards the
+// packed zone key, which the CPU vs GPU compare would otherwise ignore.
+TEST_F(
+    TimezoneFunctionTest,
+    castTimestampToTimestampWithTimeZoneAppliesSessionZone) {
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+  // 2021-01-01 12:00:00 as wall time in Los_Angeles -> 20:00:00 UTC on CPU.
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'609'502'400, 0)}, TIMESTAMP())});
+  assertPackedTimestampWithTimeZoneMatchesCpu(
+      "cast(c0 as timestamp with time zone)", input);
+}
+
+// Verifies that with adjust_timestamp_to_session_timezone on, CAST treats the
+// TIMESTAMP as already being the UTC instant, so it packs the millis unchanged
+// with the session zone key -- no shift. The GPU cast honors the adjust flag by
+// skipping the shift while still stamping the session zone key.
+TEST_F(TimezoneFunctionTest, castTimestampToTimestampWithTimeZoneAdjustOn) {
+  setSessionTimezone("America/Los_Angeles"); // adjust on.
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'609'502'400, 0)}, TIMESTAMP())});
+  assertPackedTimestampWithTimeZoneMatchesCpu(
+      "cast(c0 as timestamp with time zone)", input);
+}
+
+// now()/current_timestamp -> timestamp with time zone. now() is
+// non-deterministic -- a live CPU now() and a separate GPU now() observe
+// different instants -- so this cannot assert CPU == GPU against a live clock.
+// Instead it pins the deterministic contract CPU's CurrentTimestampFunction
+// implements: pack(sessionStartTimeMs, sessionZone). The GPU must emit a
+// TIMESTAMP WITH TIME ZONE whose UTC millis are the session start time and
+// whose zone key is the session zone. A dummy column sizes the batch.
+TEST_F(TimezoneFunctionTest, nowUsesSessionStartTimeAndTimezone) {
+  constexpr int64_t kStartMs = 1'609'466'400'000; // 2021-01-01T02:00:00 UTC.
+  setSessionStartTimeAndTimeZone(kStartMs, "America/Los_Angeles");
+  auto input = doubleInput(0.0);
+  auto exprSet = compileExpression("now()", asRowType(input->type()));
+  auto result = evaluate(*exprSet, input);
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), input->size());
+  ASSERT_TRUE(isTimestampWithTimeZoneType(result->type()))
+      << "now() must produce TIMESTAMP WITH TIME ZONE, got "
+      << result->type()->toString();
+  const auto packed = result->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(packed), kStartMs);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("America/Los_Angeles"));
 }
 
 // Year-only and year-month: CPU -> start-of-period midnight GMT.
