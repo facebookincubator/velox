@@ -261,6 +261,35 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
   }
 }
 
+TEST_F(PlanConsistencyCheckerTest, sharedSubexpressionDag) {
+  auto valuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto sourceNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"x"},
+      std::vector<TypedExprPtr>{Lit(int64_t{1})},
+      valuesNode);
+
+  // Each level squares the one below by referencing it twice, so the expression
+  // is a DAG whose expansion as a tree has 2^depth nodes. The checker must
+  // visit each node once; otherwise validating this is exponential.
+  constexpr int kDepth = 40;
+  TypedExprPtr expr = Col(BIGINT(), "x");
+  for (int i = 0; i < kDepth; ++i) {
+    expr = std::make_shared<CallTypedExpr>(
+        BIGINT(), std::vector<TypedExprPtr>{expr, expr}, "multiply");
+  }
+
+  auto projectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"y"},
+      std::vector<TypedExprPtr>{expr},
+      sourceNode);
+
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(projectNode));
+}
+
 TEST_F(PlanConsistencyCheckerTest, hashJoin) {
   auto leftValuesNode =
       std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
