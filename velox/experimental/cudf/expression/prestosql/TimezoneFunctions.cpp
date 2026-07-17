@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/expression/prestosql/TimezoneFunctions.h"
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
@@ -1356,10 +1357,15 @@ void registerTimezoneFunctions(const std::string& prefix) {
   registerCudfFunction(
       prefix + "from_unixtime",
       [](const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        const auto offsetMinutes = static_cast<int32_t>(
-            constIntArg(expr, 1) * 60 + constIntArg(expr, 2));
+        // Compute hours*60 + minutes in int64 with overflow checks, mirroring
+        // CPU FromUnixtimeFunction; tz::getTimeZoneID then bounds the result to
+        // +/-840 minutes. Guards against a large hours value overflowing the
+        // product and truncating into a bogus in-range offset.
+        const auto offsetMinutes = checkedPlus(
+            checkedMultiply<int64_t>(constIntArg(expr, 1), 60),
+            constIntArg(expr, 2));
         return std::make_shared<FromUnixtimeWithZoneFunction>(
-            tz::getTimeZoneID(offsetMinutes),
+            tz::getTimeZoneID(static_cast<int32_t>(offsetMinutes)),
             FromUnixtimeRounding::kFloorThenFraction);
       },
       {FunctionSignatureBuilder()
