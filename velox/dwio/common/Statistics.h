@@ -531,6 +531,8 @@ struct SplitStats {
   folly::F14FastMap<std::string, RuntimeMetric> splitMetrics;
 
   // Per-column statistics keyed by schema node ID.
+  // TODO(#18171): Use a stable column ID rather than schema node ID
+  //  which is not scan-stable.
   folly::F14FastMap<uint32_t, ColumnStats> columnStats;
 
   /// Returns the statistics for 'nodeId', creating them if necessary.
@@ -590,6 +592,8 @@ struct RuntimeStats {
       formatSpecificStats;
 
   // Per-column statistics aggregated by schema node ID and file format.
+  // TODO(#18171): Use a stable column ID rather than schema node ID
+  //  which is not scan-stable.
   folly::F14FastMap<uint32_t, folly::F14FastMap<FileFormat, ColumnStats>>
       columnStats;
 
