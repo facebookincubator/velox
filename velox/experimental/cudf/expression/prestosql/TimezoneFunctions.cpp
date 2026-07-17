@@ -722,6 +722,121 @@ void checkOffsetMagnitudeInRange(
       hi, 840, "Invalid timezone offset in from_iso8601_timestamp (minutes)");
 }
 
+// Maps captured offset groups (sign character, hours digits, minutes digits) to
+// a signed offset in whole minutes as an INT64 column. A null in the hours or
+// minutes group is treated as absent (contributes 0), and a null sign defaults
+// to '+', so a missing offset (Z or no suffix) yields 0 (GMT). The sign is read
+// from the sign character so "-00:30" stays negative. Rejects magnitudes beyond
+// +/-840 minutes via checkOffsetMagnitudeInRange, matching CPU's
+// tz::getTimeZoneID bound.
+std::unique_ptr<cudf::column> signedOffsetMinutes(
+    const cudf::column_view& signChar,
+    const cudf::column_view& hoursDigits,
+    const cudf::column_view& minutesDigits,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto offsetHours = cudf::replace_nulls(
+      cudf::strings::to_integers(
+          cudf::strings_column_view(hoursDigits), int64Type(), stream, mr)
+          ->view(),
+      int64Scalar(0, stream),
+      stream,
+      mr);
+  auto offsetMins = cudf::replace_nulls(
+      cudf::strings::to_integers(
+          cudf::strings_column_view(minutesDigits), int64Type(), stream, mr)
+          ->view(),
+      int64Scalar(0, stream),
+      stream,
+      mr);
+  auto signStr = cudf::replace_nulls(
+      signChar, cudf::string_scalar("+", true, stream), stream, mr);
+  auto isNegativeSign = cudf::strings::starts_with(
+      cudf::strings_column_view(signStr->view()),
+      cudf::string_scalar("-", true, stream),
+      stream,
+      mr);
+  auto hourMinutes = binaryOp(
+      offsetHours->view(),
+      int64Scalar(60, stream),
+      cudf::binary_operator::MUL,
+      int64Type(),
+      stream,
+      mr);
+  auto magnitude = cudf::binary_operation(
+      hourMinutes->view(),
+      offsetMins->view(),
+      cudf::binary_operator::ADD,
+      int64Type(),
+      stream,
+      mr);
+  // Reject offsets beyond +/-14h before they pack into a zone key that
+  // overflows the 12-bit zone field, matching CPU's tz::getTimeZoneID bound.
+  checkOffsetMagnitudeInRange(magnitude->view(), stream, mr);
+  auto negativeMagnitude = cudf::binary_operation(
+      int64Scalar(0, stream),
+      magnitude->view(),
+      cudf::binary_operator::SUB,
+      int64Type(),
+      stream,
+      mr);
+  return cudf::copy_if_else(
+      negativeMagnitude->view(),
+      magnitude->view(),
+      isNegativeSign->view(),
+      stream,
+      mr);
+}
+
+// Maps a signed offset-minutes INT64 column to packed fixed-offset zone keys,
+// mirroring Velox's TimeZoneMap ordering: 0 -> 0 (GMT); <0 -> offset+841;
+// >0 -> offset+840.
+std::unique_ptr<cudf::column> zoneKeyFromOffsetMinutes(
+    const cudf::column_view& offsetMinutes,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto idPositive = binaryOp(
+      offsetMinutes,
+      int64Scalar(840, stream),
+      cudf::binary_operator::ADD,
+      int64Type(),
+      stream,
+      mr);
+  auto idNegative = binaryOp(
+      offsetMinutes,
+      int64Scalar(841, stream),
+      cudf::binary_operator::ADD,
+      int64Type(),
+      stream,
+      mr);
+  auto isNegativeOffset = binaryOp(
+      offsetMinutes,
+      int64Scalar(0, stream),
+      cudf::binary_operator::LESS,
+      cudf::data_type{kBool8},
+      stream,
+      mr);
+  auto idNonZero = cudf::copy_if_else(
+      idNegative->view(),
+      idPositive->view(),
+      isNegativeOffset->view(),
+      stream,
+      mr);
+  auto isZeroOffset = binaryOp(
+      offsetMinutes,
+      int64Scalar(0, stream),
+      cudf::binary_operator::EQUAL,
+      cudf::data_type{kBool8},
+      stream,
+      mr);
+  return cudf::copy_if_else(
+      int64Scalar(0, stream),
+      idNonZero->view(),
+      isZeroOffset->view(),
+      stream,
+      mr);
+}
+
 // Selects the millisecond rounding for from_unixtime, which differs between the
 // two CPU overloads. from_unixtime(double, varchar) rounds the whole value with
 // llround(x*1000); from_unixtime(double, hours, minutes) floors the seconds and
@@ -924,7 +1039,15 @@ class ParseDatetimeFunction : public CudfFunction {
     strptime_ = jodaToStrftime(constStringArg(expr, 1), trailing);
     if (trailing == TrailingZone::kOffsetNoColon ||
         trailing == TrailingZone::kOffsetColon) {
+      // to_timestamps folds the %z offset into the UTC instant. The parsed
+      // offset is recovered per-row in eval so the packed zone key reflects it
+      // instead of GMT.
       strptime_ += "%z";
+      hasOffset_ = true;
+      // Trailing signed offset with an optional colon, matching both "-09:00"
+      // and "-0900". Groups: 0 sign, 1 hours, 2 minutes.
+      offsetProgram_ = cudf::strings::regex_program::create(
+          "([+-])([0-9]{2}):?([0-9]{2})$");
     } else if (trailing != TrailingZone::kNone) {
       VELOX_NYI("parse_datetime zone-name token is not supported on GPU");
     }
@@ -951,11 +1074,30 @@ class ParseDatetimeFunction : public CudfFunction {
         stream,
         mr);
     auto millis = bitcastColumn(parsed->view(), kInt64);
-    // pack(millis, GMT) == millis << 12.
-    return binaryOp(
+    auto shifted = binaryOp(
         millis,
         int64Scalar(kMillisShift, stream),
         cudf::binary_operator::SHIFT_LEFT,
+        int64Type(),
+        stream,
+        mr);
+    if (!hasOffset_) {
+      // pack(millis, GMT) == millis << 12.
+      return shifted;
+    }
+    // Recover the per-row offset that to_timestamps folded into the instant and
+    // pack the matching fixed-offset zone key, so timezone_hour/to_iso8601
+    // reflect the parsed offset instead of GMT.
+    auto groups = cudf::strings::extract(
+        cudf::strings_column_view(input), *offsetProgram_, stream, mr);
+    auto g = groups->view();
+    auto offsetMinutes =
+        signedOffsetMinutes(g.column(0), g.column(1), g.column(2), stream, mr);
+    auto zoneId = zoneKeyFromOffsetMinutes(offsetMinutes->view(), stream, mr);
+    return cudf::binary_operation(
+        shifted->view(),
+        zoneId->view(),
+        cudf::binary_operator::BITWISE_OR,
         int64Type(),
         stream,
         mr);
@@ -963,6 +1105,11 @@ class ParseDatetimeFunction : public CudfFunction {
 
  private:
   std::string strptime_;
+  // True when the Joda format carries a numeric offset token (%z appended);
+  // gates the per-row offset recovery in eval.
+  bool hasOffset_{false};
+  // Compiled trailing-offset extraction program, built once when hasOffset_.
+  std::unique_ptr<cudf::strings::regex_program> offsetProgram_;
 };
 
 // from_iso8601_timestamp(varchar) -> timestamp with time zone.
@@ -1077,57 +1224,8 @@ class FromIso8601Function : public CudfFunction {
     // Signed offset minutes from the captured sign + HH(:MM); a missing offset
     // (Z or no suffix) yields 0 (GMT). The sign is read from the sign character
     // so "-00:30" stays negative.
-    auto offsetHours = cudf::replace_nulls(
-        cudf::strings::to_integers(
-            cudf::strings_column_view(g.column(9)), int64Type(), stream, mr)
-            ->view(),
-        int64Scalar(0, stream),
-        stream,
-        mr);
-    auto offsetMins = cudf::replace_nulls(
-        cudf::strings::to_integers(
-            cudf::strings_column_view(g.column(10)), int64Type(), stream, mr)
-            ->view(),
-        int64Scalar(0, stream),
-        stream,
-        mr);
-    auto signStr = cudf::replace_nulls(
-        g.column(8), cudf::string_scalar("+", true, stream), stream, mr);
-    auto isNegativeSign = cudf::strings::starts_with(
-        cudf::strings_column_view(signStr->view()),
-        cudf::string_scalar("-", true, stream),
-        stream,
-        mr);
-    auto hourMinutes = binaryOp(
-        offsetHours->view(),
-        int64Scalar(60, stream),
-        cudf::binary_operator::MUL,
-        int64Type(),
-        stream,
-        mr);
-    auto magnitude = cudf::binary_operation(
-        hourMinutes->view(),
-        offsetMins->view(),
-        cudf::binary_operator::ADD,
-        int64Type(),
-        stream,
-        mr);
-    // Reject offsets beyond +/-14h before they pack into a zone key that
-    // overflows the 12-bit zone field, matching CPU's tz::getTimeZoneID bound.
-    checkOffsetMagnitudeInRange(magnitude->view(), stream, mr);
-    auto negativeMagnitude = cudf::binary_operation(
-        int64Scalar(0, stream),
-        magnitude->view(),
-        cudf::binary_operator::SUB,
-        int64Type(),
-        stream,
-        mr);
-    auto offsetMinutes = cudf::copy_if_else(
-        negativeMagnitude->view(),
-        magnitude->view(),
-        isNegativeSign->view(),
-        stream,
-        mr);
+    auto offsetMinutes =
+        signedOffsetMinutes(g.column(8), g.column(9), g.column(10), stream, mr);
 
     // utcMillis = wallMillis - offsetMinutes * 60'000.
     auto offsetMillis = binaryOp(
@@ -1146,46 +1244,7 @@ class FromIso8601Function : public CudfFunction {
         mr);
 
     // zoneId from offset minutes: 0 -> 0; <0 -> off+841; >0 -> off+840.
-    auto idPositive = binaryOp(
-        offsetMinutes->view(),
-        int64Scalar(840, stream),
-        cudf::binary_operator::ADD,
-        int64Type(),
-        stream,
-        mr);
-    auto idNegative = binaryOp(
-        offsetMinutes->view(),
-        int64Scalar(841, stream),
-        cudf::binary_operator::ADD,
-        int64Type(),
-        stream,
-        mr);
-    auto isNegativeOffset = binaryOp(
-        offsetMinutes->view(),
-        int64Scalar(0, stream),
-        cudf::binary_operator::LESS,
-        cudf::data_type{kBool8},
-        stream,
-        mr);
-    auto idNonZero = cudf::copy_if_else(
-        idNegative->view(),
-        idPositive->view(),
-        isNegativeOffset->view(),
-        stream,
-        mr);
-    auto isZeroOffset = binaryOp(
-        offsetMinutes->view(),
-        int64Scalar(0, stream),
-        cudf::binary_operator::EQUAL,
-        cudf::data_type{kBool8},
-        stream,
-        mr);
-    auto zoneId = cudf::copy_if_else(
-        int64Scalar(0, stream),
-        idNonZero->view(),
-        isZeroOffset->view(),
-        stream,
-        mr);
+    auto zoneId = zoneKeyFromOffsetMinutes(offsetMinutes->view(), stream, mr);
 
     // An offset-less input is interpreted in the session timezone, not GMT,
     // when one is set -- matching CPU's FromIso8601Timestamp, which reads the

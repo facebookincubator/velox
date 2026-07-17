@@ -414,6 +414,28 @@ TEST_F(TimezoneFunctionTest, parseDatetime) {
       varcharInput("2021-01-01 02:00:00"));
 }
 
+// When the Joda format carries a colon offset token (ZZ), CPU folds the offset
+// into the UTC instant AND packs the parsed fixed-offset zone key, so
+// timezone_hour reports -9 and to_iso8601 prints -09:00. GPU currently packs
+// GMT (timezone_hour = 0, to_iso8601 = Z). Compare through projections that read
+// the zone key, since assertMatchesCpu on the TSWTZ value alone ignores it.
+TEST_F(TimezoneFunctionTest, parseDatetimePreservesParsedOffset) {
+  auto input = varcharInput("2021-01-01 02:00:00 -09:00");
+  assertMatchesCpu(
+      "timezone_hour(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss ZZ'))", input);
+}
+
+// Same, for the no-colon offset token (Z) matching -0900.
+TEST_F(TimezoneFunctionTest, parseDatetimeNoColonOffset) {
+  auto input = varcharInput("2021-01-01 02:00:00 -0900");
+  assertMatchesCpu(
+      "timezone_hour(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+  assertMatchesCpu(
+      "to_iso8601(parse_datetime(c0, 'yyyy-MM-dd HH:mm:ss Z'))", input);
+}
+
 TEST_F(TimezoneFunctionTest, fromIso8601Timestamp) {
   // from_iso8601_timestamp(varchar) -> timestamp with time zone.
   assertMatchesCpu(
