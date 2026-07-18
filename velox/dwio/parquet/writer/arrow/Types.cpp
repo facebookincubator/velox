@@ -416,14 +416,13 @@ std::shared_ptr<const LogicalType> LogicalType::fromThrift(
     case Type::DATE:
       return DateLogicalType::make();
     case Type::TIME: {
-      auto thrift_unit = type.get_TIME().unit();
-      const auto thriftUnitType = thrift_unit->getType();
+      const auto& thrift_unit = type.get_TIME().unit();
       LogicalType::TimeUnit::Unit unit;
-      if (thriftUnitType == TimeUnitType::MILLIS) {
+      if (thrift_unit->getType() == TimeUnitType::MILLIS) {
         unit = LogicalType::TimeUnit::kMillis;
-      } else if (thriftUnitType == TimeUnitType::MICROS) {
+      } else if (thrift_unit->getType() == TimeUnitType::MICROS) {
         unit = LogicalType::TimeUnit::kMicros;
-      } else if (thriftUnitType == TimeUnitType::NANOS) {
+      } else if (thrift_unit->getType() == TimeUnitType::NANOS) {
         unit = LogicalType::TimeUnit::kNanos;
       } else {
         unit = LogicalType::TimeUnit::kUnknown;
@@ -431,14 +430,13 @@ std::shared_ptr<const LogicalType> LogicalType::fromThrift(
       return TimeLogicalType::make(*type.get_TIME().isAdjustedToUTC(), unit);
     }
     case Type::TIMESTAMP: {
-      auto thrift_unit = type.get_TIMESTAMP().unit();
-      const auto thriftUnitType = thrift_unit->getType();
+      const auto& thrift_unit = type.get_TIMESTAMP().unit();
       LogicalType::TimeUnit::Unit unit;
-      if (thriftUnitType == TimeUnitType::MILLIS) {
+      if (thrift_unit->getType() == TimeUnitType::MILLIS) {
         unit = LogicalType::TimeUnit::kMillis;
-      } else if (thriftUnitType == TimeUnitType::MICROS) {
+      } else if (thrift_unit->getType() == TimeUnitType::MICROS) {
         unit = LogicalType::TimeUnit::kMicros;
-      } else if (thriftUnitType == TimeUnitType::NANOS) {
+      } else if (thrift_unit->getType() == TimeUnitType::NANOS) {
         unit = LogicalType::TimeUnit::kNanos;
       } else {
         unit = LogicalType::TimeUnit::kUnknown;
