@@ -114,7 +114,8 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   static bool compareSerDeOptions(
       const SerDeOptions& l,
       const SerDeOptions& r) {
-    return l.isEscaped == r.isEscaped && l.escapeChar == r.escapeChar &&
+    return l.avroSchema == r.avroSchema && l.isEscaped == r.isEscaped &&
+        l.escapeChar == r.escapeChar &&
         l.lastColumnTakesRest == r.lastColumnTakesRest &&
         l.nullString == r.nullString && l.separators == r.separators;
   }
@@ -312,6 +313,15 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   expectedSerDe.isEscaped = true;
   tableParameters[TableParameter::kSerializationNullFormat] = "";
   expectedSerDe.nullString = "";
+  performConfigure();
+  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
+
+  // Configure only the Avro schema literal.
+  clearDynamicParameters(FileFormat::AVRO);
+  const std::string avroSchema{
+      R"({"type":"record","name":"TestRecord","fields":[]})"};
+  serdeParameters[SerDeOptions::kAvroSchema] = avroSchema;
+  expectedSerDe.avroSchema = avroSchema;
   performConfigure();
   EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
 

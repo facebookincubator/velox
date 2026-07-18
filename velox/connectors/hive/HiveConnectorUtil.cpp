@@ -521,6 +521,9 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   auto escapeCharIt =
       serdeParameters.find(dwio::common::SerDeOptions::kEscapeChar);
 
+  auto avroSchemaIt =
+      serdeParameters.find(dwio::common::SerDeOptions::kAvroSchema);
+
   auto nullStringIt = tableParameters.find(
       dwio::common::TableParameter::kSerializationNullFormat);
 
@@ -528,6 +531,7 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
       collectionIt == serdeParameters.end() &&
       mapKeyIt == serdeParameters.end() &&
       escapeCharIt == serdeParameters.end() &&
+      avroSchemaIt == serdeParameters.end() &&
       nullStringIt == tableParameters.end()) {
     return nullptr;
   }
@@ -570,8 +574,6 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
     serDeOptions->nullString = nullStringIt->second;
   }
 
-  auto avroSchemaIt =
-      serdeParameters.find(dwio::common::SerDeOptions::kAvroSchema);
   if (avroSchemaIt != serdeParameters.end()) {
     serDeOptions->avroSchema = avroSchemaIt->second;
   }

@@ -565,7 +565,15 @@ TypePtr findRequestedChildType(
 
 void rejectUnsupportedScanSpecFeaturesForAvro(
     const common::ScanSpec& spec,
-    const std::string& path) {
+    const std::string& path,
+    bool hasTransformFallback) {
+  hasTransformFallback = hasTransformFallback || spec.hasTransform();
+  VELOX_USER_CHECK(
+      spec.extractionType() == common::ScanSpec::ExtractionType::kNone ||
+          hasTransformFallback,
+      "Avro reader does not support native extraction pushdown without a "
+      "post-read transform at '{}'.",
+      path);
   VELOX_USER_CHECK_NULL(
       spec.deltaUpdate(),
       "Avro reader does not support delta updates at '{}'.",
@@ -585,7 +593,9 @@ void rejectUnsupportedScanSpecFeaturesForAvro(
 
   for (const auto& childSpec : spec.children()) {
     rejectUnsupportedScanSpecFeaturesForAvro(
-        *childSpec, childPath(path, childSpec->fieldName()));
+        *childSpec,
+        childPath(path, childSpec->fieldName()),
+        hasTransformFallback);
   }
 }
 
@@ -1197,6 +1207,30 @@ VectorPtr projectComplexVector(
     const VectorPtr& input,
     const common::ScanSpec& spec);
 
+VectorPtr applyScanSpecTransform(
+    const VectorPtr& input,
+    const common::ScanSpec& spec) {
+  if (!spec.hasTransform()) {
+    return input;
+  }
+
+  VELOX_CHECK_NOT_NULL(
+      spec.transformOutputType(),
+      "Avro ScanSpec transform output type is null for field: {}.",
+      spec.fieldName());
+  auto transformed = spec.transform()(input, input->pool());
+  VELOX_CHECK_NOT_NULL(
+      transformed,
+      "Avro ScanSpec transform returned a null vector for field: {}.",
+      spec.fieldName());
+  VELOX_CHECK_EQ(
+      transformed->size(),
+      input->size(),
+      "Avro ScanSpec transform changed the number of rows for field: {}.",
+      spec.fieldName());
+  return transformed;
+}
+
 struct NestedEntrySelection {
   BufferPtr offsets;
   BufferPtr sizes;
@@ -1271,8 +1305,10 @@ VectorPtr projectRowVector(
     const auto channel = childSpec->channel();
     names[channel] = childSpec->fieldName();
     if (childSpec->isConstant()) {
-      children[channel] = BaseVector::wrapInConstant(
-          input->size(), 0, childSpec->constantValue());
+      children[channel] = applyScanSpecTransform(
+          BaseVector::wrapInConstant(
+              input->size(), 0, childSpec->constantValue()),
+          *childSpec);
       types[channel] = children[channel]->type();
       continue;
     }
@@ -1446,16 +1482,23 @@ VectorPtr projectMapVector(
 VectorPtr projectComplexVector(
     const VectorPtr& input,
     const common::ScanSpec& spec) {
+  VectorPtr projected;
   switch (input->typeKind()) {
     case TypeKind::ROW:
-      return projectRowVector(input, spec);
+      projected = projectRowVector(input, spec);
+      break;
     case TypeKind::ARRAY:
-      return projectArrayVector(input, spec);
+      projected = projectArrayVector(input, spec);
+      break;
     case TypeKind::MAP:
-      return projectMapVector(input, spec);
+      projected = projectMapVector(input, spec);
+      break;
     default:
-      return input;
+      projected = input;
+      break;
   }
+
+  return applyScanSpecTransform(projected, spec);
 }
 
 void applyMutationToRows(
@@ -1527,21 +1570,29 @@ VectorPtr applyRowSelection(const VectorPtr& input, const uint64_t* passed) {
       std::move(children));
 }
 
-// Applies ScanSpec projection, filters, constants, and row-level mutation to
-// the Avro row vector produced by the read schema.
-VectorPtr projectAvroColumns(
+// Applies ScanSpec projection, filters, constants, transforms, and row-level
+// mutation to the Avro row vector produced by the read schema.
+VectorPtr processAvroRows(
     const VectorPtr& input,
-    const common::ScanSpec& spec,
+    const common::ScanSpec* spec,
     const dwio::common::Mutation* mutation) {
+  if (!spec && !dwio::common::hasDeletion(mutation)) {
+    return input;
+  }
+
   auto* inputRow = input->as<RowVector>();
   VELOX_CHECK_NOT_NULL(inputRow);
   std::vector<uint64_t> passed(bits::nwords(input->size()), -1);
   applyMutationToRows(mutation, input->size(), passed.data());
-  if (spec.hasFilter()) {
-    spec.applyFilter(*inputRow, input->size(), passed.data());
+
+  VectorPtr projected = input;
+  if (spec) {
+    if (spec->hasFilter()) {
+      spec->applyFilter(*inputRow, input->size(), passed.data());
+    }
+    projected = projectComplexVector(input, *spec);
   }
 
-  auto projected = projectRowVector(input, spec);
   return applyRowSelection(projected, passed.data());
 }
 } // namespace
@@ -1576,6 +1627,10 @@ std::unique_ptr<::avro::DataFileReader<::avro::GenericDatum>>
 createAvroDataFileReader(const AvroFileContents& contents) {
   auto stream = std::make_unique<ReadFileAvroInputStream>(
       contents.readFileInput, 0, contents.length, contents.pool);
+  // TODO: Generate a projected reader schema from requestedType and ScanSpec.
+  // avro-cpp does not provide a convenient public API for cloning and pruning
+  // schemas while preserving metadata. Passing the projected schema to
+  // avro-cpp’s resolving decoder would avoid materializing unrequested fields.
   return std::make_unique<::avro::DataFileReader<::avro::GenericDatum>>(
       std::move(stream), contents.avroSchema);
 }
@@ -1603,7 +1658,8 @@ std::shared_ptr<const AvroReadSchema> buildReadSchema(
   const auto& requestedType = options.requestedType();
   const auto& scanSpec = options.scanSpec();
   if (scanSpec) {
-    rejectUnsupportedScanSpecFeaturesForAvro(*scanSpec, "root");
+    rejectUnsupportedScanSpecFeaturesForAvro(
+        *scanSpec, "root", /*hasTransformFallback=*/false);
   }
   if (!requestedType && !scanSpec) {
     return std::make_shared<AvroReadSchema>(
@@ -1687,6 +1743,26 @@ std::unique_ptr<dwio::common::RowReader> AvroReader::createRowReader(
   return std::make_unique<AvroRowReader>(contents_, options);
 }
 
+namespace {
+// Avro-cpp does not expose OCF block metadata such as row counts, so scan
+// from the file start to derive the absolute row number.
+// TODO: Use block metadata when avro-cpp exposes it.
+uint64_t countRowsBeforeBlock(
+    const AvroFileContents& contents,
+    int64_t blockStart) {
+  auto reader = createAvroDataFileReader(contents);
+  ::avro::GenericDatum datum(reader->readerSchema());
+  uint64_t numRows{0};
+  while (reader->read(datum)) {
+    if (reader->previousSync() >= blockStart) {
+      break;
+    }
+    ++numRows;
+  }
+  return numRows;
+}
+} // namespace
+
 AvroRowReader::AvroRowReader(
     std::shared_ptr<AvroFileContents> contents,
     const dwio::common::RowReaderOptions& options)
@@ -1706,6 +1782,12 @@ AvroRowReader::AvroRowReader(
       rowSizeSampleBytes_(0) {
   if (options.offset() > 0) {
     reader_->sync(static_cast<int64_t>(options.offset()));
+    if (reader_->pastSync(splitLimit_)) {
+      atEnd_ = true;
+    } else {
+      fileRowNumber_ =
+          countRowsBeforeBlock(*contents_, reader_->previousSync());
+    }
   }
   uint64_t skip = options.skipRows();
   while (skip > 0) {
@@ -1749,7 +1831,10 @@ int64_t AvroRowReader::nextReadSize(const uint64_t size) {
 void AvroRowReader::updateRuntimeStats(
     dwio::common::RuntimeStatistics& /*stats*/) const {}
 
-void AvroRowReader::resetFilterCaches() {}
+void AvroRowReader::resetFilterCaches() {
+  // No-op because Avro applies filters after materialization and does not
+  // cache filter results.
+}
 
 uint64_t AvroRowReader::next(
     const uint64_t size,
@@ -1793,12 +1878,8 @@ uint64_t AvroRowReader::next(
     rowSizeSampleCount_ += numRead;
     rowSizeSampleBytes_ += batchBytes;
   }
-  std::shared_ptr<const common::ScanSpec> scanSpec = options_.scanSpec();
-  if (scanSpec) {
-    result = projectAvroColumns(rowVector, *scanSpec, mutation);
-  } else {
-    result = rowVector;
-  }
+  const auto& scanSpec = options_.scanSpec();
+  result = processAvroRows(rowVector, scanSpec.get(), mutation);
   return numRead;
 }
 

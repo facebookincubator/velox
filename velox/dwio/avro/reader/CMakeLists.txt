@@ -17,5 +17,5 @@ velox_add_library(velox_dwio_avro_reader AvroReader.cpp HEADERS AvroReader.h)
 if(VELOX_ENABLE_AVRO)
   find_package(AvroCpp REQUIRED)
 
-  velox_link_libraries(velox_dwio_avro_reader AvroCpp::avrocpp)
+  velox_link_libraries(velox_dwio_avro_reader velox_dwio_common AvroCpp::avrocpp)
 endif()

@@ -18,6 +18,8 @@
 #include <avro/DataFile.hh>
 #include <avro/Generic.hh>
 
+#include <limits>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/testutil/TempFilePath.h"
@@ -1049,6 +1051,51 @@ TEST_F(AvroReaderTest, createsMultipleRowReaders) {
   assertEqualVectors(firstResult, secondResult);
 }
 
+TEST_F(AvroReaderTest, nextRowNumberIsFileAbsoluteForNonZeroSplit) {
+  const std::string schemaJson = R"JSON(
+    {
+      "type": "record",
+      "name": "SplitRowNumberRecord",
+      "fields": [
+        {"name": "value", "type": "int"}
+      ]
+    })JSON";
+  uint64_t splitOffset{0};
+  auto filePath = writeAvroFile(
+      schemaJson,
+      [&splitOffset](auto& writer, const ::avro::ValidSchema& schema) {
+        ::avro::GenericDatum datum(schema.root());
+        auto& value =
+            datum.value<::avro::GenericRecord>().fieldAt(0).value<int32_t>();
+
+        // Place the split at the first block's start. Avro aligns a non-zero
+        // split to the next sync marker, so reading starts at the second block.
+        splitOffset = writer.getCurrentBlockStart();
+        value = 10;
+        writer.write(datum);
+        writer.flush();
+
+        value = 20;
+        writer.write(datum);
+        value = 30;
+        writer.write(datum);
+      });
+
+  ASSERT_GT(splitOffset, 0);
+  auto reader = createReader(filePath);
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.range(splitOffset, std::numeric_limits<uint64_t>::max());
+  auto rowReader = createRowReader(*reader, rowOptions);
+
+  EXPECT_EQ(rowReader->nextRowNumber(), 1);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  auto expected = makeRowVector({makeFlatVector<int32_t>({20})});
+  assertEqualVectors(expected, result);
+  EXPECT_EQ(rowReader->nextRowNumber(), 2);
+}
+
 TEST_F(AvroReaderTest, readsComplexNestedData) {
   const auto filePath = writeComplexNestedRecord();
   auto reader = createReader(filePath);
@@ -1442,6 +1489,158 @@ TEST_F(AvroReaderTest, scanSpecFiltersUnionMember) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(AvroReaderTest, scanSpecAppliesTransformToConstantField) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* constantSpec = spec->addField("ds", 0);
+  constantSpec->setConstantValue(
+      BaseVector::createConstant(VARCHAR(), "abc", 1, pool()));
+  constantSpec->setTransform(
+      [](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        VELOX_CHECK(input->isConstantEncoding());
+        const auto* inputStrings = input->as<SimpleVector<StringView>>();
+        VELOX_CHECK_NOT_NULL(inputStrings);
+
+        auto output = BaseVector::create(BIGINT(), input->size(), pool);
+        auto* rawLengths = output->asFlatVector<int64_t>()->mutableRawValues();
+        for (vector_size_t row{0}; row < input->size(); ++row) {
+          rawLengths[row] = inputStrings->valueAt(row).size();
+        }
+        return output;
+      },
+      BIGINT());
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expected = makeRowVector({"ds"}, {makeFlatVector<int64_t>({3, 3})});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecAppliesExtractionTransform) {
+  const auto filePath = writeAllTypesRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mapSpec = spec->addFieldRecursively(
+      "mapCol", *MAP(VARCHAR(), BIGINT()), /*channel=*/0);
+  mapSpec->setExtractionType(common::ScanSpec::ExtractionType::kKeys);
+  mapSpec->setTransform(
+      [](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        auto* map = input->as<MapVector>();
+        VELOX_CHECK_NOT_NULL(map);
+        return std::make_shared<ArrayVector>(
+            pool,
+            ARRAY(map->mapKeys()->type()),
+            map->nulls(),
+            map->size(),
+            map->offsets(),
+            map->sizes(),
+            map->mapKeys());
+      },
+      ARRAY(VARCHAR()));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expected = makeRowVector(
+      {"mapCol"}, {makeArrayVector<std::string>({{"a", "b"}, {"c"}})});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecAppliesNestedExtractionTransform) {
+  const auto filePath = writeComplexNestedRecord();
+  auto reader = createReader(filePath);
+
+  const auto metaType =
+      ROW({{"ids", ARRAY(BIGINT())}, {"attrs", MAP(VARCHAR(), VARCHAR())}});
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* metaSpec = spec->addFieldRecursively("meta", *metaType, /*channel=*/0);
+  metaSpec->setExtractionType(common::ScanSpec::ExtractionType::kField);
+  metaSpec->setExtractionFieldIndex(1);
+  metaSpec->childByName("ids")->setConstantValue(
+      BaseVector::createNullConstant(ARRAY(BIGINT()), 1, pool()));
+  metaSpec->childByName("attrs")->setExtractionType(
+      common::ScanSpec::ExtractionType::kKeys);
+  metaSpec->setTransform(
+      [](const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        auto* meta = input->as<RowVector>();
+        VELOX_CHECK_NOT_NULL(meta);
+        auto* attrs = meta->childAt(input->type()->asRow().getChildIdx("attrs"))
+                          ->as<MapVector>();
+        VELOX_CHECK_NOT_NULL(attrs);
+        return std::make_shared<ArrayVector>(
+            pool,
+            ARRAY(attrs->mapKeys()->type()),
+            attrs->nulls(),
+            attrs->size(),
+            attrs->offsets(),
+            attrs->sizes(),
+            attrs->mapKeys());
+      },
+      ARRAY(VARCHAR()));
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 1, rowOptions);
+
+  auto expected = makeRowVector(
+      {"meta"}, {makeArrayVector<std::string>({{"alpha", "beta"}})});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, scanSpecAppliesMultipleExtractionTransform) {
+  const auto filePath = writeAllTypesRecord();
+  auto reader = createReader(filePath);
+
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  auto* mapSpec = spec->addFieldRecursively(
+      "mapCol", *MAP(VARCHAR(), BIGINT()), /*channel=*/0);
+  const auto transformOutputType =
+      ROW({{"keys", ARRAY(VARCHAR())}, {"size", BIGINT()}});
+  mapSpec->setTransform(
+      [transformOutputType](
+          const VectorPtr& input, memory::MemoryPool* pool) -> VectorPtr {
+        auto* map = input->as<MapVector>();
+        VELOX_CHECK_NOT_NULL(map);
+        auto keys = std::make_shared<ArrayVector>(
+            pool,
+            ARRAY(map->mapKeys()->type()),
+            map->nulls(),
+            map->size(),
+            map->offsets(),
+            map->sizes(),
+            map->mapKeys());
+        auto sizes = BaseVector::create(BIGINT(), map->size(), pool);
+        auto* rawSizes = sizes->asFlatVector<int64_t>()->mutableRawValues();
+        for (vector_size_t i = 0; i < map->size(); ++i) {
+          rawSizes[i] = map->sizeAt(i);
+        }
+        return std::make_shared<RowVector>(
+            pool,
+            transformOutputType,
+            nullptr,
+            map->size(),
+            std::vector<VectorPtr>{std::move(keys), std::move(sizes)});
+      },
+      transformOutputType);
+
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setScanSpec(spec);
+  auto result = readRows(*reader, 5, 2, rowOptions);
+
+  auto expectedExtractions = makeRowVector(
+      {"keys", "size"},
+      {makeArrayVector<std::string>({{"a", "b"}, {"c"}}),
+       makeFlatVector<int64_t>({2, 1})});
+  auto expected = makeRowVector({"mapCol"}, {expectedExtractions});
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(AvroReaderTest, scanSpecRejectsUnsupportedFeatures) {
   const auto filePath = writeRequestedTypeRecord();
   TestDeltaColumnUpdater updater;
@@ -1468,6 +1667,44 @@ TEST_F(AvroReaderTest, scanSpecRejectsUnsupportedFeatures) {
   auto deltaUpdateSpec = std::make_shared<common::ScanSpec>("root");
   deltaUpdateSpec->addField("rawDate", 0)->setDeltaUpdate(&updater);
   expectRejected(std::move(deltaUpdateSpec));
+
+  auto extractionWithoutTransformSpec =
+      std::make_shared<common::ScanSpec>("root");
+  extractionWithoutTransformSpec
+      ->addFieldRecursively("mapCol", *MAP(VARCHAR(), BIGINT()), /*channel=*/0)
+      ->setExtractionType(common::ScanSpec::ExtractionType::kKeys);
+  auto extractionReader = createReader(writeAllTypesRecord());
+  dwio::common::RowReaderOptions extractionRowOptions;
+  extractionRowOptions.setScanSpec(std::move(extractionWithoutTransformSpec));
+  EXPECT_THROW(
+      createRowReader(*extractionReader, extractionRowOptions), VeloxUserError);
+}
+
+TEST_F(AvroReaderTest, appliesDeletedRowsMutationWithoutScanSpec) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+  auto rowReader = createRowReader(*reader);
+
+  std::vector<uint64_t> deletedRows(bits::nwords(2));
+  bits::setBit(deletedRows.data(), 0);
+  dwio::common::Mutation mutation;
+  mutation.deletedRows = deletedRows.data();
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(5, result, &mutation), 2);
+
+  auto expectedMeta = makeRowVector(
+      {"tsMillis", "tsMicros", "label", "count"},
+      {makeFlatVector<Timestamp>({Timestamp::fromMillis(2'700)}),
+       makeFlatVector<Timestamp>({Timestamp::fromMicros(4'500)}),
+       makeFlatVector<std::string>({"beta"}),
+       makeFlatVector<int32_t>({2})});
+  auto expected = makeRowVector(
+      {"rawDate", "meta", "unused"},
+      {makeFlatVector<int32_t>({22}, DATE()),
+       expectedMeta,
+       makeFlatVector<std::string>({"unused-b"})});
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(AvroReaderTest, scanSpecAppliesDeletedRowsMutation) {

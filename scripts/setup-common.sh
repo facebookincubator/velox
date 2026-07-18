@@ -334,7 +334,11 @@ function install_avro_cpp {
   github_checkout $AVRO_REPO_NAME "$AVRO_CPP_VERSION" --depth 1
   (
     cd avro/lang/c++ || exit
-    cmake_install -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS=OFF
+    cmake_install \
+      -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
+      -DAVRO_BUILD_EXECUTABLES=OFF \
+      -DAVRO_BUILD_SHARED=OFF \
+      -DAVRO_BUILD_TESTS=OFF
   )
 }
 

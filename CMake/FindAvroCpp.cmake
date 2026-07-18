@@ -29,14 +29,19 @@ endif()
 
 find_package_handle_standard_args(AvroCpp REQUIRED_VARS AVROCPP_INCLUDE_DIRS AVROCPP_LIBRARIES)
 
-if(AvroCpp_FOUND)
-  if(NOT TARGET AvroCpp::avrocpp)
-    add_library(AvroCpp::avrocpp ${_AVROCPP_LIBTYPE} IMPORTED)
-    set_target_properties(
-      AvroCpp::avrocpp
-      PROPERTIES
-        IMPORTED_LOCATION "${AVROCPP_LIBRARIES}"
-        INTERFACE_INCLUDE_DIRECTORIES "${AVROCPP_INCLUDE_DIRS}"
+if(AvroCpp_FOUND AND NOT TARGET AvroCpp::avrocpp)
+  add_library(AvroCpp::avrocpp ${_AVROCPP_LIBTYPE} IMPORTED)
+  set_target_properties(
+    AvroCpp::avrocpp
+    PROPERTIES
+      IMPORTED_LOCATION "${AVROCPP_LIBRARIES}"
+      INTERFACE_INCLUDE_DIRECTORIES "${AVROCPP_INCLUDE_DIRS}"
+  )
+
+  if(_AVROCPP_LIBTYPE STREQUAL "STATIC")
+    set_property(
+      TARGET AvroCpp::avrocpp
+      PROPERTY INTERFACE_LINK_LIBRARIES ZLIB::ZLIB Snappy::snappy zstd::zstd
     )
   endif()
 endif()
