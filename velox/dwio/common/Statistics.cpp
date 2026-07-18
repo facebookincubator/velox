@@ -195,7 +195,7 @@ void DecodingStats::toRuntimeMetrics(
   addCounter("decodeCPUTimeNanos", decodeCPUTimeNanos);
 }
 
-void ColumnReadStats::accumulateStat(
+void ColumnRuntimeStats::accumulateStat(
     const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
     int64_t value) {
   auto [it, inserted] = columnMetrics.try_emplace(stat.first);
@@ -207,7 +207,7 @@ void ColumnReadStats::accumulateStat(
   it->second.addValue(value);
 }
 
-ColumnReadStats& SplitStats::getOrCreateColumnStats(
+ColumnRuntimeStats& SplitStats::getOrCreateColumnStats(
     uint32_t nodeId,
     TypeKind typeKind) {
   auto [it, inserted] = columnStats.try_emplace(nodeId, typeKind);
@@ -233,7 +233,7 @@ void SplitStats::initColumnStatsCollection(
   registerColumnStats(schema, options.collectColumnCpuMetrics());
 }
 
-void ColumnReadStats::mergeFrom(const ColumnReadStats& other) {
+void ColumnRuntimeStats::mergeFrom(const ColumnRuntimeStats& other) {
   // TODO(#18171): Add the typeKind check once column ID assignment is stable.
   //  For now, the same column ID can refer to different typeKinds.
   // VELOX_CHECK_EQ(typeKind, other.typeKind);
@@ -251,7 +251,7 @@ void ColumnReadStats::mergeFrom(const ColumnReadStats& other) {
   }
 }
 
-void ColumnReadStats::toRuntimeMetrics(
+void ColumnRuntimeStats::toRuntimeMetrics(
     std::string_view prefix,
     std::unordered_map<std::string, RuntimeMetric>& result) const {
   for (const auto& [name, metric] : columnMetrics) {

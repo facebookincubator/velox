@@ -49,7 +49,7 @@ class PageReader {
       ParquetTypeWithIdPtr fileType,
       common::CompressionKind codec,
       int64_t chunkSize,
-      dwio::common::ColumnReadStats& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -71,7 +71,7 @@ class PageReader {
       memory::MemoryPool& pool,
       common::CompressionKind codec,
       int64_t chunkSize,
-      dwio::common::ColumnReadStats& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const tz::TimeZone* sessionTimezone = nullptr,
       int32_t maxRepeat = 0,
       int32_t maxDefine = 1)
@@ -540,7 +540,7 @@ class PageReader {
   // Base values of dictionary when reading a string dictionary.
   VectorPtr dictionaryValues_;
 
-  dwio::common::ColumnReadStats& stats_;
+  dwio::common::ColumnRuntimeStats& stats_;
 
   const tz::TimeZone* sessionTimezone_{nullptr};
 

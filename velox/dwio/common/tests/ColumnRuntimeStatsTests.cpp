@@ -100,7 +100,7 @@ TEST(DecodingStatsTest, ToRuntimeMetrics) {
   EXPECT_EQ(decode.unit, facebook::velox::RuntimeCounter::Unit::kNanos);
 }
 
-TEST(SplitStatsTest, ColumnReadStats) {
+TEST(SplitStatsTest, ColumnRuntimeStats) {
   SplitStats stats{kExampleFormat};
   auto& column = stats.getOrCreateColumnStats(1, TypeKind::BIGINT);
   EXPECT_EQ(&stats.getOrCreateColumnStats(1, TypeKind::BIGINT), &column);
@@ -223,13 +223,13 @@ TEST(IoCounterTest, MergeStats) {
 }
 
 TEST(ColumnReadStatsTest, MergeFromWithDecodingStats) {
-  ColumnReadStats src{TypeKind::BIGINT};
+  ColumnRuntimeStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
   src.decodingStats.emplace();
   src.decodingStats->decompressCPUTimeNanos.increment(1'000);
 
   // Merge into stats without decoding stats creates and populates them.
-  ColumnReadStats dst{TypeKind::BIGINT};
+  ColumnRuntimeStats dst{TypeKind::BIGINT};
   dst.accumulateStat(kExampleFormatMetric, 50);
   dst.mergeFrom(src);
 
@@ -244,12 +244,12 @@ TEST(ColumnReadStatsTest, MergeFromWithDecodingStats) {
 }
 
 TEST(ColumnReadStatsTest, MergeFromBothWithDecodingStats) {
-  ColumnReadStats src{TypeKind::BIGINT};
+  ColumnRuntimeStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
   src.decodingStats.emplace();
   src.decodingStats->decompressCPUTimeNanos.increment(1'000);
 
-  ColumnReadStats dst{TypeKind::BIGINT};
+  ColumnRuntimeStats dst{TypeKind::BIGINT};
   dst.accumulateStat(kExampleFormatMetric, 50);
   dst.decodingStats.emplace();
   dst.decodingStats->decompressCPUTimeNanos.increment(2'000);
@@ -282,10 +282,10 @@ TEST(WithDecompressStatsTest, NullCounter) {
 }
 
 TEST(ColumnReadStatsTest, MergeFromWithoutDecodingStats) {
-  ColumnReadStats src{TypeKind::BIGINT};
+  ColumnRuntimeStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
 
-  ColumnReadStats dst{TypeKind::BIGINT};
+  ColumnRuntimeStats dst{TypeKind::BIGINT};
   dst.accumulateStat(kExampleFormatMetric, 50);
   dst.decodingStats.emplace();
   dst.decodingStats->decompressCPUTimeNanos.increment(1'000);

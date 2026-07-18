@@ -108,7 +108,7 @@ class ParquetWriterTest : public ParquetTestBase {
   }
 
   inline static const std::string kHiveConnectorId = "test-hive";
-  dwio::common::ColumnReadStats stats{TypeKind::BIGINT};
+  dwio::common::ColumnRuntimeStats stats{TypeKind::BIGINT};
 };
 
 class ArrowMemoryPool final : public ::arrow::MemoryPool {

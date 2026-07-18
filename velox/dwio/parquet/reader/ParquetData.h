@@ -63,7 +63,7 @@ class ParquetData : public dwio::common::FormatData {
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const FileMetaDataPtr fileMetadataPtr,
       memory::MemoryPool& pool,
-      dwio::common::ColumnReadStats& stats,
+      dwio::common::ColumnRuntimeStats& stats,
       const tz::TimeZone* sessionTimezone)
       : pool_(pool),
         type_(std::static_pointer_cast<const ParquetTypeWithId>(type)),
@@ -227,7 +227,7 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
-  dwio::common::ColumnReadStats& stats_;
+  dwio::common::ColumnRuntimeStats& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
 

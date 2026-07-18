@@ -370,7 +370,7 @@ class FormatParams {
  public:
   explicit FormatParams(
       memory::MemoryPool& pool,
-      dwio::common::ColumnReadStats& stats)
+      dwio::common::ColumnRuntimeStats& stats)
       : pool_(pool), stats_(stats) {}
 
   virtual ~FormatParams() = default;
@@ -386,13 +386,13 @@ class FormatParams {
     return pool_;
   }
 
-  dwio::common::ColumnReadStats& runtimeStatistics() {
+  dwio::common::ColumnRuntimeStats& runtimeStatistics() {
     return stats_;
   }
 
  private:
   memory::MemoryPool& pool_;
-  dwio::common::ColumnReadStats& stats_;
+  dwio::common::ColumnRuntimeStats& stats_;
 };
 
 }; // namespace facebook::velox::wave
