@@ -543,6 +543,13 @@ class SharedArbitrator : public memory::MemoryArbitrator {
       uint64_t growBytes,
       uint64_t reservationBytes);
 
+  // Grows 'participant' capacity like checkedGrow(), but frees 'growBytes' back
+  // to the arbitrator before rethrowing if the growth fails.
+  void checkedGrowOrFree(
+      const ScopedArbitrationParticipant& participant,
+      uint64_t growBytes,
+      uint64_t reservationBytes);
+
   // Invoked to reclaim used memory from 'participant' with specified
   // 'targetBytes'. The function returns the actually freed capacity.
   // 'localArbitration' is true when the reclaim attempt is for a local
