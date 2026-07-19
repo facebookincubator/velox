@@ -148,8 +148,10 @@ struct AvroTypeInfo {
 /// Union handling:
 ///   - union with "null"          -> nullable = true
 ///   - single non-null branch     -> passthrough
-///   - unions of {int, long}      -> BIGINT() (numeric promotion)
-///   - unions of {float, double}  -> DOUBLE() (numeric promotion)
+///   - unions of {int, long} without logical types
+///       -> BIGINT() (numeric promotion)
+///   - unions of {float, double} without logical types
+///       -> DOUBLE() (numeric promotion)
 ///   - other multi-branch unions
 ///       -> ROW(member0..memberN,
 ///              veloxType(branch0)..veloxType(branchN))
@@ -220,6 +222,12 @@ std::shared_ptr<AvroTypeInfo> buildUnionType(
 
     auto childInfo = buildTypeInfo(branchNode, options);
     nonNullInfos.push_back(childInfo);
+
+    if (childInfo->logicalType != AvroLogicalType::kNone) {
+      allIntsOrLongs = false;
+      allFloatsOrDoubles = false;
+      continue;
+    }
 
     switch (branchNode->type()) {
       case ::avro::Type::AVRO_INT:
@@ -1801,6 +1809,9 @@ AvroRowReader::AvroRowReader(
   if (skip > 0) {
     atEnd_ = true;
   }
+  if (!atEnd_ && reader_->pastSync(splitLimit_)) {
+    atEnd_ = true;
+  }
 }
 
 int64_t AvroRowReader::nextRowNumber() {
@@ -1870,6 +1881,9 @@ uint64_t AvroRowReader::next(
     writer.commit(true);
     ++numRead;
     ++fileRowNumber_;
+  }
+  if (!atEnd_ && reader_->pastSync(splitLimit_)) {
+    atEnd_ = true;
   }
   writer.finish();
   rowVector->resize(numRead);

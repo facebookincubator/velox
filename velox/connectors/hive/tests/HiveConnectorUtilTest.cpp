@@ -316,10 +316,19 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   performConfigure();
   EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
 
-  // Configure only the Avro schema literal.
+  // Prefer Avro schema in table parameters.
   clearDynamicParameters(FileFormat::AVRO);
   const std::string avroSchema{
       R"({"type":"record","name":"TestRecord","fields":[]})"};
+  tableParameters[SerDeOptions::kAvroSchema] = avroSchema;
+  serdeParameters[SerDeOptions::kAvroSchema] =
+      R"({"type":"record","name":"WrongRecord","fields":[]})";
+  expectedSerDe.avroSchema = avroSchema;
+  performConfigure();
+  EXPECT_TRUE(compareSerDeOptions(readerOptions.serDeOptions(), expectedSerDe));
+
+  // Fall back to Avro schema in SerDe parameters.
+  clearDynamicParameters(FileFormat::AVRO);
   serdeParameters[SerDeOptions::kAvroSchema] = avroSchema;
   expectedSerDe.avroSchema = avroSchema;
   performConfigure();

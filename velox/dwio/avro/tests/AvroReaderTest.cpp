@@ -733,6 +733,103 @@ class AvroReaderTest : public testing::Test, public VectorTestBase {
         });
     return filePath;
   }
+
+  std::shared_ptr<TempFilePath> writeLogicalUnionRecord() const {
+    const std::string schemaJson = R"JSON(
+    {
+      "type": "record",
+      "name": "LogicalUnionRecord",
+      "fields": [
+        {"name": "dateOrLong", "type": [
+          {"type": "int", "logicalType": "date"},
+          "long"
+        ]},
+        {"name": "intOrTimeMicros", "type": [
+          "int",
+          {"type": "long", "logicalType": "time-micros"}
+        ]},
+        {"name": "timeMillisOrLong", "type": [
+          {"type": "int", "logicalType": "time-millis"},
+          "long"
+        ]},
+        {"name": "intOrTimestampMillis", "type": [
+          "int",
+          {"type": "long", "logicalType": "timestamp-millis"}
+        ]},
+        {"name": "dateOrTimestampMicros", "type": [
+          {"type": "int", "logicalType": "date"},
+          {"type": "long", "logicalType": "timestamp-micros"}
+        ]},
+        {"name": "nullableTimeMillisOrTimestampNanos", "type": [
+          {"type": "int", "logicalType": "time-millis"},
+          "null",
+          {"type": "long", "logicalType": "timestamp-nanos"}
+        ]},
+        {"name": "intOrLong", "type": ["int", "long"]},
+        {"name": "floatOrDouble", "type": ["float", "double"]}
+      ]
+    })JSON";
+    auto filePath = writeAvroFile(
+        schemaJson, [](auto& writer, const ::avro::ValidSchema& schema) {
+          ::avro::GenericDatum datum(schema.root());
+          auto& record = datum.value<::avro::GenericRecord>();
+          auto setIntBranch =
+              [&](size_t fieldIndex, size_t branchIndex, int32_t value) {
+                auto& unionDatum = record.fieldAt(fieldIndex);
+                unionDatum.selectBranch(branchIndex);
+                unionDatum.value<int32_t>() = value;
+              };
+          auto setLongBranch =
+              [&](size_t fieldIndex, size_t branchIndex, int64_t value) {
+                auto& unionDatum = record.fieldAt(fieldIndex);
+                unionDatum.selectBranch(branchIndex);
+                unionDatum.value<int64_t>() = value;
+              };
+          auto setFloatBranch =
+              [&](size_t fieldIndex, size_t branchIndex, float value) {
+                auto& unionDatum = record.fieldAt(fieldIndex);
+                unionDatum.selectBranch(branchIndex);
+                unionDatum.value<float>() = value;
+              };
+          auto setDoubleBranch =
+              [&](size_t fieldIndex, size_t branchIndex, double value) {
+                auto& unionDatum = record.fieldAt(fieldIndex);
+                unionDatum.selectBranch(branchIndex);
+                unionDatum.value<double>() = value;
+              };
+
+          setIntBranch(0, 0, 10);
+          setIntBranch(1, 0, 20);
+          setIntBranch(2, 0, 30);
+          setIntBranch(3, 0, 40);
+          setIntBranch(4, 0, 50);
+          setIntBranch(5, 0, 60);
+          setIntBranch(6, 0, 70);
+          setFloatBranch(7, 0, 1.5F);
+          writer.write(datum);
+
+          setLongBranch(0, 1, 100);
+          setLongBranch(1, 1, 200);
+          setLongBranch(2, 1, 300);
+          setLongBranch(3, 1, 400);
+          setLongBranch(4, 1, 500);
+          record.fieldAt(5).selectBranch(1);
+          setLongBranch(6, 1, 700);
+          setDoubleBranch(7, 1, 2.25);
+          writer.write(datum);
+
+          setIntBranch(0, 0, 11);
+          setIntBranch(1, 0, 21);
+          setIntBranch(2, 0, 31);
+          setIntBranch(3, 0, 41);
+          setIntBranch(4, 0, 51);
+          setLongBranch(5, 2, 600);
+          setIntBranch(6, 0, 71);
+          setFloatBranch(7, 0, 3.5F);
+          writer.write(datum);
+        });
+    return filePath;
+  }
 };
 
 TEST_F(AvroReaderTest, allTypesSchemaMapping) {
@@ -819,6 +916,35 @@ TEST_F(AvroReaderTest, unionMapping) {
   EXPECT_EQ(nullableNestedRecord.nameOf(1), "nestedString");
   EXPECT_EQ(nullableNestedRecord.childAt(0)->kind(), TypeKind::INTEGER);
   EXPECT_EQ(nullableNestedRecord.childAt(1)->kind(), TypeKind::VARCHAR);
+}
+
+TEST_F(AvroReaderTest, logicalUnionMapping) {
+  const auto filePath = writeLogicalUnionRecord();
+
+  auto reader = createReader(filePath);
+  auto rowType = reader->rowType();
+  ASSERT_EQ(rowType->size(), 8);
+
+  const auto expectUnionType = [&](size_t fieldIndex,
+                                   const TypePtr& firstType,
+                                   const TypePtr& secondType) {
+    ASSERT_EQ(rowType->childAt(fieldIndex)->kind(), TypeKind::ROW);
+    const auto& unionType = rowType->childAt(fieldIndex)->asRow();
+    ASSERT_EQ(unionType.size(), 2);
+    EXPECT_EQ(unionType.nameOf(0), "member0");
+    EXPECT_EQ(unionType.nameOf(1), "member1");
+    EXPECT_TRUE(*unionType.childAt(0) == *firstType);
+    EXPECT_TRUE(*unionType.childAt(1) == *secondType);
+  };
+
+  expectUnionType(0, DATE(), BIGINT());
+  expectUnionType(1, INTEGER(), TIME());
+  expectUnionType(2, TIME(), BIGINT());
+  expectUnionType(3, INTEGER(), TIMESTAMP());
+  expectUnionType(4, DATE(), TIMESTAMP());
+  expectUnionType(5, TIME(), TIMESTAMP());
+  EXPECT_TRUE(*rowType->childAt(6) == *BIGINT());
+  EXPECT_TRUE(*rowType->childAt(7) == *DOUBLE());
 }
 
 TEST_F(AvroReaderTest, lowerCaseFieldNames) {
@@ -1051,6 +1177,36 @@ TEST_F(AvroReaderTest, createsMultipleRowReaders) {
   assertEqualVectors(firstResult, secondResult);
 }
 
+TEST_F(AvroReaderTest, reportsAtEndForEmptyFile) {
+  const std::string schemaJson = R"JSON(
+    {
+      "type": "record",
+      "name": "EmptyFileRecord",
+      "fields": [
+        {"name": "value", "type": "int"}
+      ]
+    })JSON";
+  const auto filePath = writeAvroFile(schemaJson, [](auto&, const auto&) {});
+  auto reader = createReader(filePath);
+  auto rowReader = createRowReader(*reader);
+
+  EXPECT_EQ(rowReader->nextRowNumber(), dwio::common::RowReader::kAtEnd);
+  EXPECT_EQ(rowReader->nextReadSize(1), dwio::common::RowReader::kAtEnd);
+  VectorPtr result;
+  EXPECT_EQ(rowReader->next(1, result), 0);
+}
+
+TEST_F(AvroReaderTest, reportsAtEndAfterExactRead) {
+  const auto filePath = writeRequestedTypeRecord();
+  auto reader = createReader(filePath);
+  auto rowReader = createRowReader(*reader);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  EXPECT_EQ(rowReader->nextRowNumber(), dwio::common::RowReader::kAtEnd);
+  EXPECT_EQ(rowReader->nextReadSize(2), dwio::common::RowReader::kAtEnd);
+}
+
 TEST_F(AvroReaderTest, nextRowNumberIsFileAbsoluteForNonZeroSplit) {
   const std::string schemaJson = R"JSON(
     {
@@ -1164,6 +1320,65 @@ TEST_F(AvroReaderTest, readsUnionData) {
       simpleNestedRecord,
       nullableNestedRecord,
   });
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(AvroReaderTest, readsLogicalUnionData) {
+  const auto filePath = writeLogicalUnionRecord();
+
+  auto reader = createReader(filePath);
+  auto result = readRows(*reader, 3, 3);
+
+  auto dateOrLong = makeRowVector(
+      {"member0", "member1"},
+      {makeNullableFlatVector<int32_t>({10, std::nullopt, 11}, DATE()),
+       makeNullableFlatVector<int64_t>({std::nullopt, 100, std::nullopt})});
+  auto intOrTimeMicros = makeRowVector(
+      {"member0", "member1"},
+      {makeNullableFlatVector<int32_t>({20, std::nullopt, 21}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt, 200, std::nullopt}, TIME())});
+  auto timeMillisOrLong = makeRowVector(
+      {"member0", "member1"},
+      {makeNullableFlatVector<int64_t>({30'000, std::nullopt, 31'000}, TIME()),
+       makeNullableFlatVector<int64_t>({std::nullopt, 300, std::nullopt})});
+  auto intOrTimestampMillis = makeRowVector(
+      {"member0", "member1"},
+      {makeNullableFlatVector<int32_t>({40, std::nullopt, 41}),
+       makeNullableFlatVector<Timestamp>(
+           {std::nullopt, Timestamp::fromMillis(400), std::nullopt})});
+  auto dateOrTimestampMicros = makeRowVector(
+      {"member0", "member1"},
+      {makeNullableFlatVector<int32_t>({50, std::nullopt, 51}, DATE()),
+       makeNullableFlatVector<Timestamp>(
+           {std::nullopt, Timestamp::fromMicros(500), std::nullopt})});
+  auto nullableTimeMillisOrTimestampNanos = makeRowVector(
+      {"member0", "member1"},
+      {makeNullableFlatVector<int64_t>(
+           {60'000, std::nullopt, std::nullopt}, TIME()),
+       makeNullableFlatVector<Timestamp>(
+           {std::nullopt, std::nullopt, Timestamp::fromNanos(600)})},
+      [](vector_size_t row) { return row == 1; });
+  auto intOrLong = makeFlatVector<int64_t>({70, 700, 71});
+  auto floatOrDouble = makeFlatVector<double>({1.5, 2.25, 3.5});
+
+  auto expected = makeRowVector(
+      {"dateOrLong",
+       "intOrTimeMicros",
+       "timeMillisOrLong",
+       "intOrTimestampMillis",
+       "dateOrTimestampMicros",
+       "nullableTimeMillisOrTimestampNanos",
+       "intOrLong",
+       "floatOrDouble"},
+      {dateOrLong,
+       intOrTimeMicros,
+       timeMillisOrLong,
+       intOrTimestampMillis,
+       dateOrTimestampMicros,
+       nullableTimeMillisOrTimestampNanos,
+       intOrLong,
+       floatOrDouble});
   assertEqualVectors(expected, result);
 }
 
