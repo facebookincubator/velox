@@ -15,7 +15,9 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
+#include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -47,6 +49,77 @@ class IcebergInsertTest : public test::IcebergTestBase {
                     .endTableScan()
                     .planNode();
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+  }
+
+  /// Build an IcebergInsertTableHandle with per-column write-defaults and
+  /// an explicit insertedColumns list (columns named in the INSERT statement).
+  /// Columns absent from @p writeDefaults get no write-default; columns absent
+  /// from @p insertedColumns are treated as omitted and receive the default.
+  IcebergInsertTableHandlePtr makeWriteDefaultHandle(
+      const RowTypePtr& rowType,
+      const std::string& outputPath,
+      const std::unordered_map<std::string, std::string>& writeDefaults,
+      const std::vector<std::string>& insertedColumns) {
+    int32_t fieldId = 1;
+    std::vector<IcebergColumnHandlePtr> columnHandles;
+    columnHandles.reserve(rowType->size());
+    for (auto i = 0; i < rowType->size(); ++i) {
+      const auto& name = rowType->nameOf(i);
+      const auto& type = rowType->childAt(i);
+      const parquet::ParquetFieldId field{fieldId++, {}};
+      auto it = writeDefaults.find(name);
+      columnHandles.push_back(
+          std::make_shared<const IcebergColumnHandle>(
+              name,
+              FileColumnHandle::ColumnType::kRegular,
+              type,
+              field,
+              /*requiredSubfields=*/std::vector<common::Subfield>{},
+              /*initialDefaultValue=*/std::nullopt,
+              /*icebergMetadata=*/IcebergFieldMetadata{},
+              it != writeDefaults.end() ? std::make_optional(it->second)
+                                        : std::nullopt));
+    }
+    auto locationHandle = std::make_shared<LocationHandle>(
+        outputPath, outputPath, LocationHandle::TableType::kNew);
+    return std::make_shared<const IcebergInsertTableHandle>(
+        columnHandles,
+        locationHandle,
+        fileFormat_,
+        /*partitionSpec=*/nullptr,
+        common::CompressionKind::CompressionKind_ZSTD,
+        /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+        IcebergInsertTableHandle::WriteKind::kData,
+        /*existingDeletionVectors=*/
+        std::unordered_map<
+            std::string,
+            IcebergInsertTableHandle::ExistingDeletionVector>{},
+        std::make_shared<const IcebergFileNameGenerator>(),
+        insertedColumns);
+  }
+
+  /// Write @p vectors through a sink built from @p handle and return commit
+  /// tasks. Mirrors createDataSinkAndAppendData but accepts a custom handle.
+  std::vector<std::string> writeThroughHandle(
+      const RowTypePtr& rowType,
+      const IcebergInsertTableHandlePtr& handle,
+      const std::vector<RowVectorPtr>& vectors) {
+    auto sink = std::make_shared<IcebergDataSink>(
+        rowType,
+        handle,
+        connectorQueryCtx_.get(),
+        CommitStrategy::kNoCommit,
+        std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{})),
+        std::make_shared<IcebergConfig>(std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {IcebergConfig::kFunctionPrefixConfig,
+                 IcebergConfig::kDefaultFunctionPrefix}})));
+    for (const auto& v : vectors) {
+      sink->appendData(v);
+    }
+    EXPECT_TRUE(sink->finish());
+    return sink->close();
   }
 };
 
@@ -302,6 +375,216 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
 
   ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
+}
+
+// Explicit NULL (column in insertedColumns) and omitted column (not in
+// insertedColumns) written to separate files. The explicit NULL must be
+// preserved; the omitted column must receive the write-default.
+TEST_F(IcebergInsertTest, explicitNullPreservedOmittedGetsWriteDefault) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "status"}, {BIGINT(), VARCHAR()});
+
+  // Row 2: status explicitly set to NULL.
+  {
+    auto handle = makeWriteDefaultHandle(
+        rowType,
+        outputDir->getPath(),
+        {{"status", "ACTIVE"}},
+        /*insertedColumns=*/{"id", "status"});
+    writeThroughHandle(
+        rowType,
+        handle,
+        {makeRowVector(
+            rowType->names(),
+            {makeFlatVector<int64_t>({2}),
+             makeNullableFlatVector<std::string>({std::nullopt})})});
+  }
+
+  // Row 3: status omitted → write-default 'ACTIVE' must be materialised.
+  {
+    auto handle = makeWriteDefaultHandle(
+        rowType,
+        outputDir->getPath(),
+        {{"status", "ACTIVE"}},
+        /*insertedColumns=*/{"id"});
+    writeThroughHandle(
+        rowType,
+        handle,
+        {makeRowVector(
+            rowType->names(),
+            {makeFlatVector<int64_t>({3}),
+             makeNullableFlatVector<std::string>({std::nullopt})})});
+  }
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeNullableFlatVector<std::string>({std::nullopt, "ACTIVE"})})});
+}
+
+// Multiple default columns: only 'id' is in insertedColumns for row 2 (all
+// defaults applied); 'id' and 'country' for row 3 (priority and is_enabled
+// get their defaults, 'country' keeps the explicit value 'UK').
+TEST_F(IcebergInsertTest, multipleWriteDefaultColumns) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType =
+      ROW({"id", "country", "priority", "is_enabled"},
+          {BIGINT(), VARCHAR(), INTEGER(), BOOLEAN()});
+
+  const std::unordered_map<std::string, std::string> defaults = {
+      {"country", "US"}, {"priority", "10"}, {"is_enabled", "true"}};
+
+  // Row 2: all default columns omitted.
+  {
+    auto handle =
+        makeWriteDefaultHandle(rowType, outputDir->getPath(), defaults, {"id"});
+    writeThroughHandle(
+        rowType,
+        handle,
+        {makeRowVector(
+            rowType->names(),
+            {makeFlatVector<int64_t>({2}),
+             makeNullableFlatVector<std::string>({std::nullopt}),
+             makeNullableFlatVector<int32_t>({std::nullopt}),
+             makeNullableFlatVector<bool>({std::nullopt})})});
+  }
+
+  // Row 3: country explicitly set to 'UK'; priority and is_enabled omitted.
+  {
+    auto handle = makeWriteDefaultHandle(
+        rowType, outputDir->getPath(), defaults, {"id", "country"});
+    writeThroughHandle(
+        rowType,
+        handle,
+        {makeRowVector(
+            rowType->names(),
+            {makeFlatVector<int64_t>({3}),
+             makeFlatVector<std::string>({"UK"}),
+             makeNullableFlatVector<int32_t>({std::nullopt}),
+             makeNullableFlatVector<bool>({std::nullopt})})});
+  }
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeFlatVector<std::string>({"US", "UK"}),
+           makeFlatVector<int32_t>({10, 10}),
+           makeFlatVector<bool>({true, true})})});
+}
+
+// All scalar write-default types (VARCHAR, DOUBLE, BIGINT, INTEGER, BOOLEAN)
+// are materialised when their columns are omitted from the INSERT.
+TEST_F(IcebergInsertTest, writeDefaultAllScalarTypes) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType =
+      ROW({"id", "name", "score", "count", "priority", "active"},
+          {BIGINT(), VARCHAR(), DOUBLE(), BIGINT(), INTEGER(), BOOLEAN()});
+
+  auto handle = makeWriteDefaultHandle(
+      rowType,
+      outputDir->getPath(),
+      {{"name", "Unknown"},
+       {"score", "0.0"},
+       {"count", "0"},
+       {"priority", "5"},
+       {"active", "false"}},
+      /*insertedColumns=*/{"id"});
+  writeThroughHandle(
+      rowType,
+      handle,
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2}),
+           makeNullableFlatVector<std::string>({std::nullopt}),
+           makeNullableFlatVector<double>({std::nullopt}),
+           makeNullableFlatVector<int64_t>({std::nullopt}),
+           makeNullableFlatVector<int32_t>({std::nullopt}),
+           makeNullableFlatVector<bool>({std::nullopt})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2}),
+           makeFlatVector<std::string>({"Unknown"}),
+           makeFlatVector<double>({0.0}),
+           makeFlatVector<int64_t>({0}),
+           makeFlatVector<int32_t>({5}),
+           makeFlatVector<bool>({false})})});
+}
+
+// Simulates ALTER TABLE … SET DEFAULT: two consecutive INSERTs each use a
+// different write-default for 'country' (first 'IN', then 'US').  Reading
+// both files back must return the value that was current at write time.
+TEST_F(IcebergInsertTest, changedWriteDefaultAcrossInserts) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType =
+      ROW({"id", "amount", "country"}, {BIGINT(), DOUBLE(), VARCHAR()});
+
+  auto omittedCountryRow = [&](int64_t id, double amount) {
+    return makeRowVector(
+        rowType->names(),
+        {makeFlatVector<int64_t>({id}),
+         makeFlatVector<double>({amount}),
+         makeNullableFlatVector<std::string>({std::nullopt})});
+  };
+
+  // INSERT 1: write-default = 'IN'.
+  {
+    auto handle = makeWriteDefaultHandle(
+        rowType,
+        outputDir->getPath(),
+        {{"country", "IN"}},
+        /*insertedColumns=*/{"id", "amount"});
+    writeThroughHandle(rowType, handle, {omittedCountryRow(2, 200.0)});
+  }
+
+  // INSERT 2: write-default changed to 'US' (ALTER TABLE … SET DEFAULT 'US').
+  {
+    auto handle = makeWriteDefaultHandle(
+        rowType,
+        outputDir->getPath(),
+        {{"country", "US"}},
+        /*insertedColumns=*/{"id", "amount"});
+    writeThroughHandle(rowType, handle, {omittedCountryRow(3, 300.0)});
+  }
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  // Row 2 was written with default 'IN', row 3 with 'US'.
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({2, 3}),
+           makeFlatVector<double>({200.0, 300.0}),
+           makeFlatVector<std::string>({"IN", "US"})})});
 }
 
 #endif

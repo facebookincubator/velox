@@ -29,6 +29,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldId.h"
@@ -139,7 +140,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     WriteKind writeKind,
     std::unordered_map<std::string, ExistingDeletionVector>
         existingDeletionVectors,
-    std::shared_ptr<const FileNameGenerator> fileNameGenerator)
+    std::shared_ptr<const FileNameGenerator> fileNameGenerator,
+    const std::vector<std::string>& insertedColumns)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -154,7 +156,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
       writeKind_(writeKind),
-      existingDeletionVectors_(std::move(existingDeletionVectors)) {
+      existingDeletionVectors_(std::move(existingDeletionVectors)),
+      insertedColumns_(insertedColumns) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The
@@ -377,6 +380,58 @@ IcebergDataSink::IcebergDataSink(
   // returns the matching collector, or nullptr for formats without support.
   statsCollector_ = IcebergStatsCollector::create(
       insertTableHandle->storageFormat(), columnHandles, inputType_);
+}
+
+void IcebergDataSink::appendData(RowVectorPtr input) {
+  // Fill write-default values for columns that were omitted from the INSERT
+  // statement. This ensures that when columns are not specified in INSERT,
+  // they get their write-default values instead of NULL.
+  bool needsModification = false;
+  std::vector<VectorPtr> modifiedChildren;
+  modifiedChildren.reserve(input->childrenSize());
+  // Build a set of inserted column names for fast lookup
+  const auto& insertedCols = icebergInsertTableHandle_->insertedColumns();
+  std::unordered_set<std::string> insertedColSet(
+      insertedCols.begin(), insertedCols.end());
+  for (auto i = 0; i < input->childrenSize(); ++i) {
+    auto child = input->childAt(i);
+    // Check if this column has a write-default value
+    const auto& columnHandle = checkedPointerCast<const IcebergColumnHandle>(
+        icebergInsertTableHandle_->inputColumns()[i]);
+    // Apply write-default only if:
+    // 1. Column has a write-default value
+    // 2. Column was omitted from INSERT (not in insertedColumns)
+    // 3. Block may have NULLs
+    const bool isOmittedColumn = !insertedColSet.empty() &&
+        insertedColSet.find(columnHandle->name()) == insertedColSet.end();
+    const auto& writeDefault = columnHandle->writeDefaultValue();
+    if (writeDefault.has_value() && isOmittedColumn && child->mayHaveNulls()) {
+      // Column was omitted from INSERT, replace with write-default constant
+      needsModification = true;
+      const auto& writeDefaultStr = writeDefault.value();
+      auto defaultConstant = newConstantFromString(
+          child->type(), writeDefaultStr, input->pool(), false, false);
+      // Create a ConstantVector with the default value for all rows
+      modifiedChildren.push_back(
+          BaseVector::wrapInConstant(input->size(), 0, defaultConstant));
+    } else {
+      // Column was explicitly specified in INSERT or has no write-default
+      // Keep original values (including explicit NULLs)
+      modifiedChildren.push_back(child);
+    }
+  }
+  // If any column was modified, create a new RowVector
+  RowVectorPtr processedInput = input;
+  if (needsModification) {
+    processedInput = std::make_shared<RowVector>(
+        input->pool(),
+        input->type(),
+        input->nulls(),
+        input->size(),
+        std::move(modifiedChildren));
+  }
+  // Call parent's appendData with the processed input
+  HiveDataSink::appendData(processedInput);
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
