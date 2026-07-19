@@ -20,6 +20,7 @@
 
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/SpillFile.h"
 
 namespace facebook::velox::exec {
 
@@ -74,6 +75,13 @@ class MergeJoin : public Operator {
   void finishDrain() override;
 
   void close() override;
+
+  bool canReclaim() const override;
+
+  bool reclaimableBytes(uint64_t& reclaimableBytes) const override;
+
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
  private:
   // Sets up 'filter_' and related member variables.
@@ -171,8 +179,31 @@ class MergeJoin : public Operator {
   // with all join keys being the same. The set of rows may span multiple
   // batches of input.
   struct Match {
+    struct Batch {
+      // Stable identity for this original input batch. Used by JoinTracker
+      // because spilled batches are re-read into different vector instances.
+      uint64_t id{0};
+
+      // The original input batch while it is retained in memory.
+      RowVectorPtr input;
+
+      // Spill file metadata after 'input' is spilled.
+      std::optional<SpillFiles> spillFiles;
+
+      // Re-read batch used only while producing output from a spilled input.
+      RowVectorPtr restoredInput;
+
+      RowTypePtr rowType;
+      vector_size_t numRows{0};
+      uint64_t retainedBytes{0};
+
+      bool spilled() const {
+        return spillFiles.has_value();
+      }
+    };
+
     // One or more batches of inputs that contain rows with matching keys.
-    std::vector<RowVectorPtr> inputs;
+    std::vector<Batch> inputs;
 
     // Row number in the first batch pointing to the first row with matching
     // keys.
@@ -219,6 +250,34 @@ class MergeJoin : public Operator {
       const std::vector<column_index_t>& keys,
       Match& match);
 
+  void addInputToMatch(Match& match, const RowVectorPtr& input);
+
+  RowVectorPtr matchInput(Match& match, size_t batchIndex);
+
+  vector_size_t matchBatchSize(const Match::Batch& batch) const;
+
+  RowVectorPtr restoreSpilledInput(Match::Batch& batch);
+
+  void spillMatchBatch(Match::Batch& batch);
+
+  bool isMatchBatchSpillable(const Match::Batch& batch) const;
+
+  uint64_t reclaimableBytesLocked() const;
+
+  void releaseMatchBatch(Match::Batch& batch);
+
+  void clearMatch(std::optional<Match>& match);
+
+  void clearRestoredMatchInputs();
+
+  void reserveMatchMemory(uint64_t bytes);
+
+  void releaseMatchMemory(uint64_t bytes);
+
+  void maybeTriggerSpill();
+
+  void loadInputColumns(const RowVectorPtr& input);
+
   // Ensures `output_` is ready to receive records via `addOutput()` or
   // `addOutputRowForLeftJoin()`. Initialize vectors using `outputBatchSize_`.
   // Returns true is the output_ needs to be returned/produced first, and false
@@ -259,8 +318,10 @@ class MergeJoin : public Operator {
   bool tryAddOutputRow(
       const RowVectorPtr& leftBatch,
       vector_size_t leftRow,
+      uint64_t leftBatchId,
       const RowVectorPtr& rightBatch,
-      vector_size_t rightRow);
+      vector_size_t rightRow,
+      uint64_t rightBatchId);
 
   // If the right side projected columns in the current output vector happen to
   // span more than one vector from the right side, they cannot be simply
@@ -351,7 +412,12 @@ class MergeJoin : public Operator {
       return nullptr;
     }
     output_->resize(outputSize_);
-    return std::move(output_);
+    auto output = std::move(output_);
+    currentLeft_.reset();
+    currentRight_.reset();
+    isRightFlattened_ = false;
+    clearRestoredMatchInputs();
+    return output;
   }
 
   // Updates outputBatchSize_ dynamically based on the average row size of the
@@ -364,6 +430,10 @@ class MergeJoin : public Operator {
   // a subset of rows on which the filter passed. Returns nullptr if no rows
   // passed the filter.
   RowVectorPtr applyFilter(const RowVectorPtr& output);
+
+  RowVectorPtr applyFilterForFullJoin(
+      const RowVectorPtr& output,
+      const SelectivityVector& filterRows);
 
   // Evaluates 'filter_' on the specified rows of 'filterInput_' and decodes
   // the result using 'decodedFilterResult_'.
@@ -416,6 +486,10 @@ class MergeJoin : public Operator {
         : matchingRows_{numRows, false} {
       leftRowNumbers_ = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
       rawLeftRowNumbers_ = leftRowNumbers_->asMutable<vector_size_t>();
+      batchIds_ = AlignedBuffer::allocate<uint64_t>(numRows, pool);
+      rawBatchIds_ = batchIds_->asMutable<uint64_t>();
+      rowIndices_ = AlignedBuffer::allocate<vector_size_t>(numRows, pool);
+      rawRowIndices_ = rowIndices_->asMutable<vector_size_t>();
     }
 
     // Records a row of output that corresponds to a match between a left-side
@@ -424,15 +498,18 @@ class MergeJoin : public Operator {
     // addMiss method for each row of output in order, starting with the first
     // row.
     void addMatch(
-        const VectorPtr& vector,
+        uint64_t batchId,
         vector_size_t row,
         vector_size_t outputIndex) {
       matchingRows_.setValid(outputIndex, true);
+      rawBatchIds_[outputIndex] = batchId;
+      rawRowIndices_[outputIndex] = row;
 
-      if (lastVector_ != vector || lastIndex_ != row) {
+      if (!hasLastRow_ || lastBatchId_ != batchId || lastIndex_ != row) {
         // New left-side row.
         ++lastLeftRowNumber_;
-        lastVector_ = vector;
+        hasLastRow_ = true;
+        lastBatchId_ = batchId;
         lastIndex_ = row;
       }
 
@@ -461,7 +538,8 @@ class MergeJoin : public Operator {
     // re-use, hence, need to make sure that new rows won't be confused with
     // the old ones.
     void resetLastVector() {
-      lastVector_.reset();
+      hasLastRow_ = false;
+      lastBatchId_ = 0;
       lastIndex_ = -1;
     }
 
@@ -477,12 +555,16 @@ class MergeJoin : public Operator {
         const TOnMiss& onMiss,
         const TOnMatch& onMatch) {
       const auto rowNumber = rawLeftRowNumbers_[outputIndex];
+      const auto batchId = rawBatchIds_[outputIndex];
+      const auto rowIndex = rawRowIndices_[outputIndex];
       if (currentLeftRowNumber_ != rowNumber) {
         if (currentRow_ != -1 && !currentRowPassed_) {
           onMiss(currentRow_);
         }
         currentRow_ = outputIndex;
         currentLeftRowNumber_ = rowNumber;
+        currentBatchId_ = batchId;
+        currentIndex_ = rowIndex;
         currentRowPassed_ = false;
       } else {
         currentRow_ = outputIndex;
@@ -500,17 +582,32 @@ class MergeJoin : public Operator {
       return currentLeftRowNumber_ == rawLeftRowNumbers_[row];
     }
 
+    bool isCurrentRow(uint64_t batchId, vector_size_t row) const {
+      return currentRow_ != -1 && currentBatchId_ == batchId &&
+          currentIndex_ == row;
+    }
+
+    uint64_t batchId(vector_size_t outputIndex) const {
+      return rawBatchIds_[outputIndex];
+    }
+
+    vector_size_t rowIndex(vector_size_t outputIndex) const {
+      return rawRowIndices_[outputIndex];
+    }
+
     // Called when all rows from the current output batch are processed and the
     // next batch of output will start with a new left-side row or there will
     // be no more batches. Calls 'onMiss' for the last left-side row if the
     // filter failed for all matches of that row.
     template <typename TOnMiss>
     void noMoreFilterResults(TOnMiss onMiss) {
-      if (!currentRowPassed_) {
+      if (currentRow_ != -1 && !currentRowPassed_) {
         onMiss(currentRow_);
       }
 
       currentRow_ = -1;
+      currentBatchId_ = 0;
+      currentIndex_ = -1;
       currentRowPassed_ = false;
     }
 
@@ -521,10 +618,11 @@ class MergeJoin : public Operator {
     // keys. Used in filter evaluation.
     SelectivityVector matchingRows_;
 
-    // The left-side vector and index of the last added row. Used to identify
-    // the end of a block of output rows that correspond to the same left-side
-    // row.
-    VectorPtr lastVector_{nullptr};
+    // The stable batch identity and row index of the last added row. Used to
+    // identify the end of a block of output rows that correspond to the same
+    // left-side row.
+    bool hasLastRow_{false};
+    uint64_t lastBatchId_{0};
     vector_size_t lastIndex_{-1};
 
     // Synthetic numbers used to uniquely identify a left-side row. We cannot
@@ -534,6 +632,12 @@ class MergeJoin : public Operator {
     // not defined.
     BufferPtr leftRowNumbers_;
     vector_size_t* rawLeftRowNumbers_;
+
+    BufferPtr batchIds_;
+    uint64_t* rawBatchIds_;
+
+    BufferPtr rowIndices_;
+    vector_size_t* rawRowIndices_;
 
     // Synthetic number assigned to the last added "match" row or zero if no row
     // has been added yet.
@@ -545,6 +649,10 @@ class MergeJoin : public Operator {
     // Synthetic number for the 'currentRow'.
     vector_size_t currentLeftRowNumber_{-1};
 
+    // Stable identity for the current tracked row.
+    uint64_t currentBatchId_{0};
+    vector_size_t currentIndex_{-1};
+
     // True if at least one row in a block of output rows corresponding a single
     // left-side row identified by 'currentRowNumber' passed the filter.
     bool currentRowPassed_{false};
@@ -552,6 +660,42 @@ class MergeJoin : public Operator {
 
   /// Used to record both left and right join.
   std::optional<JoinTracker> joinTracker_{std::nullopt};
+
+  // Full outer join with a filter needs to track right-side rows independently
+  // because right rows are not contiguous in merge join output order.
+  std::optional<JoinTracker> fullJoinRightTracker_{std::nullopt};
+
+  struct FullJoinRightMissKey {
+    uint64_t batchId;
+    vector_size_t row;
+
+    bool operator==(const FullJoinRightMissKey& other) const {
+      return batchId == other.batchId && row == other.row;
+    }
+  };
+
+  struct FullJoinRightMissKeyHash {
+    size_t operator()(const FullJoinRightMissKey& key) const {
+      const auto rowHash = std::hash<vector_size_t>{}(key.row);
+      auto seed = std::hash<uint64_t>{}(key.batchId);
+      seed ^= rowHash + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+      return seed;
+    }
+  };
+
+  struct FullJoinRightMiss {
+    vector_size_t storedRow;
+    bool passed;
+  };
+
+  folly::F14FastMap<
+      FullJoinRightMissKey,
+      size_t,
+      FullJoinRightMissKeyHash>
+      fullJoinRightMissIndex_;
+  std::vector<FullJoinRightMiss> fullJoinRightMisses_;
+  RowVectorPtr fullJoinRightMissRows_;
+  bool fullJoinFilterMatchFinished_{false};
 
   // Indices buffer used by the output dictionaries. All projection from the
   // left share `leftIndices_`, and projections in the right share
@@ -644,6 +788,10 @@ class MergeJoin : public Operator {
 
   // A set of rows with matching keys on the right side.
   std::optional<Match> rightMatch_;
+
+  uint64_t nextMatchBatchId_{1};
+
+  uint64_t retainedMatchBytes_{0};
 
   RowVectorPtr output_;
 

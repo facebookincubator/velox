@@ -23,7 +23,7 @@ spilled state on disk. The restoring phase is executed after the operator has
 processed all the input. It reads the spilled state from disk and merges it
 with un-spilled state in memory to produce the result. Different operators use
 different spilling algorithms. This document discusses the algorithms used by
-Hash Aggregation, Order By, and Hash Join operators.
+Hash Aggregation, Order By, Hash Join, and Sort Merge Join operators.
 
 Spilling Framework
 ------------------
@@ -137,14 +137,15 @@ and then selects a number of partitions to spill.
 **spill vector**: the operator spills a row vector to a specified partition. The
 Spiller directly appends the row vector to the currently open spill file from
 that partition. The spilling process is also controlled by the operator. It is
-used for spilling by the hash join. Both hash build and hash probe operators
-spill input rows to disk if the corresponding partition has been spilled. For
-the hash build operator, if a partition has been spilled, then all the input
-rows from that partition have to spill as we can’t build a hash table with a
-subset of rows from that partition to join. For the hash probe operator, it
-itself is not spillable but it needs to spill the input rows if the associated
-partition has been spilled by the hash build. We discuss this further in the
-hash join spilling section.
+used for spilling by the hash join and sort merge join. Both hash build and
+hash probe operators spill input rows to disk if the corresponding partition
+has been spilled. For the hash build operator, if a partition has been spilled,
+then all the input rows from that partition have to spill as we can’t build a
+hash table with a subset of rows from that partition to join. For the hash
+probe operator, it itself is not spillable but it needs to spill the input rows
+if the associated partition has been spilled by the hash build. Sort merge join
+uses this API to spill buffered duplicate-key match batches. We discuss this
+further in the hash join and sort merge join spilling sections.
 
 .. code-block:: c++
 
@@ -529,6 +530,31 @@ spilling:
 * To parallelize the hash table build from the spilled partition, the hash join
   bridge will split the spill partition files among the hash build operators
   with each one having an equally-sized shard to restore.
+
+Sort Merge Join
+^^^^^^^^^^^^^^^
+
+The sort merge join operator assumes that both inputs are already sorted on the
+join keys. It advances the two sorted streams until it finds matching keys, then
+buffers the rows with that key from both sides and produces the Cartesian
+product for that match window. A match window can span multiple input batches
+on either side when the join key has many duplicates.
+
+Sort merge join spilling applies only to these buffered duplicate-key match
+windows. It does not spill, sort, or repartition the input streams themselves.
+When memory reclaim is requested, the operator spills safe, unreferenced input
+batches from the current match window to disk using unsorted row-vector spill
+files. The operator keeps the spill file metadata for each original input batch
+and drops the in-memory batch reference.
+
+While producing output, the operator re-reads spilled match batches from their
+spill files as needed. A spilled batch may be read more than once because the
+join output for a duplicate-key window may revisit the same left or right batch
+while resuming from an output cursor. Re-read batches are cached only across the
+current output boundary and then released.
+
+Sort merge join spilling is enabled by the global spill configuration and the
+join spill configuration, the same settings used by hash join spilling.
 
 Reclaim Across Memory Resources
 -------------------------------
