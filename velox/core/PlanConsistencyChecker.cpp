@@ -315,9 +315,26 @@ class Checker : public PlanNodeVisitor {
     }
   }
 
+  using TypedExprCache = folly::F14FastSet<const ITypedExpr*>;
+
   static void checkInputs(
       const core::TypedExprPtr& expr,
       const RowTypePtr& rowType) {
+    TypedExprCache visited;
+    checkInputs(expr, rowType, visited);
+  }
+
+  static void checkInputs(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& rowType,
+      TypedExprCache& visited) {
+    // A TypedExpr is a DAG: a shared subexpression is reached from many
+    // parents. Check each node once, so a heavily-shared expression is
+    // validated in linear rather than exponential time.
+    if (!visited.insert(expr.get()).second) {
+      return;
+    }
+
     if (expr->isFieldAccessKind()) {
       auto fieldAccess = expr->asUnchecked<core::FieldAccessTypedExpr>();
       if (fieldAccess->isInputColumn()) {
@@ -337,11 +354,12 @@ class Checker : public PlanNodeVisitor {
 
     if (expr->isLambdaKind()) {
       const auto& lambda = expr->asUnchecked<core::LambdaTypedExpr>();
-      checkInputs(lambda->body(), lambda->signature()->unionWith(rowType));
+      checkInputs(
+          lambda->body(), lambda->signature()->unionWith(rowType), visited);
     }
 
     for (const auto& input : expr->inputs()) {
-      checkInputs(input, rowType);
+      checkInputs(input, rowType, visited);
     }
   }
 

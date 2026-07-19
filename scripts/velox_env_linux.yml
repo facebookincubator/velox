@@ -45,7 +45,7 @@ dependencies:
   - bzip2
   - double-conversion
   - fmt=8.0.*
-  - gflags=2.2.2
+  - gflags=2.3.0
   - glog=0.6.0
   - gmock=1.13
   - google-cloud-cpp

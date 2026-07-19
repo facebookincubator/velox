@@ -868,11 +868,31 @@ void CastExpr::applyPeeled(
             fromType,
             toType);
     }
-  } else if (
-      fromType->kind() == TypeKind::TIMESTAMP &&
-      (toType->kind() == TypeKind::VARCHAR ||
-       toType->kind() == TypeKind::VARBINARY)) {
-    if (fromType->equivalent(*TIMESTAMP_UTC())) {
+  } else if (toType->equivalent(*TIMESTAMP_UTC())) {
+    if (fromType->equivalent(*TIMESTAMP())) {
+      VELOX_USER_CHECK(
+          hooks_->supportsTimestampUtc(),
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+      result = applyTimestampTimestampUtcCast<true>(rows, context, input);
+    } else {
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+    }
+  } else if (fromType->equivalent(*TIMESTAMP_UTC())) {
+    if (toType->equivalent(*TIMESTAMP())) {
+      VELOX_USER_CHECK(
+          hooks_->supportsTimestampUtc(),
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+      result = applyTimestampTimestampUtcCast<false>(rows, context, input);
+    } else if (
+        toType->kind() == TypeKind::VARCHAR ||
+        toType->kind() == TypeKind::VARBINARY) {
       VELOX_USER_CHECK(
           hooks_->supportsTimestampUtc(),
           "Cast from {} to {} is not supported",
@@ -881,9 +901,17 @@ void CastExpr::applyPeeled(
       result = applyTimestampToVarcharCast(
           toType, rows, context, input, hooks_->timestampUtcToStringOptions());
     } else {
-      result = applyTimestampToVarcharCast(
-          toType, rows, context, input, hooks_->timestampToStringOptions());
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
     }
+  } else if (
+      fromType->kind() == TypeKind::TIMESTAMP &&
+      (toType->kind() == TypeKind::VARCHAR ||
+       toType->kind() == TypeKind::VARBINARY)) {
+    result = applyTimestampToVarcharCast(
+        toType, rows, context, input, hooks_->timestampToStringOptions());
   } else if (toType->kind() == TypeKind::VARBINARY) {
     switch (fromType->kind()) {
       case TypeKind::TINYINT:
@@ -981,6 +1009,38 @@ VectorPtr CastExpr::applyTimestampToVarcharCast(
 
   // Update the exact buffer size.
   buffer->setSize(rawBuffer - buffer->asMutable<char>());
+  return result;
+}
+
+template <bool kToUtc>
+VectorPtr CastExpr::applyTimestampTimestampUtcCast(
+    const SelectivityVector& rows,
+    exec::EvalCtx& context,
+    const BaseVector& input) {
+  VectorPtr result;
+  if constexpr (kToUtc) {
+    context.ensureWritable(rows, TIMESTAMP_UTC(), result);
+  } else {
+    context.ensureWritable(rows, TIMESTAMP(), result);
+  }
+  (*result).clearNulls(rows);
+  auto* resultVector = result->asFlatVector<Timestamp>();
+  const auto& inputVector = *input.as<SimpleVector<Timestamp>>();
+  const auto* sessionTimeZone =
+      getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+    Timestamp ts = inputVector.valueAt(row);
+    if (sessionTimeZone) {
+      if constexpr (kToUtc) {
+        ts.toTimezone(*sessionTimeZone);
+      } else {
+        // Convert from local timestamp representation to UTC, applying DST gap
+        // correction for spring-forward transitions.
+        hooks_->castDateTimestampToGMT(ts, *sessionTimeZone);
+      }
+    }
+    resultVector->set(row, ts);
+  });
   return result;
 }
 

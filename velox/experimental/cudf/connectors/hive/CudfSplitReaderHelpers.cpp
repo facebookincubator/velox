@@ -170,20 +170,6 @@ void BufferedInputDataSource::readContiguous(
   stream->readFully(reinterpret_cast<char*>(dst), size);
 }
 
-std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
-    std::shared_ptr<cudf::io::datasource> dataSource) {
-  // Using libcudf utility but may have custom implementation in the future
-  return cudf::io::parquet::fetch_footer_to_host(*dataSource);
-}
-
-std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
-    std::shared_ptr<cudf::io::datasource> dataSource,
-    const cudf::io::text::byte_range_info pageIndexBytes) {
-  // Using libcudf utility but may have custom implementation in the future
-  return cudf::io::parquet::fetch_page_index_to_host(
-      *dataSource, pageIndexBytes);
-}
-
 std::tuple<
     std::vector<rmm::device_buffer>,
     std::vector<cudf::device_span<const uint8_t>>,
