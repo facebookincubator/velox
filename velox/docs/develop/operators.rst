@@ -62,6 +62,7 @@ WindowNode                  Window
 RowNumberNode               RowNumber
 TopNRowNumberNode           TopNRowNumber
 MixedUnionNode              MixedUnion
+RPCNode                     RPCOperator
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -1134,6 +1135,51 @@ ALL.
 .. image:: images/local-exchange.png
     :width: 400
     :align: center
+
+.. _RPCNode:
+
+RPCNode
+~~~~~~~
+
+The RPC operation calls an external service asynchronously — once per input row
+(``PER_ROW``) or once per batch of rows (``BATCH``) — and appends the response as
+a new column. It is used for remote inference such as LLM completion and text
+embeddings. The corresponding operator is ``RPCOperator`` (``velox/exec/rpc/``);
+the business logic is provided by an :ref:`AsyncRPCFunction <AsyncRPCFunction>`
+(see :doc:`/develop/async-rpc-functions`).
+
+The node does not evaluate its argument expressions: a ``ProjectNode`` upstream
+pre-computes them into columns, which the RPC node references by name.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - functionName
+     - Name of the registered async RPC function to call.
+   * - argumentColumns
+     - Names of the input columns supplying the call arguments, in order.
+   * - argumentTypes / constantInputs
+     - The type of each argument and, for constant arguments, its value
+       (non-constant arguments are null).
+   * - outputColumn / resultType
+     - Name and Velox type of the result column appended to the output.
+   * - outputType
+     - Full output row type: the passed-through source columns plus the result
+       column (stated explicitly to allow column pruning).
+   * - streamingMode
+     - ``kPerRow`` (one RPC per row, dispatched concurrently) or ``kBatch``
+       (rows grouped into a single request).
+   * - dispatchBatchSize
+     - In ``kBatch`` mode, the number of rows per request (``0`` = the whole
+       input as one request). Not used in ``kPerRow`` mode.
+
+.. note::
+   The ``streamingMode`` / ``dispatchBatchSize`` control model is under review;
+   see :doc:`/develop/async-rpc-functions` for details.
 
 GPU Operators (cuDF)
 --------------------
