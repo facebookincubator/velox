@@ -19,9 +19,12 @@
 #include <avro/Generic.hh>
 
 #include <limits>
+#include <string_view>
+#include <utility>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/avro/RegisterAvroReader.h"
 #include "velox/dwio/common/Mutation.h"
@@ -38,6 +41,29 @@ using namespace facebook::velox::common::testutil;
 class TestDeltaColumnUpdater : public dwio::common::DeltaColumnUpdater {
  public:
   void update(const RowSet&, VectorPtr&) override {}
+};
+
+class FileStartReadTrackingFile : public InMemoryReadFile {
+ public:
+  using InMemoryReadFile::InMemoryReadFile;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buffer,
+      const FileIoContext& context = {}) const override {
+    if (offset == 0) {
+      ++numReadsFromFileStart_;
+    }
+    return InMemoryReadFile::pread(offset, length, buffer, context);
+  }
+
+  uint64_t numReadsFromFileStart() const {
+    return numReadsFromFileStart_;
+  }
+
+ private:
+  mutable uint64_t numReadsFromFileStart_{0};
 };
 
 class AvroReaderTest : public testing::Test, public VectorTestBase {
@@ -830,6 +856,40 @@ class AvroReaderTest : public testing::Test, public VectorTestBase {
         });
     return filePath;
   }
+
+  static std::pair<std::shared_ptr<TempFilePath>, uint64_t>
+  writeSplitRowNumberRecord() {
+    const std::string schemaJson = R"JSON(
+    {
+      "type": "record",
+      "name": "SplitRowNumberRecord",
+      "fields": [
+        {"name": "value", "type": "int"}
+      ]
+    })JSON";
+    uint64_t splitOffset{0};
+    auto filePath = writeAvroFile(
+        schemaJson,
+        [&splitOffset](auto& writer, const ::avro::ValidSchema& schema) {
+          ::avro::GenericDatum datum(schema.root());
+          auto& value =
+              datum.value<::avro::GenericRecord>().fieldAt(0).value<int32_t>();
+
+          // Place the split at the first block's start. Avro aligns a non-zero
+          // split to the next sync marker, so reading starts at the second
+          // block.
+          splitOffset = writer.getCurrentBlockStart();
+          value = 10;
+          writer.write(datum);
+          writer.flush();
+
+          value = 20;
+          writer.write(datum);
+          value = 30;
+          writer.write(datum);
+        });
+    return {std::move(filePath), splitOffset};
+  }
 };
 
 TEST_F(AvroReaderTest, allTypesSchemaMapping) {
@@ -1003,6 +1063,51 @@ TEST_F(AvroReaderTest, rejectsUnsupportedLogicalType) {
       [](auto& /*writer*/, const ::avro::ValidSchema& /*schema*/) {});
 
   EXPECT_THROW(createReader(filePath), VeloxUserError);
+}
+
+TEST_F(AvroReaderTest, rejectsUnsupportedDecimalMetadata) {
+  const auto expectUnsupported = [&](const std::string& schemaJson,
+                                     std::string_view expectedError) {
+    auto filePath = writeAvroFile(
+        schemaJson,
+        [](auto& /*writer*/, const ::avro::ValidSchema& /*schema*/) {});
+    VELOX_ASSERT_THROW_CODE(
+        createReader(filePath), error_code::kUnsupported, expectedError);
+  };
+
+  expectUnsupported(
+      R"JSON(
+        {
+          "type": "record",
+          "name": "HighPrecisionDecimalRecord",
+          "fields": [
+            {"name": "value", "type": {
+              "type": "bytes",
+              "logicalType": "decimal",
+              "precision": 39,
+              "scale": 2
+            }}
+          ]
+        })JSON",
+      "Avro decimal precision exceeds the maximum supported by Velox");
+  expectUnsupported(
+      R"JSON(
+        {
+          "type": "record",
+          "name": "WideFixedDecimalRecord",
+          "fields": [
+            {"name": "value", "type": {
+              "type": "fixed",
+              "name": "WideFixedDecimal",
+              "size": 17,
+              "logicalType": "decimal",
+              "precision": 38,
+              "scale": 2
+            }}
+          ]
+        })JSON",
+      "Avro fixed decimal encoding is wider than the maximum supported by "
+      "the Velox Avro reader");
 }
 
 TEST_F(AvroReaderTest, rejectsNonRecordRootSchema) {
@@ -1208,34 +1313,7 @@ TEST_F(AvroReaderTest, reportsAtEndAfterExactRead) {
 }
 
 TEST_F(AvroReaderTest, nextRowNumberIsFileAbsoluteForNonZeroSplit) {
-  const std::string schemaJson = R"JSON(
-    {
-      "type": "record",
-      "name": "SplitRowNumberRecord",
-      "fields": [
-        {"name": "value", "type": "int"}
-      ]
-    })JSON";
-  uint64_t splitOffset{0};
-  auto filePath = writeAvroFile(
-      schemaJson,
-      [&splitOffset](auto& writer, const ::avro::ValidSchema& schema) {
-        ::avro::GenericDatum datum(schema.root());
-        auto& value =
-            datum.value<::avro::GenericRecord>().fieldAt(0).value<int32_t>();
-
-        // Place the split at the first block's start. Avro aligns a non-zero
-        // split to the next sync marker, so reading starts at the second block.
-        splitOffset = writer.getCurrentBlockStart();
-        value = 10;
-        writer.write(datum);
-        writer.flush();
-
-        value = 20;
-        writer.write(datum);
-        value = 30;
-        writer.write(datum);
-      });
+  const auto [filePath, splitOffset] = writeSplitRowNumberRecord();
 
   ASSERT_GT(splitOffset, 0);
   auto reader = createReader(filePath);
@@ -1250,6 +1328,65 @@ TEST_F(AvroReaderTest, nextRowNumberIsFileAbsoluteForNonZeroSplit) {
   auto expected = makeRowVector({makeFlatVector<int32_t>({20})});
   assertEqualVectors(expected, result);
   EXPECT_EQ(rowReader->nextRowNumber(), 2);
+}
+
+TEST_F(AvroReaderTest, resolvesNonZeroSplitRowNumberLazily) {
+  const auto [filePath, splitOffset] = writeSplitRowNumberRecord();
+
+  ASSERT_GT(splitOffset, 0);
+  LocalReadFile localFile(filePath->getPath());
+  std::string fileData(localFile.size(), '\0');
+  localFile.pread(0, fileData.size(), fileData.data());
+  auto readTrackingFile =
+      std::make_shared<FileStartReadTrackingFile>(std::move(fileData));
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readTrackingFile, *pool());
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::AVRO);
+  auto reader = factory->createReader(
+      std::move(input), dwio::common::ReaderOptions{pool()});
+
+  const auto numReadsFromFileStartBeforeRowReader =
+      readTrackingFile->numReadsFromFileStart();
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.range(splitOffset, std::numeric_limits<uint64_t>::max());
+  auto rowReader = createRowReader(*reader, rowOptions);
+
+  // Constructing the row reader reads one header without scanning the prefix.
+  EXPECT_EQ(
+      readTrackingFile->numReadsFromFileStart(),
+      numReadsFromFileStartBeforeRowReader + 1);
+
+  // Reading data does not resolve the split's absolute starting row.
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1, result), 1);
+  EXPECT_EQ(
+      readTrackingFile->numReadsFromFileStart(),
+      numReadsFromFileStartBeforeRowReader + 1);
+
+  // The first row number request resolves the split's absolute starting row.
+  rowReader->nextRowNumber();
+  EXPECT_EQ(
+      readTrackingFile->numReadsFromFileStart(),
+      numReadsFromFileStartBeforeRowReader + 2);
+
+  // Later row number requests reuse the resolved starting row.
+  rowReader->nextRowNumber();
+  EXPECT_EQ(
+      readTrackingFile->numReadsFromFileStart(),
+      numReadsFromFileStartBeforeRowReader + 2);
+}
+
+TEST_F(AvroReaderTest, rejectsRowNumberColumnInfo) {
+  auto reader = createReader(writeRequestedTypeRecord());
+  dwio::common::RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 0;
+  rowNumberColumnInfo.name = "$row_number";
+  dwio::common::RowReaderOptions rowOptions;
+  rowOptions.setRowNumberColumnInfo(rowNumberColumnInfo);
+  VELOX_ASSERT_THROW_CODE(
+      createRowReader(*reader, rowOptions),
+      error_code::kUnsupported,
+      "Avro reader does not support implicit row number columns");
 }
 
 TEST_F(AvroReaderTest, readsComplexNestedData) {

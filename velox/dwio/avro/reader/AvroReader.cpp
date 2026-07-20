@@ -170,22 +170,22 @@ std::shared_ptr<AvroTypeInfo> buildTypeInfo(
 void applyDecimalLogicalType(
     const ::avro::LogicalType& logical,
     AvroTypeInfo& info) {
+  constexpr int32_t kMaxDecimalPrecision{
+      static_cast<int32_t>(LongDecimalType::kMaxPrecision)};
   const auto precisionValue = logical.precision();
   const auto scaleValue = logical.scale();
-  VELOX_CHECK_LE(
-      precisionValue,
-      static_cast<decltype(precisionValue)>(
-          std::numeric_limits<uint8_t>::max()));
-  VELOX_CHECK_LE(
-      scaleValue,
-      static_cast<decltype(scaleValue)>(std::numeric_limits<uint8_t>::max()));
+  if (precisionValue > kMaxDecimalPrecision) {
+    VELOX_UNSUPPORTED(
+        "Avro decimal precision exceeds the maximum supported by Velox: "
+        "precision {}, maximum {}.",
+        precisionValue,
+        kMaxDecimalPrecision);
+  }
+  VELOX_CHECK_GE(precisionValue, 1);
+  VELOX_CHECK_GE(scaleValue, 0);
+  VELOX_CHECK_LE(scaleValue, precisionValue);
   const auto precision = static_cast<uint8_t>(precisionValue);
   const auto scale = static_cast<uint8_t>(scaleValue);
-
-  VELOX_CHECK_GE(precision, 1);
-  VELOX_CHECK_LE(precision, LongDecimalType::kMaxPrecision);
-  VELOX_CHECK_GE(scale, 0);
-  VELOX_CHECK_LE(scale, precisionValue);
   info.logicalType = AvroLogicalType::kDecimal;
   info.decimalPrecision = precision;
   info.decimalScale = scale;
@@ -357,6 +357,14 @@ std::shared_ptr<AvroTypeInfo> buildTypeInfo(
       break;
     case ::avro::Type::AVRO_FIXED:
       if (logicalType == ::avro::LogicalType::Type::DECIMAL) {
+        const auto fixedSize = resolvedNode->fixedSize();
+        if (fixedSize > sizeof(int128_t)) {
+          VELOX_UNSUPPORTED(
+              "Avro fixed decimal encoding is wider than the maximum supported "
+              "by the Velox Avro reader: size {} bytes, maximum {} bytes.",
+              fixedSize,
+              sizeof(int128_t));
+        }
         applyDecimalLogicalType(logical, *info);
       } else if (logicalType == ::avro::LogicalType::Type::UUID) {
         info->logicalType = AvroLogicalType::kUuid;
@@ -857,9 +865,18 @@ class ReadFileAvroInputStream : public ::avro::SeekableInputStream {
 
   void backup(size_t len) override {
     if (pushback_ > 0) {
+      // SeekableFileInputStream allows BackUp() only once after each Next().
+      // Reconsume the previous pushback before backing up the cumulative size.
       const void* rawData = nullptr;
       int32_t size = 0;
-      stream_->Next(&rawData, &size);
+      VELOX_CHECK(
+          stream_->Next(&rawData, &size),
+          "Underlying stream failed to replay backed-up bytes.");
+      VELOX_CHECK_EQ(
+          static_cast<size_t>(size),
+          pushback_,
+          "Underlying stream replayed an unexpected number of backed-up "
+          "bytes.");
     }
     pushback_ += len;
     stream_->BackUp(static_cast<int32_t>(pushback_));
@@ -1752,8 +1769,8 @@ std::unique_ptr<dwio::common::RowReader> AvroReader::createRowReader(
 }
 
 namespace {
-// Avro-cpp does not expose OCF block metadata such as row counts, so scan
-// from the file start to derive the absolute row number.
+// Avro-cpp does not expose OCF block metadata such as row counts, so derive an
+// absolute split row number on demand by scanning from the file start.
 // TODO: Use block metadata when avro-cpp exposes it.
 uint64_t countRowsBeforeBlock(
     const AvroFileContents& contents,
@@ -1769,6 +1786,7 @@ uint64_t countRowsBeforeBlock(
   }
   return numRows;
 }
+
 } // namespace
 
 AvroRowReader::AvroRowReader(
@@ -1785,16 +1803,23 @@ AvroRowReader::AvroRowReader(
       options_(options),
       readSchema_(buildReadSchema(*contents_, options)),
       atEnd_(false),
-      fileRowNumber_(0),
+      splitStartPosition_(0),
+      splitStartRowNumber_(0),
+      numRowsConsumedInSplit_(0),
       rowSizeSampleCount_(0),
       rowSizeSampleBytes_(0) {
+  if (options_.rowNumberColumnInfo().has_value()) {
+    // TODO: Support implicit row number columns using currentFileRowNumber().
+    VELOX_UNSUPPORTED(
+        "Avro reader does not support implicit row number columns.");
+  }
   if (options.offset() > 0) {
     reader_->sync(static_cast<int64_t>(options.offset()));
     if (reader_->pastSync(splitLimit_)) {
       atEnd_ = true;
     } else {
-      fileRowNumber_ =
-          countRowsBeforeBlock(*contents_, reader_->previousSync());
+      splitStartPosition_ = reader_->previousSync();
+      splitStartRowNumber_.reset();
     }
   }
   uint64_t skip = options.skipRows();
@@ -1803,7 +1828,7 @@ AvroRowReader::AvroRowReader(
       atEnd_ = true;
       break;
     }
-    ++fileRowNumber_;
+    ++numRowsConsumedInSplit_;
     --skip;
   }
   if (skip > 0) {
@@ -1814,8 +1839,16 @@ AvroRowReader::AvroRowReader(
   }
 }
 
+uint64_t AvroRowReader::currentFileRowNumber() {
+  if (!splitStartRowNumber_.has_value()) {
+    splitStartRowNumber_ =
+        countRowsBeforeBlock(*contents_, splitStartPosition_);
+  }
+  return splitStartRowNumber_.value() + numRowsConsumedInSplit_;
+}
+
 int64_t AvroRowReader::nextRowNumber() {
-  return atEnd_ ? kAtEnd : static_cast<int64_t>(fileRowNumber_);
+  return atEnd_ ? kAtEnd : static_cast<int64_t>(currentFileRowNumber());
 }
 
 std::optional<size_t> AvroRowReader::estimatedRowSize() const {
@@ -1857,8 +1890,7 @@ uint64_t AvroRowReader::next(
   const auto rowsToRead = nextReadSize(size);
   SelectivityVector rows(rowsToRead);
   const auto& rowType = readSchema_->rowType;
-  if (result &&
-      (!result->type()->equivalent(*rowType) || result->size() != size)) {
+  if (result && !result->type()->equivalent(*rowType)) {
     result.reset();
   }
   BaseVector::ensureWritable(rows, rowType, &contents_->pool, result);
@@ -1880,8 +1912,8 @@ uint64_t AvroRowReader::next(
     writeDatum(resolved, writer.current());
     writer.commit(true);
     ++numRead;
-    ++fileRowNumber_;
   }
+  numRowsConsumedInSplit_ += numRead;
   if (!atEnd_ && reader_->pastSync(splitLimit_)) {
     atEnd_ = true;
   }
