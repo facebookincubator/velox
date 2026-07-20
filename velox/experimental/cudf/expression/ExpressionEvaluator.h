@@ -26,6 +26,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -60,6 +61,15 @@ inline std::vector<cudf::column_view> tableViewToColumnViews(
   }
   return result;
 }
+
+// Throws a VeloxUserError with userMessage if any non-null entry of cond is
+// false. cond must be a BOOL8 column. Does nothing for empty or all-null
+// columns.
+void checkAllTrue(
+    cudf::column_view cond,
+    std::string_view userMessage,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 class CudfFunction {
  public:
