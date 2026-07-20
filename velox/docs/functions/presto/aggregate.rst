@@ -1009,7 +1009,7 @@ Miscellaneous
 
 .. function:: max_data_size_for_stats(x) -> bigint
 
-    Returns an estimate of the the maximum in-memory size in bytes of ``x``.
+    Returns an estimate of the maximum in-memory size in bytes of ``x``.
 
 .. function:: sum_data_size_for_stats(x) -> bigint
 

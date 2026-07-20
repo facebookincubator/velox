@@ -281,6 +281,11 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
+  md_.scanOutputReturnBarrier = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   md_.alwaysSingleBlock = val;
   return *this;
@@ -315,6 +320,11 @@ MetadataBuilder& MetadataBuilder::arithmeticPromotion(bool val) {
 
 MetadataBuilder& MetadataBuilder::inPlaceIfLastUse(bool val) {
   md_.inPlaceIfLastUse = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::sizeFromOutput(bool val) {
+  md_.sizeFromOutput = val;
   return *this;
 }
 
@@ -504,6 +514,11 @@ MetadataBuilder& MetadataBuilder::hasSizeArg(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
   ensureElementwise().hasBlockInfo = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::hasOutputArg(bool val) {
+  ensureElementwise().hasOutputArg = val;
   return *this;
 }
 

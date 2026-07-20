@@ -1588,5 +1588,143 @@ DEBUG_ONLY_TEST_P(StreamingAggregationTest, singleAggregationCleansState) {
   EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
 }
 
+// Minimal plan node + operator for a back-pressuring downstream. This mirrors
+// the helper in RowNumberTest, which is a regression test for the same class of
+// bug (an operator's needsInput() not checking input_ == nullptr). The operator
+// passes input through but refuses it most of the time, keeping the upstream
+// StreamingAggregation holding a buffered batch. Before the needsInput() fix
+// this made the Driver re-feed the aggregation and overwrite its undrained
+// input_, silently dropping rows.
+class BackpressureNode : public core::PlanNode {
+ public:
+  BackpressureNode(const core::PlanNodeId& id, core::PlanNodePtr input)
+      : PlanNode(id), sources_{std::move(input)} {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "Backpressure";
+  }
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+
+  std::vector<core::PlanNodePtr> sources_;
+};
+
+class BackpressureOperator : public Operator {
+ public:
+  BackpressureOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const std::shared_ptr<const BackpressureNode>& node)
+      : Operator(ctx, node->outputType(), id, node->id(), "Backpressure") {}
+
+  bool needsInput() const override {
+    if (noMoreInput_ || input_ != nullptr) {
+      return false;
+    }
+    // Accept input only every 4th poll. The rejected polls are when the Driver
+    // would re-feed (and, before the fix, overwrite) the upstream aggregation.
+    return (++polls_ % 4) == 0;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    return std::move(input_);
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /* future */) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
+
+ private:
+  mutable int32_t polls_{0};
+};
+
+class BackpressureNodeFactory : public Operator::PlanNodeTranslator {
+ public:
+  std::unique_ptr<Operator> toOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node) override {
+    if (auto bpNode = std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return std::make_unique<BackpressureOperator>(ctx, id, bpNode);
+    }
+    return nullptr;
+  }
+
+  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override {
+    if (std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return 1;
+    }
+    return std::nullopt;
+  }
+};
+
+// Regression test: a StreamingAggregation feeding a back-pressuring downstream
+// must not drop rows. Before the fix, StreamingAggregation::needsInput() did
+// not check input_ == nullptr, so when the downstream returned
+// needsInput()=false the Driver re-fed the aggregation and addInput() overwrote
+// the undrained batch, silently dropping rows (seen in production with
+// streaming aggregations fed through async IndexLookupJoins). One distinct,
+// clustered key per row makes the aggregation a pass-through, so output rows
+// must equal input rows.
+TEST_P(StreamingAggregationTest, noRowLossWithBackpressuringDownstream) {
+  static folly::once_flag registerFlag;
+  folly::call_once(registerFlag, [] {
+    Operator::registerOperator(std::make_unique<BackpressureNodeFactory>());
+  });
+
+  // Many small batches so the Driver repeatedly feeds the aggregation while the
+  // downstream refuses input.
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    // One distinct, globally-increasing (hence clustered) key per row, so a
+    // correct streaming aggregation emits exactly one group per input row.
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .streamingAggregation(
+              {"c0"},
+              {"arbitrary(c1)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .addNode([](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<BackpressureNode>(id, std::move(input));
+          })
+          .planNode();
+
+  // Single driver so the aggregation and the back-pressuring downstream share a
+  // pipeline.
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
+
 } // namespace
 } // namespace facebook::velox::exec

@@ -26,6 +26,7 @@
 
 #include <cuda/iterator>
 #include <cuda/std/type_traits>
+#include <thrust/count.h>
 #include <thrust/scatter.h>
 #include <thrust/sequence.h>
 #include <thrust/transform.h>
@@ -60,6 +61,17 @@ void applyBitmapToMask(
       deleteMask.begin<bool>(),
       deleteMask.begin<bool>(),
       IsDeletedRow{bitmap.data()});
+}
+
+cudf::size_type countDeletedRows(
+    cudf::column_view const& deleteMask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref temp_mr) {
+  return static_cast<cudf::size_type>(thrust::count(
+      rmm::exec_policy_nosync(stream, temp_mr),
+      deleteMask.begin<bool>(),
+      deleteMask.end<bool>(),
+      true));
 }
 
 void scatterDeletesToMask(

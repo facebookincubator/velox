@@ -617,8 +617,6 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::addOutputRow(
   reader_->addOutputRow(row);
 }
 
-enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
-
 namespace detail {
 
 template <typename T, typename A>
@@ -993,20 +991,10 @@ class DictionaryColumnVisitor
           dictMask,
           reinterpret_cast<const int32_t*>(filterCache() - 3),
           indices);
-#ifdef SVE_BITS
       auto unknowns = simd::toBitMask(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
-          xsimd::batch<uint32_t>(0));
-      auto passed = simd::toBitMask(
-          (simd::reinterpretBatch<uint32_t>(cache) &
-           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
-#else
-      auto unknowns = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
-              (cache & (kUnknown << 24)) << 1)));
-      auto passed = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-#endif
+          (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+          xsimd::batch<int32_t>(0));
+      auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         // Ranges only over inputs that are in dictionary, the not in dictionary
@@ -1387,6 +1375,11 @@ class StringDictionaryColumnVisitor
     }
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
+    // TODO: This inline SIMD loop duplicates the shared
+    // filterDictionaryRunSimd() free function in DecoderUtil.h; rewire
+    // processRun to call it in a follow-up diff. The dedup is split out to keep
+    // this DWRF change separate from the Nimble post-hoc dictionary filter
+    // feature.
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     for (auto i = 0; i < numInput; i += kWidth) {
       auto indices = xsimd::load_unaligned(input + i);
@@ -1402,20 +1395,10 @@ class StringDictionaryColumnVisitor
       } else {
         cache = simd::gather<int32_t, int32_t, 1>(base, indices);
       }
-#ifdef SVE_BITS
       auto unknowns = simd::toBitMask(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
-          xsimd::batch<uint32_t>(0));
-      auto passed = simd::toBitMask(
-          (simd::reinterpretBatch<uint32_t>(cache) &
-           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
-#else
-      auto unknowns = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
-              (cache & (kUnknown << 24)) << 1)));
-      auto passed = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-#endif
+          (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+          xsimd::batch<int32_t>(0));
+      auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         while (bits) {

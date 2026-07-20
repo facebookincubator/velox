@@ -23,6 +23,7 @@ add_executable(
   StringTest.cpp
   TypeAnalysisTest.cpp
   TypedExprSerdeTest.cpp
+  TypedExprToStringTest.cpp
 )
 
 add_test(velox_core_test velox_core_test)

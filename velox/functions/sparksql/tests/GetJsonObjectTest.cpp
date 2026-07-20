@@ -134,6 +134,31 @@ TEST_F(GetJsonObjectTest, basic) {
   EXPECT_EQ(getJsonObject(R"({"hello": "\u000A"})", "$.hello"), "\n");
 }
 
+TEST_F(GetJsonObjectTest, supplementaryPlaneInObject) {
+  // See appendWithSupplementaryEscapes for the behavior under test.
+
+  // Literal emoji U+1F9E7 inside an object value, alongside a CJK string
+  // that must stay literal.
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {"name": "🧧会员"}})", "$.a"),
+      R"({"name": "\uD83E\uDDE7会员"})");
+
+  // Literal emoji U+1F947 inside an array.
+  EXPECT_EQ(getJsonObject(R"({"a": ["🥇"]})", "$.a"), R"(["\uD83E\uDD47"])");
+
+  // Already-escaped '\u' input arrives as ASCII bytes and is preserved
+  // verbatim (no double escaping). Inside a raw string literal the backslash
+  // is literal, so the input/expected below are the literal bytes
+  // \ u D 8 3 E \ u D D E 7 g i f t.
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {"name": "\uD83E\uDDE7gift"}})", "$.a"),
+      R"({"name": "\uD83E\uDDE7gift"})");
+
+  // A supplementary-plane character extracted as a scalar string leaf is
+  // decoded to its literal form, unaffected by this change.
+  EXPECT_EQ(getJsonObject(R"({"a": "🥇"})", "$.a"), "🥇");
+}
+
 TEST_F(GetJsonObjectTest, nullResult) {
   // Field not found.
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$.hi"), std::nullopt);

@@ -213,7 +213,7 @@ class AggregateCallExpr : public CallExpr {
         name(), inputs(), distinct_, filter_, orderBy_, alias);
   }
 
-  ExprPtr dropAlias() const final {
+  ExprPtr dropAlias() const override {
     return std::make_shared<AggregateCallExpr>(
         name(), inputs(), distinct_, filter_, orderBy_, std::nullopt);
   }

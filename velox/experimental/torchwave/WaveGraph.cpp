@@ -26,6 +26,7 @@
 
 #include <c10/util/StringUtil.h>
 #include <folly/ScopeGuard.h>
+#include <functional>
 #include <sstream>
 
 #include "velox/experimental/wave/common/Cuda.h"
@@ -186,6 +187,35 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   optimizer_ = std::make_unique<Optimizer>(*this);
   optimizer_->optimizeGraph(graph_);
   createdValueDtypes_.clear();
+
+  // Graph outputs (and, for list-typed outputs, their elements) escape the
+  // graph, so LaunchData must never release them as per-op intermediates.
+  graphOutputIds_.clear();
+  if (auto* outNode = graph_->outputNode()) {
+    std::function<void(ValueCP)> addOut = [&](ValueCP v) {
+      if (v == nullptr || !graphOutputIds_.insert(v->id()).second) {
+        return;
+      }
+      // A graph output that is a view keeps its base's storage live, so protect
+      // the storage base too -- freeing the base as a per-op intermediate would
+      // corrupt the surviving output.
+      if (auto* base = viewStorageBase(v); base != nullptr) {
+        graphOutputIds_.insert(base->id());
+      }
+      auto k = v->type().kind();
+      if (k == nativert::Type::Kind::TensorList ||
+          k == nativert::Type::Kind::NestedTensorList ||
+          k == nativert::Type::Kind::OptionalTensorList) {
+        for (auto* e : v->getListElements()) {
+          addOut(e);
+        }
+      }
+    };
+    for (const auto& in : outNode->inputs()) {
+      addOut(in.value);
+    }
+  }
+
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(*graph_);
 
@@ -427,6 +457,16 @@ nativert::Value* WaveGraph::newListValue(
 
 bool WaveGraph::isCreatedValue(ValueCP value) const {
   return createdValueDtypes_.count(value->id()) > 0;
+}
+
+void WaveGraph::declareMultiplyReferencedInput(const nativert::Value* value) {
+  if (value != nullptr) {
+    multiUseInputs_.insert(value->id());
+    if (WaveConfig::get().trace & WaveConfig::kFrame) {
+      LOG(INFO) << "declareMultiplyReferencedInput %" << value->id() << " ("
+                << value->name() << ")";
+    }
+  }
 }
 
 nativert::Value* WaveGraph::duplicateValue(ValueCP original) {

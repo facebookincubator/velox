@@ -29,6 +29,10 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <folly/ScopeGuard.h>
+
+#include <limits>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -647,6 +651,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
   std::vector<RowVectorPtr> makeTimestampExtractVectors() {
     std::vector<std::optional<Timestamp>> timestamps = {
+        Timestamp(-14400, 0), // 1969-12-31 20:00:00
         Timestamp(1609459199, 0), // 2020-12-31 23:59:59
         Timestamp(1609459200, 0), // 2021-01-01 00:00:00
         Timestamp(1609718400, 0), // 2021-01-04 00:00:00
@@ -656,6 +661,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
         std::nullopt};
 
     std::vector<std::optional<int32_t>> dates = {
+        toDateDays("1969-12-31"),
         toDateDays("2020-12-31"),
         toDateDays("2021-01-01"),
         toDateDays("2021-01-04"),
@@ -666,7 +672,7 @@ class CudfFilterProjectTest : public OperatorTestBase {
 
     auto data = makeRowVector(
         {"event_id", "event_ts", "event_date"},
-        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+        {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8}),
          makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
          makeNullableFlatVector<int32_t>(dates, DATE())});
     return {data};
@@ -893,6 +899,65 @@ TEST_F(CudfFilterProjectTest, timestampLiteralComparisons) {
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.filter);
     assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+  }
+}
+
+// Comparing a timestamp column against a timestamp literal must work under
+// every value cudf.timestamp_unit accepts. Regression test for the
+// millisecond and second units, whose constant scalars previously fell
+// through to VELOX_FAIL("Unsupported timestamp unit").
+TEST_F(CudfFilterProjectTest, timestampLiteralComparisonsAcrossUnits) {
+  std::vector<Timestamp> timestamps = {
+      Timestamp(1735689599, 0), // 2024-12-31 23:59:59
+      Timestamp(1735689600, 0), // 2025-01-01 00:00:00
+      Timestamp(1736942400, 0), // 2025-01-15 12:00:00
+      Timestamp(1738367999, 0), // 2025-01-31 23:59:59
+      Timestamp(1738368000, 0), // 2025-02-01 00:00:00
+      Timestamp(1738454400, 0) // 2025-02-02 00:00:00
+  };
+
+  auto data = makeRowVector(
+      {"event_id", "event_ts"},
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+       makeFlatVector<Timestamp>(timestamps, TIMESTAMP())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  struct Case {
+    std::string filter;
+    std::vector<int32_t> expectedIds;
+  };
+  const std::vector<Case> cases{
+      {"event_ts = TIMESTAMP '2025-01-01 00:00:00'", {2}},
+      {"event_ts <> TIMESTAMP '2025-01-01 00:00:00'", {1, 3, 4, 5, 6}},
+      {"event_ts < TIMESTAMP '2025-01-01 00:00:00'", {1}},
+      {"event_ts <= TIMESTAMP '2025-01-01 00:00:00'", {1, 2}},
+      {"event_ts > TIMESTAMP '2025-01-31 23:59:59'", {5, 6}},
+      {"event_ts >= TIMESTAMP '2025-01-31 23:59:59'", {4, 5, 6}}};
+
+  struct Unit {
+    cudf::type_id id;
+    std::string name;
+  };
+  // event_ts and the literals are whole seconds, so the coarsest unit
+  // (seconds) is lossless and the expected result is identical for all units.
+  const std::vector<Unit> units{
+      {cudf::type_id::TIMESTAMP_SECONDS, "s"},
+      {cudf::type_id::TIMESTAMP_MILLISECONDS, "ms"},
+      {cudf::type_id::TIMESTAMP_MICROSECONDS, "us"},
+      {cudf::type_id::TIMESTAMP_NANOSECONDS, "ns"}};
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  for (const auto& unit : units) {
+    config.timestampUnit = unit.id;
+    for (const auto& testCase : cases) {
+      SCOPED_TRACE("unit=" + unit.name + " filter=" + testCase.filter);
+      assertFilterIds(vectors, testCase.filter, testCase.expectedIds);
+    }
   }
 }
 
@@ -1130,6 +1195,202 @@ TEST_F(CudfFilterProjectTest, datePlusIntervalRejectsSubDayInterval) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "Cannot add hours, minutes, seconds or milliseconds to a date");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateConstantValue) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeNullableFlatVector<int32_t>(
+          {toDateDays("2019-02-28"),
+           toDateDays("2019-01-30"),
+           toDateDays("2019-11-30"),
+           toDateDays("2020-02-29"),
+           std::nullopt},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', 1, event_date) AS plus_day",
+      "date_add('week', 1, event_date) AS plus_week",
+      "date_add('month', 13, event_date) AS plus_month",
+      "date_add('quarter', 1, event_date) AS plus_quarter",
+      "date_add('year', 1, event_date) AS plus_year",
+      "date_add('day', -366, event_date) AS minus_day"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateColumnValue) {
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2019-02-28"),
+            toDateDays("2019-01-30"),
+            toDateDays("2020-02-29"),
+            std::nullopt,
+            toDateDays("2025-01-15")},
+           DATE()),
+       makeNullableFlatVector<int64_t>({1, 13, -1, 2, std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, event_date) AS plus_day",
+      "date_add('week', amount, event_date) AS plus_week",
+      "date_add('month', amount, event_date) AS plus_month",
+      "date_add('quarter', amount, event_date) AS plus_quarter",
+      "date_add('year', amount, event_date) AS plus_year",
+      "date_add('week', amount, DATE '2020-01-31') AS literal_date_week",
+      "date_add('month', amount, DATE '2020-01-31') AS literal_date_month"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralValue) {
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>(
+          {toDateDays("2020-01-01"),
+           toDateDays("2020-06-15"),
+           toDateDays("2020-12-31")},
+          DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', CAST(NULL AS BIGINT), event_date) AS plus_day",
+      "date_add('year', CAST(NULL AS BIGINT), event_date) AS plus_year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullLiteralDate) {
+  auto data = makeRowVector({"amount"}, {makeFlatVector<int64_t>({1, 13, -1})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, CAST(NULL AS DATE)) AS plus_day",
+      "date_add('month', amount, CAST(NULL AS DATE)) AS plus_month"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateLiteralValueOutOfRange) {
+  // Literal value that exceeds int32 range; checked at eval time by
+  // checkedScaleValue -> checkValueInInt32Range.
+  auto data = makeRowVector(
+      {"event_date"},
+      {makeFlatVector<int32_t>({toDateDays("2020-01-01")}, DATE())});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"date_add('day', 2147483648, event_date) AS r"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateColumnValueOutOfRange) {
+  // Column value that exceeds int32 range; checked at eval time by
+  // checkValueRange on the GPU.
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>(
+           {toDateDays("2020-01-01"), toDateDays("2020-12-31")}, DATE()),
+       makeFlatVector<int64_t>({1, std::numeric_limits<int64_t>::max()})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"date_add('day', amount, event_date) AS r"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateNullDateSkipsValueRangeCheck) {
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeNullableFlatVector<int32_t>(
+           {toDateDays("2020-01-01"), std::nullopt, std::nullopt}, DATE()),
+       makeFlatVector<int64_t>(
+           {1,
+            std::numeric_limits<int64_t>::max(),
+            std::numeric_limits<int64_t>::min()})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('day', amount, event_date) AS plus_day",
+      "date_add('month', amount, event_date) AS plus_month"};
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
+  constexpr int64_t kPositiveWeekOverflow =
+      std::numeric_limits<int32_t>::max() / 7LL + 1;
+  constexpr int64_t kNegativeWeekOverflow =
+      std::numeric_limits<int32_t>::min() / 7LL - 1;
+
+  auto data = makeRowVector(
+      {"event_date", "amount"},
+      {makeFlatVector<int32_t>({0, 0}, DATE()),
+       makeFlatVector<int64_t>(
+           {kPositiveWeekOverflow, kNegativeWeekOverflow})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "date_add('week', amount, event_date) AS column_value",
+      "date_add('week', 306783379, event_date) AS positive_literal",
+      "date_add('week', -306783379, event_date) AS negative_literal"};
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('second', event_ts) AS second",
+      "date_trunc('minute', event_ts) AS minute",
+      "date_trunc('hour', event_ts) AS hour",
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('week', event_ts) AS week",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('quarter', event_ts) AS quarter",
+      "date_trunc('year', event_ts) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncDateUnits) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_date) AS day",
+      "date_trunc('week', event_date) AS week",
+      "date_trunc('month', event_date) AS month",
+      "date_trunc('quarter', event_date) AS quarter",
+      "date_trunc('year', event_date) AS year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "date_trunc('day', event_ts) AS day",
+      "date_trunc('month', event_ts) AS month",
+      "date_trunc('year', event_ts) AS year"};
+  const std::vector<std::string> groupingKeys{"year", "month", "day"};
+  const std::vector<std::string> orderByKeys{
+      "year ASC NULLS LAST", "month ASC NULLS LAST", "day ASC NULLS LAST"};
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project(projections)
+                  .singleAggregation(groupingKeys, {"count(1) AS events"})
+                  .orderBy(orderByKeys, false)
+                  .planNode();
+
+  assertPlanMatchesVelox(plan);
 }
 
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
@@ -2366,6 +2627,135 @@ TEST_F(CudfFilterProjectTest, andAndAndWithDecimalDivideBelowExpr) {
       makeNullableFlatVector<bool>({true, false, false, false}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
+  parse::ParseOptions options;
+  options.parseIntegerAsBigint = false;
+
+  // round(double) with no scale (defaults to 0)
+  auto data = makeRowVector(
+      {makeFlatVector<double>({3.14159, 2.71828, -1.5, 0.5, 100.999})});
+  auto plan = PlanBuilder()
+                  .setParseOptions(options)
+                  .values({data})
+                  .project({"round(c0) as c1"})
+                  .planNode();
+  auto expected =
+      makeRowVector({makeFlatVector<double>({3.0, 3.0, -2.0, 1.0, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, 2)
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -1) — round to nearest 10
+  data =
+      makeRowVector({makeFlatVector<double>({123.456, -987.654, 55.0, 5.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -1) as c1"})
+             .planNode();
+  expected =
+      makeRowVector({makeFlatVector<double>({120.0, -990.0, 60.0, 10.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // round(double, -3) — round to nearest 1000
+  data = makeRowVector({makeFlatVector<double>({4123.0, 456789098.0})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, -3) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({4000.0, 456789000.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Large values
+  data = makeRowVector({makeFlatVector<double>({1e15 + 0.5, -1e15 - 0.5})});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({1e15 + 1.0, -1e15 - 1.0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  // Corner cases: IEEE-754 half-way values and representation artifacts.
+  // The FLOAT64 round path JIT-compiles Velox CPU's round algorithm
+  // (std::round(x * factor) / factor), so the result depends on the actual
+  // binary value of the input and on any rounding introduced by the factor
+  // multiply. For example, 2.675 is stored as 2.6749999999999998 but
+  // multiplied by 100 lands on the exactly-representable 267.5 tie, which
+  // std::round rounds away from zero to 268 -> 2.68. By contrast, 1.005 is
+  // stored as 1.0049999999999999 and multiplied by 100 falls just below
+  // 100.5, which rounds down to 100 -> 1.00.
+  data = makeRowVector({makeFlatVector<double>({
+      // HALF_UP ties at integer magnitudes.
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.675,
+      0.1,
+      0.3,
+      1.005,
+      1.0000000000000002,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.675,
+      -1.6,
+      -1.645,
+      0.125,
+      1e-10,
+      999999999999999.5,
+  })});
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      3.0, 4.0,  -3.0, -4.0, 3.0,  0.0,  0.0, 1.0, 1.0,  0.0,
+      1.0, -1.0, -2.0, -3.0, -2.0, -2.0, 0.0, 0.0, 1e15,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = PlanBuilder()
+             .setParseOptions(options)
+             .values({data})
+             .project({"round(c0, 2) as c1"})
+             .planNode();
+  expected = makeRowVector({makeFlatVector<double>({
+      2.5,
+      3.5,
+      -2.5,
+      -3.5,
+      2.68,
+      0.1,
+      0.3,
+      1.0,
+      1.0,
+      0.0,
+      0.5,
+      -0.5,
+      -1.5,
+      -2.68,
+      -1.6,
+      -1.65,
+      0.13,
+      0.0,
+      999999999999999.5,
+  })});
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 } // namespace

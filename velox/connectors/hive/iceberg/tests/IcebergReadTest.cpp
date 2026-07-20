@@ -68,28 +68,14 @@ class IcebergReadTest : public test::IcebergTestBase {
       const std::string& name,
       const TypePtr& type,
       int fieldId,
-      const std::string& defaultValue) {
+      std::optional<std::string> defaultValue = std::nullopt) {
     return std::make_shared<IcebergColumnHandle>(
         name,
         HiveColumnHandle::ColumnType::kRegular,
         type,
         parquet::ParquetFieldId(fieldId),
         std::vector<common::Subfield>{},
-        std::optional<std::string>{defaultValue});
-  }
-
-  std::shared_ptr<IcebergColumnHandle> makeIcebergHandle(
-      const std::string& name,
-      const TypePtr& type,
-      int fieldId,
-      FileColumnHandle::ColumnType columnType =
-          FileColumnHandle::ColumnType::kRegular) {
-    return std::make_shared<IcebergColumnHandle>(
-        name,
-        columnType,
-        type,
-        parquet::ParquetFieldId(fieldId),
-        std::vector<common::Subfield>{});
+        defaultValue);
   }
 
   void assertDefaultValues(
@@ -566,6 +552,140 @@ TEST_F(IcebergReadTest, defaultValueWithDeletesAndFilters) {
         .splits(makeSplits())
         .assertResults(makeExpected({5, 7, 8, 9, 10}));
   }
+}
+
+// Test filter pushdown (remainingFilter) with initial-default columns.
+// This test validates that when a filter is pushed down to the split reader,
+// files with missing columns that have initial-defaults are correctly handled
+// during checkIfSplitIsEmpty().
+TEST_F(IcebergReadTest, filterPushdownWithInitialDefault) {
+  auto newRowType =
+      ROW({"c0", "country", "status"}, {BIGINT(), VARCHAR(), VARCHAR()});
+
+  // Write data file with old schema (only c0) containing rows 1-5.
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
+  assignments["country"] = makeIcebergHandle("country", VARCHAR(), 2, "IN");
+  assignments["status"] = makeIcebergHandle("status", VARCHAR(), 3);
+
+  // Test 1: Filter pushdown on initial-default column (matching value)
+  // Without the fix, checkIfSplitIsEmpty() would incorrectly skip this file
+  // because it treats missing 'country' column as NULL, and NULL != 'IN'.
+  std::vector<RowVectorPtr> allRowsExpected;
+  allRowsExpected.push_back(makeRowVector(
+      newRowType->names(),
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<std::string>({"IN", "IN", "IN", "IN", "IN"}),
+       makeNullableFlatVector<std::string>(
+           {std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt})}));
+
+  auto filteredExpected = std::vector<RowVectorPtr>{makeRowVector(
+      newRowType->names(),
+      {makeFlatVector<int64_t>({3, 4, 5}),
+       makeFlatVector<std::string>({"IN", "IN", "IN"}),
+       makeNullableFlatVector<std::string>(
+           {std::nullopt, std::nullopt, std::nullopt})})};
+
+  auto assertFilter = [&](const std::string& filter,
+                          const std::vector<RowVectorPtr>& expected,
+                          int32_t numSplitsSkipped = 0) {
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan()
+                    .connectorId(test::kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .remainingFilter(filter)
+                    .endTableScan()
+                    .planNode();
+    auto task = exec::test::AssertQueryBuilder(plan)
+                    .splits(makeIcebergSplits(dataFilePath->getPath()))
+                    .assertResults(expected);
+    ASSERT_EQ(
+        task->taskStats()
+            .pipelineStats[0]
+            .operatorStats[0]
+            .runtimeStats["skippedSplits"]
+            .sum,
+        numSplitsSkipped);
+  };
+
+  assertFilter("country = 'IN'", allRowsExpected);
+  assertFilter("country IS NOT NULL", allRowsExpected);
+  assertFilter("status IS NULL", allRowsExpected);
+  assertFilter("status IS NOT NULL", {}, 1);
+  assertFilter("c0 > 2 AND country = 'IN'", filteredExpected);
+  assertFilter("country = 'US'", {}, 1);
+}
+
+// Test filter pushdown with non-VARCHAR initial-default columns (INTEGER,
+// REAL). This validates that the type casting in testFilterOnConstantVector()
+// works correctly for numeric types.
+TEST_F(IcebergReadTest, filterPushdownWithNumericInitialDefaults) {
+  auto newRowType = ROW({"c0", "age", "score"}, {BIGINT(), INTEGER(), REAL()});
+
+  // Write data file with old schema (only c0) containing rows 1-5.
+  std::vector<RowVectorPtr> dataVectors;
+  dataVectors.push_back(
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5})}));
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), dataVectors);
+
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeIcebergHandle("c0", BIGINT(), 1);
+  assignments["age"] = makeIcebergHandle("age", INTEGER(), 2, "25");
+  assignments["score"] = makeIcebergHandle("score", REAL(), 3, "3.14");
+
+  std::vector<RowVectorPtr> allRowsExpected;
+  allRowsExpected.push_back(makeRowVector(
+      newRowType->names(),
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<int32_t>({25, 25, 25, 25, 25}),
+       makeFlatVector<float>({3.14f, 3.14f, 3.14f, 3.14f, 3.14f})}));
+
+  auto assertFilter = [&](const std::string& filter,
+                          const std::vector<RowVectorPtr>& expected,
+                          int32_t numSplitsSkipped = 0) {
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan()
+                    .connectorId(test::kIcebergConnectorId)
+                    .outputType(newRowType)
+                    .dataColumns(newRowType)
+                    .assignments(assignments)
+                    .remainingFilter(filter)
+                    .endTableScan()
+                    .planNode();
+    auto task = exec::test::AssertQueryBuilder(plan)
+                    .splits(makeIcebergSplits(dataFilePath->getPath()))
+                    .assertResults(expected);
+    ASSERT_EQ(
+        task->taskStats()
+            .pipelineStats[0]
+            .operatorStats[0]
+            .runtimeStats["skippedSplits"]
+            .sum,
+        numSplitsSkipped);
+  };
+
+  assertFilter("age = cast(25 as INTEGER)", allRowsExpected);
+  assertFilter("age = cast(30 as INTEGER)", {}, 1);
+  assertFilter("score = cast(3.14 as REAL)", allRowsExpected);
+  assertFilter("score > cast(5.0 as REAL)", {}, 1);
+  assertFilter(
+      "age = cast(25 as INTEGER) AND score = cast(3.14 as REAL)",
+      allRowsExpected);
+  assertFilter(
+      "age = cast(25 as INTEGER) AND score > cast(5.0 as REAL)", {}, 1);
 }
 
 TEST_F(IcebergReadTest, partitionColumnsFromHive) {

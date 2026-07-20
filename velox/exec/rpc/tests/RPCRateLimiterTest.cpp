@@ -212,6 +212,73 @@ TEST_F(RPCRateLimiterTest, testingResetAllState) {
   EXPECT_EQ(RPCRateLimiter::pendingCount(tier), 0);
 }
 
+TEST_F(RPCRateLimiterTest, adaptiveDisabledIsNoop) {
+  const std::string tier = "test.tier";
+  RPCRateLimiter::setMaxPending(tier, 10);
+  // Adaptive off (default): the overload signal must not shrink the cap.
+  RPCRateLimiter::onRateLimited(tier);
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 10);
+  RPCRateLimiter::onSuccess(tier, 1000);
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 10);
+}
+
+TEST_F(RPCRateLimiterTest, adaptiveMultiplicativeDecrease) {
+  const std::string tier = "test.tier";
+  RPCRateLimiter::setMaxPending(tier, 16);
+  RPCRateLimiter::setAdaptiveConfig(
+      /*enabled*/ true, /*minLimit*/ 1, /*decreaseFactor*/ 0.5);
+
+  RPCRateLimiter::onRateLimited(tier);
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 8);
+  RPCRateLimiter::onRateLimited(tier);
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 4);
+}
+
+TEST_F(RPCRateLimiterTest, adaptiveFlooredAtMinLimit) {
+  const std::string tier = "test.tier";
+  RPCRateLimiter::setMaxPending(tier, 16);
+  RPCRateLimiter::setAdaptiveConfig(true, /*minLimit*/ 4, 0.5);
+
+  for (int i = 0; i < 10; ++i) {
+    RPCRateLimiter::onRateLimited(tier);
+  }
+  // 16 -> 8 -> 4, then pinned at the floor.
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 4);
+}
+
+TEST_F(RPCRateLimiterTest, adaptiveRecoveryScalesWithSuccesses) {
+  const std::string tier = "test.tier";
+  RPCRateLimiter::setMaxPending(tier, 16);
+  RPCRateLimiter::setAdaptiveConfig(true, 1, 0.5);
+
+  RPCRateLimiter::onRateLimited(tier); // 16 -> 8
+  ASSERT_EQ(RPCRateLimiter::currentLimit(tier), 8);
+
+  // A tiny drain recovers by the +1 floor (step = max(1, 1/8)).
+  RPCRateLimiter::onSuccess(tier, 1);
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 9);
+
+  // A large drain recovers proportionally (step = successes/cap) and, on
+  // reaching the ceiling, clears the adaptive state so the static cap governs.
+  RPCRateLimiter::onSuccess(tier, 1000);
+  EXPECT_EQ(RPCRateLimiter::currentLimit(tier), 16);
+}
+
+TEST_F(RPCRateLimiterTest, adaptiveShrinkReducesAdmission) {
+  const std::string tier = "test.tier";
+  RPCRateLimiter::setMaxPending(tier, 4);
+  RPCRateLimiter::setAdaptiveConfig(true, 1, 0.5);
+
+  RPCRateLimiter::onRateLimited(tier); // cap 4 -> 2
+  ASSERT_EQ(RPCRateLimiter::currentLimit(tier), 2);
+
+  auto token1 = RPCRateLimiter::acquire(tier);
+  EXPECT_FALSE(RPCRateLimiter::checkBackpressure(tier).has_value());
+  auto token2 = RPCRateLimiter::acquire(tier);
+  // At the shrunk cap of 2 (not the static 4), backpressure kicks in.
+  EXPECT_TRUE(RPCRateLimiter::checkBackpressure(tier).has_value());
+}
+
 TEST_F(RPCRateLimiterTest, noBackpressureBelowLimit) {
   const std::string tier = "test.tier";
   RPCRateLimiter::setMaxPending(tier, 5);

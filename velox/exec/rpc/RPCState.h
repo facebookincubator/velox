@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -115,6 +116,22 @@ class RPCState {
     int64_t rttNs{0};
   };
 
+  /// Snapshot of all operator-visible state at close() time, captured under a
+  /// single lock acquisition for consistency.
+  struct OperatorSnapshot {
+    // Congestion controller.
+    int64_t windowLimit{0};
+    int64_t baselineRttNs{0};
+    int64_t numShrinks{0};
+    int64_t peakInFlight{0};
+    // Transport RTT.
+    int64_t rttMinNs{0};
+    int64_t rttMaxNs{0};
+    int64_t numRttSamples{0};
+    // Streaming mode.
+    RPCStreamingMode streamingMode{RPCStreamingMode::kPerRow};
+  };
+
   RPCState() = default;
 
   // ===== Configuration =====
@@ -128,10 +145,15 @@ class RPCState {
   /// (default 1.0). Both default to the controller's defaults so callers and
   /// OSS behavior are unchanged; the RPCOperator threads runtime-tunable values
   /// from QueryConfig.
+  /// @param maxWindow Ceiling for the congestion window (and, for PER_ROW, its
+  /// starting value). 0 keeps the per-mode built-in ceiling (PER_ROW 100, BATCH
+  /// 256). Raise it so a high-latency backend can run at high concurrency;
+  /// admission-controlled dispatch makes this ceiling bind.
   void setStreamingMode(
       RPCStreamingMode mode,
       int64_t minWindow = 1,
-      double stepCoef = 1.0);
+      double stepCoef = 1.0,
+      int64_t maxWindow = 0);
 
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
@@ -257,6 +279,13 @@ class RPCState {
   /// the congestion window limit.
   bool isUnderBackpressure();
 
+  /// Available dispatch headroom under the per-driver congestion window:
+  /// max(0, window.limit() - inFlight). Admission-controlled dispatch takes the
+  /// min of this and the process-global rate-limiter headroom to size each
+  /// drip chunk, so a whole-vector blast can no longer overrun the window.
+  /// Thread-safe.
+  int64_t dispatchHeadroom();
+
   /// Report that a completed unit showed backend overload (rate limit /
   /// timeout). Multiplicative-decrease (halving) of the congestion window.
   /// Thread-safe.
@@ -272,6 +301,10 @@ class RPCState {
   /// otherwise lock once per row, contending with completion callbacks.
   /// Thread-safe.
   void onUnitSamples(const std::vector<int64_t>& rttNsList);
+
+  /// Return a consistent snapshot of all operator-visible state under a single
+  /// lock acquisition. Thread-safe.
+  OperatorSnapshot operatorSnapshot() const;
 
  private:
   /// Move a completed row into readyRows_ and notify waiters.
@@ -314,6 +347,14 @@ class RPCState {
   // so exactly one dispatch path feeds this counter. Backpressure compares it
   // against window_.limit().
   int64_t inFlight_{0};
+
+  // High-water mark of inFlight_ across the lifetime of this RPCState.
+  int64_t peakInFlight_{0};
+
+  // Accumulated RTT measurements across all completed units.
+  int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};
+  int64_t rttMaxNs_{0};
+  int64_t numRttSamples_{0};
 
   // Latency-gradient concurrency window, fed RTT via onUnitSample(). Both modes
   // use the same learner; setStreamingMode() only picks the (start, max) pair:

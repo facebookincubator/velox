@@ -1422,23 +1422,7 @@ using AggregationNodePtr = std::shared_ptr<const AggregationNode>;
 inline std::ostream& operator<<(
     std::ostream& out,
     const AggregationNode::Step& step) {
-  switch (step) {
-    case AggregationNode::Step::kFinal:
-      return out << "FINAL";
-    case AggregationNode::Step::kIntermediate:
-      return out << "INTERMEDIATE";
-    case AggregationNode::Step::kPartial:
-      return out << "PARTIAL";
-    case AggregationNode::Step::kSingle:
-      return out << "SINGLE";
-  }
-  VELOX_UNREACHABLE();
-}
-
-inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
-  std::stringstream ss;
-  ss << step;
-  return ss.str();
+  return out << AggregationNode::toName(step);
 }
 
 /// Specify the column stats collection by aggregation. This is used by table
@@ -4762,6 +4746,7 @@ class UnnestNode : public PlanNode {
       unnestVariables_ = other.unnestVariables();
       unnestNames_ = other.unnestNames_;
       ordinalityName_ = other.ordinalityName_;
+      markerName_ = other.markerName_;
       splitOutput_ = other.splitOutput_;
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
@@ -5011,21 +4996,6 @@ class AssignUniqueIdNode : public PlanNode {
       const PlanNodeId& id,
       const std::string& idName,
       PlanNodePtr source);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  // Legacy constructor for read-only synced consumers that still pass
-  // taskUniqueId on the node. The value is not serialized; it is consumed at
-  // execution as the fallback for an unset PlanFragment::taskUniqueId.
-  AssignUniqueIdNode(
-      const PlanNodeId& id,
-      const std::string& idName,
-      int32_t taskUniqueId,
-      PlanNodePtr source)
-      : PlanNode(id),
-        taskUniqueId_(taskUniqueId),
-        sources_{std::move(source)},
-        outputType_(makeOutputType(sources_[0], idName)) {}
-#endif
 
   bool supportsBarrier() const override {
     return true;

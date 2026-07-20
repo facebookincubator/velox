@@ -16,6 +16,7 @@
 
 #include "velox/exec/rpc/RPCState.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include <folly/executors/InlineExecutor.h>
@@ -51,24 +52,31 @@ int64_t steadyNowNs() {
 void RPCState::setStreamingMode(
     RPCStreamingMode mode,
     int64_t minWindow,
-    double stepCoef) {
+    double stepCoef,
+    int64_t maxWindow) {
   streamingMode_ = mode;
   if (mode == RPCStreamingMode::kBatch) {
     // BATCH: the gradient window starts at 2 (the previously hand-tuned value)
     // and learns the in-flight-batch sweet spot from per-batch RTT, bounded
     // only by a large safety ceiling so it never leaves throughput on the
     // table.
+    const int64_t maxW = maxWindow > 0 ? maxWindow : kBatchMaxWindow;
     window_ = CongestionController{/*startWindow*/ 2,
-                                   /*maxWindow*/ kBatchMaxWindow,
+                                   /*maxWindow*/ maxW,
                                    minWindow,
                                    stepCoef};
   } else {
-    // PER_ROW: per-row parallelism is bounded by the transport thread pool, so
-    // the window starts non-binding at 100 (start == max). The same gradient
-    // learner still shrinks it under sustained overload and recovers it back
-    // toward 100; growth above 100 is unnecessary and capped off.
+    // PER_ROW: start == max. Default ceiling 100; a high-latency backend can
+    // raise it via rpc.congestion.max_window. Pinning start == max is
+    // deliberate: the window starts at the ceiling and can only SHRINK from
+    // there under overload. It must NOT ramp upward on its own, because a
+    // rate-limit (429) storm is LOW-latency — the latency gradient can't see
+    // it, so a probing-upward window would ramp straight into the storm. The
+    // gradient plus the per-driver onUnitError halve (fed kRateLimited/kTimeout
+    // by RPCOperator) shrink it under sustained overload.
+    const int64_t maxW = maxWindow > 0 ? maxWindow : 100;
     window_ = CongestionController{
-        /*startWindow*/ 100, /*maxWindow*/ 100, minWindow, stepCoef};
+        /*startWindow*/ maxW, /*maxWindow*/ maxW, minWindow, stepCoef};
   }
 }
 
@@ -143,6 +151,7 @@ void RPCState::addPendingRow(
   {
     std::lock_guard<std::mutex> l(mutex_);
     inFlight_++;
+    peakInFlight_ = std::max(peakInFlight_, inFlight_);
     RPC_STATE_VLOG(2) << "addPendingRow: rowId=" << rowId
                       << ", inFlight=" << inFlight_;
   }
@@ -190,6 +199,12 @@ void RPCState::completeRow(
           .response = std::move(response),
           .rttNs = rttNs});
   inFlight_--;
+
+  if (rttNs > 0) {
+    rttMinNs_ = std::min(rttMinNs_, rttNs);
+    rttMaxNs_ = std::max(rttMaxNs_, rttNs);
+    ++numRttSamples_;
+  }
 
   RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
                     << ", readyRows=" << readyRows_.size()
@@ -307,6 +322,7 @@ void RPCState::addPendingBatch(
     std::lock_guard<std::mutex> l(mutex_);
     auto batchId = nextBatchId_++;
     inFlight_++;
+    peakInFlight_ = std::max(peakInFlight_, inFlight_);
     pendingBatches_.push_back(
         PendingBatch{
             .batchId = batchId,
@@ -345,6 +361,12 @@ RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
     result.responses = {};
     RPC_STATE_LOG(ERROR) << "extractReadyBatchLocked: batchId="
                          << result.batchId << " failed: " << e.what();
+  }
+
+  if (result.rttNs > 0) {
+    rttMinNs_ = std::min(rttMinNs_, result.rttNs);
+    rttMaxNs_ = std::max(rttMaxNs_, result.rttNs);
+    ++numRttSamples_;
   }
 
   pendingBatches_.erase(it);
@@ -413,6 +435,11 @@ bool RPCState::isUnderBackpressure() {
   return inFlight_ >= window_.limit();
 }
 
+int64_t RPCState::dispatchHeadroom() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return std::max<int64_t>(0, window_.limit() - inFlight_);
+}
+
 void RPCState::onUnitError() {
   std::lock_guard<std::mutex> l(mutex_);
   const auto prev = window_.limit();
@@ -453,6 +480,20 @@ void RPCState::notifyWaitersLocked() {
     promise.setValue();
   }
   promises_.clear();
+}
+
+RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return OperatorSnapshot{
+      .windowLimit = window_.limit(),
+      .baselineRttNs = window_.baselineRttNs(),
+      .numShrinks = window_.numShrinks(),
+      .peakInFlight = peakInFlight_,
+      .rttMinNs = numRttSamples_ > 0 ? rttMinNs_ : 0,
+      .rttMaxNs = rttMaxNs_,
+      .numRttSamples = numRttSamples_,
+      .streamingMode = streamingMode_,
+  };
 }
 
 } // namespace facebook::velox::exec::rpc
