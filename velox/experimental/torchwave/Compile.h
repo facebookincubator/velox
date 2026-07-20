@@ -204,8 +204,8 @@ class CompileCtx {
 
   void emitBarrier();
 
-  /// Returns true if 'node' has a randomAccess input whose value is
-  /// produced in generatingOp_ but not yet covered by a barrier.
+  /// Returns true if 'node' reads any input whose producer ran earlier in the
+  /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
 
   void addInclude(std::string_view header);
@@ -427,6 +427,11 @@ class CompileCtx {
   std::unordered_set<ValueCP> memoryValues_;
 
   const ElementExpr* currentElementExpr_{nullptr};
+
+  // The subgraph root output of the elementwise expression currently being
+  // generated (the tensor the loop writes at 'idx'). Passed as the output
+  // argument to device functions whose ElementwiseOp has hasOutputArg set.
+  ValueCP currentRootOutput_{nullptr};
 
   // Maps each index in leafInputs/allInputs to its tensor-only bit position
   // in the isFastPath bitmask, or -1 for non-tensor inputs. A value of -1

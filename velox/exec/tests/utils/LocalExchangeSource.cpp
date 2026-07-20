@@ -182,6 +182,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
   void close() override {
     checkSetRequestPromise();
 
+    {
+      // Deregister any pending timeout. A source closed with an in-flight
+      // request (e.g. when its query is cancelled) would otherwise linger in
+      // the static 'timeouts_' map until atexit, where stop() destroys it after
+      // the MemoryManager is already gone -- a use-after-free on its pool.
+      std::lock_guard<std::mutex> l(mutex_);
+      timeouts_.erase(shared_from_this());
+    }
+
     auto buffers = DefaultOutputBufferManager::getInstanceRef();
     buffers->deleteResults(remoteTaskId_, destination_);
   }
