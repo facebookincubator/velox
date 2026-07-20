@@ -33,6 +33,9 @@ class OpaqueCustomTypeTest : public testing::Test {
   struct TestCustomType {
     std::string name;
 
+    TestCustomType() = default;
+    explicit TestCustomType(std::string name) : name{std::move(name)} {}
+
     bool operator==(const TestCustomType& other) const {
       return name == other.name;
     }
