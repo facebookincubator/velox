@@ -41,4 +41,14 @@ enum class EsriShapeType : uint32_t {
   MULTI_POINT = 8
 };
 
+/// Latitude/Longitude range constraints for spherical coordinates.
+constexpr double kMinLatitude = -90.0;
+constexpr double kMaxLatitude = 90.0;
+constexpr double kMinLongitude = -180.0;
+constexpr double kMaxLongitude = 180.0;
+
+/// BingTile-specific latitude constraints (narrower than standard lat/long).
+constexpr double kMinBingTileLatitude = -85.05112878;
+constexpr double kMaxBingTileLatitude = 85.05112878;
+
 } // namespace facebook::velox::common::geospatial

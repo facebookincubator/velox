@@ -15,9 +15,19 @@
 velox_add_library(
   velox_dwio_parquet_common
   BloomFilter.cpp
-  XxHasher.cpp
   LevelComparison.cpp
   LevelConversion.cpp
+  XxHasher.cpp
+  HEADERS
+  BitStreamUtilsInternal.h
+  BloomFilter.h
+  Hasher.h
+  LevelComparison.h
+  LevelConversion.h
+  LevelConversionUtil.h
+  ParquetConfig.h
+  RleEncodingInternal.h
+  XxHasher.h
 )
 
 velox_link_libraries(
@@ -30,6 +40,5 @@ velox_link_libraries(
   fmt::fmt
   Folly::folly
   Snappy::snappy
-  thrift
   zstd::zstd
 )

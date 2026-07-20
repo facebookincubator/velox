@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/Status.h"
 #include "velox/expression/CastHooks.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
@@ -27,14 +28,6 @@ namespace facebook::velox::exec {
 class CastOperator {
  public:
   virtual ~CastOperator() = default;
-
-  /// Determines whether the cast operator supports casting to the custom type
-  /// from the other type.
-  virtual bool isSupportedFromType(const TypePtr& other) const = 0;
-
-  /// Determines whether the cast operator supports casting from the custom type
-  /// to the other type.
-  virtual bool isSupportedToType(const TypePtr& other) const = 0;
 
   /// Casts an input vector to the custom type. This function should not throw
   /// when processing input rows, but report errors via context.setError().
@@ -106,14 +99,7 @@ class CastExpr : public SpecialForm {
 
   std::string toSql(std::vector<VectorPtr>*) const override;
 
- private:
-  /// Apply the cast after generating the input vectors
-  /// @param rows The list of rows being processed
-  /// @param input The input vector to be casted
-  /// @param context The context
-  /// @param fromType the input type
-  /// @param toType the target type
-  /// @param result The result vector
+  /// Casts 'input' from 'fromType' to 'toType' for selected 'rows'.
   void apply(
       const SelectivityVector& rows,
       const VectorPtr& input,
@@ -122,6 +108,7 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
+ private:
   VectorPtr applyMap(
       const SelectivityVector& rows,
       const MapVector* input,
@@ -312,7 +299,29 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       const SelectivityVector& rows,
       exec::EvalCtx& context,
+      const BaseVector& input,
+      const TimestampToStringOptions& options);
+
+  // Casts between TIMESTAMP and TIMESTAMP UTC.
+  // Casting TIMESTAMP_UTC to TIMESTAMP converts from local timestamp
+  // representation to UTC. Casting TIMESTAMP to TIMESTAMP_UTC applies the
+  // session timezone offset so that the local timestamp is preserved.
+  // @tparam kToUtc If true, casts TIMESTAMP to TIMESTAMP UTC. Otherwise,
+  // casts TIMESTAMP UTC to TIMESTAMP.
+  template <bool kToUtc>
+  VectorPtr applyTimestampTimestampUtcCast(
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
       const BaseVector& input);
+
+  // Casts basic numeric types to wider types.
+  template <TypeKind ToKind, TypeKind FromKind>
+  void applyNumericUpcast(
+      const SelectivityVector& rows,
+      const TypePtr& toType,
+      exec::EvalCtx& context,
+      const BaseVector& input,
+      VectorPtr& result);
 
   bool isTryCast() const {
     return isTryCast_;
@@ -320,6 +329,77 @@ class CastExpr : public SpecialForm {
 
   bool setNullInResultAtError() const {
     return isTryCast() && (inTopLevel || hooks_->applyTryCastRecursively());
+  }
+
+  /// Helper function to set error status or null in result based on cast
+  /// policy. Centralizes error handling logic used across different cast
+  /// operations.
+  /// @param row The row index where the error occurred
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  /// @param makeErrorDetails Callable returning the error details string. It is
+  /// invoked lazily and only when the error details are actually needed.
+  template <typename TResult, typename TMakeErrorDetails>
+  void setCastError(
+      vector_size_t row,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException,
+      TMakeErrorDetails makeErrorDetails) const {
+    if (setNullInResultAtError()) {
+      result->setNull(row, true);
+      return;
+    }
+    wrapException = false;
+    if (context.captureErrorDetails()) {
+      const std::string details = makeErrorDetails();
+      if (!details.empty()) {
+        context.setStatus(row, Status::UserError("{}", details));
+        return;
+      }
+    }
+    context.setStatus(row, Status::UserError());
+  }
+
+  /// Overload for cases where no error details are available.
+  template <typename TResult>
+  void setCastError(
+      vector_size_t row,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException) const {
+    setCastError(
+        row, context, result, wrapException, [] { return std::string{}; });
+  }
+
+  /// Helper to set result or error from Expected<T> cast result.
+  /// If castResult has an error, sets the error in context. Otherwise, sets
+  /// the value in castResult directly to result.
+  /// @param row The row index being processed
+  /// @param castResult The Expected<T> result from cast operation
+  /// @param makeErrorDetails Builds the full error details string lazily from
+  /// the cast error message.
+  /// @param context The evaluation context
+  /// @param result The result vector to update
+  /// @param wrapException Output parameter indicating if exception should be
+  /// wrapped
+  template <typename T, typename TResult, typename TMakeErrorDetails>
+  void setResultOrError(
+      vector_size_t row,
+      const Expected<T>& castResult,
+      TMakeErrorDetails makeErrorDetails,
+      EvalCtx& context,
+      TResult* result,
+      bool& wrapException) const {
+    if (castResult.hasError()) {
+      setCastError(row, context, result, wrapException, [&] {
+        return makeErrorDetails(castResult.error().message());
+      });
+    } else {
+      result->set(row, castResult.value());
+    }
   }
 
   CastOperatorPtr getCastOperator(const TypePtr& type);

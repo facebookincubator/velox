@@ -28,7 +28,8 @@ const bool* FlatVector<bool>::rawValues() const {
 }
 
 template <>
-bool FlatVector<bool>::valueAtFast(vector_size_t idx) const {
+SimpleVector<bool>::TValueAt FlatVector<bool>::valueAtFast(
+    vector_size_t idx) const {
   return bits::isBitSet(reinterpret_cast<const uint64_t*>(rawValues_), idx);
 }
 

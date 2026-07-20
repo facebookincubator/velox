@@ -341,7 +341,7 @@ struct MyRegexpMatchFunction {
     // quite expensive to compile it on a per-row basis. In this example we
     // support both modes (const and non-const).
     if (pattern != nullptr) {
-      re_.emplace(*pattern);
+      re_.emplace(std::string_view(*pattern));
     }
 
     // Optionally, one could also inspect the session configs in `QueryConfig`.
@@ -359,7 +359,8 @@ struct MyRegexpMatchFunction {
     // > `my_regexp_match(col1, col2)`
     result = re_.has_value()
         ? RE2::PartialMatch(toStringPiece(input), *re_)
-        : RE2::PartialMatch(toStringPiece(input), ::re2::RE2(pattern));
+        : RE2::PartialMatch(
+              toStringPiece(input), ::re2::RE2(std::string_view(pattern)));
     return true;
   }
 

@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include <gtest/gtest.h>
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
@@ -27,12 +28,13 @@ class IcebergConnectorTest : public test::IcebergTestBase {
  protected:
   static void resetIcebergConnector(
       const std::shared_ptr<const config::ConfigBase>& config) {
-    unregisterConnector(test::kIcebergConnectorId);
+    ConnectorRegistry::global().erase(test::kIcebergConnectorId);
 
     IcebergConnectorFactory factory;
     auto icebergConnector =
         factory.newConnector(test::kIcebergConnectorId, config);
-    registerConnector(icebergConnector);
+    ConnectorRegistry::global().insert(
+        icebergConnector->connectorId(), icebergConnector);
   }
 };
 
@@ -45,7 +47,7 @@ TEST_F(IcebergConnectorTest, connectorConfiguration) {
   resetIcebergConnector(customConfig);
 
   // Verify connector was registered successfully with custom config.
-  auto icebergConnector = getConnector(test::kIcebergConnectorId);
+  auto icebergConnector = ConnectorRegistry::tryGet(test::kIcebergConnectorId);
   ASSERT_NE(icebergConnector, nullptr);
 
   auto config = icebergConnector->connectorConfig();
@@ -57,7 +59,7 @@ TEST_F(IcebergConnectorTest, connectorConfiguration) {
 }
 
 TEST_F(IcebergConnectorTest, connectorProperties) {
-  auto icebergConnector = getConnector(test::kIcebergConnectorId);
+  auto icebergConnector = ConnectorRegistry::tryGet(test::kIcebergConnectorId);
   ASSERT_NE(icebergConnector, nullptr);
 
   ASSERT_TRUE(icebergConnector->canAddDynamicFilter());

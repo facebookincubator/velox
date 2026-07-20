@@ -18,29 +18,22 @@
 
 #include <string>
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/MergeJoinReplayer.h"
 #include "velox/tool/trace/TraceReplayRunner.h"
 
-// using namespace facebook::velox;
-// using namespace facebook::velox::core;
-// using namespace facebook::velox::common;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
-// using namespace facebook::velox::connector;
-// using namespace facebook::velox::connector::hive;
-// using namespace facebook::velox::dwio::common;
-// using namespace facebook::velox::common::testutil;
-// using namespace facebook::velox::common::hll;
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::tool::trace::test {
 class MergeJoinReplayerTest : public HiveConnectorTestBase {
@@ -283,8 +276,8 @@ TEST_F(MergeJoinReplayerTest, runner) {
   }
   auto traceResult = traceBuilder.copyResults(pool(), task);
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto leftOperatorTraceDir = exec::trace::getOpTraceDirectory(
       taskTraceDir,
       traceNodeId_,

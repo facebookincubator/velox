@@ -91,6 +91,12 @@ class IPAddressType final : public HugeintType {
     return name();
   }
 
+  /// Formats an int128_t IP address value as a dotted-decimal IPv4 string
+  /// (e.g., "192.168.1.1") or a colon-separated IPv6 string (e.g.,
+  /// "2001:db8::ff00:42:8329"). IPv4-mapped IPv6 addresses are returned in
+  /// IPv4 format.
+  std::string valueToString(int128_t value) const;
+
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;
     obj["name"] = "Type";

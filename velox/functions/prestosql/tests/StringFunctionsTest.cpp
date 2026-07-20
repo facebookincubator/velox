@@ -1199,7 +1199,7 @@ TEST_F(StringFunctionsTest, stringPosition) {
   };
 
   // We dont have to try all encoding combinations here since there is a test
-  // that test the encoding resolution but we want to to have a test for each
+  // that test the encoding resolution but we want to have a test for each
   // possible resolution
   testStringPositionAllFlatVector<int64_t>(testsAscii, {true, true}, false);
 
@@ -1281,7 +1281,7 @@ TEST_F(StringFunctionsTest, stringPositionFromEnd) {
   };
 
   // We dont have to try all encoding combinations here since there is a test
-  // that test the encoding resolution but we want to to have a test for each
+  // that test the encoding resolution but we want to have a test for each
   // possible resolution
   testStringPositionFromEndAllFlatVector<int64_t>(
       testsAscii, {true, true}, false);
@@ -2480,4 +2480,22 @@ TEST_F(StringFunctionsTest, xxHash64FunctionVarchar) {
   EXPECT_EQ(160339756714205673, xxhash64("abc\\x00def"));
   // Non-ASCII strings
   EXPECT_EQ(8176744303664166369, xxhash64("日本語"));
+}
+
+TEST_F(StringFunctionsTest, keySamplingPercent) {
+  const auto keySamplingPercent =
+      [&](const std::optional<std::string>& string) {
+        return evaluateOnce<double>("key_sampling_percent(c0)", string);
+      };
+
+  EXPECT_EQ(std::nullopt, keySamplingPercent(std::nullopt));
+  EXPECT_EQ(0.56, keySamplingPercent("abc"));
+  EXPECT_EQ(6.11561179120687E-153, keySamplingPercent("abcdefghskwkjadhwd"));
+  EXPECT_EQ(2.393674127734674E-93, keySamplingPercent("001yxzuj"));
+  EXPECT_EQ(0.48, keySamplingPercent("56wfythjhdhvgewuikwemn"));
+  EXPECT_EQ(0.7520703125, keySamplingPercent("special_#@,$|%/^~?{}+-"));
+  EXPECT_EQ(0.4, keySamplingPercent("     "));
+  EXPECT_EQ(0.28, keySamplingPercent(""));
+  EXPECT_EQ(
+      4.143659858002825E-274, keySamplingPercent("Hello World from Velox!"));
 }

@@ -81,7 +81,11 @@ class AggregationFuzzerBase {
                                       : getFuzzerOptions(timestampPrecision),
             pool_.get()} {
     filesystems::registerLocalFileSystem();
-    registerHiveConnector(hiveConfigs);
+    // Fuzzer test generates a lot of files and directories. Disable file
+    // handle cache to avoid EBADF errors.
+    auto configs = hiveConfigs;
+    configs[connector::hive::HiveConfig::kEnableFileHandleCache] = "false";
+    registerHiveConnector(configs);
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
 
@@ -121,6 +125,7 @@ class AggregationFuzzerBase {
     opts.stringVariableLength = true;
     opts.stringLength = 4'000;
     opts.nullRatio = FLAGS_null_ratio;
+    opts.useRandomNullPattern = true;
     opts.timestampPrecision = timestampPrecision;
     return opts;
   }

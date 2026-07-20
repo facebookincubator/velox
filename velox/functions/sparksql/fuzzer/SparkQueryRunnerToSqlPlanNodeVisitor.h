@@ -93,6 +93,16 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
     VELOX_NYI();
   }
 
+  void visit(const core::MarkSortedNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::EnforceDistinctNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::MergeExchangeNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
@@ -183,6 +193,11 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
 
   // Used to visit custom PlanNodes that extend the set provided by Velox.
   void visit(const core::PlanNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::MixedUnionNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
   }

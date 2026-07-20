@@ -19,6 +19,12 @@ String Functions
     some languages. Specifically, this will return incorrect results for
     Lithuanian, Turkish and Azeri.
 
+.. function:: bit_length(string) -> integer
+
+    Returns the bit length for the specified string column.
+
+        SELECT bit_length('123'); -- 24
+
 .. function:: chr(n) -> varchar
 
     Returns the Unicode code point ``n`` as a single character string.
@@ -28,6 +34,7 @@ String Functions
     Returns the Unicode code point of the only character of ``string``.
 
 .. function:: concat(string1, ..., stringN) -> varchar
+   :noindex:
 
     Returns the concatenation of ``string1``, ``string2``, ``...``, ``stringN``.
     This function provides the same functionality as the
@@ -65,6 +72,7 @@ String Functions
     Returns the Jaro-Winkler similarity of ``string1`` and ``string2``.
 
 .. function:: length(string) -> bigint
+   :noindex:
 
     Returns the length of ``string`` in characters.
 
@@ -72,6 +80,10 @@ String Functions
 
     Returns the Levenshtein edit distance of 2 strings. I.e. the minimum number of single-character edits
     (insertions, deletions or substitutions) needed to convert ``string_1`` to ``string_2``.
+
+.. function:: longest_common_prefix(string1, string2) -> varchar
+
+    Returns the longest common prefix between ``string1`` and ``string2``
 
 .. function:: lower(string) -> varchar
 
@@ -97,7 +109,7 @@ String Functions
         SELECT ltrim('test', 't'); -- est
         SELECT ltrim('tetris', 'te'); -- ris
 
-.. function:: replaceFirst(string, search, replace) -> varchar
+.. function:: replace_first(string, search, replace) -> varchar
 
     Removes the first instances of ``search`` with ``replace`` in ``string``.
 
@@ -177,6 +189,7 @@ String Functions
     Raises an error if there are duplicate keys.
 
 .. function:: split_to_map(string, entryDelimiter, keyValueDelimiter, function(K,V1,V2,R)) -> map<varchar, varchar>
+   :noindex:
 
     Splits ``string`` by ``entryDelimiter`` and ``keyValueDelimiter`` and returns a map.
     ``entryDelimiter`` splits ``string`` into key-value pairs. ``keyValueDelimiter`` splits
@@ -301,6 +314,7 @@ String Functions
     the ``word`` in lowercase is returned.
 
 .. function:: word_stem(word, lang) -> varchar
+   :noindex:
 
     Returns the stem of ``word`` in the ``lang`` language. This function supports the following languages:
 
@@ -340,10 +354,11 @@ Unicode Functions
     Transforms ``string`` with NFC normalization form.
 
 .. function:: normalize(string, form) -> varchar
+   :noindex:
 
     Reference: https://unicode.org/reports/tr15/#Norm_Forms
     Transforms ``string`` with the specified normalization form.
-    ``form`` must be be one of the following keywords:
+    ``form`` must be one of the following keywords:
 
     ======== ===========
     Form     Description
@@ -362,3 +377,8 @@ Unicode Functions
 .. function:: to_utf8(string) -> varbinary
 
     Encodes ``string`` into a UTF-8 varbinary representation.
+
+.. function:: key_sampling_percent(varchar) -> double
+
+    Generates a double value between 0.0 and 1.0 based on the hash of the given ``varchar``.
+    This function is useful for deterministic sampling of data.

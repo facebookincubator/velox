@@ -29,29 +29,29 @@ namespace facebook::velox::parquet::arrow::arrow {
 
 using ::arrow::Result;
 
-Result<std::shared_ptr<::arrow::DataType>> FromByteArray(
-    const LogicalType& logical_type);
-Result<std::shared_ptr<::arrow::DataType>> FromFLBA(
-    const LogicalType& logical_type,
-    int32_t physical_length);
-Result<std::shared_ptr<::arrow::DataType>> FromInt32(
-    const LogicalType& logical_type);
-Result<std::shared_ptr<::arrow::DataType>> FromInt64(
-    const LogicalType& logical_type);
+Result<std::shared_ptr<::arrow::DataType>> fromByteArray(
+    const LogicalType& logicalType);
+Result<std::shared_ptr<::arrow::DataType>> fromFLBA(
+    const LogicalType& logicalType,
+    int32_t physicalLength);
+Result<std::shared_ptr<::arrow::DataType>> fromInt32(
+    const LogicalType& logicalType);
+Result<std::shared_ptr<::arrow::DataType>> fromInt64(
+    const LogicalType& logicalType);
 
-Result<std::shared_ptr<::arrow::DataType>> GetArrowType(
-    Type::type physical_type,
-    const LogicalType& logical_type,
-    int type_length);
+Result<std::shared_ptr<::arrow::DataType>> getArrowType(
+    Type::type physicalType,
+    const LogicalType& logicalType,
+    int typeLength);
 
-Result<std::shared_ptr<::arrow::DataType>> GetArrowType(
-    Type::type physical_type,
-    const LogicalType& logical_type,
-    int type_length,
-    ::arrow::TimeUnit::type int96_arrow_time_unit = ::arrow::TimeUnit::NANO);
+Result<std::shared_ptr<::arrow::DataType>> getArrowType(
+    Type::type physicalType,
+    const LogicalType& logicalType,
+    int typeLength,
+    ::arrow::TimeUnit::type int96ArrowTimeUnit = ::arrow::TimeUnit::NANO);
 
-Result<std::shared_ptr<::arrow::DataType>> GetArrowType(
+Result<std::shared_ptr<::arrow::DataType>> getArrowType(
     const schema::PrimitiveNode& primitive,
-    ::arrow::TimeUnit::type int96_arrow_time_unit = ::arrow::TimeUnit::NANO);
+    ::arrow::TimeUnit::type int96ArrowTimeUnit = ::arrow::TimeUnit::NANO);
 
 } // namespace facebook::velox::parquet::arrow::arrow

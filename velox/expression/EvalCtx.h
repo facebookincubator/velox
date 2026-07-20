@@ -224,6 +224,22 @@ class EvalCtx {
       const RowVector* row,
       bool lazyDereference = false);
 
+  /// Creates an EvalCtx with a pre-computed inputFlatNoNulls flag, skipping
+  /// the per-column loop when the caller has already computed the flag via
+  /// computeInputFlatNoNulls(). Intended for multi-threaded use cases where
+  /// the same RowVector is evaluated across many EvalCtx instances (each bound
+  /// to a different ExprSet), so the flag can be computed once and shared.
+  EvalCtx(
+      core::ExecCtx* execCtx,
+      ExprSet* exprSet,
+      const RowVector* row,
+      bool inputFlatNoNulls,
+      bool lazyDereference);
+
+  /// Computes the inputFlatNoNulls flag for a RowVector. Returns true if all
+  /// children are flat or constant encoded and have no nulls.
+  static bool computeInputFlatNoNulls(const RowVector& row);
+
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* execCtx);
 
@@ -539,15 +555,50 @@ class EvalCtx {
     return execCtx_->optimizationParams().dictionaryMemoizationEnabled;
   }
 
+  /// Returns true if adaptive per-function CPU sampling is enabled.
+  bool adaptiveCpuSamplingEnabled() const {
+    return adaptiveCpuSamplingEnabled_;
+  }
+
+  void setAdaptiveCpuSamplingEnabled(bool enabled) {
+    adaptiveCpuSamplingEnabled_ = enabled;
+  }
+
+  /// Returns the maximum acceptable overhead pct for adaptive sampling.
+  double adaptiveCpuSamplingMaxOverheadPct() const {
+    return adaptiveCpuSamplingMaxOverheadPct_;
+  }
+
+  void setAdaptiveCpuSamplingMaxOverheadPct(double pct) {
+    adaptiveCpuSamplingMaxOverheadPct_ = pct;
+  }
+
+  /// Returns the measured CpuWallTimer overhead in nanoseconds (per
+  /// invocation). Measured once per ExprSet and shared across all Expr nodes.
+  uint64_t timerOverheadNanos() const {
+    return timerOverheadNanos_;
+  }
+
+  void setTimerOverheadNanos(uint64_t nanos) {
+    timerOverheadNanos_ = nanos;
+  }
+
   /// Returns the maximum number of distinct inputs to cache results for in a
   /// given shared subexpression.
   uint32_t maxSharedSubexprResultsCached() const {
     return execCtx_->optimizationParams().maxSharedSubexprResultsCached;
   }
 
-  /// Returns true if peeling is enabled.
-  bool peelingEnabled() const {
-    return execCtx_->optimizationParams().peelingEnabled;
+  /// Returns true if peeling is enabled for the given rows. Peeling is
+  /// disabled globally via OptimizationParams::peelingEnabled, or suppressed
+  /// for small batches when the number of selected rows is below
+  /// OptimizationParams::minRowsForPeeling, since for small batches the cost
+  /// of wrapping inputs in dictionary vectors and materializing them outweighs
+  /// the benefit of peeling.
+  bool peelingEnabled(const SelectivityVector& rows) const {
+    const auto& params = execCtx_->optimizationParams();
+    return params.peelingEnabled &&
+        rows.countSelected() >= params.minRowsForPeeling;
   }
 
   /// Returns true if shared subexpression reuse is enabled.
@@ -604,12 +655,21 @@ class EvalCtx {
 
   // If isFinalSelection_ is false, the set of rows for the upper-most IF or
   // OR. Used to determine the set of rows for loading lazy vectors.
-  const SelectivityVector* finalSelection_;
+  const SelectivityVector* finalSelection_{nullptr};
 
   // Stores exceptions encountered during expression evaluation.
   // If 'captureErrorDetails()' is false, stores flags indicating which rows had
   // errors without storing actual exceptions.
   EvalErrorsPtr errors_;
+
+  // Whether adaptive per-function CPU sampling is enabled.
+  bool adaptiveCpuSamplingEnabled_{false};
+
+  // Maximum acceptable overhead percentage for adaptive CPU sampling.
+  double adaptiveCpuSamplingMaxOverheadPct_{1.0};
+
+  // Measured CpuWallTimer overhead (nanos per invocation), shared across Exprs.
+  uint64_t timerOverheadNanos_{0};
 };
 
 /// Utility wrapper struct that is used to temporarily reset the value of the

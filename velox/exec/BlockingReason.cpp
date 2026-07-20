@@ -16,6 +16,8 @@
 
 #include "velox/exec/BlockingReason.h"
 
+#include "velox/common/EnumDefine.h"
+
 namespace facebook::velox::exec {
 
 namespace {
@@ -35,6 +37,9 @@ const auto& blockingReasonNames() {
       {BlockingReason::kWaitForArbitration, "kWaitForArbitration"},
       {BlockingReason::kWaitForScanScaleUp, "kWaitForScanScaleUp"},
       {BlockingReason::kWaitForIndexLookup, "kWaitForIndexLookup"},
+      {BlockingReason::kWaitForIndexSplits, "kWaitForIndexSplits"},
+      {BlockingReason::kWaitForRPC, "kWaitForRPC"},
+      {BlockingReason::kWaitForAggregationPeers, "kWaitForAggregationPeers"},
   };
   return kNames;
 }

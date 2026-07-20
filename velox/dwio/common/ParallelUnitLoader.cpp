@@ -97,7 +97,7 @@ class ParallelUnitLoader : public UnitLoader {
 
     uint64_t unitLoadNanos{0};
     try {
-      NanosecondTimer timer{&unitLoadNanos};
+      NanosecondWallTimer timer{&unitLoadNanos};
       asyncSources_[unit]->move();
     } catch (const std::exception& e) {
       VELOX_FAIL("Failed to load unit {}: {}", unit, e.what());
@@ -129,9 +129,7 @@ class ParallelUnitLoader : public UnitLoader {
     stats.addCounter(
         "waitForUnitReadyNanos",
         RuntimeCounter(
-            waitForUnitReadyNanos_ > std::numeric_limits<int64_t>::max()
-                ? std::numeric_limits<int64_t>::max()
-                : waitForUnitReadyNanos_,
+            saturateCast(waitForUnitReadyNanos_),
             RuntimeCounter::Unit::kNanos));
     return stats;
   }

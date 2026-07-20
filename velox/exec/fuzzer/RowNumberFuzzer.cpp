@@ -18,15 +18,16 @@
 
 #include <utility>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
-#include "velox/exec/fuzzer/RowNumberFuzzerBase.h"
+#include "velox/exec/fuzzer/SpillFuzzerBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
-class RowNumberFuzzer : public RowNumberFuzzerBase {
+class RowNumberFuzzer : public SpillFuzzerBase {
  public:
   explicit RowNumberFuzzer(
       size_t initialSeed,
@@ -68,7 +69,7 @@ class RowNumberFuzzer : public RowNumberFuzzerBase {
 RowNumberFuzzer::RowNumberFuzzer(
     size_t initialSeed,
     std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
-    : RowNumberFuzzerBase(initialSeed, std::move(referenceQueryRunner)) {
+    : SpillFuzzerBase(initialSeed, std::move(referenceQueryRunner)) {
   // Set timestamp precision as milliseconds, as timestamp may be used as
   // paritition key, and presto doesn't supports nanosecond precision.
   vectorFuzzer_.getMutableOptions().timestampPrecision =
@@ -109,7 +110,7 @@ std::vector<RowVectorPtr> RowNumberFuzzer::generateInput(
   return input;
 }
 
-RowNumberFuzzerBase::PlanWithSplits RowNumberFuzzer::makeDefaultPlan(
+PlanWithSplits RowNumberFuzzer::makeDefaultPlan(
     const std::vector<std::string>& partitionKeys,
     const std::vector<RowVectorPtr>& input) {
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -123,7 +124,7 @@ RowNumberFuzzerBase::PlanWithSplits RowNumberFuzzer::makeDefaultPlan(
   return PlanWithSplits{std::move(plan)};
 }
 
-RowNumberFuzzerBase::PlanWithSplits RowNumberFuzzer::makePlanWithTableScan(
+PlanWithSplits RowNumberFuzzer::makePlanWithTableScan(
     const RowTypePtr& type,
     const std::vector<std::string>& partitionKeys,
     const std::vector<Split>& splits) {
@@ -164,8 +165,7 @@ void RowNumberFuzzer::runSingleIteration() {
   test::logVectors(input);
 
   auto defaultPlan = makeDefaultPlan(keyNames, input);
-  const auto expected =
-      execute(defaultPlan, pool_, /*injectSpill=*/false, false);
+  const auto expected = execute(defaultPlan, /*injectSpill=*/false, false);
 
   if (expected != nullptr) {
     validateExpectedResults(defaultPlan.plan, input, expected);
@@ -174,7 +174,7 @@ void RowNumberFuzzer::runSingleIteration() {
   std::vector<PlanWithSplits> altPlans;
   altPlans.push_back(std::move(defaultPlan));
 
-  const auto tableScanDir = exec::test::TempDirectoryPath::create();
+  const auto tableScanDir = TempDirectoryPath::create();
   addPlansWithTableScan(tableScanDir->getPath(), keyNames, input, altPlans);
 
   for (auto i = 0; i < altPlans.size(); ++i) {

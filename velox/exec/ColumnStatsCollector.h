@@ -51,11 +51,6 @@ class ColumnStatsCollector {
       memory::MemoryPool* pool,
       tsan_atomic<bool>* nonReclaimableSection);
 
-  /// Returns the output row type that will be produced by this collector.
-  /// The output type is determined by the grouping keys and aggregate functions
-  /// specified in the ColumnStatsSpec.
-  static RowTypePtr outputType(const core::ColumnStatsSpec& statsSpec);
-
   /// Initializes the stats collector. Must be called exactly once before
   /// adding any input data. Sets up internal aggregation structures based
   /// on the provided ColumnStatsSpec.

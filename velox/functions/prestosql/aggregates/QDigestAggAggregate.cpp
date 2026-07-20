@@ -20,7 +20,6 @@
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/QuantileDigest.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
 
 using namespace facebook::velox::exec;
@@ -84,15 +83,13 @@ struct QDigestAccumulator {
   void checkSetAccuracy(double accuracy) {
     VELOX_USER_CHECK(
         accuracy > 0.0 && accuracy < 1.0,
-        "{}: accuracy must be in range (0.0, 1.0), got {}",
-        kQDigestAgg,
+        "accuracy must be in range (0.0, 1.0), got {}",
         accuracy);
     if (digest.getMaxError() == kUninitializedMaxError) {
       digest.setMaxError(accuracy);
     } else if (digest.getMaxError() != accuracy) {
       VELOX_USER_FAIL(
-          "{}: accuracy must be the same for all rows in the group, got {} and {}",
-          kQDigestAgg,
+          "accuracy must be the same for all rows in the group, got {} and {}",
           digest.getMaxError(),
           accuracy);
     }
@@ -174,7 +171,9 @@ std::unique_ptr<exec::Aggregate> createQDigestAggAggregate(
 
 } // namespace
 
-void registerQDigestAggAggregate(const std::string& prefix, bool overwrite) {
+void registerQDigestAggAggregate(
+    const std::vector<std::string>& names,
+    bool overwrite) {
   registerQDigestType();
 
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -203,15 +202,13 @@ void registerQDigestAggAggregate(const std::string& prefix, bool overwrite) {
             .build());
   }
 
-  auto name = prefix + kQDigestAgg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         if (argTypes.size() == 1) {
           return createQDigestAggAggregate<1>(step, argTypes, resultType);

@@ -48,5 +48,9 @@ velox_add_library(
   ${BISON_SignatureParser_OUTPUTS}
   ${FLEX_SignatureParserScanner_OUTPUTS}
   ParseUtil.cpp
+  HEADERS
+  ParseUtil.h
+  Scanner.h
+  SignatureParser.h
 )
 velox_link_libraries(velox_signature_parser velox_common_base velox_type)

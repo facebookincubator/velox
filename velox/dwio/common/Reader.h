@@ -21,12 +21,16 @@
 #include <optional>
 #include <string>
 
+#include <folly/container/F14Map.h>
+
+#include "velox/connectors/Connector.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/serializers/KeyEncoder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -43,6 +47,16 @@ namespace facebook::velox::dwio::common {
 class RowReader {
  public:
   static constexpr int64_t kAtEnd = -1;
+
+  /// Runtime stat names.
+  /// Tracks the number of index columns that were converted from ScanSpec
+  /// filters to index bounds for index-based filtering (e.g., cluster index
+  /// pruning in Nimble).
+  static constexpr std::string_view kNumIndexFilterConversions =
+      "numIndexFilterConversions";
+
+  /// Tracks the number of times a stripe has been loaded during index lookup.
+  static constexpr std::string_view kNumStripeLoads = "numStripeLoads";
 
   virtual ~RowReader() = default;
 
@@ -140,6 +154,34 @@ class RowReader {
   }
 
   /**
+   * Result of projectColumnsWithSelection. 'output' is the projected
+   * RowVector. 'selectedRows' maps each output row back to its input row
+   * index: selectedRows[i] is the input row that produced output row i.
+   * 'selectedRows' is null when no rows were dropped — output rows are
+   * identity-aligned with the input. This includes the empty-input case
+   * (input->size() == 0), where the identity mapping holds trivially.
+   * When all rows are filtered out from a non-empty input, 'output' is
+   * empty and 'selectedRows' is a non-null zero-length buffer so callers
+   * can distinguish "filtered to empty" from "identity mapping".
+   */
+  struct ProjectColumnsResult {
+    VectorPtr output;
+    BufferPtr selectedRows;
+  };
+
+  /**
+   * Like projectColumns, but also returns the input-row selection used to
+   * build the output. Callers that need to keep an external per-input-row
+   * structure (for example, an index reader's inputHits buffer) aligned
+   * with the filtered output can use 'selectedRows' to compact that
+   * structure without re-running filters.
+   */
+  static ProjectColumnsResult projectColumnsWithSelection(
+      const VectorPtr& input,
+      const velox::common::ScanSpec& spec,
+      const Mutation* mutation);
+
+  /**
    * Helper function used by non-selective reader to project top level columns
    * according to the scan spec and mutations.
    */
@@ -155,6 +197,154 @@ class RowReader {
       uint64_t rowsToRead,
       const dwio::common::Mutation*,
       VectorPtr& result);
+};
+
+/// Represents a row range within a stripe [startRow, endRow).
+struct RowRange {
+  vector_size_t startRow{0}; // Inclusive
+  vector_size_t endRow{0}; // Exclusive
+
+  RowRange() = default;
+  RowRange(vector_size_t _startRow, vector_size_t _endRow)
+      : startRow(_startRow), endRow(_endRow) {}
+
+  /// Returns true if this row range is empty (no rows to read).
+  bool empty() const {
+    return startRow >= endRow;
+  }
+};
+
+/**
+ * Abstract index reader interface for index-based lookups.
+ *
+ * IndexReader provides a batch lookup API that takes a vector of index bounds
+ * and returns results via an iterator pattern. This interface is used by
+ * HiveIndexReader to perform efficient key-based lookups on indexed files.
+ *
+ * Usage pattern:
+ *   1. Call startLookup() with a vector of index bounds to start a new batch
+ * lookup
+ *   2. Call next() repeatedly to get results until it returns nullptr
+ *   3. Each next() call returns results for one or more request indices
+ *
+ * The implementation is responsible for:
+ *   - Encoding index bounds into format-specific keys
+ *   - Looking up stripes and row ranges
+ *   - Managing stripe iteration and data reading
+ *   - Returning results in the correct order
+ */
+class IndexReader {
+ public:
+  /// Runtime stat names for index reader.
+
+  /// Tracks the number of index lookup requests submitted in startLookup().
+  /// Each request corresponds to one set of index bounds and may match rows
+  /// across multiple stripes.
+  static constexpr std::string_view kNumIndexLookupRequests =
+      "numIndexLookupRequests";
+
+  /// Tracks the total number of stripes that need to be read for all requests.
+  /// Within a single startLookup() call, a stripe shared by multiple requests
+  /// is counted once; across different startLookup() calls, the same stripe is
+  /// counted separately for each call.
+  static constexpr std::string_view kNumIndexLookupStripes =
+      "numIndexLookupStripes";
+
+  /// Tracks the total number of rows in all loaded stripes. Measures the full
+  /// stripe row count regardless of how many rows are actually needed by
+  /// index lookups. Comparing with kNumIndexMatchedRows shows cluster index
+  /// selectivity within stripes.
+  static constexpr std::string_view kNumIndexScannedRows =
+      "numIndexScannedRows";
+
+  /// Tracks the total number of rows matched by the cluster index across all
+  /// stripes. These are the rows identified as matching the lookup bounds
+  /// within each stripe, before any ScanSpec filter pushdown. Comparing with
+  /// actual output rows shows filter selectivity.
+  static constexpr std::string_view kNumIndexMatchedRows =
+      "numIndexMatchedRows";
+
+  /// Tracks the total number of read segments across all stripes. A read
+  /// segment is a contiguous row range within a stripe that needs to be read.
+  /// When filters are present, overlapping request ranges are split at
+  /// boundaries to enable per-request output tracking. Without filters,
+  /// overlapping ranges are merged to minimize I/O.
+  static constexpr std::string_view kNumIndexLookupReadSegments =
+      "numIndexLookupReadSegments";
+
+  /// Wall time spent loading stripes (or equivalent format-specific load unit)
+  /// during index lookup, summed across all stripe loads.
+  static constexpr std::string_view kIndexStripeLoadWallNanos =
+      "indexStripeLoadWallNanos";
+
+  /// CPU time spent loading stripes during index lookup. May undercount on
+  /// async/prefetch paths; see IndexSource::lookupTiming() for details.
+  static constexpr std::string_view kIndexStripeLoadCpuNanos =
+      "indexStripeLoadCpuNanos";
+
+  /// Wall time spent decoding column data from loaded stripes during index
+  /// lookup, summed across all read segments.
+  static constexpr std::string_view kIndexDataDecodeWallNanos =
+      "indexDataDecodeWallNanos";
+
+  /// CPU time spent decoding column data from loaded stripes during index
+  /// lookup. Same prefetch caveat as kIndexStripeLoadCpuNanos.
+  static constexpr std::string_view kIndexDataDecodeCpuNanos =
+      "indexDataDecodeCpuNanos";
+
+  /// Number of distinct stripes loaded across the lifetime of this index
+  /// reader. Useful for spotting redundant loads when comparing against
+  /// numStripeLoads (which counts every load call).
+  static constexpr std::string_view kNumIndexDistinctStripesLoaded =
+      "numIndexDistinctStripesLoaded";
+
+  virtual ~IndexReader() = default;
+
+  /// Returns runtime statistics accumulated by this index reader.
+  virtual folly::F14FastMap<std::string, RuntimeMetric> stats() const {
+    return {};
+  }
+
+  /// Options for controlling index reader behavior.
+  struct Options {
+    /// Maximum number of rows to read per index lookup request.
+    /// When set to non-zero, the index reader will stop fetching or truncate
+    /// stripes once the total row range (before filtering) reaches this limit.
+    /// 0 means no limit (default).
+    vector_size_t maxRowsPerRequest{0};
+  };
+
+  /// Starts a new batch lookup with the given index bounds.
+  /// Each index bound in the vector represents a separate lookup request.
+  /// After calling startLookup(), call next() repeatedly to get results.
+  ///
+  /// @param indexBounds Index bounds for the lookup request. Contains
+  ///        column names and lower/upper bound values.
+  /// @param options Options controlling index reader behavior (e.g.,
+  ///        maxRowsPerRequest). Defaults to no limit.
+  /// @throws if lookup is not supported by the implementation or if any
+  ///         index bound is invalid.
+  virtual void startLookup(
+      const velox::serializer::IndexBounds& indexBounds,
+      const Options& options) = 0;
+
+  /// Returns true if there are more results to fetch from the current lookup.
+  virtual bool hasNext() const = 0;
+
+  /// Returns the next batch of results from the current lookup.
+  /// Results are returned in request order - all results for request N are
+  /// returned before any results for request N+1.
+  ///
+  /// The Result contains:
+  /// - inputHits: Buffer of request indices for each output row
+  /// - output: RowVector of matching data rows
+  ///
+  /// @param maxOutputRows Maximum number of output rows to return in this
+  ///        batch. The actual number may be less if fewer rows are available.
+  /// @return Result containing inputHits and output rows, or nullptr if no
+  ///         more results are available.
+  virtual std::unique_ptr<connector::IndexSource::Result> next(
+      vector_size_t maxOutputRows) = 0;
 };
 
 /**
@@ -179,11 +369,18 @@ class Reader {
    */
   virtual std::optional<uint64_t> numberOfRows() const = 0;
 
-  /**
-   * Get statistics for a specified column.
-   * @param index column index
-   * @return column statisctics
-   */
+  /// Returns file-level statistics for the column identified by 'index'.
+  ///
+  /// 'index' is a node ID in the type tree (TypeWithId::id()), not a top-level
+  /// column ordinal. Node 0 is the root ROW type; top-level columns start at 1
+  /// for flat schemas. For nested types, IDs follow pre-order DFS numbering.
+  ///
+  /// Use typeWithId() to navigate the schema and obtain the correct ID:
+  ///   auto& col = reader->typeWithId()->childByName("column_name");
+  ///   auto stats = reader->columnStatistics(col->id());
+  ///
+  /// Returns nullptr if statistics are not available (e.g., non-leaf complex
+  /// types in Parquet, out-of-range index, or missing stats in the file).
   virtual std::unique_ptr<ColumnStatistics> columnStatistics(
       uint32_t index) const = 0;
 
@@ -206,6 +403,17 @@ class Reader {
    */
   virtual std::unique_ptr<RowReader> createRowReader(
       const RowReaderOptions& options = {}) const = 0;
+
+  /**
+   * Create index reader object for index-based lookups.
+   * @param options Row reader options describing the data to fetch
+   * @return Index reader for efficient key-based lookups
+   * @throws if index reading is not supported by the implementation
+   */
+  virtual std::unique_ptr<IndexReader> createIndexReader(
+      const RowReaderOptions& options = {}) const {
+    VELOX_UNSUPPORTED("Reader::createIndexReader() is not supported");
+  }
 
   static TypePtr updateColumnNames(
       const TypePtr& fileType,

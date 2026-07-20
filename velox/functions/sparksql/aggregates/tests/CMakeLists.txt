@@ -14,7 +14,10 @@
 
 add_executable(
   velox_functions_spark_aggregates_test
+  ApproxPercentileAggregateTest.cpp
   AverageAggregationTest.cpp
+  BitmapConstructAggAggregateTest.cpp
+  BitmapOrAggAggregateTest.cpp
   BitwiseXorAggregationTest.cpp
   BloomFilterAggAggregateTest.cpp
   CentralMomentsAggregationTest.cpp
@@ -31,6 +34,8 @@ add_executable(
   SumAggregationTest.cpp
   VarianceAggregationTest.cpp
 )
+
+velox_add_test_headers(velox_functions_spark_aggregates_test BitmapBuilder.h)
 
 add_test(velox_functions_spark_aggregates_test velox_functions_spark_aggregates_test)
 

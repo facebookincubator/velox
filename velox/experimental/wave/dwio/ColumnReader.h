@@ -122,7 +122,7 @@ class ReadStream : public Executable {
   ReadStream(
       StructColumnReader* columnReader,
       WaveStream& waveStream,
-      velox::io::IoStatistics* ioStats,
+      velox::io::IoStatistics* ioStatistics,
       FileInfo& fileInfo,
       const OperandSet* firstColumns = nullptr);
 

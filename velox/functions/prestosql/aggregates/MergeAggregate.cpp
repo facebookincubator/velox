@@ -15,7 +15,6 @@
  */
 #include "velox/functions/prestosql/aggregates/MergeAggregate.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/HyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MergeKHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MergeQDigestAggregate.h"
@@ -34,8 +33,8 @@ namespace facebook::velox::aggregate::prestosql {
 
 namespace {
 
-exec::AggregateRegistrationResult registerMerge(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerMerge(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite,
     double defaultError) {
@@ -60,9 +59,9 @@ exec::AggregateRegistrationResult registerMerge(
   bool hllAsRawInput = true;
   bool hllAsFinalResult = true;
   return exec::registerAggregateFunction(
-      name,
+      names,
       signatures,
-      [name, hllAsFinalResult, hllAsRawInput, defaultError](
+      [hllAsFinalResult, hllAsRawInput, defaultError](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -87,7 +86,7 @@ exec::AggregateRegistrationResult registerMerge(
         if (argTypes[0] == KHYPERLOGLOG()) {
           return std::make_unique<MergeKHyperLogLogAggregate>(resultType);
         }
-        if (argTypes[0]->isUnKnown()) {
+        if (argTypes[0]->isUnknown()) {
           return std::make_unique<HyperLogLogAggregate<UnknownValue, true>>(
               resultType, hllAsRawInput, defaultError);
         }
@@ -111,7 +110,7 @@ exec::AggregateRegistrationResult registerMerge(
 } // namespace
 
 void registerMergeAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool /* withCompanionFunctions */,
     bool overwrite) {
   registerSfmSketchType();
@@ -122,10 +121,7 @@ void registerMergeAggregate(
   // merge is companion function for approx_distinct. Don't register companion
   // functions for it.
   registerMerge(
-      prefix + kMerge,
-      false,
-      overwrite,
-      common::hll::kDefaultApproxSetStandardError);
+      names, false, overwrite, common::hll::kDefaultApproxSetStandardError);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

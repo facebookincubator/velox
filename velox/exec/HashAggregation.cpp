@@ -16,9 +16,13 @@
 #include "velox/exec/HashAggregation.h"
 
 #include <optional>
+#include "velox/common/testutil/TestValue.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -32,15 +36,24 @@ HashAggregation::HashAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation",
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation,
           aggregationNode->canSpill(driverCtx->queryConfig())
-              ? driverCtx->makeSpillConfig(operatorId)
+              ? driverCtx->makeSpillConfig(
+                    operatorId,
+                    aggregationNode->step() ==
+                            core::AggregationNode::Step::kPartial
+                        ? OperatorType::kPartialAggregation
+                        : OperatorType::kAggregation)
               : std::nullopt),
       aggregationNode_(aggregationNode),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isGlobal_(aggregationNode->groupingKeys().empty()),
       isDistinct_(!isGlobal_ && aggregationNode->aggregates().empty()),
+      isRawInput_(isRawInput(aggregationNode->step())),
+      hasGlobalGroupingSets_(!aggregationNode->globalGroupingSets().empty()),
+      memoryCompactionEnabled_(
+          driverCtx->queryConfig().aggregationMemoryCompactionReclaimEnabled()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       abandonPartialAggregationMinRows_(
@@ -107,7 +120,7 @@ void HashAggregation::initialize() {
       std::move(aggregateInfos),
       aggregationNode_->ignoreNullKeys(),
       isPartialOutput_,
-      isRawInput(aggregationNode_->step()),
+      isRawInput_,
       aggregationNode_->globalGroupingSets(),
       groupIdChannel,
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
@@ -115,6 +128,8 @@ void HashAggregation::initialize() {
       &operatorCtx_->driverCtx()->queryConfig(),
       operatorCtx_->pool(),
       spillStats_.get());
+
+  hasCompactableAggregates_ = groupingSet_->hasCompactableAggregates();
 
   aggregationNode_.reset();
 }
@@ -215,13 +230,32 @@ void HashAggregation::addInput(RowVectorPtr input) {
   }
 }
 
+bool HashAggregation::startDrain() {
+  VELOX_CHECK(isDraining());
+  VELOX_CHECK(!noMoreInput_);
+  VELOX_CHECK(
+      !groupingSet_->hasSpilled(),
+      "Barrier drain is not supported for spilled hash aggregation");
+
+  return true;
+}
+
+void HashAggregation::finishDrain() {
+  if (!isDraining()) {
+    return;
+  }
+  groupingSet_->resetTable(/*freeTable=*/false);
+  if (isGlobal_) {
+    groupingSet_->resetGlobalAggregation();
+  }
+  Operator::finishDrain();
+}
+
 void HashAggregation::updateRuntimeStats() {
   // Report range sizes and number of distinct values for the group-by keys.
   const auto& hashers = groupingSet_->hashLookup().hashers;
   uint64_t asRange{0};
   uint64_t asDistinct{0};
-  const auto hashTableStats = groupingSet_->hashTableStats();
-
   auto lockedStats = stats_.wlock();
   auto& runtimeStats = lockedStats->runtimeStats;
 
@@ -235,14 +269,9 @@ void HashAggregation::updateRuntimeStats() {
     }
   }
 
-  runtimeStats[BaseHashTable::kCapacity] =
-      RuntimeMetric(hashTableStats.capacity);
-  runtimeStats[BaseHashTable::kNumRehashes] =
-      RuntimeMetric(hashTableStats.numRehashes);
-  runtimeStats[BaseHashTable::kNumDistinct] =
-      RuntimeMetric(hashTableStats.numDistinct);
-  runtimeStats[BaseHashTable::kNumTombstones] =
-      RuntimeMetric(hashTableStats.numTombstones);
+  if (auto* table = groupingSet_->table()) {
+    table->addRuntimeStats(runtimeStats);
+  }
 }
 
 void HashAggregation::prepareOutput(vector_size_t size) {
@@ -266,10 +295,13 @@ void HashAggregation::resetPartialOutputIfNeed() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        "flushRowCount", RuntimeCounter(numOutputRows_));
-    lockedStats->addRuntimeStat("flushTimes", RuntimeCounter(1));
+        std::string(HashAggregation::kFlushRowCount),
+        RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        "partialAggregationPct", RuntimeCounter(aggregationPct));
+        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+    lockedStats->addRuntimeStat(
+        std::string(HashAggregation::kPartialAggregationPct),
+        RuntimeCounter(saturateCast(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
   partialFull_ = false;
@@ -293,7 +325,6 @@ void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(
            maxExtendedPartialAggregationMemoryUsage_)) {
     groupingSet_->abandonPartialAggregation();
     pool()->release();
-    addRuntimeStat("abandonedPartialAggregation", RuntimeCounter(1));
     abandonedPartialAggregation_ = true;
     return;
   }
@@ -328,10 +359,14 @@ RowVectorPtr HashAggregation::getOutput() {
       finished_ = true;
     }
     if (!input_) {
+      finishDrain();
       return nullptr;
     }
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
+    addRuntimeStat(
+        std::string(HashAggregation::kAbandonedPartialAggregationRows),
+        RuntimeCounter(input_->size()));
     numOutputRows_ += input_->size();
     input_ = nullptr;
     return output_;
@@ -342,14 +377,18 @@ RowVectorPtr HashAggregation::getOutput() {
   // - partial aggregation reached memory limit;
   // - distinct aggregation has new keys;
   // - running in partial streaming mode and have some output ready.
-  if (!noMoreInput_ && !partialFull_ && !newDistincts_ &&
-      !groupingSet_->hasOutput()) {
+  if (!noMoreInput_ && !isDraining() && !partialFull_ && !newDistincts_ &&
+      !groupingSet_->hasDrainedNewGroups() && !groupingSet_->hasOutput()) {
     input_ = nullptr;
     return nullptr;
   }
 
   if (isDistinct_) {
-    return getDistinctOutput();
+    auto distinctOutput = getDistinctOutput();
+    if (distinctOutput == nullptr) {
+      finishDrain();
+    }
+    return distinctOutput;
   }
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
@@ -365,10 +404,14 @@ RowVectorPtr HashAggregation::getOutput() {
       output_);
   if (!hasData) {
     resultIterator_.reset();
+    resetPartialOutputIfNeed();
+    finishDrain();
     if (noMoreInput_) {
       finished_ = true;
+      if (emitDefaultGlobalGroupingSetRows_) {
+        return getDefaultGlobalGroupingSetOutput();
+      }
     }
-    resetPartialOutputIfNeed();
     return nullptr;
   }
   numOutputRows_ += output_->size();
@@ -378,6 +421,15 @@ RowVectorPtr HashAggregation::getOutput() {
 RowVectorPtr HashAggregation::getDistinctOutput() {
   VELOX_CHECK(isDistinct_);
   VELOX_CHECK(!finished_);
+
+  if (groupingSet_->hasDrainedNewGroups()) {
+    auto size = groupingSet_->drainedNewGroupsCount();
+    prepareOutput(size);
+    groupingSet_->extractDrainedNewGroups(output_);
+    numOutputRows_ += size;
+    resetPartialOutputIfNeed();
+    return output_;
+  }
 
   if (newDistincts_) {
     VELOX_CHECK_NOT_NULL(input_);
@@ -403,13 +455,9 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
   if (!groupingSet_->hasSpilled()) {
     if (noMoreInput_) {
       finished_ = true;
-      if (auto numRows = groupingSet_->numDefaultGlobalGroupingSetRows()) {
-        prepareOutput(numRows.value());
-        if (groupingSet_->getDefaultGlobalGroupingSetOutput(
-                resultIterator_, output_)) {
-          numOutputRows_ += output_->size();
-          return output_;
-        }
+      resultIterator_.reset();
+      if (emitDefaultGlobalGroupingSetRows_) {
+        return getDefaultGlobalGroupingSetOutput();
       }
     }
     return nullptr;
@@ -434,12 +482,72 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
   return output_;
 }
 
+bool HashAggregation::shouldEmitDefaultGlobalGroupingSetRows() {
+  if (!hasGlobalGroupingSets_ || !isRawInput_) {
+    return false;
+  }
+  // Single driver has no peers; emit based on its own input.
+  if (operatorCtx_->task()->numDrivers(operatorCtx_->driver()) <= 1) {
+    return groupingSet_->numInputRows() == 0;
+  }
+  return electDefaultGlobalGroupingSetDriver();
+}
+
+bool HashAggregation::electDefaultGlobalGroupingSetDriver() {
+  std::vector<ContinuePromise> promises;
+  std::vector<std::shared_ptr<Driver>> peers;
+  if (!operatorCtx_->task()->allPeersFinished(
+          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    VELOX_CHECK(future_.valid());
+    return false;
+  }
+
+  SCOPE_EXIT {
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  };
+
+  // allPeersFinished returned true, so every peer has finished noMoreInput()
+  // and its input count is final.
+  uint64_t totalInputRows = groupingSet_->numInputRows();
+  for (auto& peer : peers) {
+    auto* aggregation =
+        dynamic_cast<HashAggregation*>(peer->findOperator(planNodeId()));
+    VELOX_CHECK_NOT_NULL(aggregation);
+    totalInputRows += aggregation->groupingSet_->numInputRows();
+  }
+  return totalInputRows == 0;
+}
+
+RowVectorPtr HashAggregation::getDefaultGlobalGroupingSetOutput() {
+  prepareOutput(groupingSet_->numGlobalGroupingSets());
+  VELOX_CHECK(groupingSet_->getDefaultGlobalGroupingSetOutput(
+      resultIterator_, output_));
+  numOutputRows_ += output_->size();
+  return output_;
+}
+
 void HashAggregation::noMoreInput() {
   updateEstimatedOutputRowSize();
   groupingSet_->noMoreInput();
   Operator::noMoreInput();
+
+  // May park this driver on 'future_' for the peer election, surfaced by
+  // isBlocked() as kWaitForAggregationPeers.
+  emitDefaultGlobalGroupingSetRows_ = shouldEmitDefaultGlobalGroupingSetRows();
+
   // Release the extra reserved memory right after processing all the inputs.
   pool()->release();
+}
+
+BlockingReason HashAggregation::isBlocked(ContinueFuture* future) {
+  if (future_.valid()) {
+    *future = std::move(future_);
+    return BlockingReason::kWaitForAggregationPeers;
+  }
+  return BlockingReason::kNotBlocked;
 }
 
 bool HashAggregation::isFinished() {
@@ -458,13 +566,37 @@ void HashAggregation::reclaim(
 
   updateEstimatedOutputRowSize();
 
+  // Try lightweight compaction first before spilling.
+  if (memoryCompactionEnabled_) {
+    uint64_t compactedBytes{0};
+    if (hasCompactableAggregates_) {
+      compactedBytes = groupingSet_->compact();
+    }
+    TestValue::adjust(
+        "facebook::velox::exec::HashAggregation::reclaim::compact",
+        &compactedBytes);
+    if (compactedBytes > 0) {
+      stats.reclaimedBytes += compactedBytes;
+      pool()->release();
+      if (compactedBytes >= targetBytes) {
+        return;
+      }
+    }
+  }
+
+  if (!canSpill()) {
+    return;
+  }
+
   if (noMoreInput_) {
     if (groupingSet_->hasSpilled()) {
       LOG(WARNING)
           << "Can't reclaim from aggregation operator which has spilled and is under output processing, pool "
-          << pool()->name()
-          << ", memory usage: " << succinctBytes(pool()->usedBytes())
-          << ", reservation: " << succinctBytes(pool()->reservedBytes());
+          << pool()->name() << ", root pool: " << pool()->root()->name()
+          << ", used: " << succinctBytes(pool()->usedBytes())
+          << ", reservation: " << succinctBytes(pool()->reservedBytes())
+          << ", root pool reservation: "
+          << succinctBytes(pool()->root()->reservedBytes());
       return;
     }
     if (isDistinct_) {

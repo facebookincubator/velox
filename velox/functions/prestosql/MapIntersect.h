@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <algorithm>
+
+#include <folly/Likely.h>
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Udf.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -34,26 +37,38 @@ struct MapIntersectPrimitiveFunction {
       const arg_type<Array<Key>>* keys) {
     if (keys != nullptr) {
       constantSearchKeys_ = true;
-      initializeSearchKeys(*keys);
+      searchKeys_.reserve(keys->size());
+      for (const auto& key : keys->skipNulls()) {
+        searchKeys_.emplace(key);
+      }
     }
   }
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Map<Key, Generic<T1>>>& out,
       const arg_type<Map<Key, Generic<T1>>>& inputMap,
       const arg_type<Array<Key>>& keys) {
-    if (keys.empty()) {
+    if (FOLLY_UNLIKELY(keys.empty() || inputMap.empty())) {
       return;
     }
 
     if (!constantSearchKeys_) {
       searchKeys_.clear();
-      initializeSearchKeys(keys);
+      searchKeys_.reserve(keys.size());
+      for (const auto& key : keys.skipNulls()) {
+        searchKeys_.emplace(key);
+      }
     }
 
-    if (searchKeys_.empty()) {
+    if (FOLLY_UNLIKELY(searchKeys_.empty())) {
       return;
     }
+
+    out.reserve(
+        static_cast<vector_size_t>(
+            std::min<size_t>(inputMap.size(), searchKeys_.size())));
+
+    auto toFind = searchKeys_.size();
 
     for (const auto& entry : inputMap) {
       if (!searchKeys_.contains(entry.first)) {
@@ -68,16 +83,15 @@ struct MapIntersectPrimitiveFunction {
         keyWriter = entry.first;
         valueWriter.copy_from(entry.second.value());
       }
+
+      --toFind;
+      if (toFind == 0) {
+        break;
+      }
     }
   }
 
  private:
-  void initializeSearchKeys(const arg_type<Array<Key>>& keys) {
-    for (const auto& key : keys.skipNulls()) {
-      searchKeys_.emplace(key);
-    }
-  }
-
   bool constantSearchKeys_{false};
   util::floating_point::HashSetNaNAware<arg_type<Key>> searchKeys_;
 };
@@ -95,6 +109,7 @@ struct MapIntersectVarcharFunction {
     if (keys != nullptr) {
       constantSearchKeys_ = true;
 
+      searchKeys_.reserve(keys->size());
       searchKeyStrings_.reserve(keys->size());
       for (const auto& key : keys->skipNulls()) {
         if (key.isInline()) {
@@ -107,24 +122,31 @@ struct MapIntersectVarcharFunction {
     }
   }
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Map<Varchar, Generic<T1>>>& out,
       const arg_type<Map<Varchar, Generic<T1>>>& inputMap,
       const arg_type<Array<Varchar>>& keys) {
-    if (keys.empty()) {
+    if (FOLLY_UNLIKELY(keys.empty() || inputMap.empty())) {
       return;
     }
 
     if (!constantSearchKeys_) {
       searchKeys_.clear();
+      searchKeys_.reserve(keys.size());
       for (const auto& key : keys.skipNulls()) {
         searchKeys_.emplace(key);
       }
     }
 
-    if (searchKeys_.empty()) {
+    if (FOLLY_UNLIKELY(searchKeys_.empty())) {
       return;
     }
+
+    out.reserve(
+        static_cast<vector_size_t>(
+            std::min<size_t>(inputMap.size(), searchKeys_.size())));
+
+    auto toFind = searchKeys_.size();
 
     for (const auto& entry : inputMap) {
       if (!searchKeys_.contains(entry.first)) {
@@ -138,6 +160,11 @@ struct MapIntersectVarcharFunction {
         auto [keyWriter, valueWriter] = out.add_item();
         keyWriter.copy_from(entry.first);
         valueWriter.copy_from(entry.second.value());
+      }
+
+      --toFind;
+      if (toFind == 0) {
+        break;
       }
     }
   }
@@ -156,7 +183,7 @@ struct MapIntersectFunctionEqualComparator {
 
     auto result = lhs.compare(rhs, kEqualValueAtFlags);
 
-    // If comparison returns indeterminate (null), treat as not equal
+    // If comparison returns indeterminate (null), treat as not equal.
     if (!result.has_value()) {
       return false;
     }
@@ -171,22 +198,29 @@ template <typename TExec>
 struct MapIntersectFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
-  void call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Map<Generic<T1>, Generic<T2>>>& out,
       const arg_type<Map<Generic<T1>, Generic<T2>>>& inputMap,
       const arg_type<Array<Generic<T1>>>& keys) {
-    if (keys.empty()) {
+    if (FOLLY_UNLIKELY(keys.empty() || inputMap.empty())) {
       return;
     }
 
     searchKeys_.clear();
+    searchKeys_.reserve(keys.size());
     for (const auto& key : keys.skipNulls()) {
       searchKeys_.emplace(key);
     }
 
-    if (searchKeys_.empty()) {
+    if (FOLLY_UNLIKELY(searchKeys_.empty())) {
       return;
     }
+
+    out.reserve(
+        static_cast<vector_size_t>(
+            std::min<size_t>(inputMap.size(), searchKeys_.size())));
+
+    auto toFind = searchKeys_.size();
 
     for (const auto& entry : inputMap) {
       if (!searchKeys_.contains(entry.first)) {
@@ -200,6 +234,11 @@ struct MapIntersectFunction {
         auto [keyWriter, valueWriter] = out.add_item();
         keyWriter.copy_from(entry.first);
         valueWriter.copy_from(entry.second.value());
+      }
+
+      --toFind;
+      if (toFind == 0) {
+        break;
       }
     }
   }

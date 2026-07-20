@@ -16,6 +16,8 @@ Scalar functions are one of the most used extension points in Velox. Since Velox
 <img src="/img/simple1_1.png"/>
 </figure>
 
+<!-- truncate -->
+
 Writing functions as vector functions directly gives the user `complete` control over the function implementations and optimizations, however it comes with some cost that can be summarized in three points:
 
 - **Complexity** : Requires an understanding of Velox vectorized data representation and encodings, which requires additional work for our customers, specially those without DB background. Moreover, Writing optimized vector functions requires even deeper understanding.

@@ -51,6 +51,16 @@ Map Functions
 
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
 
+.. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
+
+    Returns a map created from the given array of entries. Throws exception if duplicate key or NULL
+    key is found. Returns NULL if NULL entry exists. ::
+
+        SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'null'))); -- {1 -> 'a', 2 -> 'null'}
+        SELECT map_from_entries(array(struct(1, 'a'), null)); -- {null}
+        SELECT map_from_entries(array(struct(null, 'a'))); -- "map key cannot be null"
+        SELECT map_from_entries(array(struct(1, 'a'), struct(1, 'b'))); -- "Duplicate map keys (1) are not allowed"
+
 .. spark:function:: map_keys(x(K,V)) -> array(K)
 
     Returns all the keys in the map ``x``.
@@ -83,3 +93,11 @@ Map Functions
         SELECT size(map(array(1, 2), array(3, 4)), true); -- 2
         SELECT size(NULL, true); -- -1
         SELECT size(NULL, false); -- NULL
+
+.. spark:function:: transform_values(map(K,V1), func) -> map(K,V2)
+
+    Returns a map that applies ``func`` to each entry of ``map`` and transforms
+    the values. Keys are left unchanged. ::
+
+        SELECT transform_values(map(1, 10, 2, 20), (k, v) -> v * 2); -- {1 -> 20, 2 -> 40}
+        SELECT transform_values(map(1, 10, 2, 20), (k, v) -> k + v); -- {1 -> 11, 2 -> 22}

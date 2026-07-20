@@ -40,6 +40,13 @@ struct ArrowOptions {
   std::optional<std::string> timestampTimeZone{std::nullopt};
   // Export VARCHAR and VARBINARY to Arrow 15 StringView format
   bool exportToStringView = false;
+  // Export VARBINARY as UTF-8 string (for consumers that lack binary support).
+  bool exportVarbinaryAsString = false;
+  /// Respect the width component of decimal type format string on export.
+  /// Default to false for now until Arrow 18 upgrade is completed and Parquet
+  /// reader/writer code is adapted to support Decimal64. CUDF I/O sets this to
+  /// true as it uses NanoArrow 0.7.0 which already supports Decimal64.
+  bool useDecimalTypeWidth = false;
 };
 
 namespace facebook::velox {

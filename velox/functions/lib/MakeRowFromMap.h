@@ -240,6 +240,9 @@ class MakeRowFromMap {
     std::vector<bool> visited(keyToIndex_.size());
     std::vector<std::vector<BaseVector::CopyRange>> copyRangesFromBase(
         keyToIndex_.size());
+    for (auto& ranges : copyRangesFromBase) {
+      ranges.reserve(rows.countSelected());
+    }
     rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
       std::fill(visited.begin(), visited.end(), false);
       if (!decodedMap->isNullAt(row)) {
@@ -258,12 +261,13 @@ class MakeRowFromMap {
           auto index = it->second;
           if (visited[index]) {
             if (throwOnDuplicateKeys_) {
-              auto errorMessage =
-                  fmt::format("Duplicate keys not allowed: {}", key);
               if (evalCtx) {
-                evalCtx->setStatus(row, Status::UserError(errorMessage));
+                evalCtx->setStatus(
+                    row,
+                    Status::UserError(
+                        fmt::format("Duplicate keys not allowed: {}", key)));
               } else {
-                VELOX_USER_FAIL(errorMessage);
+                VELOX_USER_FAIL("Duplicate keys not allowed: {}", key);
               }
               return;
             }

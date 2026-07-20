@@ -17,6 +17,11 @@ velox_add_library(
   Compression.cpp
   PagedInputStream.cpp
   PagedOutputStream.cpp
+  HEADERS
+  Compression.h
+  CompressionBufferPool.h
+  PagedInputStream.h
+  PagedOutputStream.h
 )
 
 velox_link_libraries(

@@ -26,12 +26,16 @@
 #include "velox/functions/prestosql/ArrayFunctions.h"
 #include "velox/functions/prestosql/ArraySort.h"
 #include "velox/functions/prestosql/ArraySubset.h"
+#include "velox/functions/prestosql/DotProduct.h"
+#include "velox/functions/prestosql/L2Norm.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
+#include "velox/type/SimpleFunctionApi.h"
 
 namespace facebook::velox::functions {
 extern void registerArrayConcatFunctions(const std::string& prefix);
 extern void registerArrayNGramsFunctions(const std::string& prefix);
+extern void registerArraySplitIntoChunksFunctions(const std::string& prefix);
 
 template <typename T>
 inline void registerArrayMinMaxFunctions(const std::string& prefix) {
@@ -228,6 +232,7 @@ void registerArrayFunctions(const std::string& prefix) {
 
   registerArrayConcatFunctions(prefix);
   registerArrayNGramsFunctions(prefix);
+  registerArraySplitIntoChunksFunctions(prefix);
 
   registerArrayRemoveFunctions<int8_t>(prefix);
   registerArrayRemoveFunctions<int16_t>(prefix);
@@ -380,5 +385,132 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Generic<T1>>,
       Array<int32_t>>({prefix + "array_subset"});
+
+  // Register l2_norm function for arrays
+  registerFunction<ArrayL2NormFunction, double, Array<int8_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int16_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int32_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<int64_t>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<float>>(
+      {prefix + "l2_norm"});
+  registerFunction<ArrayL2NormFunction, double, Array<double>>(
+      {prefix + "l2_norm"});
+
+  // Register l2_norm function for maps with numeric values
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int8_t>,
+      double,
+      Map<Varchar, int8_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int16_t>,
+      double,
+      Map<Varchar, int16_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int32_t>,
+      double,
+      Map<Varchar, int32_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, int64_t>,
+      double,
+      Map<Varchar, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, float>,
+      double,
+      Map<Varchar, float>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, Varchar, double>,
+      double,
+      Map<Varchar, double>>({prefix + "l2_norm"});
+
+  // Register l2_norm function for maps with integer keys
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, int32_t>,
+      double,
+      Map<int32_t, int32_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, int64_t>,
+      double,
+      Map<int32_t, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, float>,
+      double,
+      Map<int32_t, float>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int32_t, double>,
+      double,
+      Map<int32_t, double>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int64_t, int64_t>,
+      double,
+      Map<int64_t, int64_t>>({prefix + "l2_norm"});
+  registerFunction<
+      ParameterBinder<MapL2NormFunction, int64_t, double>,
+      double,
+      Map<int64_t, double>>({prefix + "l2_norm"});
+
+  // Register dot_product for integer arrays only.
+  // Float and double array versions already exist in
+  // MathematicalFunctionsRegistration.cpp (DotProductArray,
+  // DotProductFloatArray) with different semantics: they return NaN for empty
+  // arrays to maintain compatibility with cosine_similarity and other distance
+  // functions there. Integer versions here return 0 for empty arrays.
+  registerFunction<
+      ParameterBinder<DotProductFunction, int8_t>,
+      int64_t,
+      Array<int8_t>,
+      Array<int8_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int16_t>,
+      int64_t,
+      Array<int16_t>,
+      Array<int16_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int32_t>,
+      int64_t,
+      Array<int32_t>,
+      Array<int32_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<DotProductFunction, int64_t>,
+      int64_t,
+      Array<int64_t>,
+      Array<int64_t>>({prefix + "dot_product"});
+
+  // Register dot_product for maps with integer keys
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int32_t, int64_t>,
+      int64_t,
+      Map<int32_t, int64_t>,
+      Map<int32_t, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int64_t, int64_t>,
+      int64_t,
+      Map<int64_t, int64_t>,
+      Map<int64_t, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int32_t, double>,
+      double,
+      Map<int32_t, double>,
+      Map<int32_t, double>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, int64_t, double>,
+      double,
+      Map<int64_t, double>,
+      Map<int64_t, double>>({prefix + "dot_product"});
+
+  // Register dot_product for maps with varchar keys
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, Varchar, int64_t>,
+      int64_t,
+      Map<Varchar, int64_t>,
+      Map<Varchar, int64_t>>({prefix + "dot_product"});
+  registerFunction<
+      ParameterBinder<MapDotProductFunction, Varchar, double>,
+      double,
+      Map<Varchar, double>,
+      Map<Varchar, double>>({prefix + "dot_product"});
 }
 } // namespace facebook::velox::functions

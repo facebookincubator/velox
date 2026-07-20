@@ -18,7 +18,13 @@ endif()
 
 add_subdirectory(writer)
 
-velox_add_library(velox_dwio_text_writer_register RegisterTextWriter.cpp)
+velox_add_library(
+  velox_dwio_text_writer_register
+  RegisterTextWriter.cpp
+  HEADERS
+  RegisterTextReader.h
+  RegisterTextWriter.h
+)
 
 velox_link_libraries(velox_dwio_text_writer_register velox_dwio_text_writer)
 

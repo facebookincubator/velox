@@ -23,7 +23,7 @@
 include(FindPackageHandleStandardArgs)
 include(SelectLibraryConfigurations)
 
-find_library(LZ4_LIBRARY_RELEASE lz4 PATHS $LZ4_LIBRARYDIR})
+find_library(LZ4_LIBRARY_RELEASE lz4 PATHS ${LZ4_LIBRARYDIR})
 find_library(LZ4_LIBRARY_DEBUG lz4d PATHS ${LZ4_LIBRARYDIR})
 
 find_path(LZ4_INCLUDE_DIR lz4.h PATHS ${LZ4_INCLUDEDIR})

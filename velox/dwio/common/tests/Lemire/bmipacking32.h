@@ -33,6 +33,8 @@ always unpack them fully.
 
 #pragma once
 
+#ifdef __BMI2__
+
 #include <immintrin.h>
 #include <x86intrin.h>
 #include <cstring>
@@ -3762,3 +3764,5 @@ void bmiunpack32(
     bitunpack(&in, &out);
   }
 }
+
+#endif

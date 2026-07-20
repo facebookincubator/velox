@@ -18,6 +18,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::dwio::common {
@@ -34,6 +35,8 @@ class HiveConnector : public Connector {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* executor);
 
+  const config::ConfigProvider* configProvider() const override;
+
   bool canAddDynamicFilter() const override {
     return true;
   }
@@ -48,11 +51,24 @@ class HiveConnector : public Connector {
     return true;
   }
 
+  bool supportsIndexLookup() const override {
+    return true;
+  }
+
   std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       ConnectorInsertTableHandlePtr connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
+
+  std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
 
   folly::Executor* ioExecutor() const override {
     return ioExecutor_;
@@ -72,6 +88,7 @@ class HiveConnector : public Connector {
 
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
+  HiveConfigProvider configProvider_;
   FileHandleFactory fileHandleFactory_;
   folly::Executor* ioExecutor_;
 };
@@ -112,7 +129,7 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
   /// a bucket to partition map based on the actual number of partitions with
   /// round-robin partitioning scheme to create the function instance. For
   /// instance, when we create the local partition node with hive bucket
-  /// function to support multiple table writer drivers, we don't know the the
+  /// function to support multiple table writer drivers, we don't know the
   /// actual number of table writer drivers until start the task.
   HivePartitionFunctionSpec(
       int numBuckets,

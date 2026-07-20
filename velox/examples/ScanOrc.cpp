@@ -18,14 +18,16 @@
 #include <algorithm>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 
@@ -48,7 +50,11 @@ int main(int argc, char** argv) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
 
   std::string filePath{argv[1]};
-  dwio::common::ReaderOptions readerOpts{pool.get()};
+  auto dataIoStats = std::make_shared<io::IoStatistics>();
+  auto metadataIoStats = std::make_shared<io::IoStatistics>();
+  dwio::common::ReaderOptions readerOpts(pool.get());
+  readerOpts.setDataIoStats(dataIoStats);
+  readerOpts.setMetadataIoStats(metadataIoStats);
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(FileFormat::ORC);
   auto reader = dwio::common::getReaderFactory(FileFormat::ORC)

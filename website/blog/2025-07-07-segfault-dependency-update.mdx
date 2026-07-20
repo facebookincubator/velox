@@ -14,6 +14,8 @@ Updating these dependencies typically involves modifying the Velox code to align
 However, a recent upgrade of Folly and Facebook Thrift to version *v2025.04.28.00* caused a *SEGFAULT* only in one unit test in Velox
 named *velox_functions_remote_client_test*.
 
+<!-- truncate -->
+
 ## Investigation
 We immediately put on our [gdb](https://en.wikipedia.org/wiki/GNU_Debugger) gloves and looked at the stack traces. This issue was also reproducible in a debug build.
 The SEGFAULT occurred in Facebook Thrift's *ThriftServer* Class during it's initialization but the offending call was invoking a destructor of a certain handler.

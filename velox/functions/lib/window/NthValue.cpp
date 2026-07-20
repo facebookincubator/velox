@@ -31,13 +31,16 @@ class NthValueFunction : public exec::WindowFunction {
       velox::memory::MemoryPool* pool)
       : WindowFunction(resultType, pool, nullptr), ignoreNulls_(ignoreNulls) {
     VELOX_CHECK_EQ(args.size(), 2);
-    VELOX_CHECK_NULL(args[0].constantValue);
     auto offsetType = args[1].type;
     VELOX_USER_CHECK(
         (offsetType->isInteger() || offsetType->isBigint()),
         "Invalid offset type: {}",
         offsetType->toString());
-    valueIndex_ = args[0].index.value();
+    if (args[0].constantValue) {
+      constantValue_ = args[0].constantValue;
+    } else {
+      valueIndex_ = args[0].index.value();
+    }
     if (args[1].constantValue) {
       if (args[1].constantValue->isNullAt(0)) {
         isConstantOffsetNull_ = true;
@@ -82,6 +85,17 @@ class NthValueFunction : public exec::WindowFunction {
       int32_t resultOffset,
       const VectorPtr& result) override {
     auto numRows = frameStarts->size() / sizeof(vector_size_t);
+
+    // When value is a constant null and IGNORE NULLS is set, the result is
+    // always null.
+    if (constantValue_ && ignoreNulls_ && constantValue_->isNullAt(0)) {
+      for (auto i = 0; i < numRows; ++i) {
+        result->setNull(resultOffset + i, true);
+      }
+      partitionOffset_ += numRows;
+      return;
+    }
+
     rowNumbers_.resize(numRows);
 
     if (isConstantOffsetNull_) {
@@ -94,9 +108,13 @@ class NthValueFunction : public exec::WindowFunction {
 
     setRowNumbersForEmptyFrames(validRows);
 
-    auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
-    partition_->extractColumn(
-        valueIndex_, rowNumbersRange, resultOffset, result);
+    if (constantValue_) {
+      setConstantResult(numRows, resultOffset, result);
+    } else {
+      auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
+      partition_->extractColumn(
+          valueIndex_, rowNumbersRange, resultOffset, result);
+    }
 
     partitionOffset_ += numRows;
   }
@@ -116,7 +134,9 @@ class NthValueFunction : public exec::WindowFunction {
     auto rawFrameEnds = frameEnds->as<vector_size_t>();
     bool ignoreNullsForBlock = false;
     vector_size_t leastFrame = 0;
-    if (ignoreNulls_) {
+    // When the value is a constant (non-null, since null+ignoreNulls is
+    // handled earlier), there are no nulls to ignore.
+    if (ignoreNulls_ && !constantValue_) {
       auto extractNullsResult = partition_->extractNulls(
           valueIndex_, validRows, frameStarts, frameEnds, &nulls_);
       // Perform ignoreNulls processing only if there are null values in the
@@ -223,6 +243,21 @@ class NthValueFunction : public exec::WindowFunction {
     }
   }
 
+  // Write the constant value for rows with valid rowNumbers and null
+  // otherwise.
+  void setConstantResult(
+      vector_size_t numRows,
+      int32_t resultOffset,
+      const VectorPtr& result) {
+    for (auto i = 0; i < numRows; ++i) {
+      if (rowNumbers_[i] == kNullRow) {
+        result->setNull(resultOffset + i, true);
+      } else {
+        result->copy(constantValue_.get(), resultOffset + i, 0, 1);
+      }
+    }
+  }
+
   void setRowNumbersForEmptyFrames(const SelectivityVector& validRows) {
     if (validRows.isAllSelected()) {
       return;
@@ -270,6 +305,9 @@ class NthValueFunction : public exec::WindowFunction {
   }
 
   const bool ignoreNulls_;
+
+  // Non-null when the value argument is a constant expression.
+  VectorPtr constantValue_;
 
   // These are the argument indices of the nth_value value and offset columns
   // in the input row vector. These are needed to retrieve column values

@@ -12,13 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_remote_thrift_client ThriftClient.cpp)
+velox_add_library(velox_functions_remote_thrift_client ThriftClient.cpp HEADERS ThriftClient.h)
 velox_link_libraries(
   velox_functions_remote_thrift_client
   PUBLIC remote_function_thrift FBThrift::thriftcpp2
 )
 
-velox_add_library(velox_functions_remote Remote.cpp RemoteVectorFunction.cpp)
+velox_add_library(
+  velox_functions_remote
+  Remote.cpp
+  RemoteVectorFunction.cpp
+  HEADERS
+  Remote.h
+  RemoteVectorFunction.h
+)
 velox_link_libraries(
   velox_functions_remote
   PUBLIC

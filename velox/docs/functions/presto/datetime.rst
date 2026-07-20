@@ -41,6 +41,7 @@ Date and Time Operators
      - ``0 00:00:10.000``
 
 .. function:: plus(x, y) -> [same as x]
+   :noindex:
 
     Returns the sum of ``x`` and ``y``. Both ``x`` and ``y`` are intervals day
     to second or one of them can be timestamp. For addition of two intervals day to
@@ -50,6 +51,7 @@ Date and Time Operators
     second, overflowed results are wrapped around.
 
 .. function:: minus(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of subtracting ``y`` from ``x``. Both ``x`` and ``y``
     are intervals day to second or ``x`` can be timestamp. For subtraction of
@@ -67,6 +69,7 @@ Date and Time Operators
     when ``x`` is -infinity or when the multiplication overflow in negiative.
 
 .. function:: multiply(x, interval day to second) -> interval day to second
+   :noindex:
 
     Returns the result of multiplying ``x`` by ``interval day to second``.
     Same as ``multiply(interval day to second, x)``.
@@ -156,10 +159,15 @@ Date and Time Functions
     using ``string`` for the time zone.
 
 .. function:: from_unixtime(unixtime, hours, minutes) -> timestamp with time zone
+   :noindex:
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``hours`` and ``minutes`` for the time zone offset.
     The offset must be in [-14:00, 14:00] range.
+
+.. function:: localtimestamp -> timestamp
+
+    Returns the timestamp as of the start of the query.
 
 .. function:: to_iso8601(x) -> varchar
 
@@ -180,6 +188,10 @@ Date and Time Functions
 
     Returns ``timestamp`` as a UNIX timestamp.
 
+.. function:: current_time() -> time with time zone
+
+    Returns the current time since midnight with the session timezoneReturns the current time since midnight with the session timezone, based on the query session start time.
+
 .. function:: current_timezone() -> varchar
 
     Returns the current session time zone as a varchar.
@@ -187,6 +199,19 @@ Date and Time Functions
     Example::
 
         SELECT current_timezone;   -- Asia/Kolkata
+
+.. function:: current_timestamp() -> timestamp with time zone
+.. function:: now() -> timestamp with time zone
+
+    Returns the current timestamp with session time zone applied.
+    The timestamp is captured once at the start of query execution and remains
+    constant throughout the query. This matches the standard SQL behavior for
+    ``CURRENT_TIMESTAMP`` and ``NOW()``.
+
+    Example::
+
+        SELECT current_timestamp;  -- 2025-07-17 14:53:12.123 Asia/Kolkata
+        SELECT now();              -- 2025-07-17 14:53:12.123 Asia/Kolkata
 
 Truncation Function
 -------------------
@@ -324,6 +349,10 @@ Specifier Description
 .. function:: date_format(x, format) -> varchar
 
     Formats ``x`` as a string using ``format``. ``x`` is a timestamp or a timestamp with time zone.
+
+.. function:: date_parse(string, format) -> timestamp
+
+    Parses ``string`` into a timestamp using ``format``.
 
 Java Date Functions
 -------------------

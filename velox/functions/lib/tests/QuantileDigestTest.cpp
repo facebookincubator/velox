@@ -990,6 +990,31 @@ TEST_F(QuantileDigestTest, getDistributionFunction) {
   testGetDistributionFunction<float>();
 }
 
+template <typename T>
+void testEmptyDistributionFunction() {
+  std::allocator<T> allocator;
+  // Create empty QuantileDigest and get CDF
+  QuantileDigest<T, std::allocator<T>> digest(allocator, 0.01);
+  auto cdf = digest.getDistributionFunction(0, 100);
+  ASSERT_EQ(cdf.size(), 2);
+
+  // By convention, the CDF should always start at (rangeStart, 0) and end at
+  // (rangeEnd, 1) Since the digest is empty, these will be the only points
+  std::vector<T> expectedCdfUpperBound = {0, 100};
+  std::vector<double> expectedCdfCumulativeProbability = {0, 1};
+  for (auto i = 0; i < cdf.size(); i++) {
+    ASSERT_EQ(
+        cdf[i].cumulativeProbability, expectedCdfCumulativeProbability[i]);
+    ASSERT_EQ(cdf[i].upperBound, expectedCdfUpperBound[i]);
+  }
+}
+
+TEST_F(QuantileDigestTest, emptyDistributionFunction) {
+  testEmptyDistributionFunction<int64_t>();
+  testEmptyDistributionFunction<double>();
+  testEmptyDistributionFunction<float>();
+}
+
 TEST_F(QuantileDigestTest, getValuesInQuantileRangeBigInt) {
   QuantileDigest<int64_t> digest{StlAllocator<int64_t>(allocator()), 0.01};
 

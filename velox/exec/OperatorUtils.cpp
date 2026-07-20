@@ -127,12 +127,35 @@ void gatherCopy(
 // per event. This function returns true for such metrics.
 bool shouldAggregateRuntimeMetric(const std::string& name) {
   static const folly::F14FastSet<std::string> metricNames{
+      "cacheWaitWallNanos",
+      "coalescedSsdLoadWallNanos",
+      "coalescedStorageLoadWallNanos",
       "dataSourceAddSplitWallNanos",
+      "dataSourceLazyCpuNanos",
       "dataSourceLazyWallNanos",
-      "queuedWallNanos",
-      "flushTimes",
+      "dataSourceLazyInputBytes",
+      "dataSourceReadWallNanos",
       "driverCpuTimeNanos",
-      "ioWaitWallNanos"};
+      "flushTimes",
+      "ioWaitWallNanos",
+      "pageLoadTimeNanos",
+      "prefetchBytes",
+      "preloadSplitPrepareTimeNanos",
+      "preloadedSplits",
+      "ramReadBytes",
+      "readyPreloadedSplits",
+      "rpcCongestionWindowFinal",
+      "rpcPeakInFlight",
+      "rpcBaselineRttNanos",
+      "rpcRttMinWallNanos",
+      "rpcRttMaxWallNanos",
+      "rpcStreamingMode",
+      "queuedWallNanos",
+      "storageReadWallNanos",
+      "storageReadBytes",
+      "ssdCacheReadWallNanos",
+      "waitForPreloadSplitNanos",
+  };
   if (metricNames.contains(name)) {
     return true;
   }
@@ -465,24 +488,31 @@ std::string makeOperatorSpillPath(
 }
 
 void setOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  stats[name] = RuntimeMetric(value.unit);
-  stats[name].addValue(value.value);
+  auto [it, _] =
+      stats.insert_or_assign(std::string(name), RuntimeMetric(value.unit));
+  it->second.addValue(value.value);
 }
 
 void addOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  auto statIt = stats.find(name);
-  if (UNLIKELY(statIt == stats.end())) {
-    statIt = stats.insert(std::pair(name, RuntimeMetric(value.unit))).first;
-  } else {
+  auto [statIt, inserted] =
+      stats.emplace(std::string(name), RuntimeMetric(value.unit));
+  if (!inserted) {
     VELOX_CHECK_EQ(statIt->second.unit, value.unit);
   }
   statIt->second.addValue(value.value);
+}
+
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  stats.insert_or_assign(std::string(name), metric);
 }
 
 void aggregateOperatorRuntimeStats(
@@ -580,16 +610,17 @@ std::unique_ptr<Operator> BlockedOperatorFactory::toOperator(
 
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
-    VectorSerde::Kind kind,
-    std::optional<float> minCompressionRatio) {
-  std::unique_ptr<VectorSerde::Options> options =
-      kind == VectorSerde::Kind::kPresto
+    const std::string& kind,
+    std::optional<float> minCompressionRatio,
+    int32_t minCompressionPageSizeBytes) {
+  std::unique_ptr<VectorSerde::Options> options = kind == "Presto"
       ? std::make_unique<serializer::presto::PrestoVectorSerde::PrestoOptions>()
       : std::make_unique<VectorSerde::Options>();
   options->compressionKind = compressionKind;
   if (minCompressionRatio.has_value()) {
     options->minCompressionRatio = minCompressionRatio.value();
   }
+  options->minCompressionPageSizeBytes = minCompressionPageSizeBytes;
   return options;
 }
 

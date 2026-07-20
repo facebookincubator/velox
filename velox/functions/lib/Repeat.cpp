@@ -66,6 +66,18 @@ class RepeatFunction : public exec::VectorFunction {
     return count;
   }
 
+  static void checkTotalCount(size_t totalCount) {
+    // We could overflow int32 if total count is too large, potentially
+    // causing a small buffer allocation followed by a large write, resulting
+    // in SIGSEGV.
+    VELOX_USER_CHECK_LE(
+        totalCount,
+        std::numeric_limits<vector_size_t>::max(),
+        "REPEAT result too large: {} elements exceeds maximum {}",
+        totalCount,
+        std::numeric_limits<vector_size_t>::max());
+  }
+
   VectorPtr applyConstantCount(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -81,13 +93,15 @@ class RepeatFunction : public exec::VectorFunction {
     }
 
     auto count = constantCount->valueAt(0);
+    size_t totalCount{0};
     try {
       count = checkCount(count, allowNegativeCount_);
+      totalCount = size_t(count) * numRows;
+      checkTotalCount(totalCount);
     } catch (const VeloxUserError&) {
       context.setErrors(rows, std::current_exception());
       return nullptr;
     }
-    const auto totalCount = count * numRows;
 
     // Allocate new vectors for indices, lengths and offsets.
     BufferPtr indices = allocateIndices(totalCount, pool);
@@ -122,7 +136,7 @@ class RepeatFunction : public exec::VectorFunction {
       exec::EvalCtx& context) const {
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto countDecoded = decodedArgs.at(1);
-    int32_t totalCount = 0;
+    size_t totalCount = 0;
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       auto count =
@@ -131,6 +145,13 @@ class RepeatFunction : public exec::VectorFunction {
       count = checkCount(count, allowNegativeCount_);
       totalCount += count;
     });
+
+    try {
+      checkTotalCount(totalCount);
+    } catch (const VeloxUserError&) {
+      context.setErrors(rows, std::current_exception());
+      return nullptr;
+    }
 
     const auto numRows = rows.end();
     auto pool = context.pool();

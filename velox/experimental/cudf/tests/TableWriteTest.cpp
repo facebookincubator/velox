@@ -25,6 +25,7 @@
 
 #include "folly/dynamic.h"
 #include "velox/common/base/Fs.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/WriterFactory.h"
@@ -33,7 +34,6 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gflags/gflags.h>
 #include <re2/re2.h>
@@ -138,7 +138,7 @@ struct TestParam {
   std::string toString() const {
     return fmt::format(
         "FileFormat[{}] TestMode[{}] commitStrategy[{}] multiDrivers[{}] compression[{}]",
-        dwio::common::toString((fileFormat())),
+        dwio::common::FileFormatName::toName((fileFormat())),
         testModeString(testMode()),
         CommitStrategyName::toName(commitStrategy()),
         multiDrivers(),

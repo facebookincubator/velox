@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/vector/FlatMapVector.h"
 #include <folly/hash/Hash.h>
-#include "velox/vector/FlatVector.h"
+
+#include "velox/vector/FlatMapVector.h"
+#include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
 namespace {
@@ -34,9 +35,9 @@ std::optional<column_index_t> getKeyChannelImpl(
     return std::nullopt;
   }
 
-  auto distinctFlatKeys = distinctKeys->as<FlatVector<T>>();
+  auto simpleKeys = distinctKeys->as<SimpleVector<T>>();
   VELOX_CHECK(
-      distinctFlatKeys != nullptr,
+      simpleKeys != nullptr,
       "Incompatible vector type for flat map vector keys: {}",
       distinctKeys->toString());
 
@@ -51,7 +52,7 @@ std::optional<column_index_t> getKeyChannelImpl(
   // Here there was at least one hash match. Need to compare to the keys vector
   // to ensure it's an actual match and not a hash collision.
   for (auto it = range.first; it != range.second; ++it) {
-    if (distinctFlatKeys->valueAtFast(it->second) == keyValue) {
+    if (simpleKeys->valueAt(it->second) == keyValue) {
       return it->second;
     }
   }
@@ -100,7 +101,7 @@ vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
 
   for (vector_size_t i = 0; i < numDistinctKeys(); i++) {
     if (i < inMaps_.size() && inMaps_[i] != nullptr) {
-      size += bits::isBitSet(inMaps_[i]->asMutable<uint64_t>(), index);
+      size += bits::isBitSet(inMaps_[i]->as<uint64_t>(), index);
     } else {
       // By default assume the key exists.
       ++size;
@@ -129,7 +130,17 @@ void FlatMapVector::resize(vector_size_t newSize, bool setNotNull) {
 
         if (i < inMaps_.size() && inMaps_[i] != nullptr) {
           VELOX_CHECK(inMaps_[i]->unique(), "Resizing shared in map vector");
-          AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
+          if (!inMaps_[i]->isMutable()) {
+            // Can't reallocate an immutable buffer, must create new buffer.
+            auto newInMap = AlignedBuffer::allocate<bool>(newSize, pool_, 0);
+            memcpy(
+                newInMap->asMutable<uint64_t>(),
+                inMaps_[i]->as<uint64_t>(),
+                bits::nbytes(oldSize));
+            inMaps_[i] = std::move(newInMap);
+          } else {
+            AlignedBuffer::reallocate<bool>(&inMaps_[i], newSize, 0);
+          }
         }
       }
     }
@@ -545,7 +556,8 @@ void FlatMapVector::copyRanges(
       // Then we allocate a new key values vector and in map buffer.
       inMapsAt(channel, true) =
           AlignedBuffer::allocate<bool>(size(), pool(), false);
-      mapValues_.back() = BaseVector::create(valueType(), size(), pool());
+      mapValues_.back() = BaseVector::createEmptyLike(
+          sourceFlatMap->mapValues_[i].get(), size(), pool());
     }
 
     // Finally, copy the map values and update the in map buffers.

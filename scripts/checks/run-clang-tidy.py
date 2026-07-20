@@ -44,29 +44,58 @@ def git_changed_lines(commit):
 
         match = re.match(r"^\+\+\+ b/(.*(\.cpp|\.h|\.hpp))$", line)
         if match:
-            file = match.group(1)
+            matched_file = match.group(1)
+            # Exclude files in cudf, wave, and torchwave directories
+            # as clang-tidy doesn't support CUDA compiler flags and CUDA
+            # headers. Exclude *-inl.h files: they are designed to be
+            # included from their corresponding header and cannot be
+            # compiled as standalone translation units.
+            if (
+                "cudf/" not in matched_file
+                and "wave/" not in matched_file
+                and "ucx-exchange/" not in matched_file
+                and not matched_file.endswith("-inl.h")
+            ):
+                file = matched_file
 
         match = re.match(r"^@@", line)
-        if match and file != "":
+        if match and file != "" and len(fields) >= 3:
             lspan = fields[2].split(",")
             if len(lspan) <= 1:
-                lspan.append(0)
+                lspan.append("0")
 
-            changed_lines[file] = [int(lspan[0]), int(lspan[0]) + int(lspan[1])]
+            start_line = int(lspan[0])
+            line_count = int(lspan[1])
+
+            # Skip invalid line ranges (e.g., +0,0 from deleted files)
+            if start_line > 0 or line_count > 0:
+                changed_lines[file] = [start_line, start_line + line_count]
 
     return changed_lines
 
 
 def check_output(output):
-    return re.match(r"^/.* warning: ", output)
+    return re.match(r"(^/.* warning: |^$)", output)
 
 
 def tidy(args):
     files = util.input_files(args.files)
     files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
-    in_gha = os.environ.get("GITHUB_ACTIONS") is not None
+    # Exclude files in cudf, wave, and torchwave directories
+    # as clang-tidy doesn't support CUDA compiler flags and CUDA headers
+    files = [
+        file
+        for file in files
+        if "cudf/" not in file and "wave/" not in file and "ucx-exchange/" not in file
+    ]
 
+    # Exclude *-inl.h files: they are designed to be included from their
+    # corresponding header and cannot be compiled as standalone translation
+    # units (see git_changed_lines for rationale).
+    files = [file for file in files if not file.endswith("-inl.h")]
+
+    in_gha = os.environ.get("GITHUB_ACTIONS") is not None
     changed_lines = git_changed_lines(args.commit)
 
     line_filter = json.dumps(
@@ -109,6 +138,8 @@ def tidy(args):
                 )
 
     ok = check_output(stdout)
+    if not ok:
+        print(stdout)
 
     return 0 if ok else 1
 

@@ -30,4 +30,21 @@ std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format) {
   }
   VELOX_UNREACHABLE();
 }
+
+std::unique_ptr<VectorSerde::Options> getSerdeOptions(
+    const remote::PageFormat& format,
+    bool preserveEncoding) {
+  switch (format) {
+    case remote::PageFormat::PRESTO_PAGE: {
+      auto options = std::make_unique<
+          serializer::presto::PrestoVectorSerde::PrestoOptions>();
+      options->preserveEncodings = preserveEncoding;
+      return options;
+    }
+    case remote::PageFormat::SPARK_UNSAFE_ROW:
+      return std::make_unique<VectorSerde::Options>();
+  }
+  VELOX_UNREACHABLE();
+}
+
 } // namespace facebook::velox::functions

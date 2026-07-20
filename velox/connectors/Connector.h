@@ -16,22 +16,25 @@
 #pragma once
 
 #include "folly/CancellationToken.h"
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/PrefixSortConfig.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SpillConfig.h"
-#include "velox/common/base/SpillStats.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/ScanBatchEvent.h"
+#include "velox/exec/SpillStats.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 
 namespace facebook::velox {
 class Config;
@@ -45,7 +48,7 @@ class ConfigBase;
 
 namespace facebook::velox::core {
 class ITypedExpr;
-}
+} // namespace facebook::velox::core
 
 namespace facebook::velox::core {
 struct IndexLookupCondition;
@@ -61,6 +64,13 @@ struct ConnectorSplit : public ISerializable {
   const std::string connectorId;
   const int64_t splitWeight{0};
   const bool cacheable{true};
+
+  /// Optional hint for the number of rows a TableScan should read per batch
+  /// from this split. When set (> 0), TableScan uses this instead of the
+  /// query-level preferred batch size. This allows split generators (e.g.,
+  /// MixedUnion split iterators) to control per-source read rates by stamping
+  /// each split with a batch size proportional to its share of the union.
+  int32_t batchSizeHint{0};
 
   std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
@@ -139,6 +149,16 @@ class ConnectorTableHandle : public ISerializable {
     return false;
   }
 
+  /// Returns true if this table handle requires splits for index lookup.
+  /// Default implementation returns false. Subclasses can override this to
+  /// indicate that splits need to be provided to the index source before
+  /// performing lookups.
+  ///
+  /// NOTE: this only applies if supportsIndexLookup() returns true.
+  virtual bool needsIndexSplit() const {
+    return false;
+  }
+
   virtual std::string toString() const {
     return name();
   }
@@ -195,8 +215,9 @@ class DataSink {
     uint64_t numCompressedBytes{0};
     uint64_t recodeTimeNs{0};
     uint64_t compressionTimeNs{0};
+    folly::F14FastMap<std::string, RuntimeMetric> writerRuntimeStats;
 
-    common::SpillStats spillStats;
+    exec::SpillStats spillStats;
 
     bool empty() const;
 
@@ -271,6 +292,19 @@ class DataSource {
   /// Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
+  /// Stores a callback to fire after each scan batch.
+  void setScanBatchCallback(core::ScanBatchCallback callback) {
+    scanBatchCallback_ = std::move(callback);
+  }
+
+  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Default is a no-op. Subclasses should override to create a
+  /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
+  /// connector-specific fields, and call scanBatchCallback_.
+  virtual void fireScanBatchCallback(core::ScanBatchEvent /*event*/) {}
+
+  /// Returns cumulative runtime stats for work completed so far by this data
+  /// source.
   virtual std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() {
     return {};
   }
@@ -315,33 +349,46 @@ class DataSource {
   /// connector implementation decides how to support the cancellation if
   /// needed.
   virtual void cancel() {}
+
+ protected:
+  core::ScanBatchCallback scanBatchCallback_;
 };
 
 class IndexSource {
  public:
   virtual ~IndexSource() = default;
 
+  /// Adds splits to the index source for lookup. This is called when
+  /// the table handle's needsIndexSplit() returns true. This method must be
+  /// called before the first call to lookup(). This method is expected to be
+  /// called only once. Default implementation throws as most index sources
+  /// don't require splits.
+  virtual void addSplits(
+      std::vector<std::shared_ptr<ConnectorSplit>> /*splits*/) {
+    VELOX_UNSUPPORTED("This IndexSource does not support splits");
+  }
+
   /// Represents a lookup request for a given input.
-  struct LookupRequest {
+  struct Request {
     /// Contains the input column vectors used by lookup join and range
     /// conditions.
     RowVectorPtr input;
 
-    explicit LookupRequest(RowVectorPtr input) : input(std::move(input)) {}
+    explicit Request(RowVectorPtr input) : input(std::move(input)) {}
   };
 
   /// Represents the lookup result for a subset of input produced by the
-  /// 'LookupResultIterator'.
-  struct LookupResult {
+  /// 'ResultIterator'.
+  struct Result {
     /// Specifies the indices of input row in the lookup request that have
     /// matches in 'output'. It contains the input indices in the order
     /// of the input rows in the lookup request. Any gap in the indices means
     /// the input rows that has no matches in output.
     ///
     /// Example:
-    ///   LookupRequest: input = [0, 1, 2, 3, 4]
-    ///   LookupResult:  inputHits = [0, 0, 2, 2, 3, 4, 4, 4]
-    ///                  output    = [0, 1, 2, 3, 4, 5, 6, 7]
+    ///   Request: input = [0, 1, 2, 3, 4]
+    ///   Result:  inputHits = [0, 0, 2, 2, 3, 4, 4, 4]
+    ///            output    = [0, 1, 2, 3, 4, 5, 6, 7]
     ///
     ///   Here is match results for each input row:
     ///   input row #0: match with output rows #0 and #1.
@@ -350,7 +397,7 @@ class IndexSource {
     ///   input row #3: match with output row #4.
     ///   input row #4: match with output rows #5, #6 and #7.
     ///
-    /// 'LookupResultIterator' must also produce the output result in order of
+    /// 'ResultIterator' must also produce the output result in order of
     /// input rows.
     BufferPtr inputHits;
 
@@ -361,7 +408,7 @@ class IndexSource {
       return output->size();
     }
 
-    LookupResult(BufferPtr _inputHits, RowVectorPtr _output)
+    Result(BufferPtr _inputHits, RowVectorPtr _output)
         : inputHits(std::move(_inputHits)), output(std::move(_output)) {
       VELOX_CHECK_EQ(inputHits->size() / sizeof(vector_size_t), output->size());
     }
@@ -369,9 +416,9 @@ class IndexSource {
 
   /// The lookup result iterator used to fetch the lookup result in batch for a
   /// given lookup request.
-  class LookupResultIterator {
+  class ResultIterator {
    public:
-    virtual ~LookupResultIterator() = default;
+    virtual ~ResultIterator() = default;
 
     /// Invoked to check if there are more lookup results available to fetch.
     /// Returns true if there are more results, false otherwise. This allows
@@ -383,15 +430,14 @@ class IndexSource {
     /// the 'future' if started asynchronous work and needs to wait for it to
     /// complete to continue processing. The caller will wait for the 'future'
     /// to complete before calling 'next' again.
-    virtual std::optional<std::unique_ptr<LookupResult>> next(
+    virtual std::optional<std::unique_ptr<Result>> next(
         vector_size_t size,
         velox::ContinueFuture& future) {
       VELOX_UNSUPPORTED();
     }
   };
 
-  virtual std::shared_ptr<LookupResultIterator> lookup(
-      const LookupRequest& request) = 0;
+  virtual std::shared_ptr<ResultIterator> lookup(const Request& request) = 0;
 
   virtual std::unordered_map<std::string, RuntimeMetric> runtimeStats() = 0;
 };
@@ -513,10 +559,12 @@ class ConnectorQueryCtx {
     return cancellationToken_;
   }
 
+  /// Deprecated: Use FileConfig::kSelectiveNimbleReaderEnabledSession instead.
   bool selectiveNimbleReaderEnabled() const {
     return selectiveNimbleReaderEnabled_;
   }
 
+  /// Deprecated: Use connector session properties instead.
   void setSelectiveNimbleReaderEnabled(bool value) {
     selectiveNimbleReaderEnabled_ = value;
   }
@@ -594,6 +642,12 @@ class Connector {
     return config_;
   }
 
+  /// Returns the config provider for this connector's session properties,
+  /// or nullptr if the connector has no session-overridable properties.
+  virtual const config::ConfigProvider* configProvider() const {
+    return nullptr;
+  }
+
   /// Returns true if this connector would accept a filter dynamically
   /// generated during query execution.
   virtual bool canAddDynamicFilter() const {
@@ -620,14 +674,14 @@ class Connector {
   }
 
   /// Creates index source for index join lookup.
-  /// @param inputType The list of probe-side columns that either used in
-  /// equi-clauses or join conditions.
-  /// @param numJoinKeys The number of key columns used in join equi-clauses.
-  /// The first 'numJoinKeys' columns in 'inputType' form a prefix of the
-  /// index, and the rest of the columns in inputType are expected to be used in
-  /// 'joinConditions'.
-  /// @param joinConditions The join conditions. It expects inputs columns from
-  /// the 'tail' of 'inputType' and from 'columnHandles'.
+  /// @param inputType The list of probe-side columns used in join conditions.
+  /// @param joinConditions The join conditions that specify how to perform the
+  /// index lookup. This includes:
+  /// - EqualIndexLookupCondition: For equi-join conditions.
+  /// - InIndexLookupCondition: For IN-list conditions.
+  /// - BetweenIndexLookupCondition: For range conditions.
+  /// The index source can determine which columns form the index prefix by
+  /// examining EqualIndexLookupCondition objects where !isFilter().
   /// @param outputType The lookup output type from index source.
   /// @param tableHandle The index table handle.
   /// @param columnHandles The column handles which maps from column name
@@ -645,9 +699,12 @@ class Connector {
   ///
   /// Here,
   /// - 'inputType' is ROW{t.sid, t.event_list}
-  /// - 'numJoinKeys' is 1 since only t.sid is used in join equi-clauses.
-  /// - 'joinConditions' specifies the join condition: contains(t.event_list,
-  ///   u.event_type)
+  /// - 'joinConditions' includes:
+  ///   - EqualIndexLookupCondition(u.sid, t.sid) for the equi-join
+  ///   - InIndexLookupCondition(u.event_type, t.event_list) for the IN
+  ///     condition
+  ///   - BetweenIndexLookupCondition(u.ds, '2024-01-01', '2024-01-07') for the
+  ///     BETWEEN condition
   /// - 'outputType' is ROW{u.event_value}
   /// - 'tableHandle' specifies the metadata of the index table.
   /// - 'columnHandles' is a map from 'u.event_type' (in 'joinConditions') and
@@ -657,7 +714,6 @@ class Connector {
   ///
   virtual std::shared_ptr<IndexSource> createIndexSource(
       const RowTypePtr& inputType,
-      size_t numJoinKeys,
       const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
           joinConditions,
       const RowTypePtr& outputType,
@@ -696,8 +752,36 @@ class Connector {
 
   /// The name of the common runtime stats collected and reported by connector
   /// data/index sources.
-  static inline const std::string kTotalRemainingFilterTime{
+  static constexpr std::string_view kTotalRemainingFilterTime{
       "totalRemainingFilterWallNanos"};
+
+  /// Total CPU time spent on remaining filter evaluation.
+  static inline const std::string kTotalRemainingFilterCpuTime{
+      "totalRemainingFilterCpuNanos"};
+
+  /// Total time spent waiting for synchronously issued IO or for an in-progress
+  /// read-ahead to finish.
+  static constexpr std::string_view kIoWaitWallNanos{"ioWaitWallNanos"};
+
+  /// Time spent waiting for remote storage reads (S3, HDFS, etc.)
+  static constexpr std::string_view kStorageReadWallNanos{
+      "storageReadWallNanos"};
+
+  /// Time spent waiting for SSD cache reads.
+  static constexpr std::string_view kSsdCacheReadWallNanos{
+      "ssdCacheReadWallNanos"};
+
+  /// Time spent waiting for EXCLUSIVE cache entries (another thread is
+  /// loading).
+  static constexpr std::string_view kCacheWaitWallNanos{"cacheWaitWallNanos"};
+
+  /// Time spent waiting for coalesced loads from SSD cache.
+  static constexpr std::string_view kCoalescedSsdLoadWallNanos{
+      "coalescedSsdLoadWallNanos"};
+
+  /// Time spent waiting for coalesced loads from remote storage.
+  static constexpr std::string_view kCoalescedStorageLoadWallNanos{
+      "coalescedStorageLoadWallNanos"};
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);
@@ -710,26 +794,18 @@ class Connector {
       trackers_;
 };
 
-/// Adds connector instance to the registry using connector ID as the key.
-/// Throws if connector with the same ID is already present. Always returns
-/// true. The return value makes it easy to use with FB_ANONYMOUS_VARIABLE.
-bool registerConnector(std::shared_ptr<Connector> connector);
+/// Deprecated free functions. Use ConnectorRegistry methods instead.
 
-/// Returns true if a connector with the specified ID has been registered, false
-/// otherwise.
+[[deprecated("Use ConnectorRegistry::global().insert() instead.")]]
+bool registerConnector(const std::shared_ptr<Connector>& connector);
+
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 bool hasConnector(const std::string& connectorId);
 
-/// Removes the connector with specified ID from the registry. Returns true
-/// if connector was removed and false if connector didn't exist.
+[[deprecated("Use ConnectorRegistry::global().erase() instead.")]]
 bool unregisterConnector(const std::string& connectorId);
 
-/// Returns a connector with specified ID. Throws if connector doesn't
-/// exist.
+[[deprecated("Use ConnectorRegistry::tryGet() instead.")]]
 std::shared_ptr<Connector> getConnector(const std::string& connectorId);
-
-/// Returns a map of all (connectorId -> connector) pairs currently
-/// registered.
-const std::unordered_map<std::string, std::shared_ptr<Connector>>&
-getAllConnectors();
 
 } // namespace facebook::velox::connector

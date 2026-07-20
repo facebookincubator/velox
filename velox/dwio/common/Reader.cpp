@@ -20,7 +20,7 @@ namespace facebook::velox::dwio::common {
 
 using namespace velox::common;
 
-VectorPtr RowReader::projectColumns(
+RowReader::ProjectColumnsResult RowReader::projectColumnsWithSelection(
     const VectorPtr& input,
     const ScanSpec& spec,
     const Mutation* mutation) {
@@ -75,11 +75,23 @@ VectorPtr RowReader::projectColumns(
   auto rowType = ROW(std::move(names), std::move(types));
   auto size = bits::countBits(passed.data(), 0, input->size());
   if (size == 0) {
-    return RowVector::createEmpty(rowType, input->pool());
+    // Empty output. Return null selectedRows when the input was already
+    // empty (no rows were dropped — identity mapping holds trivially).
+    // Otherwise return a zero-length selection buffer so callers can
+    // distinguish "all rows filtered out" from "identity mapping" by
+    // checking selectedRows == nullptr.
+    return {
+        RowVector::createEmpty(rowType, input->pool()),
+        input->size() == 0 ? nullptr : allocateIndices(0, input->pool())};
   }
+
+  // Preserve input nulls buffer
+  BufferPtr outputNulls = input->nulls();
+
+  BufferPtr selectedRows;
   if (size < input->size()) {
-    auto indices = allocateIndices(size, input->pool());
-    auto* rawIndices = indices->asMutable<vector_size_t>();
+    selectedRows = allocateIndices(size, input->pool());
+    auto* rawIndices = selectedRows->asMutable<vector_size_t>();
     vector_size_t j = 0;
     bits::forEachSetBit(
         passed.data(), 0, input->size(), [&](auto i) { rawIndices[j++] = i; });
@@ -89,11 +101,69 @@ VectorPtr RowReader::projectColumns(
       }
       child->disableMemo();
       child = BaseVector::wrapInDictionary(
-          nullptr, indices, size, std::move(child));
+          nullptr, selectedRows, size, std::move(child));
+    }
+
+    // Filter the nulls buffer to match the filtered rows
+    if (input->nulls()) {
+      outputNulls = AlignedBuffer::allocate<bool>(size, input->pool());
+      auto* rawOutputNulls = outputNulls->asMutable<uint64_t>();
+      // Initialize all as not null (all bits set to 1)
+      memset(rawOutputNulls, 0xFF, bits::nbytes(size));
+
+      const auto* rawInputNulls = input->rawNulls();
+      for (vector_size_t i = 0; i < size; ++i) {
+        if (bits::isBitNull(rawInputNulls, rawIndices[i])) {
+          bits::setNull(rawOutputNulls, i);
+        }
+      }
     }
   }
-  return std::make_shared<RowVector>(
-      input->pool(), rowType, nullptr, size, std::move(children));
+
+  // Apply post-read transforms for column extraction pushdown.
+  // This runs after filtering/dictionary wrapping so the vectors have the
+  // correct row count.  If a child has more elements than the output size
+  // (e.g., text reader pre-allocates), slice it first.
+  bool hasTransforms = false;
+  for (auto& childSpec : spec.children()) {
+    if (!childSpec->projectOut() || !childSpec->hasTransform()) {
+      continue;
+    }
+    auto i = childSpec->channel();
+    if (children[i]) {
+      auto child = children[i];
+      if (child->size() > size) {
+        child = child->slice(0, size);
+      }
+      children[i] = childSpec->transform()(child, input->pool());
+      hasTransforms = true;
+    }
+  }
+
+  // Rebuild rowType if transforms changed any child types.
+  if (hasTransforms) {
+    auto rowNames = rowType->asRow().names();
+    std::vector<TypePtr> rowTypes;
+    rowTypes.reserve(numColumns);
+    for (column_index_t i = 0; i < numColumns; ++i) {
+      rowTypes.push_back(
+          children[i] ? children[i]->type() : rowType->childAt(i));
+    }
+    rowType =
+        ROW(std::vector<std::string>(rowNames.begin(), rowNames.end()),
+            std::move(rowTypes));
+  }
+
+  auto output = std::make_shared<RowVector>(
+      input->pool(), rowType, outputNulls, size, std::move(children));
+  return {std::move(output), std::move(selectedRows)};
+}
+
+VectorPtr RowReader::projectColumns(
+    const VectorPtr& input,
+    const ScanSpec& spec,
+    const Mutation* mutation) {
+  return projectColumnsWithSelection(input, spec, mutation).output;
 }
 
 namespace {

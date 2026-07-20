@@ -74,6 +74,14 @@ TEST_F(GetJsonObjectTest, basic) {
   EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$.a "), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"a ": "1"})", "$.a "), "1");
   EXPECT_EQ(getJsonObject(R"({"a b": "1"})", "$.a b "), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$['a b']"), "1");
+  EXPECT_EQ(getJsonObject(R"({ "a b ": "1" })", "$['a b ']"), "1");
+  EXPECT_EQ(getJsonObject(R"({ " a b": "1" })", "$[' a b']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$[ 'a b']"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({ "a b": "1" })", "$['a b' ]"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"a": {"a b": 1}})", "$.a['a b']"), "1");
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {" a b": 1}})", "$.a[' a b']"), std::nullopt);
   EXPECT_EQ(
       getJsonObject(R"({"two spaces": "1"})", "$.  two spaces "), std::nullopt);
   EXPECT_EQ(getJsonObject(R"({"a": "1"})", "$ .a"), std::nullopt);
@@ -112,6 +120,43 @@ TEST_F(GetJsonObjectTest, basic) {
           R"([{"my": {"info": {"name": "Alice"}}}, {"other": ["v1", "v2"]}])",
           "$[1].other[1]"),
       "v2");
+
+  // Valid escape sequences: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX.
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\"b"})", "$.hello"), R"(a"b)");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\\b"})", "$.hello"), R"(a\b)");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\/b"})", "$.hello"), "a/b");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\bb"})", "$.hello"), "a\bb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\fb"})", "$.hello"), "a\fb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\nb"})", "$.hello"), "a\nb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\rb"})", "$.hello"), "a\rb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "a\tb"})", "$.hello"), "a\tb");
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u0041"})", "$.hello"), "A");
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u000A"})", "$.hello"), "\n");
+}
+
+TEST_F(GetJsonObjectTest, supplementaryPlaneInObject) {
+  // See appendWithSupplementaryEscapes for the behavior under test.
+
+  // Literal emoji U+1F9E7 inside an object value, alongside a CJK string
+  // that must stay literal.
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {"name": "🧧会员"}})", "$.a"),
+      R"({"name": "\uD83E\uDDE7会员"})");
+
+  // Literal emoji U+1F947 inside an array.
+  EXPECT_EQ(getJsonObject(R"({"a": ["🥇"]})", "$.a"), R"(["\uD83E\uDD47"])");
+
+  // Already-escaped '\u' input arrives as ASCII bytes and is preserved
+  // verbatim (no double escaping). Inside a raw string literal the backslash
+  // is literal, so the input/expected below are the literal bytes
+  // \ u D 8 3 E \ u D D E 7 g i f t.
+  EXPECT_EQ(
+      getJsonObject(R"({"a": {"name": "\uD83E\uDDE7gift"}})", "$.a"),
+      R"({"name": "\uD83E\uDDE7gift"})");
+
+  // A supplementary-plane character extracted as a scalar string leaf is
+  // decoded to its literal form, unaffected by this change.
+  EXPECT_EQ(getJsonObject(R"({"a": "🥇"})", "$.a"), "🥇");
 }
 
 TEST_F(GetJsonObjectTest, nullResult) {
@@ -136,6 +181,17 @@ TEST_F(GetJsonObjectTest, nullResult) {
           R"([{"my": {"info": {"name": "Alice"quoted""}}}, {"other": ["v1", "v2"]}])",
           "$[0].my.info.name"),
       std::nullopt);
+
+  // Invalid escape sequence.
+  EXPECT_EQ(getJsonObject(R"({"hello": "\x"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(
+      getJsonObject(R"({"hello": "test", "invalid": "\@"})", "$.hello"),
+      std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\๑"})", "$.hello"), std::nullopt);
+  // Invalid unicode escape sequences.
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\u123"})", "$.hello"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"({"hello": "\uGHIJ"})", "$.hello"), std::nullopt);
 }
 
 TEST_F(GetJsonObjectTest, incompleteJson) {

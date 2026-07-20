@@ -104,7 +104,7 @@ void checkSimd(const Filter* filter, const T* values, ScalarTest scalarTest) {
 
 TEST(FilterTest, bigIntRange) {
   // x = 1
-  auto filter = equal(1, false);
+  std::unique_ptr<common::Filter> filter = equal(1, false);
   auto testInt64 = [&](int64_t x) { return filter->testInt64(x); };
   EXPECT_TRUE(filter->testInt64(1));
 
@@ -210,6 +210,52 @@ TEST(FilterTest, bigIntRange) {
         1111};
     checkSimd(filter.get(), n16, testInt64);
   }
+}
+
+TEST(FilterTest, bigIntRangeBoundaryOverflow) {
+  auto filter = greaterThan(std::numeric_limits<int64_t>::max());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter->testInt64(0));
+
+  filter = lessThan(std::numeric_limits<int64_t>::min());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(0));
+
+  filter = greaterThan(std::numeric_limits<int64_t>::max(), true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = lessThan(std::numeric_limits<int64_t>::min(), true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = greaterThan(std::numeric_limits<int64_t>::max() - 1);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max() - 1));
+
+  filter = lessThan(std::numeric_limits<int64_t>::min() + 1);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min() + 1));
+}
+
+TEST(FilterTest, hugeintRangeBoundaryOverflow) {
+  auto filter = greaterThanHugeint(std::numeric_limits<int128_t>::max());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt128(std::numeric_limits<int128_t>::max()));
+  EXPECT_FALSE(filter->testInt128(0));
+
+  filter = lessThanHugeint(std::numeric_limits<int128_t>::min());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt128(std::numeric_limits<int128_t>::min()));
+  EXPECT_FALSE(filter->testInt128(0));
 }
 
 TEST(FilterTest, negatedBigintRange) {
@@ -615,6 +661,70 @@ TEST(FilterTest, negatedBigintValuesEdgeCases) {
   EXPECT_TRUE(not_equal->testInt64(1));
 }
 
+TEST(FilterTest, bigintValuesUsingBloomFilter) {
+  BigintValuesUsingBloomFilter filter(10, false);
+  folly::F14FastSet<int64_t> inserted;
+  for (int64_t x : {2, 3, 5, 7, 11, 13, 17, 19}) {
+    filter.insert(x);
+    inserted.insert(x);
+  }
+  ASSERT_FALSE(filter.testNull());
+  for (int i = 0; i < 20; ++i) {
+    ASSERT_EQ(filter.testInt64(i), inserted.contains(i));
+  }
+  ASSERT_TRUE(filter.testInt64Range(20, 30, true));
+  ASSERT_TRUE(filter.testingEquals(filter));
+  Filter::registerSerDe();
+  auto serialized = filter.serialize();
+  auto deserialized =
+      ISerializable::deserialize<BigintValuesUsingBloomFilter>(serialized);
+  ASSERT_TRUE(deserialized->testingEquals(filter));
+  ASSERT_FALSE(filter.testInt64(23));
+  filter.insert(23);
+  ASSERT_TRUE(filter.testInt64(23));
+  ASSERT_FALSE(deserialized->testingEquals(filter));
+  ASSERT_TRUE(filter.clone(std::nullopt)->testingEquals(filter));
+  auto nullAllowedClone = filter.clone(true);
+  ASSERT_TRUE(nullAllowedClone->testNull());
+  ASSERT_TRUE(nullAllowedClone->clone(false)->testingEquals(filter));
+}
+
+TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
+  BigintValuesUsingBloomFilter filter(4, false);
+  for (int64_t x : {2, 3, 5, 7}) {
+    filter.insert(x);
+  }
+  auto test = [&](const Filter& other, const Filter& expected) {
+    auto merged = filter.mergeWith(&other);
+    ASSERT_TRUE(merged->testingEquals(expected));
+    auto merged2 = other.mergeWith(&filter);
+    ASSERT_TRUE(merged->testingEquals(*merged2));
+  };
+  {
+    SCOPED_TRACE("BigintRange");
+    test(BigintRange(2, 5, true), *createBigintValues({2, 3, 5}, false));
+  }
+  {
+    SCOPED_TRACE("Huge BigintRange");
+    BigintRange other(-1, INT64_MAX, true);
+    test(other, other);
+  }
+  {
+    SCOPED_TRACE("BigintValuesUsingHashTable");
+    std::vector<int64_t> otherValues = {INT64_MIN, 0, 3, 6, 9, INT64_MAX};
+    BigintValuesUsingHashTable other(
+        otherValues.front(), otherValues.back(), otherValues, true);
+    test(other, *createBigintValues({3}, false));
+  }
+  {
+    SCOPED_TRACE("BigintValuesUsingBitmask");
+    std::vector<int64_t> otherValues = {0, 3, 6, 9};
+    BigintValuesUsingBitmask other(
+        otherValues.front(), otherValues.back(), otherValues, true);
+    test(other, *createBigintValues({3}, false));
+  }
+}
+
 TEST(FilterTest, bigintMultiRange) {
   // x between 1 and 10 or x between 100 and 120
   auto filter = bigintOr(between(1, 10), between(100, 120));
@@ -638,6 +748,81 @@ TEST(FilterTest, bigintMultiRange) {
   EXPECT_TRUE(filter->testInt64Range(105, 115, true));
   EXPECT_FALSE(filter->testInt64Range(15, 45, false));
   EXPECT_FALSE(filter->testInt64Range(15, 45, true));
+}
+
+TEST(FilterTest, bigintOrWithBoundaryOverflow) {
+  auto filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()), between(1, 10));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+
+  filter =
+      bigintOr(between(1, 10), lessThan(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()),
+      lessThan(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max(), true),
+      lessThan(std::numeric_limits<int64_t>::min(), true));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()),
+      lessThan(std::numeric_limits<int64_t>::min(), true));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max(), true),
+      lessThan(std::numeric_limits<int64_t>::min()));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max(), true), between(1, 10));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      between(1, 10), lessThan(std::numeric_limits<int64_t>::min(), true));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_FALSE(filter->testInt64(50));
+  EXPECT_TRUE(filter->testNull());
+
+  filter = bigintOr(
+      greaterThan(std::numeric_limits<int64_t>::max()),
+      lessThan(std::numeric_limits<int64_t>::min()),
+      between(100, 200));
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintRange);
+  EXPECT_TRUE(filter->testInt64(150));
+  EXPECT_FALSE(filter->testInt64(50));
+}
+
+TEST(FilterTest, negatedBigintRangeMergeWithBoundaryOverflow) {
+  const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  auto merged =
+      notBetween(-118, kInt64Max)->mergeWith(notBetween(284, 479).get());
+  ASSERT_EQ(merged->kind(), FilterKind::kNegatedBigintRange);
+  EXPECT_TRUE(merged->testInt64(-119));
+  EXPECT_FALSE(merged->testInt64(-118));
+  EXPECT_FALSE(merged->testInt64(kInt64Max));
 }
 
 TEST(FilterTest, boolValue) {
@@ -726,6 +911,32 @@ TEST(FilterTest, doubleRange) {
   EXPECT_FALSE(filter->testDouble(1));
   EXPECT_TRUE(filter->testDouble(3));
   EXPECT_TRUE(filter->testDouble(100));
+
+  // Test DoubleRange filter with float batch (schema evolution slow path).
+  // When a double filter is applied to float data, it falls back to
+  // element-by-element testing instead of SIMD batch processing.
+  filter = betweenDouble(1.2, 3.4);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {1.0f, std::nanf("nan"), 3.4f, 3.1f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
+
+  filter = lessThanOrEqualDouble(1.2);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
+
+  filter = greaterThanDouble(1.2);
+  {
+    auto verifyFloat = [&](float x) { return filter->testFloat(x); };
+    float n8[] = {
+        1.0f, std::nanf("nan"), 1.3f, 1e20f, -1e20f, 0.0f, 1.1f, 1.2f};
+    checkSimd(filter.get(), n8, verifyFloat);
+  }
 }
 
 TEST(FilterTest, floatRange) {
@@ -1313,6 +1524,19 @@ void testMergeWithFloat(Filter* left, Filter* right) {
     float f = i * 0.1;
     ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
   }
+  for (float f : {
+           -3.4f,
+           -1.2f,
+           -0.5f,
+           0.5f,
+           1.2f,
+           2.0f,
+           2.5f,
+           3.4f,
+           std::numeric_limits<float>::quiet_NaN(),
+       }) {
+    ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
+  }
 }
 
 void testMergeWithBytes(Filter* left, Filter* right) {
@@ -1572,6 +1796,17 @@ TEST(FilterTest, mergeWithBigint) {
   filters.push_back(notIn({empty - 5, empty, empty + 5}, true));
   filters.push_back(notIn({5, 498, 499, 500}, false));
 
+  const int64_t kInt64Min = std::numeric_limits<int64_t>::min();
+  const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  filters.push_back(notIn({kInt64Min, -1}));
+  filters.push_back(notIn({kInt64Min, -1}, true));
+  filters.push_back(notIn({1, kInt64Max}));
+  filters.push_back(notIn({1, kInt64Max}, true));
+  filters.push_back(notIn({kInt64Min, kInt64Max}));
+  filters.push_back(between(kInt64Min, 0));
+  filters.push_back(between(0, kInt64Max));
+  filters.push_back(notBetween(-118, kInt64Max));
+
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());
@@ -1729,6 +1964,10 @@ TEST(FilterTest, mergeMultiRange) {
       orFilter(lessThanOrEqualFloat(1.2), greaterThanOrEqualFloat(3.4)));
   filters.push_back(
       orFilter(lessThanOrEqualFloat(1.2), greaterThanOrEqualFloat(3.4), true));
+
+  filters.push_back(lessThanFloat(2.0));
+  filters.push_back(greaterThanOrEqualFloat(0.5));
+  filters.push_back(betweenFloat(-0.5, 2.5));
 
   for (const auto& left : filters) {
     for (const auto& right : filters) {
@@ -1904,7 +2143,8 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
 }
 
 TEST(FilterTest, hugeIntRange) {
-  auto filter = equalHugeint(HugeInt::build(1, 1), false);
+  std::unique_ptr<common::Filter> filter =
+      equalHugeint(HugeInt::build(1, 1), false);
   auto max = DecimalUtil::kLongDecimalMax;
   auto min = DecimalUtil::kLongDecimalMin;
 
@@ -1994,7 +2234,8 @@ TEST(FilterTest, dateRange) {
 
 TEST(FilterTest, timestampRange) {
   // x = timestamp '1970-01-01 00:00:10.123'
-  auto filter = equal(Timestamp(10, 123000000), false);
+  std::unique_ptr<common::Filter> filter =
+      equal(Timestamp(10, 123000000), false);
   EXPECT_FALSE(filter->testNull());
 
   EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 123000000)));

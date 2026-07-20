@@ -14,13 +14,22 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
 
 using namespace facebook::velox;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
+
 namespace facebook::velox::test {
 namespace {
+
+constexpr const char* kSparkAnsiCast = "spark_ansi_cast";
+constexpr const char* kSparkLegacyCast = "spark_legacy_cast";
 
 class SparkCastExprTest : public functions::test::CastBaseTest {
  protected:
@@ -28,6 +37,194 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     parse::registerTypeResolver();
     functions::sparksql::registerFunctions("");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  void setAnsiSupport(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          std::to_string(value)}});
+  }
+
+  VectorPtr evaluateCastModeSpecialForm(
+      const std::string& castName,
+      const TypePtr& toType,
+      const VectorPtr& input) {
+    auto inputField =
+        std::make_shared<const core::FieldAccessTypedExpr>(input->type(), "c0");
+    auto cast = std::make_shared<const core::CallTypedExpr>(
+        toType, std::vector<core::TypedExprPtr>{inputField}, castName);
+    return evaluate(cast, makeRowVector({input}));
+  }
+
+  void testBoolToTimestamp() {
+    testCast(
+        makeFlatVector<bool>({true, false}),
+        makeFlatVector<Timestamp>({
+            Timestamp(0, 1000),
+            Timestamp(0, 0),
+        }));
+  }
+
+  template <typename T>
+  void testIntegralToTimestampCast() {
+    testCast(
+        makeNullableFlatVector<T>({
+            0,
+            1,
+            std::numeric_limits<T>::max(),
+            std::numeric_limits<T>::min(),
+            std::nullopt,
+        }),
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(1, 0),
+             Timestamp(std::numeric_limits<T>::max(), 0),
+             Timestamp(std::numeric_limits<T>::min(), 0),
+             std::nullopt}));
+  }
+
+  void testIntToTimestamp() {
+    // Cast bigint as timestamp.
+    testCast(
+        makeNullableFlatVector<int64_t>({
+            0,
+            1727181032,
+            -1727181032,
+            9223372036855,
+            -9223372036856,
+            std::numeric_limits<int64_t>::max(),
+            std::numeric_limits<int64_t>::min(),
+        }),
+        makeNullableFlatVector<Timestamp>({
+            Timestamp(0, 0),
+            Timestamp(1727181032, 0),
+            Timestamp(-1727181032, 0),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(-9223372036855, 224'192'000),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(-9223372036855, 224'192'000),
+        }));
+
+    // Cast tinyint/smallint/integer as timestamp.
+    testIntegralToTimestampCast<int8_t>();
+    testIntegralToTimestampCast<int16_t>();
+    testIntegralToTimestampCast<int32_t>();
+  }
+
+  void testTinyIntToBinary() {
+    testCast<int8_t, std::string>(
+        TINYINT(),
+        VARBINARY(),
+        {18,
+         -26,
+         0,
+         110,
+         std::numeric_limits<int8_t>::max(),
+         std::numeric_limits<int8_t>::min()},
+        {std::string("\x12", 1),
+         std::string("\xE6", 1),
+         std::string("\0", 1),
+         std::string("\x6E", 1),
+         std::string("\x7F", 1),
+         std::string("\x80", 1)});
+  }
+
+  void testSmallintToBinary() {
+    testCast<int16_t, std::string>(
+        SMALLINT(),
+        VARBINARY(),
+        {180,
+         -199,
+         0,
+         12300,
+         std::numeric_limits<int16_t>::max(),
+         std::numeric_limits<int16_t>::min()},
+        {std::string("\0\xB4", 2),
+         std::string("\xFF\x39", 2),
+         std::string("\0\0", 2),
+         std::string("\x30\x0C", 2),
+         std::string("\x7F\xFF", 2),
+         std::string("\x80\00", 2)});
+  }
+
+  void testIntegerToBinary() {
+    testCast<int32_t, std::string>(
+        INTEGER(),
+        VARBINARY(),
+        {18,
+         -26,
+         0,
+         180000,
+         std::numeric_limits<int32_t>::max(),
+         std::numeric_limits<int32_t>::min()},
+        {std::string("\0\0\0\x12", 4),
+         std::string("\xFF\xFF\xFF\xE6", 4),
+         std::string("\0\0\0\0", 4),
+         std::string("\0\x02\xBF\x20", 4),
+         std::string("\x7F\xFF\xFF\xFF", 4),
+         std::string("\x80\0\0\0", 4)});
+  }
+
+  void testBigIntToBinary() {
+    testCast<int64_t, std::string>(
+        BIGINT(),
+        VARBINARY(),
+        {123456,
+         -256789,
+         0,
+         180000,
+         std::numeric_limits<int64_t>::max(),
+         std::numeric_limits<int64_t>::min()},
+        {std::string("\0\0\0\0\0\x01\xE2\x40", 8),
+         std::string("\xFF\xFF\xFF\xFF\xFF\xFC\x14\xEB", 8),
+         std::string("\0\0\0\0\0\0\0\0", 8),
+         std::string("\0\0\0\0\0\x02\xBF\x20", 8),
+         std::string("\x7F\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8),
+         std::string("\x80\x00\x00\x00\x00\x00\x00\x00", 8)});
+  }
+
+  void testFloatToTimestamp() {
+    testCast(
+        makeFlatVector<float>({
+            0.0,
+            1727181032.0,
+            -1727181032.0,
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::min(),
+        }),
+        makeNullableFlatVector<Timestamp>({
+            Timestamp(0, 0),
+            Timestamp(1727181056, 0),
+            Timestamp(-1727181056, 0),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(0, 0),
+        }));
+  }
+
+  void testDoubleToTimestamp() {
+    testCast(
+        makeFlatVector<double>({
+            0.0,
+            1727181032.0,
+            -1727181032.0,
+            9223372036855.999,
+            -9223372036856.999,
+            1.79769e+308,
+            std::numeric_limits<double>::max(),
+            -std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::min(),
+        }),
+        makeNullableFlatVector<Timestamp>({
+            Timestamp(0, 0),
+            Timestamp(1727181032, 0),
+            Timestamp(-1727181032, 0),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(-9223372036855, 224'192'000),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(-9223372036855, 224'192'000),
+            Timestamp(0, 0),
+        }));
   }
 
   template <typename T>
@@ -92,21 +289,97 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              std::nullopt}));
   }
 
-  template <typename T>
-  void testIntegralToTimestampCast() {
+  void testDecimalToIntegral() {
+    testDecimalToIntegralCasts<int64_t>();
+    testDecimalToIntegralCasts<int32_t>();
+    testDecimalToIntegralCasts<int16_t>();
+    testDecimalToIntegralCasts<int8_t>();
+  }
+
+  void testDecimalToString() {
     testCast(
-        makeNullableFlatVector<T>({
-            0,
-            1,
-            std::numeric_limits<T>::max(),
-            std::numeric_limits<T>::min(),
-            std::nullopt,
-        }),
-        makeNullableFlatVector<Timestamp>(
-            {Timestamp(0, 0),
-             Timestamp(1, 0),
-             Timestamp(std::numeric_limits<T>::max(), 0),
-             Timestamp(std::numeric_limits<T>::min(), 0),
+        makeFlatVector<int64_t>(
+            {100, 1230, 12345, 0, -100, -1230, -12345}, DECIMAL(10, 2)),
+        makeFlatVector<std::string>(
+            {"1.00", "12.30", "123.45", "0.00", "-1.00", "-12.30", "-123.45"}));
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {100000, 123000, 123450, 0, -100000, -123000, -123450},
+            DECIMAL(10, 3)),
+        makeFlatVector<std::string>(
+            {"100.000",
+             "123.000",
+             "123.450",
+             "0.000",
+             "-100.000",
+             "-123.000",
+             "-123.450"}));
+
+    testCast(
+        makeFlatVector<int128_t>(
+            {HugeInt::build(0, 10000000000),
+             HugeInt::build(0, 12300000000),
+             HugeInt::build(0, 12345000000),
+             HugeInt::build(0, 0),
+             HugeInt::build(0, 55),
+             HugeInt::build(0, 1),
+             -HugeInt::build(0, 3),
+             -HugeInt::build(0, 10000000000),
+             -HugeInt::build(0, 12300000000),
+             -HugeInt::build(0, 12345000000)},
+            DECIMAL(20, 10)),
+        makeFlatVector<std::string>(
+            {"1.0000000000",
+             "1.2300000000",
+             "1.2345000000",
+             "0E-10",
+             "5.5E-9",
+             "1E-10",
+             "-3E-10",
+             "-1.0000000000",
+             "-1.2300000000",
+             "-1.2345000000"}));
+
+    testCast(
+        makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 0)),
+        makeFlatVector<std::string>({"100", "200", "300"}));
+
+    testCast(
+        makeFlatVector<int64_t>(
+            {0, 12, 55, 120, 1200, -3, -12, -120}, DECIMAL(10, 8)),
+        makeFlatVector<std::string>(
+            {"0E-8",
+             "1.2E-7",
+             "5.5E-7",
+             "0.00000120",
+             "0.00001200",
+             "-3E-8",
+             "-1.2E-7",
+             "-0.00000120"}));
+
+    testCast(
+        makeNullableFlatVector<int64_t>(
+            {100, std::nullopt, 1230, std::nullopt}, DECIMAL(10, 2)),
+        makeNullableFlatVector<std::string>(
+            {"1.00", std::nullopt, "12.30", std::nullopt}));
+
+    // Keep one non-scientific long-decimal baseline for larger magnitudes.
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {DecimalUtil::kLongDecimalMin,
+             0,
+             DecimalUtil::kLongDecimalMax,
+             HugeInt::build(0xFFFFFFFFFFFFFFFFull, 0xFFFFFFFFFFFFFFFFull),
+             HugeInt::build(0xffff, 0xffffffffffffffff),
+             std::nullopt},
+            DECIMAL(38, 5)),
+        makeNullableFlatVector<std::string>(
+            {"-999999999999999999999999999999999.99999",
+             "0.00000",
+             "999999999999999999999999999999999.99999",
+             "-0.00001",
+             "12089258196146291747.06175",
              std::nullopt}));
   }
 
@@ -127,8 +400,11 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         }));
   }
 
+  // Overflow cases for casting timestamp to tinyint/smallint/integer. Under
+  // ANSI OFF (or try_cast), values that do not fit the target type return NULL.
   template <typename T>
-  void testTimestampToIntegralCastOverflow(std::vector<T> expected) {
+  void testTimestampToIntegralCastOverflow(
+      std::vector<std::optional<T>> expected) {
     testCast(
         makeFlatVector<Timestamp>({
             Timestamp(1740470426, 0),
@@ -136,80 +412,1237 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             Timestamp(9223372036854, 775'807'000),
             Timestamp(-9223372036855, 224'192'000),
         }),
-        makeFlatVector<T>(expected));
+        makeNullableFlatVector<T>(expected));
+  }
+
+  void testTimestampToInt() {
+    // Cast timestamp as bigint.
+    testCast(
+        makeFlatVector<Timestamp>({
+            Timestamp(0, 0),
+            Timestamp(1, 0),
+            Timestamp(10, 0),
+            Timestamp(-1, 0),
+            Timestamp(-10, 0),
+            Timestamp(-1, 500000),
+            Timestamp(-2, 999999),
+            Timestamp(-10, 999999),
+            Timestamp(1, 999999),
+            Timestamp(-1, 1),
+            Timestamp(1234567, 500000),
+            Timestamp(-9876543, 1234),
+            Timestamp(1727181032, 0),
+            Timestamp(-1727181032, 0),
+            Timestamp(9223372036854, 775'807'000),
+            Timestamp(-9223372036855, 224'192'000),
+        }),
+        makeNullableFlatVector<int64_t>({
+            0,
+            1,
+            10,
+            -1,
+            -10,
+            -1,
+            -2,
+            -10,
+            1,
+            -1,
+            1234567,
+            -9876543,
+            1727181032,
+            -1727181032,
+            9223372036854,
+            -9223372036855,
+        }));
+
+    // Cast timestamp as tinyint/smallint/integer.
+    testTimestampToIntegralCast<int8_t>();
+    testTimestampToIntegralCast<int16_t>();
+    testTimestampToIntegralCast<int32_t>();
+  }
+
+  void testTimestampToString() {
+    testCast<Timestamp, std::string>(
+        "string",
+        {
+            Timestamp(-946684800, 0),
+            Timestamp(-7266, 0),
+            Timestamp(0, 0),
+            Timestamp(946684800, 0),
+            Timestamp(9466848000, 0),
+            Timestamp(94668480000, 0),
+            Timestamp(946729316, 0),
+            Timestamp(946729316, 123),
+            Timestamp(946729316, 100000000),
+            Timestamp(946729316, 129900000),
+            Timestamp(946729316, 123456789),
+            Timestamp(7266, 0),
+            Timestamp(-50049331200, 0),
+            Timestamp(253405036800, 0),
+            Timestamp(-62480037600, 0),
+            std::nullopt,
+        },
+        {
+            "1940-01-02 00:00:00",
+            "1969-12-31 21:58:54",
+            "1970-01-01 00:00:00",
+            "2000-01-01 00:00:00",
+            "2269-12-29 00:00:00",
+            "4969-12-04 00:00:00",
+            "2000-01-01 12:21:56",
+            "2000-01-01 12:21:56",
+            "2000-01-01 12:21:56.1",
+            "2000-01-01 12:21:56.1299",
+            "2000-01-01 12:21:56.123456",
+            "1970-01-01 02:01:06",
+            "0384-01-01 08:00:00",
+            "+10000-02-01 16:00:00",
+            "-0010-02-01 10:00:00",
+            std::nullopt,
+        });
+
+    std::vector<std::optional<Timestamp>> input = {
+        Timestamp(-946684800, 0),
+        Timestamp(-7266, 0),
+        Timestamp(0, 0),
+        Timestamp(61, 10),
+        Timestamp(3600, 0),
+        Timestamp(946684800, 0),
+
+        Timestamp(946729316, 0),
+        Timestamp(946729316, 123),
+        Timestamp(946729316, 100000000),
+        Timestamp(946729316, 129900000),
+        Timestamp(946729316, 123456789),
+        Timestamp(7266, 0),
+        std::nullopt,
+    };
+
+    setTimezone("America/Los_Angeles");
+    testCast<Timestamp, std::string>(
+        "string",
+        input,
+        {
+            "1940-01-01 16:00:00",
+            "1969-12-31 13:58:54",
+            "1969-12-31 16:00:00",
+            "1969-12-31 16:01:01",
+            "1969-12-31 17:00:00",
+            "1999-12-31 16:00:00",
+            "2000-01-01 04:21:56",
+            "2000-01-01 04:21:56",
+            "2000-01-01 04:21:56.1",
+            "2000-01-01 04:21:56.1299",
+            "2000-01-01 04:21:56.123456",
+            "1969-12-31 18:01:06",
+            std::nullopt,
+        });
+    setTimezone("Asia/Shanghai");
+    testCast<Timestamp, std::string>(
+        "string",
+        input,
+        {
+            "1940-01-02 08:00:00",
+            "1970-01-01 05:58:54",
+            "1970-01-01 08:00:00",
+            "1970-01-01 08:01:01",
+            "1970-01-01 09:00:00",
+            "2000-01-01 08:00:00",
+            "2000-01-01 20:21:56",
+            "2000-01-01 20:21:56",
+            "2000-01-01 20:21:56.1",
+            "2000-01-01 20:21:56.1299",
+            "2000-01-01 20:21:56.123456",
+            "1970-01-01 10:01:06",
+            std::nullopt,
+        });
+  }
+
+  void testTimestampUtcToString() {
+    // Basic formatting: output reflects the stored UTC time directly.
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0),
+             Timestamp(946'684'800, 0),
+             Timestamp(946'729'316, 0),
+             Timestamp(1'426'680'197, 0),
+             Timestamp(1'426'680'197, 123'000'000),
+             Timestamp(1'426'680'197, 123'456'000)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00",
+             "2000-01-01 00:00:00",
+             "2000-01-01 12:21:56",
+             "2015-03-18 12:03:17",
+             "2015-03-18 12:03:17.123",
+             "2015-03-18 12:03:17.123456"},
+            VARCHAR()));
+
+    // Session timezone does not affect TIMESTAMP_UTC output.
+    setTimezone("Asia/Shanghai");
+    testCast(
+        makeNullableFlatVector<Timestamp>(
+            {Timestamp(0, 0), Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()),
+        makeNullableFlatVector<std::string>(
+            {"1970-01-01 00:00:00", "2000-01-01 12:21:56"}, VARCHAR()));
+  }
+
+  void testInvalidDate() {
+    testInvalidCast<int8_t>(
+        "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
+    testInvalidCast<int16_t>(
+        "date",
+        {1234},
+        "Cast from SMALLINT to DATE is not supported",
+        SMALLINT());
+    testInvalidCast<int32_t>(
+        "date",
+        {1234},
+        "Cast from INTEGER to DATE is not supported",
+        INTEGER());
+    testInvalidCast<int64_t>(
+        "date", {1234}, "Cast from BIGINT to DATE is not supported", BIGINT());
+
+    testInvalidCast<float>(
+        "date", {12.99}, "Cast from REAL to DATE is not supported", REAL());
+    testInvalidCast<double>(
+        "date", {12.99}, "Cast from DOUBLE to DATE is not supported", DOUBLE());
+  }
+
+  void testStringToBoolean() {
+    // Valid strings for true (case-insensitive): t, true, y, yes, 1.
+    testCast<std::string, bool>(
+        "boolean",
+        {"t", "T", "true", "TRUE", "TrUe", "y", "Y", "yes", "YES", "YeS", "1"},
+        {true, true, true, true, true, true, true, true, true, true, true});
+
+    // Valid strings for false (case-insensitive): f, false, n, no, 0.
+    testCast<std::string, bool>(
+        "boolean",
+        {"f", "F", "false", "FALSE", "FaLsE", "n", "N", "no", "NO", "nO", "0"},
+        {false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false,
+         false});
+
+    // Whitespace should be trimmed.
+    testCast<std::string, bool>(
+        "boolean",
+        {" true", "false ", " 1 ", "  yes  ", "  no  "},
+        {true, false, true, true, false});
+
+    // NULL values should remain NULL.
+    testCast<std::string, bool>(
+        "boolean",
+        {"true", std::nullopt, "false", std::nullopt},
+        {true, std::nullopt, false, std::nullopt});
+  }
+
+  void testStringToTimestamp() {
+    std::vector<std::optional<std::string>> input{
+        "1970-01-01",
+        "1970-01-01 00:00:00-02:00",
+        "1970-01-01 00:00:00 +02:00",
+        "2000-01-01",
+        "1970-01-01 00:00:00",
+        "2000-01-01 12:21:56",
+        std::nullopt,
+        "2015-03-18T12:03:17",
+        "2015-03-18T12:03:17Z",
+        "2015-03-18 12:03:17",
+        "2015-03-18T12:03:17",
+        "2015-03-18 12:03:17.123",
+        "2015-03-18T12:03:17.123",
+        "2015-03-18T12:03:17.456",
+        "2015-03-18 12:03:17.456",
+    };
+    std::vector<std::optional<Timestamp>> expected{
+        Timestamp(0, 0),
+        Timestamp(7200, 0),
+        Timestamp(-7200, 0),
+        Timestamp(946684800, 0),
+        Timestamp(0, 0),
+        Timestamp(946729316, 0),
+        std::nullopt,
+        Timestamp(1426680197, 0),
+        Timestamp(1426680197, 0),
+        Timestamp(1426680197, 0),
+        Timestamp(1426680197, 0),
+        Timestamp(1426680197, 123000000),
+        Timestamp(1426680197, 123000000),
+        Timestamp(1426680197, 456000000),
+        Timestamp(1426680197, 456000000),
+    };
+    testCast<std::string, Timestamp>("timestamp", input, expected);
+
+    setTimezone("Asia/Shanghai");
+    testCast<std::string, Timestamp>(
+        "timestamp",
+        {"1970-01-01 00:00:00",
+         "1970-01-01 08:00:00",
+         "1970-01-01 08:00:59",
+         "1970"},
+        {Timestamp(-8 * 3600, 0),
+         Timestamp(0, 0),
+         Timestamp(59, 0),
+         Timestamp(-8 * 3600, 0)});
+  }
+
+  void testStringToDate() {
+    testCast<std::string, int32_t>(
+        "date",
+        {"1970-01-01",
+         "2020-01-01",
+         "2135-11-09",
+         "1969-12-27",
+         "1812-04-15",
+         "1920-01-02",
+         "12345-12-18",
+         "1970-1-2",
+         "1970-01-2",
+         "1970-1-02",
+         "+1970-01-02",
+         " 1970-01-01",
+         std::nullopt},
+        {0,
+         18262,
+         60577,
+         -5,
+         -57604,
+         -18262,
+         3789742,
+         1,
+         1,
+         1,
+         1,
+         0,
+         std::nullopt},
+        VARCHAR(),
+        DATE());
+    testCast<std::string, int32_t>(
+        "date",
+        {"12345",
+         "2015",
+         "2015-03",
+         "2015-03-18T",
+         "2015-03-18T123123",
+         "2015-03-18 123142",
+         "2015-03-18 (BC)"},
+        {3789391, 16436, 16495, 16512, 16512, 16512, 16512},
+        VARCHAR(),
+        DATE());
+  }
+
+  void testFromString() {
+    // String with leading and trailing whitespaces.
+    testCast<std::string, int8_t>(
+        "tinyint", {"\n\f\r\t\n\u001F 123\u000B\u001C\u001D\u001E"}, {123});
+    testCast<std::string, int32_t>(
+        "integer", {"\n\f\r\t\n\u001F 123\u000B\u001C\u001D\u001E"}, {123});
+    testCast<std::string, int64_t>(
+        "bigint", {"\n\f\r\t\n\u001F 123\u000B\u001C\u001D\u001E"}, {123});
+    testCast<std::string, int32_t>(
+        "date",
+        {"\n\f\r\t\n\u001F 2015-03-18T\u000B\u001C\u001D\u001E"},
+        {16512},
+        VARCHAR(),
+        DATE());
+    testCast<std::string, float>(
+        "real", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
+    testCast<std::string, double>(
+        "double", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
+    testCast<std::string, Timestamp>(
+        "timestamp",
+        {"\n\f\r\t\n\u001F 2000-01-01 12:21:56\u000B\u001C\u001D\u001E"},
+        {Timestamp(946729316, 0)});
+    testCast(
+        makeFlatVector<StringView>(
+            {" 9999999999.99",
+             "9999999999.99 ",
+             "\n\f\r\t\n\u001F 9999999999.99\u000B\u001C\u001D\u001E",
+             " -3E+2",
+             "-3E+2 ",
+             "\u000B\u001C\u001D-3E+2\u001E\n\f\r\t\n\u001F "}),
+        makeFlatVector<int64_t>(
+            {999'999'999'999,
+             999'999'999'999,
+             999'999'999'999,
+             -30000,
+             -30000,
+             -30000},
+            DECIMAL(12, 2)));
+  }
+
+  void testPrimitiveValidCornerCases() {
+    // To integer.
+    {
+      // Valid strings.
+      testCast<std::string, int8_t>("tinyint", {"+1"}, {1});
+      testCast<std::string, int8_t>("tinyint", {"-1"}, {-1});
+
+      testCast<double, int8_t>("tinyint", {127.1}, {127});
+
+      testCast<double, int64_t>("bigint", {12345.12}, {12345});
+      testCast<double, int64_t>("bigint", {12345.67}, {12345});
+    }
+
+    // To floating-point.
+    {
+      testCast<std::string, float>("real", {"1."}, {1.0});
+      testCast<std::string, float>("real", {"1"}, {1});
+      testCast<std::string, float>("real", {"infinity"}, {kInf});
+      testCast<std::string, float>("real", {"-infinity"}, {-kInf});
+      testCast<std::string, float>("real", {"nan"}, {kNan});
+      testCast<std::string, float>("real", {"InfiNiTy"}, {kInf});
+      testCast<std::string, float>("real", {"-InfiNiTy"}, {-kInf});
+      testCast<std::string, float>("real", {"nAn"}, {kNan});
+    }
+
+    // To boolean.
+    {
+      testCast<int8_t, bool>("boolean", {1}, {true});
+      testCast<int8_t, bool>("boolean", {0}, {false});
+      testCast<int8_t, bool>("boolean", {12}, {true});
+      testCast<int8_t, bool>("boolean", {-1}, {true});
+
+      testCast<std::string, bool>("boolean", {"1"}, {true});
+      testCast<std::string, bool>("boolean", {"t"}, {true});
+      testCast<std::string, bool>("boolean", {"y"}, {true});
+      testCast<std::string, bool>("boolean", {"yes"}, {true});
+      testCast<std::string, bool>("boolean", {"true"}, {true});
+
+      testCast<std::string, bool>("boolean", {"0"}, {false});
+      testCast<std::string, bool>("boolean", {"f"}, {false});
+      testCast<std::string, bool>("boolean", {"n"}, {false});
+      testCast<std::string, bool>("boolean", {"no"}, {false});
+      testCast<std::string, bool>("boolean", {"false"}, {false});
+
+      testCast<std::string, bool>(
+          "boolean",
+          {"t",
+           "T",
+           "true",
+           "TRUE",
+           "TrUe",
+           "y",
+           "Y",
+           "yes",
+           "YES",
+           "YeS",
+           "1"},
+          {true, true, true, true, true, true, true, true, true, true, true});
+
+      testCast<std::string, bool>(
+          "boolean",
+          {"f",
+           "F",
+           "false",
+           "FALSE",
+           "FaLsE",
+           "n",
+           "N",
+           "no",
+           "NO",
+           "nO",
+           "0"},
+          {false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false,
+           false});
+
+      testCast<std::string, bool>(
+          "boolean",
+          {" true", "false ", " 1 ", "  yes  ", "  no  "},
+          {true, false, true, true, false});
+
+      testCast<std::string, bool>(
+          "boolean",
+          {"true", std::nullopt, "false", std::nullopt},
+          {true, std::nullopt, false, std::nullopt});
+    }
+
+    // To string.
+    {
+      testCast<float, std::string>("varchar", {kInf}, {"Infinity"});
+      testCast<float, std::string>("varchar", {kNan}, {"NaN"});
+    }
+  }
+
+  void testTruncate() {
+    testCast<Timestamp, int32_t>("integer", {Timestamp(17, 500'000'000)}, {17});
+
+    testCast<Timestamp, int32_t>("integer", {Timestamp(17, 1'000)}, {17});
+
+    testCast<Timestamp, int32_t>("integer", {Timestamp(17, 999'999'000)}, {17});
+
+    testCast<Timestamp, int32_t>("integer", {Timestamp(17, 600'000'000)}, {17});
+
+    testCast<Timestamp, int32_t>("integer", {Timestamp(17, 400'000'000)}, {17});
+
+    testCast<Timestamp, int32_t>("integer", {Timestamp(17, 555'000'000)}, {17});
+
+    testCast<Timestamp, int32_t>("integer", {Timestamp(12 * 3600, 0)}, {43200});
+    testCast<Timestamp, int32_t>(
+        "integer", {Timestamp(12 * 3600, 120'000'000)}, {43200});
+
+    testCast<Timestamp, int32_t>(
+        "integer", {Timestamp(12 * 3600, 345'600'000)}, {43200});
+
+    testCast<Timestamp, int32_t>(
+        "integer", {Timestamp(1 * 3600 + 2 * 60 + 3, 555'550'000)}, {3723});
+
+    testCast<Timestamp, int64_t>(
+        "bigint", {Timestamp(1 * 3600 + 2 * 60 + 3, 555'550'000)}, {3723L});
+
+    testCast<Timestamp, int32_t>(
+        "integer", {Timestamp(23 * 3600 + 59 * 60 + 59, 999'900'000)}, {86399});
+
+    testCast<Timestamp, int64_t>(
+        "bigint", {Timestamp(23 * 3600 + 59 * 60 + 59, 999'900'000)}, {86399L});
+  }
+
+  void testTryCasts() {
+    testTryCast<std::string, int8_t>(
+        "tinyint",
+        {"-",
+         "-0",
+         " @w 123",
+         "123 ",
+         "  122",
+         "",
+         "-12-3",
+         "1234",
+         "-129",
+         "1.1.1",
+         "1..",
+         "1.abc",
+         "..",
+         "-..",
+         "125.5",
+         "127",
+         "-128",
+         "1.2"},
+        {std::nullopt,
+         0,
+         std::nullopt,
+         123,
+         122,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         127,
+         -128,
+         std::nullopt});
+
+    testTryCast<double, int32_t>(
+        "integer",
+        {1e12, 2.5, 3.6, 100.44, -100.101},
+        {std::nullopt, 2, 3, 100, -100});
+    testTryCast<int64_t, int8_t>("tinyint", {456}, {std::nullopt});
+    testTryCast<int64_t, int16_t>("smallint", {1234567}, {std::nullopt});
+    testTryCast<int64_t, int32_t>("integer", {2147483649}, {std::nullopt});
+
+    testTryCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
+    testTryCast<std::string, int32_t>(
+        "integer", {"17515055537"}, {std::nullopt});
+    testTryCast<std::string, int32_t>(
+        "integer", {"-17515055537"}, {std::nullopt});
+    testTryCast<std::string, int64_t>(
+        "bigint", {"9663372036854775809"}, {std::nullopt});
+    testTryCast<int64_t, int8_t>(
+        "tinyint", {456}, {std::nullopt}, DECIMAL(6, 0));
+  }
+
+  void testOverflow() {
+    testCast<int16_t, int8_t>("tinyint", {456}, {-56});
+    testCast<int32_t, int8_t>("tinyint", {266}, {10});
+    testCast<int64_t, int8_t>("tinyint", {1234}, {-46});
+    testCast<int64_t, int16_t>("smallint", {1234567}, {-10617});
+    testCast<double, int8_t>("tinyint", {127.8}, {127});
+    testCast<double, int8_t>("tinyint", {129.9}, {-127});
+    testCast<double, int16_t>("smallint", {1234567.89}, {-10617});
+    testCast<double, int64_t>(
+        "bigint", {std::numeric_limits<double>::max()}, {9223372036854775807});
+    testCast<double, int64_t>(
+        "bigint", {std::numeric_limits<double>::quiet_NaN()}, {0});
+    auto shortFlat = makeNullableFlatVector<int64_t>(
+        {-3000,
+         -2600,
+         -2300,
+         -2000,
+         -1000,
+         0,
+         55000,
+         57490,
+         5755,
+         6900,
+         7200,
+         std::nullopt},
+        DECIMAL(5, 1));
+    testCast(
+        shortFlat,
+        makeNullableFlatVector<int8_t>(
+            {-44, -4, 26, 56, -100, 0, 124, 117, 63, -78, -48, std::nullopt}),
+        false);
+    testCast(
+        makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
+        makeNullableFlatVector<int8_t>({0}),
+        false);
+    testCast(
+        makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
+        makeNullableFlatVector<int32_t>({-2147483648}),
+        false);
+    testCast(
+        makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
+        makeNullableFlatVector<int64_t>({2147483648}),
+        false);
+  }
+
+  void testRecursiveTryCast() {
+    // Test array elements.
+    testCast(
+        makeArrayVector<StringView>({
+            {"1", "2", "3"},
+            {"4", "a", "6"},
+            {"b", "c", "d"},
+        }),
+        makeNullableArrayVector<int64_t>({
+            {1, 2, 3},
+            {4, std::nullopt, 6},
+            {std::nullopt, std::nullopt, std::nullopt},
+        }),
+        true);
+
+    // Test map values (Spark doesn't allow casting if the map keys can become
+    // null).
+    testCast(
+        makeMapVectorFromJson<int64_t, std::string>({
+            R"( {1:"1", 2:"2", 3:"3"} )",
+            R"( {1:"4", 2:"a", 3:"6"} )",
+            R"( {1:"b", 2:"c", 3:"d"} )",
+        }),
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:1, 2:2, 3:3}",
+            "{1:4, 2:null, 3:6}",
+            "{1:null, 2:null, 3:null}",
+        }),
+        true);
+
+    // Test row fields.
+    testCast(
+        makeRowVector(
+            {makeFlatVector<StringView>({"1", "4", "b"}),
+             makeFlatVector<StringView>({"2", "a", "c"}),
+             makeFlatVector<StringView>({"3", "6", "d"})}),
+        makeRowVector(
+            {makeNullableFlatVector<int64_t>({1, 4, std::nullopt}),
+             makeNullableFlatVector<int64_t>({2, std::nullopt, std::nullopt}),
+             makeNullableFlatVector<int64_t>({3, 6, std::nullopt})}),
+        true);
+
+    // Test nested arrays.
+    testCast(
+        makeNestedArrayVectorFromJson<std::string>({
+            R"( [["1", "2", "3"], ["4", "a", "6"]] )",
+            R"( [["b", "c", "d"], ["x", "7", "z"]] )",
+        }),
+        makeNestedArrayVectorFromJson<int64_t>({
+            "[[1, 2, 3], [4, null, 6]]",
+            "[[null, null, null], [null, 7, null]]",
+        }),
+        true);
+  }
+
+  // Regular (valid) varchar-to-decimal cast cases. These produce identical
+  // results regardless of ANSI mode, so they are shared between the ANSI ON
+  // and ANSI OFF tests.
+  void testVarcharToDecimal() {
+    testCast(
+        makeFlatVector<StringView>(
+            {"9999999999.99",
+             "15",
+             "1.5",
+             "-1.5",
+             "1.556",
+             "1.554",
+             ("1.556" + std::string(32, '1')).data(),
+             ("1.556" + std::string(32, '9')).data(),
+             "0000.123",
+             ".12300000000",
+             "+09",
+             "9.",
+             ".9",
+             "3E2",
+             "-3E+2",
+             "3E+2",
+             "3E+00002",
+             "3E-2",
+             "3e+2",
+             "3e-2",
+             "3.5E-2",
+             "3.4E-2",
+             "3.5E+2",
+             "3.4E+2",
+             "31.423e+2",
+             "31.423e-2",
+             "31.523e-2",
+             "-3E-00000"}),
+        makeFlatVector<int64_t>(
+            {999'999'999'999,
+             1500,
+             150,
+             -150,
+             156,
+             155,
+             156,
+             156,
+             12,
+             12,
+             900,
+             900,
+             90,
+             30000,
+             -30000,
+             30000,
+             30000,
+             3,
+             30000,
+             3,
+             4,
+             3,
+             35000,
+             34000,
+             314230,
+             31,
+             32,
+             -300},
+            DECIMAL(12, 2)));
+
+    // Truncates the fractional digits with exponent.
+    testCast(
+        makeFlatVector<StringView>(
+            {"112345612.23e-6",
+             "112345662.23e-6",
+             "1.23e-6",
+             "1.23e-3",
+             "1.26e-3",
+             "1.23456781e3",
+             "1.23456789e3",
+             "1.23456789123451789123456789e9",
+             "1.23456789123456789123456789e9"}),
+        makeFlatVector<int128_t>(
+            {1123456,
+             1123457,
+             0,
+             12,
+             13,
+             12345678,
+             12345679,
+             12345678912345,
+             12345678912346},
+            DECIMAL(20, 4)));
+
+    const auto minDecimalStr = '-' + std::string(36, '9') + '.' + "99";
+    const auto maxDecimalStr = std::string(36, '9') + '.' + "99";
+    testCast(
+        makeFlatVector<StringView>(
+            {StringView(minDecimalStr),
+             StringView(maxDecimalStr),
+             "123456789012345678901234.567"}),
+        makeFlatVector<int128_t>(
+            {
+                DecimalUtil::kLongDecimalMin,
+                DecimalUtil::kLongDecimalMax,
+                HugeInt::build(
+                    669260,
+                    10962463713375599297U), // 12345678901234567890123457
+            },
+            DECIMAL(38, 2)));
+
+    const std::string fractionLarge = "1.9" + std::string(67, '9');
+    const std::string fractionLargeExp = "1.9" + std::string(67, '9') + "e2";
+    const std::string fractionLargeNegExp =
+        "1000.9" + std::string(67, '9') + "e-2";
+    testCast(
+        makeFlatVector<StringView>(
+            {StringView(('-' + std::string(38, '9')).data()),
+             StringView(std::string(38, '9').data()),
+             StringView(fractionLarge),
+             StringView(fractionLargeExp),
+             StringView(fractionLargeNegExp)}),
+        makeFlatVector<int128_t>(
+            {DecimalUtil::kLongDecimalMin,
+             DecimalUtil::kLongDecimalMax,
+             2,
+             200,
+             10},
+            DECIMAL(38, 0)));
+
+    const std::string fractionRoundDown = "0." + std::string(38, '9') + "2";
+    const std::string fractionRoundDownExp =
+        "99." + std::string(36, '9') + "2e-2";
+    testCast(
+        makeFlatVector<StringView>(
+            {StringView(fractionRoundDown), StringView(fractionRoundDownExp)}),
+        makeConstant<int128_t>(
+            DecimalUtil::kLongDecimalMax, 2, DECIMAL(38, 38)));
+
+    // Spark trims leading/trailing whitespace before casting, so these are
+    // valid. Interior whitespace (e.g. "1. 23") remains invalid.
+    testCast<std::string, int128_t>(
+        "decimal(38, 0)", {"1.23 "}, {1}, VARCHAR(), DECIMAL(38, 0));
+    testCast<std::string, int128_t>(
+        "decimal(38, 0)", {" 1.23"}, {1}, VARCHAR(), DECIMAL(38, 0));
+    testCast<std::string, int64_t>(
+        "decimal(12, 2)", {"-3E+2 "}, {-30000}, VARCHAR(), DECIMAL(12, 2));
+    testCast<std::string, int64_t>(
+        "decimal(12, 2)", {" -3E+2"}, {-30000}, VARCHAR(), DECIMAL(12, 2));
+  }
+
+  template <typename T>
+  void testIntegralToDecimal() {
+    // Integral to short decimal.
+    auto input = makeFlatVector<T>({-3, -2, -1, 0, 55, 69, 72});
+    testCast(
+        input,
+        makeFlatVector<int64_t>(
+            {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(6, 2)));
+
+    // Integral to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {-30'000'000'000,
+             -20'000'000'000,
+             -10'000'000'000,
+             0,
+             550'000'000'000,
+             690'000'000'000,
+             720'000'000'000},
+            DECIMAL(20, 10)));
   }
 };
 
-TEST_F(SparkCastExprTest, date) {
-  testCast<std::string, int32_t>(
-      "date",
-      {"1970-01-01",
-       "2020-01-01",
-       "2135-11-09",
-       "1969-12-27",
-       "1812-04-15",
-       "1920-01-02",
-       "12345-12-18",
-       "1970-1-2",
-       "1970-01-2",
-       "1970-1-02",
-       "+1970-01-02",
-       " 1970-01-01",
-       std::nullopt},
-      {0,
-       18262,
-       60577,
-       -5,
-       -57604,
-       -18262,
-       3789742,
-       1,
-       1,
-       1,
-       1,
-       0,
-       std::nullopt},
-      VARCHAR(),
-      DATE());
-  testCast<std::string, int32_t>(
-      "date",
-      {"12345",
-       "2015",
-       "2015-03",
-       "2015-03-18T",
-       "2015-03-18T123123",
-       "2015-03-18 123142",
-       "2015-03-18 (BC)"},
-      {3789391, 16436, 16495, 16512, 16512, 16512, 16512},
-      VARCHAR(),
-      DATE());
+class SparkCastExprTestAnsiOn : public SparkCastExprTest {
+ protected:
+  void SetUp() override {
+    SparkCastExprTest::SetUp();
+    setAnsiSupport(true);
+  }
+};
+
+class SparkCastExprTestAnsiOff : public SparkCastExprTest {
+ protected:
+  void SetUp() override {
+    SparkCastExprTest::SetUp();
+    setAnsiSupport(false);
+  }
+};
+
+TEST_F(SparkCastExprTest, ansiCastModeIgnoresSessionAnsiOff) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          INTEGER(),
+          makeFlatVector<std::string>({"2147483648"})),
+      "Cannot cast");
 }
 
-TEST_F(SparkCastExprTest, decimalToIntegral) {
-  testDecimalToIntegralCasts<int64_t>();
-  testDecimalToIntegralCasts<int32_t>();
-  testDecimalToIntegralCasts<int16_t>();
-  testDecimalToIntegralCasts<int8_t>();
+TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
+  setAnsiSupport(true);
+
+  auto result = evaluateCastModeSpecialForm(
+      kSparkLegacyCast,
+      INTEGER(),
+      makeFlatVector<std::string>({"2147483648", "123"}));
+  auto expected =
+      makeNullableFlatVector<int32_t>({std::nullopt, 123}, INTEGER());
+  assertEqualVectors(expected, result);
 }
 
-TEST_F(SparkCastExprTest, invalidDate) {
-  testInvalidCast<int8_t>(
-      "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
-  testInvalidCast<int16_t>(
-      "date",
-      {1234},
-      "Cast from SMALLINT to DATE is not supported",
-      SMALLINT());
-  testInvalidCast<int32_t>(
-      "date", {1234}, "Cast from INTEGER to DATE is not supported", INTEGER());
-  testInvalidCast<int64_t>(
-      "date", {1234}, "Cast from BIGINT to DATE is not supported", BIGINT());
+// ============================================================================
+// ANSI ON Tests
+// ============================================================================
 
-  testInvalidCast<float>(
-      "date", {12.99}, "Cast from REAL to DATE is not supported", REAL());
-  testInvalidCast<double>(
-      "date", {12.99}, "Cast from DOUBLE to DATE is not supported", DOUBLE());
+TEST_F(SparkCastExprTestAnsiOn, boolToTimestamp) {
+  testBoolToTimestamp();
+}
 
+TEST_F(SparkCastExprTestAnsiOn, intToTimestamp) {
+  testIntToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, tinyIntToBinary) {
+  testTinyIntToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, smallintToBinary) {
+  testSmallintToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, integerToBinary) {
+  testIntegerToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, bigIntToBinary) {
+  testBigIntToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, decimalToString) {
+  testDecimalToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
+  testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
+  testFloatToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, doubleToTimestamp) {
+  testDoubleToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToInt) {
+  testTimestampToInt();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToIntOverflow) {
+  // Under ANSI ON, values that overflow the target type throw instead of
+  // returning NULL.
+  auto testOverflowThrows = [this](const std::string& type, Timestamp value) {
+    auto input = makeRowVector({makeFlatVector<Timestamp>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate(fmt::format("cast(c0 as {})", type), input)),
+        "due to an overflow");
+  };
+
+  testOverflowThrows("tinyint", Timestamp(1740470426, 0));
+  testOverflowThrows("smallint", Timestamp(1740470426, 0));
+  testOverflowThrows("integer", Timestamp(9223372036854, 775'807'000));
+  testOverflowThrows("integer", Timestamp(-9223372036855, 224'192'000));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampToString) {
+  testTimestampToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToString) {
+  testTimestampUtcToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, testInvalidDate) {
+  auto expected = [](const std::string& v) {
+    return fmt::format(
+        "Cannot cast VARCHAR '{}' to DATE. Unable to parse date value: \"{}\". "
+        "Valid date string patterns include ([y]y*, [y]y*-[m]m*, "
+        "[y]y*-[m]m*-[d]d*, [y]y*-[m]m*-[d]d* *, "
+        "[y]y*-[m]m*-[d]d*T*), and any pattern prefixed with [+-]",
+        v,
+        v);
+  };
+  testInvalidCast<std::string>(
+      "date", {"2012-Oct-23"}, expected("2012-Oct-23"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"2015-03-18X"}, expected("2015-03-18X"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"2015/03/18"}, expected("2015/03/18"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"2015.03.18"}, expected("2015.03.18"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"20150318"}, expected("20150318"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"2015-031-8"}, expected("2015-031-8"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"-1-1-1"}, expected("-1-1-1"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"-11-1-1"}, expected("-11-1-1"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"-111-1-1"}, expected("-111-1-1"), VARCHAR());
+  testInvalidCast<std::string>(
+      "date", {"- 1111-1-1"}, expected("- 1111-1-1"), VARCHAR());
+  testInvalidDate();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToBoolean) {
+  testStringToBoolean();
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(evaluate("cast(c0 as boolean)", input), "Cannot cast");
+  };
+
+  testInvalidString("invalid");
+  testInvalidString("tru");
+  testInvalidString("2");
+  testInvalidString("-1");
+  testInvalidString("on");
+  testInvalidString("off");
+  testInvalidString("");
+  testInvalidString(" ");
+  testInvalidString("nan");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestamp) {
+  testStringToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
+  testStringToDate();
+  auto testInvalidDate = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluateCast(VARCHAR(), DATE(), input, false)),
+        "Unable to parse date value");
+  };
+
+  testInvalidDate("2012-Oct-23");
+  testInvalidDate("2015/03/18");
+  testInvalidDate("2015-13-01");
+  testInvalidDate("2015-02-30");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, fromString) {
+  testFromString();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, primitiveInvalidCornerCase) {
+  // To integer - ANSI ON (throws on error).
+  {
+    auto testInvalidThrows =
+        [this](const std::string& type, const std::string& value) {
+          auto input = makeRowVector({makeFlatVector<std::string>({value})});
+          VELOX_ASSERT_THROW(
+              (evaluate(fmt::format("cast(c0 as {})", type), input)), "");
+        };
+
+    // Invalid strings should throw.
+    testInvalidThrows("tinyint", "1234567");
+    testInvalidThrows("tinyint", "1a");
+    testInvalidThrows("tinyint", "");
+    testInvalidThrows("integer", "1'234'567");
+    testInvalidThrows("integer", "1,234,567");
+    testInvalidThrows("bigint", "infinity");
+    testInvalidThrows("bigint", "nan");
+    testInvalidThrows("bigint", "abc");
+    testInvalidThrows("bigint", "+");
+    testInvalidThrows("bigint", "-");
+
+    // Overflow should throw.
+    testInvalidThrows("tinyint", "128");
+    testInvalidThrows("tinyint", "-129");
+    testInvalidThrows("smallint", "32768");
+    testInvalidThrows("smallint", "-32769");
+    testInvalidThrows("integer", "2147483648");
+    testInvalidThrows("integer", "-2147483649");
+  }
+}
+
+TEST_F(SparkCastExprTestAnsiOn, primitiveValidCornerCases) {
+  testPrimitiveValidCornerCases();
+
+  auto testInvalidString = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(evaluate("cast(c0 as boolean)", input), "Cannot cast");
+  };
+
+  testInvalidString("invalid");
+  testInvalidString("tru");
+  testInvalidString("2");
+  testInvalidString("-1");
+  testInvalidString("on");
+  testInvalidString("off");
+  testInvalidString("");
+  testInvalidString(" ");
+  testInvalidString("nan");
+  auto testInvalidThrows =
+      [this](const std::string& type, const std::string& value) {
+        auto input = makeRowVector({makeFlatVector<std::string>({value})});
+        VELOX_ASSERT_THROW(
+            (evaluate(fmt::format("cast(c0 as {})", type), input)), "");
+      };
+
+  // Invalid strings should throw.
+  testInvalidThrows("tinyint", "1234567");
+  testInvalidThrows("tinyint", "1a");
+  testInvalidThrows("tinyint", "");
+  testInvalidThrows("integer", "1'234'567");
+  testInvalidThrows("integer", "1,234,567");
+  testInvalidThrows("bigint", "infinity");
+  testInvalidThrows("bigint", "nan");
+  testInvalidThrows("bigint", "abc");
+  testInvalidThrows("bigint", "+");
+  testInvalidThrows("bigint", "-");
+
+  // Overflow should throw.
+  testInvalidThrows("tinyint", "128");
+  testInvalidThrows("tinyint", "-129");
+  testInvalidThrows("smallint", "32768");
+  testInvalidThrows("smallint", "-32769");
+  testInvalidThrows("integer", "2147483648");
+  testInvalidThrows("integer", "-2147483649");
+
+  testCast<std::string, int64_t>(
+      "bigint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+  testCast<std::string, int32_t>(
+      "integer", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+  testCast<std::string, int16_t>(
+      "smallint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+  testCast<std::string, int8_t>(
+      "tinyint", {"12", "-45", "+78", "  99  "}, {12, -45, 78, 99});
+
+  auto testDecimalThrows = [this](
+                               const std::string& type,
+                               const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate(fmt::format("cast(c0 as {})", type), input)), "Cannot cast");
+  };
+
+  testDecimalThrows("bigint", "123.45");
+  testDecimalThrows("integer", "456.78");
+  testDecimalThrows("smallint", "78.9");
+  testDecimalThrows("tinyint", "12.3");
+  testDecimalThrows("tinyint", "1.2");
+  testDecimalThrows("tinyint", "-1.8");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, truncate) {
+  testTruncate();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, tryCasts) {
+  testTryCasts();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, overflow) {
+  // Overflow protection not enabled yet, see velox#16579
+}
+
+TEST_F(SparkCastExprTestAnsiOn, recursiveTryCast) {
+  testRecursiveTryCast();
+}
+
+// ============================================================================
+// ANSI OFF Tests
+// ============================================================================
+
+TEST_F(SparkCastExprTestAnsiOff, boolToTimestamp) {
+  testBoolToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, intToTimestamp) {
+  testIntToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, tinyIntToBinary) {
+  testTinyIntToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, smallintToBinary) {
+  testSmallintToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, integerToBinary) {
+  testIntegerToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, bigIntToBinary) {
+  testBigIntToBinary();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, decimalToIntegral) {
+  testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, decimalToString) {
+  testDecimalToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, floatToTimestamp) {
+  testFloatToTimestamp();
+  testCast(
+      makeFlatVector<float>({kInf, kNan, -kInf}),
+      makeNullableFlatVector<Timestamp>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }));
+}
+
+TEST_F(SparkCastExprTestAnsiOff, doubleToTimestamp) {
+  testDoubleToTimestamp();
+  testCast(
+      makeFlatVector<double>({
+          kInf,
+          kNan,
+          -kInf,
+      }),
+      makeNullableFlatVector<Timestamp>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }));
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampToInt) {
+  testTimestampToInt();
+  testCast<Timestamp, int64_t>(
+      "bigint", {Timestamp(9223372036856, 0)}, {std::nullopt});
+  // Values that overflow the target type return NULL when ANSI is off.
+  testTimestampToIntegralCastOverflow<int8_t>({
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  testTimestampToIntegralCastOverflow<int16_t>({
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+  });
+  testTimestampToIntegralCastOverflow<int32_t>({
+      1740470426,
+      2147483647,
+      std::nullopt,
+      std::nullopt,
+  });
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampToString) {
+  testTimestampToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToString) {
+  testTimestampUtcToString();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, testInvalidDate) {
+  testInvalidDate();
   // Parsing ill-formated dates.
   testCast<std::string, int32_t>(
       "date", {"2012-Oct-23"}, {std::nullopt}, VARCHAR(), DATE());
@@ -233,209 +1666,66 @@ TEST_F(SparkCastExprTest, invalidDate) {
       "date", {"- 1111-1-1"}, {std::nullopt}, VARCHAR(), DATE());
 }
 
-TEST_F(SparkCastExprTest, stringToTimestamp) {
-  std::vector<std::optional<std::string>> input{
-      "1970-01-01",
-      "1970-01-01 00:00:00-02:00",
-      "1970-01-01 00:00:00 +02:00",
-      "2000-01-01",
-      "1970-01-01 00:00:00",
-      "2000-01-01 12:21:56",
-      std::nullopt,
-      "2015-03-18T12:03:17",
-      "2015-03-18T12:03:17Z",
-      "2015-03-18 12:03:17",
-      "2015-03-18T12:03:17",
-      "2015-03-18 12:03:17.123",
-      "2015-03-18T12:03:17.123",
-      "2015-03-18T12:03:17.456",
-      "2015-03-18 12:03:17.456",
-  };
-  std::vector<std::optional<Timestamp>> expected{
-      Timestamp(0, 0),
-      Timestamp(7200, 0),
-      Timestamp(-7200, 0),
-      Timestamp(946684800, 0),
-      Timestamp(0, 0),
-      Timestamp(946729316, 0),
-      std::nullopt,
-      Timestamp(1426680197, 0),
-      Timestamp(1426680197, 0),
-      Timestamp(1426680197, 0),
-      Timestamp(1426680197, 0),
-      Timestamp(1426680197, 123000000),
-      Timestamp(1426680197, 123000000),
-      Timestamp(1426680197, 456000000),
-      Timestamp(1426680197, 456000000),
-  };
-  testCast<std::string, Timestamp>("timestamp", input, expected);
+TEST_F(SparkCastExprTestAnsiOff, stringToBoolean) {
+  testStringToBoolean();
 
-  setTimezone("Asia/Shanghai");
-  testCast<std::string, Timestamp>(
-      "timestamp",
-      {"1970-01-01 00:00:00",
-       "1970-01-01 08:00:00",
-       "1970-01-01 08:00:59",
-       "1970"},
-      {Timestamp(-8 * 3600, 0),
-       Timestamp(0, 0),
-       Timestamp(59, 0),
-       Timestamp(-8 * 3600, 0)});
+  testCast<std::string, bool>(
+      "boolean",
+      {"invalid", "tru", "2", "-1", "on", "off", "nan", "", " "},
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+
+  testCast<std::string, bool>(
+      "boolean",
+      {"true", "invalid", "false", std::nullopt, "1", "2", "0"},
+      {true, std::nullopt, false, std::nullopt, true, std::nullopt, false});
 }
 
-TEST_F(SparkCastExprTest, intToTimestamp) {
-  // Cast bigint as timestamp.
-  testCast(
-      makeNullableFlatVector<int64_t>({
-          0,
-          1727181032,
-          -1727181032,
-          9223372036855,
-          -9223372036856,
-          std::numeric_limits<int64_t>::max(),
-          std::numeric_limits<int64_t>::min(),
-      }),
-      makeNullableFlatVector<Timestamp>({
-          Timestamp(0, 0),
-          Timestamp(1727181032, 0),
-          Timestamp(-1727181032, 0),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(-9223372036855, 224'192'000),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(-9223372036855, 224'192'000),
-      }));
-
-  // Cast tinyint/smallint/integer as timestamp.
-  testIntegralToTimestampCast<int8_t>();
-  testIntegralToTimestampCast<int16_t>();
-  testIntegralToTimestampCast<int32_t>();
+TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
+  testStringToTimestamp();
+  testCast<std::string, Timestamp>("timestamp", {"INVALID"}, {std::nullopt});
 }
 
-TEST_F(SparkCastExprTest, timestampToInt) {
-  // Cast timestamp as bigint.
-  testCast(
-      makeFlatVector<Timestamp>(
-          {Timestamp(0, 0),
-           Timestamp(1, 0),
-           Timestamp(10, 0),
-           Timestamp(-1, 0),
-           Timestamp(-10, 0),
-           Timestamp(-1, 500000),
-           Timestamp(-2, 999999),
-           Timestamp(-10, 999999),
-           Timestamp(1, 999999),
-           Timestamp(-1, 1),
-           Timestamp(1234567, 500000),
-           Timestamp(-9876543, 1234),
-           Timestamp(1727181032, 0),
-           Timestamp(-1727181032, 0),
-           Timestamp(9223372036854, 775'807'000),
-           Timestamp(-9223372036855, 224'192'000),
-           Timestamp(9223372036856, 0)}),
-      makeNullableFlatVector<int64_t>({
-          0,
-          1,
-          10,
-          -1,
-          -10,
-          -1,
-          -2,
-          -10,
-          1,
-          -1,
-          1234567,
-          -9876543,
-          1727181032,
-          -1727181032,
-          9223372036854,
-          -9223372036855,
-          std::nullopt,
-      }));
-
-  // Cast timestamp as tinyint/smallint/integer.
-  testTimestampToIntegralCast<int8_t>();
-  testTimestampToIntegralCast<int16_t>();
-  testTimestampToIntegralCast<int32_t>();
-
-  // Cast overflowed timestamp as tinyint/smallint/integer.
-  testTimestampToIntegralCastOverflow<int8_t>({
-      -102,
-      -1,
-      -10,
-      9,
-  });
-  testTimestampToIntegralCastOverflow<int16_t>({
-      30874,
-      -1,
-      23286,
-      -23287,
-  });
-  testTimestampToIntegralCastOverflow<int32_t>({
-      1740470426,
-      2147483647,
-      2077252342,
-      -2077252343,
-  });
+TEST_F(SparkCastExprTestAnsiOff, stringToDate) {
+  testStringToDate();
+  testCast<std::string, int32_t>(
+      "date",
+      {"2012-Oct-23", /*Invalid format*/
+       "2015/03/18", /*Wrong separator*/
+       "2015-13-01", /*Invalid month*/
+       "2015-02-30"}, /*Invalid day*/
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+      VARCHAR(),
+      DATE());
 }
 
-TEST_F(SparkCastExprTest, doubleToTimestamp) {
-  testCast(
-      makeFlatVector<double>({
-          0.0,
-          1727181032.0,
-          -1727181032.0,
-          9223372036855.999,
-          -9223372036856.999,
-          1.79769e+308,
-          std::numeric_limits<double>::max(),
-          -std::numeric_limits<double>::max(),
-          std::numeric_limits<double>::min(),
-          kInf,
-          kNan,
-          -kInf,
-      }),
-      makeNullableFlatVector<Timestamp>({
-          Timestamp(0, 0),
-          Timestamp(1727181032, 0),
-          Timestamp(-1727181032, 0),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(-9223372036855, 224'192'000),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(-9223372036855, 224'192'000),
-          Timestamp(0, 0),
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-      }));
+TEST_F(SparkCastExprTestAnsiOff, fromString) {
+  testFromString();
 }
 
-TEST_F(SparkCastExprTest, floatToTimestamp) {
-  testCast(
-      makeFlatVector<float>({
-          0.0,
-          1727181032.0,
-          -1727181032.0,
-          std::numeric_limits<float>::max(),
-          std::numeric_limits<float>::min(),
-          kInf,
-          kNan,
-          -kInf,
-      }),
-      makeNullableFlatVector<Timestamp>({
-          Timestamp(0, 0),
-          Timestamp(1727181056, 0),
-          Timestamp(-1727181056, 0),
-          Timestamp(9223372036854, 775'807'000),
-          Timestamp(0, 0),
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-      }));
-}
+TEST_F(SparkCastExprTestAnsiOff, primitiveInvalidCornerCase) {
+  // To floating-point - invalid strings return null
+  testCast<std::string, float>("real", {"1.2a"}, {std::nullopt});
+  testCast<std::string, float>("real", {"1.2.3"}, {std::nullopt});
 
-TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
-  // To integer.
+  // To boolean - invalid strings return null
+  testCast<std::string, bool>("boolean", {"1.7E308"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"nan"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"12"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"-1"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"tr"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"tru"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"on"}, {std::nullopt});
+  testCast<std::string, bool>("boolean", {"off"}, {std::nullopt});
+
+  // To integer
   {
     // Invalid strings.
     testCast<std::string, int8_t>("tinyint", {"1234567"}, {std::nullopt});
@@ -445,141 +1735,70 @@ TEST_F(SparkCastExprTest, primitiveInvalidCornerCases) {
     testCast<std::string, int32_t>("integer", {"1,234,567"}, {std::nullopt});
     testCast<std::string, int64_t>("bigint", {"infinity"}, {std::nullopt});
     testCast<std::string, int64_t>("bigint", {"nan"}, {std::nullopt});
-  }
+    testCast<std::string, int64_t>(
+        "bigint",
+        {"abc", "+", "-", "  "},
+        {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 
-  // To floating-point.
-  {
-    // Invalid strings.
-    testCast<std::string, float>("real", {"1.2a"}, {std::nullopt});
-    testCast<std::string, float>("real", {"1.2.3"}, {std::nullopt});
-  }
-
-  // To boolean.
-  {
-    testCast<std::string, bool>("boolean", {"1.7E308"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"nan"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"12"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"-1"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"tr"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"tru"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"on"}, {std::nullopt});
-    testCast<std::string, bool>("boolean", {"off"}, {std::nullopt});
+    // Overflow cases.
+    testCast<std::string, int8_t>(
+        "tinyint",
+        {"128", "-129", "1000"},
+        {std::nullopt, std::nullopt, std::nullopt});
+    testCast<std::string, int16_t>(
+        "smallint", {"32768", "-32769"}, {std::nullopt, std::nullopt});
   }
 }
 
-TEST_F(SparkCastExprTest, primitiveValidCornerCases) {
-  // To integer.
-  {
-    // Valid strings.
-    testCast<std::string, int8_t>("tinyint", {"1.2"}, {1});
-    testCast<std::string, int8_t>("tinyint", {"1.23444"}, {1});
-    testCast<std::string, int8_t>("tinyint", {".2355"}, {0});
-    testCast<std::string, int8_t>("tinyint", {"-1.8"}, {-1});
-    testCast<std::string, int8_t>("tinyint", {"+1"}, {1});
-    testCast<std::string, int8_t>("tinyint", {"1."}, {1});
-    testCast<std::string, int8_t>("tinyint", {"-1"}, {-1});
-    testCast<std::string, int8_t>("tinyint", {"-1."}, {-1});
-    testCast<std::string, int8_t>("tinyint", {"0."}, {0});
-    testCast<std::string, int8_t>("tinyint", {"."}, {0});
-    testCast<std::string, int8_t>("tinyint", {"-."}, {0});
+TEST_F(SparkCastExprTestAnsiOff, primitiveValidCornerCases) {
+  testPrimitiveValidCornerCases();
 
-    testCast<int32_t, int8_t>("tinyint", {1234567}, {-121});
-    testCast<int32_t, int8_t>("tinyint", {-1234567}, {121});
-    testCast<double, int8_t>("tinyint", {12345.67}, {57});
-    testCast<double, int8_t>("tinyint", {-12345.67}, {-57});
-    testCast<double, int8_t>("tinyint", {127.1}, {127});
-    testCast<float, int64_t>("bigint", {kInf}, {9223372036854775807});
-    testCast<float, int64_t>("bigint", {kNan}, {0});
-    testCast<float, int32_t>("integer", {kNan}, {0});
-    testCast<float, int16_t>("smallint", {kNan}, {0});
-    testCast<float, int8_t>("tinyint", {kNan}, {0});
+  testCast<std::string, int64_t>(
+      "bigint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+  testCast<std::string, int32_t>(
+      "integer", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+  testCast<std::string, int16_t>(
+      "smallint", {"123", "-456", "+789", "  999  "}, {123, -456, 789, 999});
+  testCast<std::string, int8_t>(
+      "tinyint", {"12", "-45", "+78", "  99  "}, {12, -45, 78, 99});
 
-    testCast<double, int64_t>("bigint", {12345.12}, {12345});
-    testCast<double, int64_t>("bigint", {12345.67}, {12345});
-  }
+  testCast<float, int64_t>("bigint", {kNan}, {0});
+  testCast<float, int32_t>("integer", {kNan}, {0});
+  testCast<float, int16_t>("smallint", {kNan}, {0});
+  testCast<float, int8_t>("tinyint", {kNan}, {0});
 
-  // To floating-point.
-  {
-    testCast<double, float>("real", {1.7E308}, {kInf});
+  testCast<std::string, int8_t>("tinyint", {"1.2"}, {1});
+  testCast<std::string, int8_t>("tinyint", {"1.23444"}, {1});
+  testCast<std::string, int8_t>("tinyint", {".2355"}, {0});
+  testCast<std::string, int8_t>("tinyint", {"-1.8"}, {-1});
+  testCast<std::string, int8_t>("tinyint", {"1."}, {1});
+  testCast<std::string, int8_t>("tinyint", {"-1."}, {-1});
+  testCast<std::string, int8_t>("tinyint", {"0."}, {0});
+  testCast<std::string, int8_t>("tinyint", {"."}, {0});
+  testCast<std::string, int8_t>("tinyint", {"-."}, {0});
 
-    testCast<std::string, float>("real", {"1.7E308"}, {kInf});
-    testCast<std::string, float>("real", {"1."}, {1.0});
-    testCast<std::string, float>("real", {"1"}, {1});
-    testCast<std::string, float>("real", {"infinity"}, {kInf});
-    testCast<std::string, float>("real", {"-infinity"}, {-kInf});
-    testCast<std::string, float>("real", {"nan"}, {kNan});
-    testCast<std::string, float>("real", {"InfiNiTy"}, {kInf});
-    testCast<std::string, float>("real", {"-InfiNiTy"}, {-kInf});
-    testCast<std::string, float>("real", {"nAn"}, {kNan});
-  }
+  testCast<int32_t, int8_t>("tinyint", {1234567}, {-121});
+  testCast<int32_t, int8_t>("tinyint", {-1234567}, {121});
 
-  // To boolean.
-  {
-    testCast<int8_t, bool>("boolean", {1}, {true});
-    testCast<int8_t, bool>("boolean", {0}, {false});
-    testCast<int8_t, bool>("boolean", {12}, {true});
-    testCast<int8_t, bool>("boolean", {-1}, {true});
-    testCast<double, bool>("boolean", {1.0}, {true});
-    testCast<double, bool>("boolean", {1.1}, {true});
-    testCast<double, bool>("boolean", {0.1}, {true});
-    testCast<double, bool>("boolean", {-0.1}, {true});
-    testCast<double, bool>("boolean", {-1.0}, {true});
-    testCast<float, bool>("boolean", {kNan}, {false});
-    testCast<float, bool>("boolean", {kInf}, {true});
-    testCast<double, bool>("boolean", {0.0000000000001}, {true});
+  testCast<double, int8_t>("tinyint", {12345.67}, {57});
+  testCast<double, int8_t>("tinyint", {-12345.67}, {-57});
+  testCast<float, int64_t>("bigint", {kInf}, {9223372036854775807});
 
-    testCast<std::string, bool>("boolean", {"1"}, {true});
-    testCast<std::string, bool>("boolean", {"t"}, {true});
-    testCast<std::string, bool>("boolean", {"y"}, {true});
-    testCast<std::string, bool>("boolean", {"yes"}, {true});
-    testCast<std::string, bool>("boolean", {"true"}, {true});
+  testCast<double, float>("real", {1.7E308}, {kInf});
 
-    testCast<std::string, bool>("boolean", {"0"}, {false});
-    testCast<std::string, bool>("boolean", {"f"}, {false});
-    testCast<std::string, bool>("boolean", {"n"}, {false});
-    testCast<std::string, bool>("boolean", {"no"}, {false});
-    testCast<std::string, bool>("boolean", {"false"}, {false});
-  }
+  testCast<double, bool>("boolean", {1.0}, {true});
+  testCast<double, bool>("boolean", {1.1}, {true});
+  testCast<double, bool>("boolean", {0.1}, {true});
+  testCast<double, bool>("boolean", {-0.1}, {true});
+  testCast<double, bool>("boolean", {-1.0}, {true});
+  testCast<float, bool>("boolean", {kNan}, {false});
+  testCast<float, bool>("boolean", {kInf}, {true});
+  testCast<double, bool>("boolean", {0.0000000000001}, {true});
 
-  // To string.
-  {
-    testCast<float, std::string>("varchar", {kInf}, {"Infinity"});
-    testCast<float, std::string>("varchar", {kNan}, {"NaN"});
-  }
-}
-
-TEST_F(SparkCastExprTest, truncate) {
-  // Testing truncate cast from double to int.
-  testCast<int32_t, int8_t>(
-      "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5});
-}
-
-TEST_F(SparkCastExprTest, tryCast) {
-  testTryCast<std::string, int8_t>(
-      "tinyint",
-      {"-",
-       "-0",
-       " @w 123",
-       "123 ",
-       "  122",
-       "",
-       "-12-3",
-       "1234",
-       "-129",
-       "1.1.1",
-       "1..",
-       "1.abc",
-       "..",
-       "-..",
-       "125.5",
-       "127",
-       "-128",
-       "1.2"},
+  testCast<std::string, bool>(
+      "boolean",
+      {"invalid", "tru", "2", "-1", "on", "off", "nan", "", " "},
       {std::nullopt,
-       0,
-       std::nullopt,
-       123,
-       122,
        std::nullopt,
        std::nullopt,
        std::nullopt,
@@ -587,74 +1806,50 @@ TEST_F(SparkCastExprTest, tryCast) {
        std::nullopt,
        std::nullopt,
        std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       std::nullopt,
-       127,
-       -128,
        std::nullopt});
 
-  testTryCast<double, int32_t>(
-      "integer",
-      {1e12, 2.5, 3.6, 100.44, -100.101},
-      {std::nullopt, 2, 3, 100, -100});
-  testTryCast<int64_t, int8_t>("tinyint", {456}, {std::nullopt});
-  testTryCast<int64_t, int16_t>("smallint", {1234567}, {std::nullopt});
-  testTryCast<int64_t, int32_t>("integer", {2147483649}, {std::nullopt});
+  testCast<std::string, bool>(
+      "boolean",
+      {"true", "invalid", "false", std::nullopt, "1", "2", "0"},
+      {true, std::nullopt, false, std::nullopt, true, std::nullopt, false});
 
-  testTryCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
-  testTryCast<std::string, int32_t>("integer", {"17515055537"}, {std::nullopt});
-  testTryCast<std::string, int32_t>(
-      "integer", {"-17515055537"}, {std::nullopt});
-  testTryCast<std::string, int64_t>(
-      "bigint", {"9663372036854775809"}, {std::nullopt});
-  testTryCast<int64_t, int8_t>("tinyint", {456}, {std::nullopt}, DECIMAL(6, 0));
+  {
+    // Invalid strings.
+    testCast<std::string, int8_t>("tinyint", {"1234567"}, {std::nullopt});
+    testCast<std::string, int8_t>("tinyint", {"1a"}, {std::nullopt});
+    testCast<std::string, int8_t>("tinyint", {""}, {std::nullopt});
+    testCast<std::string, int32_t>("integer", {"1'234'567"}, {std::nullopt});
+    testCast<std::string, int32_t>("integer", {"1,234,567"}, {std::nullopt});
+    testCast<std::string, int64_t>("bigint", {"infinity"}, {std::nullopt});
+    testCast<std::string, int64_t>("bigint", {"nan"}, {std::nullopt});
+    testCast<std::string, int64_t>(
+        "bigint",
+        {"abc", "+", "-", "  "},
+        {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+    // Overflow cases.
+    testCast<std::string, int8_t>(
+        "tinyint",
+        {"128", "-129", "1000"},
+        {std::nullopt, std::nullopt, std::nullopt});
+    testCast<std::string, int16_t>(
+        "smallint", {"32768", "-32769"}, {std::nullopt, std::nullopt});
+  }
 }
 
-TEST_F(SparkCastExprTest, overflow) {
-  testCast<int16_t, int8_t>("tinyint", {456}, {-56});
-  testCast<int32_t, int8_t>("tinyint", {266}, {10});
-  testCast<int64_t, int8_t>("tinyint", {1234}, {-46});
-  testCast<int64_t, int16_t>("smallint", {1234567}, {-10617});
-  testCast<double, int8_t>("tinyint", {127.8}, {127});
-  testCast<double, int8_t>("tinyint", {129.9}, {-127});
-  testCast<double, int16_t>("smallint", {1234567.89}, {-10617});
-  testCast<double, int64_t>(
-      "bigint", {std::numeric_limits<double>::max()}, {9223372036854775807});
-  testCast<double, int64_t>(
-      "bigint", {std::numeric_limits<double>::quiet_NaN()}, {0});
-  auto shortFlat = makeNullableFlatVector<int64_t>(
-      {-3000,
-       -2600,
-       -2300,
-       -2000,
-       -1000,
-       0,
-       55000,
-       57490,
-       5755,
-       6900,
-       7200,
-       std::nullopt},
-      DECIMAL(5, 1));
-  testCast(
-      shortFlat,
-      makeNullableFlatVector<int8_t>(
-          {-44, -4, 26, 56, -100, 0, 124, 117, 63, -78, -48, std::nullopt}),
-      false);
-  testCast(
-      makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int8_t>({0}),
-      false);
-  testCast(
-      makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int32_t>({-2147483648}),
-      false);
-  testCast(
-      makeNullableFlatVector<int64_t>({214748364890}, DECIMAL(12, 2)),
-      makeNullableFlatVector<int64_t>({2147483648}),
-      false);
+TEST_F(SparkCastExprTestAnsiOff, truncate) {
+  testCast<int32_t, int8_t>(
+      "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5});
+  testTruncate();
+}
 
+TEST_F(SparkCastExprTestAnsiOff, tryCasts) {
+  testTryCasts();
+}
+TEST_F(SparkCastExprTestAnsiOff, overflow) {
+  testOverflow();
+
+  // String overflow cases return null in non-ANSI mode
   testCast<std::string, int8_t>("tinyint", {"166"}, {std::nullopt});
   testCast<std::string, int16_t>("smallint", {"52769"}, {std::nullopt});
   testCast<std::string, int32_t>("integer", {"17515055537"}, {std::nullopt});
@@ -663,273 +1858,403 @@ TEST_F(SparkCastExprTest, overflow) {
       "bigint", {"9663372036854775809"}, {std::nullopt});
 }
 
-TEST_F(SparkCastExprTest, timestampToString) {
-  testCast<Timestamp, std::string>(
-      "string",
-      {
-          Timestamp(-946684800, 0),
-          Timestamp(-7266, 0),
-          Timestamp(0, 0),
-          Timestamp(946684800, 0),
-          Timestamp(9466848000, 0),
-          Timestamp(94668480000, 0),
-          Timestamp(946729316, 0),
-          Timestamp(946729316, 123),
-          Timestamp(946729316, 100000000),
-          Timestamp(946729316, 129900000),
-          Timestamp(946729316, 123456789),
-          Timestamp(7266, 0),
-          Timestamp(-50049331200, 0),
-          Timestamp(253405036800, 0),
-          Timestamp(-62480037600, 0),
-          std::nullopt,
-      },
-      {
-          "1940-01-02 00:00:00",
-          "1969-12-31 21:58:54",
-          "1970-01-01 00:00:00",
-          "2000-01-01 00:00:00",
-          "2269-12-29 00:00:00",
-          "4969-12-04 00:00:00",
-          "2000-01-01 12:21:56",
-          "2000-01-01 12:21:56",
-          "2000-01-01 12:21:56.1",
-          "2000-01-01 12:21:56.1299",
-          "2000-01-01 12:21:56.123456",
-          "1970-01-01 02:01:06",
-          "0384-01-01 08:00:00",
-          "+10000-02-01 16:00:00",
-          "-0010-02-01 10:00:00",
-          std::nullopt,
-      });
+TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
+  testRecursiveTryCast();
+}
 
-  std::vector<std::optional<Timestamp>> input = {
-      Timestamp(-946684800, 0),
-      Timestamp(-7266, 0),
-      Timestamp(0, 0),
-      Timestamp(61, 10),
-      Timestamp(3600, 0),
-      Timestamp(946684800, 0),
+// Verify that casting DATE to TIMESTAMP in a timezone where midnight falls in
+// a gap (nonexistent local time) does not throw. Spark adjusts to the
+// post-transition time instead.
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampTimezoneGap) {
+  // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
+  // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
+  // 1941-12-24 15:30:00 UTC.
+  setTimezone("Asia/Hong_Kong");
+  auto input = makeFlatVector<int32_t>({-10234}, DATE());
+  auto expected =
+      makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
+  testCast(input, expected);
+}
 
-      Timestamp(946729316, 0),
-      Timestamp(946729316, 123),
-      Timestamp(946729316, 100000000),
-      Timestamp(946729316, 129900000),
-      Timestamp(946729316, 123456789),
-      Timestamp(7266, 0),
-      std::nullopt,
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampTimezoneGap) {
+  setTimezone("Asia/Hong_Kong");
+  auto input = makeFlatVector<int32_t>({-10234}, DATE());
+  auto expected =
+      makeFlatVector<Timestamp>({Timestamp(-884248200, 0)}, TIMESTAMP());
+  testCast(input, expected);
+}
+
+// Cast TIMESTAMP → TIMESTAMP_UTC: applies the session timezone offset so the
+// local timestamp is preserved as a UTC epoch in TIMESTAMP_UTC.
+TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
+  // No session timezone: identity cast.
+  testCast(
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()));
+
+  // America/Los_Angeles (PST = UTC-8): 2020-01-01 00:00:00 UTC
+  // → local 2019-12-31 16:00:00 → stored as epoch 1577808000.
+  SCOPE_EXIT {
+    setTimezone("");
   };
-
   setTimezone("America/Los_Angeles");
-  testCast<Timestamp, std::string>(
-      "string",
-      input,
-      {
-          "1940-01-01 16:00:00",
-          "1969-12-31 13:58:54",
-          "1969-12-31 16:00:00",
-          "1969-12-31 16:01:01",
-          "1969-12-31 17:00:00",
-          "1999-12-31 16:00:00",
-          "2000-01-01 04:21:56",
-          "2000-01-01 04:21:56",
-          "2000-01-01 04:21:56.1",
-          "2000-01-01 04:21:56.1299",
-          "2000-01-01 04:21:56.123456",
-          "1969-12-31 18:01:06",
-          std::nullopt,
-      });
-  setTimezone("Asia/Shanghai");
-  testCast<Timestamp, std::string>(
-      "string",
-      input,
-      {
-          "1940-01-02 08:00:00",
-          "1970-01-01 05:58:54",
-          "1970-01-01 08:00:00",
-          "1970-01-01 08:01:01",
-          "1970-01-01 09:00:00",
-          "2000-01-01 08:00:00",
-          "2000-01-01 20:21:56",
-          "2000-01-01 20:21:56",
-          "2000-01-01 20:21:56.1",
-          "2000-01-01 20:21:56.1299",
-          "2000-01-01 20:21:56.123456",
-          "1970-01-01 10:01:06",
-          std::nullopt,
-      });
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()));
+
+  // Asia/Kolkata (IST = UTC+5:30): epoch 0 → local 05:30:00
+  // → stored as epoch 19800.
+  setTimezone("Asia/Kolkata");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>({Timestamp(19'800, 0)}, TIMESTAMP_UTC()));
 }
 
-TEST_F(SparkCastExprTest, fromString) {
-  // String with leading and trailing whitespaces.
-  testCast<std::string, int8_t>(
-      "tinyint", {"\n\f\r\t\n\u001F 123\u000B\u001C\u001D\u001E"}, {123});
-  testCast<std::string, int32_t>(
-      "integer", {"\n\f\r\t\n\u001F 123\u000B\u001C\u001D\u001E"}, {123});
-  testCast<std::string, int64_t>(
-      "bigint", {"\n\f\r\t\n\u001F 123\u000B\u001C\u001D\u001E"}, {123});
-  testCast<std::string, int32_t>(
-      "date",
-      {"\n\f\r\t\n\u001F 2015-03-18T\u000B\u001C\u001D\u001E"},
-      {16512},
+TEST_F(SparkCastExprTestAnsiOn, timestampToTimestampUtc) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()));
+}
+
+// Cast TIMESTAMP_UTC → TIMESTAMP: converts from the stored local timestamp
+// epoch back to a UTC epoch using the session timezone.
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
+  // No session timezone: identity cast.
+  testCast(
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(0, 0), Timestamp(1'000'000'000, 123)}, TIMESTAMP()));
+
+  // America/Los_Angeles (PST = UTC-8): stored epoch 1577808000
+  // → local 2019-12-31 16:00:00 → UTC 2020-01-01 00:00:00 = epoch 1577836800.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()));
+
+  // Asia/Kolkata (IST = UTC+5:30): stored epoch 19800
+  // → local 05:30:00 → UTC 00:00:00 = epoch 0.
+  setTimezone("Asia/Kolkata");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(19'800, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestamp) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("America/Los_Angeles");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()));
+}
+
+// Verify that casting TIMESTAMP_UTC to TIMESTAMP in a timezone where the
+// stored local time falls in a DST gap does not throw.
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
+  // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
+  // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
+  // 1941-12-24 15:30:00 UTC.
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("Asia/Hong_Kong");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(-884'248'200, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestampDSTGap) {
+  SCOPE_EXIT {
+    setTimezone("");
+  };
+  setTimezone("Asia/Hong_Kong");
+  testCast(
+      makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>({Timestamp(-884'248'200, 0)}, TIMESTAMP()));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, varcharToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testVarcharToDecimal();
+
+  // Under ANSI ON, invalid or overflowing inputs throw.
+
+  // Overflows when parsing whole digits.
+  testThrow<std::string>(
       VARCHAR(),
-      DATE());
-  testCast<std::string, float>(
-      "real", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
-  testCast<std::string, double>(
-      "double", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
-  testCast<std::string, Timestamp>(
-      "timestamp",
-      {"\n\f\r\t\n\u001F 2000-01-01 12:21:56\u000B\u001C\u001D\u001E"},
-      {Timestamp(946729316, 0)});
-  testCast(
-      makeFlatVector<StringView>(
-          {" 9999999999.99",
-           "9999999999.99 ",
-           "\n\f\r\t\n\u001F 9999999999.99\u000B\u001C\u001D\u001E",
-           " -3E+2",
-           "-3E+2 ",
-           "\u000B\u001C\u001D-3E+2\u001E\n\f\r\t\n\u001F "}),
-      makeFlatVector<int64_t>(
-          {999'999'999'999,
-           999'999'999'999,
-           999'999'999'999,
-           -30000,
-           -30000,
-           -30000},
-          DECIMAL(12, 2)));
+      DECIMAL(38, 0),
+      {std::string(280, '9')},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 0). Value too large.",
+          std::string(280, '9')));
+
+  // Overflows when parsing fractional digits.
+  const std::string fractionOverflow = std::string(36, '9') + '.' + "23456";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 10),
+      {fractionOverflow},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 10). Value too large.",
+          fractionOverflow));
+
+  const std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {fractionRoundUp},
+      fmt::format(
+          "Cannot cast VARCHAR '{}' to DECIMAL(38, 38). Value too large.",
+          fractionRoundUp));
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"0.0444a"},
+      "Cannot cast VARCHAR '0.0444a' to DECIMAL(38, 0). Value is not a number.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {""},
+      "Cannot cast VARCHAR '' to DECIMAL(38, 0). Value is not a number. Input is empty.");
+
+  // Exponent > LongDecimalType::kMaxPrecision.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1.23e67"},
+      "Cannot cast VARCHAR '1.23e67' to DECIMAL(38, 0). Value too large.");
+
+  // Forcing the scale to be zero overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"20908.23e35"},
+      "Cannot cast VARCHAR '20908.23e35' to DECIMAL(38, 0). Value too large.");
+
+  // Rescale overflows.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 38),
+      {"111111111111111111.23"},
+      "Cannot cast VARCHAR '111111111111111111.23' to DECIMAL(38, 38). Value too large.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"23e-5d"},
+      "Cannot cast VARCHAR '23e-5d' to DECIMAL(38, 0). Value is not a number. Non-digit character is not allowed in the exponent part.");
+
+  // Whitespaces.
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(38, 0),
+      {"1. 23"},
+      "Cannot cast VARCHAR '1. 23' to DECIMAL(38, 0). Value is not a number.");
+  // Interior whitespace stays invalid; leading/trailing cases are valid and
+  // covered in testVarcharToDecimal().
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+ 2"},
+      "Cannot cast VARCHAR '-3E+ 2' to DECIMAL(12, 2). Value is not a number. Non-digit character is not allowed in the exponent part.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+2.1"},
+      "Cannot cast VARCHAR '-3E+2.1' to DECIMAL(12, 2). Value is not a number. Non-digit character is not allowed in the exponent part.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E+"},
+      "Cannot cast VARCHAR '-3E+' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"-3E-"},
+      "Cannot cast VARCHAR '-3E-' to DECIMAL(12, 2). Value is not a number. The exponent part only contains sign.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"9e"},
+      "Cannot cast VARCHAR '9e' to DECIMAL(12, 2). Value is not a number. The exponent part is empty.");
+
+  testThrow<std::string>(
+      VARCHAR(),
+      DECIMAL(12, 2),
+      {"09{xi+yD"},
+      "Cannot cast VARCHAR '09{xi+yD' to DECIMAL(12, 2). Value is not a number. Chars are invalid.");
 }
 
-TEST_F(SparkCastExprTest, tinyintToBinary) {
-  testCast<int8_t, std::string>(
-      TINYINT(),
-      VARBINARY(),
-      {18,
-       -26,
-       0,
-       110,
-       std::numeric_limits<int8_t>::max(),
-       std::numeric_limits<int8_t>::min()},
-      {std::string("\x12", 1),
-       std::string("\xE6", 1),
-       std::string("\0", 1),
-       std::string("\x6E", 1),
-       std::string("\x7F", 1),
-       std::string("\x80", 1)});
+TEST_F(SparkCastExprTestAnsiOn, integralToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testIntegralToDecimal<int8_t>();
+  testIntegralToDecimal<int16_t>();
+  testIntegralToDecimal<int32_t>();
+  testIntegralToDecimal<int64_t>();
+
+  // Under ANSI ON, inputs that overflow the target precision/scale throw.
+  // The value does not fit in the allowed integer digits (precision - scale)
+  // of the target.
+  auto testOverflowThrow = [&]<typename T>() {
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(3, 1),
+        {std::numeric_limits<T>::min()},
+        fmt::format(
+            "Cannot cast {} '{}' to DECIMAL(3, 1)",
+            CppToType<T>::name,
+            std::to_string(std::numeric_limits<T>::min())));
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(17, 16),
+        {-100},
+        fmt::format(
+            "Cannot cast {} '-100' to DECIMAL(17, 16)", CppToType<T>::name));
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(17, 16),
+        {100},
+        fmt::format(
+            "Cannot cast {} '100' to DECIMAL(17, 16)", CppToType<T>::name));
+  };
+  testOverflowThrow.operator()<int8_t>();
+  testOverflowThrow.operator()<int16_t>();
+  testOverflowThrow.operator()<int32_t>();
+  testOverflowThrow.operator()<int64_t>();
 }
 
-TEST_F(SparkCastExprTest, smallintToBinary) {
-  testCast<int16_t, std::string>(
-      SMALLINT(),
-      VARBINARY(),
-      {180,
-       -199,
-       0,
-       12300,
-       std::numeric_limits<int16_t>::max(),
-       std::numeric_limits<int16_t>::min()},
-      {std::string("\0\xB4", 2),
-       std::string("\xFF\x39", 2),
-       std::string("\0\0", 2),
-       std::string("\x30\x0C", 2),
-       std::string("\x7F\xFF", 2),
-       std::string("\x80\00", 2)});
+TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testVarcharToDecimal();
+
+  // Under ANSI OFF, the same invalid or overflowing inputs return NULL instead
+  // of throwing.
+
+  // Overflows when parsing whole digits.
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)",
+      {std::string(280, '9')},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 0));
+
+  // Overflows when parsing fractional digits.
+  const std::string fractionOverflow = std::string(36, '9') + '.' + "23456";
+  testCast<std::string, int128_t>(
+      "decimal(38, 10)",
+      {fractionOverflow},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 10));
+
+  const std::string fractionRoundUp = "0." + std::string(38, '9') + "6";
+  testCast<std::string, int128_t>(
+      "decimal(38, 38)",
+      {fractionRoundUp},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 38));
+
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"0.0444a"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {""}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  // Exponent > LongDecimalType::kMaxPrecision.
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"1.23e67"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  // Forcing the scale to be zero overflows.
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)",
+      {"20908.23e35"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 0));
+
+  // Rescale overflows.
+  testCast<std::string, int128_t>(
+      "decimal(38, 38)",
+      {"111111111111111111.23"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 38));
+
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"23e-5d"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+
+  // Interior whitespace stays invalid; leading/trailing cases are valid and
+  // covered in testVarcharToDecimal().
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)", {"1. 23"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E+ 2"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E+2.1"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E+"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"-3E-"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)", {"9e"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
+
+  testCast<std::string, int64_t>(
+      "decimal(12, 2)",
+      {"09{xi+yD"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(12, 2));
 }
 
-TEST_F(SparkCastExprTest, integerToBinary) {
-  testCast<int32_t, std::string>(
-      INTEGER(),
-      VARBINARY(),
-      {18,
-       -26,
-       0,
-       180000,
-       std::numeric_limits<int32_t>::max(),
-       std::numeric_limits<int32_t>::min()},
-      {std::string("\0\0\0\x12", 4),
-       std::string("\xFF\xFF\xFF\xE6", 4),
-       std::string("\0\0\0\0", 4),
-       std::string("\0\x02\xBF\x20", 4),
-       std::string("\x7F\xFF\xFF\xFF", 4),
-       std::string("\x80\0\0\0", 4)});
-}
+TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testIntegralToDecimal<int8_t>();
+  testIntegralToDecimal<int16_t>();
+  testIntegralToDecimal<int32_t>();
+  testIntegralToDecimal<int64_t>();
 
-TEST_F(SparkCastExprTest, bigintToBinary) {
-  testCast<int64_t, std::string>(
-      BIGINT(),
-      VARBINARY(),
-      {123456,
-       -256789,
-       0,
-       180000,
-       std::numeric_limits<int64_t>::max(),
-       std::numeric_limits<int64_t>::min()},
-      {std::string("\0\0\0\0\0\x01\xE2\x40", 8),
-       std::string("\xFF\xFF\xFF\xFF\xFF\xFC\x14\xEB", 8),
-       std::string("\0\0\0\0\0\0\0\0", 8),
-       std::string("\0\0\0\0\0\x02\xBF\x20", 8),
-       std::string("\x7F\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 8),
-       std::string("\x80\x00\x00\x00\x00\x00\x00\x00", 8)});
-}
-
-TEST_F(SparkCastExprTest, boolToTimestamp) {
-  testCast(
-      makeFlatVector<bool>({true, false}),
-      makeFlatVector<Timestamp>({
-          Timestamp(0, 1000),
-          Timestamp(0, 0),
-      }));
-}
-
-TEST_F(SparkCastExprTest, recursiveTryCast) {
-  // Test array elements.
-  testCast(
-      makeArrayVector<StringView>({
-          {"1", "2", "3"},
-          {"4", "a", "6"},
-          {"b", "c", "d"},
-      }),
-      makeNullableArrayVector<int64_t>({
-          {1, 2, 3},
-          {4, std::nullopt, 6},
-          {std::nullopt, std::nullopt, std::nullopt},
-      }));
-
-  // Test map values (Spark doesn't allow casting if the map keys can become
-  // null).
-  testCast(
-      makeMapVectorFromJson<int64_t, std::string>({
-          R"( {1:"1", 2:"2", 3:"3"} )",
-          R"( {1:"4", 2:"a", 3:"6"} )",
-          R"( {1:"b", 2:"c", 3:"d"} )",
-      }),
-      makeMapVectorFromJson<int64_t, int64_t>({
-          "{1:1, 2:2, 3:3}",
-          "{1:4, 2:null, 3:6}",
-          "{1:null, 2:null, 3:null}",
-      }));
-
-  // Test row fields.
-  testCast(
-      makeRowVector(
-          {makeFlatVector<StringView>({"1", "4", "b"}),
-           makeFlatVector<StringView>({"2", "a", "c"}),
-           makeFlatVector<StringView>({"3", "6", "d"})}),
-      makeRowVector(
-          {makeNullableFlatVector<int64_t>({1, 4, std::nullopt}),
-           makeNullableFlatVector<int64_t>({2, std::nullopt, std::nullopt}),
-           makeNullableFlatVector<int64_t>({3, 6, std::nullopt})}));
-
-  // Test nested arrays.
-  testCast(
-      makeNestedArrayVectorFromJson<std::string>({
-          R"( [["1", "2", "3"], ["4", "a", "6"]] )",
-          R"( [["b", "c", "d"], ["x", "7", "z"]] )",
-      }),
-      makeNestedArrayVectorFromJson<int64_t>({
-          "[[1, 2, 3], [4, null, 6]]",
-          "[[null, null, null], [null, 7, null]]",
-      }));
+  // Under ANSI OFF, the same overflowing inputs return NULL instead of
+  // throwing.
+  auto testOverflowNull = [&]<typename T>() {
+    testCast<T, int64_t>(
+        CppToType<T>::create(),
+        DECIMAL(3, 1),
+        {std::numeric_limits<T>::min()},
+        {std::nullopt});
+    testCast<T, int64_t>(
+        CppToType<T>::create(), DECIMAL(17, 16), {-100}, {std::nullopt});
+    testCast<T, int64_t>(
+        CppToType<T>::create(), DECIMAL(17, 16), {100}, {std::nullopt});
+  };
+  testOverflowNull.operator()<int8_t>();
+  testOverflowNull.operator()<int16_t>();
+  testOverflowNull.operator()<int32_t>();
+  testOverflowNull.operator()<int64_t>();
 }
 
 } // namespace

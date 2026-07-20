@@ -20,11 +20,14 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/vector/ComplexVector.h"
@@ -38,17 +41,41 @@ class ArrowDataBufferSink;
 
 struct ArrowContext;
 
+/// Parquet-specific file metadata wrapper. Provides access to the underlying
+/// arrow::FileMetaData.
+class ParquetFileMetadata : public dwio::common::FileMetadata {
+ public:
+  explicit ParquetFileMetadata(std::shared_ptr<arrow::FileMetaData> metadata)
+      : metadata_(std::move(metadata)) {}
+
+  std::shared_ptr<arrow::FileMetaData> arrowMetadata() const {
+    return metadata_;
+  }
+
+ private:
+  std::shared_ptr<arrow::FileMetaData> metadata_;
+};
+
+/// Parquet writer enforces the row-count cap via Arrow, and this policy
+/// supplements it with a byte threshold. For Parquet,
+/// - stripeSizeEstimate: the actual compressed bytes of current row group.
+/// - stripeRowCount: remains 0.
+/// Custom Parquet policies should derive from DefaultFlushPolicy to preserve
+/// this contract.
 class DefaultFlushPolicy : public dwio::common::FlushPolicy {
  public:
   DefaultFlushPolicy()
-      : rowsInRowGroup_(1'024 * 1'024), bytesInRowGroup_(128 * 1'024 * 1'024) {}
+      : rowsInRowGroup_(kDefaultRowsInGroup),
+        bytesInRowGroup_(kDefaultBytesInRowGroup) {}
   DefaultFlushPolicy(uint64_t rowsInRowGroup, int64_t bytesInRowGroup)
       : rowsInRowGroup_(rowsInRowGroup), bytesInRowGroup_(bytesInRowGroup) {}
 
+  static constexpr uint64_t kDefaultRowsInGroup{1'024 * 1'024};
+  static constexpr int64_t kDefaultBytesInRowGroup{128 * 1'024 * 1'024};
+
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
-        stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+    return stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
   }
 
   void onClose() override {
@@ -88,13 +115,13 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
   std::function<bool()> lambda_;
 };
 
-struct WriterOptions : public dwio::common::WriterOptions {
+struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
   double bufferGrowRatio = 1.5;
 
-  arrow::Encoding::type encoding = arrow::Encoding::PLAIN;
+  arrow::Encoding::type encoding = arrow::Encoding::kPlain;
 
   std::shared_ptr<CodecOptions> codecOptions;
   std::unordered_map<std::string, common::CompressionKind>
@@ -111,74 +138,42 @@ struct WriterOptions : public dwio::common::WriterOptions {
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
   std::optional<bool> enableDictionary;
+  /// Controls how DECIMAL values are stored by the Writer.
+  /// - If unset, the Writer defaults to storing as integer (true),
+  /// using INT32/INT64 for short DECIMAL precisions; higher precisions are
+  /// stored as FIXED_LEN_BYTE_ARRAY.
+  /// - If set to false, DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY,
+  /// regardless of precision.
+  std::optional<bool> enableStoreDecimalAsInteger;
   std::optional<bool> useParquetDataPageV2;
   std::optional<std::string> createdBy;
 
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
 
-  // Parsing session and hive configs.
-
-  // This isn't a typo; session and hive connector config names are different
-  // ('_' vs '-').
-  static constexpr const char* kParquetSessionWriteTimestampUnit =
-      "hive.parquet.writer.timestamp_unit";
-  static constexpr const char* kParquetHiveConnectorWriteTimestampUnit =
-      "hive.parquet.writer.timestamp-unit";
-  static constexpr const char* kParquetSessionEnableDictionary =
-      "hive.parquet.writer.enable_dictionary";
-  static constexpr const char* kParquetHiveConnectorEnableDictionary =
-      "hive.parquet.writer.enable-dictionary";
-  static constexpr const char* kParquetSessionDictionaryPageSizeLimit =
-      "hive.parquet.writer.dictionary_page_size_limit";
-  static constexpr const char* kParquetHiveConnectorDictionaryPageSizeLimit =
-      "hive.parquet.writer.dictionary-page-size-limit";
-  static constexpr const char* kParquetSessionDataPageVersion =
-      "hive.parquet.writer.datapage_version";
-  static constexpr const char* kParquetHiveConnectorDataPageVersion =
-      "hive.parquet.writer.datapage-version";
-  static constexpr const char* kParquetSessionWritePageSize =
-      "hive.parquet.writer.page_size";
-  static constexpr const char* kParquetHiveConnectorWritePageSize =
-      "hive.parquet.writer.page-size";
-  static constexpr const char* kParquetSessionWriteBatchSize =
-      "hive.parquet.writer.batch_size";
-  static constexpr const char* kParquetHiveConnectorWriteBatchSize =
-      "hive.parquet.writer.batch-size";
-  static constexpr const char* kParquetHiveConnectorCreatedBy =
-      "hive.parquet.writer.created-by";
-
-  // Serde parameter keys for timestamp settings. These can be set via
-  // serdeParameters map to override the default timestamp behavior.
-  // The timezone key accepts a timezone string or empty string to disable
-  // timezone conversion.
-  static constexpr const char* kParquetSerdeTimestampUnit =
-      "parquet.writer.timestamp.unit";
-  static constexpr const char* kParquetSerdeTimestampTimezone =
-      "parquet.writer.timestamp.timezone";
-
-  // Process hive connector and session configs.
-  void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) override;
+  /// Optional field IDs to assign to columns in the Parquet schema.
+  /// If provided, the writer will use these IDs for the schema fields.
+  /// If not provided, the field_id will be -1.
+  /// The structure should match the schema hierarchy with nested children.
+  std::vector<ParquetFieldId> parquetFieldIds;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
 class Writer : public dwio::common::Writer {
  public:
-  // Constructs a writer with output to 'sink'. A new row group is
-  // started every 'rowsInRowGroup' top level rows. 'pool' is used for
-  // temporary memory. 'properties' specifies Parquet-specific
-  // options. 'schema' specifies the file's overall schema, and it is always
-  // non-null.
+  // Constructs a writer with output to 'sink'. 'options' carries common writer
+  // options and Parquet-specific format options. For Parquet,
+  // 'options.flushPolicyFactory' must create a DefaultFlushPolicy (or a
+  // subclass); 'pool' is used for temporary memory. 'schema' specifies the
+  // file's overall schema, and it is always non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       std::shared_ptr<memory::MemoryPool> pool,
       RowTypePtr schema);
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       RowTypePtr schema);
 
   ~Writer() override = default;
@@ -197,10 +192,11 @@ class Writer : public dwio::common::Writer {
     return true;
   }
 
-  // Closes 'this', After close, data can no longer be added and the completed
+  // Closes 'this'. After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
-  // live until destruction of 'this'.
-  void close() override;
+  // live until destruction of 'this'. Returns file metadata, or null if no
+  // metadata is available (e.g. for an empty file).
+  std::unique_ptr<dwio::common::FileMetadata> close() override;
 
   void abort() override;
 
@@ -223,6 +219,8 @@ class Writer : public dwio::common::Writer {
 
   std::shared_ptr<ArrowContext> arrowContext_;
 
+  std::vector<ParquetFieldId> parquetFieldIds_;
+
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
 
   const RowTypePtr schema_;
@@ -242,6 +240,10 @@ class ParquetWriterFactory : public dwio::common::WriterFactory {
       const std::shared_ptr<dwio::common::WriterOptions>& options) override;
 
   std::unique_ptr<dwio::common::WriterOptions> createWriterOptions() override;
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 } // namespace facebook::velox::parquet

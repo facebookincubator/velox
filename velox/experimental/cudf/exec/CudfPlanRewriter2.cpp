@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter2.h"
 
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 
@@ -253,8 +254,12 @@ class Rewriter {
     if (!tableScan) {
       return false;
     }
-    auto connectorId = tableScan->tableHandle()->connectorId();
-    auto connector = connector::hive::getConnector(connectorId);
+    const auto connectorId = tableScan->tableHandle()->connectorId();
+    auto connector =
+        facebook::velox::connector::ConnectorRegistry::tryGet(connectorId);
+    if (!connector) {
+      return false;
+    }
     return dynamic_cast<facebook::velox::cudf_velox::connector::hive::
                             CudfHiveConnector*>(connector.get()) != nullptr;
   }
@@ -272,15 +277,7 @@ class Rewriter {
   static std::shared_ptr<const core::AggregationNode> cloneAggregationNode(
       const std::shared_ptr<const core::AggregationNode>& node,
       const core::PlanNodePtr& newSource) {
-    return std::make_shared<core::AggregationNode>(
-        node->id(),
-        node->step(),
-        node->groupingKeys(),
-        node->preGroupedKeys(),
-        node->aggregateNames(),
-        node->aggregates(),
-        node->ignoreNullKeys(),
-        newSource);
+    return core::AggregationNode::Builder(*node).source(newSource).build();
   }
 
   static std::shared_ptr<const core::HashJoinNode> cloneHashJoinNode(

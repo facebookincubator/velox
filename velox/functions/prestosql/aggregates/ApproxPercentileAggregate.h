@@ -17,23 +17,12 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::aggregate::prestosql {
 
-enum ApproxPercentileIntermediateTypeChildIndex {
-  kPercentiles = 0,
-  kPercentilesIsArray = 1,
-  kAccuracy = 2,
-  kK = 3,
-  kN = 4,
-  kMinValue = 5,
-  kMaxValue = 6,
-  kItems = 7,
-  kLevels = 8,
-};
-
 void registerApproxPercentileAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);
 

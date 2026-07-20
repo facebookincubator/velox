@@ -26,11 +26,34 @@ velox_add_library(
   StructColumnReader.cpp
   StringColumnReader.cpp
   SemanticVersion.cpp
+  HEADERS
+  BooleanColumnReader.h
+  BooleanDecoder.h
+  DeltaBpDecoder.h
+  DeltaByteArrayDecoder.h
+  FloatingPointColumnReader.h
+  IntegerColumnReader.h
+  Metadata.h
+  NestedStructureDecoder.h
+  PageReader.h
+  ParquetColumnReader.h
+  ParquetData.h
+  ParquetReader.h
+  ParquetStatsContext.h
+  ParquetTypeWithId.h
+  RepeatedColumnReader.h
+  RleBpDataDecoder.h
+  RleBpDecoder.h
+  SemanticVersion.h
+  StringColumnReader.h
+  StringDecoder.h
+  StructColumnReader.h
+  TimeColumnReader.h
+  TimestampColumnReader.h
 )
 
 velox_link_libraries(
   velox_dwio_native_parquet_reader
-  velox_dwio_parquet_thrift
   velox_dwio_parquet_common
   velox_type
   velox_dwio_common
@@ -38,6 +61,5 @@ velox_link_libraries(
   fmt::fmt
   arrow
   Snappy::snappy
-  thrift
   zstd::zstd
 )

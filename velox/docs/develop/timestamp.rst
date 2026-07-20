@@ -139,6 +139,16 @@ generally more efficient, but std::chrono does not handle time zone offsets
 such as ``+09:00``.  Timezone offsets are only supported in the API version
 that takes a timezone ID.
 
+Timezone Database Lookup
+------------------------
+
+Velox uses the IANA Time Zone Database to handle timezone conversions. It looks for the database in the following order:
+
+1. The directory specified by the ``TZDIR`` environment variable.
+2. ``/usr/share/zoneinfo/uclibc`` (on Linux).
+3. ``/usr/share/zoneinfo`` (on Linux).
+4. The path pointed to by ``/etc/localtime`` (on macOS).
+
 Casts
 -----
 

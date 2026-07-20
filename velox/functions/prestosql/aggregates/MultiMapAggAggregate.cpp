@@ -18,7 +18,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
 #include "velox/functions/lib/aggregates/ValueList.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/FlatVector.h"
 
@@ -599,7 +598,7 @@ std::unique_ptr<exec::Aggregate> createMultiMapAggAggregateWithCustomCompare(
 } // namespace
 
 void registerMultiMapAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -612,15 +611,13 @@ void registerMultiMapAggAggregate(
           .argumentType("V")
           .build()};
 
-  auto name = prefix + kMultiMapAgg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         const auto keyType = resultType->childAt(0);
         const auto typeKind = keyType->kind();

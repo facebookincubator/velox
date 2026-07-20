@@ -106,7 +106,6 @@ static ds_key_t date_join(
       genrand_integer(
           &nTemp, DIST_UNIFORM, nMin * 2, nMax * 2, 0, from_col, dsdGenContext);
       return (join_count + nTemp);
-      break;
     case WEB_SITE:
     case WEB_PAGE:
       return (web_join(from_col, join_count, dsdGenContext));

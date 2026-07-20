@@ -18,6 +18,7 @@
 
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -515,6 +516,56 @@ VectorPtr newArray(
       std::move(elements));
 }
 
+VectorPtr newFlatMap(
+    const EncodedVectorCopyOptions& options,
+    const FlatMapVector& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  auto size = newTargetSize(ranges);
+  auto nulls = newNulls(size, options.pool, source.rawNulls(), ranges);
+
+  VectorPtr distinctKeys = BaseVector::create(
+      source.keyType(), source.numDistinctKeys(), options.pool);
+  BaseVector::CopyRange keyRange{0, 0, source.numDistinctKeys()};
+  distinctKeys->copyRanges(source.distinctKeys().get(), {&keyRange, 1});
+
+  std::vector<VectorPtr> mapValues;
+  mapValues.reserve(distinctKeys->size());
+  for (column_index_t i = 0; i < distinctKeys->size(); ++i) {
+    VectorPtr value;
+    // Vector is not empty or non-null
+    if (source.mapValuesAt(i)) {
+      copyImpl(options, source.mapValuesAt(i), ranges, value, false);
+    } else {
+      value = BaseVector::create(source.valueType(), size, options.pool);
+    }
+    mapValues.push_back(std::move(value));
+  }
+
+  std::vector<BufferPtr> inMaps;
+  inMaps.reserve(distinctKeys->size());
+  for (const auto& inMap : source.inMaps()) {
+    if (inMap) {
+      auto newInMap = allocateNulls(size, options.pool);
+      BaseVector::copyNulls(
+          newInMap->asMutable<uint64_t>(), inMap->as<uint64_t>(), ranges);
+      inMaps.push_back(std::move(newInMap));
+    } else {
+      inMaps.push_back(nullptr);
+    }
+  }
+
+  return std::make_shared<FlatMapVector>(
+      options.pool,
+      source.type(),
+      std::move(nulls),
+      size,
+      std::move(distinctKeys),
+      std::move(mapValues),
+      std::move(inMaps),
+      std::nullopt,
+      source.hasSortedKeys());
+}
+
 void copyIntoFlat(
     const EncodedVectorCopyOptions& options,
     const VectorPtr& source,
@@ -571,13 +622,15 @@ void copyIntoConstant(
   VectorPtr alphabet;
   if (decodedSource.isConstantMapping()) {
     fillIndices(1, ranges, rawIndices);
-    alphabet = BaseVector::create(target->type(), 2, options.pool);
+    alphabet =
+        BaseVector::createEmptyLike(decodedTarget.base(), 2, options.pool);
     alphabet->copy(decodedTarget.base(), 0, decodedTarget.index(0), 1);
     alphabet->copy(decodedSource.base(), 1, decodedSource.index(0), 1);
   } else {
     nulls = newNulls(size, options.pool, decodedSource.nulls(), ranges);
     auto baseRanges = toBaseRanges(decodedSource, ranges, 1, rawIndices);
-    alphabet = BaseVector::create(target->type(), 1, options.pool);
+    alphabet =
+        BaseVector::createEmptyLike(decodedTarget.base(), 1, options.pool);
     alphabet->copy(decodedTarget.base(), 0, decodedTarget.index(0), 1);
     copyImpl(options, sourceBase, baseRanges, alphabet, true);
   }
@@ -664,7 +717,7 @@ void copyIntoRow(
       copyImpl(
           options, source.childAt(i), ranges, targetChild, targetChildMutable);
     }
-    targetRow->updateContainsLazyNotLoaded();
+    targetRow->invalidateContainsLazyNotLoaded();
   } else {
     BufferPtr nulls;
     if (target->rawNulls() || sourceNulls) {
@@ -853,6 +906,152 @@ void copyIntoArray(
   }
 }
 
+void copyIntoFlatMapMutable(
+    const EncodedVectorCopyOptions& options,
+    const FlatMapVector& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    VectorPtr& target) {
+  const auto size = targetSize(target->size(), ranges);
+  target->resize(size);
+  target->resetDataDependentFlags(nullptr);
+  setSourceNulls(source.rawNulls(), *target, ranges);
+
+  auto* targetFlatMap = target->asUnchecked<FlatMapVector>();
+  auto startingNumDistinctKeys = targetFlatMap->numDistinctKeys();
+
+  for (column_index_t i = 0; i < source.numDistinctKeys(); ++i) {
+    const auto channel = targetFlatMap->getKeyChannel(source.distinctKeys(), i)
+                             .value_or(targetFlatMap->numDistinctKeys());
+
+    if (channel == targetFlatMap->numDistinctKeys()) {
+      targetFlatMap->appendDistinctKey(source.distinctKeys(), i);
+      targetFlatMap->inMapsAt(channel, true) =
+          AlignedBuffer::allocate<bool>(size, options.pool, false);
+      targetFlatMap->mapValuesAt(channel) = BaseVector::createEmptyLike(
+          source.mapValuesAt(i).get(), size, options.pool);
+    }
+
+    auto& mapValue = targetFlatMap->mapValuesAt(channel);
+    bool childMutable = mapValue.use_count() == 1;
+    copyImpl(options, source.mapValuesAt(i), ranges, mapValue, childMutable);
+    targetFlatMap->copyInMapRanges(channel, source.rawInMapsAt(i), ranges);
+  }
+
+  for (column_index_t i = 0; i < startingNumDistinctKeys; ++i) {
+    if (source.getKeyChannel(targetFlatMap->distinctKeys(), i) ==
+        std::nullopt) {
+      auto& targetInMapsBuffer = targetFlatMap->inMapsAt(i, true);
+      if (targetInMapsBuffer == nullptr) {
+        targetInMapsBuffer =
+            AlignedBuffer::allocate<bool>(size, options.pool, false);
+      }
+      if (targetInMapsBuffer->isView()) {
+        targetInMapsBuffer =
+            AlignedBuffer::copy(options.pool, targetInMapsBuffer);
+      }
+      auto* targetInMaps = targetInMapsBuffer->asMutable<uint64_t>();
+
+      applyToEachRange(
+          ranges, [targetInMaps](auto targetIndex, auto, auto count) {
+            bits::fillBits(
+                targetInMaps, targetIndex, targetIndex + count, false);
+          });
+    }
+  }
+}
+
+void copyIntoFlatMapImmutable(
+    const EncodedVectorCopyOptions& options,
+    const FlatMapVector& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    VectorPtr& target) {
+  const auto size = targetSize(target->size(), ranges);
+  auto* targetFlatMap = target->asUnchecked<FlatMapVector>();
+
+  auto mapValues = targetFlatMap->mapValues();
+  for (auto& mv : mapValues) {
+    if (mv && mv->size() < size) {
+      auto resized = BaseVector::createEmptyLike(mv.get(), size, options.pool);
+      BaseVector::CopyRange copyRange{0, 0, mv->size()};
+      copyImpl(options, mv, {&copyRange, 1}, resized, true);
+      mv = std::move(resized);
+    }
+  }
+  std::vector<BufferPtr> inMaps(targetFlatMap->inMaps().size());
+  for (size_t i = 0; i < targetFlatMap->inMaps().size(); ++i) {
+    if (targetFlatMap->inMaps()[i]) {
+      inMaps[i] = AlignedBuffer::copy(options.pool, targetFlatMap->inMaps()[i]);
+      if (bits::nbytes(size) > inMaps[i]->size()) {
+        AlignedBuffer::reallocate<bool>(&inMaps[i], size, false);
+      }
+    }
+  }
+  auto distinctKeys =
+      BaseVector::copy(*targetFlatMap->distinctKeys(), options.pool);
+
+  BufferPtr nulls;
+  if (target->rawNulls() || source.rawNulls()) {
+    nulls = combineNulls(
+        size,
+        options.pool,
+        target->rawNulls(),
+        target->size(),
+        source.rawNulls(),
+        ranges);
+  }
+
+  target = std::make_shared<FlatMapVector>(
+      options.pool,
+      target->type(),
+      std::move(nulls),
+      size,
+      std::move(distinctKeys),
+      std::move(mapValues),
+      std::move(inMaps));
+  target->resetDataDependentFlags(nullptr);
+  copyIntoFlatMapMutable(options, source, ranges, target);
+}
+
+void copyIntoFlatMap(
+    const EncodedVectorCopyOptions& options,
+    const VectorPtr& source,
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    DecodedVector& decodedSource,
+    const VectorPtr& sourceBase,
+    VectorPtr& target,
+    bool targetMutable) {
+  if (decodedSource.isIdentityMapping()) {
+    auto& flatMapSource = *source->asUnchecked<FlatMapVector>();
+    if (targetMutable) {
+      copyIntoFlatMapMutable(options, flatMapSource, ranges, target);
+    } else {
+      copyIntoFlatMapImmutable(options, flatMapSource, ranges, target);
+    }
+    return;
+  }
+  const auto size = targetSize(target->size(), ranges);
+  BufferPtr nulls;
+  auto indices = allocateIndices(size, options.pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::iota(rawIndices, rawIndices + target->size(), 0);
+  BaseVector::CopyRange baseRange;
+  baseRange.targetIndex = target->size();
+  if (decodedSource.isConstantMapping()) {
+    fillIndices(target->size(), ranges, rawIndices);
+    baseRange.sourceIndex = decodedSource.index(0);
+    baseRange.count = 1;
+  } else {
+    nulls = newNulls(size, options.pool, decodedSource.nulls(), ranges);
+    copyIndices(decodedSource.indices(), ranges, target->size(), rawIndices);
+    baseRange.sourceIndex = 0;
+    baseRange.count = sourceBase->size();
+  }
+  copyImpl(
+      options, sourceBase, folly::Range(&baseRange, 1), target, targetMutable);
+  target = BaseVector::wrapInDictionary(
+      std::move(nulls), std::move(indices), size, target);
+}
+
 void copyIntoComplex(
     const EncodedVectorCopyOptions& options,
     DecodedVector& decodedSource,
@@ -980,11 +1179,26 @@ void copyIntoExisting(
     case VectorEncoding::Simple::FLAT:
       copyIntoFlat(options, source, ranges, target, targetMutable);
       break;
-    case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::MAP:
+      VELOX_CHECK_NE(
+          sourceBase->encoding(),
+          VectorEncoding::Simple::FLAT_MAP,
+          "Cannot copy FlatMapVector into MapVector.");
+      [[fallthrough]];
+    case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
       copyIntoComplex(
           options, decodedSource, sourceBase, ranges, target, targetMutable);
+      break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      copyIntoFlatMap(
+          options,
+          source,
+          ranges,
+          decodedSource,
+          sourceBase,
+          target,
+          targetMutable);
       break;
     case VectorEncoding::Simple::LAZY:
       copyIntoLazy(options, source, ranges, target, targetMutable);
@@ -1003,7 +1217,7 @@ void copyImpl(
     bool targetMutable) {
   if (ranges.empty()) {
     if (!target) {
-      target = BaseVector::create(source->type(), 0, options.pool);
+      target = BaseVector::createEmptyLike(source.get(), 0, options.pool);
     }
     return;
   }
@@ -1045,6 +1259,10 @@ void copyImpl(
       break;
     case VectorEncoding::Simple::ARRAY:
       target = newArray(options, *source->asUnchecked<ArrayVector>(), ranges);
+      break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      target =
+          newFlatMap(options, *source->asUnchecked<FlatMapVector>(), ranges);
       break;
     case VectorEncoding::Simple::LAZY:
       VELOX_CHECK(!sourceBase->isLazy());

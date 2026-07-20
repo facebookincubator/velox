@@ -16,15 +16,15 @@
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Spill.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
-using facebook::velox::exec::test::TempDirectoryPath;
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class HashJoinBridgeTestHelper {
  public:
@@ -44,10 +44,16 @@ class HashJoinBridgeTestHelper {
   HashJoinBridge* const bridge_;
 };
 
+namespace {
 struct TestParam {
   int32_t numProbers{1};
   int32_t numBuilders{1};
 };
+
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << fmt::format(
+      "probers:{}_builders:{}", param.numProbers, param.numBuilders);
+}
 
 class HashJoinBridgeTest : public testing::Test,
                            public testing::WithParamInterface<TestParam> {
@@ -70,7 +76,7 @@ class HashJoinBridgeTest : public testing::Test,
 
   void SetUp() override {
     rng_.seed(1245);
-    tempDir_ = exec::test::TempDirectoryPath::create();
+    tempDir_ = TempDirectoryPath::create();
   }
 
   void TearDown() override {}
@@ -96,7 +102,7 @@ class HashJoinBridgeTest : public testing::Test,
           std::make_unique<VectorHasher>(rowType_->childAt(channel), channel));
     }
     return HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, 1'000, pool_.get());
+        std::move(keyHashers), {}, true, false, false, 1'000, pool_.get());
   }
 
   std::vector<ContinueFuture> createEmptyFutures(int32_t count) {
@@ -728,4 +734,5 @@ TEST(HashJoinBridgeTest, hashJoinTableSpillType) {
     ASSERT_EQ(spillType->names(), testData.expectedTableSpillType->names());
   }
 }
+} // namespace
 } // namespace facebook::velox::exec::test

@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/BigintEnumRegistration.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
@@ -27,17 +28,6 @@ class BigintEnumCastOperator : public exec::CastOperator {
         std::make_shared<const BigintEnumCastOperator>();
 
     return kInstance;
-  }
-
-  // Casting is supported from all integer types.
-  bool isSupportedFromType(const TypePtr& other) const override {
-    return BIGINT()->equivalent(*other) || TINYINT()->equivalent(*other) ||
-        SMALLINT()->equivalent(*other) || INTEGER()->equivalent(*other);
-  }
-
-  // Casting is only supported to BIGINT type.
-  bool isSupportedToType(const TypePtr& other) const override {
-    return BIGINT()->equivalent(*other);
   }
 
   void castTo(
@@ -132,6 +122,13 @@ class BigintEnumTypeFactory : public CustomTypeFactory {
 
 void registerBigintEnumType() {
   registerCustomType(
-      "bigint_enum", std::make_unique<const BigintEnumTypeFactory>());
+      "BIGINT_ENUM", std::make_unique<const BigintEnumTypeFactory>());
+  registerCastRules({
+      {.fromType = "TINYINT", .toType = "BIGINT_ENUM"},
+      {.fromType = "SMALLINT", .toType = "BIGINT_ENUM"},
+      {.fromType = "INTEGER", .toType = "BIGINT_ENUM"},
+      {.fromType = "BIGINT", .toType = "BIGINT_ENUM"},
+      {.fromType = "BIGINT_ENUM", .toType = "BIGINT"},
+  });
 }
 } // namespace facebook::velox

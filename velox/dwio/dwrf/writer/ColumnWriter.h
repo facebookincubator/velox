@@ -192,7 +192,7 @@ class BaseColumnWriter : public ColumnWriter {
           createBooleanRleEncoder(newStream(StreamKind::StreamKind_PRESENT));
     }
     const auto options =
-        StatisticsBuilderOptions::fromConfig(context.getConfigs());
+        StatisticsBuilder::optionsFromConfig(context.getConfigs());
     indexStatsBuilder_ = StatisticsBuilder::create(*type.type(), options);
     fileStatsBuilder_ = StatisticsBuilder::create(*type.type(), options);
   }

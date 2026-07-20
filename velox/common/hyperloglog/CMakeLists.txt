@@ -17,6 +17,12 @@ velox_add_library(
   DenseHll.cpp
   SparseHll.cpp
   Murmur3Hash128.cpp
+  HEADERS
+  BiasCorrection.h
+  DenseHll.h
+  HllUtils.h
+  Murmur3Hash128.h
+  SparseHll.h
 )
 
 velox_link_libraries(velox_common_hyperloglog PUBLIC velox_memory PRIVATE velox_exception)

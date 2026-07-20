@@ -12,7 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_type_fbhive HiveTypeParser.cpp HiveTypeSerializer.cpp)
+velox_add_library(
+  velox_type_fbhive
+  HiveTypeParser.cpp
+  HiveTypeSerializer.cpp
+  HEADERS
+  HiveTypeParser.h
+  HiveTypeSerializer.h
+)
 
 velox_link_libraries(velox_type_fbhive velox_type)
 

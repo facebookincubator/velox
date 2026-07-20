@@ -28,8 +28,14 @@ class TruncateArgTypesGenerator : public fuzzer::ArgTypesGenerator {
       FuzzerGenerator& rng) override {
     // Only the single-arg truncate function is supported because
     // ArgumentTypeFuzzer can generate argument types for the two-arg truncate
-    // function.
-    VELOX_CHECK_EQ(1, signature.argumentTypes().size());
+    // function. Since custom generators are prioritized over
+    // ArgumentTypeFuzzer, this generator is called for both signatures. Return
+    // empty to signal the fuzzer to skip this signature (returning nullptr in
+    // ExpressionFuzzer), allowing the two-arg signature to be handled by
+    // ArgumentTypeFuzzer.
+    if (signature.argumentTypes().size() != 1) {
+      return {};
+    }
     // Generates a decimal type following below formulas:
     // p = max(p1 - s1, 1)
     // s = 0

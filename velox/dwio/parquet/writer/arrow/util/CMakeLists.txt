@@ -21,6 +21,15 @@ velox_add_library(
   CompressionLZ4.cpp
   Hashing.cpp
   Crc32.cpp
+  HEADERS
+  ByteStreamSplitInternal.h
+  Compression.h
+  CompressionInternal.h
+  Crc32.h
+  Hashing.h
+  OverflowUtilInternal.h
+  VisitArrayInline.h
+  safe-math.h
 )
 
 velox_link_libraries(

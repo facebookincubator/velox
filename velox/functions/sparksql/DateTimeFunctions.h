@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -156,8 +157,9 @@ struct UnixTimestampParseFunction {
       const arg_type<Varchar>* /*input*/) {
     auto formatter = detail::getDateTimeFormatter(
         kDefaultFormat_,
-        config.sparkLegacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
-                                          : DateTimeFormatterType::JODA);
+        SparkQueryConfig{config}.legacyDateFormatter()
+            ? DateTimeFormatterType::STRICT_SIMPLE
+            : DateTimeFormatterType::JODA);
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
     setTimezone(config);
@@ -208,7 +210,7 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     if (format != nullptr) {
       auto formatter = detail::getDateTimeFormatter(
           std::string_view(format->data(), format->size()),
@@ -301,7 +303,7 @@ struct FromUnixtimeFunction {
       const core::QueryConfig& config,
       const arg_type<int64_t>* /*unixtime*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
@@ -422,7 +424,7 @@ struct GetTimestampFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = config.sparkLegacyDateFormatter();
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     auto sessionTimezoneName = config.sessionTimezone();
     if (!sessionTimezoneName.empty()) {
       sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
@@ -435,6 +437,7 @@ struct GetTimestampFunction {
       } else {
         invalidFormat_ = true;
       }
+      isConstantTimeFormat_ = true;
     }
   }
 
@@ -780,6 +783,51 @@ struct WeekdayFunction {
 };
 
 template <typename T>
+struct DayNameFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr std::string_view kDayNames[] =
+      {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    // Based on the fact that the Unix epoch is Thursday.
+    auto dayOfWeek = (4 + date) % 7;
+    if (dayOfWeek < 0) {
+      dayOfWeek += 7;
+    }
+    result.append(StringView(kDayNames[dayOfWeek]));
+  }
+};
+
+template <typename T>
+struct MonthNameFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr std::string_view kMonthNames[] = {
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"};
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Date>& date) {
+    const auto tm = getDateTime(date);
+    result.append(kMonthNames[tm.tm_mon]);
+  }
+};
+
+template <typename T>
 struct NextDayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -837,35 +885,61 @@ struct NextDayFunction {
   bool invalidFormat_{false};
 };
 
-template <typename T>
+template <typename T, typename TTimestamp>
 struct HourFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<TTimestamp>* timestamp) {
+    if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      // TIMESTAMP UTC represents a timestamp in UTC, not subject to session
+      // timezone adjustment.
+      this->timeZone_ = nullptr;
+    } else {
+      InitSessionTimezone<T>::initialize(inputTypes, config, timestamp);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
+      const arg_type<TTimestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
   }
 };
 
-template <typename T>
+template <typename T, typename TTimestamp>
 struct MinuteFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<TTimestamp>* timestamp) {
+    if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      // TIMESTAMP UTC represents a timestamp in UTC, not subject to session
+      // timezone adjustment.
+      this->timeZone_ = nullptr;
+    } else {
+      InitSessionTimezone<T>::initialize(inputTypes, config, timestamp);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
+      const arg_type<TTimestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_min;
   }
 };
 
-template <typename T>
+template <typename T, typename TTimestamp>
 struct SecondFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
-      const arg_type<Timestamp>& timestamp) {
+      const arg_type<TTimestamp>& timestamp) {
     result = getDateTime(timestamp, nullptr).tm_sec;
   }
 };
@@ -1049,7 +1123,7 @@ struct TimestampDiffFunction {
   std::optional<DateTimeUnit> unit_ = std::nullopt;
 };
 
-template <typename T>
+template <typename T, typename TTimestamp>
 struct TimestampAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1059,7 +1133,7 @@ struct TimestampAddFunction {
       const core::QueryConfig& config,
       const arg_type<Varchar>* unitString,
       const TInput* /*value*/,
-      const arg_type<Timestamp>* /*timestamp*/) {
+      const arg_type<TTimestamp>* /*timestamp*/) {
     VELOX_USER_CHECK_NOT_NULL(unitString);
     std::string unitStr(*unitString);
     folly::toLowerAscii(unitStr);
@@ -1069,15 +1143,21 @@ struct TimestampAddFunction {
       unit_ = fromDateTimeUnitString(
           *unitString, /*throwIfInvalid=*/true, /*allowMicro=*/true);
     }
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
+      // TIMESTAMP UTC represents a timestamp in UTC, not subject to session
+      // timezone adjustment.
+      sessionTimeZone_ = nullptr;
+    } else {
+      sessionTimeZone_ = getTimeZoneFromConfig(config);
+    }
   }
 
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
-      out_type<Timestamp>& result,
+      out_type<TTimestamp>& result,
       const arg_type<Varchar>& /*unitString*/,
       const TInput value,
-      const arg_type<Timestamp>& timestamp) {
+      const arg_type<TTimestamp>& timestamp) {
     const auto unit = unit_.value();
     result = addToTimestamp(unit, value, timestamp, sessionTimeZone_);
   }
@@ -1141,6 +1221,71 @@ struct MonthsBetweenFunction {
   static constexpr int64_t kRoundingPrecision = 1e8;
   static constexpr int64_t kSecondsInMonth = kSecondsInDay * 31;
   const tz::TimeZone* sessionTimeZone_ = nullptr;
+};
+
+template <typename T>
+struct DateFormatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if (formatString != nullptr) {
+      auto formatter = detail::initializeFormatter(
+          std::string_view(*formatString), legacyFormatter_);
+      if (formatter) {
+        formatter_ = formatter;
+        maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
+      } else {
+        invalidFormat_ = true;
+      }
+      isConstFormat_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& formatString) {
+    if (invalidFormat_) {
+      return false;
+    }
+    if (!isConstFormat_) {
+      auto formatter = detail::initializeFormatter(
+          std::string_view(formatString), legacyFormatter_);
+      if (!formatter) {
+        return false;
+      }
+      formatter_ = formatter;
+      maxResultSize_ = formatter_->maxResultSize(sessionTimeZone_);
+    }
+
+    format(timestamp, sessionTimeZone_, maxResultSize_, result);
+    return true;
+  }
+
+ private:
+  FOLLY_ALWAYS_INLINE void format(
+      const Timestamp& timestamp,
+      const tz::TimeZone* timeZone,
+      uint32_t maxResultSize,
+      out_type<Varchar>& result) const {
+    result.reserve(maxResultSize);
+    const auto resultSize =
+        formatter_->format(timestamp, timeZone, maxResultSize, result.data());
+    result.resize(resultSize);
+  }
+
+  const tz::TimeZone* sessionTimeZone_{nullptr};
+  std::shared_ptr<DateTimeFormatter> formatter_;
+  bool isConstFormat_{false};
+  bool legacyFormatter_{false};
+  bool invalidFormat_{false};
+  uint32_t maxResultSize_;
 };
 
 } // namespace facebook::velox::functions::sparksql

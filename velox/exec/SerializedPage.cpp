@@ -15,6 +15,8 @@
  */
 #include "velox/exec/SerializedPage.h"
 
+#include <utility>
+
 namespace facebook::velox::exec {
 
 PrestoSerializedPage::PrestoSerializedPage(
@@ -24,7 +26,7 @@ PrestoSerializedPage::PrestoSerializedPage(
     : iobuf_(std::move(iobuf)),
       iobufBytes_(chainBytes(*iobuf_.get())),
       numRows_(numRows),
-      onDestructionCb_(onDestructionCb) {
+      onDestructionCb_(std::move(onDestructionCb)) {
   VELOX_CHECK_NOT_NULL(iobuf_);
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();

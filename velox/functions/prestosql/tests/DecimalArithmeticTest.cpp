@@ -42,6 +42,24 @@ class DecimalArithmeticTest : public FunctionBaseTest {
     testOpDictVectors<EvalType>(expression, expected, input);
   }
 
+  // Returns a tester lambda that takes an InputType and an EvalType and which
+  // can be called to test the expression with specific input and expected
+  // output values. Currently only used by floorAndCeil test.
+  // See Issue #16464 for details.
+  template <typename InputType, TypeKind K>
+  std::function<void(InputType, typename TypeTraits<K>::NativeType)>
+  makeDecimalExprTester(
+      const TypePtr& inType,
+      const TypePtr& outType,
+      const std::string& exprStr) {
+    using EvalType = typename TypeTraits<K>::NativeType;
+    return [this, inType, outType, exprStr](InputType input, EvalType out) {
+      auto v = makeFlatVector<InputType>({input}, inType);
+      testDecimalExpr<K>(
+          makeFlatVector<EvalType>({out}, outType), exprStr, {v});
+    };
+  }
+
   template <typename T>
   void testOpDictVectors(
       const std::string& operation,
@@ -565,76 +583,173 @@ TEST_F(DecimalArithmeticTest, roundN) {
           DECIMAL(19, 5))});
 }
 
-TEST_F(DecimalArithmeticTest, floor) {
-  // short DECIMAL -> short DECIMAL.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, -1, 0, -1, 0, -1, 0, -1}, DECIMAL(2, 0))},
-      "floor(c0)",
-      {makeFlatVector<int64_t>(
-          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(3, 2))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {123, -123, 123, -124, 123, -124, 123, -124, 123, -124, 123, -124},
-          DECIMAL(4, 0))},
-      "floor(c0)",
-      {makeFlatVector<int64_t>(
-          {12300,
-           -12300,
-           12301,
-           -12301,
-           12345,
-           -12345,
-           12349,
-           -12349,
-           12350,
-           -12350,
-           12399,
-           -12399},
-          DECIMAL(5, 2))});
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(18, 0))},
-      "floor(c0)",
-      {makeFlatVector<int64_t>(
-          {DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMin},
-          DECIMAL(18, 0))});
+// Proposed new style for all these tests (and perhaps the SparkSQL equivalents)
+// tests to make them more readable and maintainable. A helper function was
+// added to the test class which returns a lambda which is then called to test
+// the expression with specific input and expected output values.
+// @TODO: Refactor other tests to use this style for clarity. See Issue #16464.
 
-  // long DECIMAL -> long DECIMAL.
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {0, 0, -1, 0, -1, 0, -1, 0, -1}, DECIMAL(19, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {0, 1, -1, 49, -49, 50, -50, 99, -99}, DECIMAL(20, 2))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kPowersOfTen[33] - 1, -DecimalUtil::kPowersOfTen[33]},
-          DECIMAL(34, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 5))});
-  testDecimalExpr<TypeKind::HUGEINT>(
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMin},
-          DECIMAL(38, 0))});
+TEST_F(DecimalArithmeticTest, floorAndCeil) {
+  // Short DECIMAL(3,2) -> Short DECIMAL(2.0).
+  // e.g. floor(0.49) = 0, floor(-0.49) = -1, ceil(0.49) = 1, ceil(-0.49) = 0
+  {
+    const auto inType = DECIMAL(3, 2);
+    const auto outType = DECIMAL(2, 0);
+    auto testFloor = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(0, 0);
+    testFloor(1, 0);
+    testFloor(-1, -1);
+    testFloor(49, 0);
+    testFloor(-49, -1);
+    testFloor(50, 0);
+    testFloor(-50, -1);
+    testFloor(99, 0);
+    testFloor(-99, -1);
+    testCeil(0, 0);
+    testCeil(1, 1);
+    testCeil(-1, 0);
+    testCeil(49, 1);
+    testCeil(-49, 0);
+    testCeil(50, 1);
+    testCeil(-50, 0);
+    testCeil(99, 1);
+    testCeil(-99, 0);
+  }
 
-  // long DECIMAL -> short DECIMAL.
-  testDecimalExpr<TypeKind::BIGINT>(
-      {makeFlatVector<int64_t>({0, 0, -1, -1, 0}, DECIMAL(1, 0))},
-      "floor(c0)",
-      {makeFlatVector<int128_t>(
-          {1234567890123456789,
-           5000000000000000000,
-           -9000000000000000000,
-           -1000000000000000000,
-           0},
-          DECIMAL(19, 19))});
+  // Short DECIMAL(5,2) -> Short DECIMAL(4,0).
+  // e.g. floor(123.45) = 123, floor(-123.45) = -124, ceil(123.45) = 124,
+  // ceil(-123.45) = -123
+  {
+    const auto inType = DECIMAL(5, 2);
+    const auto outType = DECIMAL(4, 0);
+    auto testFloor = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(12300, 123);
+    testFloor(-12300, -123);
+    testFloor(12301, 123);
+    testFloor(-12301, -124);
+    testFloor(12345, 123);
+    testFloor(-12345, -124);
+    testFloor(12349, 123);
+    testFloor(-12349, -124);
+    testFloor(12350, 123);
+    testFloor(-12350, -124);
+    testFloor(12399, 123);
+    testFloor(-12399, -124);
+    testCeil(12300, 123);
+    testCeil(-12300, -123);
+    testCeil(12301, 124);
+    testCeil(-12301, -123);
+    testCeil(12345, 124);
+    testCeil(-12345, -123);
+    testCeil(12349, 124);
+    testCeil(-12349, -123);
+    testCeil(12350, 124);
+    testCeil(-12350, -123);
+    testCeil(12399, 124);
+    testCeil(-12399, -123);
+  }
+
+  // Short DECIMAL(18,0) -> Short DECIMAL(18,0).
+  // Min and max are unchanged if there are no fractional digits.
+  {
+    const auto inType = DECIMAL(18, 0);
+    const auto outType = DECIMAL(18, 0);
+    auto testFloor = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int64_t, TypeKind::BIGINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMax);
+    testFloor(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMin);
+    testCeil(DecimalUtil::kShortDecimalMax, DecimalUtil::kShortDecimalMax);
+    testCeil(DecimalUtil::kShortDecimalMin, DecimalUtil::kShortDecimalMin);
+  }
+
+  // Long DECIMAL(20,2) -> Long DECIMAL(19,0).
+  // e.g. floor(0.49) = 0, floor(-0.49) = -1, ceil(0.49) = 1, ceil(-0.49) = 0
+  {
+    const auto inType = DECIMAL(20, 2);
+    const auto outType = DECIMAL(19, 0);
+    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(0, 0);
+    testFloor(1, 0);
+    testFloor(-1, -1);
+    testFloor(49, 0);
+    testFloor(-49, -1);
+    testFloor(50, 0);
+    testFloor(-50, -1);
+    testFloor(99, 0);
+    testFloor(-99, -1);
+    testCeil(0, 0);
+    testCeil(1, 1);
+    testCeil(-1, 0);
+    testCeil(49, 1);
+    testCeil(-49, 0);
+    testCeil(50, 1);
+    testCeil(-50, 0);
+    testCeil(99, 1);
+    testCeil(-99, 0);
+  }
+
+  // Long DECIMAL(38,5) -> Long DECIMAL(34,0).
+  // Min and max are rounded to the nearest whole number within the range of the
+  // output type.
+  {
+    const auto inType = DECIMAL(38, 5);
+    const auto outType = DECIMAL(34, 0);
+    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(DecimalUtil::kLongDecimalMax, DecimalUtil::kPowersOfTen[33] - 1);
+    testFloor(DecimalUtil::kLongDecimalMin, -DecimalUtil::kPowersOfTen[33]);
+    testCeil(DecimalUtil::kLongDecimalMax, DecimalUtil::kPowersOfTen[33]);
+    testCeil(DecimalUtil::kLongDecimalMin, -DecimalUtil::kPowersOfTen[33] + 1);
+  }
+
+  // Long DECIMAL(38,0) -> Long DECIMAL(38,0).
+  // Min and max are unchanged if there are no fractional digits.
+  {
+    const auto inType = DECIMAL(38, 0);
+    const auto outType = DECIMAL(38, 0);
+    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::HUGEINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax);
+    testFloor(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
+    testCeil(DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax);
+    testCeil(DecimalUtil::kLongDecimalMin, DecimalUtil::kLongDecimalMin);
+  }
+
+  // Long DECIMAL(19,19) -> Short DECIMAL(1,0).
+  // e.g. floor(0.1234567890123456789) = 0, ceil(0.1234567890123456789) = 1
+  {
+    const auto inType = DECIMAL(19, 19);
+    const auto outType = DECIMAL(1, 0);
+    auto testFloor = makeDecimalExprTester<int128_t, TypeKind::BIGINT>(
+        inType, outType, "floor(c0)");
+    auto testCeil = makeDecimalExprTester<int128_t, TypeKind::BIGINT>(
+        inType, outType, "ceil(c0)");
+    testFloor(int128_t{1234567890123456789}, 0);
+    testFloor(int128_t{5000000000000000000}, 0);
+    testFloor(int128_t{-9000000000000000000}, -1);
+    testFloor(int128_t{-1000000000000000000}, -1);
+    testFloor(int128_t{0}, 0);
+    testCeil(int128_t{1234567890123456789}, 1);
+    testCeil(int128_t{5000000000000000000}, 1);
+    testCeil(int128_t{-9000000000000000000}, 0);
+    testCeil(int128_t{-1000000000000000000}, 0);
+    testCeil(int128_t{0}, 0);
+  }
 }
 
 TEST_F(DecimalArithmeticTest, truncate) {

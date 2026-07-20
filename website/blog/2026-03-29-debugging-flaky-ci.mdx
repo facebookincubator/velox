@@ -1,0 +1,221 @@
+---
+slug: debugging-flaky-ci-across-repos
+title: "From flaky Axiom CI to a Velox bug fix: a cross-repo debugging story"
+authors: [mbasmanova]
+tags: [tech-blog, debugging]
+---
+
+## TL;DR
+
+When adding macOS CI to [Axiom](https://github.com/facebookincubator/axiom),
+set operation tests kept failing intermittently — but only in macOS debug CI.
+Linux CI (debug and release) passed consistently. Local runs always passed.
+The root cause turned out to be a bug in
+[Velox](https://github.com/facebookincubator/velox) — a dependency managed as
+a Git submodule. This post describes the process of debugging a CI-only failure
+when the bug lives in a different repository.
+
+<!-- truncate -->
+
+## The problem
+
+[Axiom](https://github.com/facebookincubator/axiom) is a set of open-source
+composable libraries for building SQL and dataframe processing front ends on
+top of [Velox](https://github.com/facebookincubator/velox). It integrates
+Velox as a Git submodule.
+
+After adding macOS CI builds ([#1168](https://github.com/facebookincubator/axiom/pull/1168)),
+we couldn't get the test suite to pass reliably.
+Various set operation tests (`SqlTest.set_*`) failed intermittently in macOS
+debug CI — different tests on different runs, all involving EXCEPT ALL or
+INTERSECT ALL. Linux debug and release CI passed consistently. Running the same
+tests locally — same build type, same data, same configuration — always passed.
+
+## Why CI-only failures are hard to debug
+
+The obvious approach — reproduce locally, attach a debugger, step through the
+code — doesn't work. You are limited to CI runs, and each run takes about 10
+minutes end-to-end: push the change, wait for CI to pick it up, build
+(~8 minutes even with ccache), run tests, check results. That's 3-4 iterations
+per hour at best. Every CI run has to be designed to extract maximum signal.
+
+## Step 1: Make CI runs count
+
+The first change was to restructure CI to focus on the problem:
+
+- **Disable unrelated builds.** Linux debug, Linux release, and macOS release
+  were all passing. Disabling them reduced the CI cycle time.
+- **Run only `SqlTest.set_*` tests 5 times.** The tests were flaky — sometimes
+  passing, sometimes failing. Running just the set operation tests (not the
+  full suite) 5 times increased the chances of triggering the failure together
+  with the debug logging while keeping the run fast. Without this, a CI run
+  could pass by luck, wasting 10 minutes with no useful signal.
+- **Run the full test suite after.** The 5x set-test loop ran first. If it
+  passed, the full suite ran to check for regressions.
+
+## Step 2: Iterate on Velox changes using Axiom CI
+
+The failing tests all involved EXCEPT ALL and INTERSECT ALL queries. Axiom's
+SQL parser and optimizer translate these into Velox execution plans using
+*counting joins* — a Velox-specific join type that, unlike regular semi/anti
+joins that check whether a key exists, tracks how many times each key appears
+on the build side. Since the implementation lives in Velox, the bug had to be
+there too.
+
+But the tests were in Axiom. Axiom uses Velox as a Git submodule pointing to a
+specific commit on `facebookincubator/velox`. To add debug logging to Velox and
+test it in Axiom CI, we needed Axiom to build from a modified Velox.
+
+The key insight is that you don't have to land changes to Velox first. You can
+point Axiom's submodule at a fork branch and let CI validate end-to-end.
+
+The workflow:
+
+1. **Fork Velox and push changes to a branch.** Create a branch on your fork
+   (e.g., `mbasmanova/velox`) with the debug logging or fix.
+2. **Point Axiom's submodule at the fork.** Two changes are needed:
+   - Update `.gitmodules` to use the fork URL:
+     ```
+     [submodule "velox"]
+         path = velox
+         url = https://github.com/mbasmanova/velox.git
+     ```
+   - Update the submodule to the desired commit:
+     ```bash
+     git -C velox checkout <commit>
+     git add velox .gitmodules
+     ```
+3. **Push and let CI build.** Axiom CI checks out submodules recursively, so
+   it picks up the modified Velox automatically.
+
+One subtlety: the Velox PR and the Axiom submodule both pushed to branches on
+the same fork (`mbasmanova/velox`). Initially we used the same branch name for
+both, which caused force-pushes from one repo to overwrite the other. The fix
+was to use separate branches — `fix-counting-join-merge` for the Velox PR and
+`fix-counting-join-merge-axiom` for the Axiom submodule.
+
+## Step 3: Form a hypothesis, then add targeted logging
+
+With limited CI iterations, random logging is wasteful. Each round of logging
+must be designed to prove or disprove one or more hypotheses.
+
+The hypothesis was:
+
+> When multiple build drivers process overlapping keys, each driver builds its
+> own hash table with per-key counts. When these tables are merged, duplicate
+> keys are dropped without summing their counts.
+
+To test this, we added logging at three points in the counting join lifecycle,
+logging full input/output data per driver including the driver ID:
+
+1. **Build input** — log each batch of rows received by each build driver.
+2. **Probe input** — log each batch of probe rows.
+3. **Probe output** — log the rows emitted by each probe driver.
+
+By comparing build inputs across drivers (to see which keys each driver
+processed) with probe outputs (to see the final results), we could determine
+whether the merged hash table had correct per-key counts.
+
+Before pushing to CI, we ran the tests locally. The bug didn't reproduce
+locally, but the logging code paths still executed. This validated that the log
+output was readable, the format was correct, and the information needed to
+confirm or reject the hypothesis would be present.
+
+One CI run with this logging confirmed the hypothesis: multiple build drivers
+processed overlapping keys, but the probe output showed counts as if only one
+driver's keys were present — the merge had dropped duplicate key counts.
+
+## Step 4: The fix
+
+The actual bug was straightforward once identified. Velox's `HashTable` has
+three code paths for inserting rows during hash table merge:
+
+- `arrayPushRow` for array-based hash mode (small key domains)
+- `buildFullProbe` with normalized-key comparison (medium key domains)
+- `buildFullProbe` with full key comparison (complex types)
+
+All three paths handled duplicate keys correctly for regular joins (linking
+rows via a "next" pointer), but for counting joins (which use a count instead
+of a next pointer), duplicates were silently dropped.
+
+The fix adds an `addCount` method to sum counts when a duplicate key is found
+during merge. Since Axiom's build does not compile Velox tests, we built Velox
+standalone to develop and run the test.
+
+Designing a test that exercises all three code paths was non-trivial. The hash
+table mode is chosen automatically based on key types, number of distinct
+values, and value ranges. Our first test attempts only hit array mode because
+the key domain was small. We had to study the mode selection logic in
+`decideHashMode()` to find key configurations that force each mode. This
+analysis was time-consuming enough that we
+[documented the hash modes](https://facebookincubator.github.io/velox/develop/hash-table.html)
+([#16953](https://github.com/facebookincubator/velox/pull/16953)) to spare
+other developers the same exercise. The key configurations we found:
+
+- Small integers `{1, 2}` → array mode
+- Two integer columns with 1500 distinct values each (combined cardinality
+  exceeds the 2M array threshold) → normalized-key mode
+- `ARRAY(INTEGER)` keys (complex types don't support value IDs) → hash mode
+
+We verified each variant independently by reverting the fix for one code path
+at a time and confirming the test failed.
+
+## Step 5: Landing the fix
+
+With the fix validated in Axiom CI, we created two PRs:
+
+- **Velox PR** ([#16949](https://github.com/facebookincubator/velox/pull/16949)):
+  The fix, test, documentation updates, and a new `hashtable.hashMode` runtime
+  stat.
+- **Axiom PR** ([#1175](https://github.com/facebookincubator/axiom/pull/1175)):
+  Update the Velox submodule and stop skipping set operation tests in macOS
+  debug CI (they were excluded via `GTEST_FILTER="-SqlTest.set_*"` as a
+  workaround).
+
+After the Velox PR merges, the Axiom submodule will be updated to point back to
+`facebookincubator/velox`.
+
+## Why only macOS debug?
+
+Honestly, we don't fully know.
+
+The bug requires splits with overlapping keys to land on different build
+drivers. The test uses 4 drivers and 3 data splits (one per input vector).
+Velox assigns splits to drivers on demand — whichever driver is ready first
+grabs the next split. If all splits happen to be processed by the same driver,
+there is no merge and no bug.
+
+Note that this is not a race condition. Given the same split-to-driver
+assignment, the result is deterministic and reproducibly wrong. The
+non-determinism is purely in which driver grabs which split, which depends on
+thread scheduling.
+
+What we can't explain is why macOS debug CI triggers this while the same macOS
+debug build locally does not. Same OS, same build type, same compiler, same
+test data, same number of drivers. Yet the thread scheduling differs enough
+to change split distribution. Differences in CPU, load, or runtime environment
+on the CI runner may play a role.
+
+If you have insights into what could cause such a difference in thread
+scheduling between local and CI macOS environments, please comment on
+[axiom#1170](https://github.com/facebookincubator/axiom/issues/1170).
+
+## Takeaways
+
+- **Don't dismiss "flaky" tests.** A test that sometimes passes and sometimes
+  fails is not necessarily a bad test. In this case, the test was correct — the
+  production code was buggy. The flakiness was the only signal that something
+  was wrong. We initially excluded the set tests via `GTEST_FILTER` to land the
+  macOS CI work, but came back to investigate right away. Leaving them disabled
+  would have hidden a real bug in Velox affecting all users of EXCEPT ALL and
+  INTERSECT ALL.
+- **Design each CI run for maximum signal.** When you get 3-4 iterations per
+  hour, you can't afford exploratory logging. Form a hypothesis first, design
+  logging to confirm or reject it, validate the logging locally, then push.
+- **Run flaky tests multiple times.** Not to distinguish flaky from broken, but
+  to ensure you reliably trigger the failure together with your debug logging
+  in a single CI run.
+- **Use downstream CI to iterate on dependency fixes.** When a bug lives in a
+  dependency, you can debug and validate fixes without landing anything. Point
+  the submodule at a fork branch and let downstream CI run end-to-end. See
+  Step 2 above for details.

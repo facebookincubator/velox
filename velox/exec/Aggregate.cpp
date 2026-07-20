@@ -19,7 +19,7 @@
 #include <unordered_map>
 #include "velox/exec/AggregateCompanionAdapter.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
-#include "velox/exec/AggregateWindow.h"
+#include "velox/exec/window/AggregateWindow.h"
 
 namespace facebook::velox::exec {
 
@@ -86,7 +86,7 @@ AggregateRegistrationResult registerAggregateFunction(
   // If the aggregate is not a companion function, also register it as a window
   // function.
   if (!metadata.companionFunction) {
-    registerAggregateWindowFunction(sanitizedName);
+    window::registerAggregateWindowFunction(sanitizedName);
   }
 
   // Register companion function if needed.
@@ -138,6 +138,7 @@ std::vector<AggregateRegistrationResult> registerAggregateFunction(
     bool registerCompanionFunctions,
     bool overwrite) {
   auto size = names.size();
+  VELOX_CHECK_NE(size, 0, "Aggregate function registered without a name.");
   std::vector<AggregateRegistrationResult> registrationResults{size};
   for (int i = 0; i < size; ++i) {
     registrationResults[i] = registerAggregateFunction(

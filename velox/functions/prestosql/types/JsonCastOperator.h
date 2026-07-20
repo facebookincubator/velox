@@ -23,10 +23,6 @@ namespace facebook::velox {
 /// Custom operator for casts from and to Json type.
 class JsonCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override;
-
-  bool isSupportedToType(const TypePtr& other) const override;
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,

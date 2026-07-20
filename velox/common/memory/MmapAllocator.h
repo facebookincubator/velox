@@ -51,37 +51,6 @@ using ClassPageCount = int32_t;
 /// malloc.
 class MmapAllocator : public MemoryAllocator {
  public:
-  struct Options {
-    ///  Capacity in bytes, default unlimited.
-    uint64_t capacity{kMaxMemory};
-
-    int32_t largestSizeClass{256};
-
-    /// If set true, allocations larger than largest size class size will be
-    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
-    /// issued for each such allocation.
-    bool useMmapArena = false;
-
-    /// Used to determine MmapArena capacity. The ratio represents system memory
-    /// capacity to single MmapArena capacity ratio.
-    int32_t mmapArenaCapacityRatio = 10;
-
-    /// If not zero, reserve 'smallAllocationReservePct'% of space from
-    /// 'capacity' for ad hoc small allocations. And those allocations are
-    /// delegated to std::malloc.
-    ///
-    /// NOTE: if 'maxMallocBytes' is 0, this value will be disregarded.
-    uint32_t smallAllocationReservePct = 0;
-
-    /// The allocation threshold less than which an allocation is delegated to
-    /// std::malloc().
-    ///
-    /// NOTE: if it is zero, then we don't delegate any allocation std::malloc,
-    /// and 'smallAllocationReservePct' will be automatically set to 0
-    /// disregarding any passed in value.
-    int32_t maxMallocBytes = 3072;
-  };
-
   explicit MmapAllocator(const Options& options);
 
   ~MmapAllocator();
@@ -174,6 +143,16 @@ class MmapAllocator : public MemoryAllocator {
 
     MachinePageCount unitSize() const {
       return unitSize_;
+    }
+
+    // Start of the mmap'd region backing this size class.
+    uint8_t* address() const {
+      return address_;
+    }
+
+    // Byte size of the mmap'd region backing this size class.
+    size_t byteSize() const {
+      return byteSize_;
     }
 
     // Allocates 'numPages' from 'this' and appends these to *out.
@@ -347,8 +326,7 @@ class MmapAllocator : public MemoryAllocator {
   // track sizes and enforce caps etc. If 'alignment' is not kMinAlignment,
   // then 'bytes' must be a multiple of 'alignment'.
   //
-  // NOTE: 'alignment' must be power of two and in range of [kMinAlignment,
-  // kMaxAlignment].
+  // NOTE: 'alignment' must be power of two and >= kMinAlignment.
   void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
   // Ensures that there are at least 'newMappedNeeded' pages that are
@@ -378,6 +356,9 @@ class MmapAllocator : public MemoryAllocator {
   // delegated to ManagedMmapArena. Otherwise, a system mmap call will be
   // issued for each such allocation.
   const bool useMmapArena_;
+
+  // See Options::onMap. Null if unset.
+  const std::function<void(void* address, size_t bytes)> onMap_;
 
   // Serializes moving capacity between size classes
   std::mutex sizeClassBalanceMutex_;

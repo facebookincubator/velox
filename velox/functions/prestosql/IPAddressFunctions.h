@@ -69,7 +69,8 @@ struct IPPrefixFunction {
       out_type<IPPrefix>& result,
       const arg_type<Varchar>& ipString,
       const arg_type<int64_t>& prefixBits) {
-    auto tryIp = folly::IPAddress::tryFromString(ipString);
+    // TODO: Remove explicit std::string_view cast.
+    auto tryIp = folly::IPAddress::tryFromString(std::string_view(ipString));
     if (tryIp.hasError()) {
       VELOX_USER_FAIL("Cannot cast value to IPADDRESS: {}", ipString);
     }
@@ -332,7 +333,7 @@ struct IPPrefixCollapseFunction {
       VELOX_USER_CHECK(
           prefixLength >= 0 && prefixLength <= ipVersionMaxBits,
           fmt::format(
-              "Recieved invalid ipprefix:{} prefix length: {}",
+              "Received invalid ipprefix:{} prefix length: {}",
               firstIpAddress,
               prefixLength));
 
@@ -601,6 +602,40 @@ struct IsPrivateIPFunction {
   }
 };
 
+template <typename T>
+struct IPVersionFromIPAddressFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<IPAddress>& ip) {
+    result = isIPv4(*ip) ? 4 : 6;
+  }
+};
+
+template <typename T>
+struct IPVersionFromIPPrefixFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<IPPrefix>& ipPrefix) {
+    result = isIPv4(*ipPrefix.template at<0>()) ? 4 : 6;
+  }
+};
+
+template <typename T>
+struct IPPrefixMaskLenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<IPPrefix>& ipPrefix) {
+    result =
+        static_cast<int64_t>(static_cast<uint8_t>(*ipPrefix.template at<1>()));
+  }
+};
+
 void registerIPAddressFunctions(const std::string& prefix) {
   registerIPAddressType();
   registerIPPrefixType();
@@ -624,6 +659,12 @@ void registerIPAddressFunctions(const std::string& prefix) {
       {prefix + "ip_prefix_subnets"});
   registerFunction<IsPrivateIPFunction, bool, IPAddress>(
       {prefix + "is_private_ip"});
+  registerFunction<IPVersionFromIPAddressFunction, int64_t, IPAddress>(
+      {prefix + "ip_version"});
+  registerFunction<IPVersionFromIPPrefixFunction, int64_t, IPPrefix>(
+      {prefix + "ip_version"});
+  registerFunction<IPPrefixMaskLenFunction, int64_t, IPPrefix>(
+      {prefix + "ip_prefix_masklen"});
 }
 
 } // namespace facebook::velox::functions

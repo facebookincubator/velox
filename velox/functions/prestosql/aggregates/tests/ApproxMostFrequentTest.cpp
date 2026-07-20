@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -179,6 +181,121 @@ TEST_F(ApproxMostFrequentTestStringView, stringLifeCycle) {
   });
   testReadFromFiles(
       {rows, rows}, {}, {"approx_most_frequent(3, c0, 31)"}, {expected});
+}
+
+TEST_F(ApproxMostFrequentTestStringView, globalAggregationWithCompaction) {
+  // Test setup: 1024 unique strings of 1MB each = 1GB total input.
+  // With capacity=100, only 100 strings are kept at any time, so without
+  // compaction, ~924 dead strings accumulate in memory.
+  constexpr int kNumStrings = 1024;
+  constexpr int kCapacity = 100;
+  constexpr size_t kStringLen = 1 << 20; // 1MB
+  constexpr size_t kTotalInputBytes = kNumStrings * kStringLen; // 1GB
+  constexpr size_t kActiveBytes = kCapacity * kStringLen; // 100MB
+
+  // Use a smaller compaction threshold for testing.
+  constexpr uint64_t kCompactionBytes = 256UL << 20; // 256MB
+  constexpr uint64_t kMemoryLimit = 512UL << 20; // 512MB
+
+  std::vector<std::string> strings;
+  strings.reserve(kNumStrings);
+  for (int i = 0; i < kNumStrings; ++i) {
+    auto& s = strings.emplace_back(kStringLen, 'a' + (i % 26));
+    auto indexStr = folly::to<std::string>(i);
+    s.replace(kStringLen - indexStr.size(), indexStr.size(), indexStr);
+  }
+
+  auto values = makeFlatVector<StringView>(
+      kNumStrings, [&](auto row) { return StringView(strings[row]); });
+  auto rows = makeRowVector({values});
+
+  auto plan =
+      exec::test::PlanBuilder()
+          .values({rows})
+          .partialAggregation(
+              {}, {fmt::format("approx_most_frequent(10, c0, {})", kCapacity)})
+          .planNode();
+
+  struct TestSettings {
+    std::string name;
+    std::string compactionBytesConfig;
+    uint64_t memoryLimit;
+    bool expectOOM;
+    std::function<void(uint64_t)> validatePeakMemory;
+
+    std::string debugString() const {
+      return fmt::format(
+          "name: {}, compactionBytesConfig: {}, memoryLimit: {}, expectOOM: {}",
+          name,
+          compactionBytesConfig,
+          memoryLimit,
+          expectOOM);
+    }
+  };
+
+  std::vector<TestSettings> testSettings = {
+      {
+          "compaction-enabled",
+          folly::to<std::string>(kCompactionBytes),
+          kMemoryLimit,
+          false,
+          [=](uint64_t peakMemory) {
+            ASSERT_LT(peakMemory, kCompactionBytes + 2 * kActiveBytes)
+                << "With compaction enabled, peak memory should be bounded near "
+                   "compaction threshold plus active bytes";
+          },
+      },
+      {
+          "oom-without-compaction",
+          "0",
+          kMemoryLimit,
+          true,
+          nullptr,
+      },
+      {
+          "compaction-disabled-large-memory",
+          "0",
+          2UL << 30,
+          false,
+          [=](uint64_t peakMemory) {
+            // Without compaction, peak memory should exceed total input size.
+            ASSERT_GT(peakMemory, kTotalInputBytes)
+                << "Without compaction, peak memory should exceed total input "
+                   "size due to dead string accumulation";
+          },
+      },
+  };
+
+  for (const auto& testSetting : testSettings) {
+    SCOPED_TRACE(testSetting.debugString());
+
+    auto queryPool = memory::memoryManager()->addRootPool(
+        testSetting.name,
+        testSetting.memoryLimit,
+        exec::MemoryReclaimer::create());
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+
+    exec::test::AssertQueryBuilder queryBuilder(plan);
+    queryBuilder.queryCtx(queryCtx);
+    if (!testSetting.compactionBytesConfig.empty()) {
+      queryBuilder.config(
+          core::QueryConfig::kAggregationCompactionBytesThreshold,
+          testSetting.compactionBytesConfig);
+    }
+
+    if (testSetting.expectOOM) {
+      VELOX_ASSERT_THROW(
+          queryBuilder.copyResults(pool()), "Exceeded memory pool capacity");
+    } else {
+      auto result = queryBuilder.copyResults(pool());
+      ASSERT_EQ(result->size(), 1);
+      ASSERT_FALSE(result->isNullAt(0));
+
+      auto peakMemory = queryCtx->pool()->peakBytes();
+      testSetting.validatePeakMemory(peakMemory);
+    }
+  }
 }
 
 class ApproxMostFrequentTestBoolean : public AggregationTestBase {

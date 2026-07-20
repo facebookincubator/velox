@@ -132,6 +132,14 @@ template <>
     return ::duckdb::Value::INTERVAL(0, days, microseconds);
   }
 
+  if (type->isTime()) {
+    VELOX_DCHECK(type->equivalent(*TIME()));
+    // TIME is stored as milliseconds since midnight in Velox.
+    // DuckDB TIME is stored as microseconds since midnight.
+    const auto timeMillis = vector->as<SimpleVector<int64_t>>()->valueAt(index);
+    return ::duckdb::Value::TIME(::duckdb::dtime_t(timeMillis * 1000L));
+  }
+
   return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
@@ -278,7 +286,8 @@ variant variantAt<TypeKind::VARBINARY>(
     int32_t row,
     int32_t column) {
   return variant::binary(
-      StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
+      std::string(
+          ::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
 }
 
 template <>
@@ -323,7 +332,7 @@ variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
 
 template <>
 variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
-  return variant::binary(StringView(::duckdb::StringValue::Get(value)));
+  return variant::binary(std::string(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {
@@ -447,6 +456,13 @@ std::vector<MaterializedRow> materialize(
         auto value = variant(
             ::duckdb::Date::EpochDays(
                 dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
+        row.push_back(value);
+      } else if (type->isTime()) {
+        VELOX_DCHECK(type->equivalent(*TIME()));
+        // DuckDB TIME is in microseconds, Velox TIME is in milliseconds.
+        auto value = variant(
+            dataChunk->GetValue(j, i).GetValue<::duckdb::dtime_t>().micros /
+            1000L);
         row.push_back(value);
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -824,6 +840,13 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
   return rows;
 }
 
+::duckdb::DuckDB& DuckDbQueryRunner::database() {
+  if (db_ == nullptr) {
+    db_ = std::make_shared<::duckdb::DuckDB>(nullptr);
+  }
+  return *db_;
+}
+
 void DuckDbQueryRunner::createTable(
     const std::string& name,
     const std::vector<RowVectorPtr>& data) {
@@ -831,7 +854,7 @@ void DuckDbQueryRunner::createTable(
   execute(query);
 
   auto& rowType = data[0]->type()->as<TypeKind::ROW>();
-  ::duckdb::Connection con(db_);
+  ::duckdb::Connection con(database());
   auto sql = duckdb::makeCreateTableSql(name, rowType);
   auto res = con.Query(sql);
   verifyDuckDBResult(res, sql);
@@ -872,7 +895,7 @@ void DuckDbQueryRunner::createTable(
 }
 
 DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
-  ::duckdb::Connection con(db_);
+  ::duckdb::Connection con(database());
   // Changing the default null order of NULLS FIRST used by DuckDB. Velox uses
   // NULLS LAST.
   con.Query("PRAGMA default_null_order='NULLS LAST'");
@@ -1346,12 +1369,31 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(TaskCursor*)> addSplits,
     uint64_t maxWaitMicros) {
+  return readCursorAsync(
+      params,
+      [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
+        addSplitsVoid(cursor);
+        return ContinueFuture::makeEmpty();
+      },
+      maxWaitMicros);
+}
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursorAsync(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
   auto cursor = TaskCursor::create(params);
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
+  cursor->start();
+  auto future = ContinueFuture::makeEmpty();
   while (!cursor->noMoreSplits()) {
-    addSplits(cursor.get());
+    if (future.valid()) {
+      future.wait();
+    }
+    future = addSplits(cursor.get());
     while (cursor->moveNext()) {
       auto vector = cursor->current();
       vector->loadedVector();

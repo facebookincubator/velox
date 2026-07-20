@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include <string_view>
 #include <vector>
 #include "velox/core/ITypedExpr.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/type/TypeCoercer.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -191,12 +193,27 @@ TypePtr resolveVectorFunction(
 TypePtr resolveVectorFunctionWithCoercions(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes,
-    std::vector<TypePtr>& coercions);
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
 resolveVectorFunctionWithMetadata(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
+
+/// Like 'resolveVectorFunctionWithMetadata', but with support for applying type
+/// coercions if no signature matches 'argTypes' exactly.
+///
+/// @param coercions A list of optional type coercions that were applied to
+/// resolve the function successfully. Contains one entry per argument. The
+/// entry is null if no coercion is required for that argument. The entry is not
+/// null if coercion is necessary.
+std::optional<std::pair<TypePtr, VectorFunctionMetadata>>
+resolveVectorFunctionWithMetadataWithCoercions(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer);
 
 /// Returns an instance of VectorFunction for the given name, input types and
 /// optionally constant input values.
@@ -222,7 +239,7 @@ getVectorFunctionWithMetadata(
 /// expressions.
 /// Returns true iff an new function is inserted
 bool registerVectorFunction(
-    const std::string& name,
+    std::string_view name,
     std::vector<FunctionSignaturePtr> signatures,
     std::unique_ptr<VectorFunction> func,
     VectorFunctionMetadata metadata = {},
@@ -274,7 +291,7 @@ VectorFunctionFactory makeVectorFunctionFactory() {
 // name is replaced.
 // Returns true iff the function was inserted
 bool registerStatefulVectorFunction(
-    const std::string& name,
+    std::string_view name,
     std::vector<FunctionSignaturePtr> signatures,
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata = {},
@@ -287,36 +304,36 @@ bool registerStatefulVectorFunction(
 
 // Declares a vectorized UDF function given a tag. Goes into the UDF .cpp file.
 #define VELOX_DECLARE_VECTOR_FUNCTION(tag, signatures, function) \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string& name) { \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) {   \
     facebook::velox::exec::registerVectorFunction(               \
         (name), (signatures), (function));                       \
   }
 
-#define VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(             \
-    tag, signatures, metadata, function)                         \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string& name) { \
-    facebook::velox::exec::registerVectorFunction(               \
-        (name), (signatures), (function), (metadata));           \
+#define VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(           \
+    tag, signatures, metadata, function)                       \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) { \
+    facebook::velox::exec::registerVectorFunction(             \
+        (name), (signatures), (function), (metadata));         \
   }
 
 // Declares a stateful vectorized UDF.
 #define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(tag, signatures, function) \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string& name) {          \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) {            \
     facebook::velox::exec::registerStatefulVectorFunction(                \
         (name), (signatures), (function));                                \
   }
 
-#define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(    \
-    tag, signatures, metadata, function)                         \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string& name) { \
-    facebook::velox::exec::registerStatefulVectorFunction(       \
-        (name), (signatures), (function), (metadata));           \
+#define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(  \
+    tag, signatures, metadata, function)                       \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) { \
+    facebook::velox::exec::registerStatefulVectorFunction(     \
+        (name), (signatures), (function), (metadata));         \
   }
 
 // Registers a vectorized UDF associated with a given tag.
 // This should be used in the same namespace the declare macro is used in.
-#define VELOX_REGISTER_VECTOR_FUNCTION(tag, name)                   \
-  {                                                                 \
-    extern void _VELOX_REGISTER_FUNC_NAME(tag)(const std::string&); \
-    _VELOX_REGISTER_FUNC_NAME(tag)(name);                           \
+#define VELOX_REGISTER_VECTOR_FUNCTION(tag, name)                 \
+  {                                                               \
+    extern void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view); \
+    _VELOX_REGISTER_FUNC_NAME(tag)(name);                         \
   }

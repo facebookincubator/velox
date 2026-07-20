@@ -93,6 +93,17 @@ RowTypePtr concat(const RowTypePtr& a, const RowTypePtr& b);
 /// TODO Investigate mismatches reported when comparing Varbinary.
 bool containsUnsupportedTypes(const TypePtr& type);
 
+/// Checks if a type contains IPADDRESS in any container position (array
+/// element, map key, or map value) at any nesting level. Returns false for
+/// bare IPADDRESS or IPADDRESS directly in a ROW field.
+///
+/// Presto's Int128ArrayBlock doesn't implement compareTo(), which causes
+/// failures when IPADDRESS appears in containers that require element-level
+/// comparison (arrays, map keys, map values).
+///
+/// See: https://github.com/prestodb/presto/issues/26836
+bool containsIPAddress(const TypePtr& type);
+
 /// Determines whether the signature has an argument that contains typeName.
 /// typeName should be in lower case.
 bool usesInputTypeName(

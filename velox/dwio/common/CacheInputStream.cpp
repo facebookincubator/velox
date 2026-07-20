@@ -16,7 +16,6 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
-#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -35,14 +34,14 @@ CacheInputStream::CacheInputStream(
     const Region& region,
     std::shared_ptr<ReadFileInputStream> input,
     uint64_t fileNum,
-    bool noCacheRetention,
+    bool cacheable,
     std::shared_ptr<ScanTracker> tracker,
     TrackingId trackingId,
     uint64_t groupId,
     int32_t loadQuantum)
     : bufferedInput_(bufferedInput),
       cache_(bufferedInput_->cache()),
-      noCacheRetention_(noCacheRetention),
+      cacheable_(cacheable),
       region_(region),
       fileNum_(fileNum),
       tracker_(std::move(tracker)),
@@ -53,12 +52,18 @@ CacheInputStream::CacheInputStream(
       input_(std::move(input)) {}
 
 CacheInputStream::~CacheInputStream() {
+  if (preloaded_) {
+    // Preloaded streams hold a shared pin copy. Just release it; eviction of
+    // the preloaded entry is handled by CachedBufferedInput destructor based
+    // on cacheable_ flag.
+    return;
+  }
   clearCachePin();
   makeCacheEvictable();
 }
 
 void CacheInputStream::makeCacheEvictable() {
-  if (!noCacheRetention_) {
+  if (preloaded_ || cacheable_) {
     return;
   }
   // Walks through the potential prefetch or access cache space of this cache
@@ -97,7 +102,7 @@ bool CacheInputStream::Next(const void** buffer, int32_t* size) {
   }
   offsetInRun_ += *size;
 
-  if (prefetchPct_ < 100) {
+  if (!preloaded_ && prefetchPct_ < 100) {
     const auto offsetInQuantum = position_ % loadQuantum_;
     const auto nextQuantumOffset = position_ - offsetInQuantum + loadQuantum_;
     const auto prefetchThreshold = loadQuantum_ * prefetchPct_ / 100;
@@ -170,31 +175,7 @@ void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
   window_ = Region{static_cast<uint64_t>(position_), remainingBytes};
 }
 
-namespace {
-std::vector<folly::Range<char*>> makeRanges(
-    cache::AsyncDataCacheEntry* entry,
-    size_t length) {
-  std::vector<folly::Range<char*>> buffers;
-  if (entry->tinyData() == nullptr) {
-    auto& allocation = entry->data();
-    buffers.reserve(allocation.numRuns());
-    uint64_t offsetInRuns = 0;
-    for (int i = 0; i < allocation.numRuns(); ++i) {
-      auto run = allocation.runAt(i);
-      uint64_t bytes = run.numPages() * memory::AllocationTraits::kPageSize;
-      uint64_t readSize = std::min(bytes, length - offsetInRuns);
-      buffers.push_back(folly::Range<char*>(run.data<char>(), readSize));
-      offsetInRuns += readSize;
-    }
-  } else {
-    buffers.push_back(folly::Range<char*>(entry->tinyData(), entry->size()));
-  }
-  return buffers;
-}
-} // namespace
-
 void CacheInputStream::loadSync(const Region& region) {
-  process::TraceContext trace("loadSync");
   int64_t hitSize = region.length;
   if (window_.has_value()) {
     const int64_t regionEnd = region.offset + region.length;
@@ -211,21 +192,27 @@ void CacheInputStream::loadSync(const Region& region) {
   // the individual parts are hit.
   ioStats_->incRawBytesRead(hitSize);
   prefetchStarted_ = false;
+
+  // TODO: add a maximum retry limit or timeout to prevent infinite loops under
+  // memory pressure or contention if findOrCreate() consistently returns empty
+  // pins.
   do {
     folly::SemiFuture<bool> cacheLoadWait(false);
     cache::RawFileCacheKey key{fileNum_, region.offset};
     clearCachePin();
-    pin_ = cache_->findOrCreate(key, region.length, &cacheLoadWait);
+    pin_ = cache_->findOrCreate(
+        key, region.length, /*contiguous=*/false, &cacheLoadWait);
     if (pin_.empty()) {
       VELOX_CHECK(cacheLoadWait.valid());
       uint64_t waitUs{0};
       {
-        MicrosecondTimer timer(&waitUs);
+        MicrosecondWallTimer timer(&waitUs);
         std::move(cacheLoadWait)
             .via(&folly::QueuedImmediateExecutor::instance())
             .wait();
       }
-      ioStats_->queryThreadIoLatency().increment(waitUs);
+      ioStats_->queryThreadIoLatencyUs().increment(waitUs);
+      ioStats_->cacheWaitLatencyUs().increment(waitUs);
       continue;
     }
 
@@ -245,24 +232,25 @@ void CacheInputStream::loadSync(const Region& region) {
     if (loadFromSsd(region, *entry)) {
       return;
     }
-    const auto ranges = makeRanges(entry, region.length);
+    const auto ranges = entry->dataRanges(region.length);
     uint64_t storageReadUs{0};
     {
-      MicrosecondTimer timer(&storageReadUs);
+      MicrosecondWallTimer timer(&storageReadUs);
       input_->read(ranges, region.offset, LogType::FILE);
     }
     ioStats_->read().increment(region.length);
-    ioStats_->queryThreadIoLatency().increment(storageReadUs);
-    ioStats_->incTotalScanTime(storageReadUs * 1'000);
-    entry->setExclusiveToShared(!noCacheRetention_);
+    ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
+    ioStats_->storageReadLatencyUs().increment(storageReadUs);
+    ioStats_->incTotalScanTimeNs(storageReadUs * 1'000);
+    entry->setExclusiveToShared(cacheable_);
   } while (pin_.empty());
 }
 
 void CacheInputStream::clearCachePin() {
-  if (pin_.empty()) {
+  if (preloaded_ || pin_.empty()) {
     return;
   }
-  if (noCacheRetention_) {
+  if (!cacheable_) {
     pin_.checkedEntry()->makeEvictable();
   }
   pin_.clear();
@@ -298,11 +286,11 @@ bool CacheInputStream::loadFromSsd(
   std::vector<cache::CachePin> pins;
   pins.push_back(std::move(pin_));
   try {
-    MicrosecondTimer timer(&ssdLoadUs);
+    MicrosecondWallTimer timer(&ssdLoadUs);
     file.load(ssdPins, pins);
   } catch (const std::exception& e) {
     LOG(ERROR) << "IOERR: Failed SSD loadSync " << entry.toString() << ' '
-               << e.what() << process::TraceContext::statusLine()
+               << e.what()
                << fmt::format(
                       "stream region {} {}b, start of load {} file {}",
                       region_.offset,
@@ -318,7 +306,8 @@ bool CacheInputStream::loadFromSsd(
   VELOX_CHECK(pin_.empty());
   pin_ = std::move(pins[0]);
   ioStats_->ssdRead().increment(region.length);
-  ioStats_->queryThreadIoLatency().increment(ssdLoadUs);
+  ioStats_->queryThreadIoLatencyUs().increment(ssdLoadUs);
+  ioStats_->ssdCacheReadLatencyUs().increment(ssdLoadUs);
   // Skip no-cache retention setting as data is loaded from ssd.
   entry.setExclusiveToShared();
   return true;
@@ -334,24 +323,31 @@ std::string CacheInputStream::ssdFileName() const {
 
 void CacheInputStream::loadPosition() {
   const auto offset = region_.offset;
+
   if (pin_.empty()) {
+    VELOX_CHECK(!preloaded_, "Preloaded stream must always have a valid pin");
     auto load = bufferedInput_->coalescedLoad(this);
     if (load != nullptr) {
       folly::SemiFuture<bool> waitFuture(false);
       uint64_t loadUs{0};
       {
-        MicrosecondTimer timer(&loadUs);
+        MicrosecondWallTimer timer(&loadUs);
         try {
-          if (!load->loadOrFuture(&waitFuture, !noCacheRetention_)) {
+          if (!load->loadOrFuture(&waitFuture, cacheable_)) {
             waitFuture.wait();
           }
         } catch (const std::exception& e) {
-          // Log the error and continue. The error, if it persists, will be hit
-          // again in looking up the specific entry and thrown from there.
+          // Log the error and continue. The error, if it persists, will be
+          // hit again in looking up the specific entry and thrown from there.
           LOG(ERROR) << "IOERR: error in coalesced load " << e.what();
         }
       }
-      ioStats_->queryThreadIoLatency().increment(loadUs);
+      ioStats_->queryThreadIoLatencyUs().increment(loadUs);
+      if (load->isSsdLoad()) {
+        ioStats_->coalescedSsdLoadLatencyUs().increment(loadUs);
+      } else {
+        ioStats_->coalescedStorageLoadLatencyUs().increment(loadUs);
+      }
     }
 
     const auto nextLoadRegion = nextQuantizedLoadRegion(position_);
@@ -366,15 +362,16 @@ void CacheInputStream::loadPosition() {
       entry->offset() + entry->size() > positionInFile) {
     // The position is inside the range of 'entry'.
     const auto offsetInEntry = positionInFile - entry->offset();
-    if (entry->data().numPages() == 0) {
-      run_ = reinterpret_cast<uint8_t*>(entry->tinyData());
+    if (entry->hasContiguousData()) {
+      run_ = reinterpret_cast<uint8_t*>(entry->contiguousData());
       runSize_ = entry->size();
       offsetInRun_ = offsetInEntry;
       offsetOfRun_ = 0;
     } else {
-      entry->data().findRun(offsetInEntry, &runIndex_, &offsetInRun_);
+      entry->nonContiguousData().findRun(
+          offsetInEntry, &runIndex_, &offsetInRun_);
       offsetOfRun_ = offsetInEntry - offsetInRun_;
-      const auto run = entry->data().runAt(runIndex_);
+      const auto run = entry->nonContiguousData().runAt(runIndex_);
       run_ = run.data();
       runSize_ = memory::AllocationTraits::pageBytes(run.numPages());
       if (offsetOfRun_ + runSize_ > entry->size()) {
@@ -382,6 +379,14 @@ void CacheInputStream::loadPosition() {
       }
     }
   } else {
+    // Position is out of range for the current entry. This cannot happen for
+    // preloaded entries since they cover the entire file.
+    VELOX_CHECK(
+        !preloaded_,
+        "Position {} out of range for preloaded entry [{}, {})",
+        positionInFile,
+        entry->offset(),
+        entry->offset() + entry->size());
     clearCachePin();
     loadPosition();
   }

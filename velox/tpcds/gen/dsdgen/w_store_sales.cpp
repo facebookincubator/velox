@@ -54,14 +54,12 @@ W_STORE_SALES_TBL* mk_master_store_sales(
     ds_key_t index,
     DSDGenContext& dsdGenContext) {
   decimal_t dMin, dMax;
-  int nMaxItemCount;
   struct W_STORE_SALES_TBL* r;
   r = &dsdGenContext.g_w_store_sales;
 
   if (!dsdGenContext.mk_master_store_sales_init) {
     strtodec(&dMin, "1.00");
     strtodec(&dMax, "100000.00");
-    nMaxItemCount = 20;
     dsdGenContext.pStoreSalesItemPermutation = makePermutation(
         dsdGenContext.nStoreSalesItemCount =
             static_cast<int>(getIDCount(ITEM, dsdGenContext)),

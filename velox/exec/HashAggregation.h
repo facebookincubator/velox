@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/Operator.h"
 
@@ -22,6 +24,18 @@ namespace facebook::velox::exec {
 
 class HashAggregation : public Operator {
  public:
+  /// Runtime stat keys for hash aggregation.
+  /// Number of rows flushed in partial aggregation output.
+  static constexpr std::string_view kFlushRowCount = "flushRowCount";
+  /// Number of partial aggregation flush operations.
+  static constexpr std::string_view kFlushTimes = "flushTimes";
+  /// Ratio of output to input rows in partial aggregation as a percentage.
+  static constexpr std::string_view kPartialAggregationPct =
+      "partialAggregationPct";
+  /// Number of rows emitted after partial aggregation was abandoned.
+  static constexpr std::string_view kAbandonedPartialAggregationRows =
+      "abandonedPartialAggregationRows";
+
   HashAggregation(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -37,13 +51,22 @@ class HashAggregation : public Operator {
     return !noMoreInput_ && !partialFull_;
   }
 
+  bool startDrain() override;
+
+  void finishDrain() override;
+
   void noMoreInput() override;
 
-  BlockingReason isBlocked(ContinueFuture* /* unused */) override {
-    return BlockingReason::kNotBlocked;
-  }
+  BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
+
+  /// HashAggregation can reclaim memory via lightweight compaction even when
+  /// spilling is not enabled.
+  bool canReclaim() const override {
+    return (memoryCompactionEnabled_ && hasCompactableAggregates_) ||
+        canSpill();
+  }
 
   void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
       override;
@@ -84,11 +107,28 @@ class HashAggregation : public Operator {
 
   void updateEstimatedOutputRowSize();
 
+  // Returns whether this driver should emit the default global grouping set
+  // rows.
+  bool shouldEmitDefaultGlobalGroupingSetRows();
+
+  // Barrier across peers. True only on the elected last driver when input is
+  // globally empty; false when parked on 'future_' or input is non-empty.
+  bool electDefaultGlobalGroupingSetDriver();
+
+  // Returns the default global grouping set rows for the () set.
+  RowVectorPtr getDefaultGlobalGroupingSetOutput();
+
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const bool isPartialOutput_;
   const bool isGlobal_;
   const bool isDistinct_;
+  // True for raw-input steps (kSingle/kPartial).
+  const bool isRawInput_;
+  // True when the aggregation has a global grouping set: the empty () set that
+  // yields one grand-total row over all input.
+  const bool hasGlobalGroupingSets_;
+  const bool memoryCompactionEnabled_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
   // Minimum number of rows to see before deciding to give up on partial
   // aggregation.
@@ -99,6 +139,11 @@ class HashAggregation : public Operator {
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;
+
+  // Cached from groupingSet_->hasCompactableAggregates() during initialize().
+  // Stored separately to allow safe access from the arbitration thread without
+  // dereferencing groupingSet_.
+  bool hasCompactableAggregates_{false};
 
   // Size of a single output row estimated using
   // 'groupingSet_->estimateRowSize()'. If spilling, this value is set to max
@@ -124,6 +169,14 @@ class HashAggregation : public Operator {
 
   // Possibly reusable output vector.
   RowVectorPtr output_;
+
+  // Set in noMoreInput() to park a non-last driver for the peer election;
+  // consumed by the next isBlocked().
+  ContinueFuture future_{ContinueFuture::makeEmpty()};
+
+  // Set only on the single elected driver when the input is globally empty;
+  // that driver emits the default () grouping-set rows.
+  bool emitDefaultGlobalGroupingSetRows_{false};
 };
 
 } // namespace facebook::velox::exec

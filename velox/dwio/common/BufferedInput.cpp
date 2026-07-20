@@ -27,6 +27,42 @@ using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
 
+CachedRegion::CachedRegion(cache::CachePin pin) : pin_(std::move(pin)) {
+  VELOX_CHECK(!pin_.empty(), "CachedRegion requires a non-empty cache pin");
+  auto* entry = pin_.checkedEntry();
+  VELOX_CHECK(
+      !entry->isExclusive(),
+      "CachedRegion requires a shared (non-exclusive) cache pin");
+  size_ = entry->size();
+  if (entry->hasContiguousData()) {
+    ranges_.push_back(
+        folly::Range<const char*>(entry->contiguousData(), size_));
+  } else {
+    auto& allocation = entry->nonContiguousData();
+    ranges_.reserve(allocation.numRuns());
+    uint64_t offset{0};
+    for (int i = 0; i < allocation.numRuns() && offset < size_; ++i) {
+      auto run = allocation.runAt(i);
+      const uint64_t bytes =
+          run.numPages() * memory::AllocationTraits::kPageSize;
+      const uint64_t readSize = std::min(bytes, size_ - offset);
+      ranges_.emplace_back(run.data<const char>(), readSize);
+      offset += readSize;
+    }
+  }
+}
+
+folly::IOBuf CachedRegion::toIOBuf() const {
+  VELOX_CHECK(!ranges_.empty());
+  auto iobuf =
+      folly::IOBuf::wrapBufferAsValue(ranges_[0].data(), ranges_[0].size());
+  for (size_t i = 1; i < ranges_.size(); ++i) {
+    iobuf.appendToChain(
+        folly::IOBuf::wrapBuffer(ranges_[i].data(), ranges_[i].size()));
+  }
+  return iobuf;
+}
+
 static_assert(std::is_move_constructible<BufferedInput>());
 
 namespace {
@@ -42,6 +78,14 @@ uint64_t BufferedInput::nextFetchSize() const {
       regions_.cbegin(), regions_.cend(), 0L, [](uint64_t a, const Region& b) {
         return a + b.length;
       });
+}
+
+void BufferedInput::reset() {
+  regions_.clear();
+  offsets_.clear();
+  buffers_.clear();
+  enqueuedToBufferOffset_.clear();
+  allocPool_->clear();
 }
 
 void BufferedInput::load(const LogType logType) {
@@ -82,14 +126,15 @@ void BufferedInput::readToBuffer(
     uint64_t offset,
     folly::Range<char*> allocated,
     const LogType logType) {
-  uint64_t usec = 0;
+  uint64_t storageReadTimeUs = 0;
   {
-    MicrosecondTimer timer(&usec);
+    MicrosecondWallTimer timer(&storageReadTimeUs);
     input_->read(allocated.data(), allocated.size(), offset, logType);
   }
   if (auto* stats = input_->getStats()) {
     stats->read().increment(allocated.size());
-    stats->queryThreadIoLatency().increment(usec);
+    stats->queryThreadIoLatencyUs().increment(storageReadTimeUs);
+    stats->storageReadLatencyUs().increment(storageReadTimeUs);
   }
 }
 
@@ -114,8 +159,9 @@ std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
       // help faster lookup using enqueuedToBufferOffset_ later.
       [region, this, i = regions_.size() - 1]() {
         auto result = readInternal(region.offset, region.length, i);
-        VELOX_CHECK(
-            std::get<1>(result) != MAX_UINT64,
+        VELOX_CHECK_NE(
+            std::get<1>(result),
+            MAX_UINT64,
             "Fail to read region offset={} length={}",
             region.offset,
             region.length);
@@ -191,12 +237,15 @@ void BufferedInput::mergeRegions() {
 bool BufferedInput::tryMerge(Region& first, const Region& second) {
   VELOX_CHECK_GE(second.offset, first.offset, "regions should be sorted.");
   const int64_t gap = second.offset - first.offset - first.length;
-
   // Duplicate regions (extension==0) is the only case allowed to merge for
   // useVRead()
   const int64_t extension = gap + second.length;
   if (useVRead()) {
     return extension == 0;
+  }
+
+  if (gap > 0 && input_->getStats() != nullptr) {
+    input_->getStats()->readGap().increment(gap);
   }
 
   // compare with 0 since it's comparison in different types

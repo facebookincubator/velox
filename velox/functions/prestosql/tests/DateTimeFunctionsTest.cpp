@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#define XXH_INLINE_ALL
-#include <xxhash.h>
+#include "velox/common/base/XxHashInline.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/tzdb/zoned_time.h"
@@ -3815,7 +3814,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezone) {
           TimestampWithTimezone(1'598'373'010'123, "America/Los_Angeles")));
 
   // Test if calculations are being performed in correct zone. Presto behavior
-  // is to use the zone of the first parameter. Note that that this UTC interval
+  // is to use the zone of the first parameter. Note that this UTC interval
   // (a, b) crosses a daylight savings boundary in PST when PST loses one hour.
   // So whenever the calculation is performed in PST, the interval is
   // effectively smaller than 24h and returns zero.
@@ -4249,29 +4248,19 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   for (int i = 0; i < 31; i++) {
     std::string date("2022-08-" + std::to_string(i + 1));
     EXPECT_EQ(
-        std::to_string(i % 7 + 1),
-        formatDatetime(parseTimestamp(StringView{date}), "e"));
+        std::to_string(i % 7 + 1), formatDatetime(parseTimestamp(date), "e"));
   }
   EXPECT_EQ("000001", formatDatetime(parseTimestamp("2022-08-01"), "eeeeee"));
 
   // Day of week text - 'E'
   for (int i = 0; i < 31; i++) {
     std::string date("2022-08-" + std::to_string(i + 1));
+    EXPECT_EQ(daysShort[i % 7], formatDatetime(parseTimestamp(date), "E"));
+    EXPECT_EQ(daysShort[i % 7], formatDatetime(parseTimestamp(date), "EE"));
+    EXPECT_EQ(daysShort[i % 7], formatDatetime(parseTimestamp(date), "EEE"));
+    EXPECT_EQ(daysLong[i % 7], formatDatetime(parseTimestamp(date), "EEEE"));
     EXPECT_EQ(
-        daysShort[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "E"));
-    EXPECT_EQ(
-        daysShort[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EE"));
-    EXPECT_EQ(
-        daysShort[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EEE"));
-    EXPECT_EQ(
-        daysLong[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EEEE"));
-    EXPECT_EQ(
-        daysLong[i % 7],
-        formatDatetime(parseTimestamp(StringView{date}), "EEEEEEEE"));
+        daysLong[i % 7], formatDatetime(parseTimestamp(date), "EEEEEEEE"));
   }
 
   // Year test cases - 'y'
@@ -4309,21 +4298,11 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   for (int i = 0; i < 12; i++) {
     auto month = i + 1;
     std::string date("2022-" + std::to_string(month) + "-01");
-    EXPECT_EQ(
-        std::to_string(month),
-        formatDatetime(parseTimestamp(StringView{date}), "M"));
-    EXPECT_EQ(
-        padNumber(month),
-        formatDatetime(parseTimestamp(StringView{date}), "MM"));
-    EXPECT_EQ(
-        monthsShort[i],
-        formatDatetime(parseTimestamp(StringView{date}), "MMM"));
-    EXPECT_EQ(
-        monthsLong[i],
-        formatDatetime(parseTimestamp(StringView{date}), "MMMM"));
-    EXPECT_EQ(
-        monthsLong[i],
-        formatDatetime(parseTimestamp(StringView{date}), "MMMMMMMM"));
+    EXPECT_EQ(std::to_string(month), formatDatetime(parseTimestamp(date), "M"));
+    EXPECT_EQ(padNumber(month), formatDatetime(parseTimestamp(date), "MM"));
+    EXPECT_EQ(monthsShort[i], formatDatetime(parseTimestamp(date), "MMM"));
+    EXPECT_EQ(monthsLong[i], formatDatetime(parseTimestamp(date), "MMMM"));
+    EXPECT_EQ(monthsLong[i], formatDatetime(parseTimestamp(date), "MMMMMMMM"));
   }
 
   // Day of month test cases - 'd'
@@ -4756,11 +4735,9 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   for (int i = 0; i < 8; i++) {
     std::string date("1996-01-0" + std::to_string(i + 1));
     // Full length name.
-    EXPECT_EQ(
-        daysLong[i % 7], dateFormat(parseTimestamp(StringView{date}), "%W"));
+    EXPECT_EQ(daysLong[i % 7], dateFormat(parseTimestamp(date), "%W"));
     // Abbreviated name.
-    EXPECT_EQ(
-        daysShort[i % 7], dateFormat(parseTimestamp(StringView{date}), "%a"));
+    EXPECT_EQ(daysShort[i % 7], dateFormat(parseTimestamp(date), "%a"));
   }
 
   // Month cases.
@@ -4769,23 +4746,19 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
     std::string monthNum = std::to_string(i + 1);
 
     // Full length name.
-    EXPECT_EQ(
-        monthsLong[i % 12], dateFormat(parseTimestamp(StringView{date}), "%M"));
+    EXPECT_EQ(monthsLong[i % 12], dateFormat(parseTimestamp(date), "%M"));
 
     // Abbreviated name.
-    EXPECT_EQ(
-        monthsShort[i % 12],
-        dateFormat(parseTimestamp(StringView{date}), "%b"));
+    EXPECT_EQ(monthsShort[i % 12], dateFormat(parseTimestamp(date), "%b"));
 
     // Numeric.
-    EXPECT_EQ(monthNum, dateFormat(parseTimestamp(StringView{date}), "%c"));
+    EXPECT_EQ(monthNum, dateFormat(parseTimestamp(date), "%c"));
 
     // Numeric 0-padded.
     if (i + 1 < 10) {
-      EXPECT_EQ(
-          "0" + monthNum, dateFormat(parseTimestamp(StringView{date}), "%m"));
+      EXPECT_EQ("0" + monthNum, dateFormat(parseTimestamp(date), "%m"));
     } else {
-      EXPECT_EQ(monthNum, dateFormat(parseTimestamp(StringView{date}), "%m"));
+      EXPECT_EQ(monthNum, dateFormat(parseTimestamp(date), "%m"));
     }
   }
 
@@ -4793,12 +4766,11 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   for (int i = 1; i <= 31; i++) {
     std::string dayOfMonth = std::to_string(i);
     std::string date("1970-01-" + dayOfMonth);
-    EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(StringView{date}), "%e"));
+    EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(date), "%e"));
     if (i < 10) {
-      EXPECT_EQ(
-          "0" + dayOfMonth, dateFormat(parseTimestamp(StringView{date}), "%d"));
+      EXPECT_EQ("0" + dayOfMonth, dateFormat(parseTimestamp(date), "%d"));
     } else {
-      EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(StringView{date}), "%d"));
+      EXPECT_EQ(dayOfMonth, dateFormat(parseTimestamp(date), "%d"));
     }
   }
 
@@ -6623,6 +6595,45 @@ TEST_F(DateTimeFunctionsTest, xxHash64FunctionTime) {
   EXPECT_EQ(-3599997350390034763, xxhash64(1234)); // Arbitrary value
 }
 
+TEST_F(DateTimeFunctionsTest, currentTimestamp) {
+  const auto callCurrentTimestamp =
+      [&](int64_t sessionStartTime,
+          const std::optional<std::string>& timeZone) {
+        if (timeZone.has_value()) {
+          setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+        } else {
+          setQuerySessionStartTime(sessionStartTime);
+        }
+
+        auto rowVector = makeRowVector({});
+        rowVector->resize(1);
+
+        auto result = evaluate("current_timestamp()", rowVector);
+        DecodedVector decoded(*result);
+        return decoded.valueAt<int64_t>(0);
+      };
+
+  // Test without timezone
+  EXPECT_THROW(
+      {
+        try {
+          callCurrentTimestamp(0, std::nullopt);
+        } catch (const VeloxException& e) {
+          EXPECT_EQ(e.exceptionType(), VeloxException::Type::kUser);
+          throw;
+        }
+      },
+      VeloxException);
+
+  // Test with timezone America/Los_Angeles
+  auto laPacked = callCurrentTimestamp(1758499200000, "America/Los_Angeles");
+  auto la = TimestampWithTimezone::unpack(laPacked);
+  ASSERT_TRUE(la.has_value());
+
+  EXPECT_EQ(la->timezone_->name(), "America/Los_Angeles");
+  EXPECT_EQ(la->milliSeconds_, 1758499200000);
+}
+
 TEST_F(DateTimeFunctionsTest, localtime) {
   const auto localtime = [&](int64_t sessionStartTime,
                              const std::optional<std::string>& timeZone) {
@@ -6649,6 +6660,102 @@ TEST_F(DateTimeFunctionsTest, localtime) {
   // Test during daylight saving time
   localVal = localtime(1710061200000, "America/Los_Angeles");
   EXPECT_EQ(localVal, 32400000); // 9 AM UTC
+}
+
+TEST_F(DateTimeFunctionsTest, localTimestamp) {
+  const auto localTimestamp = [&](int64_t sessionStartTime,
+                                  const std::optional<std::string>& timeZone) {
+    if (timeZone.has_value()) {
+      setSessionStartTimeAndTimeZone(sessionStartTime, timeZone.value());
+    } else {
+      setQuerySessionStartTime(sessionStartTime);
+    }
+
+    return evaluateOnce<Timestamp>(
+        "localtimestamp()", makeRowVector(ROW({}), 1));
+  };
+
+  // ============================================================
+  // 1. Basic behavior (no timezone)
+  // ============================================================
+
+  // Epoch — zero nanos
+  {
+    auto tsUtc = localTimestamp(0, std::nullopt);
+    ASSERT_TRUE(tsUtc.has_value());
+    EXPECT_EQ(tsUtc->getSeconds(), 0);
+    EXPECT_EQ(tsUtc->getNanos(), 0);
+  }
+
+  // ============================================================
+  // 2. Basic behavior with timezone
+  // ============================================================
+
+  // Exact second boundary
+  {
+    const int64_t millis = 1758499200000; // exact second
+    auto tsExact = localTimestamp(millis, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsExact.has_value());
+    EXPECT_EQ(tsExact.value().getSeconds(), millis / 1000);
+    EXPECT_EQ(tsExact.value().getNanos(), 0);
+  }
+
+  // Fractional milliseconds (nanos test)
+  {
+    const int64_t millisWithFraction = 1758499200123; // +123 ms
+    auto tsWithNanos =
+        localTimestamp(millisWithFraction, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsWithNanos.has_value());
+    EXPECT_EQ(tsWithNanos.value().getSeconds(), millisWithFraction / 1000);
+    EXPECT_EQ(tsWithNanos.value().getNanos(), 123'000'000);
+  }
+
+  // ============================================================
+  // 3. DST FORWARD (Spring transition)
+  // America/Los_Angeles
+  // 2023-03-12 01:59:59 PST  →  03:00:00 PDT
+  // ============================================================
+
+  {
+    const int64_t beforeForward = 1678615199000; // 2023-03-12T09:59:59Z
+    auto tsBeforeForward = localTimestamp(beforeForward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsBeforeForward.has_value());
+    EXPECT_EQ(tsBeforeForward.value().getSeconds(), beforeForward / 1000);
+    EXPECT_EQ(tsBeforeForward.value().getNanos(), 0);
+
+    const int64_t afterForward = 1678615200000; // 2023-03-12T10:00:00Z
+    auto tsAfterForward = localTimestamp(afterForward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsAfterForward.has_value());
+    EXPECT_EQ(tsAfterForward.value().getSeconds(), afterForward / 1000);
+    EXPECT_EQ(tsAfterForward.value().getNanos(), 0);
+  }
+
+  // ============================================================
+  // 4. DST BACKWARD (Fall transition)
+  // America/Los_Angeles
+  // 2023-11-05 01:59:59 PDT  →  01:00:00 PST (repeated hour)
+  // ============================================================
+
+  {
+    const int64_t beforeBackward = 1699174799000; // 2023-11-05T08:59:59Z
+    auto tsBeforeBackward =
+        localTimestamp(beforeBackward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsBeforeBackward.has_value());
+    EXPECT_EQ(tsBeforeBackward.value().getSeconds(), beforeBackward / 1000);
+    EXPECT_EQ(tsBeforeBackward.value().getNanos(), 0);
+
+    const int64_t afterBackward = 1699174800000; // 2023-11-05T09:00:00Z
+    auto tsAfterBackward = localTimestamp(afterBackward, "America/Los_Angeles");
+
+    ASSERT_TRUE(tsAfterBackward.has_value());
+    EXPECT_EQ(tsAfterBackward.value().getSeconds(), afterBackward / 1000);
+    EXPECT_EQ(tsAfterBackward.value().getNanos(), 0);
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffTime) {
@@ -6966,6 +7073,31 @@ TEST_F(DateTimeFunctionsTest, dateAddDateVariableUnit) {
       DATE());
 
   assertEqualVectors(expected, result);
+}
+
+TEST_F(DateTimeFunctionsTest, currentTime) {
+  auto testCurrentTime = [&](int64_t sessionStartTime,
+                             const std::string& zone,
+                             int64_t expectedMillis,
+                             int16_t expectedOffset) {
+    setSessionStartTimeAndTimeZone(sessionStartTime, zone);
+
+    auto packed = evaluateOnce<int64_t>(
+        "current_time()",
+        makeRowVector(ROW({}), 1),
+        std::nullopt,
+        TIME_WITH_TIME_ZONE());
+
+    ASSERT_TRUE(packed.has_value());
+
+    EXPECT_EQ(util::unpackMillisUtc(packed.value()), expectedMillis);
+    EXPECT_EQ(util::unpackZoneOffset(packed.value()), expectedOffset);
+  };
+
+  testCurrentTime(1710064800000, "UTC", 36000000, 0);
+  testCurrentTime(1710064800000, "Asia/Kolkata", 55800000, 1170);
+  testCurrentTime(1705312800000, "America/Los_Angeles", 7200000, 361);
+  testCurrentTime(1717243200000, "America/Los_Angeles", 18000000, 421);
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimezone) {

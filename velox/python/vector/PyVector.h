@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <pybind11/embed.h>
 #include "velox/python/type/PyType.h"
 #include "velox/vector/BaseVector.h"
 

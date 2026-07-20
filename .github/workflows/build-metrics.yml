@@ -36,7 +36,10 @@ permissions:
 jobs:
   metrics:
     name: Linux ${{ matrix.link-type }} - ${{ matrix.type }} with adapters
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    # Disabled: the conbench service at velox-conbench.voltrondata.run is no
+    # longer available (DNS resolution fails). The scheduled runs have been
+    # failing since late 2025. Re-enable once a replacement service is set up.
+    if: false #${{ github.repository == 'facebookincubator/velox' }}
     runs-on: ${{ matrix.runner }}
     container: ghcr.io/facebookincubator/velox-dev:adapters
     strategy:
@@ -49,7 +52,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
@@ -101,7 +104,7 @@ jobs:
           cat $sizes_file
           echo "::endgroup::"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           path: ${{ env.sizes_file }}
           name: ${{ matrix.type }}-${{ matrix.link-type }}-sizes
@@ -174,7 +177,7 @@ jobs:
           nix-shell --run "quarto render report.qmd"
 
       - name: Upload Report Artifact
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: report
           path: scripts/ci/bm-report/report.html

@@ -42,7 +42,7 @@ struct FollyIsJsonScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(bool& result, const arg_type<Json>& json) {
-    auto parsedJson = folly::parseJson(json);
+    auto parsedJson = folly::parseJson(std::string_view(json));
     result = parsedJson.isNumber() || parsedJson.isString() ||
         parsedJson.isBool() || parsedJson.isNull();
   }
@@ -103,7 +103,7 @@ struct FollyJsonArrayLengthFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Json>& json) {
-    auto parsedJson = folly::parseJson(json);
+    auto parsedJson = folly::parseJson(std::string_view(json));
     if (!parsedJson.isArray()) {
       return false;
     }
@@ -120,7 +120,7 @@ struct FollyJsonArrayContainsFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
   call(bool& result, const arg_type<Json>& json, const TInput& value) {
-    auto parsedJson = folly::parseJson(json);
+    auto parsedJson = folly::parseJson(std::string_view(json));
     if (!parsedJson.isArray()) {
       return false;
     }

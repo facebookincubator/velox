@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/prestosql/aggregates/MaxByAggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/MinMaxByAggregateBase.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -42,13 +41,13 @@ class MaxByNAggregate<ComplexType, C>
 };
 
 void registerMaxByAggregates(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   registerMinMaxBy<
       functions::aggregate::MinMaxByAggregateBase,
       true,
-      MaxByNAggregate>(prefix + kMaxBy, withCompanionFunctions, overwrite);
+      MaxByNAggregate>(names, withCompanionFunctions, overwrite);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

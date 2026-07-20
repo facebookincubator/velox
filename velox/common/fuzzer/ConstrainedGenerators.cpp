@@ -305,7 +305,11 @@ template <typename T>
 variant SetDigestInputGenerator::generateTyped() {
   velox::functions::SetDigest<int64_t> digest(allocator_.get());
 
-  int numValues = rand<int>(rng_, 10, 100);
+  // SetDigest defaults to maxHashes=8192. Usually generate small datasets
+  // (exact mode), but occasionally generate >8192 values to test approximate
+  // mode.
+  int numValues = coinToss(rng_, 0.1) ? rand<int>(rng_, 8500, 10000)
+                                      : rand<int>(rng_, 10, 100);
   for (int i = 0; i < numValues; ++i) {
     int64_t value = rand<int64_t>(rng_);
     digest.add(value);
@@ -321,7 +325,8 @@ template <>
 variant SetDigestInputGenerator::generateTyped<std::string>() {
   velox::functions::SetDigest<StringView> digest(allocator_.get());
 
-  int numValues = rand<int>(rng_, 10, 100);
+  int numValues = coinToss(rng_, 0.1) ? rand<int>(rng_, 8500, 10000)
+                                      : rand<int>(rng_, 10, 100);
   static const std::vector<UTF8CharList> encodings{
       UTF8CharList::ASCII,
       UTF8CharList::UNICODE_CASE_SENSITIVE,

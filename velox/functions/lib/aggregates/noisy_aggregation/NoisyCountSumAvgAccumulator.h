@@ -107,7 +107,7 @@ class NoisyCountSumAvgAccumulator {
   // sizeof(double) for lowerBound_ value
   // sizeof(double) for upperBound_ value
   // sizeof(bool) for randomSeed_ has_value flag
-  // sizeof(int32_t) for randomSeed_ value
+  // sizeof(int64_t) for randomSeed_ value
   static size_t serializedSize() {
     return sizeof(double) + sizeof(uint64_t) + sizeof(double) + sizeof(bool) +
         sizeof(double) + sizeof(double) + sizeof(bool) + sizeof(int64_t);
@@ -137,7 +137,7 @@ class NoisyCountSumAvgAccumulator {
     std::optional<double> lowerBound = stream.read<double>();
     std::optional<double> upperBound = stream.read<double>();
     bool hasRandomSeed = stream.read<bool>();
-    std::optional<int32_t> randomSeed = stream.read<int64_t>();
+    std::optional<int64_t> randomSeed = stream.read<int64_t>();
     return NoisyCountSumAvgAccumulator(
         sum,
         count,

@@ -18,6 +18,13 @@ velox_add_library(
   JsonStringUtil.cpp
   SIMDJsonExtractor.cpp
   SIMDJsonUtil.cpp
+  HEADERS
+  JsonExtractor.h
+  JsonPathTokenizer.h
+  JsonStringUtil.h
+  SIMDJsonExtractor.h
+  SIMDJsonUtil.h
+  SIMDJsonWrapper.h
 )
 
 velox_link_libraries(velox_functions_json velox_functions_lib simdjson::simdjson)

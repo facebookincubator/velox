@@ -30,11 +30,15 @@ queries=${1:-$(seq 1 22)}
 devices=${2:-"cpu gpu"}
 profile=${3:-"false"}
 cudf_exec_mode=${CUDF_EXECUTION_MODE:-plan_rewriter}
+# Resolve script dir so binaries can be run from anywhere
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../" && pwd)"
+DATA_PATH="${VELOX_TPCH_DATA_PATH:-${REPO_ROOT}/velox-tpch-sf10-data}"
 
 cudf_chunk_read_limit=$((1024 * 1024 * 1024 * 1))
 cudf_pass_read_limit=0
-VELOX_CUDF_MEMORY_RESOURCE="async"
-VELOX_CUDF_MEMORY_PERCENT=0
+VELOX_CUDF_MEMORY_RESOURCE="${VELOX_CUDF_MEMORY_RESOURCE:-async}"
+VELOX_CUDF_MEMORY_PERCENT="${VELOX_CUDF_MEMORY_PERCENT:-0}"
 
 for query_number in ${queries}; do
   printf -v query_number '%02d' "${query_number}"
@@ -42,13 +46,13 @@ for query_number in ${queries}; do
     case "${device}" in
     "cpu")
       num_drivers=${NUM_DRIVERS:-32}
-      BENCHMARK_EXECUTABLE=./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark
+      BENCHMARK_EXECUTABLE="${REPO_ROOT}/_build/release/velox/benchmarks/tpch/velox_tpch_benchmark"
       CUDF_FLAGS=""
       FILE_STRING="cpu_${num_drivers}_drivers"
       ;;
     "gpu")
       num_drivers=${NUM_DRIVERS:-32}
-      BENCHMARK_EXECUTABLE=./_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark
+      BENCHMARK_EXECUTABLE="${REPO_ROOT}/_build/release/velox/experimental/cudf/benchmarks/velox_cudf_tpch_benchmark"
       plan_mode_flags=""
       if [[ "${cudf_exec_mode}" == "plan_rewriter" ]]; then
         plan_mode_flags="--velox_cudf_table_scan=false --gpu_driver_count=1"
@@ -65,7 +69,10 @@ for query_number in ${queries}; do
         --cudf_gpu_batch_size_rows=1000000 \
         --cudf_execution_mode=${cudf_exec_mode} \
         ${plan_mode_flags}"
-      VELOX_CUDF_ENABLED=true
+      ;;
+    *)
+      echo "Unsupported device: ${device}. Expected cpu or gpu." >&2
+      exit 1
       ;;
     esac
     echo "Running query ${query_number} on ${device} with ${num_drivers} drivers."
@@ -86,10 +93,18 @@ for query_number in ${queries}; do
       fi
     fi
 
+    if [[ ${device} == "gpu" ]]; then
+      VELOX_CUDF_PROPERTIES_FILE="$(mktemp "${TMPDIR:-/tmp}/velox-cudf.XXXXXX.properties")"
+      printf '%s\n' \
+        "cudf.memory_resource=${VELOX_CUDF_MEMORY_RESOURCE}" \
+        "cudf.memory_percent=${VELOX_CUDF_MEMORY_PERCENT}" \
+        >"${VELOX_CUDF_PROPERTIES_FILE}"
+      CUDF_FLAGS="${CUDF_FLAGS} --cudf_properties=${VELOX_CUDF_PROPERTIES_FILE}"
+    fi
     set +e -x
     ${PROFILE_CMD} \
       ${BENCHMARK_EXECUTABLE} \
-      --data_path=/mydata/velox-tpch-sf10-data \
+      --data_path="${DATA_PATH}" \
       --data_format=parquet \
       --run_query_verbose=${query_number} \
       --num_repeats=3 \
@@ -97,6 +112,9 @@ for query_number in ${queries}; do
       --num_drivers=${num_drivers} \
       ${CUDF_FLAGS} 2>&1 |
       tee benchmark_results/q${query_number}_${FILE_STRING}.txt
+    if [[ ${device} == "gpu" ]]; then
+      rm -f "${VELOX_CUDF_PROPERTIES_FILE}"
+    fi
     { set -e +x; } &>/dev/null
   done
 done

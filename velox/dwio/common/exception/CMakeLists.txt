@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_dwio_common_exception Exception.cpp Exceptions.cpp)
+velox_add_library(
+  velox_dwio_common_exception
+  Exception.cpp
+  Exceptions.cpp
+  HEADERS
+  Exception.h
+  Exceptions.h
+)
 
 velox_link_libraries(velox_dwio_common_exception velox_exception Folly::folly glog::glog)

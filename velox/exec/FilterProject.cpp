@@ -15,6 +15,8 @@
  */
 #include "velox/exec/FilterProject.h"
 #include "velox/core/Expressions.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
@@ -72,6 +74,26 @@ std::vector<OperatorStats> splitStats(
   return {std::move(projectStats), std::move(filterStats)};
 }
 
+// Load lazy vectors for input channels that are referenced by more than one
+// identity projection. A lazy vector cannot be reused across different output
+// fields because its contents may be loaded via a hook during pushdown.
+// Accessing a loaded vector in this case can lead to incorrect results or
+// even a crash.
+void loadReusedLazyVectors(
+    const RowVectorPtr& input,
+    const std::vector<column_index_t>& reusedInputChannels) {
+  if (!input || reusedInputChannels.empty()) {
+    return;
+  }
+
+  auto& children = input->children();
+  for (const auto inputChannel : reusedInputChannels) {
+    if (isLazyNotLoaded(*children[inputChannel])) {
+      children[inputChannel]->loadedVector();
+    }
+  }
+}
+
 } // namespace
 
 FilterProject::FilterProject(
@@ -84,7 +106,7 @@ FilterProject::FilterProject(
           project ? project->outputType() : filter->outputType(),
           operatorId,
           project ? project->id() : filter->id(),
-          "FilterProject"),
+          OperatorType::kFilterProject),
       hasFilter_(filter != nullptr),
       lazyDereference_(
           dynamic_cast<const core::LazyDereferenceNode*>(project.get()) !=
@@ -127,6 +149,18 @@ void FilterProject::initialize() {
     }
     isIdentityProjection_ = true;
   }
+  {
+    std::unordered_map<column_index_t, size_t> inputChannelCounts;
+    for (const auto& projection : identityProjections_) {
+      inputChannelCounts[projection.inputChannel]++;
+    }
+    for (const auto& [inputChannel, count] : inputChannelCounts) {
+      if (count > 1) {
+        reusedInputChannels_.push_back(inputChannel);
+      }
+    }
+  }
+
   numExprs_ = allExprs.size();
   exprs_ = makeExprSetFromFlag(
       std::move(allExprs), operatorCtx_->execCtx(), lazyDereference_);
@@ -148,6 +182,11 @@ void FilterProject::initialize() {
   }
   filter_.reset();
   project_.reset();
+
+  if (const auto* traceCtx = operatorCtx_->driverCtx()->traceCtx();
+      traceCtx && traceCtx->shouldTrace(*this)) {
+    exprs_->maybeSetupTracers(*this, *traceCtx);
+  }
 }
 
 void FilterProject::addInput(RowVectorPtr input) {
@@ -185,7 +224,11 @@ RowVectorPtr FilterProject::getOutput() {
   if (!hasFilter_) {
     VELOX_CHECK(!isIdentityProjection_);
     auto results = project(*rows, evalCtx);
-    return fillOutput(size, nullptr, results);
+    if (!lazyDereference_) {
+      loadReusedLazyVectors(input_, reusedInputChannels_);
+    }
+    auto output = fillOutput(size, nullptr, results);
+    return output;
   }
 
   // evaluate filter
@@ -205,10 +248,14 @@ RowVectorPtr FilterProject::getOutput() {
     results = project(*rows, evalCtx);
   }
 
-  return fillOutput(
+  if (!lazyDereference_) {
+    loadReusedLazyVectors(input_, reusedInputChannels_);
+  }
+  auto output = fillOutput(
       numOut,
       allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices,
       results);
+  return output;
 }
 
 std::vector<VectorPtr> FilterProject::project(

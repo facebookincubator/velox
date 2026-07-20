@@ -13,8 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <folly/experimental/FunctionScheduler.h>
+#include <folly/executors/FunctionScheduler.h>
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -187,11 +188,12 @@ class AsyncConnectorTest : public OperatorTestBase {
             std::unordered_map<std::string, std::string>()),
         nullptr,
         nullptr);
-    connector::registerConnector(testConnector);
+    connector::ConnectorRegistry::global().insert(
+        testConnector->connectorId(), testConnector);
   }
 
   void TearDown() override {
-    connector::unregisterConnector(kTestConnectorId);
+    connector::ConnectorRegistry::global().erase(kTestConnectorId);
     OperatorTestBase::TearDown();
   }
 };

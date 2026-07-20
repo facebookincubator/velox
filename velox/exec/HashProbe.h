@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
@@ -26,6 +28,13 @@ namespace facebook::velox::exec {
 // Probes a hash table made by HashBuild.
 class HashProbe : public Operator {
  public:
+  /// Runtime stat keys for hash probe.
+  /// Size of the bloom filter in bytes.
+  static constexpr std::string_view kBloomFilterSize = "bloomFilterSize";
+  /// Number of rows bypassed via dynamic filter replacement.
+  static constexpr std::string_view kReplacedWithDynamicFilterRows =
+      "replacedWithDynamicFilterRows";
+
   HashProbe(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -110,7 +119,8 @@ class HashProbe : public Operator {
   // output.
   static bool joinIncludesMissesFromLeft(core::JoinType joinType) {
     return isLeftJoin(joinType) || isFullJoin(joinType) ||
-        isAntiJoin(joinType) || isLeftSemiProjectJoin(joinType);
+        isAntiJoin(joinType) || isCountingAntiJoin(joinType) ||
+        isLeftSemiProjectJoin(joinType);
   }
 
   void setState(ProbeOperatorState state);
@@ -147,6 +157,11 @@ class HashProbe : public Operator {
   // If 'toSpillOutput', the produced output is spilled to disk for memory
   // arbitration.
   RowVectorPtr getOutputInternal(bool toSpillOutput);
+
+  // Handles the right semi filter join fast path when there is no extra
+  // filter. Marks matching build rows as probed and consumes the current
+  // input batch.
+  void processRightSemiNoFilter(bool emptyBuildSide);
 
   // Check if output_ can be re-used and if not make a new one.
   void prepareOutput(vector_size_t size);
@@ -190,7 +205,7 @@ class HashProbe : public Operator {
   // 'filterPropagateNulls' is true, the probe input row which has null in any
   // probe filter column can't pass the filter.
   void prepareFilterRowsForNullAwareJoin(
-      RowVectorPtr& filterInput,
+      const RowVector* filterInput,
       vector_size_t numRows,
       bool filterPropagateNulls);
 
@@ -210,7 +225,7 @@ class HashProbe : public Operator {
   // that pass the filter in 'filterPassedRows'. Used in null-aware join
   // processing.
   void applyFilterOnTableRowsForNullAwareJoin(
-      const SelectivityVector& rows,
+      SelectivityVector& rows,
       SelectivityVector& filterPassedRows,
       std::function<int32_t(char**, int32_t)> iterator);
 
@@ -268,6 +283,17 @@ class HashProbe : public Operator {
   // batch. This might trigger memory arbitration underneath and the probe
   // operator is set to reclaimable at this stage.
   void ensureOutputFits();
+
+  // Returns true if the current input batch requires lazy preloading before
+  // the non-reclaimable probe output loop. Checks canReclaim(), input state,
+  // and join type to determine if preloading is needed.
+  bool needLazyLoadProbeInput() const;
+
+  // Pre-loads lazy input vectors in a reclaimable section so that the
+  // subsequent non-reclaimable evalFilter/fillOutput does not trigger OOM.
+  // Called after listJoinResults() so that atEnd() is known and preloading
+  // can be skipped for columns that fillOutput/createFilterInput won't load.
+  void ensureLazyInputLoaded();
 
   // Setups spilled output reader if 'spillOutputPartitionSet_' is not empty.
   void maybeSetupSpillOutputReader();
@@ -376,7 +402,17 @@ class HashProbe : public Operator {
 
   const bool nullAware_;
 
+  const bool nullAsValue_;
+
   const RowTypePtr probeType_;
+
+  // Flag to indicate whether this hash probe operator can output build-side
+  // rows in parallel with the peer operators for the current hash table.
+  // Outputting build-side rows in parallel is currently not allowed in either
+  // of the following cases:
+  // 1. QueryConfig::kParallelOutputJoinBuildRowsEnabled is false.
+  // 2. Spill is enabled.
+  const bool canOutputBuildRowsInParallel_;
 
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
@@ -630,7 +666,7 @@ class HashProbe : public Operator {
     std::optional<bool> currentRowPassed;
   };
 
-  BaseHashTable::RowsIterator lastProbeIterator_;
+  RowContainerIterator lastProbeIterator_;
 
   // For left and anti join with filter, tracks the probe side rows which had
   // matches on the build side but didn't pass the filter.
@@ -665,6 +701,11 @@ class HashProbe : public Operator {
   // cases where there is more than one batch of output or join filter
   // input.
   SelectivityVector passingInputRows_;
+
+  // Set while loading lazy input vectors inside a ReclaimableSectionGuard.
+  // Tells reclaim() to skip spillOutput() for this operator to avoid
+  // re-entering the column reader (which would deadlock on call_once).
+  tsan_atomic<bool> loadingLazyInput_{false};
 
   // Indicates if this hash probe has exceeded max spill limit which is not
   // allowed to spill. This is reset when hash probe operator starts to probe
@@ -728,6 +769,10 @@ class HashProbe : public Operator {
 
   // Input vector used for listing rows with null keys.
   VectorPtr nullKeyProbeInput_;
+
+  // The index of the row container in the current hash table that this hash
+  // probe oprator is processing to output build-side rows.
+  int buildSideOutputRowContainerId_{-1};
 };
 
 inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {

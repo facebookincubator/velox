@@ -91,6 +91,8 @@ void registerMathOperators(const std::string& prefix = "") {
       IntervalYearMonth,
       double>({prefix + "divide"});
   registerBinaryFloatingPoint<ModulusFunction>({prefix + "mod"});
+  registerBinaryIntegral<PModIntFunction>({prefix + "pmod"});
+  registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
 }
 
 } // namespace

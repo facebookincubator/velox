@@ -67,6 +67,18 @@ TEST_F(TypedExprSerDeTest, fieldAccess) {
       0);
   testSerde(expression);
   ASSERT_EQ(expression->toString(), "\"ab\"[a]");
+
+  expression = std::make_shared<DereferenceTypedExpr>(
+      INTEGER(),
+      std::make_shared<FieldAccessTypedExpr>(ROW({INTEGER(), VARCHAR()}), "x"),
+      0);
+  ASSERT_EQ(expression->toString(), "\"x\"[0]");
+
+  expression = std::make_shared<DereferenceTypedExpr>(
+      VARCHAR(),
+      std::make_shared<FieldAccessTypedExpr>(ROW({INTEGER(), VARCHAR()}), "x"),
+      1);
+  ASSERT_EQ(expression->toString(), "\"x\"[1]");
 }
 
 TEST_F(TypedExprSerDeTest, constant) {
@@ -141,6 +153,32 @@ TEST_F(TypedExprSerDeTest, lambda) {
           std::make_shared<ConstantTypedExpr>(makeArrayVector<int64_t>({
               {1, 2, 3, 4, 5},
           }))));
+  testSerde(expression);
+}
+
+TEST_F(TypedExprSerDeTest, nullIf) {
+  TypedExprPtr expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(INTERVAL_DAY_TIME(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(INTERVAL_DAY_TIME(), "b"),
+      INTERVAL_DAY_TIME());
+  testSerde(expression);
+
+  expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(DATE(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(DATE(), "b"),
+      DATE());
+  testSerde(expression);
+
+  expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(TIME(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(TIME(), "b"),
+      TIME());
+  testSerde(expression);
+
+  expression = std::make_shared<NullIfTypedExpr>(
+      std::make_shared<FieldAccessTypedExpr>(TIME_MICRO_UTC(), "a"),
+      std::make_shared<FieldAccessTypedExpr>(TIME_MICRO_UTC(), "b"),
+      TIME_MICRO_UTC());
   testSerde(expression);
 }
 

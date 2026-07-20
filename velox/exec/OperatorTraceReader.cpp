@@ -19,9 +19,10 @@
 #include <folly/hash/Checksum.h>
 #include "velox/common/file/FileInputStream.h"
 #include "velox/exec/OperatorTraceReader.h"
-#include "velox/exec/TraceUtil.h"
+#include "velox/exec/trace/TraceUtil.h"
 
 namespace facebook::velox::exec::trace {
+
 OperatorTraceInputReader::OperatorTraceInputReader(
     std::string traceDir,
     RowTypePtr dataType,
@@ -30,7 +31,7 @@ OperatorTraceInputReader::OperatorTraceInputReader(
       fs_(filesystems::getFileSystem(traceDir_, nullptr)),
       dataType_(std::move(dataType)),
       pool_(pool),
-      serde_(getNamedVectorSerde(VectorSerde::Kind::kPresto)),
+      serde_(getNamedVectorSerde("Presto")),
       inputStream_(getInputStream()) {
   VELOX_CHECK_NOT_NULL(dataType_);
 }
@@ -155,4 +156,5 @@ std::vector<std::string> OperatorTraceSplitReader::deserialize(
   }
   return splits;
 }
+
 } // namespace facebook::velox::exec::trace

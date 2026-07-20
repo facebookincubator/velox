@@ -388,11 +388,8 @@ std::optional<int32_t> compareSwitch(
 template <
     bool typeProvidesCustomComparison,
     TypeKind Kind,
-    std::enable_if_t<
-        Kind != TypeKind::VARCHAR && Kind != TypeKind::VARBINARY &&
-            Kind != TypeKind::ARRAY && Kind != TypeKind::MAP &&
-            Kind != TypeKind::ROW,
-        int32_t> = 0>
+    std::enable_if_t<!is_string_kind(Kind) && !is_nested_kind(Kind), int32_t> =
+        0>
 std::optional<int32_t> compare(
     ByteInputStream& left,
     const BaseVector& right,
@@ -693,11 +690,8 @@ std::optional<int32_t> compareSwitch(
 template <
     bool typeProvidesCustomComparison,
     TypeKind Kind,
-    std::enable_if_t<
-        Kind != TypeKind::VARCHAR && Kind != TypeKind::VARBINARY &&
-            Kind != TypeKind::ARRAY && Kind != TypeKind::MAP &&
-            Kind != TypeKind::ROW,
-        int32_t> = 0>
+    std::enable_if_t<!is_string_kind(Kind) && !is_nested_kind(Kind), int32_t> =
+        0>
 std::optional<int32_t> compare(
     ByteInputStream& left,
     ByteInputStream& right,
@@ -898,11 +892,8 @@ uint64_t hashSwitch(ByteInputStream& stream, const Type* type);
 template <
     bool typeProvidesCustomComparison,
     TypeKind Kind,
-    std::enable_if_t<
-        Kind != TypeKind::VARBINARY && Kind != TypeKind::VARCHAR &&
-            Kind != TypeKind::ARRAY && Kind != TypeKind::MAP &&
-            Kind != TypeKind::ROW,
-        int32_t> = 0>
+    std::enable_if_t<!is_string_kind(Kind) && !is_nested_kind(Kind), int32_t> =
+        0>
 uint64_t hashOne(ByteInputStream& stream, const Type* type) {
   using T = typename TypeTraits<Kind>::NativeType;
 

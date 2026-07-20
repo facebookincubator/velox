@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #pragma once
+#include <folly/container/F14Map.h>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 #include "velox/core/PlanNode.h"
@@ -22,6 +25,18 @@
 namespace facebook::velox::core {
 
 class QueryConfig;
+
+/// Well-known transport type identifiers for use with inputTransportTypes /
+/// outputTransportTypes maps. For example, in Presto with GPU workers the
+/// Exchange nodes use UCX to receive from peers while the PartitionedOutput
+/// node uses HTTP to send results to the Java coordinator. Other applications
+/// may define additional identifiers without modifying this header.
+struct TransportKind {
+  /// Standard HTTP/HTTPS-based Presto exchange protocol.
+  static constexpr std::string_view kHttp{"HTTP"};
+  /// UCX-based RDMA exchange for high-bandwidth GPU transfers between workers.
+  static constexpr std::string_view kUcx{"UCX"};
+};
 
 /// Gives hints on how to execute the fragment of a plan.
 enum class ExecutionStrategy {
@@ -47,6 +62,27 @@ struct PlanFragment {
 
   /// Contains leaf plan nodes that need to be executed in the grouped mode.
   std::unordered_set<PlanNodeId> groupedExecutionLeafNodeIds;
+
+  /// Per-node transport types assigned by the coordinator at task creation time
+  /// based on cluster topology. inputTransportTypes is keyed by Exchange node
+  /// ID, outputTransportTypes by PartitionedOutput node ID. A node absent from
+  /// the map uses TransportKind::kHttp.
+  folly::F14FastMap<PlanNodeId, std::string> inputTransportTypes;
+  folly::F14FastMap<PlanNodeId, std::string> outputTransportTypes;
+
+  /// Identifies this task among all tasks running the same query stage.
+  /// Supplied by the consumer at task creation time. AssignUniqueId packs it
+  /// into the high 24 bits of each generated id and the per-row counter into
+  /// the low 40 bits, so it must fit in 24 bits (0 <= taskUniqueId < 2^24).
+  /// When unset, AssignUniqueId falls back to the value carried on its plan
+  /// node (0 in the canonical construction path).
+  std::optional<int32_t> taskUniqueId{};
+
+  /// Validates that every node ID in inputTransportTypes refers to an Exchange
+  /// node and every node ID in outputTransportTypes refers to a
+  /// PartitionedOutput node in this fragment. Throws if a node ID is not found
+  /// in the plan tree or refers to a node of the wrong type.
+  void validateTransportTypes() const;
 
   /// Returns true if the fragment uses grouped execution strategy meaning that
   /// at least one pipeline has a leaf node that should run grouped execution.

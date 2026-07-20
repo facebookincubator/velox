@@ -61,8 +61,8 @@ struct EnumKeyFunction {
     return Status::OK();
   }
 
-  Status call(out_type<Varchar>& result, const std::string& input) {
-    auto keyAt = enumPtr_->keyAt(input);
+  Status call(out_type<Varchar>& result, const arg_type<Varchar>& input) {
+    auto keyAt = enumPtr_->keyAt(std::string(input));
     if (!keyAt.has_value()) {
       return Status::UserError(
           "Value '{}' not in VarcharEnum: {}", input, enumPtr_->toString());

@@ -29,6 +29,8 @@ add_executable(
 add_test(velox_wave_common_test velox_wave_common_test)
 set_tests_properties(velox_wave_common_test PROPERTIES LABELS cuda_driver)
 
+target_compile_options(velox_wave_common_test PRIVATE ${VELOX_CUDA_DEBUG_FLAGS})
+
 if(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST)
   target_compile_definitions(velox_wave_common_test PRIVATE VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST=1)
 endif()

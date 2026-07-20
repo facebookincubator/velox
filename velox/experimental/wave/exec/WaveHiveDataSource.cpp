@@ -15,6 +15,8 @@
  */
 
 #include "velox/experimental/wave/exec/WaveHiveDataSource.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/HiveDataSource.h"
 
 namespace facebook::velox::wave {
 
@@ -29,7 +31,7 @@ WaveHiveDataSource::WaveHiveDataSource(
     folly::Executor* executor,
     const connector::ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig,
-    const std::shared_ptr<io::IoStatistics>& ioStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const exec::ExprSet* remainingFilter,
     std::shared_ptr<common::MetadataFilter> metadataFilter) {
   params_.hiveTableHandle = hiveTableHandle;
@@ -40,7 +42,7 @@ WaveHiveDataSource::WaveHiveDataSource(
   params_.executor = executor;
   params_.connectorQueryCtx = connectorQueryCtx;
   params_.hiveConfig = hiveConfig;
-  params_.ioStats = ioStats;
+  params_.ioStatistics = ioStatistics;
   remainingFilter_ = remainingFilter ? remainingFilter->exprs().at(0) : nullptr;
   metadataFilter_ = metadataFilter;
 }
@@ -68,8 +70,8 @@ void WaveHiveDataSource::setFromDataSource(
   splitReader_ = std::move(source->splitReader_);
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
-  source->params_.ioStats->merge(*params_.ioStats);
-  params_.ioStats = std::move(source->params_.ioStats);
+  source->params_.ioStatistics->merge(*params_.ioStatistics);
+  params_.ioStatistics = std::move(source->params_.ioStatistics);
 }
 
 void WaveHiveDataSource::addSplit(
@@ -77,7 +79,7 @@ void WaveHiveDataSource::addSplit(
   VELOX_CHECK(
       split_ == nullptr,
       "Previous split has not been processed yet. Call next to process the split.");
-  split_ = std::dynamic_pointer_cast<HiveConnectorSplit>(split);
+  split_ = split;
   VELOX_CHECK(split_, "Wrong type of split");
 
   VLOG(1) << "Adding split " << split_->toString();
@@ -164,29 +166,34 @@ void WaveHiveDataSource::registerConnector() {
   // Create hive connector with config...
   connector::hive::HiveConnectorFactory factory;
   auto hiveConnector = factory.newConnector("wavemock", config, nullptr);
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
   connector::hive::HiveDataSource::registerWaveDelegateHook(
       [](const HiveTableHandlePtr& hiveTableHandle,
          const std::shared_ptr<common::ScanSpec>& scanSpec,
          const RowTypePtr& readerOutputType,
-         std::unordered_map<std::string, HiveColumnHandlePtr>* partitionKeys,
+         std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
          FileHandleFactory* fileHandleFactory,
          folly::Executor* executor,
          const connector::ConnectorQueryCtx* connectorQueryCtx,
          const std::shared_ptr<HiveConfig>& hiveConfig,
-         const std::shared_ptr<io::IoStatistics>& ioStats,
+         const std::shared_ptr<io::IoStatistics>& ioStatistics,
          const exec::ExprSet* remainingFilter,
          std::shared_ptr<common::MetadataFilter> metadataFilter) {
+        // HiveColumnHandle extends FileColumnHandle, so this cast is safe.
+        auto* hivePartitionKeys = reinterpret_cast<
+            std::unordered_map<std::string, HiveColumnHandlePtr>*>(
+            partitionKeys);
         return std::make_shared<WaveHiveDataSource>(
             hiveTableHandle,
             scanSpec,
             readerOutputType,
-            partitionKeys,
+            hivePartitionKeys,
             fileHandleFactory,
             executor,
             connectorQueryCtx,
             hiveConfig,
-            ioStats,
+            ioStatistics,
             remainingFilter,
             metadataFilter);
       });

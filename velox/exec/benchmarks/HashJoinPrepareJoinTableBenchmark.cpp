@@ -129,6 +129,7 @@ class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
     topTable_->prepareJoinTable(
         std::move(otherTables_),
         BaseHashTable::kNoSpillInputStartPartitionBit,
+        1'000'000,
         false,
         executor_.get());
     VELOX_CHECK_EQ(topTable_->hashMode(), params_.mode);
@@ -220,6 +221,7 @@ class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
           dependentTypes,
           true,
           false,
+          false, // hasCountFlag
           1'000,
           pool_.get());
 

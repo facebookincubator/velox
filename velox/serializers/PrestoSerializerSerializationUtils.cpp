@@ -374,6 +374,11 @@ void serializeRowVectorRanges(
   }
   auto rowVector = vector->as<RowVector>();
   std::vector<IndexRange> childRanges;
+  size_t totalOffsets = 0;
+  for (const auto& range : ranges) {
+    totalOffsets += range.size;
+  }
+  childRanges.reserve(totalOffsets);
   for (int32_t i = 0; i < ranges.size(); ++i) {
     auto begin = ranges[i].begin;
     auto end = begin + ranges[i].size;
@@ -401,8 +406,12 @@ void serializeArrayVectorRanges(
   auto arrayVector = vector->as<ArrayVector>();
   auto rawSizes = arrayVector->rawSizes();
   auto rawOffsets = arrayVector->rawOffsets();
+  size_t totalOffsets = 0;
+  for (const auto& range : ranges) {
+    totalOffsets += range.size;
+  }
   std::vector<IndexRange> childRanges;
-  childRanges.reserve(ranges.size());
+  childRanges.reserve(totalOffsets);
   for (int32_t i = 0; i < ranges.size(); ++i) {
     int32_t begin = ranges[i].begin;
     int32_t end = begin + ranges[i].size;
@@ -560,8 +569,8 @@ void copyWords(
     const T* values,
     Conv&& conv = {}) {
   for (auto i = 0; i < numIndices; ++i) {
-    folly::storeUnaligned(
-        destination + i * sizeof(T), conv(values[indices[i]]));
+    folly::storeUnaligned<T>(
+        destination + i * sizeof(T), static_cast<T>(conv(values[indices[i]])));
   }
 }
 
@@ -578,8 +587,9 @@ void copyWordsWithRows(
     return;
   }
   for (auto i = 0; i < numIndices; ++i) {
-    folly::storeUnaligned(
-        destination + i * sizeof(T), conv(values[rows[indices[i]]]));
+    folly::storeUnaligned<T>(
+        destination + i * sizeof(T),
+        static_cast<T>(conv(values[rows[indices[i]]])));
   }
 }
 
@@ -763,7 +773,7 @@ void serializeFlatVector<TypeKind::BOOLEAN>(
     uint64_t word = bitsToBytes(reinterpret_cast<uint8_t*>(valueBits)[i]);
     auto* target = output + i * 8;
     if (i < numBytes - 1) {
-      folly::storeUnaligned(target, word);
+      folly::storeUnaligned<uint64_t>(target, word);
     } else {
       memcpy(target, &word, numValueBits - i * 8);
     }

@@ -21,6 +21,7 @@
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/IExpr.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
@@ -340,6 +341,13 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param indexColumns Names of columns that form the index key for the
+    /// table. When set, enables index-based lookups.
+    TableScanBuilder& indexColumns(std::vector<std::string> indexColumns) {
+      indexColumns_ = std::move(indexColumns);
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -357,6 +365,7 @@ class PlanBuilder {
     core::ExprPtr remainingFilter_;
     double sampleRate_{1.0};
     RowTypePtr dataColumns_;
+    std::vector<std::string> indexColumns_;
     std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
@@ -372,9 +381,11 @@ class PlanBuilder {
     common::SubfieldFilters subfieldFiltersMap_;
   };
 
-  /// Start a TableScanBuilder.
-  TableScanBuilder& startTableScan() {
+  /// Start a TableScanBuilder using the specified connector.
+  TableScanBuilder& startTableScan(
+      std::string connectorId = std::string(kHiveDefaultConnectorId)) {
     tableScanBuilder_.reset(new TableScanBuilder(*this));
+    tableScanBuilder_->connectorId(std::move(connectorId));
     return *tableScanBuilder_;
   }
 
@@ -436,6 +447,21 @@ class PlanBuilder {
       return *this;
     }
 
+    IndexLookupJoinBuilder& splitOutput(std::optional<bool> splitOutput) {
+      splitOutput_ = splitOutput;
+      return *this;
+    }
+
+    /// @param forwardedProbeColumns Probe-side column names the operator
+    /// should include in the connector's lookup input even when no join key
+    /// or join condition references them. See IndexLookupJoinNode for the
+    /// full contract.
+    IndexLookupJoinBuilder& forwardedProbeColumns(
+        std::vector<std::string> forwardedProbeColumns) {
+      forwardedProbeColumns_ = std::move(forwardedProbeColumns);
+      return *this;
+    }
+
     /// Stop the IndexLookupJoinBuilder.
     PlanBuilder& endIndexLookupJoin() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -455,6 +481,8 @@ class PlanBuilder {
     bool hasMarker_{false};
     std::vector<std::string> outputLayout_;
     core::JoinType joinType_{core::JoinType::kInner};
+    std::optional<bool> splitOutput_;
+    std::vector<std::string> forwardedProbeColumns_;
   };
 
   /// Start an IndexLookupJoinBuilder.
@@ -647,6 +675,11 @@ class PlanBuilder {
       bool parallelizable = false,
       size_t repeatTimes = 1);
 
+  /// Convenience overload that wraps a single RowVectorPtr in a vector.
+  PlanBuilder& values(const RowVectorPtr& value) {
+    return values(std::vector<RowVectorPtr>{value});
+  }
+
   PlanBuilder& filtersAsNode(bool filtersAsNode) {
     filtersAsNode_ = filtersAsNode;
     return *this;
@@ -674,9 +707,7 @@ class PlanBuilder {
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
   /// @param serdekind The kind of seralized data format.
-  PlanBuilder& exchange(
-      const RowTypePtr& outputType,
-      VectorSerde::Kind serdekind);
+  PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
@@ -689,7 +720,7 @@ class PlanBuilder {
   PlanBuilder& mergeExchange(
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
-      VectorSerde::Kind serdekind);
+      std::string serdekind);
 
   /// Add a ProjectNode using specified SQL expressions.
   ///
@@ -872,8 +903,18 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit,
       std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
 
-  /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge();
+  /// Add a TableWriteMergeNode. Derives the ColumnStatsSpec from the
+  /// TableWriteNode in the plan tree and applies the given step.
+  /// Finds the TableWriteNode through LocalPartitionNode if present.
+  /// @param step Must be kIntermediate or kFinal. Defaults to kIntermediate.
+  PlanBuilder& tableWriteMerge(
+      core::AggregationNode::Step step =
+          core::AggregationNode::Step::kIntermediate);
+
+  /// Add a TableWriteMergeNode with an explicit ColumnStatsSpec. Use for
+  /// coordinator-side merge where the TableWriteNode is in a different
+  /// fragment (e.g. after an Exchange).
+  PlanBuilder& tableWriteMerge(core::ColumnStatsSpec columnStatsSpec);
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -1134,6 +1175,56 @@ class PlanBuilder {
   /// single-threaded.
   PlanBuilder& limit(int64_t offset, int64_t count, bool isPartial);
 
+  /// Add a FixedPointNode as the root of the plan (a leaf in pipeline terms --
+  /// its iteration plans run as sub-tasks, not as pipeline sources).  Must be
+  /// the first node (no input).
+  ///
+  /// @param stateDeclarations Persistent state entries surviving across
+  /// iterations.
+  /// @param plans Per-iteration plans, run sequentially as sub-tasks.
+  /// @param convergenceConfig Convergence checking + iteration bound.
+  /// @param outputStateEntry The mutable vector state entry whose final
+  /// contents are emitted and into which each iteration's last plan output is
+  /// written.
+  PlanBuilder& fixedPoint(
+      std::vector<core::StateDeclarationPtr> stateDeclarations,
+      std::vector<core::PlanNodePtr> plans,
+      core::ConvergenceConfig convergenceConfig,
+      std::string outputStateEntry);
+
+  /// Add a FixedPointNode with a single per-iteration body plan (the common
+  /// case: no in-iteration shuffle).  `outputStateEntry` defaults to the last
+  /// declared VectorState when omitted.
+  PlanBuilder& fixedPoint(
+      std::vector<core::StateDeclarationPtr> stateDeclarations,
+      const PlanBuilder& body,
+      core::ConvergenceConfig convergenceConfig,
+      std::optional<std::string> outputStateEntry = std::nullopt);
+
+  /// Convenience overload for a single state declaration and a single body
+  /// plan.
+  PlanBuilder& fixedPoint(
+      core::StateDeclarationPtr stateDeclaration,
+      const PlanBuilder& body,
+      core::ConvergenceConfig convergenceConfig,
+      std::optional<std::string> outputStateEntry = std::nullopt);
+
+  /// Add a StateSourceNode as the source node, reading the named vector state
+  /// entry of the enclosing fixed point.  `delta` selects an append entry's
+  /// latest delta (the in-loop frontier) over its full accumulation; immaterial
+  /// for a replace entry.  Must be the first node (no input).
+  PlanBuilder& stateSource(
+      const std::string& stateName,
+      const RowTypePtr& outputType,
+      bool delta = true);
+
+  /// Add a StateHashJoinNode probing the named HashTable state entry of the
+  /// enclosing fixed point with the current plan as the probe input.
+  PlanBuilder& stateHashJoin(
+      const std::string& stateName,
+      std::vector<std::string> probeKeys,
+      const RowTypePtr& outputType);
+
   /// Add an EnforceSingleRowNode to ensure input has at most one row at
   /// runtime.
   PlanBuilder& enforceSingleRow();
@@ -1143,12 +1234,7 @@ class PlanBuilder {
   ///
   /// @param idName The name of output column that contains the unique ID.
   /// Column type is assumed as BIGINT.
-  /// @param taskUniqueId ID of the Task that will be used to run the query
-  /// plan. The ID must be unique across all the tasks of a single query. Tasks
-  /// may possibly run on different machines.
-  PlanBuilder& assignUniqueId(
-      const std::string& idName = "unique",
-      const int32_t taskUniqueId = 1);
+  PlanBuilder& assignUniqueId(const std::string& idName = "unique");
 
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.
@@ -1170,14 +1256,14 @@ class PlanBuilder {
       int numPartitions,
       bool replicateNullsAndAny,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Same as above, but assumes 'replicateNullsAndAny' is false.
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Same as above, but allows to provide custom partition function.
   PlanBuilder& partitionedOutput(
@@ -1186,7 +1272,7 @@ class PlanBuilder {
       bool replicateNullsAndAny,
       core::PartitionFunctionSpecPtr partitionFunctionSpec,
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Adds a PartitionedOutputNode to broadcast the input data.
   ///
@@ -1196,12 +1282,12 @@ class PlanBuilder {
   /// duplicated in the output.
   PlanBuilder& partitionedOutputBroadcast(
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Adds a PartitionedOutputNode to put data into arbitrary buffer.
   PlanBuilder& partitionedOutputArbitrary(
       const std::vector<std::string>& outputLayout = {},
-      VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto);
+      std::string serdeKind = "Presto");
 
   /// Adds a LocalPartitionNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction. Number of partitions is determined
@@ -1217,6 +1303,9 @@ class PlanBuilder {
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
+
+  /// Add a LocalPartitionNode with gather type (N-to-1, empty partition keys).
+  PlanBuilder& localGather();
 
   /// A convenience method to add a LocalPartitionNode with hive partition
   /// function.
@@ -1280,7 +1369,8 @@ class PlanBuilder {
       const std::string& filter,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner,
-      bool nullAware = false);
+      bool nullAware = false,
+      bool nullAsValue = false);
 
   /// Add a MergeJoinNode to join two inputs using one or more join keys and an
   /// optional filter. The caller is responsible to ensure that inputs are
@@ -1472,11 +1562,57 @@ class PlanBuilder {
       bool generateRowNumber);
 
   /// Add a MarkDistinctNode to compute aggregate mask channel
-  /// @param markerKey Name of output mask channel
+  /// @param markerName Name of output mask channel
   /// @param distinctKeys List of columns to be marked distinct.
   PlanBuilder& markDistinct(
-      std::string markerKey,
+      std::string markerName,
       const std::vector<std::string>& distinctKeys);
+
+  /// Add a multi-mask MarkDistinctNode. Produces maskNames.size() + 1 marker
+  /// columns: one no-mask marker, followed by one marker for each mask.
+  /// @param markerNames Names of output boolean marker columns. Must have
+  ///   exactly maskNames.size() + 1 entries.
+  /// @param distinctKeys List of columns to check for distinct values.
+  /// @param maskNames Column names of the input boolean mask columns.
+  PlanBuilder& markDistinct(
+      std::vector<std::string> markerNames,
+      const std::vector<std::string>& distinctKeys,
+      const std::vector<std::string>& maskNames);
+
+  /// Add an EnforceDistinctNode to ensure input has unique values for the
+  /// specified keys at runtime. Throws with the specified error message if
+  /// duplicates are found.
+  /// @param distinctKeys List of columns that must have unique values.
+  /// @param errorMessage Error message to include in the exception when
+  /// duplicates are found.
+  /// @param preGroupedKeys Optional subset of distinctKeys that input is
+  /// already clustered on. When equal to distinctKeys, uses streaming
+  /// enforcement.
+  PlanBuilder& enforceDistinct(
+      const std::vector<std::string>& distinctKeys,
+      std::string errorMessage,
+      const std::vector<std::string>& preGroupedKeys = {});
+
+  /// Add an EnforceDistinctNode to ensure pre-grouped input has unique
+  /// values for the specified keys. Equivalent to calling enforceDistinct with
+  /// preGroupedKeys equal to distinctKeys, which uses the streaming
+  /// implementation.
+  /// @param distinctKeys List of columns that must have unique values. Input
+  /// must be clustered on these keys.
+  /// @param errorMessage Error message to include in the exception when
+  /// duplicates are found.
+  PlanBuilder& streamingEnforceDistinct(
+      const std::vector<std::string>& distinctKeys,
+      std::string errorMessage);
+
+  /// Add a MarkSortedNode to mark rows indicating sortedness.
+  /// @param markerKey Name of output marker column (boolean).
+  /// @param sortingKeys List of columns used for sorting.
+  /// @param sortingOrders Sort orders for each sorting key.
+  PlanBuilder& markSorted(
+      const std::string& markerKey,
+      const std::vector<std::string>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders);
 
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use

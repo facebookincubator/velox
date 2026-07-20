@@ -120,7 +120,12 @@ file_types = OrderedDict(
 )
 
 file_pattern = regex.compile(
-    "|".join(["^" + fnmatch.translate(type) + "$" for type in file_types.keys()])
+    "|".join(
+        [
+            "^" + fnmatch.translate(type).replace(r"\z", r"\Z") + "$"
+            for type in file_types.keys()
+        ]
+    )
 )
 
 

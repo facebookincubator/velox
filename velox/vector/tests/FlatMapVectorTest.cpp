@@ -74,6 +74,124 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
   VectorMaker maker_{pool_.get()};
 };
 
+TEST_F(FlatMapVectorTest, encodedKeys) {
+  const auto constructFlatMap = [&](VectorPtr keys) {
+    return std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(INTEGER(), INTEGER()),
+        nullptr,
+        3,
+        keys,
+        std::vector<VectorPtr>{
+            makeFlatVector<int32_t>({1, 2, 3}),
+            makeFlatVector<int32_t>({4, 5, 6}),
+            makeFlatVector<int32_t>({7, 8, 9})},
+        std::vector<BufferPtr>{nullptr, nullptr, nullptr});
+  };
+
+  // Dictionary wrapped keys
+  {
+    // Simple case
+    auto flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({0, 1, 2}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3})));
+
+    auto mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 4);
+    EXPECT_EQ(mapValues->valueAt(1), 5);
+    EXPECT_EQ(mapValues->valueAt(2), 6);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 7);
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+
+    // Random indices
+    flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({2, 0, 1}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3})));
+
+    mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 4);
+    EXPECT_EQ(mapValues->valueAt(1), 5);
+    EXPECT_EQ(mapValues->valueAt(2), 6);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 7);
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+
+    // Cardinality change
+    flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({1, 3, 5}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})));
+
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+    mapValues = flatMap->projectKey(4)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 4);
+    EXPECT_EQ(mapValues->valueAt(1), 5);
+    EXPECT_EQ(mapValues->valueAt(2), 6);
+    mapValues = flatMap->projectKey(6)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 7);
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    EXPECT_EQ(flatMap->projectKey(1), nullptr);
+    EXPECT_EQ(flatMap->projectKey(3), nullptr);
+    EXPECT_EQ(flatMap->projectKey(5), nullptr);
+
+    // Repeated keys
+    flatMap = constructFlatMap(
+        BaseVector::wrapInDictionary(
+            nullptr,
+            makeIndices({2, 1, 1}),
+            3,
+            makeFlatVector<int32_t>({1, 2, 3})));
+
+    EXPECT_EQ(flatMap->projectKey(1), nullptr);
+    mapValues = flatMap->projectKey(2)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->size(), 3);
+    EXPECT_EQ(mapValues->valueAt(0), 7); // Becomes last set vector
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    mapValues = flatMap->projectKey(3)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->valueAt(0), 1);
+    EXPECT_EQ(mapValues->valueAt(1), 2);
+    EXPECT_EQ(mapValues->valueAt(2), 3);
+  }
+
+  // Constant wrapped keys
+  {
+    auto flatMap = constructFlatMap(
+        BaseVector::wrapInConstant(3, 0, makeFlatVector<int32_t>({1, 2, 3})));
+
+    auto mapValues = flatMap->projectKey(1)->as<FlatVector<int32_t>>();
+    EXPECT_EQ(mapValues->size(), 3);
+    EXPECT_EQ(mapValues->valueAt(0), 7); // Becomes last set vector
+    EXPECT_EQ(mapValues->valueAt(1), 8);
+    EXPECT_EQ(mapValues->valueAt(2), 9);
+    EXPECT_EQ(flatMap->projectKey(2), nullptr);
+    EXPECT_EQ(flatMap->projectKey(3), nullptr);
+  }
+}
+
 TEST_F(FlatMapVectorTest, fail) {
   auto buildVector = [&](const TypePtr& type,
                          const VectorPtr& keys = nullptr,
@@ -273,6 +391,95 @@ TEST_F(FlatMapVectorTest, nullInMaps) {
   EXPECT_TRUE(flatMap->isInMap(0, 0));
   EXPECT_FALSE(flatMap->isInMap(1, 0));
   EXPECT_TRUE(flatMap->isInMap(2, 0));
+}
+
+TEST_F(FlatMapVectorTest, copyRangesWithNullInMaps) {
+  auto vectorSize = 2;
+  auto distinctKeys = maker_.flatVector<int32_t>({1, 2, 3});
+
+  std::vector<VectorPtr> sourceMapValues{
+      makeFlatVector<int32_t>({10, 20}),
+      makeFlatVector<int32_t>({30, 40}),
+      makeFlatVector<int32_t>({50, 60}),
+  };
+
+  std::vector<BufferPtr> sourceInMaps(distinctKeys->size());
+  sourceInMaps[1] = AlignedBuffer::allocate<bool>(vectorSize, pool_.get(), 0);
+
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      distinctKeys,
+      sourceMapValues,
+      sourceInMaps);
+
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      makeFlatVector<int32_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int32_t>({0, 0})},
+      std::vector<BufferPtr>{nullptr});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 2}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  assertEqualVectors(source, target);
+}
+
+struct MockBufferViewReleaser {
+  void addRef() {}
+  void release() {}
+};
+
+TEST_F(FlatMapVectorTest, resizeWithViewInMaps) {
+  using MockBufferView = BufferView<MockBufferViewReleaser&>;
+  static MockBufferViewReleaser releaser;
+
+  auto vectorSize = 2;
+  auto distinctKeys = maker_.flatVector<int32_t>({1, 2});
+
+  std::vector<VectorPtr> mapValues{
+      BaseVector::create(INTEGER(), vectorSize, pool_.get()),
+      BaseVector::create(INTEGER(), vectorSize, pool_.get()),
+  };
+  mapValues[0]->asFlatVector<int32_t>()->set(0, 10);
+  mapValues[0]->asFlatVector<int32_t>()->set(1, 20);
+  mapValues[1]->asFlatVector<int32_t>()->set(0, 30);
+  mapValues[1]->asFlatVector<int32_t>()->set(1, 40);
+
+  auto inMapBuffer = AlignedBuffer::allocate<bool>(vectorSize, pool_.get());
+  auto rawInMapBuffer = inMapBuffer->asMutable<uint64_t>();
+  bits::setBit(rawInMapBuffer, 0, true);
+  bits::setBit(rawInMapBuffer, 1, true);
+
+  std::vector<BufferPtr> inMaps{
+      MockBufferView::create(inMapBuffer, releaser),
+      nullptr,
+  };
+
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      vectorSize,
+      distinctKeys,
+      std::move(mapValues),
+      std::move(inMaps));
+
+  flatMap->resize(4);
+
+  EXPECT_EQ(flatMap->size(), 4);
+  EXPECT_TRUE(flatMap->isInMap(0, 0));
+  EXPECT_TRUE(flatMap->isInMap(0, 1));
+
+  // Verify sizeAt() works after resize.
+  EXPECT_EQ(flatMap->sizeAt(0), 2);
+  EXPECT_EQ(flatMap->sizeAt(1), 2);
 }
 
 TEST_F(FlatMapVectorTest, primitiveKeys) {
@@ -743,6 +950,55 @@ TEST_F(FlatMapVectorTest, copyRanges) {
           "null",
       },
       {BaseVector::CopyRange{0, 1, 2}, BaseVector::CopyRange{3, 3, 1}});
+}
+
+TEST_F(FlatMapVectorTest, copyAndPreserveNestedFlatMap) {
+  // Create a nested map type: MAP<INT, MAP<INT, INT>>.
+  auto source = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), MAP(INTEGER(), INTEGER())),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{std::make_shared<FlatMapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          2,
+          makeFlatVector<int32_t>({10, 20}),
+          std::vector<VectorPtr>{
+              makeFlatVector<int32_t>({100, 0}),
+              makeFlatVector<int32_t>({200, 0})},
+          std::vector<BufferPtr>{
+              AlignedBuffer::allocate<bool>(2, pool_.get(), true),
+              AlignedBuffer::allocate<bool>(2, pool_.get(), true)})},
+      std::vector<BufferPtr>{
+          AlignedBuffer::allocate<bool>(2, pool_.get(), true)});
+
+  auto target = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), MAP(INTEGER(), INTEGER())),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({2}),
+      std::vector<VectorPtr>{std::make_shared<FlatMapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          2,
+          makeFlatVector<int32_t>({30}),
+          std::vector<VectorPtr>{makeFlatVector<int32_t>({300, 0})},
+          std::vector<BufferPtr>{
+              AlignedBuffer::allocate<bool>(2, pool_.get(), true)})},
+      std::vector<BufferPtr>{
+          AlignedBuffer::allocate<bool>(2, pool_.get(), true)});
+
+  std::vector<BaseVector::CopyRange> ranges = {BaseVector::CopyRange{0, 0, 2}};
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  ASSERT_EQ(target->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  assertEqualVectors(source, target);
 }
 
 } // namespace

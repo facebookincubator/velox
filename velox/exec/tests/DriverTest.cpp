@@ -17,7 +17,7 @@
 #include <folly/init/Init.h>
 #include <velox/exec/Driver.h>
 #include <memory>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -189,10 +189,11 @@ class DriverTest : public OperatorTestBase {
     bool paused = false;
     for (;;) {
       if (operation == ResultOperation::kPause && paused) {
-        if (!cursor->hasNext()) {
-          paused = false;
-          Task::resume(cursor->task());
-        }
+        // Resume the task so that next() can retrieve more data.
+        // If there's already buffered data, next() returns it immediately;
+        // otherwise it will wait for the resumed task to produce output.
+        paused = false;
+        Task::resume(cursor->task());
       }
       if (!cursor->next()) {
         break;

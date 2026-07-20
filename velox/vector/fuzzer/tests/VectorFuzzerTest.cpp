@@ -69,7 +69,10 @@ class VectorFuzzerTest : public testing::Test {
 
     std::unordered_map<uint64_t, vector_size_t> map;
 
-    for (size_t i = 0; i < mapVector->size(); ++i) {
+    for (vector_size_t i = 0; i < mapVector->size(); ++i) {
+      if (mapVector->isNullAt(i)) {
+        continue;
+      }
       vector_size_t offset = mapVector->offsetAt(i);
       map.clear();
 
@@ -94,6 +97,16 @@ class VectorFuzzerTest : public testing::Test {
 
   void validateMaxSizes(VectorPtr vector, size_t maxSize);
 
+  void assertTimeValuesInRange(const SimpleVector<int64_t>* timeVector) {
+    for (size_t i = 0; i < timeVector->size(); ++i) {
+      if (!timeVector->isNullAt(i)) {
+        auto timeValue = timeVector->valueAt(i);
+        ASSERT_GE(timeValue, TIME()->getMin());
+        ASSERT_LE(timeValue, TIME()->getMax());
+      }
+    }
+  }
+
  private:
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
@@ -113,6 +126,7 @@ TEST_F(VectorFuzzerTest, flatPrimitive) {
       VARCHAR(),
       VARBINARY(),
       DATE(),
+      TIME(),
       TIMESTAMP(),
       INTERVAL_DAY_TIME(),
       UNKNOWN(),
@@ -437,6 +451,182 @@ TEST_F(VectorFuzzerTest, array) {
   checkElementSize(kElementMaxSize + 50);
 }
 
+TEST_F(VectorFuzzerTest, fuzzDataBehindNulls) {
+  // Null rows of arrays/maps/dictionaries carry out-of-range "garbage"
+  // offsets/sizes/indices, while the vector still passes validate() (which
+  // skips null rows).
+  constexpr vector_size_t kSize = 200;
+
+  auto arrayRowInRange = [](const ArrayVectorBase* arrayVector,
+                            vector_size_t i,
+                            int64_t elementsSize) {
+    const int64_t offset = arrayVector->offsetAt(i);
+    const int64_t size = arrayVector->sizeAt(i);
+    return offset >= 0 && size >= 0 && offset + size <= elementsSize;
+  };
+
+  // Arrays: every null row must carry out-of-range offsets/sizes.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.5;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto vector = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    ASSERT_NO_THROW(vector->validate({}));
+
+    auto* arrayVector = vector->as<ArrayVector>();
+    const int64_t elementsSize = arrayVector->elements()->size();
+    bool sawNull = false;
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      if (arrayVector->isNullAt(i)) {
+        sawNull = true;
+        EXPECT_FALSE(arrayRowInRange(arrayVector, i, elementsSize))
+            << "null row " << i << " should have out-of-range offset/size";
+      } else {
+        EXPECT_TRUE(arrayRowInRange(arrayVector, i, elementsSize));
+      }
+    }
+    EXPECT_TRUE(sawNull);
+  }
+
+  // Maps (also exercises normalizeMapKeys skipping null rows with garbage
+  // offsets/sizes): every null row must carry out-of-range offsets/sizes.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.5;
+    opts.normalizeMapKeys = true;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto vector = fuzzer.fuzzMap(
+        fuzzer.fuzzFlatNotNull(BIGINT(), kSize),
+        fuzzer.fuzzFlat(BIGINT(), kSize),
+        kSize);
+    ASSERT_NO_THROW(vector->validate({}));
+
+    auto* mapVector = vector->as<MapVector>();
+    const int64_t elementsSize =
+        std::min(mapVector->mapKeys()->size(), mapVector->mapValues()->size());
+    bool sawNull = false;
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      if (mapVector->isNullAt(i)) {
+        sawNull = true;
+        EXPECT_FALSE(arrayRowInRange(mapVector, i, elementsSize))
+            << "null row " << i << " should have out-of-range offset/size";
+      }
+    }
+    EXPECT_TRUE(sawNull);
+  }
+
+  // Dictionaries: every row that is null in the dictionary's own (wrapper)
+  // nulls buffer must carry an out-of-range index. We check the wrapper nulls
+  // directly rather than isNullAt(), because isNullAt() also reports rows whose
+  // valid in-range index points at a null base element -- a different,
+  // legitimate kind of null that carries no garbage index.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.5;
+    opts.dictionaryHasNulls = true;
+    VectorFuzzer fuzzer(opts, pool());
+
+    auto vector =
+        fuzzer.fuzzDictionary(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    ASSERT_NO_THROW(vector->validate({}));
+
+    auto* dictionary = vector->as<DictionaryVector<int64_t>>();
+    ASSERT_TRUE(dictionary != nullptr);
+    const auto* rawIndices = dictionary->indices()->as<vector_size_t>();
+    const uint64_t* rawNulls = dictionary->rawNulls();
+    ASSERT_TRUE(rawNulls != nullptr);
+    bool sawNull = false;
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      if (bits::isBitNull(rawNulls, i)) {
+        sawNull = true;
+        EXPECT_GE(rawIndices[i], kSize)
+            << "null row " << i << " should have an out-of-range index";
+      } else {
+        EXPECT_GE(rawIndices[i], 0);
+        EXPECT_LT(rawIndices[i], kSize);
+      }
+    }
+    EXPECT_TRUE(sawNull);
+  }
+}
+
+TEST_F(VectorFuzzerTest, verifyEmptyContainersGenerated) {
+  // Variable-length containers (the default) must be able to naturally produce
+  // empty arrays/maps so that empty-container edge cases get fuzzed (e.g. a UDF
+  // reading element[0] of an empty array).
+  constexpr vector_size_t kSize = 1000;
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.0;
+  ASSERT_TRUE(opts.containerVariableLength);
+  VectorFuzzer fuzzer(opts, pool(), /*seed=*/12345);
+
+  auto array = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+  auto* arrayVector = array->as<ArrayVector>();
+  vector_size_t emptyArrays = 0;
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    if (arrayVector->sizeAt(i) == 0) {
+      ++emptyArrays;
+    }
+  }
+  EXPECT_GT(emptyArrays, 0);
+
+  auto map = fuzzer.fuzzMap(
+      fuzzer.fuzzFlatNotNull(BIGINT(), kSize),
+      fuzzer.fuzzFlat(BIGINT(), kSize),
+      kSize);
+  auto* mapVector = map->as<MapVector>();
+  vector_size_t emptyMaps = 0;
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    if (mapVector->sizeAt(i) == 0) {
+      ++emptyMaps;
+    }
+  }
+  EXPECT_GT(emptyMaps, 0);
+}
+
+TEST_F(VectorFuzzerTest, nonContiguousElements) {
+  constexpr vector_size_t kSize = 200;
+
+  // With the option on, some containers start after the end of the previous one
+  // (a gap of unreferenced elements), and the vector still passes validate().
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.0;
+    opts.fuzzNonContiguousElements = true;
+    VectorFuzzer fuzzer(opts, pool(), /*seed=*/12345);
+
+    auto array = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    ASSERT_NO_THROW(array->validate({}));
+    auto* arrayVector = array->as<ArrayVector>();
+    bool foundGap = false;
+    for (vector_size_t i = 1; i < kSize; ++i) {
+      if (arrayVector->offsetAt(i) >
+          arrayVector->offsetAt(i - 1) + arrayVector->sizeAt(i - 1)) {
+        foundGap = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(foundGap);
+  }
+
+  // With the option off (default), containers are laid out contiguously.
+  {
+    VectorFuzzer::Options opts;
+    opts.nullRatio = 0.0;
+    VectorFuzzer fuzzer(opts, pool(), /*seed=*/12345);
+
+    auto array = fuzzer.fuzzArray(fuzzer.fuzzFlat(BIGINT(), kSize), kSize);
+    auto* arrayVector = array->as<ArrayVector>();
+    for (vector_size_t i = 1; i < kSize; ++i) {
+      EXPECT_LE(
+          arrayVector->offsetAt(i),
+          arrayVector->offsetAt(i - 1) + arrayVector->sizeAt(i - 1));
+    }
+  }
+}
+
 TEST_F(VectorFuzzerTest, map) {
   VectorFuzzer::Options opts;
   opts.containerVariableLength = false;
@@ -488,6 +678,32 @@ TEST_F(VectorFuzzerTest, mapKeys) {
       assertMapKeys(vector->as<MapVector>());
     }
   }
+}
+
+// Regression test: normalizeMapKeys must read keys through decoding so non-flat
+// encodings work. A dictionary wrapping an unloaded lazy vector has no value
+// accessor until decoded; hashing it directly used to deref null.
+TEST_F(VectorFuzzerTest, normalizeMapKeysEncodedKeys) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0;
+  opts.dictionaryHasNulls = false;
+  opts.normalizeMapKeys = true;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Build DICTIONARY(LAZY(FLAT)) non-null keys, left unloaded.
+  auto keys = fuzzer.fuzzDictionary(
+      VectorFuzzer::wrapInLazyVector(fuzzer.fuzzFlat(BIGINT(), 1000)));
+  ASSERT_TRUE(VectorEncoding::isDictionary(keys->encoding()));
+  ASSERT_TRUE(isLazyNotLoaded(*keys->valueVector()));
+
+  VectorPtr vector;
+  ASSERT_NO_THROW(
+      vector = fuzzer.fuzzMap(keys, fuzzer.fuzzFlat(BIGINT(), 1000), 10));
+
+  // Materialize the lazy layer so the uniqueness check can read key values,
+  // then verify normalization actually deduplicated keys.
+  vector->as<MapVector>()->mapKeys()->loadedVector();
+  assertMapKeys(vector->as<MapVector>());
 }
 
 TEST_F(VectorFuzzerTest, row) {
@@ -673,6 +889,47 @@ TEST_F(VectorFuzzerTest, timestamp) {
     }
   }
   ASSERT_TRUE(nanosFound);
+}
+
+TEST_F(VectorFuzzerTest, time) {
+  constexpr size_t vectorSize = 1'000;
+  VectorFuzzer::Options opts;
+  opts.vectorSize = vectorSize;
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Test flat TIME vector.
+  auto timeVector = fuzzer.fuzzFlat(TIME());
+  ASSERT_EQ(VectorEncoding::Simple::FLAT, timeVector->encoding());
+  ASSERT_TRUE(timeVector->type()->equivalent(*TIME()));
+  ASSERT_EQ(vectorSize, timeVector->size());
+
+  auto flatTimeVector = timeVector->as<FlatVector<int64_t>>();
+  assertTimeValuesInRange(flatTimeVector);
+
+  // Test constant TIME vector.
+  auto constTimeVector = fuzzer.fuzzConstant(TIME(), vectorSize);
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, constTimeVector->encoding());
+  ASSERT_TRUE(constTimeVector->type()->equivalent(*TIME()));
+  ASSERT_EQ(vectorSize, constTimeVector->size());
+
+  // Verify constant TIME value is in valid range.
+  auto constVector = constTimeVector->as<ConstantVector<int64_t>>();
+  if (!constVector->isNullAt(0)) {
+    auto timeValue = constVector->valueAt(0);
+    ASSERT_GE(timeValue, TIME()->getMin());
+    ASSERT_LE(timeValue, TIME()->getMax());
+  }
+
+  // Test dictionary TIME vector.
+  auto dictTimeVector =
+      fuzzer.fuzzDictionary(fuzzer.fuzzFlat(TIME(), 100), 500);
+  ASSERT_EQ(VectorEncoding::Simple::DICTIONARY, dictTimeVector->encoding());
+  ASSERT_TRUE(dictTimeVector->type()->equivalent(*TIME()));
+
+  // Verify all TIME values in dictionary are in valid range.
+  auto dictVector = dictTimeVector->as<DictionaryVector<int64_t>>();
+  auto baseVector = dictVector->valueVector()->as<FlatVector<int64_t>>();
+  assertTimeValuesInRange(baseVector);
 }
 
 TEST_F(VectorFuzzerTest, assorted) {
@@ -1036,9 +1293,9 @@ TEST_F(VectorFuzzerTest, customTypeGenerator) {
       if (decoded.isNullAt(j)) {
         continue;
       }
-      std::string value = decoded.valueAt<StringView>(j);
       try {
-        json = folly::parseJson(value, opts);
+        auto stringView = decoded.valueAt<StringView>(j);
+        json = folly::parseJson(std::string_view(stringView), opts);
       } catch (...) {
         EXPECT_TRUE(false);
       }
@@ -1078,9 +1335,10 @@ TEST_F(VectorFuzzerTest, jsonConstrained) {
       if (decoded.isNullAt(j)) {
         continue;
       }
-      std::string value = decoded.valueAt<StringView>(j);
       folly::dynamic json;
-      EXPECT_NO_THROW(json = folly::parseJson(value, jsonOpts));
+      auto stringView = decoded.valueAt<StringView>(j);
+      EXPECT_NO_THROW(
+          json = folly::parseJson(std::string_view(stringView), jsonOpts));
       EXPECT_TRUE(json.isNull() || json.isArray());
     }
   }
@@ -1098,7 +1356,7 @@ TEST_F(VectorFuzzerTest, setConstrained) {
 
   DecodedVector decoded(*vector, SelectivityVector(kSize));
   for (auto i = 0; i < kSize; ++i) {
-    std::string value = decoded.valueAt<StringView>(i);
+    auto value = decoded.valueAt<StringView>(i);
     EXPECT_TRUE(value == "a" || value == "b");
   }
 }
@@ -1136,5 +1394,67 @@ TEST_F(VectorFuzzerTest, qdigestTypeGeneration) {
     EXPECT_TRUE(vector->type()->equivalent(*qdigestBigIntType));
     EXPECT_EQ(vector->size(), opts.vectorSize);
   }
+}
+
+TEST_F(VectorFuzzerTest, nullRatioPatternVariety) {
+  // Test that we get variety in NULL patterns when feature is enabled
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 100;
+  opts.nullRatio = 0.2;
+  opts.useRandomNullPattern = true; // Enable random NULL pattern selection
+
+  VectorFuzzer fuzzer(opts, pool());
+
+  // Track different null patterns we see
+  bool seenAllAtStart = false;
+  bool seenAllAtEnd = false;
+  bool seenScattered = false;
+
+  for (size_t iter = 0; iter < 200; ++iter) {
+    auto vector = fuzzer.fuzzFlat(INTEGER());
+    ASSERT_EQ(vector->size(), 100);
+
+    size_t nullCount = 0;
+    size_t firstNull = 0;
+    size_t lastNull = 0;
+    bool foundFirst = false;
+
+    for (size_t i = 0; i < vector->size(); ++i) {
+      if (vector->isNullAt(i)) {
+        nullCount++;
+        if (!foundFirst) {
+          firstNull = i;
+          foundFirst = true;
+        }
+        lastNull = i;
+      }
+    }
+
+    if (nullCount == 0) {
+      continue; // Skip empty vectors
+    }
+
+    // Detect patterns:
+    // HeadOnly: all nulls at start (firstNull < 5)
+    if (firstNull < 5 && lastNull < nullCount + 5) {
+      seenAllAtStart = true;
+    }
+    // TailOnly: all nulls at end (firstNull > 100 - nullCount - 5)
+    if (firstNull > 100 - nullCount - 5 && lastNull > 95) {
+      seenAllAtEnd = true;
+    }
+    // Scattered (Random or HeadAndTail with gaps)
+    size_t gapSize = lastNull - firstNull - nullCount + 1;
+    if (gapSize > 10) {
+      seenScattered = true;
+    }
+  }
+
+  // We should see all different patterns across 200 iterations
+  int patternsObserved = (seenAllAtStart ? 1 : 0) + (seenAllAtEnd ? 1 : 0) +
+      (seenScattered ? 1 : 0);
+  EXPECT_EQ(patternsObserved, 3)
+      << "Expected to observe multiple NULL patterns, but only saw "
+      << patternsObserved;
 }
 } // namespace

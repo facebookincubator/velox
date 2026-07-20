@@ -15,7 +15,7 @@
 # pyre-unsafe
 
 from pyvelox.vector import Vector
-from pyarrow import Array
+from pyarrow import Array, RecordBatch
 
-def to_velox(array: Array) -> Vector: ...
+def to_velox(array: Array | RecordBatch) -> Vector: ...
 def to_arrow(vector: Vector) -> Array: ...

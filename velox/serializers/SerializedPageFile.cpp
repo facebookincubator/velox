@@ -23,24 +23,26 @@ namespace facebook::velox::serializer {
 std::unique_ptr<SerializedPageFile> SerializedPageFile::create(
     uint32_t id,
     const std::string& pathPrefix,
-    const std::string& fileCreateConfig) {
+    const std::string& fileCreateConfig,
+    IoStats* ioStats) {
   return std::unique_ptr<SerializedPageFile>(
-      new SerializedPageFile(id, pathPrefix, fileCreateConfig));
+      new SerializedPageFile(id, pathPrefix, fileCreateConfig, ioStats));
 }
 
 SerializedPageFile::SerializedPageFile(
     uint32_t id,
     const std::string& pathPrefix,
-    const std::string& fileCreateConfig)
+    const std::string& fileCreateConfig,
+    IoStats* ioStats)
     : id_(id), path_(fmt::format("{}-{}", pathPrefix, ordinalCounter_++)) {
   auto fs = filesystems::getFileSystem(path_, nullptr);
   file_ = fs->openFileForWrite(
       path_,
       filesystems::FileOptions{
-          {{filesystems::FileOptions::kFileCreateConfig.toString(),
-            fileCreateConfig}},
-          nullptr,
-          std::nullopt});
+          .values =
+              {{filesystems::FileOptions::kFileCreateConfig.toString(),
+                fileCreateConfig}},
+          .stats = ioStats});
 }
 
 void SerializedPageFile::finish() {
@@ -70,14 +72,16 @@ SerializedPageFileWriter::SerializedPageFileWriter(
     const std::string& fileCreateConfig,
     std::unique_ptr<VectorSerde::Options> serdeOptions,
     VectorSerde* serde,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    IoStats* ioStats)
     : pathPrefix_(pathPrefix),
       targetFileSize_(targetFileSize),
       writeBufferSize_(writeBufferSize),
       fileCreateConfig_(fileCreateConfig),
       serdeOptions_(std::move(serdeOptions)),
       pool_(pool),
-      serde_(serde) {}
+      serde_(serde),
+      ioStats_(ioStats) {}
 
 SerializedPageFile* SerializedPageFileWriter::ensureFile() {
   if ((currentFile_ != nullptr) && (currentFile_->size() > targetFileSize_)) {
@@ -87,7 +91,8 @@ SerializedPageFile* SerializedPageFileWriter::ensureFile() {
     currentFile_ = SerializedPageFile::create(
         nextFileId_++,
         fmt::format("{}-{}", pathPrefix_, finishedFiles_.size()),
-        fileCreateConfig_);
+        fileCreateConfig_,
+        ioStats_);
   }
   return currentFile_.get();
 }
@@ -119,7 +124,7 @@ uint64_t SerializedPageFileWriter::flush() {
       *pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
   uint64_t flushTimeNs{0};
   {
-    NanosecondTimer timer(&flushTimeNs);
+    NanosecondWallTimer timer(&flushTimeNs);
     batch_->flush(&out);
   }
   batch_.reset();
@@ -128,7 +133,7 @@ uint64_t SerializedPageFileWriter::flush() {
   uint64_t writtenBytes{0};
   auto iobuf = out.getIOBuf();
   {
-    NanosecondTimer timer(&writeTimeNs);
+    NanosecondWallTimer timer(&writeTimeNs);
     writtenBytes = file->write(std::move(iobuf));
   }
   updateWriteStats(writtenBytes, flushTimeNs, writeTimeNs);
@@ -146,7 +151,7 @@ uint64_t SerializedPageFileWriter::write(
 
   uint64_t timeNs{0};
   {
-    NanosecondTimer timer(&timeNs);
+    NanosecondWallTimer timer(&timeNs);
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
       batch_->createStreamTree(
@@ -184,13 +189,15 @@ SerializedPageFileReader::SerializedPageFileReader(
     const RowTypePtr& type,
     VectorSerde* serde,
     std::unique_ptr<VectorSerde::Options> readOptions,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    IoStats* ioStats)
     : readOptions_(std::move(readOptions)),
       pool_(pool),
       serde_(serde),
       type_(type) {
   auto fs = filesystems::getFileSystem(path, nullptr);
-  auto file = fs->openFileForRead(path);
+  auto file =
+      fs->openFileForRead(path, filesystems::FileOptions{.stats = ioStats});
   input_ = std::make_unique<common::FileInputStream>(
       std::move(file), bufferSize, pool_);
 }
@@ -203,7 +210,7 @@ bool SerializedPageFileReader::nextBatch(RowVectorPtr& rowVector) {
 
   uint64_t timeNs{0};
   {
-    NanosecondTimer timer{&timeNs};
+    NanosecondWallTimer timer{&timeNs};
     VectorStreamGroup::read(
         input_.get(), pool_, type_, serde_, &rowVector, readOptions_.get());
   }

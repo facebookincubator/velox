@@ -34,12 +34,17 @@ template <typename T>
 struct SfmSketchCardinality {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::unique_ptr<HashStringAllocator> allocator_;
+
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
+      memory::MemoryPool* pool,
       const arg_type<SfmSketch>* /*input*/) {
-    pool_ = memory::memoryManager()->addLeafPool();
-    allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
+    VELOX_USER_CHECK_NOT_NULL(
+        pool,
+        "sfm_sketch_cardinality requires MemoryPool for HashStringAllocator");
+    allocator_ = std::make_unique<HashStringAllocator>(pool);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -50,24 +55,25 @@ struct SfmSketchCardinality {
                  reinterpret_cast<const char*>(input.data()), allocator_.get())
                  .cardinality();
   }
-
- private:
-  std::shared_ptr<memory::MemoryPool> pool_;
-  std::unique_ptr<HashStringAllocator> allocator_;
 };
 
 template <typename T>
 struct NoisyEmptyApproxSetSfm {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::unique_ptr<HashStringAllocator> allocator_;
+
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
+      memory::MemoryPool* pool,
       const double* /*epsilon*/,
       const int64_t* /*buckets*/ = nullptr,
       const int64_t* /*precision*/ = nullptr) {
-    pool_ = memory::memoryManager()->addLeafPool();
-    allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
+    VELOX_USER_CHECK_NOT_NULL(
+        pool,
+        "noisy_empty_approx_set_sfm requires MemoryPool for HashStringAllocator");
+    allocator_ = std::make_unique<HashStringAllocator>(pool);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -98,22 +104,22 @@ struct NoisyEmptyApproxSetSfm {
     result.resize(serialized.size());
     memcpy(result.data(), serialized.data(), serialized.size());
   }
-
- private:
-  std::shared_ptr<memory::MemoryPool> pool_;
-  std::unique_ptr<HashStringAllocator> allocator_;
 };
 
 template <typename T>
 struct mergeSfmSketchArray {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  std::unique_ptr<HashStringAllocator> allocator_;
+
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
+      memory::MemoryPool* pool,
       const arg_type<Array<SfmSketch>>* /*input*/) {
-    pool_ = memory::memoryManager()->addLeafPool();
-    allocator_ = std::make_unique<HashStringAllocator>(pool_.get());
+    VELOX_USER_CHECK_NOT_NULL(
+        pool, "merge_sfm requires MemoryPool for HashStringAllocator");
+    allocator_ = std::make_unique<HashStringAllocator>(pool);
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -153,10 +159,6 @@ struct mergeSfmSketchArray {
 
     return true;
   }
-
- private:
-  std::shared_ptr<memory::MemoryPool> pool_;
-  std::unique_ptr<HashStringAllocator> allocator_;
 };
 
 } // namespace facebook::velox::functions

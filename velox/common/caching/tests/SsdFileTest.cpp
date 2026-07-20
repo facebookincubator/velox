@@ -20,17 +20,23 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TestValue.h"
 
 #include <fcntl.h>
+#include <atomic>
+#include <thread>
+
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
+#include <folly/synchronization/Baton.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <re2/re2.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
+using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::tests::utils;
 
 using facebook::velox::memory::MemoryAllocator;
@@ -53,6 +59,7 @@ class SsdFileTest : public testing::Test {
   static constexpr int64_t kMB = 1 << 20;
 
   void SetUp() override {
+    TestValue::enable();
     filesystems::registerLocalFileSystem();
     registerFaultyFileSystem();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -79,10 +86,9 @@ class SsdFileTest : public testing::Test {
     FLAGS_velox_ssd_odirect = false;
     cache_ = AsyncDataCache::create(memory::memoryManager()->allocator());
     cacheHelper_ =
-        std::make_unique<test::AsyncDataCacheTestHelper>(cache_.get());
+        std::make_unique<cache::test::AsyncDataCacheTestHelper>(cache_.get());
     fileName_ = StringIdLease(fileIds(), "fileInStorage");
-    tempDirectory_ =
-        exec::test::TempDirectoryPath::create(enableFaultInjection);
+    tempDirectory_ = TempDirectoryPath::create(enableFaultInjection);
     initializeSsdFile(
         ssdBytes,
         checkpointIntervalBytes,
@@ -96,7 +102,8 @@ class SsdFileTest : public testing::Test {
       uint64_t checkpointIntervalBytes = 0,
       bool checksumEnabled = false,
       bool checksumReadVerificationEnabled = false,
-      bool disableFileCow = false) {
+      bool disableFileCow = false,
+      uint64_t maxEntries = 0) {
     SsdFile::Config config(
         fmt::format("{}/ssdtest", tempDirectory_->getPath()),
         0, // shardId
@@ -105,11 +112,12 @@ class SsdFileTest : public testing::Test {
         disableFileCow,
         checksumEnabled,
         checksumReadVerificationEnabled,
+        maxEntries,
         ssdExecutor());
     ssdFile_ = std::make_unique<SsdFile>(config);
     if (ssdFile_ != nullptr) {
       ssdFileHelper_ =
-          std::make_unique<test::SsdFileTestHelper>(ssdFile_.get());
+          std::make_unique<cache::test::SsdFileTestHelper>(ssdFile_.get());
     }
   }
 
@@ -197,12 +205,12 @@ class SsdFileTest : public testing::Test {
     std::vector<CachePin> pins;
     while (bytesFromCache < totalSize) {
       pins.push_back(
-          cache_->findOrCreate(RawFileCacheKey{fileId, offset}, size, nullptr));
+          cache_->findOrCreate(RawFileCacheKey{fileId, offset}, size));
       bytesFromCache += size;
       EXPECT_FALSE(pins.back().empty());
       auto entry = pins.back().entry();
       if (entry && entry->isExclusive()) {
-        initializeContents(fileId + offset, entry->data());
+        initializeContents(fileId + offset, entry->nonContiguousData());
       }
       offset += size;
       size *= 2;
@@ -238,7 +246,7 @@ class SsdFileTest : public testing::Test {
     }
     ssdFile_->load(ssdPins, pins);
     for (auto& pin : pins) {
-      checkContents(pin.entry()->data(), pin.entry()->size());
+      checkContents(pin.entry()->nonContiguousData(), pin.entry()->size());
     }
   }
 
@@ -274,7 +282,7 @@ class SsdFileTest : public testing::Test {
     EXPECT_FALSE(
         ssdFile_->find(RawFileCacheKey{fileName_.id(), ssdSize}).empty());
 
-    pins.erase(pins.begin(), pins.begin() + numWritten);
+    pins.erase(pins.cbegin(), pins.cbegin() + numWritten);
     ssdFile_->write(pins);
     for (auto& pin : pins) {
       if (pin.entry()->ssdFile()) {
@@ -300,8 +308,7 @@ class SsdFileTest : public testing::Test {
       std::vector<CachePin> pins;
       pins.push_back(cache_->findOrCreate(
           RawFileCacheKey{entry.key.fileNum.id(), entry.key.offset},
-          entry.size,
-          nullptr));
+          entry.size));
       if (pins.back().entry()->isExclusive()) {
         std::vector<SsdPin> ssdPins;
         ssdPins.push_back(ssdFile_->find(
@@ -310,21 +317,23 @@ class SsdFileTest : public testing::Test {
           ++numFound;
           ssdFile_->load(ssdPins, pins);
           checkContents(
-              pins[0].entry()->data(), pins[0].entry()->size(), expectEqual);
+              pins[0].entry()->nonContiguousData(),
+              pins[0].entry()->size(),
+              expectEqual);
         }
       }
     }
     return numFound;
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
+  std::shared_ptr<TempDirectoryPath> tempDirectory_;
 
   std::shared_ptr<AsyncDataCache> cache_;
-  std::unique_ptr<test::AsyncDataCacheTestHelper> cacheHelper_;
+  std::unique_ptr<cache::test::AsyncDataCacheTestHelper> cacheHelper_;
   StringIdLease fileName_;
 
   std::unique_ptr<SsdFile> ssdFile_;
-  std::unique_ptr<test::SsdFileTestHelper> ssdFileHelper_;
+  std::unique_ptr<cache::test::SsdFileTestHelper> ssdFileHelper_;
 };
 
 TEST_F(SsdFileTest, writeAndRead) {
@@ -376,9 +385,7 @@ TEST_F(SsdFileTest, writeAndRead) {
     std::vector<CachePin> pins;
 
     pins.push_back(cache_->findOrCreate(
-        RawFileCacheKey{fileName_.id(), entry.key.offset},
-        entry.size,
-        nullptr));
+        RawFileCacheKey{fileName_.id(), entry.key.offset}, entry.size));
     if (pins.back().entry()->isExclusive()) {
       std::vector<SsdPin> ssdPins;
 
@@ -386,7 +393,8 @@ TEST_F(SsdFileTest, writeAndRead) {
           ssdFile_->find(RawFileCacheKey{fileName_.id(), entry.key.offset}));
       if (!ssdPins.back().empty()) {
         ssdFile_->load(ssdPins, pins);
-        checkContents(pins[0].entry()->data(), pins[0].entry()->size());
+        checkContents(
+            pins[0].entry()->nonContiguousData(), pins[0].entry()->size());
       }
     }
   }
@@ -400,6 +408,89 @@ TEST_F(SsdFileTest, writeAndRead) {
     readAndCheckPins(pins);
     pins.clear();
   }
+}
+
+// Reproduces the race between a write and region eviction. The disk write in
+// SsdFile::write() runs outside of 'mutex_'. Without the region pinning in
+// getSpace(), a concurrent writer can pick the in-flight region as an
+// eviction candidate, clear it and write its own data into the same byte
+// range, so the entries registered by one of the writers point at bytes
+// overwritten by the other. The first writer is blocked between getSpace()
+// and its disk write, while a second writer fails to fit in the region and
+// triggers eviction. Checksum read verification turns the clobbered reads
+// into errors.
+DEBUG_ONLY_TEST_F(SsdFileTest, writeRacingWithEviction) {
+  // A single region so that the second write can only proceed by evicting
+  // the region the first write is using.
+  constexpr int64_t kSsdSize = SsdFile::kRegionSize;
+  initializeCache(
+      kSsdSize,
+      0,
+      /*checksumEnabled=*/true,
+      /*checksumReadVerificationEnabled=*/true);
+
+  folly::Baton<> writerReached;
+  folly::Baton<> evictionDone;
+  std::atomic<bool> hookFired{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cache::SsdFile::write",
+      std::function<void(const SsdFile*)>([&](const SsdFile*) {
+        // Block only the first writer; the second write call must proceed.
+        if (hookFired.exchange(true)) {
+          return;
+        }
+        writerReached.post();
+        evictionDone.wait();
+      }));
+
+  // The first batch nearly fills the region, leaving less space than the
+  // second batch's smallest entry.
+  auto firstPins = makePins(fileName_.id(), 0, 4096, 2048 * 1025, 62 * kMB);
+  std::thread firstWriter([&]() { ssdFile_->write(firstPins); });
+  writerReached.wait();
+
+  // The first writer is now blocked after reserving space, before its disk
+  // write. This batch does not fit in the region's remaining space, so the
+  // write can only proceed by evicting the region under write.
+  auto secondPins =
+      makePins(fileName_.id(), 1024 * kMB, 4 * kMB, 4 * kMB, 8 * kMB);
+  ssdFile_->write(secondPins);
+  evictionDone.post();
+  firstWriter.join();
+
+  // Read back every entry that was registered on SSD. Without the region
+  // pinning, the second batch's entries point at bytes overwritten by the
+  // first writer and fail checksum verification.
+  int32_t numCorruptions = 0;
+  auto verifyPins = [&](std::vector<CachePin>& pins) {
+    for (auto& pin : pins) {
+      if (pin.entry()->ssdFile() == nullptr) {
+        continue;
+      }
+      auto ssdPin = ssdFile_->find(
+          RawFileCacheKey{
+              pin.entry()->key().fileNum.id(), pin.entry()->key().offset});
+      if (ssdPin.empty()) {
+        continue;
+      }
+      std::vector<SsdPin> ssdPins;
+      ssdPins.push_back(std::move(ssdPin));
+      std::vector<CachePin> cachePins;
+      cachePins.push_back(std::move(pin));
+      try {
+        ssdFile_->load(ssdPins, cachePins);
+      } catch (const VeloxException&) {
+        ++numCorruptions;
+      }
+    }
+  };
+  verifyPins(firstPins);
+  verifyPins(secondPins);
+
+  EXPECT_EQ(numCorruptions, 0);
+  SsdCacheStats stats;
+  ssdFile_->updateStats(stats);
+  EXPECT_EQ(stats.readSsdCorruptions, 0);
 }
 
 TEST_F(SsdFileTest, checkpoint) {
@@ -416,9 +507,7 @@ TEST_F(SsdFileTest, checkpoint) {
         makePins(fileName_.id(), startOffset, 4096, 2048 * 1025, 62 * kMB);
     // Each region has one entry from `fileNameAlt`.
     pins.push_back(cache_->findOrCreate(
-        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset},
-        1024,
-        nullptr));
+        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset}, 1024));
     ssdFile_->write(pins);
     for (auto& pin : pins) {
       EXPECT_EQ(ssdFile_.get(), pin.entry()->ssdFile());
@@ -443,9 +532,7 @@ TEST_F(SsdFileTest, checkpoint) {
     auto pins =
         makePins(fileName_.id(), startOffset, 4096, 2048 * 1025, 62 * kMB);
     pins.push_back(cache_->findOrCreate(
-        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset},
-        1024,
-        nullptr));
+        RawFileCacheKey{fileNameAlt.id(), (uint64_t)startOffset}, 1024));
     readAndCheckPins(pins);
   }
   // All entries can be found.
@@ -821,6 +908,110 @@ TEST_F(SsdFileTest, ssdReadWithoutChecksumCheck) {
 #endif
 }
 
+TEST_F(SsdFileTest, writeInNoSpaceState) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  initializeCache(kSsdSize);
+
+  // Verify the initial state is kActive.
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kActive);
+
+  // Verify the cache write is successful in the initial kActiveState.
+  auto pins = makePins(fileName_.id(), 0, 4096, 4096, 4096 * 10);
+  ssdFile_->write(pins);
+  SsdCacheStats statsBeforeNoSpace;
+  ssdFile_->updateStats(statsBeforeNoSpace);
+  EXPECT_GT(statsBeforeNoSpace.entriesWritten, 0);
+  EXPECT_EQ(statsBeforeNoSpace.writeSsdDropped, 0);
+
+  // Set the state to kNoSpace to simulate the SSD running out of space.
+  ssdFileHelper_->setState(SsdFile::State::kNoSpace);
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kNoSpace);
+
+  // Verify that writes are dropped and no new entries are written in the
+  // kNoSpace state.
+  auto morePins = makePins(fileName_.id(), 4096 * 10, 4096, 4096, 4096 * 5);
+  ssdFile_->write(morePins);
+  SsdCacheStats statsAfterNoSpace;
+  ssdFile_->updateStats(statsAfterNoSpace);
+  EXPECT_GT(
+      statsAfterNoSpace.writeSsdDropped, statsBeforeNoSpace.writeSsdDropped);
+  EXPECT_EQ(
+      statsAfterNoSpace.entriesWritten, statsBeforeNoSpace.entriesWritten);
+
+  // Verify none of the new entries have ssdFile set.
+  for (const auto& pin : morePins) {
+    EXPECT_EQ(pin.entry()->ssdFile(), nullptr);
+  }
+}
+
+TEST_F(SsdFileTest, checkpointInNoSpaceState) {
+  constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
+  const uint64_t checkpointIntervalBytes = 2 * SsdFile::kRegionSize;
+  initializeCache(kSsdSize, checkpointIntervalBytes);
+
+  // Write some entries to trigger checkpoint eligibility.
+  auto pins = makePins(fileName_.id(), 0, 4096, 4096, 3 * SsdFile::kRegionSize);
+  ssdFile_->write(pins);
+
+  SsdCacheStats statsBeforeNoSpace;
+  ssdFile_->updateStats(statsBeforeNoSpace);
+
+  // Set the state to kNoSpace.
+  ssdFileHelper_->setState(SsdFile::State::kNoSpace);
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kNoSpace);
+
+  // Verify checkpointing is skipped in the kNoSpace state.
+  ssdFile_->checkpoint(true);
+
+  SsdCacheStats statsAfterNoSpace;
+  ssdFile_->updateStats(statsAfterNoSpace);
+  EXPECT_EQ(
+      statsAfterNoSpace.checkpointsWritten,
+      statsBeforeNoSpace.checkpointsWritten);
+}
+
+TEST_F(SsdFileTest, growOrEvictBlockedInNoSpaceState) {
+  constexpr int64_t kSsdSize = 4 * SsdFile::kRegionSize;
+  const uint64_t checkpointIntervalBytes = kSsdSize;
+  initializeCache(kSsdSize, checkpointIntervalBytes);
+
+  // Fill up the SSD cache to trigger eviction on subsequent writes.
+  for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
+       startOffset += SsdFile::kRegionSize) {
+    auto pins = makePins(
+        fileName_.id(), startOffset, 4096, 4096, SsdFile::kRegionSize - 1024);
+    ssdFile_->write(pins);
+  }
+
+  // The SSD cache is at max regins.
+  SsdCacheStats statsBeforeNoSpace;
+  ssdFile_->updateStats(statsBeforeNoSpace);
+  EXPECT_EQ(statsBeforeNoSpace.regionsCached, ssdFileHelper_->maxRegions());
+
+  ssdFileHelper_->setState(SsdFile::State::kNoSpace);
+  EXPECT_EQ(ssdFileHelper_->state(), SsdFile::State::kNoSpace);
+
+  // Verify the eviction should not happen since write was dropped before
+  // eviction.
+  auto newPins = makePins(fileName_.id(), kSsdSize * 2, 4096, 4096, 4096 * 5);
+  ssdFile_->write(newPins);
+
+  SsdCacheStats statsAfterNoSpace;
+  ssdFile_->updateStats(statsAfterNoSpace);
+
+  EXPECT_EQ(
+      statsAfterNoSpace.regionsEvicted, statsBeforeNoSpace.regionsEvicted);
+  EXPECT_GT(
+      statsAfterNoSpace.writeSsdDropped, statsBeforeNoSpace.writeSsdDropped);
+  EXPECT_EQ(
+      statsAfterNoSpace.entriesWritten, statsBeforeNoSpace.entriesWritten);
+
+  // Verify none of the new entries have ssdFile set.
+  for (const auto& pin : newPins) {
+    EXPECT_EQ(pin.entry()->ssdFile(), nullptr);
+  }
+}
+
 TEST_F(SsdFileTest, dataFileErrorInjection) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   initializeCache(kSsdSize, 0, false, false, false, true);
@@ -954,6 +1145,65 @@ TEST_F(SsdFileTest, evictlogFileErrorInjection) {
   SsdCacheStats statsAfterRecovery;
   ssdFile_->updateStats(statsAfterRecovery);
   ASSERT_GT(statsAfterRecovery.readCheckpointErrors, 0);
+}
+
+TEST_F(SsdFileTest, maxEntriesLimit) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  constexpr uint64_t kMaxEntries = 100;
+  FLAGS_velox_ssd_verify_write = true;
+
+  initializeCache(kSsdSize);
+  // Re-initialize SSD file with maxEntries limit
+  initializeSsdFile(kSsdSize, 0, false, false, false, kMaxEntries);
+
+  // Write more entries than the limit
+  auto pins = makePins(fileName_.id(), 0, 4096, 2048 * 1025, 62 * kMB);
+  ASSERT_GT(pins.size(), kMaxEntries);
+
+  ssdFile_->write(pins);
+
+  SsdCacheStats stats;
+  ssdFile_->updateStats(stats);
+
+  // The SSD file should have at most maxEntries
+  EXPECT_LE(stats.entriesCached, kMaxEntries);
+  // Some writes should have been dropped due to the entry limit
+  EXPECT_GT(stats.writeSsdExceedEntryLimit, 0);
+}
+
+TEST_F(SsdFileTest, noWritesDroppedWithinMaxEntriesLimit) {
+  constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
+  constexpr uint64_t kMaxEntries = 200;
+  FLAGS_velox_ssd_verify_write = true;
+
+  initializeCache(kSsdSize);
+  // Re-initialize SSD file with maxEntries limit
+  initializeSsdFile(kSsdSize, 0, false, false, false, kMaxEntries);
+
+  // Write fewer entries than the limit
+  auto pins = makePins(fileName_.id(), 0, 4096, 4096, 4096 * 50);
+  ASSERT_LT(pins.size(), kMaxEntries);
+  const auto numPins = pins.size();
+
+  ssdFile_->write(pins);
+
+  SsdCacheStats stats;
+  ssdFile_->updateStats(stats);
+
+  // All entries should be cached since we're within the limit
+  EXPECT_EQ(stats.entriesCached, numPins);
+  // No writes should be dropped due to exceeding entry limit
+  EXPECT_EQ(stats.writeSsdExceedEntryLimit, 0);
+  // No writes should be dropped due to lack of space
+  EXPECT_EQ(stats.writeSsdDropped, 0);
+  // All entries should have been written
+  EXPECT_EQ(stats.entriesWritten, numPins);
+
+  // Verify all entries are readable
+  for (auto& pin : pins) {
+    EXPECT_EQ(ssdFile_.get(), pin.entry()->ssdFile());
+  }
+  readAndCheckPins(pins);
 }
 
 #ifdef VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG

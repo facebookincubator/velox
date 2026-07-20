@@ -133,4 +133,22 @@ TEST_F(TimestampWithTimeZoneTypeTest, hash) {
   expectHashesNeq(-1639426440000, "+03:00", 1639426440000, "-14:00");
 }
 
+TEST_F(TimestampWithTimeZoneTypeTest, valueToString) {
+  // 1639426440000 ms = 2021-12-13 20:14:00.000 UTC.
+  auto packed = pack(1639426440000, tz::getTimeZoneID("America/Los_Angeles"));
+  ASSERT_EQ(
+      TIMESTAMP_WITH_TIME_ZONE()->valueToString(packed),
+      "2021-12-13 12:14:00.000 America/Los_Angeles");
+
+  packed = pack(1639426440000, tz::getTimeZoneID("+03:00"));
+  ASSERT_EQ(
+      TIMESTAMP_WITH_TIME_ZONE()->valueToString(packed),
+      "2021-12-13 23:14:00.000 +03:00");
+
+  packed = pack(0, tz::getTimeZoneID("UTC"));
+  ASSERT_EQ(
+      TIMESTAMP_WITH_TIME_ZONE()->valueToString(packed),
+      "1970-01-01 00:00:00.000 UTC");
+}
+
 } // namespace facebook::velox::test

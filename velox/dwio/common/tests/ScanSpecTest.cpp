@@ -54,6 +54,57 @@ TEST_F(ScanSpecTest, applyFilter) {
       VeloxRuntimeError);
 }
 
+TEST_F(ScanSpecTest, setFilterResetsHasFilter) {
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(64, folly::identity),
+      makeFlatVector<int64_t>(64, folly::identity),
+  });
+
+  ScanSpec scanSpec("<root>");
+  scanSpec.addAllChildFields(*rowVector->type());
+
+  // Initially no filter, hasFilter should be false.
+  ASSERT_FALSE(scanSpec.hasFilter());
+  ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
+  ASSERT_FALSE(scanSpec.childByName("c1")->hasFilter());
+
+  // Set a filter on c0, hasFilter should be true for c0 and root.
+  scanSpec.childByName("c0")->setFilter(createBigintValues({1, 2, 3}, false));
+  ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
+  ASSERT_FALSE(scanSpec.hasFilter());
+  // Root's hasFilter_ was cached as false, but setFilter should have reset it.
+  // After setting filter on child, root should report hasFilter as true.
+  scanSpec.resetCachedValues(false);
+  ASSERT_TRUE(scanSpec.hasFilter());
+  ASSERT_TRUE(scanSpec.childByName("c0")->hasFilter());
+
+  // Set filter to nullptr, hasFilter should become false.
+  scanSpec.childByName("c0")->setFilter(nullptr);
+  ASSERT_TRUE(scanSpec.childByName("c0")->hasFilter());
+  ASSERT_TRUE(scanSpec.hasFilter());
+  scanSpec.resetCachedValues(false);
+  ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
+  ASSERT_FALSE(scanSpec.hasFilter());
+
+  // Set a new filter on c1, verify hasFilter updates correctly.
+  scanSpec.childByName("c1")->setFilter(
+      std::make_shared<BigintRange>(10, 50, false));
+  ASSERT_FALSE(scanSpec.childByName("c1")->hasFilter());
+  ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
+  scanSpec.resetCachedValues(false);
+  ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
+  ASSERT_TRUE(scanSpec.childByName("c1")->hasFilter());
+  ASSERT_TRUE(scanSpec.hasFilter());
+
+  // Replace filter on c1 with a different filter.
+  scanSpec.childByName("c1")->setFilter(
+      std::make_shared<BigintRange>(20, 30, false));
+  // hasFilter should still be true after replacing with another filter.
+  ASSERT_TRUE(scanSpec.childByName("c1")->hasFilter());
+  ASSERT_FALSE(scanSpec.childByName("c0")->hasFilter());
+  ASSERT_TRUE(scanSpec.hasFilter());
+}
+
 class TypedScanSpecTest : public testing::TestWithParam<TypePtr>,
                           public test::VectorTestBase {
  protected:

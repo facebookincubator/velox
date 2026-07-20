@@ -22,41 +22,12 @@
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
 class IPAddressCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARBINARY:
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::ROW:
-        if (isIPPrefixType(other)) {
-          return true;
-        }
-        [[fallthrough]];
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARBINARY:
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::ROW:
-        if (isIPPrefixType(other)) {
-          return true;
-        }
-        [[fallthrough]];
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -107,21 +78,10 @@ class IPAddressCastOperator : public exec::CastOperator {
       BaseVector& result) {
     auto* flatResult = result.as<FlatVector<StringView>>();
     const auto* ipaddresses = input.as<SimpleVector<int128_t>>();
-    folly::ByteArray16 addrBytes;
 
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto intAddr = ipaddresses->valueAt(row);
-      memcpy(&addrBytes, &intAddr, ipaddress::kIPAddressBytes);
-
-      std::reverse(addrBytes.begin(), addrBytes.end());
-      folly::IPAddressV6 v6Addr(addrBytes);
-
       exec::StringWriter result(flatResult, row);
-      if (v6Addr.isIPv4Mapped()) {
-        result.append(v6Addr.createIPv4().str());
-      } else {
-        result.append(v6Addr.str());
-      }
+      result.append(IPADDRESS()->valueToString(ipaddresses->valueAt(row)));
       result.finalize();
     });
   }
@@ -284,6 +244,14 @@ class IPAddressTypeFactory : public CustomTypeFactory {
 
 void registerIPAddressType() {
   registerCustomType(
-      "ipaddress", std::make_unique<const IPAddressTypeFactory>());
+      "IPADDRESS", std::make_unique<const IPAddressTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR", .toType = "IPADDRESS"},
+      {.fromType = "VARBINARY", .toType = "IPADDRESS"},
+      {.fromType = "IPPREFIX", .toType = "IPADDRESS"},
+      {.fromType = "IPADDRESS", .toType = "VARCHAR"},
+      {.fromType = "IPADDRESS", .toType = "VARBINARY"},
+      {.fromType = "IPADDRESS", .toType = "IPPREFIX"},
+  });
 }
 } // namespace facebook::velox

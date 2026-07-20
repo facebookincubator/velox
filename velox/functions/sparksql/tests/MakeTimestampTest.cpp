@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -148,7 +149,7 @@ TEST_F(MakeTimestampTest, errors) {
       "make_timestamp requires session time zone to be set.");
 
   setQueryTimeZone("Asia/Shanghai");
-  // Invalid input returns null.
+  // Invalid input returns null (ANSI is off by default).
   const auto year = makeFlatVector<int32_t>(
       {facebook::velox::util::kMinYear - 1,
        facebook::velox::util::kMaxYear + 1,
@@ -157,13 +158,15 @@ TEST_F(MakeTimestampTest, errors) {
        1,
        1,
        1,
+       1,
+       1,
        1});
-  const auto month = makeFlatVector<int32_t>({1, 1, 0, 13, 1, 1, 1, 1});
-  const auto day = makeFlatVector<int32_t>({1, 1, 1, 1, 0, 32, 1, 1});
-  const auto hour = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 25, 1});
-  const auto minute = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 61});
+  const auto month = makeFlatVector<int32_t>({1, 1, 0, 13, 1, 1, 1, 1, 1, 1});
+  const auto day = makeFlatVector<int32_t>({1, 1, 1, 1, 0, 32, 1, 1, 1, 1});
+  const auto hour = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 25, 1, 24, 1});
+  const auto minute = makeFlatVector<int32_t>({1, 1, 1, 1, 1, 1, 1, 61, 1, 60});
   const auto micros =
-      makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1, 1, 1}, microsType);
+      makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, microsType);
   auto data = makeRowVector({year, month, day, hour, minute, micros});
   testInvalidInputs(data);
 
@@ -185,15 +188,90 @@ TEST_F(MakeTimestampTest, errors) {
       "DECIMAL(16, 8)).");
 }
 
-TEST_F(MakeTimestampTest, invalidTimezone) {
+TEST_F(MakeTimestampTest, ansiErrors) {
+  // Under ANSI mode each invalid argument throws with a field-specific
+  // message rather than returning NULL.
   const auto microsType = DECIMAL(16, 6);
-  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021, 2021, 2021});
-  const auto month = makeFlatVector<int32_t>({7, 7, 7, 7, 7});
-  const auto day = makeFlatVector<int32_t>({11, 11, 11, 11, 11});
-  const auto hour = makeFlatVector<int32_t>({6, 6, 6, -6, 6});
-  const auto minute = makeFlatVector<int32_t>({30, 30, 30, 30, 30});
-  const auto micros = makeNullableFlatVector<int64_t>(
-      {45678000, 1e6, 6e7, 59999999, std::nullopt}, microsType);
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "Asia/Shanghai"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
+
+  const auto eval = [&](int32_t year,
+                        int32_t month,
+                        int32_t day,
+                        int32_t hour,
+                        int32_t minute,
+                        int64_t micros) {
+    return evaluateOnce<Timestamp>(
+        "make_timestamp(c0, c1, c2, c3, c4, c5)",
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+        std::optional<int32_t>(year),
+        std::optional<int32_t>(month),
+        std::optional<int32_t>(day),
+        std::optional<int32_t>(hour),
+        std::optional<int32_t>(minute),
+        std::optional<int64_t>(micros));
+  };
+
+  // Hour out of range.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 24, 30, 0),
+      "Invalid value for hour, must be in [0, 24): 24");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, -1, 30, 0),
+      "Invalid value for hour, must be in [0, 24): -1");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 25, 30, 0),
+      "Invalid value for hour, must be in [0, 24): 25");
+
+  // Minute out of range.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 60, 0),
+      "Invalid value for minute, must be in [0, 60): 60");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, -1, 0),
+      "Invalid value for minute, must be in [0, 60): -1");
+
+  // Negative microseconds.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 30, -1),
+      "Invalid value for second microseconds, must be non-negative: -1");
+
+  // Seconds out of range.
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 30, 61'000'000),
+      "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: 61.000000");
+  VELOX_ASSERT_USER_THROW(
+      eval(2021, 7, 11, 6, 30, 60'007'000),
+      "Invalid value for second, must be in [0, 60] with 0 microseconds at 60: 60.007000");
+
+  // Invalid date components.
+  VELOX_ASSERT_USER_THROW(eval(2021, 0, 11, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(eval(2021, 13, 11, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(eval(2021, 7, 0, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(eval(2021, 7, 32, 6, 30, 0), "Date out of range");
+  VELOX_ASSERT_USER_THROW(
+      eval(facebook::velox::util::kMinYear - 1, 7, 11, 6, 30, 0),
+      "Date out of range");
+  VELOX_ASSERT_USER_THROW(
+      eval(facebook::velox::util::kMaxYear + 1, 7, 11, 6, 30, 0),
+      "Date out of range");
+}
+
+TEST_F(MakeTimestampTest, invalidTimezone) {
+  // Use valid datetime fields throughout so the timezone is the only invalid
+  // argument. Fields are validated before the timezone, so an invalid field
+  // would mask the timezone error under ANSI mode.
+  const auto microsType = DECIMAL(16, 6);
+  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021});
+  const auto month = makeFlatVector<int32_t>({7, 7, 7});
+  const auto day = makeFlatVector<int32_t>({11, 11, 11});
+  const auto hour = makeFlatVector<int32_t>({6, 6, 6});
+  const auto minute = makeFlatVector<int32_t>({30, 30, 30});
+  const auto micros =
+      makeFlatVector<int64_t>({45'678'000, 1'000'000, 60'000'000}, microsType);
   auto data = makeRowVector({year, month, day, hour, minute, micros});
 
   // Time zone is not set.
@@ -201,8 +279,33 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
       evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data),
       "make_timestamp requires session time zone to be set.");
 
-  // Invalid constant time zone.
+  const auto allNull = makeNullableFlatVector<Timestamp>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  const auto invalidTimeZones =
+      makeFlatVector<StringView>({"Invalid", "", "Bad/Zone"});
+  auto dataWithTimeZones =
+      makeRowVector({year, month, day, hour, minute, micros, invalidTimeZones});
+
+  // ANSI off: invalid timezone yields NULL, matching Spark's codegen
+  // semantics.
   setQueryTimeZone("GMT");
+  for (auto timeZone : {"Invalid", ""}) {
+    SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
+    auto result = evaluate(
+        fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timeZone),
+        data);
+    facebook::velox::test::assertEqualVectors(allNull, result);
+  }
+  auto result =
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones);
+  facebook::velox::test::assertEqualVectors(allNull, result);
+
+  // ANSI on: invalid timezone throws.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "GMT"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
   for (auto timeZone : {"Invalid", ""}) {
     SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
     VELOX_ASSERT_USER_THROW(
@@ -212,21 +315,9 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
             data),
         fmt::format("Unknown time zone: '{}'", timeZone));
   }
-
-  // Invalid timezone from vector.
-  auto timeZones = makeFlatVector<StringView>(
-      {"GMT", "CET", "Asia/Shanghai", "Invalid", "GMT"});
-  data = makeRowVector({year, month, day, hour, minute, micros, timeZones});
   VELOX_ASSERT_USER_THROW(
-      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data),
+      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones),
       "Unknown time zone: 'Invalid'");
-
-  timeZones =
-      makeFlatVector<StringView>({"GMT", "CET", "Asia/Shanghai", "", "GMT"});
-  data = makeRowVector({year, month, day, hour, minute, micros, timeZones});
-  VELOX_ASSERT_USER_THROW(
-      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data),
-      "Unknown time zone: ''");
 }
 
 } // namespace

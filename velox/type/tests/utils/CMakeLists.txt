@@ -14,3 +14,5 @@
 add_library(velox_type_test_lib INTERFACE)
 
 target_link_libraries(velox_type_test_lib INTERFACE velox_type)
+
+velox_add_library(velox_custom_types_for_testing INTERFACE HEADERS CustomTypesForTesting.h)

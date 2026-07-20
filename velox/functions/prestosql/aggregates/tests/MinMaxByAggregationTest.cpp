@@ -37,6 +37,13 @@ struct TestParam {
   TypeKind comparisonType;
 };
 
+inline void PrintTo(const TestParam& param, std::ostream* os) {
+  *os << fmt::format(
+      "{}_{}",
+      TypeKindName::toName(param.valueType),
+      TypeKindName::toName(param.comparisonType));
+}
+
 const std::vector<TypeKind> kSupportedTypes = {
     TypeKind::BOOLEAN,
     TypeKind::TINYINT,

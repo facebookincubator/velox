@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/types/UuidType.h"
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include "velox/functions/prestosql/types/UuidRegistration.h"
 #include "velox/functions/prestosql/types/tests/TypeTestBase.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace facebook::velox::test {
 
@@ -39,4 +43,29 @@ TEST_F(UuidTypeTest, basic) {
 TEST_F(UuidTypeTest, serde) {
   testTypeSerde(UUID());
 }
+
+TEST_F(UuidTypeTest, valueToString) {
+  // Round-trip: parse UUID string via the same path as CAST(varchar AS uuid),
+  // then format back via valueToString.
+  auto roundTrip = [](std::string_view uuidStr) {
+    auto uuid = boost::lexical_cast<boost::uuids::uuid>(uuidStr);
+    int128_t value;
+    memcpy(&value, &uuid, 16);
+    // boost::uuid is big-endian, convert to Velox's little-endian storage.
+    value = DecimalUtil::bigEndian(value);
+    char buffer[UuidType::kStringSize];
+    return std::string(UUID()->valueToString(value, buffer));
+  };
+
+  EXPECT_EQ(
+      roundTrip("12151fd2-7586-11e9-8f9e-2a86e4085a59"),
+      "12151fd2-7586-11e9-8f9e-2a86e4085a59");
+  EXPECT_EQ(
+      roundTrip("00000000-0000-0000-0000-000000000000"),
+      "00000000-0000-0000-0000-000000000000");
+  EXPECT_EQ(
+      roundTrip("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+      "ffffffff-ffff-ffff-ffff-ffffffffffff");
+}
+
 } // namespace facebook::velox::test

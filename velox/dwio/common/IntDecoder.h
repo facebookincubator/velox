@@ -225,13 +225,18 @@ FOLLY_ALWAYS_INLINE uint64_t IntDecoder<isSigned>::readVuLong() {
   if (LIKELY(bufferEnd_ - bufferStart_ >= folly::kMaxVarintLength64)) {
     const char* p = bufferStart_;
     uint64_t val;
+
+    // Fast path for 1-byte varints (values 0-127), which are very common.
+    // This avoids the do-while loop overhead for the most frequent case.
+    int64_t b = *p++;
+    val = (b & 0x7f);
+    if (b >= 0) {
+      bufferStart_ = p;
+      return val;
+    }
+
+    // Multi-byte varint path
     do {
-      int64_t b;
-      b = *p++;
-      val = (b & 0x7f);
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
       b = *p++;
       val |= (b & 0x7f) << 7;
       if (UNLIKELY(b >= 0)) {
@@ -292,8 +297,8 @@ FOLLY_ALWAYS_INLINE uint64_t IntDecoder<isSigned>::readVuLong() {
     return val;
   }
 
-  int64_t result = 0;
-  int64_t offset = 0;
+  uint64_t result = 0;
+  uint64_t offset = 0;
   signed char ch;
   do {
     ch = readByte();

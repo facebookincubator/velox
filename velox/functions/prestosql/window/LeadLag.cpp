@@ -30,7 +30,11 @@ class LeadLagFunction : public exec::WindowFunction {
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
       : WindowFunction(resultType, pool, nullptr), ignoreNulls_(ignoreNulls) {
-    valueIndex_ = args[0].index.value();
+    if (args[0].constantValue) {
+      constantValue_ = args[0].constantValue;
+    } else {
+      valueIndex_ = args[0].index.value();
+    }
 
     initializeOffset(args);
     initializeDefaultValue(args);
@@ -43,7 +47,9 @@ class LeadLagFunction : public exec::WindowFunction {
     partitionOffset_ = 0;
     ignoreNullsForPartition_ = false;
 
-    if (ignoreNulls_) {
+    // When the value is a constant, there are no per-row nulls to extract
+    // from the partition.
+    if (ignoreNulls_ && !constantValue_) {
       auto partitionSize = partition_->numRows();
       AlignedBuffer::reallocate<bool>(&nulls_, partitionSize);
 
@@ -67,6 +73,19 @@ class LeadLagFunction : public exec::WindowFunction {
 
     rowNumbers_.resize(numRows);
 
+    // When the value is a constant null and IGNORE NULLS is set, every row
+    // is null so lead/lag can never find a non-null value. Return the default
+    // value for all rows (or null if no default).
+    if (constantValue_ && ignoreNulls_ && constantValue_->isNullAt(0)) {
+      std::fill(rowNumbers_.begin(), rowNumbers_.end(), kDefaultValueRow);
+      for (auto i = 0; i < numRows; ++i) {
+        result->setNull(resultOffset + i, true);
+      }
+      setDefaultValue(result, resultOffset);
+      partitionOffset_ += numRows;
+      return;
+    }
+
     if (constantOffset_.has_value() || isConstantOffsetNull_) {
       setRowNumbersForConstantOffset();
     } else {
@@ -77,9 +96,25 @@ class LeadLagFunction : public exec::WindowFunction {
       }
     }
 
-    auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
-    partition_->extractColumn(
-        valueIndex_, rowNumbersRange, resultOffset, result);
+    if (constantValue_) {
+      // For constant value, write the constant for valid rows, null for
+      // kNullRow, and leave kDefaultValueRow for setDefaultValue to handle.
+      for (auto i = 0; i < numRows; ++i) {
+        if (rowNumbers_[i] == kNullRow) {
+          result->setNull(resultOffset + i, true);
+        } else if (rowNumbers_[i] == kDefaultValueRow) {
+          // Set null here; setDefaultValue will overwrite with actual default
+          // if one is specified.
+          result->setNull(resultOffset + i, true);
+        } else {
+          result->copy(constantValue_.get(), resultOffset + i, 0, 1);
+        }
+      }
+    } else {
+      auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
+      partition_->extractColumn(
+          valueIndex_, rowNumbersRange, resultOffset, result);
+    }
 
     setDefaultValue(result, resultOffset);
 
@@ -286,6 +321,9 @@ class LeadLagFunction : public exec::WindowFunction {
   // Certain partitions may not have null values. So ignore nulls processing can
   // be skipped for them. Used for tracking this at the partition level.
   bool ignoreNullsForPartition_;
+
+  // Non-null when the value argument is a constant expression.
+  VectorPtr constantValue_;
 
   // Index of the 'value' argument.
   column_index_t valueIndex_;

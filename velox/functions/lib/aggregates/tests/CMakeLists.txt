@@ -27,3 +27,5 @@ target_link_libraries(
   GTest::gtest_main
   glog::glog
 )
+
+velox_add_library(velox_lib INTERFACE HEADERS SumTestBase.h)

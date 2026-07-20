@@ -17,8 +17,8 @@
 #include "velox/exec/fuzzer/WindowFuzzer.h"
 
 #include <boost/random/uniform_int_distribution.hpp>
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ScopedVarSetter.h"
 
 DEFINE_bool(
@@ -27,6 +27,8 @@ DEFINE_bool(
     "When true, the results of the window aggregation are compared to reference DB results");
 
 namespace facebook::velox::exec::test {
+
+using namespace facebook::velox::common::testutil;
 
 namespace {
 
@@ -81,12 +83,20 @@ std::string WindowFuzzer::generateKRowsFrameBound(
 
   constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
   constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
-  // For frames with kPreceding, kFollowing bounds, pick a valid k, in the
-  // range of 1 to 10, 70% of times. Test for random k values remaining times.
-  int64_t minKValue, maxKValue;
+  // For frames with kPreceding, kFollowing bounds:
+  // - 70%: pick a valid k in the range [1, 10].
+  // - 20%: pick a valid k in the full positive range [1, INT64_MAX].
+  // - 10%: pick from the full range [INT64_MIN, INT64_MAX] to exercise
+  //   invalid (negative/zero) offsets and verify both Velox and the reference
+  //   DB reject them consistently.
+  int64_t minKValue;
+  int64_t maxKValue;
   if (vectorFuzzer_.coinToss(0.7)) {
     minKValue = 1;
     maxKValue = 10;
+  } else if (vectorFuzzer_.coinToss(2.0 / 3.0)) {
+    minKValue = 1;
+    maxKValue = kMax;
   } else {
     minKValue = kMin;
     maxKValue = kMax;
@@ -628,7 +638,7 @@ void WindowFuzzer::testAlternativePlans(
   }
 
   // With TableScan.
-  auto directory = exec::test::TempDirectoryPath::create();
+  auto directory = TempDirectoryPath::create();
   const auto inputRowType = asRowType(input[0]->type());
   if (isTableScanSupported(inputRowType)) {
     auto splits = makeSplits(input, directory->getPath(), writerPool_);

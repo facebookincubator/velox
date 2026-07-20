@@ -22,6 +22,22 @@ General Aggregate Functions
 
     Returns the bitwise XOR of all non-null input values, or null if none.
 
+.. spark:function:: bitmap_construct_agg(position) -> varbinary
+
+    Builds a fixed-size 4096-byte (32768-bit) bitmap by setting bits at the
+    specified positions. Input positions must be BIGINT values in [0, 32767].
+    Null inputs are ignored. Returns an all-zeros bitmap for empty or all-null
+    input (this is a non-nullable aggregate).
+
+.. spark:function:: bitmap_or_agg(bitmap) -> varbinary
+
+    Merges multiple VARBINARY bitmaps into a single bitmap using bitwise OR.
+    This is the companion to ``bitmap_construct_agg``: while that function builds
+    per-bucket bitmaps from bit positions, ``bitmap_or_agg`` merges those bitmaps
+    during the final count-distinct rollup. Null inputs are ignored. Returns an
+    all-zeros 4096-byte bitmap for empty or all-null input (this is a non-nullable
+    aggregate). Input bitmaps must be exactly 4096 bytes.
+
 .. spark:function:: bloom_filter_agg(hash, estimatedNumItems, numBits) -> varbinary
 
     Creates bloom filter from input hashes and returns it serialized into VARBINARY.
@@ -56,13 +72,23 @@ General Aggregate Functions
 
 .. spark:function:: collect_list(x) -> array<[same as x]>
 
-    Returns an array created from the input ``x`` elements. Ignores null
-    inputs, and returns an empty array when all inputs are null.
+    Returns an array created from the input ``x`` elements. By default,
+    ignores null inputs and returns an empty array when all inputs are null.
 
-.. spark:function:: collect_set(x) -> array<[same as x]>
+    When the configuration property ``spark.collect_list.ignore_nulls`` is set
+    to ``false``, null values are included in the output array (RESPECT NULLS
+    behavior). In this mode, an all-null input produces an array of nulls
+    instead of an empty array.
 
-    Returns an array consisting of all unique values from the input ``x`` elements excluding NULLs.
-    NaN values are considered distinct. Returns empty array if input is empty or all NULL.
+.. spark:function:: collect_set(x [, ignoreNulls]) -> array<[same as x]>
+
+    Returns an array consisting of all unique values from the input ``x`` elements.
+    When ``ignoreNulls`` is ``true``, null inputs are excluded and an all-null
+    input returns an empty array. NaN values are considered distinct.
+
+    When ``ignoreNulls`` is set to ``false`` (RESPECT NULLS), null values are
+    included in the result set. In this mode, an all-null input produces an
+    array containing a single null instead of an empty array.
 
     Example::
 

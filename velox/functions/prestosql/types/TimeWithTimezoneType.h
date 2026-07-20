@@ -64,9 +64,12 @@ class TimeWithTimezoneType final : public BigintType {
     return name();
   }
 
-  /// Returns the time with timezone 'value' formatted as HH:MM:SS.mmmZZ
-  /// where the timezone offset is included in the representation.
-  StringView valueToString(int64_t value, char* const startPos) const;
+  /// Returns the time with timezone 'value' formatted as
+  /// HH:MM:SS.mmm+HH:MM.
+  /// @param value Packed time with timezone value.
+  /// @param buffer Pre-allocated output buffer of at least
+  /// kTimeWithTimezoneToVarcharRowSize (18) bytes.
+  std::string_view valueToString(int64_t value, char* buffer) const;
 
   folly::dynamic serialize() const override;
 

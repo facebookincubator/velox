@@ -16,9 +16,13 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfHashAggregation.h"
+#include "velox/experimental/cudf/exec/CudfDistinct.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
+
+#include "velox/connectors/ConnectorRegistry.h"
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -30,7 +34,8 @@ bool isGpuTableScan(
   }
 
   const auto connectorId = tableScan->tableHandle()->connectorId();
-  auto connector = connector::hive::getConnector(connectorId);
+  auto connector =
+      facebook::velox::connector::ConnectorRegistry::tryGet(connectorId);
   if (!connector) {
     return false;
   }
@@ -59,8 +64,17 @@ std::unique_ptr<exec::Operator> CudfPlanNodeTranslator::toOperator(
 
   if (auto gpuAgg =
           std::dynamic_pointer_cast<const CudfAggregationNode>(node)) {
-    return std::make_unique<CudfHashAggregation>(
-        id, ctx, gpuAgg->aggregationNode());
+    const auto& aggregationNode = gpuAgg->aggregationNode();
+    const bool isGlobal = aggregationNode->groupingKeys().empty();
+    const bool isDistinct =
+        !isGlobal && aggregationNode->aggregates().empty();
+    if (isGlobal) {
+      return std::make_unique<CudfReduce>(id, ctx, aggregationNode);
+    }
+    if (isDistinct) {
+      return std::make_unique<CudfDistinct>(id, ctx, aggregationNode);
+    }
+    return std::make_unique<CudfGroupby>(id, ctx, aggregationNode);
   }
 
   return nullptr;

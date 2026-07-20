@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
-
-target_link_libraries(velox_temp_path velox_exception)
-
 add_library(
   velox_exec_test_lib
   AggregationResolver.cpp
@@ -33,16 +29,44 @@ add_library(
   TableScanTestBase.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
+  TpcdsQueryBuilder.cpp
+  VeloxPlanLoader.cpp
   VectorTestUtil.cpp
   PortUtil.cpp
   SerializedPageUtil.cpp
+)
+velox_add_test_headers(
+  velox_exec_test_lib
+  AggregationResolver.h
+  ArbitratorTestUtil.h
+  AssertQueryBuilder.h
+  ExpressionBuilder.h
+  FilterToExpression.h
+  HashJoinTestBase.h
+  HiveConnectorTestBase.h
+  IndexLookupJoinTestBase.h
+  LocalExchangeSource.h
+  MergeTestBase.h
+  OperatorTestBase.h
+  PlanBuilder.h
+  PortUtil.h
+  QueryAssertions.h
+  RowContainerTestBase.h
+  SerializedPageUtil.h
+  SumNonPODAggregate.h
+  TableScanTestBase.h
+  TableWriterTestBase.h
+  TestIndexStorageConnector.h
+  TpchQueryBuilder.h
+  TpcdsQueryBuilder.h
+  VectorTestUtil.h
+  VeloxPlanLoader.h
 )
 
 target_link_libraries(
   velox_exec_test_lib
   velox_vector_test_lib
   velox_vector_fuzzer
-  velox_temp_path
   velox_cursor
   velox_core
   velox_exception
@@ -63,3 +87,5 @@ target_link_libraries(
   velox_functions_prestosql
   velox_aggregates
 )
+
+velox_add_library(velox_temp_path INTERFACE HEADERS TempDirectoryPath.h TempFilePath.h)

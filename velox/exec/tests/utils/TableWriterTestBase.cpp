@@ -17,6 +17,7 @@
 #include "velox/exec/tests/utils/TableWriterTestBase.h"
 
 namespace velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 TableWriterTestBase::TestParam::TestParam(
     FileFormat fileFormat,
@@ -72,7 +73,7 @@ bool TableWriterTestBase::TestParam::scaleWriter() const {
 std::string TableWriterTestBase::TestParam::toString() const {
   return fmt::format(
       "FileFormat_{}_TestMode_{}_commitStrategy_{}_bucketKind_{}_bucketSort_{}_multiDrivers_{}_compression_{}_scaleWriter_{}",
-      dwio::common::toString((fileFormat())),
+      dwio::common::FileFormatName::toName((fileFormat())),
       testModeString(testMode()),
       CommitStrategyName::toName(commitStrategy()),
       HiveBucketProperty::kindString(bucketKind()),

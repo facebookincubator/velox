@@ -21,24 +21,28 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskTraceReader.h"
 #include "velox/exec/TaskTraceWriter.h"
-#include "velox/exec/Trace.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/Trace.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 
-using namespace facebook::velox::exec::test;
-
 namespace facebook::velox::exec::trace::test {
-class OperatorTraceTest : public HiveConnectorTestBase {
+namespace {
+using namespace facebook::velox::common::testutil;
+using exec::test::assertEqualResults;
+using exec::test::AssertQueryBuilder;
+using exec::test::PlanBuilder;
+
+class OperatorTraceTest : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -104,6 +108,13 @@ class OperatorTraceTest : public HiveConnectorTestBase {
 
   std::unique_ptr<DriverCtx> driverCtx() {
     return std::make_unique<DriverCtx>(nullptr, 0, 0, 0, 0);
+  }
+
+  std::string getTaskTraceDirectory(
+      const std::string& traceDir,
+      const Task& task) {
+    return trace::getTaskTraceDirectory(
+        traceDir, task.queryCtx()->queryId(), task.taskId());
   }
 
   RowTypePtr dataType_;
@@ -299,16 +310,17 @@ TEST_F(OperatorTraceTest, traceMetadata) {
       executor_.get(),
       core::QueryConfig(expectedQueryConfigs),
       expectedConnectorProperties);
-  auto writer = trace::TaskTraceMetadataWriter(outputDir->getPath(), pool());
-  auto traceNode = getTraceNode(planNode, traceNodeId);
-  writer.write(queryCtx, traceNode);
+  auto writer =
+      trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool());
+  writer.write(*queryCtx, *planNode);
   const auto reader =
       trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
   const auto actualQueryConfigs = reader.queryConfigs();
   const auto actualConnectorProperties = reader.connectorProperties();
   const auto actualQueryPlan = reader.queryPlan();
 
-  ASSERT_TRUE(isSamePlan(actualQueryPlan, traceNode));
+  auto expectedTraceNode = getTraceNode(*planNode, traceNodeId);
+  ASSERT_TRUE(isSamePlan(actualQueryPlan, expectedTraceNode));
   ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
   for (const auto& [key, value] : actualQueryConfigs) {
     ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
@@ -424,7 +436,7 @@ TEST_F(OperatorTraceTest, task) {
     const auto actualQueryPlan = reader.queryPlan();
 
     ASSERT_TRUE(
-        isSamePlan(actualQueryPlan, getTraceNode(planNode, hashJoinNodeId)));
+        isSamePlan(actualQueryPlan, getTraceNode(*planNode, hashJoinNodeId)));
     ASSERT_EQ(actualQueryConfigs.size(), expectedQueryConfigs.size());
     for (const auto& [key, value] : actualQueryConfigs) {
       ASSERT_EQ(actualQueryConfigs.at(key), expectedQueryConfigs.at(key));
@@ -445,7 +457,8 @@ TEST_F(OperatorTraceTest, task) {
 }
 
 TEST_F(OperatorTraceTest, error) {
-  const auto planNode = PlanBuilder().values({}).planNode();
+  const auto planNode =
+      PlanBuilder().values(std::vector<RowVectorPtr>{}).planNode();
   // No trace dir.
   {
     const auto queryConfigs = std::unordered_map<std::string, std::string>{
@@ -505,8 +518,7 @@ TEST_F(OperatorTraceTest, error) {
             .queryCtx(queryCtx)
             .maxDrivers(1)
             .copyResults(pool()),
-
-        "Trace plan node ID = nonexist not found from task");
+        "Trace plan node ID = 'nonexist' not found from task");
   }
 }
 
@@ -846,12 +858,12 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   auto ioBuf = folly::IOBuf::create(12 + 16);
   folly::io::Appender appender(ioBuf.get(), 0);
   // Writes an invalid split without crc.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
   // Writes a valid spilt.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   splitInfoFile->append(std::move(ioBuf));
   splitInfoFile->close();
 
@@ -935,13 +947,13 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   auto ioBuf = folly::IOBuf::create(16 * 2);
   folly::io::Appender appender(ioBuf.get(), 0);
   // Writes an invalid split with a wrong checksum.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32 - 1);
+  appender.writeLE<uint32_t>(crc32 - 1);
   // Writes a valid split.
-  appender.writeLE(length);
+  appender.writeLE<uint32_t>(length);
   appender.push(reinterpret_cast<const uint8_t*>(split.data()), length);
-  appender.writeLE(crc32);
+  appender.writeLE<uint32_t>(crc32);
   splitInfoFile->append(std::move(ioBuf));
   splitInfoFile->close();
 
@@ -1171,4 +1183,6 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   const auto reader = trace::TaskTraceMetadataReader(taskTraceDir, pool());
   ASSERT_EQ("test-hive", reader.connectorId("0"));
 }
+
+} // namespace
 } // namespace facebook::velox::exec::trace::test

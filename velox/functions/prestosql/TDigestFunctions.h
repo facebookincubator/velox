@@ -174,53 +174,6 @@ struct ConstructTDigestFunction {
 };
 
 template <typename T>
-struct DestructureTDigestFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<
-          Row<Array<double>,
-              Array<int32_t>,
-              double,
-              double,
-              double,
-              double,
-              int64_t>>& result,
-      const arg_type<SimpleTDigest<double>>& input) {
-    // Deserialize the TDigest
-    auto digest = TDigest<>::fromSerialized(input.data());
-    // Extract the components
-    double min = digest.min();
-    double max = digest.max();
-    double sum = digest.sum();
-    double compression = digest.compression();
-    int64_t count = 0;
-    // Get the centroids from the TDigest
-    std::vector<double> means;
-    std::vector<int32_t> weights;
-    const double* tDigestWeights = digest.weights();
-    const double* tDigestMeans = digest.means();
-    size_t numCentroids = digest.size();
-    for (int i = 0; i < numCentroids; i++) {
-      means.push_back(tDigestMeans[i]);
-      weights.push_back(static_cast<int32_t>(tDigestWeights[i]));
-      count += tDigestWeights[i];
-    }
-    // Create the result row
-    result.copy_from(
-        std::make_tuple(
-            std::move(means),
-            std::move(weights),
-            compression,
-            min,
-            max,
-            sum,
-            count));
-
-    return true;
-  }
-};
-
-template <typename T>
 struct TrimmedMeanFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
   FOLLY_ALWAYS_INLINE bool call(
@@ -234,8 +187,9 @@ struct TrimmedMeanFunction {
     VELOX_USER_CHECK(
         0 <= upperQuantileBound && upperQuantileBound <= 1,
         "Upper quantile bound must be between 0 and 1");
-    VELOX_USER_CHECK(
-        lowerQuantileBound <= upperQuantileBound,
+    VELOX_USER_CHECK_LE(
+        lowerQuantileBound,
+        upperQuantileBound,
         "Lower quantile bound must be less than or equal to upper quantile bound");
     // Deserialize the TDigest
     auto digest = TDigest<>::fromSerialized(input.data());
@@ -243,6 +197,40 @@ struct TrimmedMeanFunction {
       return false;
     }
     result = digest.trimmedMean(lowerQuantileBound, upperQuantileBound);
+    if (std::isnan(result)) {
+      return false;
+    }
+    return true;
+  }
+};
+/// Computes the Winsorized mean from a serialized TDigest. Values below the
+/// lower quantile are replaced with the boundary value at that quantile, and
+/// values above the upper quantile are replaced with the boundary value at
+/// that quantile. The mean is then computed on all values including the
+/// replaced tails.
+template <typename T>
+struct WinsorizedMeanFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<double>& result,
+      const arg_type<SimpleTDigest<double>>& input,
+      const arg_type<double>& lowerQuantileBound,
+      const arg_type<double>& upperQuantileBound) {
+    VELOX_USER_CHECK(
+        0 <= lowerQuantileBound && lowerQuantileBound <= 1,
+        "Lower quantile bound must be between 0 and 1");
+    VELOX_USER_CHECK(
+        0 <= upperQuantileBound && upperQuantileBound <= 1,
+        "Upper quantile bound must be between 0 and 1");
+    VELOX_USER_CHECK_LE(
+        lowerQuantileBound,
+        upperQuantileBound,
+        "Lower quantile bound must be less than or equal to upper quantile bound");
+    auto digest = TDigest<>::fromSerialized(input.data());
+    if (digest.size() == 0) {
+      return false;
+    }
+    result = digest.winsorizedMean(lowerQuantileBound, upperQuantileBound);
     if (std::isnan(result)) {
       return false;
     }

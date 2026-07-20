@@ -30,15 +30,6 @@ std::string HiveConnectorSplit::toString() const {
   return fmt::format("Hive: {} {} - {}", filePath, start, length);
 }
 
-uint64_t HiveConnectorSplit::size() const {
-  return length;
-}
-
-std::string HiveConnectorSplit::getFileName() const {
-  const auto i = filePath.rfind('/');
-  return i == std::string::npos ? filePath : filePath.substr(i + 1);
-}
-
 folly::dynamic HiveConnectorSplit::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "HiveConnectorSplit";
@@ -46,7 +37,7 @@ folly::dynamic HiveConnectorSplit::serialize() const {
   obj["splitWeight"] = splitWeight;
   obj["cacheable"] = cacheable;
   obj["filePath"] = filePath;
-  obj["fileFormat"] = dwio::common::toString(fileFormat);
+  obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat);
   obj["start"] = start;
   obj["length"] = length;
 

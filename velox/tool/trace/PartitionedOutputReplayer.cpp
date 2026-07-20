@@ -18,9 +18,9 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/PartitionedOutput.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
 
 using namespace facebook::velox;
@@ -36,7 +36,7 @@ std::shared_ptr<core::QueryCtx> createQueryContext(
 }
 
 std::vector<std::unique_ptr<folly::IOBuf>> getData(
-    const std::shared_ptr<exec::OutputBufferManager>& bufferManager,
+    const std::shared_ptr<exec::DefaultOutputBufferManager>& bufferManager,
     const std::string& taskId,
     int destination,
     int64_t sequence,
@@ -64,7 +64,7 @@ std::vector<std::unique_ptr<folly::IOBuf>> getData(
 } // namespace
 
 void consumeAllData(
-    const std::shared_ptr<exec::OutputBufferManager>& bufferManager,
+    const std::shared_ptr<exec::DefaultOutputBufferManager>& bufferManager,
     const std::string& taskId,
     uint32_t numPartitions,
     folly::Executor* driverExecutor,
@@ -109,7 +109,7 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
     const std::string& queryId,
     const std::string& taskId,
     const std::string& nodeId,
-    VectorSerde::Kind serdeKind,
+    std::string serdeKind,
     const std::string& operatorType,
     const std::string& driverIds,
     uint64_t queryCapacity,
@@ -136,7 +136,9 @@ PartitionedOutputReplayer::PartitionedOutputReplayer(
       std::make_shared<folly::NamedThreadFactory>("Consumer"));
 }
 
-RowVectorPtr PartitionedOutputReplayer::run(bool /*unused*/) {
+RowVectorPtr PartitionedOutputReplayer::run(
+    bool /*copyResults*/,
+    bool /*cursorCopyResult*/) {
   const auto task = Task::create(
       "local://partitioned-output-replayer",
       core::PlanFragment{createPlan()},

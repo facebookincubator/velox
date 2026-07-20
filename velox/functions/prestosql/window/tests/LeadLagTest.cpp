@@ -433,6 +433,55 @@ TEST_P(LeadLagTest, emptyFrames) {
   }
 }
 
+// Verify that lead and lag handle constant value arguments. This can happen
+// when the optimizer constant-folds a column that is always the same value
+// within the window partition context.
+TEST_F(LeadLagTest, constantArgument) {
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>({1, 1, 1, 2, 2}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  auto assertResults = [&](const std::string& function,
+                           const VectorPtr& expectedWindow) {
+    auto expected = makeRowVector({
+        input->childAt(0),
+        input->childAt(1),
+        expectedWindow,
+    });
+    WindowTestBase::testWindowFunction(
+        {input},
+        function,
+        "partition by c0 order by c1",
+        "rows between unbounded preceding and current row",
+        expected);
+  };
+
+  // Constant value: returns the constant, null when offset goes out of
+  // partition.
+  assertResults(
+      "lag('foo', 1)",
+      makeNullableFlatVector<StringView>(
+          {std::nullopt, "foo", "foo", std::nullopt, "foo"}));
+  assertResults(
+      "lead('foo', 1)",
+      makeNullableFlatVector<StringView>(
+          {"foo", "foo", std::nullopt, "foo", std::nullopt}));
+
+  // Null constant value returns null for all rows.
+  auto allNulls = makeAllNullFlatVector<StringView>(5);
+
+  assertResults("lag(null::varchar, 1)", allNulls);
+  assertResults("lead(null::varchar, 1)", allNulls);
+
+  // Constant null value with IGNORE NULLS and a default value. Every row is
+  // null so lead/lag can never find a non-null value. All rows should get the
+  // default value.
+  assertResults(
+      "lag(null::varchar, 1, 'default' IGNORE NULLS)",
+      makeConstant<StringView>("default", 5));
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(LagTest, LeadLagTest, ::testing::Values("lag"));
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

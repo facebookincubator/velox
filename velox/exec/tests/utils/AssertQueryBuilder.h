@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/system/HardwareConcurrency.h>
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
@@ -49,6 +50,20 @@ class AssertQueryBuilder {
   /// Use barrier task execution mode to execute the Velox plan.
   /// Default is false.
   AssertQueryBuilder& barrierExecution(bool barrier);
+
+  /// Sets the per-task unique id used by AssignUniqueId operators. Default
+  /// is 1. See core::PlanFragment::taskUniqueId.
+  AssertQueryBuilder& taskUniqueId(int32_t taskUniqueId) {
+    params_.taskUniqueId = taskUniqueId;
+    return *this;
+  }
+
+  /// Sets a callback invoked with the Task after it is created but before it is
+  /// started, allowing tests to tweak runtime task state.
+  AssertQueryBuilder& beforeTaskStart(std::function<void(Task&)> callback) {
+    params_.beforeTaskStart = std::move(callback);
+    return *this;
+  }
 
   /// Set configuration property. May be called multiple times to set multiple
   /// properties.
@@ -124,6 +139,13 @@ class AssertQueryBuilder {
   /// Sets the QueryCtx.
   AssertQueryBuilder& queryCtx(const std::shared_ptr<core::QueryCtx>& ctx) {
     params_.queryCtx = ctx;
+    return *this;
+  }
+
+  /// Set the maximum time to wait for task completion after all results have
+  /// been consumed. Default is 5 seconds.
+  AssertQueryBuilder& maxWaitMicros(uint64_t maxWaitMicros) {
+    maxWaitMicros_ = maxWaitMicros;
     return *this;
   }
 
@@ -206,7 +228,7 @@ class AssertQueryBuilder {
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
-        std::thread::hardware_concurrency());
+        folly::available_concurrency());
   }
 
   // Used by the created task as the default driver executor.
@@ -220,6 +242,9 @@ class AssertQueryBuilder {
   bool addSplitWithSequence_{false};
   // The sequence Id to be used when addSplitWithSequence_ is true.
   int32_t sequenceId_{0};
+  // Maximum time in microseconds to wait for task completion after all results
+  // have been consumed.
+  uint64_t maxWaitMicros_{5'000'000};
 };
 
 } // namespace facebook::velox::exec::test

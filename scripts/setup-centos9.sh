@@ -56,7 +56,8 @@ function install_build_prerequisites {
     dnf config-manager --set-enabled crb
     dnf update -y
   fi
-  dnf_install autoconf automake ccache clang gcc-toolset-12 gcc-toolset-14 git libtool \
+  dnf_install autoconf automake ccache clang compiler-rt \
+    gcc-toolset-12 gcc-toolset-14 git libtool \
     llvm ninja-build python3-pip python3-devel wget which
 
   install_uv
@@ -85,11 +86,20 @@ function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
   wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
-  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+  # CentOS 9 does not include ${INSTALL_PREFIX}/lib in the default ldconfig
+  # search paths. Register it so that downstream builds (e.g. fbthrift's
+  # thrift1 compiler) can find libgflags.so at runtime.
+  echo "${INSTALL_PREFIX}/lib" >/etc/ld.so.conf.d/usr-local.conf
+  ldconfig
 }
 
 function install_faiss_deps {
   dnf_install openblas-devel libomp
+}
+
+function install_cxl_deps {
+  dnf_install numactl-devel
 }
 
 function install_velox_deps {
@@ -109,11 +119,11 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_thrift
   run_and_time install_arrow
   run_and_time install_xsimd
   run_and_time install_simdjson
   run_and_time install_geos
+  run_and_time install_s2geometry
   run_and_time install_faiss
 }
 

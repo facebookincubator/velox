@@ -19,33 +19,36 @@
 #include "folly/dynamic.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/WriterFactory.h"
+#include "velox/dwio/common/tests/utils/RuntimeStatsInjectingWriter.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+#include <folly/ScopeGuard.h>
 #include <re2/re2.h>
 #include <string>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 
 namespace velox::exec::test {
+using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::dwio::common::test;
+
 constexpr uint64_t kQueryMemoryCapacity = 512 * MB;
 
-class BasicTableWriterTestBase : public HiveConnectorTestBase {};
+class BasicTableWriterTest : public HiveConnectorTestBase {};
 
-TEST_F(BasicTableWriterTestBase, roundTrip) {
+TEST_F(BasicTableWriterTest, roundTrip) {
   vector_size_t size = 1'000;
   auto data = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
@@ -82,7 +85,7 @@ TEST_F(BasicTableWriterTestBase, roundTrip) {
                      ->as<FlatVector<StringView>>();
   ASSERT_TRUE(details->isNullAt(0));
   ASSERT_FALSE(details->isNullAt(1));
-  folly::dynamic obj = folly::parseJson(details->valueAt(1));
+  folly::dynamic obj = folly::parseJson(std::string_view(details->valueAt(1)));
 
   ASSERT_EQ(size, obj["rowCount"].asInt());
   auto fileWriteInfos = obj["fileWriteInfos"];
@@ -104,7 +107,7 @@ TEST_F(BasicTableWriterTestBase, roundTrip) {
 
 // Generates a struct (row), write it as a flap map, and check that it is read
 // back as a map.
-TEST_F(BasicTableWriterTestBase, structAsMap) {
+TEST_F(BasicTableWriterTest, structAsMap) {
   // Input struct type.
   vector_size_t size = 1'000;
   auto data = makeRowVector(
@@ -164,7 +167,7 @@ TEST_F(BasicTableWriterTestBase, structAsMap) {
       .assertResults(expected);
 }
 
-TEST_F(BasicTableWriterTestBase, targetFileName) {
+TEST_F(BasicTableWriterTest, targetFileName) {
   constexpr const char* kFileName = "test.dwrf";
   auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
   auto directory = TempDirectoryPath::create();
@@ -180,7 +183,7 @@ TEST_F(BasicTableWriterTestBase, targetFileName) {
   auto results = AssertQueryBuilder(plan).copyResults(pool());
   auto* details = results->childAt(TableWriteTraits::kFragmentChannel)
                       ->asUnchecked<SimpleVector<StringView>>();
-  auto detail = folly::parseJson(details->valueAt(1));
+  auto detail = folly::parseJson(std::string_view(details->valueAt(1)));
   auto fileWriteInfos = detail["fileWriteInfos"];
   ASSERT_EQ(1, fileWriteInfos.size());
   ASSERT_EQ(fileWriteInfos[0]["writeFileName"].asString(), kFileName);
@@ -189,6 +192,59 @@ TEST_F(BasicTableWriterTestBase, targetFileName) {
       .split(makeHiveConnectorSplit(
           fmt::format("{}/{}", directory->getPath(), kFileName)))
       .assertResults(data);
+}
+
+TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
+  constexpr int64_t kInjectedNanos = 42'000'000;
+
+  folly::F14FastMap<std::string, RuntimeMetric> injectedStats;
+  injectedStats.emplace(
+      std::string{Operator::kBackgroundCpuTimeNanos},
+      RuntimeMetric(kInjectedNanos, RuntimeCounter::Unit::kNanos));
+
+  auto originalFactory =
+      dwio::common::getWriterFactory(dwio::common::FileFormat::DWRF);
+  auto injectingFactory = std::make_shared<RuntimeStatsInjectingWriterFactory>(
+      originalFactory, injectedStats);
+  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+  dwio::common::registerWriterFactory(injectingFactory);
+  auto restoreFactory = folly::makeGuard([&]() {
+    dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
+    dwio::common::registerWriterFactory(originalFactory);
+  });
+
+  auto data = makeRowVector({makeFlatVector<int64_t>(1'000, folly::identity)});
+
+  auto directory = TempDirectoryPath::create();
+  auto plan =
+      PlanBuilder().values({data}).tableWrite(directory->getPath()).planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).copyResults(pool(), task);
+
+  auto taskStats = task->taskStats();
+  const OperatorStats* writerOpStats = nullptr;
+  for (const auto& pipelineStats : taskStats.pipelineStats) {
+    for (const auto& opStats : pipelineStats.operatorStats) {
+      if (opStats.operatorType == "TableWrite") {
+        writerOpStats = &opStats;
+        break;
+      }
+    }
+    if (writerOpStats) {
+      break;
+    }
+  }
+  ASSERT_NE(writerOpStats, nullptr) << "TableWrite operator not found";
+  ASSERT_GT(writerOpStats->backgroundTiming.cpuNanos, 0);
+  ASSERT_EQ(
+      writerOpStats->backgroundTiming.cpuNanos,
+      static_cast<uint64_t>(kInjectedNanos));
+  ASSERT_EQ(
+      writerOpStats->runtimeStats
+          .at(std::string{Operator::kBackgroundCpuTimeNanos})
+          .sum,
+      kInjectedNanos);
 }
 
 class PartitionedTableWriterTest
@@ -1558,10 +1614,16 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     }
     ASSERT_EQ(
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
-    ASSERT_EQ(stats[1].runtimeStats[TableWriter::kNumWrittenFiles].sum, 1);
-    ASSERT_EQ(stats[1].runtimeStats[TableWriter::kNumWrittenFiles].count, 1);
-    ASSERT_GE(stats[1].runtimeStats[TableWriter::kWriteIOTime].sum, 0);
-    ASSERT_EQ(stats[1].runtimeStats[TableWriter::kWriteIOTime].count, 1);
+    ASSERT_EQ(
+        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].sum,
+        1);
+    ASSERT_EQ(
+        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].count,
+        1);
+    ASSERT_GE(
+        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].sum, 0);
+    ASSERT_EQ(
+        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].count, 1);
   }
 }
 
@@ -1817,7 +1879,8 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
     }
     if (!fragmentVector->isNullAt(i)) {
       ASSERT_FALSE(fragmentVector->isNullAt(i));
-      folly::dynamic obj = folly::parseJson(fragmentVector->valueAt(i));
+      folly::dynamic obj =
+          folly::parseJson(std::string_view(fragmentVector->valueAt(i)));
       if (testMode_ == TestMode::kUnpartitioned) {
         ASSERT_EQ(obj["targetPath"], outputDirectory->getPath());
         ASSERT_EQ(obj["writePath"], outputDirectory->getPath());
@@ -2287,6 +2350,301 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
   }
 }
 
+// Verifies TableWriteMerge with kFinal step and multiple drivers.
+// Each driver runs TableWrite(kPartial), LocalGather collects, and
+// TableWriteMerge(kFinal) produces final statistics.
+TEST_F(BasicTableWriterTest, columnStatsWithTableWriteMergeFinal) {
+  auto outputDirectory = TempDirectoryPath::create();
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(100, folly::identity),
+  });
+
+  // Stats columns: min(c0), max(c0) at channels 3 and 4.
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .tableWrite(
+                      outputDirectory->getPath(),
+                      dwio::common::FileFormat::DWRF,
+                      {"min(c0)", "max(c0)"})
+                  .localGather()
+                  .tableWriteMerge(core::AggregationNode::Step::kFinal)
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool());
+  ASSERT_GT(result->size(), 0);
+
+  // Verify the output: expect fragment rows, one stats row with values,
+  // and one summary row with the total row count.
+  auto* rowCountVector = result->childAt(TableWriteTraits::kRowCountChannel)
+                             ->as<SimpleVector<int64_t>>();
+  // Stats columns start at kStatsChannel: min(c0) at +0, max(c0) at +1.
+  auto* minVector = result->childAt(TableWriteTraits::kStatsChannel)
+                        ->as<SimpleVector<int32_t>>();
+  auto* maxVector = result->childAt(TableWriteTraits::kStatsChannel + 1)
+                        ->as<SimpleVector<int32_t>>();
+
+  int32_t numFragments = 0;
+  int32_t numStatsWithValues = 0;
+  int32_t numSummary = 0;
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    if (!result->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(i)) {
+      ++numFragments;
+    } else if (!minVector->isNullAt(i)) {
+      ++numStatsWithValues;
+      EXPECT_EQ(0, minVector->valueAt(i));
+      EXPECT_EQ(99, maxVector->valueAt(i));
+    } else if (!rowCountVector->isNullAt(i)) {
+      ++numSummary;
+      EXPECT_EQ(100, rowCountVector->valueAt(i));
+    } else {
+      FAIL() << "Unexpected row " << i << ": " << result->toString(i);
+    }
+  }
+
+  EXPECT_EQ(1, numFragments);
+  EXPECT_EQ(1, numStatsWithValues);
+  EXPECT_EQ(1, numSummary);
+}
+
+// Same as above but with a partition key as grouping key for stats.
+TEST_F(BasicTableWriterTest, columnStatsWithTableWriteMergeFinalPartitioned) {
+  auto outputDirectory = TempDirectoryPath::create();
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>(100, folly::identity),
+      makeFlatVector<int32_t>(100, [](auto row) { return row % 3; }),
+  });
+
+  // Partition by c1, collect min/max on c0 grouped by c1.
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .tableWrite(
+                      outputDirectory->getPath(),
+                      {"c1"},
+                      dwio::common::FileFormat::DWRF,
+                      {"min(c0)", "max(c0)"})
+                  .localGather()
+                  .tableWriteMerge(core::AggregationNode::Step::kFinal)
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool());
+  ASSERT_GT(result->size(), 0);
+
+  // With 3 partitions, expect 3 stats rows (one per partition key value).
+  auto* rowCountVector = result->childAt(TableWriteTraits::kRowCountChannel)
+                             ->as<SimpleVector<int64_t>>();
+  // Partition key is at kStatsChannel, stats start at kStatsChannel + 1.
+  auto* partKeyVector = result->childAt(TableWriteTraits::kStatsChannel)
+                            ->as<SimpleVector<int32_t>>();
+  auto* minVector = result->childAt(TableWriteTraits::kStatsChannel + 1)
+                        ->as<SimpleVector<int32_t>>();
+  auto* maxVector = result->childAt(TableWriteTraits::kStatsChannel + 2)
+                        ->as<SimpleVector<int32_t>>();
+
+  // Input: c0 = 0..99, c1 = c0 % 3. Per-partition min/max of c0:
+  //   partition 0: min=0, max=99
+  //   partition 1: min=1, max=97
+  //   partition 2: min=2, max=98
+  std::map<int32_t, std::pair<int32_t, int32_t>> expectedStats = {
+      {0, {0, 99}}, {1, {1, 97}}, {2, {2, 98}}};
+
+  int32_t numFragments = 0;
+  int32_t numSummary = 0;
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    if (!result->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(i)) {
+      ++numFragments;
+    } else if (!minVector->isNullAt(i)) {
+      ASSERT_FALSE(partKeyVector->isNullAt(i));
+      auto partKey = partKeyVector->valueAt(i);
+      auto it = expectedStats.find(partKey);
+      ASSERT_NE(it, expectedStats.end())
+          << "Unexpected or duplicate stats key: " << partKey;
+      EXPECT_EQ(it->second.first, minVector->valueAt(i));
+      EXPECT_EQ(it->second.second, maxVector->valueAt(i));
+      expectedStats.erase(it);
+    } else if (!rowCountVector->isNullAt(i)) {
+      ++numSummary;
+      EXPECT_EQ(100, rowCountVector->valueAt(i));
+    } else {
+      FAIL() << "Unexpected row " << i << ": " << result->toString(i);
+    }
+  }
+
+  EXPECT_EQ(3, numFragments);
+  EXPECT_TRUE(expectedStats.empty())
+      << "Missing stats: " << expectedStats.size();
+  EXPECT_EQ(1, numSummary);
+}
+
+// Extracts file paths from a fragment JSON object.
+std::vector<std::string> extractFragmentFiles(const folly::dynamic& fragment) {
+  std::vector<std::string> files;
+  auto targetPath = fragment["targetPath"].asString();
+  for (const auto& fileInfo : fragment["fileWriteInfos"]) {
+    files.push_back(
+        fmt::format(
+            "{}/{}", targetPath, fileInfo["targetFileName"].asString()));
+  }
+  return files;
+}
+
+// Builds a kFinal ColumnStatsSpec from a worker plan's kIntermediate spec.
+// The input type is used to resolve aggregate input column references.
+core::ColumnStatsSpec makeFinalStatsSpec(
+    const core::PlanNodePtr& workerPlan,
+    const RowType& inputType) {
+  auto mergeNode =
+      std::dynamic_pointer_cast<const core::TableWriteMergeNode>(workerPlan);
+  VELOX_CHECK_NOT_NULL(mergeNode);
+  VELOX_CHECK(mergeNode->hasColumnStatsSpec());
+
+  auto spec = mergeNode->columnStatsSpec().value();
+  spec.aggregationStep = core::AggregationNode::Step::kFinal;
+  for (size_t i = 0; i < spec.aggregates.size(); ++i) {
+    auto& aggregate = spec.aggregates[i];
+    const auto& name = spec.aggregateNames[i];
+    aggregate.call = std::make_shared<core::CallTypedExpr>(
+        aggregate.call->type(),
+        aggregate.call->name(),
+        std::make_shared<core::FieldAccessTypedExpr>(
+            inputType.findChild(name), name));
+  }
+  return spec;
+}
+
+// Simulates multi-node table write stats merging:
+// 1. Runs worker plan twice on different inputs (simulating 2 workers):
+//    Values → RoundRobinPartition → TableWrite(kPartial) → LocalGather →
+//    TableWriteMerge(kIntermediate)
+// 2. Collects all worker outputs and feeds them to a coordinator plan:
+//    Values(allWorkerOutputs) → TableWriteMerge(kFinal)
+// This tests mixed stats/data batches, cross-worker merge with different
+// taskIds, and dictionary-encoded input handling.
+TEST_F(BasicTableWriterTest, columnStatsWithTwoStageMerge) {
+  // Run worker plan on 2 different inputs (simulating 2 workers).
+  // Worker 1: c0 = 0..49, Worker 2: c0 = 50..99.
+  std::vector<RowVectorPtr> workerInputs = {
+      makeRowVector({makeFlatVector<int32_t>(50, folly::identity)}),
+      makeRowVector(
+          {makeFlatVector<int32_t>(50, [](auto row) { return row + 50; })}),
+  };
+
+  core::PlanNodePtr workerPlan;
+  std::vector<RowVectorPtr> allWorkerOutputs;
+  std::vector<std::shared_ptr<TempDirectoryPath>> outputDirectories;
+  for (const auto& input : workerInputs) {
+    // Each worker writes to a separate directory.
+    auto outputDirectory = TempDirectoryPath::create();
+    outputDirectories.push_back(outputDirectory);
+    workerPlan = PlanBuilder()
+                     .values(split(input, 4))
+                     .localPartitionRoundRobin()
+                     .tableWrite(
+                         outputDirectory->getPath(),
+                         dwio::common::FileFormat::DWRF,
+                         {"min(c0)", "max(c0)"})
+                     .localGather()
+                     .tableWriteMerge()
+                     .planNode();
+
+    auto workerResult =
+        AssertQueryBuilder(workerPlan).maxDrivers(4).copyResults(pool());
+    ASSERT_GT(workerResult->size(), 0);
+    allWorkerOutputs.push_back(workerResult);
+  }
+
+  // Count fragment rows from worker outputs to know expected total.
+  int32_t expectedFragments = 0;
+  for (const auto& output : allWorkerOutputs) {
+    for (vector_size_t i = 0; i < output->size(); ++i) {
+      if (!output->childAt(TableWriteTraits::kFragmentChannel)->isNullAt(i)) {
+        ++expectedFragments;
+      }
+    }
+  }
+  ASSERT_GE(expectedFragments, 2);
+
+  auto verifyCoordinatorResult = [&](const RowVectorPtr& result) {
+    ASSERT_GT(result->size(), 0);
+
+    auto* rowCountVector = result->childAt(TableWriteTraits::kRowCountChannel)
+                               ->as<SimpleVector<int64_t>>();
+    auto* minVector = result->childAt(TableWriteTraits::kStatsChannel)
+                          ->as<SimpleVector<int32_t>>();
+    auto* maxVector = result->childAt(TableWriteTraits::kStatsChannel + 1)
+                          ->as<SimpleVector<int32_t>>();
+
+    auto* fragmentVector = result->childAt(TableWriteTraits::kFragmentChannel)
+                               ->as<SimpleVector<StringView>>();
+
+    int32_t numStatsWithValues = 0;
+    int32_t numSummary = 0;
+    int64_t totalFragmentRows = 0;
+    std::set<std::string> fragmentFiles;
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      if (!fragmentVector->isNullAt(i)) {
+        auto fragment =
+            folly::parseJson(std::string(fragmentVector->valueAt(i)));
+        totalFragmentRows += fragment["rowCount"].asInt();
+        for (const auto& file : extractFragmentFiles(fragment)) {
+          EXPECT_TRUE(fragmentFiles.insert(file).second)
+              << "Duplicate fragment file: " << file;
+        }
+      } else if (!minVector->isNullAt(i)) {
+        ++numStatsWithValues;
+        EXPECT_EQ(0, minVector->valueAt(i));
+        EXPECT_EQ(99, maxVector->valueAt(i));
+      } else if (!rowCountVector->isNullAt(i)) {
+        ++numSummary;
+        EXPECT_EQ(100, rowCountVector->valueAt(i));
+      } else {
+        FAIL() << "Unexpected row " << i << ": " << result->toString(i);
+      }
+    }
+
+    // Verify fragment files match what's on disk.
+    std::set<std::string> diskFiles;
+    for (const auto& dir : outputDirectories) {
+      for (const auto& entry :
+           std::filesystem::directory_iterator(dir->getPath())) {
+        if (entry.is_regular_file()) {
+          diskFiles.insert(entry.path().string());
+        }
+      }
+    }
+    EXPECT_EQ(fragmentFiles, diskFiles);
+    EXPECT_EQ(100, totalFragmentRows);
+    EXPECT_EQ(1, numStatsWithValues);
+    EXPECT_EQ(1, numSummary);
+  };
+
+  auto spec = makeFinalStatsSpec(workerPlan, *allWorkerOutputs[0]->rowType());
+
+  auto runCoordinator = [&](const std::vector<RowVectorPtr>& input) {
+    auto plan = PlanBuilder().values(input).tableWriteMerge(spec).planNode();
+    verifyCoordinatorResult(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()));
+  };
+
+  // Run coordinator on worker outputs in order.
+  runCoordinator(allWorkerOutputs);
+
+  // Run coordinator on reversed worker outputs (worker 2 first).
+  {
+    auto reversed = allWorkerOutputs;
+    std::reverse(reversed.begin(), reversed.end());
+    runCoordinator(reversed);
+  }
+
+  // Run coordinator on split and interleaved worker outputs. Splits each
+  // worker output into 2 vectors, creating mixed batches with both stats
+  // and data rows.
+  {
+    auto parts1 = split(allWorkerOutputs[0], 2);
+    auto parts2 = split(allWorkerOutputs[1], 2);
+    runCoordinator({parts2[0], parts1[0], parts1[1], parts2[1]});
+  }
+}
+
 // TODO: add partitioned table write update mode tests and more failure tests.
 
 TEST_P(AllTableWriterTest, tableWriterStats) {
@@ -2349,17 +2707,17 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
       fixedWrittenBytes);
   ASSERT_EQ(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(TableWriter::kNumWrittenFiles)
+          ->customStats.at(std::string(TableWriter::kNumWrittenFiles))
           .sum,
       numWrittenFiles);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(TableWriter::kWriteIOTime)
+          ->customStats.at(std::string(TableWriter::kWriteIOTime))
           .sum,
       0);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(TableWriter::kRunningWallNanos)
+          ->customStats.at(std::string(TableWriter::kRunningWallNanos))
           .sum,
       0);
 }
@@ -2450,9 +2808,9 @@ DEBUG_ONLY_TEST_P(UnpartitionedTableWriterTest, dataSinkAbortError) {
 
   std::atomic<bool> triggerAbortErrorOnce{true};
   SCOPED_TESTVALUE_SET(
-      "facebook::velox::connector::hive::HiveDataSink::closeInternal",
-      std::function<void(const HiveDataSink*)>(
-          [&](const HiveDataSink* /*unused*/) {
+      "facebook::velox::connector::hive::FileDataSink::closeInternal",
+      std::function<void(const FileDataSink*)>(
+          [&](const FileDataSink* /*unused*/) {
             if (!triggerAbortErrorOnce.exchange(false)) {
               return;
             }
@@ -2508,14 +2866,16 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   // One spilled partition per each written files.
   const int numWrittenFiles = stats.customStats["numWrittenFiles"].sum;
   ASSERT_GE(stats.spilledPartitions, numWrittenFiles);
-  ASSERT_GT(stats.customStats[Operator::kSpillRuns].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillFillTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillSortTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillExtractVectorTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillSerializationTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillFlushTime].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillWrites].sum, 0);
-  ASSERT_GT(stats.customStats[Operator::kSpillWriteTime].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillRuns)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillFillTime)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillSortTime)].sum, 0);
+  ASSERT_GT(
+      stats.customStats[std::string(Operator::kSpillExtractVectorTime)].sum, 0);
+  ASSERT_GT(
+      stats.customStats[std::string(Operator::kSpillSerializationTime)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillFlushTime)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillWrites)].sum, 0);
+  ASSERT_GT(stats.customStats[std::string(Operator::kSpillWriteTime)].sum, 0);
 }
 
 DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
@@ -2815,8 +3175,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
       const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
       const int numPrevNonReclaimableAttempts =
           arbitrator->stats().numNonReclaimableAttempts;
-      auto queryCtx = core::QueryCtx::create(
-          executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+      auto queryCtx = core::QueryCtx::Builder()
+                          .executor(executor_.get())
+                          .pool(std::move(queryPool))
+                          .build();
       ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
       std::atomic_int numInputs{0};
@@ -2934,11 +3296,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
       const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
       const int numPrevNonReclaimableAttempts =
           arbitrator->stats().numNonReclaimableAttempts;
-      auto queryCtx = core::QueryCtx::create(
-          executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+      auto queryCtx = core::QueryCtx::Builder()
+                          .executor(executor_.get())
+                          .pool(std::move(queryPool))
+                          .build();
       ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
-      const auto spillStats = common::globalSpillStats();
+      const auto spillStats = globalSpillStats();
       std::atomic<int> numInputs{0};
       SCOPED_TESTVALUE_SET(
           "facebook::velox::exec::Driver::runInternal::addInput",
@@ -2953,8 +3317,13 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
               return;
             }
 
+            // Base the fake allocation on usedBytes() rather than
+            // reservedBytes() so it consumes all genuinely free capacity and
+            // forces the arbitrator to reclaim the sort writer's buffered
+            // memory by spilling, instead of being satisfied from unused
+            // reserved capacity.
             const auto fakeAllocationSize =
-                kQueryMemoryCapacity - op->pool()->parent()->reservedBytes();
+                kQueryMemoryCapacity - op->pool()->parent()->usedBytes();
             if (writerSpillEnabled) {
               auto* buffer = op->pool()->allocate(fakeAllocationSize);
               op->pool()->free(buffer, fakeAllocationSize);
@@ -3006,7 +3375,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           numPrevNonReclaimableAttempts);
 
       waitForAllTasksToBeDeleted(3'000'000);
-      const auto updatedSpillStats = common::globalSpillStats();
+      const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
         ASSERT_GT(
@@ -3049,8 +3418,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
     const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
     const int numPrevNonReclaimableAttempts =
         arbitrator->stats().numNonReclaimableAttempts;
-    auto queryCtx = core::QueryCtx::create(
-        executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+    auto queryCtx = core::QueryCtx::Builder()
+                        .executor(executor_.get())
+                        .pool(std::move(queryPool))
+                        .build();
+
     ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
     memory::MemoryPool* compressionPool{nullptr};
@@ -3157,8 +3529,11 @@ DEBUG_ONLY_TEST_F(
   const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
   const int numPrevNonReclaimableAttempts =
       arbitrator->stats().numNonReclaimableAttempts;
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
+
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
@@ -3240,8 +3615,10 @@ DEBUG_ONLY_TEST_F(
   const int numPrevNonReclaimableAttempts =
       arbitrator->stats().numNonReclaimableAttempts;
   const int numPrevReclaimedBytes = arbitrator->stats().reclaimedUsedBytes;
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> writerNoMoreInput{false};
@@ -3340,8 +3717,10 @@ DEBUG_ONLY_TEST_F(
   const int numPrevArbitrationFailures = arbitrator->stats().numFailures;
   const int numPrevNonReclaimableAttempts =
       arbitrator->stats().numNonReclaimableAttempts;
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic<bool> injectFakeAllocationOnce{true};
@@ -3384,7 +3763,7 @@ DEBUG_ONLY_TEST_F(
               {fmt::format("sum({})", TableWriteTraits::rowCountColumnName())})
           .planNode();
 
-  const auto spillStats = common::globalSpillStats();
+  const auto spillStats = globalSpillStats();
   const auto spillDirectory = TempDirectoryPath::create();
   AssertQueryBuilder(duckDbQueryRunner_)
       .queryCtx(queryCtx)
@@ -3410,7 +3789,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  const auto updatedSpillStats = common::globalSpillStats();
+  const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
   waitForAllTasksToBeDeleted();
 }
@@ -3432,8 +3811,11 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableFileWriteError", kQueryMemoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
+
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic_bool injectWriterErrorOnce{true};
@@ -3500,8 +3882,10 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity / 4);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity / 4);
 
   auto fakeLeafPool = queryCtx->pool()->addLeafChild(
@@ -3587,14 +3971,18 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
 
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   auto fakeQueryPool =
       memory::memoryManager()->addRootPool("fake", kQueryMemoryCapacity);
-  auto fakeQueryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(fakeQueryPool));
+  auto fakeQueryCtx = core::QueryCtx::Builder()
+                          .executor(executor_.get())
+                          .pool(std::move(fakeQueryPool))
+                          .build();
   ASSERT_EQ(fakeQueryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   auto fakeLeafPool = fakeQueryCtx->pool()->addLeafChild(
@@ -3680,8 +4068,10 @@ DEBUG_ONLY_TEST_F(
           .data;
   auto queryPool = memory::memoryManager()->addRootPool(
       "tableWriteSpillUseMoreMemory", kQueryMemoryCapacity);
-  auto queryCtx = core::QueryCtx::create(
-      executor_.get(), QueryConfig{{}}, {}, nullptr, std::move(queryPool));
+  auto queryCtx = core::QueryCtx::Builder()
+                      .executor(executor_.get())
+                      .pool(std::move(queryPool))
+                      .build();
   ASSERT_EQ(queryCtx->pool()->capacity(), kQueryMemoryCapacity);
 
   std::atomic_bool writerCloseWaitFlag{true};

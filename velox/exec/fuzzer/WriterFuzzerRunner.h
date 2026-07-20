@@ -24,6 +24,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/FaultyFileSink.h"
@@ -82,7 +83,8 @@ class WriterFuzzerRunner {
         kHiveConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::registerConnector(hiveConnector);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector->connectorId(), hiveConnector);
     dwrf::registerDwrfReaderFactory();
     dwrf::registerDwrfWriterFactory();
     dwio::common::registerFileSinks();

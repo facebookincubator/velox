@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSink.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -157,14 +158,15 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
 
   // Convert the input RowVectorPtr to cudf::table
   auto stream = cudfGlobalStreamPool().get_stream();
-  auto cudfInput = with_arrow::toCudfTable(input, input->pool(), stream);
+  auto cudfInput =
+      with_arrow::toCudfTable(input, input->pool(), stream, get_temp_mr());
   stream.synchronize();
   VELOX_CHECK_NOT_NULL(
       cudfInput, "Failed to convert input RowVectorPtr to cudf::table");
 
   // Check if the writer doesn't already exist
   if (writer_ == nullptr) {
-    writer_ = createCudfWriter(cudfInput->view());
+    writer_ = createCudfWriter(cudfInput->view(), stream);
   }
 
   // Write the table to the sink
@@ -174,7 +176,9 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
 }
 
 std::unique_ptr<cudf::io::chunked_parquet_writer>
-CudfHiveDataSink::createCudfWriter(cudf::table_view cudfTable) {
+CudfHiveDataSink::createCudfWriter(
+    cudf::table_view cudfTable,
+    rmm::cuda_stream_view stream) {
   // Create a table_input_metadata from the input
   auto tableInputMetadata = createCudfTableInputMetadata(cudfTable);
 
@@ -257,7 +261,8 @@ CudfHiveDataSink::createCudfWriter(cudf::table_view cudfTable) {
     }
   }
 
-  return std::make_unique<cudf::io::chunked_parquet_writer>(cudfWriterOptions);
+  return std::make_unique<cudf::io::chunked_parquet_writer>(
+      cudfWriterOptions, stream);
 }
 
 cudf::io::table_input_metadata CudfHiveDataSink::createCudfTableInputMetadata(
@@ -330,8 +335,8 @@ DataSink::Stats CudfHiveDataSink::stats() const {
   int64_t numWrittenBytes{0};
   int64_t writeIOTimeUs{0};
 
-  numWrittenBytes += ioStats_->rawBytesWritten();
-  writeIOTimeUs += ioStats_->writeIOTimeUs();
+  numWrittenBytes += ioStatistics_->rawBytesWritten();
+  writeIOTimeUs += ioStatistics_->writeIOTimeUs();
 
   stats.numWrittenBytes = numWrittenBytes;
   stats.writeIOTimeUs = writeIOTimeUs;
@@ -342,9 +347,8 @@ DataSink::Stats CudfHiveDataSink::stats() const {
 
   stats.numWrittenFiles = 1;
   VELOX_CHECK_NOT_NULL(writerInfo_);
-  const auto spillStats = writerInfo_->spillStats->rlock();
-  if (!spillStats->empty()) {
-    stats.spillStats += *spillStats;
+  if (!writerInfo_->spillStats->empty()) {
+    stats.spillStats += *writerInfo_->spillStats;
   }
 
   return stats;
@@ -403,10 +407,10 @@ std::vector<std::string> CudfHiveDataSink::close() {
           folly::dynamic::object
             ("writeFileName", writerInfo_->writerParameters.writeFileName())
             ("targetFileName", writerInfo_->writerParameters.targetFileName())
-            ("fileSize", ioStats_->rawBytesWritten())))
+            ("fileSize", ioStatistics_->rawBytesWritten())))
         ("rowCount", writerInfo_->numWrittenRows)
         ("inMemoryDataSizeInBytes", writerInfo_->inputSizeInBytes)
-        ("onDiskDataSizeInBytes", ioStats_->rawBytesWritten())
+        ("onDiskDataSizeInBytes", ioStatistics_->rawBytesWritten())
         ("containsNumberedFileNames", true));
   // clang-format on
   partitionUpdates.emplace_back(partitionUpdateJson);
@@ -456,7 +460,7 @@ void CudfHiveDataSink::makeWriterOptions(
       std::move(sinkPool),
       std::move(sortPool));
 
-  ioStats_ = std::make_shared<io::IoStatistics>();
+  ioStatistics_ = std::make_shared<io::IoStatistics>();
 
   // Take the writer options provided by the user as a starting point,
   // or allocate a new one.
@@ -494,7 +498,8 @@ folly::dynamic CudfHiveInsertTableHandle::serialize() const {
 
   obj["inputColumns"] = arr;
   obj["locationHandle"] = locationHandle_->serialize();
-  obj["tableStorageFormat"] = dwio::common::toString(storageFormat_);
+  obj["tableStorageFormat"] =
+      dwio::common::FileFormatName::toName(storageFormat_);
 
   if (compressionKind_.has_value()) {
     obj["compressionKind"] = common::compressionKindToString(*compressionKind_);
@@ -526,7 +531,7 @@ CudfHiveInsertTableHandlePtr CudfHiveInsertTableHandle::create(
 std::string CudfHiveInsertTableHandle::toString() const {
   std::ostringstream out;
   out << "CudfHiveInsertTableHandle ["
-      << dwio::common::toString(storageFormat_);
+      << dwio::common::FileFormatName::toName(storageFormat_);
   if (compressionKind_.has_value()) {
     out << " " << common::compressionKindToString(compressionKind_.value());
   } else {

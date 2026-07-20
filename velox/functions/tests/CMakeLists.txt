@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(velox_function_registry_test FunctionRegistryTest.cpp)
+velox_add_test_headers(velox_function_registry_test RegistryTestUtil.h)
 
 add_test(NAME velox_function_registry_test COMMAND velox_function_registry_test)
 

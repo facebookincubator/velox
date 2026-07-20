@@ -26,7 +26,7 @@ namespace facebook::velox::memory {
 /// The implementation of MemoryAllocator using malloc.
 class MallocAllocator : public MemoryAllocator {
  public:
-  MallocAllocator(size_t capacity, uint32_t reservationByteLimit);
+  explicit MallocAllocator(const Options& options);
 
   ~MallocAllocator() override;
 
@@ -102,11 +102,39 @@ class MallocAllocator : public MemoryAllocator {
       ContiguousAllocation& allocation,
       MachinePageCount maxPages);
 
+  // Allocates 'maxBytes' of contiguous memory using malloc or mmap depending
+  // on 'mallocContiguousEnabled_'. Returns the allocated pointer, or nullptr
+  // on failure.
+  void* dispatchAllocateContiguous(size_t maxBytes);
+
+  // Frees contiguous memory previously allocated by
+  // dispatchAllocateContiguous.
+  void dispatchFreeContiguous(ContiguousAllocation& allocation);
+
   void freeContiguousImpl(ContiguousAllocation& allocation);
 
   void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
   void* allocateZeroFilledWithoutRetry(uint64_t bytes) override;
+
+  /// Attempts in-place reallocation via ::realloc(). Returns nullptr when
+  /// ::realloc() cannot satisfy the request, in which case the caller falls
+  /// back to allocate + memcpy + free. Preconditions for using ::realloc():
+  /// 1. p must be non-null. ::realloc(nullptr, n) would behave like malloc,
+  ///    but we route nullptr through allocateBytes so the caller picks up
+  ///    cache eviction on the fallback.
+  /// 2. The requested alignment must be at most kMinAlignment. ::realloc()
+  ///    guarantees only kMinAlignment on the returned pointer (and may move
+  ///    the data to a new address), so larger alignments cannot be honored.
+  /// 3. p must already be aligned to the requested alignment. MemoryAllocator
+  ///    is a standalone module that may be used outside MemoryPool, so we
+  ///    cannot rely on the caller to pass an alignment matching the original
+  ///    allocation.
+  void* reallocateBytesWithoutRetry(
+      void* p,
+      uint64_t oldSize,
+      uint64_t newSize,
+      uint16_t alignment) override;
 
   // Increments current usage and check current 'allocatedBytes_' counter to
   // make sure current usage does not go above 'capacity_'. If it goes above
@@ -216,6 +244,9 @@ class MallocAllocator : public MemoryAllocator {
   }
 
   const Kind kind_;
+
+  // If true, use malloc for contiguous allocations instead of mmap/munmap.
+  const bool mallocContiguousEnabled_;
 
   // Capacity in bytes. Total allocation byte is not allowed to exceed this
   // value.

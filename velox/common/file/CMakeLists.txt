@@ -14,11 +14,31 @@
 
 # for generated headers
 include_directories(.)
-velox_add_library(velox_file File.cpp FileInputStream.cpp FileSystems.cpp Utils.cpp)
+velox_add_library(
+  velox_file
+  File.cpp
+  FileInputStream.cpp
+  FileIoTracer.cpp
+  FileSystems.cpp
+  FileUtils.cpp
+  IoUringReader.cpp
+  LocalFile.cpp
+  HEADERS
+  File.h
+  FileInputStream.h
+  FileIoTracer.h
+  FileSystems.h
+  FileUtils.h
+  IoUringReader.h
+  LocalFile.h
+  PlainUserNameTokenProvider.h
+  Region.h
+  TokenProvider.h
+)
 velox_link_libraries(
   velox_file
   PUBLIC velox_exception Folly::folly
-  PRIVATE velox_buffer velox_common_base fmt::fmt glog::glog
+  PRIVATE velox_buffer velox_common_base velox_memory fmt::fmt glog::glog
 )
 
 if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_TEST_UTILS})

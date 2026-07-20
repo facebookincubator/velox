@@ -5,8 +5,10 @@ Conversion Functions
 .. spark:function:: cast(value AS type) -> type
 
     Explicitly cast a ``value`` to a specified ``type``.
-    Follows the behavior when Spark ANSI mode is disabled, and does not support
-    the behavior when ANSI is turned on:
+    For cast pairs with Velox Spark ANSI support, behavior follows Spark ANSI
+    mode. Currently, ANSI mode is supported for casting from string to boolean,
+    integral, and date types. Other cast pairs follow the behavior used when
+    Spark ANSI mode is disabled:
 
     * If the ``value`` exceeds the range of the ``type``, no error is raised.
       Instead, the ``value`` is "wrapped" around.
@@ -30,6 +32,16 @@ Conversion Functions
         SELECT try_cast(128 as tinyint); -- NULL
         SELECT try_cast(cast(550000.0 as DECIMAL(8, 1)) as smallint); -- NULL
         SELECT try_cast(1e12 as int); -- NULL
+
+Expression-level cast modes
+---------------------------
+
+``spark_ansi_cast`` and ``spark_legacy_cast`` are internal special form names
+registered with Spark SQL functions to preserve Spark's per-expression cast
+mode. These are not Spark SQL functions. ``spark_ansi_cast`` applies ANSI
+behavior for supported cast pairs regardless of the session ANSI setting.
+``spark_legacy_cast`` applies non-ANSI Spark cast behavior regardless of the
+session ANSI setting.
 
 Cast from UNKNOWN Type
 ----------------------
@@ -80,9 +92,15 @@ Valid examples
 From strings
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting a string to an integral type is allowed if the string represents a number within the range of result type.
-Casting from strings that represent floating-point numbers truncates the decimal part of the input value.
-Casting from invalid input values throws.
+Casting from strings that represent floating-point numbers truncates the
+decimal part of the input value when ANSI mode is disabled; throws an
+error otherwise.
+
+Casting from other invalid strings returns NULL when ANSI mode is disabled;
+throws an error otherwise.
 
 Valid examples
 
@@ -91,28 +109,28 @@ Valid examples
   SELECT cast('12345' as bigint); -- 12345
   SELECT cast('+1' as tinyint); -- 1
   SELECT cast('-1' as tinyint); -- -1
-  SELECT cast('12345.67' as bigint); -- 12345
-  SELECT cast('1.2' as tinyint); -- 1
-  SELECT cast('-1.8' as tinyint); -- -1
+  SELECT cast('12345.67' as bigint); -- 12345 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1.2' as tinyint); -- 1 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-1.8' as tinyint); -- -1 (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('+1' as tinyint); -- 1
-  SELECT cast('1.' as tinyint); -- 1
+  SELECT cast('1.' as tinyint); -- 1 (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('-1' as tinyint); -- -1
-  SELECT cast('-1.' as tinyint); -- -1
-  SELECT cast('0.' as tinyint); -- 0
-  SELECT cast('.' as tinyint); -- 0
-  SELECT cast('-.' as tinyint); -- 0
+  SELECT cast('-1.' as tinyint); -- -1 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('0.' as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('.' as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-.' as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
 
 Invalid examples
 
 ::
 
-  SELECT cast('1234567' as tinyint); -- NULL // Reason: Out of range
-  SELECT cast('1a' as tinyint); -- NULL // Invalid argument
-  SELECT cast('' as tinyint); -- NULL // Invalid argument
-  SELECT cast('1,234,567' as bigint); -- NULL // Invalid argument
-  SELECT cast('1'234'567' as bigint); -- NULL // Invalid argument
-  SELECT cast('nan' as bigint); -- NULL // Invalid argument
-  SELECT cast('infinity' as bigint); -- NULL // Invalid argument
+  SELECT cast('1234567' as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1a' as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('' as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1,234,567' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1'234'567' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('nan' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('infinity' as bigint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From decimal
 ^^^^^^^^^^^^
@@ -134,7 +152,13 @@ Valid examples
 From timestamp
 ^^^^^^^^^^^^^^
 
-Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds, dividing by the number of microseconds in a second, and then rounding down to the nearest second since the epoch (1970-01-01 00:00:00 UTC).
+*(ANSI compliant)*
+
+Casting timestamp as integral types returns the number of seconds by converting timestamp as microseconds,
+dividing by the number of microseconds in a second, and then rounding down to the nearest second since the
+epoch (1970-01-01 00:00:00 UTC).
+
+In ANSI mode, conversion overflow causes an exception to be thrown; otherwise, returns NULL.
 
 Valid examples
 
@@ -146,8 +170,13 @@ Valid examples
   SELECT cast(cast('2000-01-01 12:21:56' as timestamp) as bigint); -- 946684916
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as bigint); -- 1740470426
   SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as integer); -- 1740470426
-  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- 30874
-  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- -102
+
+Invalid examples
+
+::
+
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as smallint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast('2025-02-25 08:00:26.88' as timestamp) as tinyint); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to Boolean
 ---------------
@@ -155,8 +184,12 @@ Cast to Boolean
 From VARCHAR
 ^^^^^^^^^^^^
 
-The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case equivalents are allowed to be casted to boolean.
-Casting from other strings to boolean throws.
+*(ANSI compliant)*
+
+The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
+equivalents are allowed to be cast to boolean.
+Casting from invalid strings throws an error when ANSI mode is enabled,
+or returns NULL when ANSI mode is disabled.
 
 Valid examples
 
@@ -177,16 +210,42 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as boolean); -- NULL // Invalid argument
-  SELECT cast('nan' as boolean); -- NULL // Invalid argument
-  SELECT cast('infinity' as boolean); -- NULL // Invalid argument
-  SELECT cast('12' as boolean); -- NULL // Invalid argument
-  SELECT cast('-1' as boolean); -- NULL // Invalid argument
-  SELECT cast('tr' as boolean); -- NULL // Invalid argument
-  SELECT cast('tru' as boolean); -- NULL // Invalid argument
+  SELECT cast('1.7E308' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('nan' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('infinity' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('12' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('-1' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tr' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('tru' as boolean); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 Cast to String
 --------------
+From DECIMAL
+^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a DECIMAL to STRING returns a plain decimal value.
+The scale is preserved and trailing zeros are kept for normal (non-scientific) form.
+When the absolute value is less than:math:`10^{-6}`, the result is formatted in scientific notation (e.g. ``1.23E-8``).
+
+The conversion always succeeds with identical results for both ANSI ON and OFF modes.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(1.00 as decimal(10, 2)) as string); -- '1.00'
+  SELECT cast(cast(12.30 as decimal(10, 2)) as string); -- '12.30'
+  SELECT cast(cast(0.00000012 as decimal(10, 8)) as string); -- '0.00000012'
+  SELECT cast(cast(-1.00 as decimal(10, 2)) as string); -- '-1.00'
+  SELECT cast(cast(123456789.123456789 as decimal(18, 9)) as string); -- '123456789.123456789'
+  SELECT cast(cast(0.00 as decimal(5, 2)) as string); -- '0.00'
+  SELECT cast(cast(999.99 as decimal(5, 2)) as string); -- '999.99'
+  SELECT cast(cast(-0.01 as decimal(3, 2)) as string); -- '-0.01'
+  SELECT cast(cast(1 as decimal(38, 20)) as string);   -- '1E-20'
+  SELECT cast(cast(0 as decimal(10, 7)) as string);   -- '0E-7'
+  SELECT cast(cast(123 as decimal(38, 10)) as string); -- '1.23E-8'
 
 From TIMESTAMP
 ^^^^^^^^^^^^^^
@@ -208,11 +267,33 @@ Valid examples
   SELECT cast(cast('0384-01-01 08:00:00.000' as timestamp) as string); -- '0384-01-01 08:00:00'
   SELECT cast(cast('-0010-02-01 10:00:00.000' as timestamp) as string); -- '-0010-02-01 10:00:00'
 
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a timestamp_utc to a string uses the same ISO 8601 format as TIMESTAMP,
+but is not subject to session timezone adjustment.
+The conversion precision is microsecond, and trailing zeros are not appended.
+When the year exceeds 9999, a positive sign is added.
+
+Valid examples
+
+::
+
+  SELECT cast(TIMESTAMP_NTZ '1970-01-01 00:00:00' as string); -- '1970-01-01 00:00:00'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.129' as string); -- '2000-01-01 12:21:56.129'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.100000' as string); -- '2000-01-01 12:21:56.1'
+  SELECT cast(TIMESTAMP_NTZ '2000-01-01 12:21:56.129900' as string); -- '2000-01-01 12:21:56.1299'
+  SELECT cast(TIMESTAMP_NTZ '10000-02-01 16:00:00.000' as string); -- '+10000-02-01 16:00:00'
+  SELECT cast(TIMESTAMP_NTZ '0384-01-01 08:00:00.000' as string); -- '0384-01-01 08:00:00'
+  SELECT cast(TIMESTAMP_NTZ '-0010-02-01 10:00:00.000' as string); -- '-0010-02-01 10:00:00'
+
 Cast to Date
 ------------
 
 From strings
 ^^^^^^^^^^^^
+
+*(ANSI compliant)*
 
 All Spark supported patterns are allowed:
 
@@ -230,7 +311,9 @@ For the last two patterns, the trailing ``*`` can represent none or any sequence
   * "1970-01-01 (BC)"
 
 All leading and trailing UTF8 white-spaces will be trimmed before cast.
-Casting from invalid input values throws.
+
+When ANSI mode is enabled, casting from invalid input values throws an error.
+When ANSI mode is disabled, casting from invalid input values returns NULL.
 
 Valid examples
 
@@ -257,10 +340,16 @@ Cast to Decimal
 From varchar
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 Casting varchar to a decimal of given precision and scale is allowed.
 The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.
 
-Valid example
+When ANSI mode is enabled, casting from an invalid input value or a value that
+overflows the target precision and scale throws an error. Otherwise, such casts
+return NULL.
+
+Valid examples
 
 ::
 
@@ -270,6 +359,44 @@ Valid example
   SELECT cast(' -3E+2' as decimal(12, 2)); -- -300.00
   SELECT cast('-3E+2 ' as decimal(12, 2)); -- -300.00
   SELECT cast('  -3E+2  ' as decimal(12, 2)); -- -300.00
+
+Invalid examples
+
+::
+
+  SELECT cast('0.0444a' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not a number
+  SELECT cast('' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not a number
+  SELECT cast('1. 23' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Interior whitespace is invalid
+  SELECT cast('1.23e67' as decimal(38, 0)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast('111111111111111111.23' as decimal(38, 38)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+
+From integral types
+^^^^^^^^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting an integral value to a decimal of given precision and scale is allowed.
+Supported types are tinyint, smallint, integer and bigint.
+
+When ANSI mode is enabled, casting a value that overflows the target precision
+and scale throws an error. Otherwise, such casts return NULL.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(55 as tinyint) as decimal(6, 2)); -- 55.00
+  SELECT cast(cast(-3 as smallint) as decimal(6, 2)); -- -3.00
+  SELECT cast(cast(72 as integer) as decimal(20, 10)); -- 72.0000000000
+  SELECT cast(cast(0 as bigint) as decimal(6, 2)); -- 0.00
+
+Invalid examples
+
+::
+
+  SELECT cast(cast(-128 as tinyint) as decimal(3, 1)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(cast(100 as integer) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
+  SELECT cast(cast(-100 as bigint) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
 Cast to Varbinary
 -----------------
@@ -342,3 +469,38 @@ Valid examples
 
   SELECT cast(true as timestamp); -- 1970-01-01 00:00:00.000001
   SELECT cast(false as timestamp); -- 1970-01-01 00:00:00
+
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+Casting a TIMESTAMP_UTC to TIMESTAMP interprets the stored timestamp as a local
+timestamp in the session timezone and returns the corresponding UTC epoch. When
+the local timestamp falls in a DST spring-forward gap, Spark adjusts to the
+post-transition timestamp instead of throwing.
+
+Valid examples
+
+::
+
+  -- Stored epoch 1577808000 represents local 2019-12-31 16:00:00.
+  -- In America/Los_Angeles (UTC-8) that is 2020-01-01 00:00:00 UTC.
+  SELECT cast(TIMESTAMP_NTZ '2019-12-31 16:00:00' as timestamp); -- 2020-01-01 00:00:00
+
+Cast to TIMESTAMP UTC
+---------------------
+
+From TIMESTAMP
+^^^^^^^^^^^^^^
+
+Casting a TIMESTAMP to TIMESTAMP_UTC applies the session timezone offset so
+that the local timestamp is preserved. The stored epoch in TIMESTAMP_UTC
+represents the same timestamp fields as the local timestamp, treated as a UTC
+epoch. When no session timezone is configured the cast is an identity operation.
+
+Valid examples
+
+::
+
+  -- 2020-01-01 00:00:00 UTC in America/Los_Angeles is local 2019-12-31 16:00:00.
+  -- TIMESTAMP_UTC stores that local time as epoch 1577808000.
+  SELECT cast(timestamp '2020-01-01 00:00:00' as timestamp_ntz); -- 2019-12-31 16:00:00

@@ -24,100 +24,33 @@ using dwio::common::ArenaCreate;
 
 namespace {
 
-static bool isValidLength(const std::optional<uint64_t>& length) {
+bool isValidLength(const std::optional<uint64_t>& length) {
   return length.has_value() &&
       length.value() <= std::numeric_limits<int64_t>::max();
 }
 
-template <typename T>
-static void mergeCount(std::optional<T>& to, const std::optional<T>& from) {
-  if (to.has_value()) {
-    if (from.has_value()) {
-      to.value() += from.value();
-    } else {
-      to.reset();
-    }
+// Serializes base ColumnStatistics fields to proto.
+void baseToProto(
+    const dwio::common::ColumnStatistics& builder,
+    ColumnStatisticsWriteWrapper& stats) {
+  if (builder.hasNull().has_value()) {
+    stats.setHasNull(builder.hasNull().value());
   }
-}
-
-template <typename T>
-static void mergeMin(std::optional<T>& to, const std::optional<T>& from) {
-  if (to.has_value()) {
-    if (!from.has_value()) {
-      to.reset();
-    } else if (from.value() < to.value()) {
-      to = from;
-    }
+  if (builder.getNumberOfValues().has_value()) {
+    stats.setNumberOfValues(builder.getNumberOfValues().value());
   }
-}
-
-template <typename T>
-static void mergeMax(std::optional<T>& to, const std::optional<T>& from) {
-  if (to.has_value()) {
-    if (!from.has_value()) {
-      to.reset();
-    } else if (from.value() > to.value()) {
-      to = from;
-    }
+  if (builder.getRawSize().has_value()) {
+    stats.setRawSize(builder.getRawSize().value());
+  }
+  if (builder.getSize().has_value()) {
+    stats.setSize(builder.getSize().value());
   }
 }
 
 } // namespace
 
-void StatisticsBuilder::merge(
-    const dwio::common::ColumnStatistics& other,
-    bool ignoreSize) {
-  // Merge valueCount_ only if both sides have it. Otherwise, reset.
-  mergeCount(valueCount_, other.getNumberOfValues());
-
-  // Merge hasNull_. Follow below rule:
-  // self / other => result
-  // true / any => true
-  // unknown / true => true
-  // unknown / unknown or false => unknown
-  // false / unknown => unknown
-  // false / false => false
-  // false / true => true
-  if (!hasNull_.has_value() || !hasNull_.value()) {
-    auto otherHasNull = other.hasNull();
-    if (otherHasNull.has_value()) {
-      if (otherHasNull.value()) {
-        // other is true, set to true
-        hasNull_ = true;
-      }
-      // when other is false, no change is needed
-    } else if (hasNull_.has_value()) {
-      // self value is false and other is unknown, set to unknown
-      hasNull_.reset();
-    }
-  }
-  // Merge rawSize_ the way similar to valueCount_
-  mergeCount(rawSize_, other.getRawSize());
-  if (!ignoreSize) {
-    // Merge size
-    mergeCount(size_, other.getSize());
-  }
-  if (hll_) {
-    auto* otherBuilder = dynamic_cast<const StatisticsBuilder*>(&other);
-    VELOX_CHECK_NOT_NULL(otherBuilder);
-    VELOX_CHECK_NOT_NULL(otherBuilder->hll_);
-    hll_->mergeWith(*otherBuilder->hll_);
-  }
-}
-
 void StatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
-  if (hasNull_.has_value()) {
-    stats.setHasNull(hasNull_.value());
-  }
-  if (valueCount_.has_value()) {
-    stats.setNumberOfValues(valueCount_.value());
-  }
-  if (rawSize_.has_value()) {
-    stats.setRawSize(rawSize_.value());
-  }
-  if (size_.has_value()) {
-    stats.setSize(size_.value());
-  }
+  baseToProto(*this, stats);
 }
 
 std::unique_ptr<dwio::common::ColumnStatistics> StatisticsBuilder::build()
@@ -214,67 +147,22 @@ void StatisticsBuilder::createTree(
       DWIO_RAISE("Not supported type: ", kind);
       break;
   }
-  return;
-};
-
-void BooleanStatisticsBuilder::merge(
-    const dwio::common::ColumnStatistics& other,
-    bool ignoreSize) {
-  StatisticsBuilder::merge(other, ignoreSize);
-  auto stats =
-      dynamic_cast<const dwio::common::BooleanColumnStatistics*>(&other);
-  if (!stats) {
-    // We only care about the case when type specific stats is missing yet
-    // it has non-null values.
-    if (!isEmpty(other) && trueCount_.has_value()) {
-      trueCount_.reset();
-    }
-    return;
-  }
-
-  // Now the case when both sides have type specific stats
-  mergeCount(trueCount_, stats->getTrueCount());
 }
 
 void BooleanStatisticsBuilder::toProto(
     ColumnStatisticsWriteWrapper& stats) const {
-  StatisticsBuilder::toProto(stats);
-  // Serialize type specific stats only if there is non-null values
-  if (!isEmpty(*this) && trueCount_.has_value()) {
+  baseToProto(*this, stats);
+  if (!isAllNull() && trueCount_.has_value()) {
     auto bStats = stats.mutableBucketStatistics();
     DWIO_ENSURE_EQ(bStats.countSize(), 0);
     bStats.addCount(trueCount_.value());
   }
 }
 
-void IntegerStatisticsBuilder::merge(
-    const dwio::common::ColumnStatistics& other,
-    bool ignoreSize) {
-  StatisticsBuilder::merge(other, ignoreSize);
-  auto stats =
-      dynamic_cast<const dwio::common::IntegerColumnStatistics*>(&other);
-  if (!stats) {
-    // We only care about the case when type specific stats is missing yet
-    // it has non-null values.
-    if (!isEmpty(other)) {
-      min_.reset();
-      max_.reset();
-      sum_.reset();
-    }
-    return;
-  }
-
-  // Now the case when both sides have type specific stats
-  mergeMin(min_, stats->getMinimum());
-  mergeMax(max_, stats->getMaximum());
-  mergeWithOverflowCheck(sum_, stats->getSum());
-}
-
 void IntegerStatisticsBuilder::toProto(
     ColumnStatisticsWriteWrapper& stats) const {
-  StatisticsBuilder::toProto(stats);
-  // Serialize type specific stats only if there is non-null values
-  if (!isEmpty(*this) &&
+  baseToProto(*this, stats);
+  if (!isAllNull() &&
       (min_.has_value() || max_.has_value() || sum_.has_value())) {
     auto iStats = stats.mutableIntegerStatistics();
     if (min_.has_value()) {
@@ -289,35 +177,10 @@ void IntegerStatisticsBuilder::toProto(
   }
 }
 
-void DoubleStatisticsBuilder::merge(
-    const dwio::common::ColumnStatistics& other,
-    bool ignoreSize) {
-  StatisticsBuilder::merge(other, ignoreSize);
-  auto stats =
-      dynamic_cast<const dwio::common::DoubleColumnStatistics*>(&other);
-  if (!stats) {
-    // We only care about the case when type specific stats is missing yet
-    // it has non-null values.
-    if (!isEmpty(other)) {
-      clear();
-    }
-    return;
-  }
-
-  // Now the case when both sides have type specific stats
-  mergeMin(min_, stats->getMinimum());
-  mergeMax(max_, stats->getMaximum());
-  mergeCount(sum_, stats->getSum());
-  if (sum_.has_value() && std::isnan(sum_.value())) {
-    sum_.reset();
-  }
-}
-
 void DoubleStatisticsBuilder::toProto(
     ColumnStatisticsWriteWrapper& stats) const {
-  StatisticsBuilder::toProto(stats);
-  // Serialize type specific stats only if there is non-null values
-  if (!isEmpty(*this) &&
+  baseToProto(*this, stats);
+  if (!isAllNull() &&
       (min_.has_value() || max_.has_value() || sum_.has_value())) {
     auto dStats = stats.mutableDoubleStatistics();
     if (min_.has_value()) {
@@ -332,49 +195,10 @@ void DoubleStatisticsBuilder::toProto(
   }
 }
 
-void StringStatisticsBuilder::merge(
-    const dwio::common::ColumnStatistics& other,
-    bool ignoreSize) {
-  // min_/max_ is not initialized with default that can be compared against
-  // easily. So we need to capture whether self is empty and handle
-  // differently.
-  auto isSelfEmpty = isEmpty(*this);
-  StatisticsBuilder::merge(other, ignoreSize);
-  auto stats =
-      dynamic_cast<const dwio::common::StringColumnStatistics*>(&other);
-  if (!stats) {
-    // We only care about the case when type specific stats is missing yet
-    // it has non-null values.
-    if (!isEmpty(other)) {
-      min_.reset();
-      max_.reset();
-      length_.reset();
-    }
-    return;
-  }
-
-  // If the other stats is empty, there is nothing to merge at string stats
-  // level.
-  if (isEmpty(other)) {
-    return;
-  }
-
-  if (isSelfEmpty) {
-    min_ = stats->getMinimum();
-    max_ = stats->getMaximum();
-  } else {
-    mergeMin(min_, stats->getMinimum());
-    mergeMax(max_, stats->getMaximum());
-  }
-
-  mergeWithOverflowCheck(length_, stats->getTotalLength());
-}
-
 void StringStatisticsBuilder::toProto(
     ColumnStatisticsWriteWrapper& stats) const {
-  StatisticsBuilder::toProto(stats);
-  // If string value is too long, drop it and fall back to basic stats
-  if (!isEmpty(*this) &&
+  baseToProto(*this, stats);
+  if (!isAllNull() &&
       (shouldKeep(min_) || shouldKeep(max_) || isValidLength(length_))) {
     auto dStats = stats.mutableStringStatistics();
     if (isValidLength(length_)) {
@@ -391,32 +215,38 @@ void StringStatisticsBuilder::toProto(
   }
 }
 
-void BinaryStatisticsBuilder::merge(
-    const dwio::common::ColumnStatistics& other,
-    bool ignoreSize) {
-  StatisticsBuilder::merge(other, ignoreSize);
-  auto stats =
-      dynamic_cast<const dwio::common::BinaryColumnStatistics*>(&other);
-  if (!stats) {
-    // We only care about the case when type specific stats is missing yet
-    // it has non-null values.
-    if (!isEmpty(other) && length_.has_value()) {
-      length_.reset();
-    }
-    return;
-  }
-
-  mergeWithOverflowCheck(length_, stats->getTotalLength());
-}
-
 void BinaryStatisticsBuilder::toProto(
     ColumnStatisticsWriteWrapper& stats) const {
-  StatisticsBuilder::toProto(stats);
-  // Serialize type specific stats only if there is non-null values
-  if (!isEmpty(*this) && isValidLength(length_)) {
+  baseToProto(*this, stats);
+  if (!isAllNull() && isValidLength(length_)) {
     auto bStats = stats.mutableBinaryStatistics();
     bStats.setSum(length_.value());
   }
+}
+
+dwio::common::KeyInfo MapStatisticsBuilder::constructKey(
+    const dwrf::proto::KeyInfo& keyInfo) {
+  if (keyInfo.has_intkey()) {
+    return dwio::common::KeyInfo{keyInfo.intkey()};
+  } else if (keyInfo.has_byteskey()) {
+    return dwio::common::KeyInfo{keyInfo.byteskey()};
+  }
+  VELOX_UNREACHABLE("Illegal null key info");
+}
+
+void MapStatisticsBuilder::addValues(
+    const dwrf::proto::KeyInfo& keyInfo,
+    const StatisticsBuilder& stats) {
+  auto& keyStats = getKeyStats(MapStatisticsBuilder::constructKey(keyInfo));
+  keyStats.merge(stats, /*ignoreSize=*/true);
+}
+
+void MapStatisticsBuilder::incrementSize(
+    const dwrf::proto::KeyInfo& keyInfo,
+    uint64_t size) {
+  auto& keyStats = getKeyStats(MapStatisticsBuilder::constructKey(keyInfo));
+  keyStats.ensureSize();
+  keyStats.incrementSize(size);
 }
 
 void MapStatisticsBuilder::merge(
@@ -425,9 +255,7 @@ void MapStatisticsBuilder::merge(
   StatisticsBuilder::merge(other, ignoreSize);
   auto stats = dynamic_cast<const dwio::common::MapColumnStatistics*>(&other);
   if (!stats) {
-    // We only care about the case when type specific stats is missing yet
-    // it has non-null values.
-    if (!isEmpty(other) && !entryStatistics_.empty()) {
+    if (!other.isAllNull() && !entryStatistics_.empty()) {
       entryStatistics_.clear();
     }
     return;
@@ -440,12 +268,11 @@ void MapStatisticsBuilder::merge(
 
 void MapStatisticsBuilder::toProto(ColumnStatisticsWriteWrapper& stats) const {
   StatisticsBuilder::toProto(stats);
-  if (!isEmpty(*this) && !entryStatistics_.empty()) {
+  if (!isAllNull() && !entryStatistics_.empty()) {
     auto mapStats = stats.mutableMapStatistics();
     for (const auto& entry : entryStatistics_) {
       auto entryStatistics = mapStats->add_stats();
       const auto& key = entry.first;
-      // Sets the corresponding key. Leave null keys null.
       if (key.intKey.has_value()) {
         entryStatistics->mutable_key()->set_intkey(key.intKey.value());
       } else if (key.bytesKey.has_value()) {

@@ -12,10 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_functions_sfm SfmSketch.cpp SfmSketchAccumulator.cpp)
+velox_add_library(
+  velox_functions_sfm
+  SfmSketch.cpp
+  SfmSketchAccumulator.cpp
+  HEADERS
+  SfmSketch.h
+  SfmSketchAccumulator.h
+)
 
 velox_link_libraries(velox_functions_sfm velox_common_base velox_memory Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
+velox_add_library(velox_randomization_strategy INTERFACE HEADERS RandomizationStrategy.h)
+
+velox_add_library(
+  velox_secure_randomization_strategy
+  INTERFACE
+  HEADERS
+  SecureRandomizationStrategy.h
+)
+
+velox_add_library(
+  velox_MT_randomization_strategy
+  INTERFACE
+  HEADERS
+  MersenneTwisterRandomizationStrategy.h
+)

@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 
 #include "gtest/gtest.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/storage_adapters/gcs/RegisterGcsFileSystem.h"
@@ -70,8 +71,10 @@ class GcsMultipleEndpointsTest : public testing::Test,
         std::string(connectorId2),
         gcsEmulatorTwo_->hiveConfig(config2Override),
         ioExecutor_.get());
-    connector::registerConnector(hiveConnector1);
-    connector::registerConnector(hiveConnector2);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector1->connectorId(), hiveConnector1);
+    connector::ConnectorRegistry::global().insert(
+        hiveConnector2->connectorId(), hiveConnector2);
   }
 
   void TearDown() override {
@@ -100,7 +103,8 @@ class GcsMultipleEndpointsTest : public testing::Test,
     // Second column contains details about written files.
     auto details = results->childAt(exec::TableWriteTraits::kFragmentChannel)
                        ->as<FlatVector<StringView>>();
-    folly::dynamic obj = folly::parseJson(details->valueAt(1));
+    folly::dynamic obj =
+        folly::parseJson(std::string_view(details->valueAt(1)));
     return obj["fileWriteInfos"];
   }
 
@@ -191,8 +195,8 @@ TEST_F(GcsMultipleEndpointsTest, baseEndpoints) {
 
   testJoin(kExpectedRows, gcsBucket, kConnectorId1, kConnectorId2);
 
-  connector::unregisterConnector(std::string(kConnectorId1));
-  connector::unregisterConnector(std::string(kConnectorId2));
+  connector::ConnectorRegistry::global().erase(std::string(kConnectorId1));
+  connector::ConnectorRegistry::global().erase(std::string(kConnectorId2));
 }
 
 } // namespace facebook::velox::filesystems

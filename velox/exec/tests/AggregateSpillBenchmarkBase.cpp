@@ -39,6 +39,7 @@ std::unique_ptr<RowContainer> makeRowContainer(
       /*hasNext=*/false,
       /*isJoinBuild=*/false,
       /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
       /*hasNormalizedKey=*/false,
       /*useListRowIndex=*/false,
       pool.get());

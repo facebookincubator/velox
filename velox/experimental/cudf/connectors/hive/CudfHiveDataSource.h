@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
@@ -30,9 +31,10 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
-#include <cudf/io/datasource.hpp>
-#include <cudf/io/parquet.hpp>
-#include <cudf/io/types.hpp>
+#include <cudf/ast/expressions.hpp>
+
+#include <mutex>
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -77,22 +79,14 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
- private:
-  // Create a cudf::io::chunked_parquet_reader with the given split.
-  std::unique_ptr<cudf::io::chunked_parquet_reader> createSplitReader();
-  // Clear split_ and splitReader after split has been fully processed.  Keep
-  // readers around to hold adaptation.
-  void resetSplit();
-  // Clear cudfTable_ and currentCudfTableView_ once we have successfully
-  // converted it to `RowVectorPtr` and returned.
-  void resetCudfTableAndView();
-  const RowVectorPtr& getEmptyOutput() {
-    if (!emptyOutput_) {
-      emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
-    }
-    return emptyOutput_;
-  }
-  RowVectorPtr emptyOutput_;
+ protected:
+  // Virtual method to create a `CudfSplitReader` or subclass for the data
+  // source.
+  virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
+
+  // Virtual method to convert the input `ConnectorSplit` to appropriate
+  // subclass(es).
+  virtual void convertSplit(std::shared_ptr<ConnectorSplit> split);
 
   std::shared_ptr<CudfHiveConnectorSplit> split_;
   std::shared_ptr<const ::facebook::velox::connector::hive::HiveTableHandle>
@@ -103,57 +97,48 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
-  memory::MemoryPool* const pool_;
-
-  // cuDF CudfHive reader stuff.
-  cudf::io::parquet_reader_options readerOptions_;
-  std::unique_ptr<cudf::io::datasource> datasource_;
-  std::unique_ptr<cudf::io::chunked_parquet_reader> splitReader_;
-  rmm::cuda_stream_view stream_;
-
-  // Table column names read from the CudfHive file
-  std::vector<std::string> columnNames_;
-
-  // Output type from file reader.  This is different from outputType_ that it
-  // contains column names before assignment, and columns that only used in
-  // remaining filter.
-  RowTypePtr readerOutputType_;
-
   // Columns to read.
   std::vector<std::string> readColumnNames_;
 
-  std::shared_ptr<io::IoStatistics> ioStats_;
-  std::shared_ptr<filesystems::File::IoStats> fsStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
+  std::shared_ptr<velox::IoStats> ioStats_;
 
-  dwio::common::ReaderOptions baseReaderOpts_;
+  // The row type for the data source output, not including filter-only columns.
+  const RowTypePtr outputType_;
+
+  bool useExperimentalCudfReader_;
+
+  // Cached combined subfield filter expression owned by 'subfieldTree_'.
+  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
+
+ private:
+  // Construct and cache a RowTypePtr for the table column names and types.
+  const RowTypePtr getTableRowType();
+  RowTypePtr cachedTableRowType_{};
+
+  memory::MemoryPool* const pool_;
 
   size_t completedRows_{0};
   size_t completedBytes_{0};
 
-  // The row type for the data source output, not including filter-only columns
-  const RowTypePtr outputType_;
+  dwio::common::RuntimeStatistics runtimeStats_;
+
+  std::unique_ptr<CudfSplitReader> cudfSplitReader_;
+
+  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
+  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
+
+  std::atomic<uint64_t> totalRemainingFilterTime_{0};
+
+  std::unordered_set<std::string> readColumnSet_;
 
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
-  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
 
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
   common::SubfieldFilters subfieldFilters_;
-
-  dwio::common::RuntimeStatistics runtimeStats_;
-  std::atomic<uint64_t> totalRemainingFilterTime_{0};
-
-  // Create callback data for total scan timing calculation
-  struct TotalScanTimeCallbackData {
-    uint64_t startTimeUs;
-    std::shared_ptr<io::IoStatistics> ioStats;
-  };
-
-  // Host callback function to calculate total scan time
-  static void totalScanTimeCalculator(void* userData);
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive

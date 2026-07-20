@@ -56,7 +56,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int8_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int16_t>({prefix + "date_add"});
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
-  registerFunction<FormatDateTimeFunction, Varchar, Timestamp, Varchar>(
+  registerFunction<DateFormatFunction, Varchar, Timestamp, Varchar>(
       {prefix + "date_format"});
   registerFunction<DateFromUnixDateFunction, Date, int32_t>(
       {prefix + "date_from_unix_date"});
@@ -65,17 +65,40 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
   registerFunction<DayFunction, int32_t, Date>(
       {prefix + "day", prefix + "dayofmonth"});
+  registerFunction<DayNameFunction, Varchar, Date>({prefix + "dayname"});
   registerFunction<DayOfYearFunction, int32_t, Date>({prefix + "dayofyear"});
   registerFunction<DayOfWeekFunction, int32_t, Date>({prefix + "dayofweek"});
   registerFunction<WeekdayFunction, int32_t, Date>({prefix + "weekday"});
   registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
   registerFunction<MonthFunction, int32_t, Date>({prefix + "month"});
+  registerFunction<MonthNameFunction, Varchar, Date>({prefix + "monthname"});
   registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
   registerFunction<GetTimestampFunction, Timestamp, Varchar, Varchar>(
       {prefix + "get_timestamp"});
-  registerFunction<HourFunction, int32_t, Timestamp>({prefix + "hour"});
-  registerFunction<MinuteFunction, int32_t, Timestamp>({prefix + "minute"});
-  registerFunction<SecondFunction, int32_t, Timestamp>({prefix + "second"});
+  registerFunction<
+      ParameterBinder<HourFunction, Timestamp>,
+      int32_t,
+      Timestamp>({prefix + "hour"});
+  registerFunction<
+      ParameterBinder<HourFunction, TimestampUtc>,
+      int32_t,
+      TimestampUtc>({prefix + "hour"});
+  registerFunction<
+      ParameterBinder<MinuteFunction, Timestamp>,
+      int32_t,
+      Timestamp>({prefix + "minute"});
+  registerFunction<
+      ParameterBinder<MinuteFunction, TimestampUtc>,
+      int32_t,
+      TimestampUtc>({prefix + "minute"});
+  registerFunction<
+      ParameterBinder<SecondFunction, Timestamp>,
+      int32_t,
+      Timestamp>({prefix + "second"});
+  registerFunction<
+      ParameterBinder<SecondFunction, TimestampUtc>,
+      int32_t,
+      TimestampUtc>({prefix + "second"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth>(
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t>(
@@ -105,17 +128,29 @@ void registerDatetimeFunctions(const std::string& prefix) {
       Timestamp,
       Timestamp>({prefix + "timestampdiff"});
   registerFunction<
-      TimestampAddFunction,
+      ParameterBinder<TimestampAddFunction, Timestamp>,
       Timestamp,
       Varchar,
       int32_t,
       Timestamp>({prefix + "timestampadd"});
   registerFunction<
-      TimestampAddFunction,
+      ParameterBinder<TimestampAddFunction, Timestamp>,
       Timestamp,
       Varchar,
       int64_t,
       Timestamp>({prefix + "timestampadd"});
+  registerFunction<
+      ParameterBinder<TimestampAddFunction, TimestampUtc>,
+      TimestampUtc,
+      Varchar,
+      int32_t,
+      TimestampUtc>({prefix + "timestampadd"});
+  registerFunction<
+      ParameterBinder<TimestampAddFunction, TimestampUtc>,
+      TimestampUtc,
+      Varchar,
+      int64_t,
+      TimestampUtc>({prefix + "timestampadd"});
   registerFunction<MonthsBetweenFunction, double, Timestamp, Timestamp, bool>(
       {prefix + "months_between"});
 }

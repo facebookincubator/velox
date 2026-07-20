@@ -37,8 +37,11 @@ class FirstLastValueFunction : public exec::WindowFunction {
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
       : WindowFunction(resultType, pool, nullptr), ignoreNulls_(ignoreNulls) {
-    VELOX_CHECK_NULL(args[0].constantValue);
-    valueIndex_ = args[0].index.value();
+    if (args[0].constantValue) {
+      constantValue_ = args[0].constantValue;
+    } else {
+      valueIndex_ = args[0].index.value();
+    }
 
     nulls_ = allocateNulls(0, pool_);
   }
@@ -56,6 +59,24 @@ class FirstLastValueFunction : public exec::WindowFunction {
       int32_t resultOffset,
       const VectorPtr& result) override {
     auto numRows = frameStarts->size() / sizeof(vector_size_t);
+
+    if (constantValue_) {
+      // Rows with empty frames should return null.
+      if (validRows.isAllSelected()) {
+        result->copy(constantValue_.get(), resultOffset, 0, numRows);
+      } else {
+        // Set constant for valid rows, null for invalid rows.
+        for (auto i = 0; i < numRows; ++i) {
+          if (validRows.isValid(i)) {
+            result->copy(constantValue_.get(), resultOffset + i, 0, 1);
+          } else {
+            result->setNull(resultOffset + i, true);
+          }
+        }
+      }
+      return;
+    }
+
     rowNumbers_.resize(numRows);
     if (validRows.hasSelections()) {
       if (ignoreNulls_) {
@@ -139,6 +160,9 @@ class FirstLastValueFunction : public exec::WindowFunction {
   }
 
   const bool ignoreNulls_;
+
+  // Non-null when the argument is a constant expression.
+  VectorPtr constantValue_;
 
   // Index of the first_value / last_value argument column in the input row
   // vector. This is used to retrieve column values from the partition data.

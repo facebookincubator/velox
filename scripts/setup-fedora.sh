@@ -58,10 +58,10 @@ function install_build_prerequisites {
 function install_velox_deps_from_dnf {
   dnf_install \
     bison boost-devel c-ares-devel curl-devel double-conversion-devel \
-    elfutils-libelf-devel flex fmt-devel gflags-devel glog-devel gmock-devel \
+    elfutils-libelf-devel flex gflags-devel glog-devel gmock-devel \
     gtest-devel libdwarf-devel libevent-devel libicu-devel \
     libsodium-devel libzstd-devel lz4-devel openssl-devel-engine \
-    re2-devel snappy-devel thrift-devel xxhash-devel zlib-devel grpc-devel grpc-plugins
+    re2-devel snappy-devel xxhash-devel zlib-devel grpc-devel grpc-plugins
 
   install_faiss_deps
 }
@@ -69,6 +69,7 @@ function install_velox_deps_from_dnf {
 function install_velox_deps {
   run_and_time install_velox_deps_from_dnf
   run_and_time install_gcs_sdk_cpp #grpc, abseil, protobuf
+  run_and_time install_fmt
   run_and_time install_fast_float
   run_and_time install_folly
   run_and_time install_fizz
@@ -81,6 +82,7 @@ function install_velox_deps {
   run_and_time install_xsimd    # to new in fedora repos
   run_and_time install_simdjson # to new in fedora repos
   run_and_time install_geos     # to new in fedora repos
+  run_and_time install_s2geometry
   run_and_time install_faiss
 }
 

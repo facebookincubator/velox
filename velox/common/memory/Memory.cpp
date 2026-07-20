@@ -46,17 +46,21 @@ SingletonState& singletonState() {
 
 std::shared_ptr<MemoryAllocator> createAllocator(
     const MemoryManager::Options& options) {
+  MemoryAllocator::Options allocatorOptions;
+  allocatorOptions.capacity = options.allocatorCapacity;
   if (options.useMmapAllocator) {
-    MmapAllocator::Options mmapOptions;
-    mmapOptions.capacity = options.allocatorCapacity;
-    mmapOptions.largestSizeClass = options.largestSizeClassPages;
-    mmapOptions.useMmapArena = options.useMmapArena;
-    mmapOptions.mmapArenaCapacityRatio = options.mmapArenaCapacityRatio;
-    return std::make_shared<MmapAllocator>(mmapOptions);
+    allocatorOptions.largestSizeClass = options.largestSizeClassPages;
+    allocatorOptions.useMmapArena = options.useMmapArena;
+    allocatorOptions.mmapArenaCapacityRatio = options.mmapArenaCapacityRatio;
+    allocatorOptions.smallAllocationReservePct =
+        options.smallAllocationReservePct;
+    allocatorOptions.maxMallocBytes = options.maxMallocBytes;
+    return std::make_shared<MmapAllocator>(allocatorOptions);
   } else {
-    return std::make_shared<MallocAllocator>(
-        options.allocatorCapacity,
-        options.allocationSizeThresholdWithReservation);
+    allocatorOptions.reservationByteLimit =
+        options.allocationSizeThresholdWithReservation;
+    allocatorOptions.mallocContiguousEnabled = options.mallocContiguousEnabled;
+    return std::make_shared<MallocAllocator>(allocatorOptions);
   }
 }
 
@@ -270,7 +274,7 @@ std::shared_ptr<MemoryPoolImpl> MemoryManager::createRootPool(
       std::move(reclaimer),
       options);
   VELOX_CHECK_EQ(pool->capacity(), 0);
-  arbitrator_->addPool(pool);
+  pool->arbitrator()->addPool(pool);
   RECORD_HISTOGRAM_METRIC_VALUE(
       kMetricMemoryPoolInitialCapacityBytes, pool->capacity());
   return pool;
@@ -281,6 +285,36 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     int64_t maxCapacity,
     std::unique_ptr<MemoryReclaimer> reclaimer,
     const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+  return addRootPoolImpl(
+      name,
+      maxCapacity,
+      std::move(reclaimer),
+      poolDebugOpts,
+      /*customAllocator=*/nullptr,
+      /*customArbitrator=*/nullptr);
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addCustomRootPool(
+    const std::string& name,
+    std::shared_ptr<CustomMemoryResource> resource,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts) {
+  VELOX_USER_CHECK_NOT_NULL(resource);
+  return addRootPoolImpl(
+      name,
+      resource->maxCapacity(),
+      resource->newReclaimer(),
+      poolDebugOpts,
+      resource->allocator(),
+      resource->arbitrator());
+}
+
+std::shared_ptr<MemoryPool> MemoryManager::addRootPoolImpl(
+    const std::string& name,
+    int64_t maxCapacity,
+    std::unique_ptr<MemoryReclaimer> reclaimer,
+    const std::optional<MemoryPool::DebugOptions>& poolDebugOpts,
+    MemoryAllocator* customAllocator,
+    MemoryArbitrator* customArbitrator) {
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -294,6 +328,8 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
   options.coreOnAllocationFailureEnabled = coreOnAllocationFailureEnabled_;
   options.getPreferredSize = getPreferredSize_;
   options.debugOptions = poolDebugOpts;
+  options.customAllocator = customAllocator;
+  options.customArbitrator = customArbitrator;
 
   auto pool = createRootPool(poolName, reclaimer, options);
   if (!disableMemoryPoolTracking_) {
@@ -304,7 +340,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       }
       pools_.emplace(poolName, pool);
     } catch (const VeloxRuntimeError&) {
-      arbitrator_->removePool(pool.get());
+      pool->arbitrator()->removePool(pool.get());
       throw;
     }
   }
@@ -336,7 +372,7 @@ uint64_t MemoryManager::shrinkPools(
 void MemoryManager::dropPool(MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(pool);
   VELOX_DCHECK_EQ(pool->reservedBytes(), 0);
-  arbitrator_->removePool(pool);
+  pool->arbitrator()->removePool(pool);
   if (disableMemoryPoolTracking_) {
     return;
   }
@@ -382,23 +418,23 @@ std::string MemoryManager::toString(bool detail) const {
                                           : succinctBytes(allocatorCapacity))
       << " alignment " << succinctBytes(alignment_) << " usedBytes "
       << succinctBytes(getTotalBytes()) << " number of pools " << numPools()
-      << "\n";
+      << '\n';
   out << "List of root pools:\n";
   if (detail) {
     out << sysRoot_->treeMemoryUsage(false);
   } else {
-    out << "\t" << sysRoot_->name() << "\n";
+    out << '\t' << sysRoot_->name() << '\n';
   }
   std::vector<std::shared_ptr<MemoryPool>> pools = getAlivePools();
   for (const auto& pool : pools) {
     if (detail) {
       out << pool->treeMemoryUsage(false);
     } else {
-      out << "\t" << pool->name() << "\n";
+      out << '\t' << pool->name() << '\n';
     }
-    out << "\trefcount " << pool.use_count() << "\n";
+    out << "\trefcount " << pool.use_count() << '\n';
   }
-  out << allocator_->toString() << "\n";
+  out << allocator_->toString() << '\n';
   out << arbitrator_->toString();
   out << "]";
   return out.str();

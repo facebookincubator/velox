@@ -157,7 +157,7 @@ std::optional<std::string> parseAWSStandardRegionName(
   const std::string_view kAmazonHostSuffix = ".amazonaws.com";
   auto index = endpoint.size() - kAmazonHostSuffix.size();
   // Handle the case where the endpoint ends in a trailing slash.
-  if (endpoint.back() == '/') {
+  if (!endpoint.empty() && endpoint.back() == '/') {
     index--;
   }
   if (endpoint.rfind(kAmazonHostSuffix) != index) {

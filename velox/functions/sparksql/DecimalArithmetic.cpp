@@ -181,7 +181,14 @@ struct DecimalAddSubtractBase {
 
     // Scale up the whole part and scale down the fraction part to combine them.
     fraction = reduceScale(TResult(fraction), higherScale - rScale);
-    const auto whole = TResult(aWhole) + TResult(bWhole) + TResult(carryToLeft);
+    // Use __builtin_add_overflow to avoid undefined behavior from signed
+    // integer overflow when both whole parts are large.
+    TResult whole;
+    if (__builtin_add_overflow(TResult(aWhole), TResult(bWhole), &whole) ||
+        __builtin_add_overflow(whole, TResult(carryToLeft), &whole)) {
+      overflow = true;
+      return 0;
+    }
     return decimalAddResult(whole, TResult(fraction), rScale, overflow);
   }
 
@@ -328,6 +335,50 @@ struct DecimalSubtractFunction : DecimalAddSubtractBase {
   }
 };
 
+// Decimal add function that returns error on overflow.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalAddFunction : DecimalAddSubtractBase {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/,
+      B* /*b*/) {
+    initializeBase<allowPrecisionLoss>(inputTypes);
+  }
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    bool valid = applyAdd<R, A, B>(out, a, b);
+    VELOX_USER_RETURN(!valid, "Decimal overflow in add");
+    return Status::OK();
+  }
+};
+
+// Decimal subtract function that returns error on overflow.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalSubtractFunction : DecimalAddSubtractBase {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename A, typename B>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& /*config*/,
+      A* /*a*/,
+      B* /*b*/) {
+    initializeBase<allowPrecisionLoss>(inputTypes);
+  }
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    bool valid = applyAdd<R, A, B>(out, a, B(-b));
+    VELOX_USER_RETURN(!valid, "Decimal overflow in subtract");
+    return Status::OK();
+  }
+};
+
 template <typename TExec, bool allowPrecisionLoss>
 struct DecimalMultiplyFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -440,6 +491,21 @@ struct DecimalMultiplyFunction {
   uint8_t rPrecision_;
   // The difference between result scale and the sum of aScale and bScale.
   int32_t deltaScale_;
+};
+
+// Decimal multiply function that returns error on overflow.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalMultiplyFunction
+    : DecimalMultiplyFunction<TExec, allowPrecisionLoss> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    bool valid = DecimalMultiplyFunction<TExec, allowPrecisionLoss>::
+        template call<R, A, B>(out, a, b);
+    VELOX_USER_RETURN(!valid, "Decimal overflow in multiply");
+    return Status::OK();
+  }
 };
 
 template <typename TExec, bool allowPrecisionLoss>
@@ -686,6 +752,30 @@ using DivideFunctionAllowPrecisionLoss = DecimalDivideFunction<TExec, true>;
 template <typename TExec>
 using DivideFunctionDenyPrecisionLoss = DecimalDivideFunction<TExec, false>;
 
+template <typename TExec>
+using CheckedAddFunctionAllowPrecisionLoss =
+    CheckedDecimalAddFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedAddFunctionDenyPrecisionLoss =
+    CheckedDecimalAddFunction<TExec, false>;
+
+template <typename TExec>
+using CheckedSubtractFunctionAllowPrecisionLoss =
+    CheckedDecimalSubtractFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedSubtractFunctionDenyPrecisionLoss =
+    CheckedDecimalSubtractFunction<TExec, false>;
+
+template <typename TExec>
+using CheckedMultiplyFunctionAllowPrecisionLoss =
+    CheckedDecimalMultiplyFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedMultiplyFunctionDenyPrecisionLoss =
+    CheckedDecimalMultiplyFunction<TExec, false>;
+
 std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
   std::string wholeDigits = fmt::format(
       "min(38, {a_precision} - {a_scale} + {b_scale})",
@@ -781,6 +871,11 @@ void registerDecimalAdd(const std::string& prefix) {
   registerDecimalBinary<AddFunctionDenyPrecisionLoss>(
       prefix + "add" + kDenyPrecisionLoss,
       makeConstraints(rPrecision, rScale, false));
+  registerDecimalBinary<CheckedAddFunctionAllowPrecisionLoss>(
+      prefix + "checked_add", makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<CheckedAddFunctionDenyPrecisionLoss>(
+      prefix + "checked_add" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
 }
 
 void registerDecimalSubtract(const std::string& prefix) {
@@ -789,6 +884,11 @@ void registerDecimalSubtract(const std::string& prefix) {
       prefix + "subtract", makeConstraints(rPrecision, rScale, true));
   registerDecimalBinary<SubtractFunctionDenyPrecisionLoss>(
       prefix + "subtract" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+  registerDecimalBinary<CheckedSubtractFunctionAllowPrecisionLoss>(
+      prefix + "checked_subtract", makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<CheckedSubtractFunctionDenyPrecisionLoss>(
+      prefix + "checked_subtract" + kDenyPrecisionLoss,
       makeConstraints(rPrecision, rScale, false));
 }
 
@@ -805,6 +905,11 @@ void registerDecimalMultiply(const std::string& prefix) {
       prefix + "multiply", makeConstraints(rPrecision, rScale, true));
   registerDecimalBinary<MultiplyFunctionDenyPrecisionLoss>(
       prefix + "multiply" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+  registerDecimalBinary<CheckedMultiplyFunctionAllowPrecisionLoss>(
+      prefix + "checked_multiply", makeConstraints(rPrecision, rScale, true));
+  registerDecimalBinary<CheckedMultiplyFunctionDenyPrecisionLoss>(
+      prefix + "checked_multiply" + kDenyPrecisionLoss,
       makeConstraints(rPrecision, rScale, false));
 }
 

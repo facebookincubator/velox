@@ -219,4 +219,102 @@ uint64_t hashBytes(uint64_t seed, const char* data, size_t size) {
   }
   return a0 ^ ((a1 * kMul)) ^ (a2 * kMul);
 }
+
+void packBitmap(std::span<const bool> bools, char* bitmap) {
+  uint64_t* word = reinterpret_cast<uint64_t*>(bitmap);
+  const uint64_t loopCount = bools.size() >> 6;
+  const uint64_t remainder = bools.size() - (loopCount << 6);
+  const bool* rawBools = bools.data();
+  for (uint64_t i = 0; i < loopCount; ++i) {
+    for (int j = 0; j < 64; ++j) {
+      *word |= static_cast<uint64_t>(*rawBools++) << j;
+    }
+    ++word;
+  }
+  for (int j = 0; j < remainder; ++j) {
+    *word |= static_cast<uint64_t>(*rawBools++) << j;
+  }
+}
+
+uint32_t
+findSetBit(const char* bitmap, uint32_t begin, uint32_t end, uint32_t n) {
+  if (begin >= end || n == 0) {
+    return begin;
+  }
+
+  const uint64_t* wordPtr = reinterpret_cast<const uint64_t*>(bitmap);
+
+  // Handle bits in the first partial word
+  uint32_t wordIdx = begin >> 6;
+  uint32_t bitOffset = begin & 63;
+  uint64_t word = wordPtr[wordIdx];
+
+  // Mask out bits before 'begin'
+  word &= ~((1ULL << bitOffset) - 1);
+
+  while (true) {
+    // Count set bits in current word
+    uint32_t setBitsInWord = __builtin_popcountll(word);
+
+    if (setBitsInWord >= n) {
+      // The n'th set bit is in this word
+      while (n > 0) {
+        uint32_t firstSetBit = __builtin_ffsll(static_cast<long long>(word));
+        if (firstSetBit == 0) {
+          break; // No more set bits
+        }
+
+        // __builtin_ffsll returns the index plus one, so subtract 1
+        --firstSetBit;
+
+        word &= ~(1ULL << firstSetBit);
+        --n;
+
+        if (n == 0) {
+          uint32_t result = (wordIdx << 6) + firstSetBit;
+          return result < end ? result : end;
+        }
+      }
+    }
+
+    // Move to next word
+    n -= setBitsInWord;
+    ++wordIdx;
+    bitOffset = 0;
+
+    // Check if we've reached the end
+    uint32_t nextWordStart = wordIdx << 6;
+    if (nextWordStart >= end) {
+      return end;
+    }
+
+    word = wordPtr[wordIdx];
+
+    // Mask out bits beyond 'end' if this is the last word
+    if (nextWordStart + 64 > end) {
+      word &= (1ULL << (end - nextWordStart)) - 1;
+    }
+
+    // If no bits set in this word, continue to next word
+    if (word == 0) {
+      continue;
+    }
+  }
+}
+
+void BitmapBuilder::copy(const Bitmap& other, uint32_t begin, uint32_t end) {
+  auto source = static_cast<const char*>(other.bits());
+  auto dest = static_cast<char*>(bitmap_);
+  auto firstByte = begin / 8;
+  if (begin % 8) {
+    uint8_t mask = (1 << (begin % 8)) - 1;
+    dest[firstByte] = static_cast<char>(
+        (dest[firstByte] & mask) | (source[firstByte] & ~mask));
+    ++firstByte;
+  }
+  // @lint-ignore CLANGSECURITY facebook-security-vulnerable-memcpy
+  std::memcpy(
+      dest + firstByte, source + firstByte, bits::nbytes(end) - firstByte);
+}
+
 } // namespace facebook::velox::bits

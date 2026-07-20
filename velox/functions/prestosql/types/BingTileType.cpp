@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include "velox/common/geospatial/GeometryConstants.h"
 
 namespace facebook::velox {
 
@@ -55,14 +56,14 @@ folly::Expected<uint32_t, std::string> longitudeToTileX(
     double longitude,
     uint8_t zoomLevel) {
   if (FOLLY_UNLIKELY(
-          longitude > BingTileType::kMaxLongitude ||
-          longitude < BingTileType::kMinLongitude)) {
+          longitude > common::geospatial::kMaxLongitude ||
+          longitude < common::geospatial::kMinLongitude)) {
     return folly::makeUnexpected(
         fmt::format(
             "Longitude {} is outside of valid range [{}, {}]",
             longitude,
-            BingTileType::kMinLongitude,
-            BingTileType::kMaxLongitude));
+            common::geospatial::kMinLongitude,
+            common::geospatial::kMaxLongitude));
   }
   double x = (longitude + 180) / 360;
 
@@ -90,14 +91,14 @@ folly::Expected<uint32_t, std::string> latitudeToTileY(
     double latitude,
     uint8_t zoomLevel) {
   if (FOLLY_UNLIKELY(
-          latitude > BingTileType::kMaxLatitude ||
-          latitude < BingTileType::kMinLatitude)) {
+          latitude > common::geospatial::kMaxBingTileLatitude ||
+          latitude < common::geospatial::kMinBingTileLatitude)) {
     return folly::makeUnexpected(
         fmt::format(
             "Latitude {} is outside of valid range [{}, {}]",
             latitude,
-            BingTileType::kMinLatitude,
-            BingTileType::kMaxLatitude));
+            common::geospatial::kMinBingTileLatitude,
+            common::geospatial::kMaxBingTileLatitude));
   }
   double sinLatitude = sin(latitude * M_PI / 180);
   double y = 0.5 - log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * M_PI);
@@ -133,14 +134,14 @@ double addDistanceToLongitude(
           sin(bearingInRadians) * sin(radiusRatio) * cos(latitudeInRadians),
           cos(radiusRatio) - sin(latitudeInRadians) * sin(latitudeInRadians)));
 
-  if (newLongitude > BingTileType::kMaxLongitude) {
-    return BingTileType::kMinLongitude +
-        (newLongitude - BingTileType::kMaxLongitude);
+  if (newLongitude > common::geospatial::kMaxLongitude) {
+    return common::geospatial::kMinLongitude +
+        (newLongitude - common::geospatial::kMaxLongitude);
   }
 
-  if (newLongitude < BingTileType::kMinLongitude) {
-    return BingTileType::kMaxLongitude +
-        (newLongitude - BingTileType::kMinLongitude);
+  if (newLongitude < common::geospatial::kMinLongitude) {
+    return common::geospatial::kMaxLongitude +
+        (newLongitude - common::geospatial::kMinLongitude);
   }
 
   return newLongitude;
@@ -155,11 +156,11 @@ addDistanceToLatitude(double latitude, double radiusInKm, double bearing) {
   double newLatitude = toDegrees(asin(
       sin(latitudeInRadians) * cos(radiusRatio) +
       cos(latitudeInRadians) * sin(radiusRatio) * cos(bearingInRadians)));
-  if (newLatitude > BingTileType::kMaxLatitude) {
-    return BingTileType::kMaxLatitude;
+  if (newLatitude > common::geospatial::kMaxBingTileLatitude) {
+    return common::geospatial::kMaxBingTileLatitude;
   }
-  if (newLatitude < BingTileType::kMinLatitude) {
-    return BingTileType::kMinLatitude;
+  if (newLatitude < common::geospatial::kMinBingTileLatitude) {
+    return common::geospatial::kMinBingTileLatitude;
   }
   return newLatitude;
 }

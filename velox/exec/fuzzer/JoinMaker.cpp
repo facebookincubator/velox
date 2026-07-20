@@ -611,7 +611,7 @@ core::JoinType flipJoinType(core::JoinType joinType) {
   auto flippedJoinType = tryFlipJoinType(joinType);
 
   if (!flippedJoinType.has_value()) {
-    VELOX_UNSUPPORTED(fmt::format("Unable to flip join type: {}", joinType));
+    VELOX_UNSUPPORTED("Unable to flip join type: {}", joinType);
   }
 
   return *flippedJoinType;

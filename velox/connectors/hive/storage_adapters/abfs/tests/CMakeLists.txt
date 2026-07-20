@@ -15,13 +15,11 @@
 add_executable(
   velox_abfs_test
   AbfsFileSystemTest.cpp
-  AbfsUtilTest.cpp
-  AzureClientProvidersTest.cpp
-  AzureClientProviderFactoriesTest.cpp
   DynamicSasTokenClientProviderTest.cpp
   AzuriteServer.cpp
   MockDataLakeFileClient.cpp
 )
+velox_add_test_headers(velox_abfs_test AzuriteServer.h MockDataLakeFileClient.h)
 
 add_test(velox_abfs_test velox_abfs_test)
 target_link_libraries(
@@ -30,3 +28,19 @@ target_link_libraries(
 )
 
 target_compile_options(velox_abfs_test PRIVATE -Wno-deprecated-declarations)
+
+add_executable(
+  velox_abfs_registration_test
+  AbfsFileSystemRegistrationTest.cpp
+  AbfsUtilTest.cpp
+  AzureClientProvidersTest.cpp
+  AzureClientProviderFactoriesTest.cpp
+)
+
+add_test(velox_abfs_registration_test velox_abfs_registration_test)
+target_link_libraries(
+  velox_abfs_registration_test
+  PRIVATE velox_abfs velox_exec_test_lib GTest::gtest GTest::gtest_main
+)
+
+target_compile_options(velox_abfs_registration_test PRIVATE -Wno-deprecated-declarations)

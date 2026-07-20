@@ -18,7 +18,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -40,59 +39,72 @@ struct Accumulator {
     return sums.size();
   }
 
+  // Adds all entries of a single input map to the running sums. The map's keys
+  // and values are decoded once per batch by the caller; 'offset' and 'size'
+  // delimit this map's entries within the decoded child vectors.
   void addValues(
-      const MapVector* mapVector,
-      const VectorPtr& mapKeys,
-      const VectorPtr& mapValues,
-      vector_size_t row,
-      HashStringAllocator* allocator) {
-    auto keys = mapKeys->template as<SimpleVector<K>>();
-    auto values = mapValues->template as<SimpleVector<S>>();
-    auto offset = mapVector->offsetAt(row);
-    auto size = mapVector->sizeAt(row);
+      const DecodedVector& decodedKeys,
+      const DecodedVector& decodedValues,
+      vector_size_t offset,
+      vector_size_t size,
+      HashStringAllocator* /*allocator*/) {
+    if (!decodedValues.mayHaveNulls()) {
+      // Null-free fast path: every value is present, so no null branch and no
+      // +0 registration is needed in the inner loop.
+      for (auto i = offset; i < offset + size; ++i) {
+        if (decodedKeys.isNullAt(i)) {
+          continue;
+        }
+        addValue(decodedKeys.valueAt<K>(i), decodedValues.valueAt<S>(i));
+      }
+      return;
+    }
 
-    for (auto i = 0; i < size; ++i) {
+    for (auto i = offset; i < offset + size; ++i) {
       // Ignore null map keys.
-      if (!keys->isNullAt(offset + i)) {
-        auto key = keys->valueAt(offset + i);
-        addValue(key, values, offset + i, values->typeKind());
+      if (decodedKeys.isNullAt(i)) {
+        continue;
+      }
+      auto key = decodedKeys.valueAt<K>(i);
+      if (decodedValues.isNullAt(i)) {
+        // A null value still registers the key with +0.
+        sums.try_emplace(key, S{0});
+      } else {
+        addValue(key, decodedValues.valueAt<S>(i));
       }
     }
   }
 
-  void addValue(
-      K key,
-      const SimpleVector<S>* mapValues,
-      vector_size_t row,
-      TypeKind valueKind) {
-    if (mapValues->isNullAt(row)) {
-      sums[key] += 0;
+  // Adds 'value' to the running sum for 'key', inserting the key if absent.
+  // Probes the F14 map exactly once and updates the sum in place.
+  void addValue(K key, S value) {
+    auto [it, inserted] = sums.try_emplace(key, S{0});
+
+    if constexpr (std::is_same_v<S, double> || std::is_same_v<S, float>) {
+      it->second += value;
     } else {
-      auto value = mapValues->valueAt(row);
+      // Add into a local so an overflow throw leaves the existing accumulator
+      // entry unchanged; only commit the result when no overflow occurred.
+      const S previousSum = it->second;
+      S checkedSum;
+      auto overflow = __builtin_add_overflow(previousSum, value, &checkedSum);
 
-      if constexpr (std::is_same_v<S, double> || std::is_same_v<S, float>) {
-        sums[key] += value;
-      } else {
-        S checkedSum;
-        auto overflow = __builtin_add_overflow(sums[key], value, &checkedSum);
+      if (UNLIKELY(overflow)) {
+        auto errorValue = (int128_t(previousSum) + int128_t(value));
 
-        if (UNLIKELY(overflow)) {
-          auto errorValue = (int128_t(sums[key]) + int128_t(value));
-
-          if (errorValue < 0) {
-            VELOX_ARITHMETIC_ERROR(
-                "Value {} is less than {}",
-                errorValue,
-                std::numeric_limits<S>::min());
-          } else {
-            VELOX_ARITHMETIC_ERROR(
-                "Value {} exceeds {}",
-                errorValue,
-                std::numeric_limits<S>::max());
-          }
+        if (errorValue < 0) {
+          VELOX_ARITHMETIC_ERROR(
+              "Arithmetic overflow in MAP_UNION_SUM: Value {} is less than {}",
+              errorValue,
+              std::numeric_limits<S>::min());
+        } else {
+          VELOX_ARITHMETIC_ERROR(
+              "Arithmetic overflow in MAP_UNION_SUM: Value {} exceeds {}",
+              errorValue,
+              std::numeric_limits<S>::max());
         }
-        sums[key] = checkedSum;
       }
+      it->second = checkedSum;
     }
   }
 
@@ -131,31 +143,33 @@ struct StringViewAccumulator {
   }
 
   void addValues(
-      const MapVector* mapVector,
-      const VectorPtr& mapKeys,
-      const VectorPtr& mapValues,
-      vector_size_t row,
+      const DecodedVector& decodedKeys,
+      const DecodedVector& decodedValues,
+      vector_size_t offset,
+      vector_size_t size,
       HashStringAllocator* allocator) {
-    auto keys = mapKeys->template as<SimpleVector<StringView>>();
-    auto values = mapValues->template as<SimpleVector<S>>();
-    auto offset = mapVector->offsetAt(row);
-    auto size = mapVector->sizeAt(row);
-
-    for (auto i = 0; i < size; ++i) {
+    const bool valuesMayHaveNulls = decodedValues.mayHaveNulls();
+    for (auto i = offset; i < offset + size; ++i) {
       // Ignore null map keys.
-      if (!keys->isNullAt(offset + i)) {
-        auto key = keys->valueAt(offset + i);
+      if (decodedKeys.isNullAt(i)) {
+        continue;
+      }
+      auto key = decodedKeys.valueAt<StringView>(i);
 
-        if (!key.isInline()) {
-          auto it = base.sums.find(key);
-          if (it != base.sums.end()) {
-            key = it->first;
-          } else {
-            key = strings.append(key, *allocator);
-          }
+      if (!key.isInline()) {
+        auto it = base.sums.find(key);
+        if (it != base.sums.end()) {
+          key = it->first;
+        } else {
+          key = strings.append(key, *allocator);
         }
+      }
 
-        base.addValue(key, values, offset + i, values->typeKind());
+      if (valuesMayHaveNulls && decodedValues.isNullAt(i)) {
+        // A null value still registers the key with +0.
+        base.sums.try_emplace(key, S{0});
+      } else {
+        base.addValue(key, decodedValues.valueAt<S>(i));
       }
     }
   }
@@ -196,54 +210,60 @@ struct ComplexTypeAccumulator {
                 16>(allocator)} {}
 
   void addValues(
-      const MapVector* mapVector,
-      const VectorPtr& mapKeys,
-      const VectorPtr& mapValues,
-      vector_size_t row,
+      const DecodedVector& decodedKeys,
+      const DecodedVector& decodedValues,
+      vector_size_t offset,
+      vector_size_t size,
       HashStringAllocator* allocator) {
-    auto offset = mapVector->offsetAt(row);
-    auto size = mapVector->sizeAt(row);
-    auto values = mapValues->template as<SimpleVector<V>>();
+    const bool valuesMayHaveNulls = decodedValues.mayHaveNulls();
+    for (auto i = offset; i < offset + size; ++i) {
+      if (decodedKeys.isNullAt(i)) {
+        continue;
+      }
+      // Get entry and value to add.
+      auto entry = serializedKeys.append(decodedKeys, i, allocator);
+      auto value = (valuesMayHaveNulls && decodedValues.isNullAt(i))
+          ? V{0}
+          : decodedValues.valueAt<V>(i);
 
-    for (auto i = 0; i < size; ++i) {
-      if (!mapKeys->isNullAt(offset + i) && (offset + i) < mapKeys->size()) {
-        // Get entry and value to add.
-        auto entry =
-            serializedKeys.append(*mapKeys.get(), offset + i, allocator);
-        auto value =
-            (values->isNullAt(offset + i)) ? 0 : values->valueAt(offset + i);
+      auto [it, inserted] = sums.try_emplace(entry, V{0});
 
-        // New entry.
-        if (!sums.contains(entry)) {
-          sums[entry] = value;
-        } else {
-          // Existing entry.
-          if constexpr (std::is_same_v<V, double> || std::is_same_v<V, float>) {
-            sums[entry] += value;
+      // New entry: keep the serialized key and set the value.
+      if (inserted) {
+        it->second = value;
+        continue;
+      }
+
+      // Existing entry: the freshly serialized key is a duplicate and must be
+      // released after combining with the existing sum.
+      if constexpr (std::is_same_v<V, double> || std::is_same_v<V, float>) {
+        it->second += value;
+        serializedKeys.removeLast(entry);
+      } else {
+        // Add into a local so an overflow throw leaves the existing
+        // accumulator entry unchanged. Release the duplicate serialized key
+        // before any potential throw so it is not orphaned in the arena.
+        const V previousSum = it->second;
+        V checkedSum;
+        auto overflow = __builtin_add_overflow(previousSum, value, &checkedSum);
+        serializedKeys.removeLast(entry);
+
+        if (UNLIKELY(overflow)) {
+          auto errorValue = (int128_t(previousSum) + int128_t(value));
+
+          if (errorValue < 0) {
+            VELOX_ARITHMETIC_ERROR(
+                "Arithmetic overflow in MAP_UNION_SUM: Value {} is less than {}",
+                errorValue,
+                std::numeric_limits<V>::min());
           } else {
-            V checkedSum;
-            auto overflow =
-                __builtin_add_overflow(sums[entry], value, &checkedSum);
-
-            if (UNLIKELY(overflow)) {
-              auto errorValue = (int128_t(sums[entry]) + int128_t(value));
-
-              if (errorValue < 0) {
-                VELOX_ARITHMETIC_ERROR(
-                    "Value {} is less than {}",
-                    errorValue,
-                    std::numeric_limits<V>::min());
-              } else {
-                VELOX_ARITHMETIC_ERROR(
-                    "Value {} exceeds {}",
-                    errorValue,
-                    std::numeric_limits<V>::max());
-              }
-            }
-            sums[entry] = checkedSum;
-            serializedKeys.removeLast(entry);
+            VELOX_ARITHMETIC_ERROR(
+                "Arithmetic overflow in MAP_UNION_SUM: Value {} exceeds {}",
+                errorValue,
+                std::numeric_limits<V>::max());
           }
         }
+        it->second = checkedSum;
       }
     }
   }
@@ -361,8 +381,11 @@ class MapUnionSumAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodedMaps_.decode(*args[0], rows);
     auto mapVector = decodedMaps_.base()->template as<MapVector>();
-    auto mapKeys = mapVector->mapKeys();
-    auto mapValues = mapVector->mapValues();
+
+    // Decode the key and value child vectors once per batch so the per-element
+    // inner loop reads from decoded raw data instead of re-casting per row.
+    decodedKeys_.decode(*mapVector->mapKeys());
+    decodedValues_.decode(*mapVector->mapValues());
 
     rows.applyToSelected([&](auto row) {
       if (!decodedMaps_.isNullAt(row)) {
@@ -371,7 +394,7 @@ class MapUnionSumAggregate : public exec::Aggregate {
 
         auto tracker = trackRowSize(group);
         auto groupMap = value<AccumulatorType>(group);
-        addMap(*groupMap, mapVector, mapKeys, mapValues, row);
+        addMap(*groupMap, mapVector, row);
       }
     });
   }
@@ -383,8 +406,11 @@ class MapUnionSumAggregate : public exec::Aggregate {
       bool /* mayPushdown */) override {
     decodedMaps_.decode(*args[0], rows);
     auto mapVector = decodedMaps_.base()->template as<MapVector>();
-    auto mapKeys = mapVector->mapKeys();
-    auto mapValues = mapVector->mapValues();
+
+    // Decode the key and value child vectors once per batch so the per-element
+    // inner loop reads from decoded raw data instead of re-casting per row.
+    decodedKeys_.decode(*mapVector->mapKeys());
+    decodedValues_.decode(*mapVector->mapValues());
 
     auto groupMap = value<AccumulatorType>(group);
 
@@ -392,7 +418,7 @@ class MapUnionSumAggregate : public exec::Aggregate {
     rows.applyToSelected([&](auto row) {
       if (!decodedMaps_.isNullAt(row)) {
         clearNull(group);
-        addMap(*groupMap, mapVector, mapKeys, mapValues, row);
+        addMap(*groupMap, mapVector, row);
       }
     });
   }
@@ -444,11 +470,11 @@ class MapUnionSumAggregate : public exec::Aggregate {
   void addMap(
       AccumulatorType& groupMap,
       const MapVector* mapVector,
-      const VectorPtr& mapKeys,
-      const VectorPtr& mapValues,
       vector_size_t row) const {
     auto decodedRow = decodedMaps_.index(row);
-    groupMap.addValues(mapVector, mapKeys, mapValues, decodedRow, allocator_);
+    auto offset = mapVector->offsetAt(decodedRow);
+    auto size = mapVector->sizeAt(decodedRow);
+    groupMap.addValues(decodedKeys_, decodedValues_, offset, size, allocator_);
   }
 
   vector_size_t countElements(char** groups, int32_t numGroups) const {
@@ -460,6 +486,8 @@ class MapUnionSumAggregate : public exec::Aggregate {
   }
 
   DecodedVector decodedMaps_;
+  DecodedVector decodedKeys_;
+  DecodedVector decodedValues_;
 };
 
 template <typename K>
@@ -488,7 +516,7 @@ std::unique_ptr<exec::Aggregate> createMapUnionSumAggregate(
 } // namespace
 
 void registerMapUnionSumAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   const std::vector<std::string> valueTypes = {
@@ -506,15 +534,13 @@ void registerMapUnionSumAggregate(
             .build());
   }
 
-  auto name = prefix + kMapUnionSum;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step /*step*/,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step /*step*/,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
         VELOX_CHECK(argTypes[0]->isMap());
@@ -536,6 +562,9 @@ void registerMapUnionSumAggregate(
                 valueTypeKind, resultType);
           case TypeKind::BIGINT:
             return createMapUnionSumAggregate<int64_t>(
+                valueTypeKind, resultType);
+          case TypeKind::HUGEINT:
+            return createMapUnionSumAggregate<int128_t>(
                 valueTypeKind, resultType);
           case TypeKind::REAL:
             return createMapUnionSumAggregate<float>(valueTypeKind, resultType);

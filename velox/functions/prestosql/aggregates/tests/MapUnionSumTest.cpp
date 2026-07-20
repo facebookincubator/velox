@@ -17,6 +17,7 @@
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -130,6 +131,110 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
       {emptyAndNullMaps}, {}, {"map_union_sum(c0)"}, {expectedEmpty});
 }
 
+TEST_F(MapUnionSumTest, nullValuesInMap) {
+  // Exercises the slow (mayHaveNulls) merge path where null map values still
+  // register their key with a +0 contribution. Key 1 sums 5 (null + 5),
+  // key 2 stays 20, and key 3 is registered with 0 from its null value.
+  auto data = makeRowVector({
+      makeNullableMapVector<int64_t, int64_t>({
+          {{{1, std::nullopt}, {2, 20}}},
+          {{{1, 5}, {3, std::nullopt}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<int64_t, int64_t>({
+          {{1, 5}, {2, 20}, {3, 0}},
+      }),
+  });
+
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, nullValuesInVarcharKeyMap) {
+  // Exercises the StringView-key accumulator's null-value branch, where a null
+  // map value still registers its key with a +0 contribution. Uses non-inline
+  // (long) keys so the string-interning path is also covered. Key 0 sums 5
+  // (null + 5), key 1 stays 20, and key 2 is registered with 0 from its null
+  // value.
+  std::vector<std::string> keyStrings = {
+      "Tall mountains and wide rivers",
+      "Deep oceans and thick dark forests",
+      "Expansive vistas as far as the eye can see",
+  };
+  std::vector<StringView> keys;
+  keys.reserve(keyStrings.size());
+  for (const auto& key : keyStrings) {
+    keys.emplace_back(key);
+  }
+
+  auto data = makeRowVector({
+      makeNullableMapVector<StringView, int64_t>({
+          {{{keys[0], std::nullopt}, {keys[1], 20}}},
+          {{{keys[0], 5}, {keys[2], std::nullopt}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<StringView, int64_t>({
+          {{keys[0], 5}, {keys[1], 20}, {keys[2], 0}},
+      }),
+  });
+
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, complexKeyDoubleValue) {
+  // Exercises the complex-key float/double existing-entry path, where a
+  // duplicate serialized key must be released via removeLast() after combining
+  // with the existing sum. The ROW key [1, 1] repeats across input maps so the
+  // merge takes the existing-entry branch for a DOUBLE value type.
+  auto data = makeRowVector(
+      {makeMapVector(
+           {0, 2, 4},
+           makeRowVector(
+               {makeFlatVector<int64_t>({1, 2, 1, 3, 1, 2}),
+                makeFlatVector<int64_t>({1, 4, 1, 5, 1, 4})}),
+           makeFlatVector<double>({1.5, 2.5, 3.0, 4.0, 2.0, 6.0})),
+       makeFlatVector<int32_t>({1, 1, 1})});
+
+  // Key [1, 1] is summed across all three maps: 1.5 + 3.0 + 2.0 = 6.5.
+  // Key [2, 4] appears in maps 0 and 2: 2.5 + 6.0 = 8.5.
+  // Key [3, 5] appears once: 4.0.
+  auto expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<int64_t>({1, 4, 5})}),
+      makeFlatVector<double>({6.5, 8.5, 4.0}))});
+
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expectedResult});
+}
+
+TEST_F(MapUnionSumTest, complexKeyIntegerOverflow) {
+  // Exercises the complex-key integer existing-entry overflow path, where the
+  // duplicate serialized key is released via removeLast() before the overflow
+  // throw. The ROW key [1, 1] repeats across input maps with TINYINT values
+  // that overflow int8_t when combined on the existing-entry branch.
+  auto data = makeRowVector(
+      {makeMapVector(
+           {0, 2, 4},
+           makeRowVector(
+               {makeFlatVector<int64_t>({1, 2, 1, 3, 1, 2}),
+                makeFlatVector<int64_t>({1, 4, 1, 5, 1, 4})}),
+           makeFlatVector<int8_t>({100, 2, 100, 4, 100, 6})),
+       makeFlatVector<int32_t>({1, 1, 1})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"map_union_sum(c0)"})
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Arithmetic overflow in MAP_UNION_SUM: Value 200 exceeds 127");
+}
+
 TEST_F(MapUnionSumTest, tinyintOverflow) {
   auto data = makeRowVector({
       makeNullableMapVector<int64_t, int8_t>({
@@ -145,7 +250,8 @@ TEST_F(MapUnionSumTest, tinyintOverflow) {
                   .planNode();
 
   VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool()), "Value 140 exceeds 127");
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Arithmetic overflow in MAP_UNION_SUM: Value 140 exceeds 127");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int8_t>({
@@ -162,7 +268,7 @@ TEST_F(MapUnionSumTest, tinyintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -140 is less than -128");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -140 is less than -128");
 }
 
 TEST_F(MapUnionSumTest, smallintOverflow) {
@@ -183,7 +289,7 @@ TEST_F(MapUnionSumTest, smallintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value 32787 exceeds 32767");
+      "Arithmetic overflow in MAP_UNION_SUM: Value 32787 exceeds 32767");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int16_t>({
@@ -200,7 +306,7 @@ TEST_F(MapUnionSumTest, smallintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -32788 is less than -32768");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -32788 is less than -32768");
 }
 
 TEST_F(MapUnionSumTest, integerOverflow) {
@@ -221,7 +327,7 @@ TEST_F(MapUnionSumTest, integerOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value 2147483667 exceeds 2147483647");
+      "Arithmetic overflow in MAP_UNION_SUM: Value 2147483667 exceeds 2147483647");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int32_t>({
@@ -238,7 +344,7 @@ TEST_F(MapUnionSumTest, integerOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -2147483668 is less than -2147483648");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -2147483668 is less than -2147483648");
 }
 
 TEST_F(MapUnionSumTest, bigintOverflow) {
@@ -259,7 +365,7 @@ TEST_F(MapUnionSumTest, bigintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value 9223372036854775827 exceeds 9223372036854775807");
+      "Arithmetic overflow in MAP_UNION_SUM: Value 9223372036854775827 exceeds 9223372036854775807");
 
   data = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
@@ -276,7 +382,7 @@ TEST_F(MapUnionSumTest, bigintOverflow) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
-      "Value -9223372036854775828 is less than -9223372036854775808");
+      "Arithmetic overflow in MAP_UNION_SUM: Value -9223372036854775828 is less than -9223372036854775808");
 }
 
 TEST_F(MapUnionSumTest, floatNan) {
@@ -569,6 +675,52 @@ TEST_F(MapUnionSumTest, decimalKey) {
       {{{{1000}, 3}, {{1001}, 2}}}, MAP(DECIMAL(30, 2), BIGINT()))});
   testAggregations(
       {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, ipAddressKey) {
+  // Helper to convert IP string to int128_t.
+  auto ipToInt128 = [](std::string_view ipAddr) -> int128_t {
+    return ipaddress::tryGetIPv6asInt128FromString(ipAddr).value();
+  };
+
+  // Test on nulls.
+  auto nullData =
+      makeRowVector({makeAllNullMapVector(3, IPADDRESS(), BIGINT())});
+  testAggregations({nullData}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+
+  auto ip1 = ipToInt128("192.168.1.1");
+  auto ip2 = ipToInt128("10.0.0.1");
+  auto ip3 = ipToInt128("172.16.0.1");
+
+  // Test global aggregation with IPADDRESS keys.
+  auto data = makeMapVector<int128_t, int64_t>(
+      {{{ip1, 10}, {ip2, 20}}, {{ip1, 5}, {ip3, 15}}},
+      MAP(IPADDRESS(), BIGINT()));
+  auto expected = makeRowVector({makeMapVector<int128_t, int64_t>(
+      {{{ip1, 15}, {ip2, 20}, {ip3, 15}}}, MAP(IPADDRESS(), BIGINT()))});
+  testAggregations(
+      {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+
+  // Test group-by aggregation with IPADDRESS keys.
+  auto groupByData = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2}),
+      makeMapVector<int128_t, int64_t>(
+          {{{ip1, 10}, {ip2, 20}},
+           {{ip1, 5}, {ip3, 15}},
+           {{ip1, 3}, {ip2, 7}},
+           {{ip3, 25}}},
+          MAP(IPADDRESS(), BIGINT())),
+  });
+
+  auto groupByExpected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<int128_t, int64_t>(
+          {{{ip1, 13}, {ip2, 27}}, {{ip1, 5}, {ip3, 40}}},
+          MAP(IPADDRESS(), BIGINT())),
+  });
+
+  testAggregations(
+      {groupByData}, {"c0"}, {"map_union_sum(c1)"}, {groupByExpected});
 }
 
 } // namespace

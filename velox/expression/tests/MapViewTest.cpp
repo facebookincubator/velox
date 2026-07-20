@@ -775,7 +775,7 @@ TEST_F(NullFreeMapViewTest, materialize) {
 
 TEST_F(NullableMapViewTest, materialize) {
   auto result = evaluate(
-      "map(array_constructor(1, 2),array_constructor(1, NULL))",
+      "map(array_constructor(1, 2),array_constructor(1, null::bigint))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;
@@ -789,7 +789,7 @@ TEST_F(NullableMapViewTest, materialize) {
 
 TEST_F(NullableMapViewTest, materializeNested) {
   auto result = evaluate(
-      "map(array_constructor(1, 2), array_constructor(array_constructor(1, null), null))",
+      "map(array_constructor(1, 2), array_constructor(array_constructor(1, null::bigint), null::bigint[]))",
       makeRowVector({makeFlatVector<int64_t>(1)}));
 
   DecodedVector decoded;

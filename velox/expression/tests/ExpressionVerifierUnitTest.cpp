@@ -21,13 +21,15 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/functions/Registerer.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::test {
 
@@ -84,8 +86,7 @@ class ExpressionVerifierUnitTest : public testing::Test, public VectorTestBase {
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    parse::ParseOptions options;
-    auto untyped = parse::parseExpr(text, options);
+    auto untyped = parse::DuckSqlExpressionsParser().parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, pool_.get());
   }
 
@@ -97,7 +98,7 @@ class ExpressionVerifierUnitTest : public testing::Test, public VectorTestBase {
 
 TEST_F(ExpressionVerifierUnitTest, persistReproInfo) {
   filesystems::registerLocalFileSystem();
-  auto reproFolder = exec::test::TempDirectoryPath::create();
+  auto reproFolder = TempDirectoryPath::create();
   const auto reproPath = reproFolder->getPath();
   auto localFs = filesystems::getFileSystem(reproPath, nullptr);
 
@@ -155,6 +156,31 @@ TEST_F(ExpressionVerifierUnitTest, subsetOfRowsToVerify) {
     rows.updateBounds();
     verifier.verify({plan}, {{data, rows}}, nullptr, false);
   }
+}
+
+TEST_F(ExpressionVerifierUnitTest, emptyActiveRowsWithReferenceRunner) {
+  // When no rows are selected, the reference-runner path reduces both the input
+  // and the result to zero rows and verifies the empty result against the
+  // reference DB.
+  auto referenceRunner =
+      std::make_shared<exec::test::DuckQueryRunner>(pool_.get());
+  ExpressionVerifierOptions options;
+  ExpressionVerifier verifier{&execCtx_, options, referenceRunner};
+
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto plan = parseExpression("c0", asRowType(data->type()));
+
+  SelectivityVector emptyRows(data->size());
+  emptyRows.clearAll();
+  ASSERT_FALSE(emptyRows.hasSelections());
+
+  auto states =
+      verifier.verify({plan}, {{data, emptyRows}}, nullptr, /*canThrow=*/false)
+          .second;
+  ASSERT_EQ(states.size(), 1);
+  EXPECT_EQ(
+      states[0],
+      ExpressionVerifier::VerificationState::kVerifiedAgainstReference);
 }
 
 } // namespace facebook::velox::test

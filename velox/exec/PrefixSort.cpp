@@ -310,7 +310,7 @@ void PrefixSort::extractRowAndEncodePrefixKeys(char* row, char* prefixBuffer) {
 }
 
 // static.
-uint32_t PrefixSort::maxRequiredBytes(
+uint64_t PrefixSort::maxRequiredBytes(
     const RowContainer* rowContainer,
     const std::vector<CompareFlags>& compareFlags,
     const velox::common::PrefixSortConfig& config,
@@ -345,7 +345,7 @@ void PrefixSort::stdSort(
       });
 }
 
-uint32_t PrefixSort::maxRequiredBytes() const {
+uint64_t PrefixSort::maxRequiredBytes() const {
   const auto numRows = rowContainer_->numRows();
   const auto numPages =
       memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);

@@ -16,7 +16,16 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-velox_add_library(velox_common_compression Compression.cpp LzoDecompressor.cpp)
+velox_add_library(
+  velox_common_compression
+  Compression.cpp
+  LzoDecompressor.cpp
+  HEADERS
+  Compression.h
+  HadoopCompressionFormat.h
+  Lz4Compression.h
+  LzoDecompressor.h
+)
 velox_link_libraries(
   velox_common_compression
   PUBLIC velox_status Folly::folly

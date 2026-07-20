@@ -19,6 +19,13 @@ velox_add_library(
   ThreadDebugInfo.cpp
   TraceContext.cpp
   TraceHistory.cpp
+  HEADERS
+  ProcessBase.h
+  StackTrace.h
+  ThreadDebugInfo.h
+  ThreadLocalRegistry.h
+  TraceContext.h
+  TraceHistory.h
 )
 
 velox_link_libraries(
@@ -29,6 +36,7 @@ velox_link_libraries(
 
 # Profiler need not be part of the core Velox library
 add_library(velox_profiler OBJECT Profiler.cpp)
+velox_add_test_headers(velox_profiler Profiler.h)
 target_link_libraries(
   velox_profiler
   PUBLIC velox_flag_definitions Folly::folly

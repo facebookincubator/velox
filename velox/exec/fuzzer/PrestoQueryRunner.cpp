@@ -40,6 +40,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
+#include "velox/functions/prestosql/types/PrestoTypes.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
 #include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
@@ -204,14 +205,21 @@ const std::vector<TypePtr>& PrestoQueryRunner::supportedScalarTypes() const {
       VARBINARY(),
       TIMESTAMP(),
       TIMESTAMP_WITH_TIME_ZONE(),
+      IPADDRESS(),
   };
   return kScalarTypes;
 }
 
 // static
 bool PrestoQueryRunner::isSupportedDwrfType(const TypePtr& type) {
-  if (type->isDate() || type->isIntervalDayTime() || type->isUnKnown() ||
+  if (type->isDate() || type->isIntervalDayTime() || type->isUnknown() ||
       isGeometryType(type)) {
+    return false;
+  }
+
+  // Block IPADDRESS in containers due to Presto's Int128ArrayBlock
+  // not supporting compareTo().
+  if (containsIPAddress(type)) {
     return false;
   }
 
@@ -320,7 +328,7 @@ bool PrestoQueryRunner::isConstantExprSupported(
     // same timezone as Velox. Interval type cannot be used as the type of
     // constant literals in Presto SQL.
     auto& type = expr->type();
-    return type->isPrimitiveType() && !type->isTimestamp() &&
+    return type->isPrimitiveType() && !type->isTimestamp() && !type->isTime() &&
         !isJsonType(type) && !type->isIntervalDayTime() &&
         !isIPAddressType(type) && !isIPPrefixType(type) && !isUuidType(type) &&
         !isTimestampWithTimeZoneType(type) && !isHyperLogLogType(type) &&
@@ -362,7 +370,6 @@ bool PrestoQueryRunner::isSupported(const exec::FunctionSignature& signature) {
       usesTypeName(signature, "hugeint") ||
       usesTypeName(signature, "geometry") || usesTypeName(signature, "time") ||
       usesTypeName(signature, "p4hyperloglog") ||
-      usesInputTypeName(signature, "ipaddress") ||
       usesInputTypeName(signature, "ipprefix") ||
       usesInputTypeName(signature, "uuid"));
 }
@@ -390,7 +397,7 @@ std::string PrestoQueryRunner::createTable(
   for (auto i = 0; i < inputType->size(); ++i) {
     appendComma(i, nullValues);
     nullValues << fmt::format(
-        "cast(null as {})", toTypeSql(inputType->childAt(i)));
+        "cast(null as {})", PrestoTypes::toSql(inputType->childAt(i)));
   }
 
   execute(fmt::format("DROP TABLE IF EXISTS {}", name));
@@ -404,9 +411,10 @@ std::string PrestoQueryRunner::createTable(
 
   // Query Presto to find out table's location on disk.
   auto results = execute(fmt::format("SELECT \"$path\" FROM {}", name));
-
   auto filePath = extractSingleValue<StringView>(results);
-  auto tableDirectoryPath = fs::path(filePath).parent_path();
+
+  // TODO: Remove explicit std::string_view cast.
+  auto tableDirectoryPath = fs::path(std::string_view(filePath)).parent_path();
 
   // Delete the all-null row.
   execute(fmt::format("DELETE FROM {}", name));
@@ -534,16 +542,18 @@ std::string PrestoQueryRunner::startQuery(
 
   // Perform the request
   CURLcode res = curl_easy_perform(curl);
+
+  // Clean up CURL resources before checking the result to avoid leaks on
+  // error.
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+
   VELOX_CHECK_EQ(
       CURLE_OK,
       res,
       "POST to {} failed: {}",
       coordinatorUri_,
       curl_easy_strerror(res));
-
-  // Cleanup
-  curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
 
   return response;
 }
@@ -569,12 +579,14 @@ std::string PrestoQueryRunner::fetchNext(const std::string& nextUri) {
 
   // Perform GET request
   CURLcode res = curl_easy_perform(curl);
-  VELOX_CHECK_EQ(
-      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
-  // Cleanup
+  // Clean up CURL resources before checking the result to avoid leaks on
+  // error.
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
+
+  VELOX_CHECK_EQ(
+      CURLE_OK, res, "Get request failed: {}", curl_easy_strerror(res));
 
   return response;
 }

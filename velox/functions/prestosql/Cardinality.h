@@ -19,16 +19,19 @@
 
 namespace facebook::velox::functions {
 
+/// Returns the number of elements in an array or map.
 template <typename T>
 struct CardinalityFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  void call(int64_t& out, const arg_type<Array<Generic<T1>>>& input) {
+  template <typename TReturn>
+  void call(TReturn& out, const arg_type<Array<Generic<T1>>>& input) {
     out = input.size();
   }
 
+  template <typename TReturn>
   void call(
-      int64_t& out,
+      TReturn& out,
       const arg_type<Map<Generic<T1>, Generic<T2>>>& input) {
     out = input.size();
   }

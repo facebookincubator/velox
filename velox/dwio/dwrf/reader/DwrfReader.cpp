@@ -16,14 +16,18 @@
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 
+#include <charconv>
 #include <chrono>
 
+#include <fmt/format.h>
 #include "velox/dwio/common/OnDemandUnitLoader.h"
 #include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/TypeUtils.h"
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
+#include "velox/dwio/dwrf/utils/ProtoUtils.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::dwrf {
@@ -41,8 +45,7 @@ class DwrfUnit : public LoadUnit {
   DwrfUnit(
       std::shared_ptr<ReaderBase> readerBase,
       const StrideIndexProvider& strideIndexProvider,
-      std::shared_ptr<dwio::common::ColumnReaderStatistics>
-          columnReaderStatistics,
+      std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats,
       uint32_t stripeIndex,
       std::shared_ptr<dwio::common::ColumnSelector> columnSelector,
       std::shared_ptr<BitSet> projectedNodes,
@@ -51,7 +54,7 @@ class DwrfUnit : public LoadUnit {
       : stripeReaderBase_{readerBase},
         memoryPool_(readerBase->memoryPool().shared_from_this()),
         strideIndexProvider_{strideIndexProvider},
-        columnReaderStatistics_{std::move(columnReaderStatistics)},
+        columnReaderStats_{std::move(columnReaderStats)},
         stripeIndex_{stripeIndex},
         columnSelector_{std::move(columnSelector)},
         projectedNodes_{std::move(projectedNodes)},
@@ -101,7 +104,7 @@ class DwrfUnit : public LoadUnit {
   const StrideIndexProvider& strideIndexProvider_;
 
   const std::shared_ptr<dwio::common::ColumnReaderStatistics>
-      columnReaderStatistics_;
+      columnReaderStats_;
   const uint32_t stripeIndex_;
   const std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
   const std::shared_ptr<BitSet> projectedNodes_;
@@ -166,7 +169,8 @@ void DwrfUnit::ensureDecoders() {
       stripeInfo_.offset(),
       stripeInfo_.numberOfRows(),
       strideIndexProvider_,
-      stripeIndex_);
+      stripeIndex_,
+      columnReaderStats_.get());
 
   auto* scanSpec = options_.scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
@@ -182,7 +186,7 @@ void DwrfUnit::ensureDecoders() {
         fileType,
         *stripeStreams_,
         streamLabels,
-        *columnReaderStatistics_,
+        *columnReaderStats_,
         scanSpec,
         flatMapContext,
         /*isRoot=*/true);
@@ -241,6 +245,15 @@ void makeProjectedNodes(
   }
 }
 
+const velox::common::ScanSpec* getChildScanSpec(
+    const velox::common::ScanSpec* scanSpec,
+    const TypeWrapper& nodeType,
+    int32_t childIdx) {
+  return scanSpec != nullptr && childIdx < nodeType.fieldNamesSize()
+      ? scanSpec->childByName(nodeType.fieldNames(childIdx))
+      : nullptr;
+}
+
 } // namespace
 
 DwrfRowReader::DwrfRowReader(
@@ -256,9 +269,11 @@ DwrfRowReader::DwrfRowReader(
                     reader->schema()))},
       decodingTimeCallback_{options_.decodingTimeCallback()},
       strideIndex_{0},
-      columnReaderStatistics_{
-          std::make_shared<dwio::common::ColumnReaderStatistics>()},
+      columnReaderStats_(
+          std::make_shared<dwio::common::ColumnReaderStatistics>()),
       currentUnit_{nullptr} {
+  columnReaderStats_->initColumnStatsCollection(
+      *getReader().schemaWithId(), options_);
   const auto& fileFooter = getReader().footer();
   const uint32_t numberOfStripes = fileFooter.stripesSize();
   currentStripe_ = numberOfStripes;
@@ -320,13 +335,15 @@ DwrfRowReader::DwrfRowReader(
     makeProjectedNodes(*getReader().schemaWithId(), *projectedNodes_);
   }
 
+  // Configure reader options before calling 'getUnitLoader()'.
+  // Construction is single-threaded, and the unit loader is created only
+  // after 'columnReaderOptions_' has been initialized.
+  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
+      readerBaseShared()->readerOptions());
   unitLoader_ = getUnitLoader();
   if (!emptyFile()) {
     getReader().loadCache();
   }
-
-  columnReaderOptions_ = dwio::common::makeColumnReaderOptions(
-      readerBaseShared()->readerOptions());
 }
 
 std::unique_ptr<ColumnReader>& DwrfRowReader::getColumnReader() {
@@ -348,7 +365,7 @@ std::unique_ptr<dwio::common::UnitLoader> DwrfRowReader::getUnitLoader() {
         std::make_unique<DwrfUnit>(
             /*readerBase=*/readerBaseShared(),
             /*strideIndexProvider=*/*this,
-            columnReaderStatistics_,
+            columnReaderStats_,
             stripe,
             columnSelector_,
             projectedNodes_,
@@ -591,8 +608,10 @@ int64_t DwrfRowReader::nextRowNumber() {
         const auto skipRows = getReader().randomSkip()->nextSkip();
         if (skipRows >= numStripeRows) {
           getReader().randomSkip()->consume(numStripeRows);
-          const auto numStrides = bits::divRoundUp(numStripeRows, strideSize);
-          skippedStrides_ += numStrides;
+          if (strideSize > 0) {
+            skippedStrides_ += static_cast<int64_t>(
+                bits::divRoundUp(numStripeRows, strideSize));
+          }
           goto advanceToNextStripe;
         }
       }
@@ -602,6 +621,9 @@ int64_t DwrfRowReader::nextRowNumber() {
 
     checkSkipStrides(strideSize);
     if (currentRowInStripe_ < rowsInCurrentStripe_) {
+      if (strideSize > 0 && currentRowInStripe_ % strideSize == 0) {
+        ++processedStrides_;
+      }
       nextRowNumber_ = firstRowOfStripe_[currentStripe_] + currentRowInStripe_;
       return *nextRowNumber_;
     }
@@ -694,7 +716,6 @@ void DwrfRowReader::loadCurrentStripe() {
   const auto loadUnitIdx = currentStripe_ - firstStripe_;
   currentUnit_ = castDwrfUnit(&unitLoader_->getLoadedUnit(loadUnitIdx));
   rowsInCurrentStripe_ = currentUnit_->getNumRows();
-  ++processedStrides_;
 }
 
 size_t DwrfRowReader::estimatedReaderMemory() const {
@@ -702,15 +723,17 @@ size_t DwrfRowReader::estimatedReaderMemory() const {
   return 2 * DwrfReader::getMemoryUse(getReader(), -1, *columnSelector_);
 }
 
-bool DwrfRowReader::shouldReadNode(uint32_t nodeId) const {
-  if (columnSelector_) {
-    return columnSelector_->shouldReadNode(nodeId);
-  }
-  return projectedNodes_->contains(nodeId);
+bool DwrfRowReader::shouldReadNode(
+    uint32_t nodeId,
+    const velox::common::ScanSpec* fieldScanSpec) const {
+  bool nodeIdSelected = (columnSelector_)
+      ? columnSelector_->shouldReadNode(nodeId)
+      : projectedNodes_->contains(nodeId);
+  return nodeIdSelected &&
+      !(fieldScanSpec != nullptr && !fieldScanSpec->readFromFile());
 }
 
 namespace {
-
 template <typename T>
 std::optional<uint64_t> getStringOrBinaryColumnSize(
     const dwio::common::ColumnStatistics& stats) {
@@ -729,6 +752,7 @@ std::optional<uint64_t> getStringOrBinaryColumnSize(
 std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     const FooterWrapper& fileFooter,
     const dwio::common::Statistics& stats,
+    const velox::common::ScanSpec* scanSpec,
     uint32_t nodeId) const {
   VELOX_CHECK_LT(nodeId, fileFooter.typesSize(), "Types missing in footer");
 
@@ -783,11 +807,16 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
           ? 0
           : 2 * valueCount * sizeof(vector_size_t);
       for (int32_t i = 0; i < nodeType.subtypesSize(); ++i) {
-        if (!shouldReadNode(nodeType.subtypes(i))) {
+        if (!shouldReadNode(
+                nodeType.subtypes(i),
+                getChildScanSpec(scanSpec, nodeType, i))) {
           continue;
         }
-        const auto subtypeEstimate =
-            estimatedRowSizeHelper(fileFooter, stats, nodeType.subtypes(i));
+        const auto subtypeEstimate = estimatedRowSizeHelper(
+            fileFooter,
+            stats,
+            getChildScanSpec(scanSpec, nodeType, i),
+            nodeType.subtypes(i));
         if (subtypeEstimate.has_value()) {
           totalEstimate += subtypeEstimate.value();
         } else {
@@ -824,8 +853,11 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
   // Estimate with projections.
   constexpr uint32_t ROOT_NODE_ID = 0;
   const auto stats = reader.statistics();
-  const auto projectedSize =
-      estimatedRowSizeHelper(fileFooter, *stats, ROOT_NODE_ID);
+  const auto projectedSize = estimatedRowSizeHelper(
+      fileFooter,
+      *stats,
+      reader.readerOptions().scanSpec().get(),
+      ROOT_NODE_ID);
   if (projectedSize.has_value()) {
     estimatedRowSize_ = projectedSize.value() / fileFooter.numberOfRows();
     return estimatedRowSize_;
@@ -839,15 +871,25 @@ DwrfReader::DwrfReader(
     const ReaderOptions& options,
     std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(options, std::move(input))) {
+  VELOX_CHECK_NE(
+      readerBase_->readerOptions().columnMappingMode(),
+      dwio::common::ColumnMappingMode::kParquetFieldId,
+      "Parquet field ID column mapping is not supported by DWRF.");
+
   // If we are not using column names to map table columns to file columns,
   // then we use indices. In that case we need to ensure the names completely
   // match, because we are still mapping columns by names further down the
   // code. So we rename column names in the file schema to match table schema.
   // We test the options to have 'fileSchema' (actually table schema) as most
   // of the unit tests fail to provide it.
-  if ((!readerBase_->readerOptions().useColumnNamesForColumnMapping()) &&
-      (readerBase_->readerOptions().fileSchema() != nullptr)) {
-    updateColumnNamesFromTableSchema();
+  const auto columnMappingMode =
+      readerBase_->readerOptions().columnMappingMode();
+  if (readerBase_->readerOptions().fileSchema() != nullptr) {
+    if (columnMappingMode == dwio::common::ColumnMappingMode::kFieldId) {
+      updateColumnNamesFromFieldIds();
+    } else if (columnMappingMode != dwio::common::ColumnMappingMode::kName) {
+      updateColumnNamesFromTableSchema();
+    }
   }
 }
 
@@ -857,6 +899,151 @@ void DwrfReader::updateColumnNamesFromTableSchema() {
   readerBase_->setSchema(
       std::dynamic_pointer_cast<const RowType>(
           updateColumnNames(fileSchema, tableSchema)));
+}
+
+namespace {
+
+constexpr std::string_view kIcebergFieldIdKey{"iceberg.id"};
+
+using AttributesByNode = std::
+    unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>;
+
+// Returns the Iceberg field id ("iceberg.id") attribute on the schema node with
+// the given pre-order id, if present and parseable.
+std::optional<int32_t> icebergFieldId(
+    const AttributesByNode& attributesByNode,
+    uint32_t nodeId) {
+  auto it = attributesByNode.find(nodeId);
+  if (it == attributesByNode.end()) {
+    return std::nullopt;
+  }
+  for (const auto& [key, value] : it->second) {
+    if (key == kIcebergFieldIdKey) {
+      int32_t parsed = 0;
+      const auto* begin = value.data();
+      const auto* end = begin + value.size();
+      const auto result = std::from_chars(begin, end, parsed);
+      if (result.ec == std::errc{} && result.ptr == end) {
+        return parsed;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+// Recursively rebuilds the file node's type, renaming file columns to the
+// requested (table) names that share their Iceberg field id. 'tableType' is the
+// matched requested node and 'tableChildFieldIds' holds its children's field id
+// trees. File columns without a matching requested field id are renamed to a
+// non-colliding sentinel so a downstream name match cannot bind them (this is
+// what makes drop + re-add of a column with the same name resolve correctly).
+TypePtr renameByFieldId(
+    const dwio::common::TypeWithId& fileNode,
+    const AttributesByNode& attributesByNode,
+    const TypePtr& tableType,
+    const std::vector<dwio::common::ParquetFieldId>& tableChildFieldIds) {
+  const auto& fileType = fileNode.type();
+  if (fileType->kind() != tableType->kind()) {
+    return fileType;
+  }
+
+  if (fileType->isRow()) {
+    const auto& tableRow = tableType->asRow();
+    const auto numTableChildren =
+        std::min<size_t>(tableRow.size(), tableChildFieldIds.size());
+    std::unordered_map<int32_t, size_t> tableChildByFieldId;
+    tableChildByFieldId.reserve(numTableChildren);
+    for (size_t j = 0; j < numTableChildren; ++j) {
+      tableChildByFieldId.emplace(tableChildFieldIds[j].fieldId, j);
+    }
+
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    names.reserve(fileNode.size());
+    types.reserve(fileNode.size());
+    for (size_t i = 0; i < fileNode.size(); ++i) {
+      const auto& fileChild = *fileNode.childAt(static_cast<uint32_t>(i));
+      const auto fieldId = icebergFieldId(attributesByNode, fileChild.id());
+      std::optional<size_t> tableChildIdx;
+      if (fieldId.has_value()) {
+        auto match = tableChildByFieldId.find(*fieldId);
+        if (match != tableChildByFieldId.end()) {
+          tableChildIdx = match->second;
+        }
+      }
+      if (tableChildIdx.has_value()) {
+        names.push_back(tableRow.nameOf(static_cast<uint32_t>(*tableChildIdx)));
+        types.push_back(renameByFieldId(
+            fileChild,
+            attributesByNode,
+            tableRow.childAt(static_cast<uint32_t>(*tableChildIdx)),
+            tableChildFieldIds[*tableChildIdx].children));
+      } else {
+        names.push_back(fmt::format("$dwrf_unmatched_{}", fileChild.id()));
+        types.push_back(fileChild.type());
+      }
+    }
+    return ROW(std::move(names), std::move(types));
+  }
+
+  if (fileType->isArray()) {
+    if (tableChildFieldIds.empty() || fileNode.size() == 0) {
+      return fileType;
+    }
+    return ARRAY(renameByFieldId(
+        *fileNode.childAt(0),
+        attributesByNode,
+        tableType->asArray().elementType(),
+        tableChildFieldIds[0].children));
+  }
+
+  if (fileType->isMap()) {
+    if (tableChildFieldIds.size() < 2 || fileNode.size() < 2) {
+      return fileType;
+    }
+    auto keyType = renameByFieldId(
+        *fileNode.childAt(0),
+        attributesByNode,
+        tableType->asMap().keyType(),
+        tableChildFieldIds[0].children);
+    auto valueType = renameByFieldId(
+        *fileNode.childAt(1),
+        attributesByNode,
+        tableType->asMap().valueType(),
+        tableChildFieldIds[1].children);
+    return MAP(std::move(keyType), std::move(valueType));
+  }
+
+  return fileType;
+}
+
+} // namespace
+
+void DwrfReader::updateColumnNamesFromFieldIds() {
+  const auto& options = readerBase_->readerOptions();
+  const auto& tableSchema = options.fileSchema();
+  const auto& fieldIds = options.fieldIds();
+  const auto& footer = readerBase_->footer();
+  // Field ids are carried as "iceberg.id" attributes on the footer types, in
+  // either the DWRF or ORC proto variant (Iceberg manifest-tags DWRF as ORC).
+  const auto attributesByNode = ProtoUtils::readAttributes(footer);
+  if (attributesByNode.empty()) {
+    // The file carries no Iceberg field-id attributes (written before field-id
+    // support, by a non-Iceberg writer, or a Hive-migrated table). Field-id
+    // resolution is impossible, so fall back to position-based name mapping
+    // (rename file columns to the requested table names by position), matching
+    // the behavior used for non-field-id column mapping. This keeps
+    // physically-present columns bound to the file instead of being treated as
+    // missing and wrongly filled with defaults/nulls.
+    updateColumnNamesFromTableSchema();
+    return;
+  }
+
+  const auto fileWithId =
+      dwio::common::TypeWithId::create(readerBase_->schema());
+  auto renamed =
+      renameByFieldId(*fileWithId, attributesByNode, tableSchema, fieldIds);
+  readerBase_->setSchema(std::dynamic_pointer_cast<const RowType>(renamed));
 }
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(
@@ -1028,8 +1215,8 @@ uint64_t DwrfReader::getMemoryUse(
 
   // Do we need even more memory to read the footer or the metadata?
   const auto footerLength = readerBase.postScript().footerLength();
-  if (memoryBytes < footerLength + readerBase.footerEstimatedSize()) {
-    memoryBytes = footerLength + readerBase.footerEstimatedSize();
+  if (memoryBytes < footerLength + readerBase.footerSpeculativeIoSize()) {
+    memoryBytes = footerLength + readerBase.footerSpeculativeIoSize();
   }
 
   // Account for firstRowOfStripe.

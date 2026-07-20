@@ -70,8 +70,8 @@ int mk_w_call_center(
     void* info_arr,
     ds_key_t index,
     DSDGenContext& dsdGenContext) {
-  int32_t jDateStart, nDaysPerRevision;
-  int32_t nSuffix, bFirstRecord = 0, nFieldChangeFlags, jDateEnd, nDateRange;
+  int32_t jDateStart;
+  int32_t nSuffix, bFirstRecord = 0, nFieldChangeFlags;
   char *cp = nullptr, *sName1 = nullptr, *sName2 = nullptr;
   decimal_t dMinTaxPercentage, dMaxTaxPercentage;
   tdef* pTdef = getSimpleTdefsByNumber(CALL_CENTER, dsdGenContext);
@@ -85,10 +85,6 @@ int mk_w_call_center(
 
   strtodt(&dTemp, DATA_START_DATE);
   jDateStart = dttoj(&dTemp) - WEB_SITE;
-  strtodt(&dTemp, DATA_END_DATE);
-  jDateEnd = dttoj(&dTemp);
-  nDateRange = jDateEnd - jDateStart + 1;
-  nDaysPerRevision = nDateRange / pTdef->nParam + 1;
   nScale = get_dbl("SCALE", dsdGenContext);
 
   r->cc_division_id = -1;
@@ -130,8 +126,9 @@ int mk_w_call_center(
         dsdGenContext);
     if (nSuffix > 0) {
       snprintf(r->cc_name, RS_CC_NAME + 1, "%s_%d", cp, nSuffix);
-    } else
+    } else {
       strcpy(r->cc_name, cp);
+    }
 
     mk_address(&r->cc_address, CC_ADDRESS, dsdGenContext);
     bFirstRecord = 1;

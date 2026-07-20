@@ -64,6 +64,15 @@ TypePtr resolveType(
     inputTypes.emplace_back(input->type());
   }
 
+  if (expr->name() == "row_constructor") {
+    const auto numInput = inputTypes.size();
+    std::vector<std::string> names(numInput);
+    for (auto i = 0; i < numInput; i++) {
+      names[i] = fmt::format("c{}", i + 1);
+    }
+    return ROW(std::move(names), std::move(inputTypes));
+  }
+
   if (auto resolvedType =
           exec::resolveTypeForSpecialForm(expr->name(), inputTypes)) {
     return resolvedType;
@@ -489,7 +498,7 @@ TypedExprPtr Expressions::tryResolveCallWithLambdas(
   }
 
   // Resolve lambda arguments.
-  exec::SignatureBinder binder(*signature, childTypes);
+  exec::SignatureBinder binder(*signature, childTypes, TypeCoercer::defaults());
   binder.tryBind();
   for (auto i = 0; i < numArgs; ++i) {
     if (signature->isLambdaArgumentAt(i)) {

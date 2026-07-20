@@ -121,6 +121,87 @@ Mathematical Functions
 
     Returns the cosecant of ``x``.
 
+.. spark:function:: decimal_ceil(x, scale) -> decimal
+
+    Rounds the decimal value ``x`` up (toward positive infinity) to the
+    specified target ``scale``. The first argument must be a DECIMAL and the
+    second must be a constant INTEGER representing the desired number of digits
+    after the decimal point.
+
+    When ``scale`` is negative, rounds up to a power of 10 (e.g., scale = -2
+    rounds up to the nearest hundred). When ``scale`` >= the input
+    scale, returns the value unchanged. Values that overflow the result
+    precision return NULL.
+
+    **Result type rules:**
+
+    The result type is determined by the input type ``DECIMAL(p, s)`` and
+    the target ``scale`` (n):
+
+    * When n >= 0: result is ``DECIMAL(min(p - s + 1 + min(s, n), 38), min(s, n))``.
+      The ``+1`` accounts for carry (e.g., ``ceil(9.9, 0)`` = 10 needs an extra digit).
+      The result scale is ``min(s, n)`` — it never pads with trailing zeros beyond the
+      input scale.
+    * When n < 0: result is ``DECIMAL(min(max(p - s + 1, |n| + 1), 38), 0)``.
+      The result scale is always 0. ``|n| + 1`` digits are needed because rounding
+      to the nearest 10^|n| can produce a value one digit wider.
+
+    See `Spark's RoundBase.dataType <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+
+    Examples (type annotations for clarity, not executable SQL)::
+
+        -- scale 0: round up to integer
+        SELECT decimal_ceil(DECIMAL(4,3) 1.234, 0); -- 2 (DECIMAL(2,0))
+        SELECT decimal_ceil(DECIMAL(4,3) -1.234, 0); -- -1 (DECIMAL(2,0))
+
+        -- scale 1: one fractional digit
+        SELECT decimal_ceil(DECIMAL(4,3) 1.234, 1); -- 1.3 (DECIMAL(3,1))
+        SELECT decimal_ceil(DECIMAL(4,3) -1.234, 1); -- -1.2 (DECIMAL(3,1))
+
+        -- scale 2: two fractional digits
+        SELECT decimal_ceil(DECIMAL(4,3) 1.234, 2); -- 1.24 (DECIMAL(4,2))
+
+        -- scale >= input scale: identity (no rounding needed)
+        SELECT decimal_ceil(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
+
+        -- negative scale: round up to power of 10
+        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(4,0))
+
+.. spark:function:: decimal_floor(x, scale) -> decimal
+
+    Rounds the decimal value ``x`` down (toward negative infinity) to the
+    specified target ``scale``. The first argument must be a DECIMAL and the
+    second must be a constant INTEGER representing the desired number of digits
+    after the decimal point.
+
+    When ``scale`` is negative, rounds down to a power of 10 (e.g., scale = -2
+    rounds down to the nearest hundred). When ``scale`` >= the input
+    scale, returns the value unchanged. Values that overflow the result
+    precision return NULL.
+
+    **Result type rules:**
+
+    Same as ``decimal_ceil`` — see above.
+
+    Examples (type annotations for clarity, not executable SQL)::
+
+        -- scale 0: round down to integer
+        SELECT decimal_floor(DECIMAL(4,3) 1.234, 0); -- 1 (DECIMAL(2,0))
+        SELECT decimal_floor(DECIMAL(4,3) -1.234, 0); -- -2 (DECIMAL(2,0))
+
+        -- scale 1: one fractional digit
+        SELECT decimal_floor(DECIMAL(4,3) 1.234, 1); -- 1.2 (DECIMAL(3,1))
+        SELECT decimal_floor(DECIMAL(4,3) -1.234, 1); -- -1.3 (DECIMAL(3,1))
+
+        -- scale 2: two fractional digits
+        SELECT decimal_floor(DECIMAL(4,3) 1.234, 2); -- 1.23 (DECIMAL(4,2))
+
+        -- scale >= input scale: identity (no rounding needed)
+        SELECT decimal_floor(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
+
+        -- negative scale: round down to power of 10
+        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(4,0))
+
 .. spark:function:: degrees(x) -> double
 
     Converts angle x in radians to degrees.
@@ -209,6 +290,10 @@ Mathematical Functions
     Returns true if x is Nan, or false otherwise. Returns false is x is NULL.
     Supported types are: REAL, DOUBLE.
 
+.. spark:function:: ln(x) -> double
+
+    Returns the natural logarithm of ``x``. Return null for zero and non-positive input.
+
 .. spark:function:: log(base, expr) -> double
 
     Returns the logarithm of ``expr`` with ``base``.
@@ -264,6 +349,10 @@ Mathematical Functions
 
     Returns ``x`` raised to the power of ``p``.
 
+.. spark:function:: radians(x) -> double
+
+    Converts angle x in degrees to radians.
+
 .. spark:function:: rand() -> double
 
     Returns a random value with uniformly distributed values in [0, 1). ::
@@ -278,8 +367,8 @@ Mathematical Functions
     `spark.partition_id` to each thread (in a deterministic way) .
     ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
 
-        SELECT rand(0);    -- 0.5488135024422883
-        SELECT rand(NULL); -- 0.5488135024422883
+        SELECT rand(0);    -- 0.7604953758285915
+        SELECT rand(NULL); -- 0.7604953758285915
 
 .. spark:function:: random() -> double
 
@@ -289,10 +378,12 @@ Mathematical Functions
 
     An alias for ``rand(seed)``.
 
-.. spark:function:: remainder(n, m) -> [same as n]
+.. spark:function:: remainder(n, m) -> [same as n] (ANSI compliant)
 
     Returns the modulus (remainder) of ``n`` divided by ``m``. Corresponds to Spark's operator ``%``.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    When ``m`` is zero, returns NULL following the behavior when Spark ANSI mode
+    is disabled, and throws an exception when Spark ANSI mode is enabled.
 
 .. spark:function:: rint(x) -> double
 
@@ -324,6 +415,10 @@ Mathematical Functions
     * 1.0 if the argument is +Infinity,
     * -1.0 if the argument is -Infinity.
 
+.. spark:function:: sin(x) -> double
+
+    Returns the sine of ``x``.
+
 .. spark:function:: sinh(x) -> double
 
     Returns hyperbolic sine of ``x``.
@@ -345,9 +440,20 @@ Mathematical Functions
         SELECT CAST(99999999999999999999999999999999.99998 as DECIMAL(38, 6)) - CAST(-0.00001 as DECIMAL(38, 5)); -- DECIMAL(38, 6) 99999999999999999999999999999999.999990
         SELECT CAST(-99999999999999999999999999999999990.0 as DECIMAL(38, 3)) - CAST(0.00001 as DECIMAL(38, 7)); -- DECIMAL(38, 6) NULL
 
-.. spark:function:: unaryminus(x) -> [same as x]
+.. spark:function:: tan(x) -> double
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the tangent of ``x``.
+
+.. spark:function:: tanh(x) -> double
+
+    Returns the hyperbolic tangent of ``x``.
+
+.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
+
+    Returns the negative of ``x``. Corresponds to Spark's operator ``-``.
+    When ``x`` is the minimum value of an integral type, returns the same value
+    as ``x`` following the behavior when Spark ANSI mode is disabled, and throws
+    an exception when Spark ANSI mode is enabled.
 
 .. spark:function:: unhex(x) -> varbinary
 

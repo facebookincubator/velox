@@ -56,7 +56,7 @@ void FileSink::write(DataBuffer<char> buffer) {
 void FileSink::writeWithLogging(std::vector<DataBuffer<char>>& buffers) {
   uint64_t timeUs{0};
   {
-    MicrosecondTimer timer(&timeUs);
+    MicrosecondWallTimer timer(&timeUs);
     write(buffers);
   }
   metricLogger_->logWrite(
@@ -70,7 +70,7 @@ void FileSink::writeImpl(
   const uint64_t oldSize = size_;
   uint64_t writeTimeUs{0};
   {
-    MicrosecondTimer timer(&writeTimeUs);
+    MicrosecondWallTimer timer(&writeTimeUs);
     for (auto& buf : buffers) {
       // NOTE: we need to update 'size_' after each 'callback' invocation as
       // some file sink implementation like MemorySink depends on the updated
@@ -111,10 +111,13 @@ WriteFileSink::WriteFileSink(
     std::unique_ptr<WriteFile> writeFile,
     std::string name,
     MetricsLogPtr metricLogger,
-    IoStatistics* stats)
+    IoStatistics* stats,
+    velox::IoStats* fileSystemStats)
     : FileSink(
           std::move(name),
-          {.metricLogger = std::move(metricLogger), .stats = stats}),
+          {.metricLogger = std::move(metricLogger),
+           .stats = stats,
+           .fileSystemStats = fileSystemStats}),
       writeFile_{std::move(writeFile)} {
   VELOX_CHECK_NOT_NULL(writeFile_);
 }

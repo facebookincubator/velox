@@ -16,7 +16,7 @@
 
 // Adapted from Apache Arrow.
 
-// Non-public Thrift schema serialization utilities
+// Non-public Thrift schema serialization utilities.
 
 #pragma once
 
@@ -35,23 +35,23 @@ class SchemaElement;
 
 namespace schema {
 
-// ----------------------------------------------------------------------
-// Conversion from Parquet Thrift metadata
+// ----------------------------------------------------------------------.
+// Conversion from Parquet Thrift metadata.
 
 PARQUET_EXPORT
-std::shared_ptr<SchemaDescriptor> FromParquet(
+std::shared_ptr<SchemaDescriptor> fromParquet(
     const std::vector<facebook::velox::parquet::thrift::SchemaElement>& schema);
 
 PARQUET_EXPORT
-std::unique_ptr<Node> Unflatten(
+std::unique_ptr<Node> unflatten(
     const facebook::velox::parquet::thrift::SchemaElement* elements,
     int length);
 
-// ----------------------------------------------------------------------
-// Conversion to Parquet Thrift metadata
+// ----------------------------------------------------------------------.
+// Conversion to Parquet Thrift metadata.
 
 PARQUET_EXPORT
-void ToParquet(
+void toParquet(
     const GroupNode* schema,
     std::vector<facebook::velox::parquet::thrift::SchemaElement>* out);
 

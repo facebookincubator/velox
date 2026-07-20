@@ -19,7 +19,7 @@
 #include <atomic>
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -36,20 +36,19 @@ namespace {
 
 static constexpr int32_t kDefaultMinExchangeOutputBatchBytes{2 << 20}; // 2 MB.
 
-class ExchangeClientTest
-    : public testing::Test,
-      public velox::test::VectorTestBase,
-      public testing::WithParamInterface<VectorSerde::Kind> {
+class ExchangeClientTest : public testing::Test,
+                           public velox::test::VectorTestBase,
+                           public testing::WithParamInterface<std::string> {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    if (!isRegisteredNamedVectorSerde("CompactRow")) {
       serializer::CompactRowVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
       serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
     }
   }
@@ -63,12 +62,13 @@ class ExchangeClientTest
     if (!isRegisteredVectorSerde()) {
       velox::serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
-    bufferManager_ = OutputBufferManager::getInstanceRef();
+    bufferManager_ = DefaultOutputBufferManager::getInstanceRef();
 
     common::testutil::TestValue::enable();
   }
 
   void TearDown() override {
+    executor_->stop();
     exec::test::waitForAllTasksToBeDeleted();
     test::testingShutdownLocalExchangeSource();
   }
@@ -85,7 +85,8 @@ class ExchangeClientTest
         executor_.get(), core::QueryConfig{std::move(config)});
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId()));
-    auto plan = test::PlanBuilder().values({}).planNode();
+    auto plan =
+        test::PlanBuilder().values(std::vector<RowVectorPtr>{}).planNode();
     return Task::create(
         taskId,
         core::PlanFragment{plan},
@@ -160,9 +161,9 @@ class ExchangeClientTest
     return executor_.get();
   }
 
-  VectorSerde::Kind serdeKind_;
+  std::string serdeKind_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
-  std::shared_ptr<OutputBufferManager> bufferManager_;
+  std::shared_ptr<DefaultOutputBufferManager> bufferManager_;
 };
 
 TEST_P(ExchangeClientTest, nonVeloxCreateExchangeSourceException) {
@@ -1057,13 +1058,99 @@ TEST_P(ExchangeClientTest, skipRequestDataSizeNotTriggeredWithMultipleSources) {
   auto pages = fetchPages(1, *client, 6);
   ASSERT_EQ(pages.size(), 6);
 
-  // Cleanup
+  // Cleanup: Signal no more data first to allow faster task termination,
+  // then cancel and remove tasks.
+  for (auto& task : tasks) {
+    bufferManager_->noMoreData(task->taskId());
+  }
   for (auto& task : tasks) {
     task->requestCancel();
     bufferManager_->removeTask(task->taskId());
   }
+  tasks.clear();
 
   client->close();
+}
+
+// Test that lazyFetching=true defers data fetching until next() is called.
+// When lazyFetching=false (default), fetching starts immediately when remote
+// tasks are added via pickSourcesToRequestLocked(). When lazyFetching=true,
+// pickSourcesToRequestLocked() is not called in addRemoteTaskId(), deferring
+// the fetch until next() is called. This is useful for cached hash table
+// scenarios where waiter tasks may not need the data if the table is already
+// cached.
+TEST_P(ExchangeClientTest, lazyFetching) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+
+  // Test with lazyFetching=false (default behavior).
+  // Verify that fetching starts and we can retrieve pages normally.
+  {
+    auto taskId = "local://eager-fetching-test";
+    auto task = makeTask(taskId);
+
+    bufferManager_->initializeTask(
+        task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
+
+    auto client = std::make_shared<ExchangeClient>(
+        "t",
+        17,
+        ExchangeClient::kDefaultMaxQueuedBytes,
+        1,
+        kDefaultMinExchangeOutputBatchBytes,
+        pool(),
+        executor(),
+        10, // requestDataSizesMaxWaitSec
+        false, // skipRequestDataSizeWithSingleSource
+        false); // lazyFetching=false (default)
+
+    client->addRemoteTaskId(taskId);
+    enqueue(taskId, 17, data);
+
+    auto pages = fetchPages(1, *client, 1);
+    ASSERT_EQ(1, pages.size());
+
+    bufferManager_->noMoreData(taskId);
+    task->requestCancel();
+    bufferManager_->removeTask(taskId);
+    task.reset();
+    client->close();
+  }
+
+  // Test with lazyFetching=true.
+  // Verify that we can still retrieve pages (fetch is triggered by next()).
+  {
+    auto taskId = "local://lazy-fetching-test";
+    auto task = makeTask(taskId);
+
+    bufferManager_->initializeTask(
+        task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
+
+    auto client = std::make_shared<ExchangeClient>(
+        "t",
+        17,
+        ExchangeClient::kDefaultMaxQueuedBytes,
+        1,
+        kDefaultMinExchangeOutputBatchBytes,
+        pool(),
+        executor(),
+        10, // requestDataSizesMaxWaitSec
+        false, // skipRequestDataSizeWithSingleSource
+        true); // lazyFetching=true
+
+    client->addRemoteTaskId(taskId);
+    enqueue(taskId, 17, data);
+
+    // Even with lazy fetching, we should be able to retrieve pages
+    // since next() triggers the fetch.
+    auto pages = fetchPages(1, *client, 1);
+    ASSERT_EQ(1, pages.size());
+
+    bufferManager_->noMoreData(taskId);
+    task->requestCancel();
+    bufferManager_->removeTask(taskId);
+    task.reset();
+    client->close();
+  }
 }
 
 // Test the new hasNoMoreSources() API
@@ -1082,11 +1169,8 @@ TEST_P(ExchangeClientTest, hasNoMoreSourcesApi) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     ExchangeClientTest,
     ExchangeClientTest,
-    testing::Values(
-        VectorSerde::Kind::kPresto,
-        VectorSerde::Kind::kCompactRow,
-        VectorSerde::Kind::kUnsafeRow),
-    [](const testing::TestParamInfo<VectorSerde::Kind>& info) {
+    testing::Values("Presto", "CompactRow", "UnsafeRow"),
+    [](const testing::TestParamInfo<std::string>& info) {
       return fmt::format("{}", info.param);
     });
 

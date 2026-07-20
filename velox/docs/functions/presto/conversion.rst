@@ -30,7 +30,7 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in :doc:`json`.
 
 .. list-table::
-   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
+   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
    :header-rows: 1
 
    * -
@@ -52,6 +52,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - ipprefix
      - tdigest
      - qdigest
+     - setdigest
+     - khyperloglog
    * - tinyint
      - Y
      - Y
@@ -67,6 +69,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
      -
      -
      -
@@ -90,6 +94,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - integer
      - Y
      - Y
@@ -105,6 +111,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
      -
      -
      -
@@ -128,6 +136,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - boolean
      - Y
      - Y
@@ -143,6 +153,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
      -
      -
      -
@@ -166,6 +178,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - double
      - Y
      - Y
@@ -181,6 +195,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
      -
      -
      -
@@ -204,6 +220,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
+     -
+     -
    * - varbinary
      -
      -
@@ -223,6 +241,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     - Y
+     - Y
    * - timestamp
      -
      -
@@ -236,6 +256,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
+     -
      -
      -
      -
@@ -261,6 +283,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - date
      -
      -
@@ -280,6 +304,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - interval day to second
      -
      -
@@ -289,6 +315,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
      -
      -
      -
@@ -318,6 +346,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - ipaddress
      -
      -
@@ -335,6 +365,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
      -
      -
    * - ipprefix
@@ -356,6 +388,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
+     -
+     -
    * - tdigest
      -
      -
@@ -375,6 +409,8 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
+     -
    * - qdigest
      -
      -
@@ -385,6 +421,50 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+   * - setdigest
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     - Y
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+   * - khyperloglog
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     -
+     - Y
+     -
+     -
      -
      -
      -
@@ -870,6 +950,26 @@ This allows quantile digests to be stored and retrieved for later use.
 
   SELECT cast(qdigest_agg(cast(1.0 as double)) as varbinary); -- AHsUrkfheoQ/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAA8D8BAAAAAAAAAAAAAPA/AAAAAAAA8L8=
 
+From SETDIGEST
+^^^^^^^^^^^^^^
+
+Returns the SetDigest as a varbinary string containing the serialized representation of the SetDigest data structure.
+This allows SetDigests to be stored and retrieved for later use.
+
+::
+
+  SELECT cast(make_set_digest(1) as varbinary);
+
+From KHYPERLOGLOG
+^^^^^^^^^^^^^^^^^
+
+Returns the KHyperLogLog as a varbinary string containing the serialized representation of the KHyperLogLog data structure.
+This allows KHyperLogLogs to be stored and retrieved for later use.
+
+::
+
+  SELECT cast(khyperloglog_agg(1, 123) as varbinary);
+
 Cast to TIMESTAMP
 -----------------
 
@@ -1323,6 +1423,32 @@ This allows previously stored quantile digests to be restored for use.
   SELECT cast(stored_qdigest_binary as qdigest(bigint));
   SELECT cast(stored_qdigest_binary as qdigest(real));
   SELECT cast(stored_qdigest_binary as qdigest(double));
+
+Cast to SETDIGEST
+-----------------
+
+From VARBINARY
+^^^^^^^^^^^^^^
+
+Returns a SetDigest reconstructed from the varbinary string containing the serialized representation.
+This allows previously stored SetDigests to be restored for use.
+
+::
+
+  SELECT cast(stored_setdigest_binary as setdigest);
+
+Cast to KHYPERLOGLOG
+--------------------
+
+From VARBINARY
+^^^^^^^^^^^^^^
+
+Returns a KHyperLogLog reconstructed from the varbinary string containing the serialized representation.
+This allows previously stored KHyperLogLogs to be restored for use.
+
+::
+
+  SELECT cast(stored_khyperloglog_binary as khyperloglog);
 
 Cast to IPPREFIX
 ----------------

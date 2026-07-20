@@ -40,10 +40,44 @@ class AggregateFunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& expectedFinalType,
       const TypePtr& expectedIntermediateType) {
-    auto finalType = resolveResultType(name, argTypes);
-    auto intermediateType = resolveIntermediateType(name, argTypes);
-    EXPECT_EQ(*finalType, *expectedFinalType);
-    EXPECT_EQ(*intermediateType, *expectedIntermediateType);
+    {
+      auto finalType = resolveResultType(name, argTypes);
+      auto intermediateType = resolveIntermediateType(name, argTypes);
+      VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
+      VELOX_EXPECT_EQ_TYPES(intermediateType, expectedIntermediateType);
+    }
+
+    {
+      std::vector<TypePtr> coercions;
+      auto finalType = resolveResultTypeWithCoercions(
+          name, argTypes, coercions, TypeCoercer::defaults());
+      VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
+
+      EXPECT_EQ(coercions.size(), argTypes.size());
+      for (const auto& coercion : coercions) {
+        EXPECT_EQ(coercion, nullptr);
+      }
+    }
+  }
+
+  void testCoersions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedFinalType,
+      const std::vector<TypePtr>& expectedCoercions) {
+    VELOX_ASSERT_THROW(
+        resolveResultType(name, argTypes),
+        "Aggregate function signature is not supported");
+
+    std::vector<TypePtr> coercions;
+    auto finalType = resolveResultTypeWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    VELOX_EXPECT_EQ_TYPES(finalType, expectedFinalType);
+
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    for (int i = 0; i < coercions.size(); ++i) {
+      VELOX_EXPECT_EQ_TYPES(coercions[i], expectedCoercions[i]);
+    }
   }
 
   void clearRegistry() {
@@ -83,6 +117,53 @@ TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
       "Aggregate function signature is not supported");
   VELOX_ASSERT_THROW(
       resolveResultType("aggregate_func", {BIGINT(), BIGINT(), BIGINT()}),
+      "Aggregate function signature is not supported");
+}
+
+TEST_F(AggregateFunctionRegistryTest, coercions) {
+  // (bigint, double) -> bigint
+  // (T, T) -> T
+  testCoersions(
+      "aggregate_func", {DOUBLE(), BIGINT()}, DOUBLE(), {nullptr, DOUBLE()});
+
+  testCoersions(
+      "aggregate_func", {TINYINT(), BIGINT()}, BIGINT(), {BIGINT(), nullptr});
+
+  testCoersions(
+      "aggregate_func", {INTEGER(), DOUBLE()}, BIGINT(), {BIGINT(), nullptr});
+}
+
+TEST_F(AggregateFunctionRegistryTest, unknownArgTieStaysAmbiguous) {
+  // Aggregate signatures carry no null-on-null metadata, so an UNKNOWN-induced
+  // tie stays ambiguous even when both overloads share a return type.
+  registerAggregateFunction(
+      "unknown_tie",
+      {exec::AggregateFunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("bigint")
+           .intermediateType("bigint")
+           .argumentType("array(T)")
+           .build(),
+       exec::AggregateFunctionSignatureBuilder()
+           .typeVariable("K")
+           .typeVariable("V")
+           .returnType("bigint")
+           .intermediateType("bigint")
+           .argumentType("map(K,V)")
+           .build()},
+      [](core::AggregationNode::Step,
+         const std::vector<TypePtr>&,
+         const TypePtr& resultType,
+         const core::QueryConfig&) -> std::unique_ptr<exec::Aggregate> {
+        return std::make_unique<AggregateFunc>(resultType);
+      },
+      /*registerCompanionFunctions*/ false,
+      /*overwrite*/ true);
+
+  std::vector<TypePtr> coercions;
+  VELOX_ASSERT_THROW(
+      resolveResultTypeWithCoercions(
+          "unknown_tie", {UNKNOWN()}, coercions, TypeCoercer::defaults()),
       "Aggregate function signature is not supported");
 }
 

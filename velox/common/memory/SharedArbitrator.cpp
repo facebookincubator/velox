@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/SharedArbitrator.h"
+#include <folly/system/HardwareConcurrency.h>
 #include <folly/system/ThreadName.h>
 #include <pthread.h>
 #include <mutex>
@@ -296,8 +297,7 @@ SharedArbitrator::SharedArbitrator(const Config& config)
       "memoryReclaimThreadsHwMultiplier_ needs to be positive");
 
   const uint64_t numReclaimThreads = std::max<size_t>(
-      1,
-      std::thread::hardware_concurrency() * memoryReclaimThreadsHwMultiplier_);
+      1, folly::available_concurrency() * memoryReclaimThreadsHwMultiplier_);
   memoryReclaimExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
       numReclaimThreads,
       std::make_shared<folly::NamedThreadFactory>("MemoryReclaim"));
@@ -1089,7 +1089,7 @@ void SharedArbitrator::runGlobalArbitration() {
   for (;; ++round) {
     uint64_t arbitrationTimeNs{0};
     {
-      NanosecondTimer timer(&arbitrationTimeNs);
+      NanosecondWallTimer timer(&arbitrationTimeNs);
       const uint64_t targetBytes = getGlobalArbitrationTarget();
       if (targetBytes == 0) {
         break;
@@ -1395,7 +1395,7 @@ uint64_t SharedArbitrator::reclaim(
   uint64_t reclaimedBytes{0};
   MemoryReclaimer::Stats stats;
   {
-    NanosecondTimer reclaimTimer(&reclaimTimeNs);
+    NanosecondWallTimer reclaimTimer(&reclaimTimeNs);
     reclaimedBytes = participant->reclaim(targetBytes, timeoutNs, stats);
   }
   // NOTE: if memory reclaim fails, then the participant is also aborted. If

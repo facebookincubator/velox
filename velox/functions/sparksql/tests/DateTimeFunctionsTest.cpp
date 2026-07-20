@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
@@ -53,7 +54,8 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
 
   void enableLegacyFormatter() {
     queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSparkLegacyDateFormatter, "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyDateFormatter),
+         "true"},
     });
   }
 
@@ -658,6 +660,44 @@ TEST_F(DateTimeFunctionsTest, weekdayDate) {
   EXPECT_EQ(4, weekday(parseDate("1582-10-15")));
 }
 
+TEST_F(DateTimeFunctionsTest, dayNameDate) {
+  const auto dayName = [&](std::optional<int32_t> date) {
+    return evaluateOnce<std::string>("dayname(c0)", DATE(), date);
+  };
+
+  EXPECT_EQ(std::nullopt, dayName(std::nullopt));
+  EXPECT_EQ("Thu", dayName(0)); // 1970-01-01
+  EXPECT_EQ("Wed", dayName(-1)); // 1969-12-31
+  EXPECT_EQ("Tue", dayName(-2)); // 1969-12-30
+  EXPECT_EQ("Sun", dayName(parseDate("2023-08-20")));
+  EXPECT_EQ("Mon", dayName(parseDate("2023-08-21")));
+  EXPECT_EQ("Tue", dayName(parseDate("2023-08-22")));
+  EXPECT_EQ("Wed", dayName(parseDate("2023-08-23")));
+  EXPECT_EQ("Thu", dayName(parseDate("2023-08-24")));
+  EXPECT_EQ("Fri", dayName(parseDate("2023-08-25")));
+  EXPECT_EQ("Sat", dayName(parseDate("2023-08-26")));
+  EXPECT_EQ(
+      "Fri", dayName(parseDate("1582-10-15"))); // Gregorian calendar start.
+}
+
+TEST_F(DateTimeFunctionsTest, monthNameDate) {
+  const auto monthName = [&](std::optional<int32_t> date) {
+    return evaluateOnce<std::string>("monthname(c0)", DATE(), date);
+  };
+
+  // Test epoch date (1970-01-01).
+  EXPECT_EQ("Jan", monthName(0));
+
+  // Test various months across different years.
+  EXPECT_EQ("Jan", monthName(parseDate("2017-01-27")));
+  EXPECT_EQ("Feb", monthName(parseDate("2008-02-20")));
+  EXPECT_EQ("May", monthName(parseDate("2011-05-06")));
+  EXPECT_EQ("Aug", monthName(parseDate("2023-08-20")));
+  EXPECT_EQ("Aug", monthName(parseDate("2023-08-21")));
+  EXPECT_EQ(
+      "Oct", monthName(parseDate("1582-10-15"))); // Gregorian calendar start.
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](std::optional<int32_t> endDate,
                             std::optional<int32_t> startDate) {
@@ -905,6 +945,24 @@ TEST_F(DateTimeFunctionsTest, hour) {
   EXPECT_EQ(2, hour("1969-01-01 13:23:00.001"));
 }
 
+TEST_F(DateTimeFunctionsTest, hourTimestampUtc) {
+  const auto hourUtc = [&](StringView timestampStr) {
+    auto ts = std::make_optional(parseTimestamp(timestampStr));
+    return evaluateOnce<int32_t>("hour(c0)", TIMESTAMP_UTC(), ts);
+  };
+
+  EXPECT_EQ(0, hourUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(1, hourUtc("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(13, hourUtc("2024-01-20 13:23:00.001"));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(0, hourUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(1, hourUtc("2024-01-08 01:23:00.001"));
+  EXPECT_EQ(13, hourUtc("2024-01-20 13:23:00.001"));
+}
+
 TEST_F(DateTimeFunctionsTest, minute) {
   const auto minute = [&](const StringView& timestampStr) {
     const auto timeStamp = std::make_optional(parseTimestamp(timestampStr));
@@ -933,6 +991,26 @@ TEST_F(DateTimeFunctionsTest, minute) {
   EXPECT_EQ(13, minute("1969-01-01 13:43:00.001"));
 }
 
+TEST_F(DateTimeFunctionsTest, minuteTimestampUtc) {
+  const auto minuteUtc = [&](StringView timestampStr) {
+    auto ts = std::make_optional(parseTimestamp(timestampStr));
+    return evaluateOnce<int32_t>("minute(c0)", TIMESTAMP_UTC(), ts);
+  };
+
+  EXPECT_EQ(23, minuteUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, minuteUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(10, minuteUtc("2015-04-08 13:10:15"));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  // Asia/Kolkata (UTC+5:30) has a 30-minute offset that would shift minutes
+  // for a regular TIMESTAMP.
+  setQueryTimeZone("Asia/Kolkata");
+
+  EXPECT_EQ(23, minuteUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, minuteUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(10, minuteUtc("2015-04-08 13:10:15"));
+}
+
 TEST_F(DateTimeFunctionsTest, second) {
   const auto second = [&](const StringView& timestampStr) {
     const auto timeStamp = std::make_optional(parseTimestamp(timestampStr));
@@ -943,6 +1021,24 @@ TEST_F(DateTimeFunctionsTest, second) {
   EXPECT_EQ(59, second("2024-01-08 00:59:59.999"));
   EXPECT_EQ(15, second("2015-04-08 13:10:15"));
   EXPECT_EQ(0, second("1969-01-01 13:43:00.001"));
+}
+
+TEST_F(DateTimeFunctionsTest, secondTimestampUtc) {
+  const auto secondUtc = [&](StringView timestampStr) {
+    auto ts = std::make_optional(parseTimestamp(timestampStr));
+    return evaluateOnce<int32_t>("second(c0)", TIMESTAMP_UTC(), ts);
+  };
+
+  EXPECT_EQ(0, secondUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, secondUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(15, secondUtc("2015-04-08 13:10:15"));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(0, secondUtc("2024-01-08 00:23:00.001"));
+  EXPECT_EQ(59, secondUtc("2024-01-08 00:59:59.999"));
+  EXPECT_EQ(15, secondUtc("2015-04-08 13:10:15"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtime) {
@@ -1823,6 +1919,45 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
 }
 
+TEST_F(DateTimeFunctionsTest, timestampAddTimestampUtc) {
+  const auto timestampAddUtc = [&](const std::string& unit,
+                                   std::optional<int32_t> value,
+                                   std::optional<Timestamp> ts) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("timestampadd('{}', c0, c1)", unit),
+        {INTEGER(), TIMESTAMP_UTC()},
+        value,
+        ts);
+  };
+
+  // 2019-02-28 10:00:00.500 UTC
+  auto base = std::make_optional(Timestamp(1551348000, 500'999'999));
+
+  EXPECT_EQ(
+      Timestamp(1551348010, 500'999'999), timestampAddUtc("second", 10, base));
+  EXPECT_EQ(
+      Timestamp(1551348060, 500'999'999), timestampAddUtc("minute", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551351600, 500'999'999), timestampAddUtc("hour", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999), timestampAddUtc("day", 1, base));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  SCOPE_EXIT {
+    setQueryTimeZone("");
+  };
+  setQueryTimeZone("America/Los_Angeles");
+
+  EXPECT_EQ(
+      Timestamp(1551348010, 500'999'999), timestampAddUtc("second", 10, base));
+  EXPECT_EQ(
+      Timestamp(1551348060, 500'999'999), timestampAddUtc("minute", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551351600, 500'999'999), timestampAddUtc("hour", 1, base));
+  EXPECT_EQ(
+      Timestamp(1551434400, 500'999'999), timestampAddUtc("day", 1, base));
+}
+
 TEST_F(DateTimeFunctionsTest, monthsBetween) {
   const auto monthsBetween = [&](std::optional<Timestamp> timestamp1,
                                  std::optional<Timestamp> timestamp2,
@@ -1875,6 +2010,31 @@ TEST_F(DateTimeFunctionsTest, monthsBetween) {
           parseTimestamp("1997-02-21 10:30:00"),
           parseTimestamp("1996-03-21 11:00:00"),
           true));
+}
+TEST_F(DateTimeFunctionsTest, dateFormat) {
+  const auto dateFormat = [&](std::optional<Timestamp> timestamp,
+                              std::optional<std::string> format) {
+    return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);
+  };
+
+  // Check invalid format.
+  EXPECT_THROW(dateFormat(parseTimestamp("1970-01-01"), "u"), VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(parseTimestamp("1970-01-01"), "'abcd"), VeloxUserError);
+
+  // Check Simple tests.
+  EXPECT_EQ("AD", dateFormat(parseTimestamp("1970-01-01"), "G"));
+  EXPECT_EQ("19", dateFormat(parseTimestamp("1900-01-01"), "C"));
+  EXPECT_EQ("2020", dateFormat(parseTimestamp("2020-01-01"), "Y"));
+  EXPECT_EQ("1", dateFormat(parseTimestamp("2022-01-01"), "D"));
+  EXPECT_EQ("1", dateFormat(parseTimestamp("2022-01-01"), "d"));
+  EXPECT_EQ("AM", dateFormat(parseTimestamp("2022-01-01 00:00:00"), "a"));
+  EXPECT_EQ(
+      "2022-01-01 00:00:00",
+      dateFormat(parseTimestamp("2022-01-01"), "yyyy-MM-dd HH:mm:ss"));
+
+  enableLegacyFormatter();
+  EXPECT_EQ("4", dateFormat(parseTimestamp("1970-01-01"), "u"));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

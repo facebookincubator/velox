@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Split.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 namespace facebook::velox::tool::trace {
@@ -43,10 +44,17 @@ class IndexLookupJoinReplayer : public OperatorReplayerBase {
             queryCapacity,
             executor) {}
 
+  /// Overrides to provide index splits to the task during replay.
+  RowVectorPtr run(bool copyResults = true, bool cursorCopyResult = false)
+      override;
+
  private:
   core::PlanNodePtr createPlanNode(
       const core::PlanNode* node,
       const core::PlanNodeId& nodeId,
       const core::PlanNodePtr& source) const override;
+
+  // Reads traced index splits from the trace directory.
+  std::vector<exec::Split> getIndexSplits() const;
 };
 } // namespace facebook::velox::tool::trace

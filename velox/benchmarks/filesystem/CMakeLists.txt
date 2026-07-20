@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_library(velox_read_benchmark_lib ReadBenchmark.cpp)
+velox_add_test_headers(velox_read_benchmark_lib ReadBenchmark.h)
 
 target_link_libraries(
   velox_read_benchmark_lib

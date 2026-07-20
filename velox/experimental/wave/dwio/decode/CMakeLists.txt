@@ -17,4 +17,6 @@ endif()
 
 add_library(velox_wave_decode GpuDecoder.cu)
 
+target_compile_options(velox_wave_decode PRIVATE ${VELOX_CUDA_DEBUG_FLAGS})
+
 target_link_libraries(velox_wave_decode velox_wave_common CUDA::cudart breeze_cuda)

@@ -107,13 +107,13 @@ class AggregationFuzzerRunner {
     facebook::velox::parse::registerTypeResolver();
     facebook::velox::serializer::presto::PrestoVectorSerde::
         registerVectorSerde();
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kPresto)) {
+    if (!isRegisteredNamedVectorSerde("Presto")) {
       serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kCompactRow)) {
+    if (!isRegisteredNamedVectorSerde("CompactRow")) {
       serializer::CompactRowVectorSerde::registerNamedVectorSerde();
     }
-    if (!isRegisteredNamedVectorSerde(VectorSerde::Kind::kUnsafeRow)) {
+    if (!isRegisteredNamedVectorSerde("UnsafeRow")) {
       serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
     }
     facebook::velox::filesystems::registerLocalFileSystem();

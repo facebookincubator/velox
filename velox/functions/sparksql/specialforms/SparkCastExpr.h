@@ -23,17 +23,18 @@ namespace facebook::velox::functions::sparksql {
 
 class SparkCastExpr : public exec::CastExpr {
  public:
-  /// @param type The target type of the cast expression
-  /// @param expr The expression to cast
-  /// @param trackCpuUsage Whether to track CPU usage
   SparkCastExpr(
       TypePtr type,
-      exec::ExprPtr&& expr,
+      exec::ExprPtr&& input,
       bool trackCpuUsage,
       bool isTryCast,
-      std::shared_ptr<SparkCastHooks> hooks)
-      : exec::CastExpr(type, std::move(expr), trackCpuUsage, isTryCast, hooks) {
-  }
+      std::shared_ptr<exec::CastHooks> hooks)
+      : exec::CastExpr(
+            std::move(type),
+            std::move(input),
+            trackCpuUsage,
+            isTryCast,
+            std::move(hooks)) {}
 };
 
 class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
@@ -43,6 +44,13 @@ class SparkCastCallToSpecialForm : public exec::CastCallToSpecialForm {
       std::vector<exec::ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+  /// Determines if ANSI mode is supported for casting from fromType to toType.
+  /// TODO: Remove this function once all cast operations support ANSI mode.
+  /// @param fromType The source type of the cast
+  /// @param toType The target type of the cast
+  /// @return true if ANSI mode is supported for this cast, false otherwise
+  static bool isAnsiSupported(const TypePtr& fromType, const TypePtr& toType);
 };
 
 class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
@@ -53,4 +61,17 @@ class SparkTryCastCallToSpecialForm : public exec::TryCastCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 };
+
+/// Registers private Spark cast special forms for integrations that translate
+/// Spark plans with per-expression cast modes. Spark SQL registration wires
+/// `spark_ansi_cast` and `spark_legacy_cast` by default for this purpose.
+///
+/// These forms are not the default Spark SQL cast forms because regular
+/// `cast` and `try_cast` must continue to derive behavior from
+/// SparkQueryConfig::ansiEnabled(), matching session-level Spark SQL semantics.
+/// The ANSI form applies ANSI behavior for casts supported by
+/// SparkCastCallToSpecialForm::isAnsiSupported() and uses legacy behavior for
+/// cast pairs whose ANSI behavior is not supported yet. The legacy form applies
+/// Spark legacy cast behavior regardless of the session ANSI setting.
+void registerSparkCastModeSpecialForms();
 } // namespace facebook::velox::functions::sparksql

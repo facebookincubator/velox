@@ -16,7 +16,6 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -524,4 +523,33 @@ TEST_F(SequenceTest, timestampIntervalExceedMaxEntries) {
       "sequence(C0, C1, C2)",
       {startVector, stopVector, stepVector},
       "result of sequence function must not have more than 10000 entries");
+}
+
+// Test that total elements across all rows cannot overflow int32.
+// Even when individual sequences are within limits, the total across all rows
+// must not exceed vector_size_t max (int32_t max).
+TEST_F(SequenceTest, totalElementsExceedInt32Max) {
+  // Configure max elements per sequence to a large value so individual
+  // sequences pass validation.
+  const int32_t maxElementsPerSequence = 100'000'000;
+  execCtx_.queryCtx()->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kMaxElementsSizeInRepeatAndSequence,
+       std::to_string(maxElementsPerSequence)},
+  });
+
+  // Create 30 rows, each producing 100M elements.
+  // Total: 30 * 100M = 3B elements, which exceeds int32 max (~2.1B).
+  const int32_t numRows = 30;
+  std::vector<int64_t> starts(numRows, 1);
+  std::vector<int64_t> stops(numRows, maxElementsPerSequence);
+
+  const auto startVector = makeFlatVector<int64_t>(starts);
+  const auto stopVector = makeFlatVector<int64_t>(stops);
+
+  auto data = makeRowVector({startVector, stopVector});
+  auto typedExpr = makeTypedExpr("sequence(C0, C1)", asRowType(data->type()));
+
+  exec::ExprSet exprSet({typedExpr}, &execCtx_);
+
+  VELOX_ASSERT_THROW(evaluate(exprSet, data), "SEQUENCE result too large");
 }

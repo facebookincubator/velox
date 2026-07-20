@@ -11,4 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+if(VELOX_ENABLE_GEO)
+  velox_add_library(velox_common_geospatial_serde GeometrySerde.cpp HEADERS GeometrySerde.h)
+  velox_link_libraries(velox_common_geospatial_serde velox_expression GEOS::geos)
+endif()
+
 velox_install_library_headers()
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
+
+velox_add_library(velox_geospatial_constants INTERFACE HEADERS GeometryConstants.h)

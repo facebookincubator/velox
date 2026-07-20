@@ -14,7 +14,16 @@
 
 # for generated headers
 
-velox_add_library(velox_hdfs RegisterHdfsFileSystem.cpp)
+velox_add_library(
+  velox_hdfs
+  RegisterHdfsFileSystem.cpp
+  HEADERS
+  HdfsFileSystem.h
+  HdfsReadFile.h
+  HdfsUtil.h
+  HdfsWriteFile.h
+  RegisterHdfsFileSystem.h
+)
 
 if(VELOX_ENABLE_HDFS)
   velox_sources(velox_hdfs PRIVATE HdfsFileSystem.cpp HdfsReadFile.cpp HdfsWriteFile.cpp)

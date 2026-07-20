@@ -129,9 +129,12 @@ SimpleFunctionRegistry::getFunctionSignaturesAndMetadata(
       result.reserve(signatureMap->size());
       for (const auto& [signature, functions] : *signatureMap) {
         VectorFunctionMetadata metadata{
-            false,
-            functions[0]->getMetadata().isDeterministic(),
-            functions[0]->getMetadata().defaultNullBehavior()};
+            .supportsFlattening = false,
+            .deterministic = functions[0]->getMetadata().isDeterministic(),
+            .defaultNullBehavior =
+                functions[0]->getMetadata().defaultNullBehavior(),
+            .companionFunction = false,
+            .owner = functions[0]->getMetadata().owner()};
         result.emplace_back(
             std::pair<VectorFunctionMetadata, const FunctionSignature*>{
                 metadata, &signature});
@@ -145,7 +148,7 @@ namespace {
 
 // Same as Type::kindEquals, but matches UNKNOWN in 'physicalType' to any type.
 bool physicalTypeMatches(const TypePtr& type, const TypePtr& physicalType) {
-  if (physicalType->isUnKnown()) {
+  if (physicalType->isUnknown()) {
     return true;
   }
 
@@ -173,7 +176,8 @@ SimpleFunctionRegistry::resolveFunction(
     const std::string& name,
     const std::vector<TypePtr>& argTypes,
     bool allowCoercion,
-    std::vector<TypePtr>& coercions) const {
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) const {
   using Candidate = std::pair<const FunctionEntry*, TypePtr>;
 
   std::optional<Candidate> selectedCandidate;
@@ -183,7 +187,7 @@ SimpleFunctionRegistry::resolveFunction(
       std::optional<uint32_t> priority;
 
       for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
-        SignatureBinder binder(candidateSignature, argTypes);
+        SignatureBinder binder(candidateSignature, argTypes, coercer);
 
         std::vector<Coercion> requiredCoercions;
 
@@ -243,7 +247,16 @@ SimpleFunctionRegistry::resolveFunction(
 
       if (!candidates.empty()) {
         if (allowCoercion) {
-          if (auto index = Coercion::pickLowestCost(candidates)) {
+          auto index = Coercion::pickLowestCost(
+              candidates, argTypes, [&](size_t candidateIndex) {
+                return Coercion::CandidateMetadata{
+                    .returnType = candidates[candidateIndex].second.second,
+                    .nullOnNull = candidates[candidateIndex]
+                                      .second.first->getMetadata()
+                                      .defaultNullBehavior()};
+              });
+
+          if (index) {
             selectedCandidate = candidates[index.value()].second;
 
             const auto& selectedCoercions = candidates[index.value()].first;

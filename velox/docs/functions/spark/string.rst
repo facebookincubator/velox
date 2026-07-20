@@ -133,6 +133,23 @@ String Functions
         SELECT find_in_set(NULL, ',123'); -- NULL
         SELECT find_in_set("abc", NULL); -- NULL
 
+.. spark:function:: format_number(number, decimalPlaces) -> varchar
+
+   Formats ``number`` with commas as thousands separator, dot as decimal
+   separator, and ``decimalPlaces`` fixed decimal digits using HALF_EVEN
+   (banker's) rounding. Uses the default format pattern
+   ``#,###,###,###,###,###,##0``. Returns NULL if ``decimalPlaces`` is negative.
+
+   Unlike ``CAST(number AS VARCHAR)``, this adds thousands separators and
+   fixed decimal places. Supports tinyint, smallint, integer, bigint, float,
+   and double. ::
+
+        SELECT format_number(12345.678, 2); -- '12,345.68'
+        SELECT format_number(12345, 0); -- '12,345'
+        SELECT format_number(-1234567.89, 1); -- '-1,234,567.9'
+        SELECT format_number(2.5, 0); -- '2' (HALF_EVEN rounds to even)
+        SELECT format_number(123, -1); -- NULL
+
 .. spark:function:: initcap(string) -> varchar
 
    The ``initcap`` function converts the first character of each word to uppercase
@@ -286,6 +303,27 @@ String Functions
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: randstr(length, seed) -> varchar
+
+    Returns a string of the specified ``length`` whose characters are chosen uniformly
+    at random from the following pool of characters: 0-9, a-z, A-Z.
+    Both ``length`` and ``seed`` must be non-null constants.
+    ``length`` must be a non-negative integer (SMALLINT or INT).
+    ``seed`` must be an integer (INT or BIGINT).
+    With the same ``seed`` and partition ID, the function produces a reproducible sequence
+    of outputs, though each row receives a different value from the sequence as the
+    internal generator advances.
+    The partition ID is retrieved from the ``spark_partition_id`` query configuration.
+    It's consistent with Spark's internal assignment for tasks.
+    Uses XORShift random number generator matching Spark's implementation.
+    Note: Spark's analyzer always provides a seed (either user-specified or
+    auto-generated), so only the seeded variant is implemented.
+    This function was added in Spark 4.0. ::
+
+        SELECT randstr(5, 0);  -- "ceV0P" (reproducible with seed)
+        SELECT randstr(10, 0); -- "ceV0PXaR2I"
+        SELECT randstr(0, 42); -- ""
+
 .. spark:function:: read_side_padding(string, limit) -> varchar
 
     Right-pads the given string with spaces to the specified length ``limit``.
@@ -368,20 +406,29 @@ String Functions
 
 .. spark:function:: split(string, delimiter[, limit]) -> array(string)
 
-    Splits ``string`` around occurrences that match ``delimiter`` and returns an array with a length of
-    at most ``limit``. ``delimiter`` is a string representing regular expression. ``limit`` is an integer
-    which controls the number of times the regex is applied. By default, ``limit`` is -1. When ``limit`` > 0,
-    the resulting array's length will not be more than ``limit``, and the resulting array's last entry will
-    contain all input beyond the last matched regex. When ``limit`` <= 0, ``regex`` will be applied as many
-    times as possible, and the resulting array can be of any size. When ``delimiter`` is empty, if ``limit``
-    is smaller than the size of ``string``, the resulting array only contains ``limit`` number of single characters
-    splitting from ``string``, if ``limit`` is not provided or is larger than the size of ``string``, the resulting
-    array contains all the single characters of ``string`` and does not include an empty tail character.
-    The split function align with vanilla spark 3.4+ split function. ::
+    Splits ``string`` around matches of ``delimiter`` and returns an array with at most ``limit`` elements.
+    ``delimiter`` is a string pattern, and ``limit`` is an integer that controls how many times the pattern
+    is applied. By default, ``limit`` is -1.
 
-        SELECT split('oneAtwoBthreeC', '[ABC]'); -- ["one","two","three",""]
-        SELECT split('oneAtwoBthreeC', '[ABC]', 2); -- ["one","twoBthreeC"]
-        SELECT split('oneAtwoBthreeC', '[ABC]', 5); -- ["one","two","three",""]
+    When ``limit`` > 0, the result length is at most ``limit``, and the last element contains the remaining
+    input after the final match. When ``limit`` <= 0, the pattern is applied as many times as possible, and
+    the result can have any length.
+
+    When ``delimiter`` is empty, the input is split into single characters. If ``limit`` is smaller than
+    ``string`` length, only ``limit`` characters are returned. If ``limit`` is not provided or is greater than
+    ``string`` length, all characters are returned without an empty trailing element.
+
+    This behavior aligns with Spark 3.4+.
+
+    Note that ``delimiter`` is always interpreted as a regular expression if it contains regex metacharacters.
+    An example pitfall is ``split(path, '.')`` splits on any character rather than literal dots.
+
+    For ``delimiter`` without regex metacharacters, Velox uses literal-matching fast paths. In this case, regex
+    compilation is skipped and these delimiters do not count toward the ``expression.max_compiled_regexes`` cache
+    limit.
+
+    ::
+
         SELECT split('one', '1'); -- ["one"]
         SELECT split('abcd', ''); -- ["a","b","c","d"]
         SELECT split('abcd', '', 3); -- ["a","b","c"]
@@ -457,6 +504,26 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 0); -- ""
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
+
+.. spark:function:: to_pretty_string(x) -> varchar
+
+    Returns pretty string for ``x``. All scalar types are supported.
+    Adjusts the timestamp input to the given time zone if set through ``session_timezone`` config.
+    The result is different from that of casting ``x`` as string in the following aspects.
+
+    - It prints null input as "NULL" rather than producing null output.
+
+    - It prints binary values using the hex format.
+
+    ::
+
+        SELECT to_pretty_string(4); -- "4"
+        SELECT to_pretty_string(cast("1.0" as float)); -- "1.0"
+        SELECT to_pretty_string("spark"); -- "spark"
+        SELECT to_pretty_string(cast('abcdef' as binary)); -- "[61 62 63 64 65 66]"
+        SELECT to_pretty_string(null); -- "NULL"
+        SELECT to_pretty_string(cast(2347589 as timestamp)); -- "1970-01-28 12:06:29"
+        SELECT to_pretty_string(cast('2024-05-08' as date)); -- "2024-05-08"
 
 .. spark:function:: translate(string, match, replace) -> varchar
 

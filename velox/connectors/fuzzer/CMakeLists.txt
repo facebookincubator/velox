@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_library(velox_fuzzer_connector OBJECT FuzzerConnector.cpp)
+velox_add_test_headers(velox_fuzzer_connector FuzzerConnector.h FuzzerConnectorSplit.h)
 
 target_link_libraries(velox_fuzzer_connector velox_connector velox_vector_fuzzer)
 

@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -22,6 +24,7 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using facebook::velox::exec::test::PlanBuilder;
@@ -412,6 +415,28 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
   ASSERT_EQ(
       "-- HashJoin[2][ANTI t_c0=u_c0] -> t_c0:SMALLINT, t_c1:INTEGER\n",
       plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({data_})
+             .project({"c0 as t_c0", "c1 as t_c1"})
+             .hashJoin(
+                 {"t_c0"},
+                 {"u_c0"},
+                 PlanBuilder()
+                     .values({data_})
+                     .project({"c0 as u_c0", "c1 as u_c1"})
+                     .planNode(),
+                 "",
+                 {"t_c0", "t_c1"},
+                 core::JoinType::kAnti,
+                 false /*nullAware*/,
+                 true /*nullAsValue*/)
+             .planNode();
+
+  ASSERT_EQ("-- HashJoin[2]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[2][ANTI t_c0=u_c0, null as value] -> t_c0:SMALLINT, t_c1:INTEGER\n",
+      plan->toString(true, false));
 }
 
 TEST_F(PlanNodeToStringTest, mergeJoin) {
@@ -544,7 +569,7 @@ TEST_F(PlanNodeToStringTest, enforceSingleRow) {
 
 TEST_F(PlanNodeToStringTest, assignUniqueId) {
   auto plan =
-      PlanBuilder().values({data_}).assignUniqueId("unique_id", 123).planNode();
+      PlanBuilder().values({data_}).assignUniqueId("unique_id").planNode();
 
   ASSERT_EQ("-- AssignUniqueId[1]\n", plan->toString());
   ASSERT_EQ(
@@ -592,10 +617,8 @@ TEST_F(PlanNodeToStringTest, localPartition) {
 }
 
 TEST_F(PlanNodeToStringTest, partitionedOutput) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
     auto plan =
         PlanBuilder()
@@ -698,10 +721,8 @@ TEST_F(PlanNodeToStringTest, localMerge) {
 }
 
 TEST_F(PlanNodeToStringTest, exchange) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
     auto plan = PlanBuilder()
@@ -716,10 +737,8 @@ TEST_F(PlanNodeToStringTest, exchange) {
 }
 
 TEST_F(PlanNodeToStringTest, mergeExchange) {
-  for (auto serdeKind : std::vector<VectorSerde::Kind>{
-           VectorSerde::Kind::kPresto,
-           VectorSerde::Kind::kCompactRow,
-           VectorSerde::Kind::kUnsafeRow}) {
+  for (auto serdeKind :
+       std::vector<std::string>{"Presto", "CompactRow", "UnsafeRow"}) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
     auto plan =
@@ -983,15 +1002,314 @@ TEST_F(PlanNodeToStringTest, topNDenseRank) {
 }
 
 TEST_F(PlanNodeToStringTest, markDistinct) {
-  auto op =
-      PlanBuilder()
-          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-          .markDistinct("marker", {"a", "b"})
-          .planNode();
-  ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+  {
+    SCOPED_TRACE("single-marker");
+    auto op =
+        PlanBuilder()
+            .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+            .markDistinct("marker", {"a", "b"})
+            .planNode();
+    ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+    ASSERT_EQ(
+        "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
+        op->toString(true, false));
+  }
+  {
+    SCOPED_TRACE("multi-mask");
+    auto op =
+        PlanBuilder()
+            .tableScan(
+                ROW({"a", "b", "m0", "m1"},
+                    {VARCHAR(), BIGINT(), BOOLEAN(), BOOLEAN()}))
+            .markDistinct({"nomask", "r0", "r1"}, {"a", "b"}, {"m0", "m1"})
+            .planNode();
+    ASSERT_EQ("-- MarkDistinct[1]\n", op->toString());
+    ASSERT_EQ(
+        "-- MarkDistinct[1][a, b, masks: [m0, m1]] -> a:VARCHAR, b:BIGINT, "
+        "m0:BOOLEAN, m1:BOOLEAN, nomask:BOOLEAN, r0:BOOLEAN, r1:BOOLEAN\n",
+        op->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, tableWrite) {
+  auto outputDir = common::testutil::TempDirectoryPath::create();
+
+  // TableWrite without stats.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(outputDir->getPath())
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with stats (no grouping keys) and TableWriteMerge.
+  {
+    core::TableWriteNodePtr writeNode;
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(
+                        outputDir->getPath(),
+                        dwio::common::FileFormat::DWRF,
+                        {"min(c0)"})
+                    .capturePlanNode(writeNode)
+                    .localGather()
+                    .tableWriteMerge()
+                    .planNode();
+
+    ASSERT_EQ("-- TableWrite[1]\n", writeNode->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, stats[PARTIAL: min(ROW[\"c0\"])]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, a0:SMALLINT\n",
+        writeNode->toString(true, false));
+
+    ASSERT_EQ("-- TableWriteMerge[3]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWriteMerge[3][stats[INTERMEDIATE: min(\"a0\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, a0:SMALLINT\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with stats and grouping keys (partitioned table).
+  {
+    core::TableWriteNodePtr writeNode;
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .tableWrite(
+                        outputDir->getPath(),
+                        {"c2"},
+                        dwio::common::FileFormat::DWRF,
+                        {"min(c0)", "max(c1)"})
+                    .capturePlanNode(writeNode)
+                    .localGather()
+                    .tableWriteMerge()
+                    .planNode();
+
+    ASSERT_EQ("-- TableWrite[1]\n", writeNode->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0, c1, c2, stats[PARTIAL [c2]: min(ROW[\"c0\"]), max(ROW[\"c1\"])]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
+        writeNode->toString(true, false));
+
+    ASSERT_EQ("-- TableWriteMerge[3]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWriteMerge[3][stats[INTERMEDIATE [c2]: min(\"a0\"), max(\"a1\")]] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY, c2:BIGINT, a0:SMALLINT, a1:INTEGER\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, countingJoin) {
+  auto makePlan = [&](core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values({data_})
+        .hashJoin(
+            {"c0"},
+            {"u_c0"},
+            PlanBuilder(planNodeIdGenerator)
+                .values({data_})
+                .project({"c0 as u_c0"})
+                .planNode(),
+            "",
+            {"c0", "c1"},
+            joinType)
+        .planNode();
+  };
+
+  auto plan = makePlan(core::JoinType::kCountingAnti);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- MarkDistinct[1][a, b] -> a:VARCHAR, b:BIGINT, c:BIGINT, marker:BOOLEAN\n",
-      op->toString(true, false));
+      "-- HashJoin[3][COUNTING ANTI c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+
+  plan = makePlan(core::JoinType::kCountingLeftSemiFilter);
+  ASSERT_EQ("-- HashJoin[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- HashJoin[3][COUNTING LEFT SEMI (FILTER) c0=u_c0] -> c0:SMALLINT, c1:INTEGER\n",
+      plan->toString(true, false));
+}
+
+// Fixed-point plan nodes.  Each named computation is one recognizable shape;
+// the same catalog drives PlanNodeSerdeTest, and execution is covered by
+// FixedPointTest.
+
+// Leaf state-access nodes have a stable toString independent of the fixed
+// point's own details.
+TEST_F(PlanNodeToStringTest, stateSource) {
+  auto schema = ROW({"id", "depth"}, BIGINT());
+
+  // delta: an append entry's in-loop frontier (rows written last iteration).
+  auto frontier =
+      PlanBuilder().stateSource("reach", schema, /*delta=*/true).planNode();
+  ASSERT_EQ("-- StateSource[0]\n", frontier->toString());
+  ASSERT_EQ(
+      "-- StateSource[0][state: reach, delta] -> id:BIGINT, depth:BIGINT\n",
+      frontier->toString(true, false));
+
+  // full: the entry's whole accumulation.
+  auto full =
+      PlanBuilder().stateSource("reach", schema, /*delta=*/false).planNode();
+  ASSERT_EQ(
+      "-- StateSource[0][state: reach, full] -> id:BIGINT, depth:BIGINT\n",
+      full->toString(true, false));
+}
+
+TEST_F(PlanNodeToStringTest, stateHashJoin) {
+  auto schema = ROW({"id", "depth"}, BIGINT());
+  auto joinOutput = ROW({"id", "depth", "dst"}, BIGINT());
+  auto plan = PlanBuilder()
+                  .stateSource("reach", schema)
+                  .stateHashJoin("graph", {"id"}, joinOutput)
+                  .planNode();
+
+  ASSERT_EQ("-- StateHashJoin[1]\n", plan->toString());
+  ASSERT_EQ(
+      "-- StateHashJoin[1][state: graph, probeKeys: [id]] -> id:BIGINT, depth:BIGINT, dst:BIGINT\n",
+      plan->toString(true, false));
+}
+
+// Catalog shape (1): a fixed-count loop producing the sequence 1..10.  One
+// append-mode vector state, a single body plan, and no convergence plan
+// (bounded by maxIterations).
+TEST_F(PlanNodeToStringTest, fixedPointSequence) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW("x", BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
+          .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              core::VectorState("n", schema, /*append=*/true).initial(seed),
+              PlanBuilder(idGenerator)
+                  .stateSource("n", schema)
+                  .project({"x + 1 AS x"}),
+              core::ConvergenceConfig::withMaxIterations(9))
+          .planNode();
+
+  ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
+  ASSERT_EQ(
+      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, convergencePlan: none] -> x:BIGINT\n",
+      plan->toString(true, false));
+}
+
+// Catalog shape (2): Fibonacci, iterate until the latest value exceeds a bound.
+// Replace-mode state read in full each iteration, with a convergence plan --
+// the convergence-driven counterpart to the fixed-count sequence.
+TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"a", "b"}, BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"a", "b"},
+              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})})})
+          .planNode();
+  auto convergence = PlanBuilder(idGenerator)
+                         .stateSource("fib", schema, /*delta=*/false)
+                         .project({"b > 100 AS converged"})
+                         .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      core::VectorState("fib", schema).initial(seed),
+                      PlanBuilder(idGenerator)
+                          .stateSource("fib", schema, /*delta=*/false)
+                          .project({"b AS a", "a + b AS b"}),
+                      core::ConvergenceConfig::converging(convergence, 100))
+                  .planNode();
+
+  ASSERT_EQ("-- FixedPoint[5]\n", plan->toString());
+  ASSERT_EQ(
+      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, convergencePlan: present] -> a:BIGINT, b:BIGINT\n",
+      plan->toString(true, false));
+}
+
+// Catalog shape (3): people within 3 degrees in a social graph, modeled as
+// hash-table reuse -- a HashTable state (the graph) probed via StateHashJoin
+// each iteration, an append-mode frontier read as a delta, and empty-frontier
+// convergence.
+TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto people = ROW({"id", "depth"}, BIGINT());
+  auto edges = ROW({"src", "dst"}, BIGINT());
+  auto joinOutput = ROW({"id", "depth", "dst"}, BIGINT());
+
+  auto me =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"id", "depth"},
+              {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({0})})})
+          .planNode();
+  auto graph = PlanBuilder(idGenerator)
+                   .values({makeRowVector(
+                       {"src", "dst"},
+                       {makeFlatVector<int64_t>({1, 2}),
+                        makeFlatVector<int64_t>({2, 3})})})
+                   .planNode();
+
+  auto body = PlanBuilder(idGenerator)
+                  .stateSource("reach", people, /*delta=*/true)
+                  .stateHashJoin("graph", {"id"}, joinOutput)
+                  .project({"dst AS id", "depth + 1 AS depth"})
+                  .planNode();
+  auto convergence = PlanBuilder(idGenerator)
+                         .stateSource("reach", people, /*delta=*/true)
+                         .singleAggregation({}, {"count(1)"})
+                         .project({"a0 = 0 AS converged"})
+                         .planNode();
+
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {core::HashTableState("graph", edges, {"src"}).initial(graph),
+               core::VectorState("reach", people, /*append=*/true).initial(me)},
+              {body},
+              core::ConvergenceConfig::converging(convergence, 3),
+              "reach")
+          .planNode();
+
+  ASSERT_EQ("-- FixedPoint[8]\n", plan->toString());
+  ASSERT_EQ(
+      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, convergencePlan: present] -> id:BIGINT, depth:BIGINT\n",
+      plan->toString(true, false));
+}
+
+// Catalog shape (4): one worker of a distributed reachability fixed point.  The
+// body shuffles -- plan 0 gathers the frontier through a PartitionedOutput,
+// plan 1 receives it via an Exchange.  The cross-worker (N-way) topology is the
+// coordinator's split-wiring, exercised by FixedPointTest, not a field of this
+// node.
+TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto seed = PlanBuilder(idGenerator)
+                  .values({makeRowVector(
+                      {"key", "val"},
+                      {makeFlatVector<int64_t>({0, 1}),
+                       makeFlatVector<int64_t>({1, 1})})})
+                  .planNode();
+  auto producer = PlanBuilder(idGenerator)
+                      .stateSource("frontier", schema)
+                      .partitionedOutput({"key"}, 2)
+                      .planNode();
+  auto consumer = PlanBuilder(idGenerator)
+                      .exchange(schema, "Presto")
+                      .singleAggregation({"key"}, {"sum(val)"})
+                      .project({"key", "a0 AS val"})
+                      .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {core::VectorState("frontier", schema).initial(seed)},
+                      {producer, consumer},
+                      core::ConvergenceConfig::withMaxIterations(3),
+                      "frontier")
+                  .planNode();
+
+  ASSERT_EQ("-- FixedPoint[6]\n", plan->toString());
+  ASSERT_EQ(
+      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, convergencePlan: none] -> key:BIGINT, val:BIGINT\n",
+      plan->toString(true, false));
 }
 
 } // namespace

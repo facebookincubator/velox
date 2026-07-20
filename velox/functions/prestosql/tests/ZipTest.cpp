@@ -69,7 +69,7 @@ TEST_F(ZipTest, combineInt) {
 
   auto firstResult = makeNullableFlatVector<int64_t>(
       {1, 1, 1, 1, 2, 2, 2, std::nullopt, std::nullopt});
-  auto secondResult = makeNullableFlatVector<std::string>(
+  auto secondResult = makeNullableFlatVector<StringView>(
       {S("a"),
        S("a"),
        S("a"),

@@ -616,6 +616,10 @@ class ArrayView {
   }
 
   Element operator[](vector_size_t index) const {
+    // Catch out-of-bounds access, e.g. reading element[0] of an empty array,
+    // which is a common source of silent data corruption in UDFs.
+    VELOX_DCHECK_GE(index, 0, "Array element access out of bounds.");
+    VELOX_DCHECK_LT(index, size_, "Array element access out of bounds.");
     if constexpr (returnsOptionalValues) {
       return Element{reader_, index + offset_};
     } else {
@@ -815,6 +819,7 @@ class MapView {
 
   materialize_t materialize() const {
     materialize_t result;
+    result.reserve(size());
     for (const auto& [key, value] : *this) {
       if constexpr (returnsOptionalValues) {
         if (value.has_value()) {

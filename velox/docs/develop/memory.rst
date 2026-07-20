@@ -539,7 +539,7 @@ between queries by adjusting their memory pool’s capacities accordingly (see
 
 The *MemoryArbitrator* is defined to support different implementations for
 different query systems. As for now, we implement *SharedArbitrator* for both
-Prestissimo and Prestissimo-on-Spark. `Gluten <https://github.com/apache/incubator-gluten>`_ implements its own memory
+Prestissimo and Prestissimo-on-Spark. `Gluten <https://github.com/apache/gluten>`_ implements its own memory
 arbitrator to integrate with the `Spark memory system <https://www.linkedin.com/pulse/apache-spark-memory-management-deep-dive-deepak-rajak/>`_. *SharedArbitrator*
 ensures the total allocated memory capacity is within the query memory limit
 (*MemoryManager::Options::arbitratorCapacity*), and also ensures each individual
@@ -667,7 +667,7 @@ Here is the memory reclaim process within a query:
    reclamation through disk spilling and table writer flush. *Operator::reclaim*
    is added to support memory reclamation with the default implementation does
    nothing. Only spillable operators override that method: *OrderBy*, *HashBuild*,
-   *HashAggregation*, *RowNumber*, *TopNRowNumber*, *Window* and *TableWriter*.
+   *HashAggregation*, *RowNumber*, *TopNRowNumber*, *MarkDistinct*, *Window* and *TableWriter*.
    As for now, we simply spill everything from the spillable operator’s row
    container to free up memory. After we add memory compaction support for row
    containers, we could leverage fine-grained disk spilling features in Velox
@@ -868,6 +868,103 @@ we don’t cap the memory allocations delegated to std::malloc in the
 (*MmapAllocator::Options::smallAllocationReservePct*) for the query system to
 reserve a small amount of memory capacity in *MmapAllocator* to compensate for
 these ad-hoc small allocations in practice.
+
+Custom Memory Resources
+-----------------------
+
+*CustomMemoryResource* lets an extension expose memory tiers other than
+host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
+NUMA-bound pools) side-by-side with the default CPU tier. A resource
+bundles a tag, an allocator, an arbitrator, and a factory that builds a
+per-query reclaimer. The constructor requires a non-empty tag and
+non-null allocator, arbitrator, and reclaimerFactory; the resource is
+immutable once constructed:
+
+.. code-block:: c++
+
+  class CustomMemoryResource {
+   public:
+    CustomMemoryResource(
+        std::string tag,
+        std::shared_ptr<MemoryAllocator> allocator,
+        std::shared_ptr<MemoryArbitrator> arbitrator,
+        std::function<std::unique_ptr<MemoryReclaimer>()> reclaimerFactory,
+        int64_t maxCapacity = std::numeric_limits<int64_t>::max());
+
+    const std::string& tag() const;
+    int64_t maxCapacity() const;
+    MemoryAllocator* allocator() const;
+    MemoryArbitrator* arbitrator() const;
+    std::unique_ptr<MemoryReclaimer> newReclaimer() const;
+  };
+
+Each resource carries its own allocator and arbitrator; the default CPU
+allocator and arbitrator on *MemoryManager* are not shared with custom
+resources. Per-tier accounting and capacity decisions stay self-contained,
+which matters when tiers differ in size, latency, alignment, or allocation
+failure modes.
+
+Registration
+^^^^^^^^^^^^
+
+Resources are tracked by *CustomMemoryResourceRegistry*. The class exposes
+a process-global root via *global()* and creates child scopes via
+*createRegistry(parent)*. Registration and lookup go directly through the
+*Registry* instance (its *insert*, *find*, and *clear* methods); each
+scope is protected by its own lock. Extensions register resources in the
+global scope at process startup, after *initializeMemoryManager*:
+
+.. code-block:: c++
+
+  auto resource = std::make_shared<memory::CustomMemoryResource>(
+      "device",
+      std::make_shared<MyTieredAllocator>(...),
+      MemoryArbitrator::create(...),
+      []() { return std::make_unique<MyReclaimer>(); },
+      deviceCapacity);
+  memory::CustomMemoryResourceRegistry::global().insert(
+      resource->tag(), resource);
+
+For each query that wants to use a registered resource, the caller looks
+the resource up by tag, materializes the per-resource root pool through
+*MemoryManager::addCustomRootPool*, and hands the pool to the *QueryCtx*
+via *Builder::customPool*:
+
+.. code-block:: c++
+
+  auto* manager = memory::memoryManager();
+  auto resource =
+      memory::CustomMemoryResourceRegistry::global().find("device");
+  VELOX_USER_CHECK_NOT_NULL(resource, "Unknown resource tag: device");
+  auto devicePool = manager->addCustomRootPool("query.q0.device", resource);
+  auto queryCtx = core::QueryCtx::Builder()
+                      .customPool("device", std::move(devicePool))
+                      .queryId("q0")
+                      .build();
+
+*addCustomRootPool* invokes *resource->newReclaimer()* to build the
+pool's reclaimer, uses *resource->maxCapacity()* as the pool capacity, and
+backs the pool with *resource->allocator()* and *resource->arbitrator()*.
+The root pool is exposed on *QueryCtx* keyed by tag:
+
+.. code-block:: c++
+
+  // Returns the custom root pool for the given resource tag, or nullptr.
+  std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
+      const std::string& tag) const;
+
+Per-Query Pool Hierarchy
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+For every custom root pool registered on *QueryCtx* via
+*Builder::customPool*, *Task* builds a parallel ``task → node → operator``
+aggregate/leaf subtree beneath it that mirrors the default hierarchy.
+Aggregate children under a custom root are created at the same moment as
+their default counterparts. Reclaimers for these aggregates come
+from each resource's ``reclaimerFactory`` via
+*CustomMemoryResource::newReclaimer*, so capacity decisions and reclaim
+on a custom subtree are governed end-to-end by the resource's own
+arbitrator and reclaimer — separate from the default DRAM tier.
 
 Server OOM Prevention
 ---------------------

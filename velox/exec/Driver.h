@@ -16,18 +16,22 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <string_view>
+#include <unordered_map>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
 
 #include "velox/common/base/Counters.h"
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/StatsReporter.h"
-#include "velox/common/base/TraceConfig.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/BlockingReason.h"
+#include "velox/exec/trace/TraceCtx.h"
 
 namespace facebook::velox::exec {
 
@@ -86,7 +90,7 @@ std::ostream& operator<<(std::ostream& out, const StopReason& reason);
 ///  Terminated - 'isTerminated' is set. The Driver cannot run after this and
 /// the state is final.
 ///
-/// CancelPool  allows terminating or pausing a set of Drivers. The Task API
+/// Task allows terminating or pausing a set of Drivers. The Task API
 /// allows starting or resuming Drivers. When terminate is requested the request
 /// is successful when all Drivers are off thread, blocked or suspended. When
 /// pause is requested, we have success when all Drivers are either enqueued,
@@ -102,7 +106,10 @@ struct ThreadState {
   std::atomic<bool> isTerminated{false};
   /// True if there is a future outstanding that will schedule this on an
   /// executor thread when some promise is realized.
-  bool hasBlockingFuture{false};
+  tsan_atomic<bool> hasBlockingFuture{false};
+  /// Timestamp in microseconds when the driver became blocked. Used to record
+  /// blocked time when the driver is terminated while still blocked.
+  tsan_atomic<uint64_t> blockingStartUs{0};
   /// The number of suspension requests on a on-thread driver. If > 0, this
   /// driver thread is in a (recursive) section waiting for RPC or memory
   /// strategy decision. The thread is not supposed to access its memory, which
@@ -167,7 +174,8 @@ struct ThreadState {
     obj["tid"] = tid.load();
     obj["isTerminated"] = isTerminated.load();
     obj["isEnqueued"] = isEnqueued.load();
-    obj["hasBlockingFuture"] = hasBlockingFuture;
+    obj["hasBlockingFuture"] = tsanAtomicValue(hasBlockingFuture);
+    obj["blockingStartUs"] = tsanAtomicValue(blockingStartUs);
     obj["isSuspended"] = suspended();
     obj["startExecTime"] = startExecTimeMs;
     return obj;
@@ -224,9 +232,11 @@ constexpr uint32_t kUngroupedGroupId{std::numeric_limits<uint32_t>::max()};
 struct DriverCtx {
   const int driverId;
   const int pipelineId;
+
   /// Id of the split group this driver should process in case of grouped
   /// execution, kUngroupedGroupId otherwise.
   const uint32_t splitGroupId;
+
   /// Id of the partition to use by this driver. For local exchange, for
   /// instance.
   const uint32_t partitionId;
@@ -234,6 +244,7 @@ struct DriverCtx {
   std::shared_ptr<Task> task;
   Driver* driver{nullptr};
   facebook::velox::process::ThreadDebugInfo threadDebugInfo;
+
   /// Tracks the traced operator ids. It is also used to avoid tracing the
   /// auxiliary operator such as the aggregation operator used by the table
   /// writer to generate the columns stats.
@@ -248,14 +259,26 @@ struct DriverCtx {
 
   const core::QueryConfig& queryConfig() const;
 
-  const std::optional<TraceConfig>& traceConfig() const;
+  const trace::TraceCtx* traceCtx() const;
 
   velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
       const std::string& operatorType);
 
-  /// Builds the spill config for the operator with specified 'operatorId'.
-  std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
+  /// Creates one leaf operator pool per registered custom root pool on the
+  /// owning task's QueryCtx, mirroring 'addOperatorPool' but under each
+  /// custom root. Returns a map keyed by resource tag. Empty when no custom
+  /// pools are registered.
+  std::unordered_map<std::string, velox::memory::MemoryPool*>
+  addCustomOperatorPools(
+      const core::PlanNodeId& planNodeId,
+      const std::string& operatorType);
+
+  /// Builds the spill config for the operator with specified 'operatorId' and
+  /// 'operatorType'.
+  std::optional<common::SpillConfig> makeSpillConfig(
+      int32_t operatorId,
+      std::string_view operatorType) const;
 
   common::PrefixSortConfig prefixSortConfig() const {
     return common::PrefixSortConfig{
@@ -273,13 +296,13 @@ constexpr const char* kOpMethodAddInput = "addInput";
 constexpr const char* kOpMethodNoMoreInput = "noMoreInput";
 constexpr const char* kOpMethodIsFinished = "isFinished";
 
-/// Same as the structure below, but does not have atomic members.
-/// Used to return the status from the struct with atomics.
+/// Non-atomic snapshot of OpCallStatus, used to return a consistent status from
+/// OpCallStatus which uses atomic members internally.
 struct OpCallStatusRaw {
   /// Time (ms) when the operator call started.
   size_t timeStartMs{0};
-  /// Id of the operator, method of which is currently running. It is index into
-  /// the vector of Driver's operators.
+  /// Id of the operator, method of which is currently running. It is the index
+  /// into the vector of Driver's operators.
   int32_t opId{0};
   /// Method of the operator, which is currently running.
   const char* method{kOpMethodNone};
@@ -293,14 +316,15 @@ struct OpCallStatusRaw {
 };
 
 /// Structure holds the information about the current operator call the driver
-/// is in. Can be used to detect deadlocks and otherwise blocked calls.
-/// If timeStartMs is zero, then we aren't in an operator call.
-struct OpCallStatus {
+/// is in. Can be used to detect deadlocks and otherwise blocked calls. If
+/// 'timeStartMs_' is zero, then we aren't in an operator call.
+class OpCallStatus {
+ public:
   OpCallStatus() {}
 
   /// The status accessor.
   OpCallStatusRaw operator()() const {
-    return OpCallStatusRaw{timeStartMs, opId, method};
+    return OpCallStatusRaw{timeStartMs_, opId_, method_};
   }
 
   void start(int32_t operatorId, const char* operatorMethod);
@@ -308,12 +332,12 @@ struct OpCallStatus {
 
  private:
   /// Time (ms) when the operator call started.
-  std::atomic_size_t timeStartMs{0};
-  /// Id of the operator, method of which is currently running. It is index into
-  /// the vector of Driver's operators.
-  std::atomic_int32_t opId{0};
+  std::atomic_size_t timeStartMs_{0};
+  /// Id of the operator, method of which is currently running. It is the index
+  /// into the vector of Driver's operators.
+  std::atomic_int32_t opId_{0};
   /// Method of the operator, which is currently running.
-  std::atomic<const char*> method{kOpMethodNone};
+  std::atomic<const char*> method_{kOpMethodNone};
 };
 
 struct PushdownFilters {
@@ -338,6 +362,14 @@ using PipelinePushdownFilters =
 
 class Driver : public std::enable_shared_from_this<Driver> {
  public:
+  ~Driver();
+
+  // Disable copy and move
+  Driver(const Driver&) = delete;
+  Driver& operator=(const Driver&) = delete;
+  Driver(Driver&&) = delete;
+  Driver& operator=(Driver&&) = delete;
+
   static void enqueue(std::shared_ptr<Driver> instance);
 
   /// Run the pipeline until it produces a batch of data or gets blocked.
@@ -393,6 +425,12 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// function returns true if it is and set future which is fulfilled when the
   /// memory arbitration finishes.
   bool checkUnderArbitration(ContinueFuture* future);
+
+  /// Accumulates blocked time for driver-level lifecycle tracking.
+  /// Called from BlockingState::setResume() when the blocking future resolves.
+  void addDriverBlockedTime(uint64_t nanos) {
+    totalDriverBlockedNanos_ += nanos;
+  }
 
   void initializeOperatorStats(std::vector<OperatorStats>& stats);
 
@@ -481,7 +519,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   /// Returns true if the driver is under barrier processing.
   bool hasBarrier() const {
-    return barrier_.has_value();
+    return barrier_.active.load(std::memory_order_acquire);
   }
 
   /// Invoked to start draining the output of this driver pipeline from the
@@ -579,15 +617,33 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void updateStats();
 
+  /// Records operator blocked time ins case the driver was off the thrread and
+  /// blocked when terminated.
+  void updateOperatorBlockingStats();
+
   // Defines the driver barrier processing state.
   struct BarrierState {
+    // True if the driver is under barrier processing. This is set by
+    // startBarrier() and read by hasBarrier() from different threads.
+    std::atomic_bool active{false};
     // If set, the driver has started output draining. It points to the operator
     // that is currently draining output.
     std::optional<int32_t> drainingOpId{std::nullopt};
-    // If set, the specified operator doesn't need any more input to finish the
-    // draining operation. All the upstream operators within the same driver
-    // should drop their output or output processing.
-    std::optional<int32_t> dropInputOpId{std::nullopt};
+    // The operator id that doesn't need any more input to finish the draining
+    // operation. All the upstream operators within the same driver should drop
+    // their output or output processing. -1 means not set. This is accessed
+    // from different driver threads so it needs to be atomic.
+    static constexpr int32_t kNoDropInput = -1;
+    std::atomic_int32_t dropInputOpId{kNoDropInput};
+
+    BarrierState() = default;
+
+    /// Starts the barrier processing. Must be called when the barrier is not
+    /// active.
+    void start();
+
+    /// Resets the barrier state. Must be called when the barrier is active.
+    void reset();
   };
 
   // Invoked to start draining on the next operator. If there is no "next"
@@ -627,6 +683,15 @@ class Driver : public std::enable_shared_from_this<Driver> {
       std::shared_ptr<BlockingState>& blockingState,
       CancelGuard& guard);
 
+  // Returns the operator to start from. The Driver always start the driver
+  // pipeline from the consumer (leaf), then walk backwards to the root based on
+  // whether they are ready to consume data, and the previous is ready to
+  // produce data.
+  //
+  // The only exception is when resuming from a trace, in which case the Driver
+  // must resume at the operator where it was blocked.
+  int32_t getStartingOperator() const;
+
   std::unique_ptr<DriverCtx> ctx_;
 
   // If set, the operator output batch size stats will be collected during
@@ -640,8 +705,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   std::atomic_bool closed_{false};
 
-  // If set, the driver is under a barrier processing.
-  std::optional<BarrierState> barrier_;
+  // The driver barrier processing state.
+  BarrierState barrier_;
 
   OpCallStatus opCallStatus_;
 
@@ -650,15 +715,43 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartUs_{0};
+
+  // Driver-level lifecycle timing: independently tracks the three states
+  // a driver can be in (queued, on-thread, blocked) to enable gap analysis.
+  // Reported as RuntimeStats on the source operator at close time.
+  // All three use high_resolution_clock for consistency, matching
+  // BlockingState::sinceUs_ and enabling accurate gap analysis
+  // (queued + on-thread + blocked ≈ elapsed time).
+  // Atomic because closeByTask() may read these from a different thread
+  // than the one running the onThreadTimeGuard scope guard.
+  std::atomic<uint64_t> totalDriverQueuedNanos_{0};
+  std::atomic<uint64_t> totalDriverOnThreadNanos_{0};
+  std::atomic<uint64_t> totalDriverBlockedNanos_{0};
+  // Timestamp (micros, high_resolution_clock) when the current on-thread
+  // period started. Set at the beginning of runInternal, used by
+  // closeOperators to snapshot on-thread time before the scope guard fires.
+  // Atomic because closeByTask() may access it from a different thread
+  // than the one running the onThreadTimeGuard scope guard in runInternal.
+  std::atomic<uint64_t> onThreadStartUs_{0};
+
   // Id (index in the vector) of the current operator to run (or the 1st one if
   // we haven't started yet). Used to determine which operator's queueTime we
   // should update.
   size_t curOperatorId_{0};
 
-  std::vector<std::unique_ptr<Operator>> operators_;
+  std::vector<std::unique_ptr<Operator>> operators_; // NOLINT
 
-  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+  tsan_atomic<BlockingReason> blockingReason_{BlockingReason::kNotBlocked};
+
+  // Stores the operator where the driver was last blocked. Note that the driver
+  // always resumes at the leaf (consumer) to prioritize getting data out of the
+  // task. The only exception is when resuming from a trace.
   size_t blockedOperatorId_{0};
+
+  // If this driver is being traced, store a pointer to the current data. Once
+  // the trace client unblocks the driver, we will feed this vector to the next
+  // operator in the pipeline.
+  RowVectorPtr traceInput_;
 
   bool trackOperatorCpuUsage_;
 
@@ -821,6 +914,10 @@ struct DriverFactory {
   /// Returns plan node IDs for which Spatial Join Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsSpatialJoinBridges() const;
+
+  /// Returns plan node IDs for which IndexLookupJoin Bridges must be created
+  /// based on this pipeline.
+  std::vector<core::PlanNodeId> needsIndexLookupJoinBridges() const;
 
   static std::vector<DriverAdapter> adapters;
 };

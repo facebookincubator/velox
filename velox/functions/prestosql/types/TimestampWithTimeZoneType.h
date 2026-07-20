@@ -27,8 +27,9 @@ constexpr int32_t kTimezoneMask = (1 << kMillisShift) - 1;
 // The maximum and minimum millis UTC we can represent in a
 // TimestampWithTimeZone value given the bits we have to store it.
 // We have 64 bits minus the bits for the time zone minus 1 for the sign bit.
-constexpr int64_t kMaxMillisUtc = (1L << (64 - (int64_t)kMillisShift - 1)) - 1L;
-constexpr int64_t kMinMillisUtc = (kMaxMillisUtc + 1) * -1;
+constexpr int64_t kMaxMillisUtc =
+    (1LL << (64 - (int64_t)kMillisShift - 1)) - 1LL;
+constexpr int64_t kMinMillisUtc = (kMaxMillisUtc + 1) * -1LL;
 
 inline int64_t unpackMillisUtc(int64_t dateTimeWithTimeZone) {
   return dateTimeWithTimeZone >> kMillisShift;
@@ -91,6 +92,9 @@ class TimestampWithTimeZoneType final : public BigintType {
   std::string toString() const override {
     return name();
   }
+
+  /// Formats a packed value as "YYYY-MM-DD HH:MM:SS.mmm <timezone>".
+  std::string valueToString(int64_t value) const;
 
   folly::dynamic serialize() const override {
     folly::dynamic obj = folly::dynamic::object;

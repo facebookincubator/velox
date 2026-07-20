@@ -18,6 +18,7 @@
 #include <optional>
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Spiller.h"
 #include "velox/vector/VectorStream.h"
 
@@ -107,7 +108,7 @@ struct WrapState {
 };
 
 /// Wraps 'inputVector' with 'wrapIndices' and
-/// 'wrapNulls'. 'wrapSize' is the size of of 'wrapIndices' and of
+/// 'wrapNulls'. 'wrapSize' is the size of 'wrapIndices' and of
 /// the resulting vector. Dictionary combining is deduplicated using
 /// 'wrapState'. If the same indices are added on top of dictionary
 /// encoded vectors sharing the same wrapping, the resulting vectors
@@ -150,14 +151,20 @@ std::string makeOperatorSpillPath(
 
 /// Set a named runtime metric in operator 'stats'.
 void setOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
 /// Add a named runtime metric to operator 'stats'.
 void addOperatorRuntimeStats(
-    const std::string& name,
+    std::string_view name,
     const RuntimeCounter& value,
+    std::unordered_map<std::string, RuntimeMetric>& stats);
+
+/// Sets a runtime metric on operator 'stats', overriding any existing value.
+void setOperatorRuntimeStats(
+    std::string_view name,
+    const RuntimeMetric& metric,
     std::unordered_map<std::string, RuntimeMetric>& stats);
 
 /// Aggregates runtime metrics we want to see per operator rather than per
@@ -232,7 +239,12 @@ class BlockedOperator : public Operator {
       int32_t id,
       core::PlanNodePtr node,
       BlockedOperatorCb&& blockedCb)
-      : Operator(ctx, node->outputType(), id, node->id(), "BlockedOperator"),
+      : Operator(
+            ctx,
+            node->outputType(),
+            id,
+            node->id(),
+            OperatorType::kBlockedOperator),
         blockedCb_(std::move(blockedCb)) {}
 
   BlockingReason isBlocked(ContinueFuture* future) override {
@@ -315,7 +327,8 @@ class BlockedOperatorFactory : public Operator::PlanNodeTranslator {
 /// settings. Optionally configures minimum compression ratio.
 std::unique_ptr<VectorSerde::Options> getVectorSerdeOptions(
     common::CompressionKind compressionKind,
-    VectorSerde::Kind kind,
-    std::optional<float> minCompressionRatio = std::nullopt);
+    const std::string& kind,
+    std::optional<float> minCompressionRatio = std::nullopt,
+    int32_t minCompressionPageSizeBytes = 0);
 
 } // namespace facebook::velox::exec

@@ -16,7 +16,9 @@
 
 #pragma once
 
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -36,6 +38,7 @@
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
+class CudfExpression;
 
 /**
  * @brief Bridge for transferring build-side hash tables between build and probe
@@ -69,12 +72,18 @@ class CudfHashJoinBridge : public exec::JoinBridge {
 
   std::optional<rmm::cuda_stream_view> getBuildStream();
 
+  void setBuildReadyEvent(std::shared_ptr<CudaEvent> buildReadyEvent);
+
+  std::shared_ptr<CudaEvent> getBuildReadyEvent();
+
  private:
   /** @brief Hash tables and join objects transferred from build to probe
    * operators */
   std::optional<hash_type> hashObject_;
   /** @brief CUDA stream used by build operator for proper synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+  /** @brief Event recorded after build-side CUDA work is ready for probes */
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
 };
 
 /**
@@ -87,24 +96,23 @@ class CudfHashJoinBridge : public exec::JoinBridge {
  * only one driver performs the final hash table construction. The constructed
  * hash tables are transferred to probe operators via CudfHashJoinBridge.
  */
-class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
+class CudfHashJoinBuild : public CudfOperatorBase {
  public:
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
-  void addInput(RowVectorPtr input) override;
-
   bool needsInput() const override;
-
-  RowVectorPtr getOutput() override;
-
-  void noMoreInput() override;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;
@@ -123,7 +131,7 @@ class CudfHashJoinBuild : public exec::Operator, public NvtxHelper {
  * manages right join state across multiple drivers, and supports batched
  * processing for large datasets.
  */
-class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
+class CudfHashJoinProbe : public CudfOperatorBase {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
 
@@ -132,39 +140,66 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::HashJoinNode> joinNode);
 
+  void initialize() override;
+
   bool needsInput() const override;
-
-  void addInput(RowVectorPtr input) override;
-
-  void noMoreInput() override;
-
-  RowVectorPtr getOutput() override;
 
   bool skipProbeOnEmptyBuild() const;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
+  /// Returns true if the join type is supported by cudf hash join.
+  /// Supported types:
+  /// - Inner, Left, Right, Full joins
+  /// - Left/Right Semi Filter joins
+  /// - Left Semi Project join (excluding null-aware join with filter)
+  /// - Anti join (non-null-aware, or null-aware without filter)
+  /// Note: Right Semi Project, and null-aware left semi-project join with
+  /// filter not yet supported.
   static bool isSupportedJoinType(core::JoinType joinType) {
     return joinType == core::JoinType::kInner ||
         joinType == core::JoinType::kLeft ||
         joinType == core::JoinType::kAnti ||
         joinType == core::JoinType::kLeftSemiFilter ||
+        joinType == core::JoinType::kLeftSemiProject ||
         joinType == core::JoinType::kRight ||
-        joinType == core::JoinType::kRightSemiFilter;
+        joinType == core::JoinType::kRightSemiFilter ||
+        joinType == core::JoinType::kFull;
   }
 
   bool isFinished() override;
 
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+  RowVectorPtr doGetOutput() override;
+  void doNoMoreInput() override;
+  void doClose() override;
+
  private:
+  void waitForBuildReady(rmm::cuda_stream_view stream);
+
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
 
   // Filter related members
+  /** @brief Whether to use AST-based filtering (false if filter spans both
+   * sides or if filter deals with decimal types) */
+  bool useAstFilter_{true};
   /** @brief CUDF AST tree for join filter evaluation */
   cudf::ast::tree tree_;
   /** @brief Scalar values used in filter expressions */
   std::vector<std::unique_ptr<cudf::scalar>> scalars_;
+  /** @brief Precompute instructions for left (probe) table columns */
+  std::vector<PrecomputeInstruction> leftPrecomputeInstructions_;
+  /** @brief Precompute instructions for right (build) table columns */
+  std::vector<PrecomputeInstruction> rightPrecomputeInstructions_;
+  /** @brief Row type for probe table (needed for precomputation) */
+  RowTypePtr probeType_;
+  /** @brief Row type for build table (needed for precomputation) */
+  RowTypePtr buildType_;
+  /** @brief Cached evaluator for post-join filter column */
+  std::shared_ptr<CudfExpression> filterEvaluator_;
 
   bool rightPrecomputed_{false};
 
@@ -186,6 +221,11 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
 
+  /// True if any build table has NULL values in join key columns.
+  /// Used for null-aware LEFT SEMI PROJECT to determine match column
+  /// nullability.
+  bool buildSideHasNullKeys_{false};
+
   // Copied from HashProbe.h
   // Indicates whether to skip probe input data processing or not. It only
   // applies for a specific set of join types (see skipProbeOnEmptyBuild()), and
@@ -197,6 +237,8 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
 
   /** @brief CUDA stream from build operator for synchronization */
   std::optional<rmm::cuda_stream_view> buildStream_;
+  /** @brief Event recorded after build-side CUDA work is ready for probes */
+  std::shared_ptr<CudaEvent> buildReadyEvent_;
   /** @brief CUDA event for coordinating stream synchronization */
   std::unique_ptr<CudaEvent> cudaEvent_;
 
@@ -207,66 +249,106 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    */
   std::vector<std::unique_ptr<cudf::column>> rightMatchedFlags_;
 
+  /// Cached precomputed columns for right (build) tables
+  std::vector<std::vector<ColumnOrView>> cachedRightPrecomputed_;
+  /// Cached extended views for right tables (original + precomputed columns)
+  std::vector<cudf::table_view> cachedExtendedRightViews_;
+
   // For Right joins, only one driver collects the unmatched rows mask and
   // emits. This value is set true only for that driver. See noMoreInput
   bool isLastDriver_{false};
 
+  /// CUDA stream used during the last getOutput() probe operation. Set only
+  /// for right/full joins, and only for drivers that process at least one probe
+  /// batch. Used in noMoreInput() to synchronize GPU streams across drivers
+  /// before combining rightMatchedFlags_. Drivers with no probe input are safe
+  /// to skip: the driver loop guarantees all addInput batches are consumed by
+  /// getOutput() before noMoreInput() fires, and unset flags remain in their
+  /// host-synchronized all-false init state with no pending GPU work.
+  std::optional<rmm::cuda_stream_view> lastProbeStream_;
+
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
+
+  struct JoinOutput {
+    std::unique_ptr<cudf::table> table;
+    vector_size_t numRows;
+  };
+
   /**
    * @brief Performs inner join between probe table and all build tables.
    * @param leftTable Probe-side table to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> innerJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+  std::vector<JoinOutput> innerJoin(
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs left join between probe table and all build tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> leftJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+  std::vector<JoinOutput> leftJoin(
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs right join between probe table and all build tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> rightJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+  std::vector<JoinOutput> rightJoin(
+      cudf::table_view leftTableView,
+      rmm::cuda_stream_view stream);
+  /**
+   * @brief Performs full outer join between probe table and all build tables.
+   * @param leftTableView Probe-side table view to join
+   * @param stream CUDA stream for operations
+   * @return Vector of result tables (multiple if build data was batched)
+   */
+  std::vector<JoinOutput> fullJoin(
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs left semi filter join between probe table and all build
    * tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> leftSemiFilterJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+  std::vector<JoinOutput> leftSemiFilterJoin(
+      cudf::table_view leftTableView,
+      rmm::cuda_stream_view stream);
+  /**
+   * @brief Performs left semi project join between probe table and all build
+   * tables. Returns all probe rows with a boolean match column indicating
+   * whether each row has a match on the build side.
+   * @param leftTableView Probe-side table view to join
+   * @param stream CUDA stream for operations
+   * @return Vector of result tables (multiple if build data was batched)
+   */
+  std::vector<JoinOutput> leftSemiProjectJoin(
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs right semi filter join between probe table and all build
    * tables.
-   * @param leftTable Probe-side table to join
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> rightSemiFilterJoin(
-      std::unique_ptr<cudf::table> const& leftTable,
+  std::vector<JoinOutput> rightSemiFilterJoin(
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Performs anti join between probe table and all build tables.
-   * @param leftTable Probe-side table to join (moved)
+   * @param leftTableView Probe-side table view to join
    * @param stream CUDA stream for operations
    * @return Vector of result tables (multiple if build data was batched)
    */
-  std::vector<std::unique_ptr<cudf::table>> antiJoin(
-      std::unique_ptr<cudf::table>&& leftTable,
+  std::vector<JoinOutput> antiJoin(
+      cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
    * @brief Constructs join output table without applying filter conditions.
@@ -275,9 +357,9 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    * @param rightTableView Input build table view
    * @param rightIndicesCol Column of indices into right table
    * @param stream CUDA stream for operations
-   * @return Join result table with gathered columns from both sides
+   * @return Join result table with its logical row count
    */
-  std::unique_ptr<cudf::table> unfilteredOutput(
+  JoinOutput unfilteredOutput(
       cudf::table_view leftTableView,
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,
@@ -291,9 +373,9 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
    * @param rightIndicesCol Column of indices into right table
    * @param func Filter function to apply to joined data
    * @param stream CUDA stream for operations
-   * @return Filtered join result table
+   * @return Filtered join result table with its logical row count
    */
-  std::unique_ptr<cudf::table> filteredOutput(
+  JoinOutput filteredOutput(
       cudf::table_view leftTableView,
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,
@@ -301,6 +383,16 @@ class CudfHashJoinProbe : public exec::Operator, public NvtxHelper {
       std::function<std::vector<std::unique_ptr<cudf::column>>(
           std::vector<std::unique_ptr<cudf::column>>&&,
           cudf::column_view)> func,
+      rmm::cuda_stream_view stream);
+
+  JoinOutput filteredOutputIndices(
+      cudf::table_view leftTableView,
+      cudf::column_view leftIndicesCol,
+      cudf::table_view rightTableView,
+      cudf::column_view rightIndicesCol,
+      cudf::table_view extendedLeftView,
+      cudf::table_view extendedRightView,
+      cudf::join_kind joinKind,
       rmm::cuda_stream_view stream);
 };
 

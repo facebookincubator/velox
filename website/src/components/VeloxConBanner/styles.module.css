@@ -1,45 +1,47 @@
 .banner {
-  background-color: #c62828;
-  /* optional subtle crosshatch pattern */
-  background-image:
-    repeating-linear-gradient(
-      45deg,
-      rgba(255, 255, 255, 0.05),
-      rgba(255, 255, 255, 0.05) 2px,
-      transparent 2px,
-      transparent 40px
-    ),
-    repeating-linear-gradient(
-      -45deg,
-      rgba(255, 255, 255, 0.05),
-      rgba(255, 255, 255, 0.05) 2px,
-      transparent 2px,
-      transparent 40px
-    );
-  background-blend-mode: overlay;
+  position: relative;
+  overflow: hidden;
   color: #ffffff;
-  padding: 20px 16px; /* thinner! was 40px 16px */
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 24px 16px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid rgba(0,0,0,0.12);
+
+  background:
+    radial-gradient(circle at 20% 30%, rgba(76,201,240,0.22), transparent 35%),
+    radial-gradient(circle at 80% 20%, rgba(67,97,238,0.20), transparent 35%),
+    linear-gradient(135deg, #0b1426 0%, #10203f 55%, #132a52 100%);
+}
+
+.banner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .container {
-  max-width: 1200px;
+  position: relative;
+  z-index: 1;
+  max-width: 900px;
   margin: 0 auto;
-  text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  text-align: center;
 }
 
 .text {
   text-align: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .title {
-  font-size: 1.6rem; /* slightly smaller to match new height */
+  font-size: 1.7rem;
   font-weight: 700;
   margin: 0;
   line-height: 1.2;
@@ -47,23 +49,28 @@
 
 .subtitle {
   font-size: 1rem;
-  margin: 4px 0 12px;
+  margin: 4px 0 0;
   opacity: 0.95;
+}
+
+.date {
+  font-size: 0.95rem;
+  margin: 2px 0 14px;
+  opacity: 0.8;
 }
 
 .button {
   display: inline-block;
-  background-color: #ffffff;
-  color: #c62828;
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-weight: 600;
+  background: linear-gradient(135deg,#6ee7ff,#60a5fa);
+  color: #081220;
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-weight: 700;
   text-decoration: none;
-  transition: transform 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .button:hover {
-  background-color: #ffe5e5;
-  color: #b71c1c;
   transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(96,165,250,0.35);
 }

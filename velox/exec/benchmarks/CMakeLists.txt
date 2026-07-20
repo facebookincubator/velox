@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 add_executable(velox_exec_vector_hasher_benchmark VectorHasherBenchmark.cpp)
 
 target_link_libraries(
@@ -51,6 +52,10 @@ target_link_libraries(
   GTest::gtest_main
 )
 
+add_executable(velox_hash_rows_benchmark HashRowsBenchmark.cpp)
+
+target_link_libraries(velox_hash_rows_benchmark Folly::folly Folly::follybenchmark)
+
 add_executable(velox_hash_benchmark HashTableBenchmark.cpp)
 
 target_link_libraries(
@@ -83,6 +88,16 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_hash_join_right_semi_benchmark HashJoinRightSemiBenchmark.cpp)
+
+target_link_libraries(
+  velox_hash_join_right_semi_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 add_executable(velox_hash_join_prepare_join_table_benchmark HashJoinPrepareJoinTableBenchmark.cpp)
 
 target_link_libraries(
@@ -104,11 +119,11 @@ if(${VELOX_ENABLE_PARQUET})
     velox_vector_test_lib
     Folly::follybenchmark
     arrow
-    thrift
   )
 endif()
 
 add_library(velox_orderby_benchmark_util OrderByBenchmarkUtil.cpp)
+velox_add_test_headers(velox_orderby_benchmark_util OrderByBenchmarkUtil.h)
 
 target_link_libraries(velox_orderby_benchmark_util velox_vector_fuzzer velox_vector_test_lib)
 
@@ -158,6 +173,28 @@ target_link_libraries(
   velox_vector_fuzzer
   velox_vector_test_lib
   velox_window
+  Folly::follybenchmark
+)
+
+add_executable(velox_rows_streaming_window_benchmark RowsStreamingWindowBenchmark.cpp)
+
+target_link_libraries(
+  velox_rows_streaming_window_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark
+)
+
+add_executable(velox_mark_sorted_benchmark MarkSortedBenchmark.cpp)
+
+target_link_libraries(
+  velox_mark_sorted_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
   Folly::follybenchmark
 )
 

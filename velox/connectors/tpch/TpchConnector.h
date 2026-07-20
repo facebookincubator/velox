@@ -34,9 +34,27 @@ class TpchColumnHandle : public ColumnHandle {
  public:
   explicit TpchColumnHandle(const std::string& name) : name_(name) {}
 
-  const std::string& name() const {
+  const std::string& name() const override {
     return name_;
   }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TpchColumnHandle::getClassName();
+    obj["columnName"] = name_;
+    return obj;
+  }
+
+  static std::shared_ptr<TpchColumnHandle> create(const folly::dynamic& obj) {
+    auto name = obj["columnName"].asString();
+    return std::make_shared<TpchColumnHandle>(name);
+  }
+
+  static void registerSerDe() {
+    registerDeserializer<TpchColumnHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(TpchColumnHandle)
 
  private:
   const std::string name_;
@@ -82,6 +100,40 @@ class TpchTableHandle : public ConnectorTableHandle {
   double getScaleFactor() const {
     return scaleFactor_;
   }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = TpchTableHandle::getClassName();
+    obj["connectorId"] = connectorId();
+    obj["table"] = static_cast<int>(table_);
+    obj["scaleFactor"] = scaleFactor_;
+    if (filterExpression_) {
+      obj["filterExpression"] = filterExpression_->serialize();
+    }
+    return obj;
+  }
+
+  static ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context) {
+    auto connectorId = obj["connectorId"].asString();
+    auto table = static_cast<velox::tpch::Table>(obj["table"].asInt());
+    auto scaleFactor = obj["scaleFactor"].asDouble();
+    velox::core::TypedExprPtr filterExpression = nullptr;
+    if (obj.count("filterExpression") && !obj["filterExpression"].isNull()) {
+      filterExpression =
+          velox::ISerializable::deserialize<velox::core::ITypedExpr>(
+              obj["filterExpression"], context);
+    }
+    return std::make_shared<TpchTableHandle>(
+        connectorId, table, scaleFactor, std::move(filterExpression));
+  }
+
+  static void registerSerDe() {
+    registerDeserializerWithContext<TpchTableHandle>();
+  }
+
+  VELOX_DEFINE_CLASS_NAME(TpchTableHandle)
 
  private:
   const velox::tpch::Table table_;
@@ -178,6 +230,12 @@ class TpchConnector final : public Connector {
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI("TpchConnector does not support data sink.");
+  }
+
+  static void registerSerDe() {
+    TpchTableHandle::registerSerDe();
+    TpchColumnHandle::registerSerDe();
+    TpchConnectorSplit::registerSerDe();
   }
 };
 

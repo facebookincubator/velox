@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_executable(velox_hdfs_file_test HdfsFileSystemTest.cpp HdfsMiniCluster.cpp HdfsUtilTest.cpp)
+velox_add_test_headers(velox_hdfs_file_test HdfsMiniCluster.h)
 
 add_test(velox_hdfs_file_test velox_hdfs_file_test)
 target_link_libraries(
@@ -32,6 +33,7 @@ target_link_libraries(
 target_compile_options(velox_hdfs_file_test PRIVATE -Wno-deprecated-declarations)
 
 add_executable(velox_hdfs_insert_test HdfsInsertTest.cpp HdfsMiniCluster.cpp HdfsUtilTest.cpp)
+velox_add_test_headers(velox_hdfs_insert_test HdfsMiniCluster.h)
 
 add_test(velox_hdfs_insert_test velox_hdfs_insert_test)
 

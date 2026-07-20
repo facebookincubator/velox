@@ -16,17 +16,9 @@
 #pragma once
 
 #include <string>
-#include "velox/parse/IExpr.h"
+#include "velox/parse/SqlExpressionsParser.h"
 
 namespace facebook::velox::duckdb {
-
-struct OrderByClause {
-  core::ExprPtr expr;
-  bool ascending;
-  bool nullsFirst;
-
-  std::string toString() const;
-};
 
 /// Hold parsing options.
 struct ParseOptions {
@@ -36,6 +28,12 @@ struct ParseOptions {
   // Whether to parse the values in an IN list as separate arguments or as a
   // single array argument.
   bool parseInListAsArray = true;
+
+  // DuckDB defaults the window frame end bound to CURRENT ROW even when ORDER
+  // BY is absent. The SQL standard requires UNBOUNDED FOLLOWING in that case.
+  // When true, corrects this default. Cannot distinguish defaulted from
+  // explicit frames, so an explicit CURRENT ROW may be incorrectly overridden.
+  bool correctWindowFrameDefault = false;
 
   /// SQL functions could be registered with different prefixes by the user.
   /// This parameter is the registered prefix of presto or spark functions,
@@ -58,60 +56,30 @@ std::vector<core::ExprPtr> parseMultipleExpressions(
     const std::string& exprString,
     const ParseOptions& options);
 
-struct AggregateExpr {
-  core::ExprPtr expr;
-  std::vector<OrderByClause> orderBy;
-  bool distinct{false};
-  core::ExprPtr maskExpr{nullptr};
-};
-
 /// Parses aggregate function call expression with optional ORDER by clause.
+/// Always returns an AggregateCallExpr.
 /// Examples:
 ///     sum(a)
 ///     sum(a) as s
 ///     array_agg(x ORDER BY y DESC)
-AggregateExpr parseAggregateExpr(
+core::AggregateCallExprPtr parseAggregateExpr(
     const std::string& exprString,
     const ParseOptions& options);
 
 // Parses an ORDER BY clause using DuckDB's internal postgresql-based parser.
 // Uses ASC NULLS LAST as the default sort order.
-OrderByClause parseOrderByExpr(const std::string& exprString);
+parse::OrderByClause parseOrderByExpr(const std::string& exprString);
 
-// Parses a WINDOW function SQL string using DuckDB's internal postgresql-based
-// parser. Window Functions are executed by Velox Window PlanNodes and not the
-// expression evaluation. So we cannot use an IExpr based API. The structures
-// below capture all the metadata needed from the window function SQL string
-// for usage in the WindowNode plan node.
-enum class WindowType { kRows, kRange };
-
-enum class BoundType {
-  kCurrentRow,
-  kUnboundedPreceding,
-  kUnboundedFollowing,
-  kPreceding,
-  kFollowing
-};
-
-struct IExprWindowFrame {
-  WindowType type;
-  BoundType startType;
-  core::ExprPtr startValue;
-  BoundType endType;
-  core::ExprPtr endValue;
-};
-
-struct IExprWindowFunction {
-  core::ExprPtr functionCall;
-  IExprWindowFrame frame;
-  bool ignoreNulls;
-
-  std::vector<core::ExprPtr> partitionBy;
-  std::vector<OrderByClause> orderBy;
-};
-
-IExprWindowFunction parseWindowExpr(
+/// Parses a WINDOW function SQL string. Returns a WindowCallExpr.
+core::WindowCallExprPtr parseWindowExpr(
     const std::string& windowString,
+    const ParseOptions& options);
+
+/// Parses a SQL expression that can be either a scalar expression or a window
+/// function. Returns a WindowCallExpr (kWindow kind) for window functions,
+/// or a regular ExprPtr for scalar expressions.
+core::ExprPtr parseScalarOrWindowExpr(
+    const std::string& exprString,
     const ParseOptions& options);
 
 } // namespace facebook::velox::duckdb

@@ -36,7 +36,6 @@ int64_t SplitBlockBloomFilter::numBlocks(
 SplitBlockBloomFilter::SplitBlockBloomFilter(const std::span<Block>& blocks)
     : blocks_(blocks) {
   VELOX_CHECK_EQ(reinterpret_cast<uintptr_t>(blocks.data()) % sizeof(Block), 0);
-  bzero(blocks.data(), blocks.size() * sizeof(Block));
 }
 
 std::string SplitBlockBloomFilter::debugString() const {

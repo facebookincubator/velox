@@ -120,6 +120,10 @@ class RowPartitions {
     return size_;
   }
 
+  void reset() {
+    size_ = 0;
+  }
+
  private:
   const int32_t capacity_;
 
@@ -298,6 +302,7 @@ class RowContainer {
             false, // hasNext
             false, // isJoinBuild
             false, // hasProbedFlag
+            false, // hasCountFlag
             false, // hasNormalizedKey
             useListRowIndex,
             pool) {}
@@ -330,6 +335,7 @@ class RowContainer {
       bool hasNext,
       bool isJoinBuild,
       bool hasProbedFlag,
+      bool hasCountFlag,
       bool hasNormalizedKey,
       bool useListRowIndex,
       memory::MemoryPool* pool);
@@ -705,6 +711,15 @@ class RowContainer {
 #endif
   void setProbedFlag(char** rows, int32_t numRows);
 
+  /// Sets 'probed' flag for a single non-null row. Returns true if the flag
+  /// transitioned from false to true.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  __attribute__((__no_sanitize__("thread")))
+#endif
+#endif
+  bool testAndSetProbedFlag(char* row);
+
   /// Compares the value at 'column' in 'row' with the value at 'index' in
   /// 'decoded'. Returns 0 for equal, < 0 for 'row' < 'decoded', > 0 otherwise.
   /// 'mayHaveNulls' specifies if nulls need to be checked. This is a fast path
@@ -760,6 +775,38 @@ class RowContainer {
   /// 0 if not applicable.
   int32_t probedFlagOffset() const {
     return probedFlagOffset_;
+  }
+
+  /// Byte offset of the per-row count for counting joins. 0 if not applicable.
+  int32_t countOffset() const {
+    return countOffset_;
+  }
+
+  /// Returns the count stored at the given row. Used for counting joins.
+  int32_t count(const char* row) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    return countRef(const_cast<char*>(row));
+  }
+
+  /// Increments the count at the given row. Used during hash table build for
+  /// counting joins.
+  void incrementCount(char* row) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    ++countRef(row);
+  }
+
+  /// Decrements the count at the given row. Used during hash table probe for
+  /// counting joins.
+  void decrementCount(char* row) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    --countRef(row);
+  }
+
+  /// Adds 'n' to the count at the given row. Used during hash table merge
+  /// to combine counts from multiple build-side tables.
+  void addCount(char* row, int32_t n) const {
+    VELOX_DCHECK_NE(countOffset_, 0);
+    countRef(row) += n;
   }
 
   /// Returns the offset of a uint32_t row size or 0 if the row has no variable
@@ -861,6 +908,12 @@ class RowContainer {
 
   const std::vector<Accumulator>& accumulators() const {
     return accumulators_;
+  }
+
+  /// Returns the RowColumn for the i-th accumulator. Accumulators are laid
+  /// out in row storage after the keys.
+  RowColumn accumulatorColumnAt(int32_t i) const {
+    return columnAt(keyTypes_.size() + i);
   }
 
   const HashStringAllocator& stringAllocator() const {
@@ -1244,8 +1297,7 @@ class RowContainer {
         Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       return compareComplexType(row, column.offset(), decoded, index, flags);
-    } else if constexpr (
-        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (is_string_kind(Kind)) {
       auto result = compareStringAsc(
           valueAt<StringView>(row, column.offset()), decoded, index);
       return flags.ascending ? result : result * -1;
@@ -1325,8 +1377,7 @@ class RowContainer {
         Kind == TypeKind::MAP) {
       return compareComplexType(
           left, right, type, leftOffset, rightOffset, flags);
-    } else if constexpr (
-        Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
+    } else if constexpr (is_string_kind(Kind)) {
       auto leftValue = valueAt<StringView>(left, leftOffset);
       auto rightValue = valueAt<StringView>(right, rightOffset);
       auto result = compareStringAsc(leftValue, rightValue);
@@ -1506,6 +1557,10 @@ class RowContainer {
     }
   }
 
+  int32_t& countRef(char* row) const {
+    return *reinterpret_cast<int32_t*>(row + countOffset_);
+  }
+
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
   const bool isJoinBuild_;
@@ -1545,6 +1600,9 @@ class RowContainer {
   // Bit offset of the probed flag for a full or right outer join  payload. 0 if
   // not applicable.
   int32_t probedFlagOffset_ = 0;
+
+  // Byte offset of the per-row count for counting joins. 0 if not applicable.
+  int32_t countOffset_ = 0;
 
   // Bit position of free bit.
   int32_t freeFlagOffset_ = 0;

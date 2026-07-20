@@ -80,6 +80,21 @@ struct udf_canonical_name<
   static constexpr exec::FunctionCanonicalName value = T::canonical_name;
 };
 
+// If a UDF doesn't declare a default owner
+template <class T, class = void>
+struct udf_owner {
+  static constexpr std::string_view value() {
+    return "";
+  }
+};
+
+template <class T>
+struct udf_owner<T, util::detail::void_t<decltype(T::owner)>> {
+  static constexpr std::string_view value() {
+    return T::owner;
+  }
+};
+
 // Has the value true, unless a Variadic Type appears anywhere but at the end
 // of the parameters.
 template <typename... TArgs>
@@ -438,6 +453,9 @@ class ISimpleFunctionMetadata {
   virtual std::string getName() const = 0;
   virtual bool isDeterministic() const = 0;
   virtual bool defaultNullBehavior() const = 0;
+  // Return the owner of the function. This is used for logging and
+  // attribution.
+  virtual std::string_view owner() const = 0;
   virtual uint32_t priority() const = 0;
   virtual const std::shared_ptr<exec::FunctionSignature> signature() const = 0;
   virtual const TypePtr& resultPhysicalType() const = 0;
@@ -550,6 +568,10 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
   bool isDeterministic() const final {
     return udf_is_deterministic<Fun>();
+  }
+
+  std::string_view owner() const final {
+    return udf_owner<Fun>::value();
   }
 
   bool defaultNullBehavior() const final {
@@ -960,7 +982,7 @@ class UDFHolder {
   // null, without calling the function implementation.
   static constexpr bool is_default_null_behavior = !udf_has_callNullable;
 
-  // If any of the the provided "call" flavors can produce null (in case any
+  // If any of the provided "call" flavors can produce null (in case any
   // of them return bool). This is only false if all the call methods provided
   // for a function return void.
   static constexpr bool can_produce_null_output = udf_has_call_return_bool |
@@ -1004,6 +1026,10 @@ class UDFHolder {
     return udf_is_deterministic<Fun>();
   }
 
+  std::string_view owner() const {
+    return udf_owner<Fun>::value();
+  }
+
   static constexpr bool isVariadic() {
     if constexpr (num_args == 0) {
       return false;
@@ -1025,17 +1051,6 @@ class UDFHolder {
     } else if constexpr (udf_has_initialize_with_pool) {
       return instance_.initialize(
           inputTypes, config, memoryPool, constantArgs...);
-    }
-  }
-
-  // Overload for backward compatibility with callers that don't pass
-  // MemoryPool (e.g., Koski batch functions).
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      const typename exec_resolver<TArgs>::in_type*... constantArgs) {
-    if constexpr (udf_has_initialize_without_pool) {
-      return instance_.initialize(inputTypes, config, constantArgs...);
     }
   }
 

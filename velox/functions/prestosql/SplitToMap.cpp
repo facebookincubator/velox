@@ -63,7 +63,7 @@ core::TypedExprPtr rewriteSplitToMapCall(
   }
 
   if (!keepFirst.has_value()) {
-    static const std::string kNotSupported =
+    static constexpr const char* kNotSupported =
         "split_to_map with arbitrary lambda is not supported: {}";
     VELOX_USER_FAIL(kNotSupported, lambda->toString());
   }

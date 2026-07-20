@@ -251,6 +251,8 @@ class TestMemoryPool : public memory::MemoryPool {
     return nullptr;
   }
 
+  void reportExternalAllocation(int64_t /* unused */) override {}
+
   void* allocateZeroFilled(int64_t /* unused */, int64_t /* unused */)
       override {
     return nullptr;
@@ -264,6 +266,8 @@ class TestMemoryPool : public memory::MemoryPool {
   }
 
   void free(void* /* unused */, int64_t /* unused */) override {}
+
+  void reportExternalFree(int64_t /* unused */) override {}
 
   void allocateNonContiguous(
       memory::MachinePageCount /* unused */,
@@ -337,6 +341,10 @@ class TestMemoryPool : public memory::MemoryPool {
   void setReclaimer(
       std::unique_ptr<memory::MemoryReclaimer> /* unused */) override {}
   memory::MemoryReclaimer* reclaimer() const override {
+    return nullptr;
+  }
+
+  memory::MemoryArbitrator* arbitrator() const override {
     return nullptr;
   }
 
@@ -490,7 +498,11 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheMetaFileDeleteErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheGrowFileErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdErrors)), 0);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricSsdCacheWriteNoSpaceErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdDropped)), 0);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricSsdCacheWriteExceedEntryLimit)), 0);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheWriteCheckpointErrors)), 0);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheReadSsdErrors)), 0);
@@ -528,7 +540,9 @@ TEST_F(PeriodicStatsReporterTest, basic) {
   newSsdStats->deleteMetaFileErrors = 10;
   newSsdStats->growFileErrors = 10;
   newSsdStats->writeSsdErrors = 10;
+  newSsdStats->writeSsdNoSpaceErrors = 1;
   newSsdStats->writeSsdDropped = 10;
+  newSsdStats->writeSsdExceedEntryLimit = 10;
   newSsdStats->writeCheckpointErrors = 10;
   newSsdStats->readSsdErrors = 10;
   newSsdStats->readSsdCorruptions = 10;
@@ -587,7 +601,11 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheMetaFileDeleteErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheGrowFileErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdErrors)), 1);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricSsdCacheWriteNoSpaceErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheWriteSsdDropped)), 1);
+    ASSERT_EQ(
+        counterMap.count(std::string(kMetricSsdCacheWriteExceedEntryLimit)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheWriteCheckpointErrors)), 1);
     ASSERT_EQ(counterMap.count(std::string(kMetricSsdCacheReadSsdErrors)), 1);
@@ -604,7 +622,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
         counterMap.count(std::string(kMetricSsdCacheRecoveredEntries)), 1);
     ASSERT_EQ(
         counterMap.count(std::string(kMetricSsdCacheReadWithoutChecksum)), 1);
-    ASSERT_EQ(counterMap.size(), 56);
+    ASSERT_EQ(counterMap.size(), 58);
   }
 }
 

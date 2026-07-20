@@ -25,6 +25,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/type/CppToType.h"
+#include "velox/type/StringView.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 

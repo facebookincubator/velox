@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/DebugUtil.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -25,7 +26,8 @@ std::string DebugUtil::toString(
     rmm::cuda_stream_view stream,
     vector_size_t from,
     vector_size_t to) {
-  auto rowVector = with_arrow::toVeloxColumn(table, pool_.get(), "", stream);
+  auto rowVector =
+      with_arrow::toVeloxColumn(table, pool_.get(), "", stream, get_temp_mr());
   stream.synchronize();
   return rowVector->toString(from, to);
 }

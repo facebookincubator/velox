@@ -13,14 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/StreamingAggregation.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempFilePath.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/Expressions.h"
+
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
+
+using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::exec {
 namespace {
@@ -184,20 +189,34 @@ class StreamingAggregationTest
                     .capturePlanNodeId(aggregationNodeId)
                     .planNode();
 
-    for (const auto barrierExecution : {false, true}) {
-      SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+    struct {
+      bool hasBarrier;
+      bool serialExecution;
+
+      std::string toString() const {
+        return fmt::format(
+            "hasBarrier: {}, serialExecution: {}", hasBarrier, serialExecution);
+      }
+    } testSettings[] = {
+        {false, false},
+        {false, true},
+        {true, false},
+        {true, true},
+    };
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(testData.toString());
       auto task =
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .splits(makeHiveConnectorSplits(tempFiles))
-              .serialExecution(true)
-              .barrierExecution(barrierExecution)
+              .serialExecution(testData.serialExecution)
+              .barrierExecution(testData.hasBarrier)
               .config(
                   core::QueryConfig::kPreferredOutputBatchRows,
                   std::to_string(outputBatchSize))
               .assertResults(
                   "SELECT c0, max(c1 order by c2), max(c1 order by c2 desc), array_agg(c1 order by c2) FROM tmp GROUP BY c0");
       const auto taskStats = task->taskStats();
-      ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+      ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
       ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
       ASSERT_EQ(
           velox::exec::toPlanStats(taskStats)
@@ -280,13 +299,30 @@ class StreamingAggregationTest
                           false)
                       .capturePlanNodeId(aggregationNodeId)
                       .planNode();
-      for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      struct {
+        bool hasBarrier;
+        bool serialExecution;
+
+        std::string toString() const {
+          return fmt::format(
+              "hasBarrier: {}, serialExecution: {}",
+              hasBarrier,
+              serialExecution);
+        }
+      } testSettings[] = {
+          {false, true},
+          {false, false},
+          {true, true},
+          {true, false},
+      };
+      for (const auto& testData : testSettings) {
+        SCOPED_TRACE(testData.toString());
         auto task =
             AssertQueryBuilder(plan, duckDbQueryRunner_)
                 .splits(makeHiveConnectorSplits(tempFiles))
-                .serialExecution(true)
-                .barrierExecution(barrierExecution)
+                .serialExecution(testData.serialExecution)
+                .barrierExecution(testData.hasBarrier)
+                .maxDrivers(testData.serialExecution ? 1 : 3)
                 .config(
                     core::QueryConfig::kPreferredOutputBatchRows,
                     std::to_string(outputBatchSize))
@@ -294,7 +330,7 @@ class StreamingAggregationTest
                     "SELECT c0, array_agg(distinct c1), array_agg(c1 order by c2), "
                     "count(distinct c1), array_agg(c2) FROM tmp GROUP BY c0");
         const auto taskStats = task->taskStats();
-        ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+        ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         ASSERT_EQ(
             velox::exec::toPlanStats(taskStats)
@@ -541,18 +577,34 @@ class StreamingAggregationTest
           keySql.str(),
           keySql.str());
 
-      for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      struct {
+        bool hasBarrier;
+        bool serialExecution;
+
+        std::string toString() const {
+          return fmt::format(
+              "hasBarrier: {}, serialExecution: {}",
+              hasBarrier,
+              serialExecution);
+        }
+      } testSettings[] = {
+          {false, false},
+          {false, true},
+          {true, false},
+          {true, true},
+      };
+      for (const auto& testData : testSettings) {
+        SCOPED_TRACE(testData.toString());
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
-                        .serialExecution(true)
-                        .barrierExecution(barrierExecution)
+                        .serialExecution(testData.serialExecution)
+                        .barrierExecution(testData.hasBarrier)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
                             std::to_string(outputBatchSize))
                         .assertResults(sql);
         const auto taskStats = task->taskStats();
-        ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+        ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
       }
@@ -584,18 +636,34 @@ class StreamingAggregationTest
 
       const auto sql = fmt::format("SELECT distinct {} FROM tmp", keySql.str());
 
-      for (const auto barrierExecution : {false, true}) {
-        SCOPED_TRACE(fmt::format("barrierExecution {}", barrierExecution));
+      struct {
+        bool hasBarrier;
+        bool serialExecution;
+
+        std::string toString() const {
+          return fmt::format(
+              "hasBarrier: {}, serialExecution: {}",
+              hasBarrier,
+              serialExecution);
+        }
+      } testSettings[] = {
+          {false, false},
+          {false, true},
+          {true, false},
+          {true, true},
+      };
+      for (const auto& testData : testSettings) {
+        SCOPED_TRACE(testData.toString());
         auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                         .splits(makeHiveConnectorSplits(tempFiles))
-                        .serialExecution(true)
-                        .barrierExecution(barrierExecution)
+                        .serialExecution(testData.serialExecution)
+                        .barrierExecution(testData.hasBarrier)
                         .config(
                             core::QueryConfig::kPreferredOutputBatchRows,
                             std::to_string(outputBatchSize))
                         .assertResults(sql);
         const auto taskStats = task->taskStats();
-        ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
+        ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
       }
@@ -1224,6 +1292,49 @@ TEST_P(StreamingAggregationTest, preferredOutputBatchBytes) {
   ASSERT_EQ(results.size(), expectedOutputBatches);
 }
 
+TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
+  // Create input batches where each batch has exactly one unique group.
+  // This tests the corner case where numGroups_ == 1 and noGroupsSpanBatches_
+  // is true.
+  std::vector<VectorPtr> keys = {
+      makeFlatVector<int32_t>({1, 1, 1, 1}),
+      makeFlatVector<int32_t>({2, 2, 2, 2}),
+      makeFlatVector<int32_t>({3, 3, 3, 3}),
+  };
+
+  auto data = addPayload(keys, 1);
+  createDuckDbTable(data);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId aggregationNodeId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(data)
+                  .streamingAggregation(
+                      {"c0"},
+                      {"count(1)", "sum(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
+                  .capturePlanNodeId(aggregationNodeId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(
+              core::QueryConfig::kStreamingAggregationMinOutputBatchRows,
+              std::to_string(1))
+          .assertResults("SELECT c0, count(1), sum(c1) FROM tmp GROUP BY c0");
+
+  // Verify the number of output batches matches the number of input batches
+  // because each batch contains a single group that should be output
+  // immediately.
+  const auto taskStats = task->taskStats();
+  ASSERT_EQ(
+      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      keys.size());
+}
+
 // Tests that when noGroupsSpanBatches is set, the number of output batches
 // matches the number of input batches when minOutputBatchRows is set to 1.
 // When minOutputBatchRows is set to an extremely large value, we expect a
@@ -1253,11 +1364,11 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
           expectedOutputBatches);
     }
   } testSettings[] = {
-      // When minOutputBatchRows is 1, each input batch produces an output batch
+      // Regardless of the value of minOutputBatchRows, each input batch
+      // produces an output batch.
+      // We do not respect minOutputBatchRows when noGroupsSpanBatches is set.
       {1, keys.size()},
-      // When minOutputBatchRows is very large, all groups are batched together
-      // into a single output
-      {std::numeric_limits<int32_t>::max(), 1},
+      {std::numeric_limits<int32_t>::max(), keys.size()},
   };
 
   for (const auto& testData : testSettings) {
@@ -1441,5 +1552,179 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
       velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
       9);
 }
+// Verify that during createOutput, the aggregation state is destroyed.
+DEBUG_ONLY_TEST_P(StreamingAggregationTest, singleAggregationCleansState) {
+  auto size = 1'000;
+
+  VectorPtr keys =
+      makeFlatVector<int32_t>(size, [](auto row) { return row / 10; });
+
+  auto data = addPayload({keys, keys, keys, keys}, 1);
+
+  bool checkedAtLeastOnce = false;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::StreamingAggregation::createOutput",
+      std::function<void(StreamingAggregation*)>([&](StreamingAggregation*) {
+        checkedAtLeastOnce = true;
+        EXPECT_GT(NonPODInt64::destructed, 0);
+      }));
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .streamingAggregation(
+                      {"c0"},
+                      {"sumnonpod(1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false,
+                      true /* noGroupsSpanBatches */)
+                  .planNode();
+
+  config(AssertQueryBuilder(plan), 100).copyResults(pool());
+
+  EXPECT_TRUE(checkedAtLeastOnce)
+      << "TestValue callback was never invoked; createOutput may not have "
+         "been called";
+  EXPECT_EQ(NonPODInt64::constructed, NonPODInt64::destructed);
+}
+
+// Minimal plan node + operator for a back-pressuring downstream. This mirrors
+// the helper in RowNumberTest, which is a regression test for the same class of
+// bug (an operator's needsInput() not checking input_ == nullptr). The operator
+// passes input through but refuses it most of the time, keeping the upstream
+// StreamingAggregation holding a buffered batch. Before the needsInput() fix
+// this made the Driver re-feed the aggregation and overwrite its undrained
+// input_, silently dropping rows.
+class BackpressureNode : public core::PlanNode {
+ public:
+  BackpressureNode(const core::PlanNodeId& id, core::PlanNodePtr input)
+      : PlanNode(id), sources_{std::move(input)} {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<core::PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "Backpressure";
+  }
+
+ private:
+  void addDetails(std::stringstream& /* stream */) const override {}
+
+  std::vector<core::PlanNodePtr> sources_;
+};
+
+class BackpressureOperator : public Operator {
+ public:
+  BackpressureOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const std::shared_ptr<const BackpressureNode>& node)
+      : Operator(ctx, node->outputType(), id, node->id(), "Backpressure") {}
+
+  bool needsInput() const override {
+    if (noMoreInput_ || input_ != nullptr) {
+      return false;
+    }
+    // Accept input only every 4th poll. The rejected polls are when the Driver
+    // would re-feed (and, before the fix, overwrite) the upstream aggregation.
+    return (++polls_ % 4) == 0;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    return std::move(input_);
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /* future */) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
+
+ private:
+  mutable int32_t polls_{0};
+};
+
+class BackpressureNodeFactory : public Operator::PlanNodeTranslator {
+ public:
+  std::unique_ptr<Operator> toOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const core::PlanNodePtr& node) override {
+    if (auto bpNode = std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return std::make_unique<BackpressureOperator>(ctx, id, bpNode);
+    }
+    return nullptr;
+  }
+
+  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override {
+    if (std::dynamic_pointer_cast<const BackpressureNode>(node)) {
+      return 1;
+    }
+    return std::nullopt;
+  }
+};
+
+// Regression test: a StreamingAggregation feeding a back-pressuring downstream
+// must not drop rows. Before the fix, StreamingAggregation::needsInput() did
+// not check input_ == nullptr, so when the downstream returned
+// needsInput()=false the Driver re-fed the aggregation and addInput() overwrote
+// the undrained batch, silently dropping rows (seen in production with
+// streaming aggregations fed through async IndexLookupJoins). One distinct,
+// clustered key per row makes the aggregation a pass-through, so output rows
+// must equal input rows.
+TEST_P(StreamingAggregationTest, noRowLossWithBackpressuringDownstream) {
+  static folly::once_flag registerFlag;
+  folly::call_once(registerFlag, [] {
+    Operator::registerOperator(std::make_unique<BackpressureNodeFactory>());
+  });
+
+  // Many small batches so the Driver repeatedly feeds the aggregation while the
+  // downstream refuses input.
+  const int32_t numBatches = 200;
+  const int32_t rowsPerBatch = 100;
+  const vector_size_t totalRows = numBatches * rowsPerBatch;
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    // One distinct, globally-increasing (hence clustered) key per row, so a
+    // correct streaming aggregation emits exactly one group per input row.
+    batches.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; }),
+         makeFlatVector<int64_t>(
+             rowsPerBatch, [&](auto row) { return i * rowsPerBatch + row; })}));
+  }
+
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .streamingAggregation(
+              {"c0"},
+              {"arbitrary(c1)"},
+              {},
+              core::AggregationNode::Step::kSingle,
+              false)
+          .addNode([](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<BackpressureNode>(id, std::move(input));
+          })
+          .planNode();
+
+  // Single driver so the aggregation and the back-pressuring downstream share a
+  // pipeline.
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  EXPECT_EQ(result->size(), totalRows);
+}
+
 } // namespace
 } // namespace facebook::velox::exec

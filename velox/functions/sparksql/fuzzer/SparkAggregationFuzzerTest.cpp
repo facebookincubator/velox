@@ -30,6 +30,9 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
 
+DECLARE_int32(batch_size);
+DECLARE_int32(num_batches);
+
 DEFINE_int64(
     seed,
     0,
@@ -56,31 +59,40 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
 
   facebook::velox::functions::prestosql::registerInternalFunctions();
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kPresto)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("Presto")) {
     facebook::velox::serializer::presto::PrestoVectorSerde::
         registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kCompactRow)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("CompactRow")) {
     facebook::velox::serializer::CompactRowVectorSerde::
         registerNamedVectorSerde();
   }
-  if (!isRegisteredNamedVectorSerde(
-          facebook::velox::VectorSerde::Kind::kUnsafeRow)) {
+  if (!facebook::velox::isRegisteredNamedVectorSerde("UnsafeRow")) {
     facebook::velox::serializer::spark::UnsafeRowVectorSerde::
         registerNamedVectorSerde();
   }
   facebook::velox::memory::MemoryManager::initialize(
       facebook::velox::memory::MemoryManager::Options{});
 
+  // Spark reference execution uses gRPC and can be sensitive to large
+  // payloads. Keep generated input sizes modest to reduce transport and
+  // memory pressure.
+  FLAGS_batch_size = 40;
+  FLAGS_num_batches = 4;
+
   // Spark does not provide user-accessible aggregate functions with the
   // following names.
   std::unordered_set<std::string> skipFunctions = {
       "bloom_filter_agg",
+      // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
+      // doesn't support. The fuzzer may pick this signature and fail.
+      "collect_set",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",
+      // https://github.com/facebookincubator/velox/issues/17124
+      // Correctness mismatches and OOM during KLL sketch operations.
+      "approx_percentile",
   };
 
   using facebook::velox::exec::test::TransformResultVerifier;

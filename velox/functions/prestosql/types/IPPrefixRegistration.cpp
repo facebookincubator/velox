@@ -21,33 +21,12 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 namespace {
 class IPPrefixCastOperator : public exec::CastOperator {
  public:
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::HUGEINT:
-        return isIPAddressType(other);
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::VARCHAR:
-        return true;
-      case TypeKind::HUGEINT:
-        return isIPAddressType(other);
-      default:
-        return false;
-    }
-  }
-
   void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
@@ -101,31 +80,11 @@ class IPPrefixCastOperator : public exec::CastOperator {
     const auto* prefix = rowVector->childAt(ipaddress::kIpPrefixRowIndex)
                              ->as<SimpleVector<int8_t>>();
     context.applyToSelectedNoThrow(rows, [&](auto row) {
-      const auto ipAddrVal = ipaddr->valueAt(row);
-      // The string representation of the last byte needs
-      // to be unsigned
-      const uint8_t prefixVal = prefix->valueAt(row);
-
-      // Copy the first 16 bytes into a ByteArray16.
-      folly::ByteArray16 addrBytes;
-      memcpy(&addrBytes, &ipAddrVal, ipaddress::kIPAddressBytes);
-      // Reverse the bytes to get the correct order. Similar to
-      // IPAddressType. We assume we're ALWAYS on a little endian machine.
-      // Note: for big endian, we should not reverse the bytes.
-      std::reverse(addrBytes.begin(), addrBytes.end());
-      // // Construct a V6 address from the ByteArray16.
-      folly::IPAddressV6 v6Addr(addrBytes);
-
-      // Inline func to get string for ipv4 or ipv6 string
-      const auto ipString =
-          (v6Addr.isIPv4Mapped()) ? v6Addr.createIPv4().str() : v6Addr.str();
-
-      // Format of string is {ipString}/{mask}
-      auto stringRet = fmt::format("{}/{}", ipString, prefixVal);
-
-      // Write the string to the result vector
       exec::StringWriter result(flatResult, row);
-      result.append(stringRet);
+      result.resize(IPPrefixType::kMaxStringSize);
+      auto str = IPPREFIX()->valueToString(
+          ipaddr->valueAt(row), prefix->valueAt(row), result.data());
+      result.resize(str.size());
       result.finalize();
     });
   }
@@ -211,6 +170,12 @@ class IPPrefixTypeFactory : public CustomTypeFactory {
 } // namespace
 
 void registerIPPrefixType() {
-  registerCustomType("ipprefix", std::make_unique<const IPPrefixTypeFactory>());
+  registerCustomType("IPPREFIX", std::make_unique<const IPPrefixTypeFactory>());
+  registerCastRules({
+      {.fromType = "VARCHAR", .toType = "IPPREFIX"},
+      {.fromType = "IPADDRESS", .toType = "IPPREFIX"},
+      {.fromType = "IPPREFIX", .toType = "VARCHAR"},
+      {.fromType = "IPPREFIX", .toType = "IPADDRESS"},
+  });
 }
 } // namespace facebook::velox

@@ -17,16 +17,18 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 class GroupedExecutionTest : public virtual HiveConnectorTestBase {
  protected:
@@ -288,7 +290,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
-  auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+  auto outputBufferManager = exec::DefaultOutputBufferManager::getInstanceRef();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task must be finished at this stage.
@@ -490,7 +492,8 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
         task->noMoreSplits(probeScanNodeId);
       }
 
-      auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+      auto outputBufferManager =
+          exec::DefaultOutputBufferManager::getInstanceRef();
       outputBufferManager->deleteResults(task->taskId(), 0);
 
       waitForTaskCompletion(task.get());
@@ -547,7 +550,7 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
     }
 
     TestScopedSpillInjection scopedSpillInjection(triggerSpill ? 100 : 0);
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
     queryBuilder.plan(plan)
         .spillDirectory(spillDirectory->getPath())
@@ -675,7 +678,7 @@ DEBUG_ONLY_TEST_F(
           }
         }));
 
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
     std::optional<common::SpillDiskOptions> spillOpts;
     if (testData.enableSpill) {
       spillOpts = common::SpillDiskOptions{
@@ -735,7 +738,8 @@ DEBUG_ONLY_TEST_F(
 
     // 'Delete results' from output buffer triggers 'set all output consumed',
     // which should finish the task.
-    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    auto outputBufferManager =
+        exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     // Task must be finished at this stage.
@@ -826,7 +830,7 @@ DEBUG_ONLY_TEST_F(
         memory::testingRunArbitration(op->pool());
       }));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   common::SpillDiskOptions spillOpts{
       .spillDirPath = spillDirectory->getPath(),
       .spillDirCreated = true,
@@ -869,7 +873,7 @@ DEBUG_ONLY_TEST_F(
 
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
-  auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+  auto outputBufferManager = exec::DefaultOutputBufferManager::getInstanceRef();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task is at running state because the build side is lingering.
@@ -1028,7 +1032,8 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
 
     // 'Delete results' from output buffer triggers 'set all output consumed',
     // which should finish the task.
-    auto outputBufferManager = exec::OutputBufferManager::getInstanceRef();
+    auto outputBufferManager =
+        exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
     // Task must be finished at this stage.

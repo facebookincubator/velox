@@ -25,6 +25,7 @@
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -36,7 +37,7 @@ struct AbsFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const T* /*a*/) {
-    ansiEnabled_ = config.sparkAnsiEnabled();
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename T>
@@ -65,12 +66,24 @@ struct AbsFunction {
 
 template <typename T>
 struct RemainderFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/,
+      const TInput* /*n*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
   template <
       typename TInput,
       typename std::enable_if_t<!std::is_floating_point_v<TInput>, int> = 0>
   FOLLY_ALWAYS_INLINE bool
   call(TInput& result, const TInput a, const TInput n) {
     if (UNLIKELY(n == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
       return false;
     }
     // std::numeric_limits<int64_t>::min() % -1 could crash the program since
@@ -91,6 +104,9 @@ struct RemainderFunction {
   FOLLY_ALWAYS_INLINE bool
   call(TInput& result, const TInput a, const TInput n) {
     if (UNLIKELY(n == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
       return false;
     }
     // If either the dividend or the divisor is NaN, or if the dividend is
@@ -106,6 +122,9 @@ struct RemainderFunction {
     }
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
@@ -146,15 +165,34 @@ struct PModFloatFunction {
 template <typename T>
 struct UnaryMinusFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a) {
-    if constexpr (std::is_integral_v<TInput>) {
-      // Avoid undefined integer overflow.
-      result = a == std::numeric_limits<TInput>::min() ? a : -a;
-    } else {
-      result = -a;
-    }
-    return true;
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*a*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
+    if constexpr (std::is_integral_v<TInput>) {
+      if (FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min())) {
+        if (ansiEnabled_) {
+          if (threadSkipErrorDetails()) {
+            return Status::UserError();
+          }
+          return Status::UserError("Arithmetic overflow: -({})", a);
+        }
+        // In non-ANSI mode, return the minimum value unchanged.
+        result = a;
+        return Status::OK();
+      }
+    }
+    result = -a;
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
@@ -308,6 +346,20 @@ struct Log2Function {
       return false;
     }
     result = std::log2(a);
+    return true;
+  }
+};
+
+template <typename T>
+struct LnFunction {
+  // Returns NULL (rather than NaN or -Infinity) when the argument is at or
+  // below the zero asymptote. This matches Spark's UnaryLogExpression, which
+  // inherits the convention from Hive.
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    if (a <= 0.0) {
+      return false;
+    }
+    result = std::log(a);
     return true;
   }
 };

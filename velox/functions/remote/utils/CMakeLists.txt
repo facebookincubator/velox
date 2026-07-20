@@ -13,5 +13,6 @@
 # limitations under the License.
 
 add_library(velox_functions_remote_utils RemoteFunctionServiceProvider.cpp)
+velox_add_test_headers(velox_functions_remote_utils RemoteFunctionServiceProvider.h)
 
 target_link_libraries(velox_functions_remote_utils PUBLIC velox_functions_remote_server)

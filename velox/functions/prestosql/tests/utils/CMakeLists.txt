@@ -13,6 +13,12 @@
 # limitations under the License.
 
 add_library(velox_functions_test_lib FunctionBaseTest.cpp)
+velox_add_test_headers(
+  velox_functions_test_lib
+  FunctionBaseTest.h
+  FuzzerTestUtils.h
+  LambdaParameterizedBaseTest.h
+)
 
 target_link_libraries(
   velox_functions_test_lib

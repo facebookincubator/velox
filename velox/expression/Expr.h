@@ -16,22 +16,30 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <folly/container/F14Map.h>
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/exec/trace/TraceWriter.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/ExprStats.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/expression/VectorFunctionListener.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
+
+namespace facebook::velox::exec::trace {
+class TraceCtx;
+} // namespace facebook::velox::exec::trace
 
 namespace facebook::velox::exec {
 
 class ExprSet;
 class FieldReference;
+class Operator;
 class VectorFunction;
 
 /// Maintains a set of rows for evaluation and removes rows with
@@ -114,6 +122,8 @@ enum class SpecialFormKind : int32_t {
   kTry = 6,
   kAnd = 7,
   kOr = 8,
+  kNullIf = 9,
+  kCase = 10,
   kCustom = 999,
 };
 
@@ -143,7 +153,8 @@ class Expr {
       std::shared_ptr<VectorFunction> vectorFunction,
       VectorFunctionMetadata metadata,
       std::string name,
-      bool trackCpuUsage);
+      bool trackCpuUsage,
+      std::vector<VectorFunctionListeners> listeners = {});
 
   virtual ~Expr() = default;
 
@@ -304,6 +315,10 @@ class Expr {
     return specialFormKind_ == SpecialFormKind::kOr;
   }
 
+  bool isCase() const {
+    return specialFormKind_ == SpecialFormKind::kCase;
+  }
+
   bool isCustom() const {
     return specialFormKind_ == SpecialFormKind::kCustom;
   }
@@ -406,6 +421,16 @@ class Expr {
     return stats_;
   }
 
+  /// Returns true if this expression is in adaptive sampling mode.
+  bool isAdaptiveSampling() const {
+    return adaptiveState_ == AdaptiveCpuSamplingState::kSampling;
+  }
+
+  /// Returns the adaptive sampling rate (0 = always track, N = sample 1/N).
+  uint32_t adaptiveSamplingRate() const {
+    return adaptiveSamplingRate_;
+  }
+
   void addNulls(
       const SelectivityVector& rows,
       const uint64_t* rawNulls,
@@ -423,6 +448,21 @@ class Expr {
   std::vector<VectorPtr>& inputValues() {
     return inputValues_;
   }
+
+  /// Sets up expression-level output tracer if the given TraceCtx indicates
+  /// this expression should be traced. Called once during operator
+  /// initialization. Uses a visited set to avoid redundant traversal of
+  /// shared CSE nodes.
+  void maybeSetupTracer(
+      const Operator& op,
+      const trace::TraceCtx& traceCtx,
+      std::unordered_set<Expr*>& visited,
+      std::unordered_map<std::string, int>& instanceCounts);
+
+  /// Finishes expression-level output tracing by calling finish() on the
+  /// cached tracer. Uses a visited set to avoid redundant traversal of
+  /// shared CSE nodes.
+  void finishTracer(std::unordered_set<Expr*>& visited);
 
   void setAllNulls(
       const SelectivityVector& rows,
@@ -505,6 +545,16 @@ class Expr {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result);
+
+  // Invokes vectorFunction_->apply() with registered listeners and exception
+  // wrapping. Post-listeners always run (even if apply throws).
+  void invokeApplyWithListeners(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result);
+
+  // Traces expression output if a tracer is configured.
+  FOLLY_ALWAYS_INLINE void traceOutput(const VectorPtr& result);
 
   // Returns true if values in 'distinctFields_' have nulls that are
   // worth skipping. If so, the rows in 'rows' with at least one sure
@@ -592,11 +642,26 @@ class Expr {
       EvalCtx& context,
       VectorPtr& result);
 
-  /// Returns an instance of CpuWallTimer if cpu usage tracking is enabled. Null
-  /// otherwise.
-  std::unique_ptr<CpuWallTimer> cpuWallTimer() {
-    return trackCpuUsage_ ? std::make_unique<CpuWallTimer>(stats_.timing)
-                          : nullptr;
+  /// Returns an instance of CpuWallTimer based on the tracking mode:
+  /// 1. trackCpuUsage_ (set via QueryConfig) — always creates timer
+  /// 2. Adaptive per-function sampling — creates timer based on calibration
+  ///    state and per-function overhead
+  std::unique_ptr<CpuWallTimer> cpuWallTimer(const EvalCtx& context);
+
+  /// Finalizes adaptive calibration after function execution. Called from
+  /// applyFunction() and evalSpecialFormWithStats() when adaptive sampling
+  /// is enabled. Transitions the per-function state machine based on
+  /// measured overhead.
+  void finalizeAdaptiveCalibration(
+      double maxOverheadPct,
+      uint64_t timerOverheadNanos);
+
+  /// Returns true if adaptive calibration is still in progress (warmup or
+  /// calibrating). Used to skip the finalizeAdaptiveCalibration() call on
+  /// the hot path once calibration is complete.
+  bool isCalibrating() const {
+    return adaptiveState_ == AdaptiveCpuSamplingState::kWarmup ||
+        adaptiveState_ == AdaptiveCpuSamplingState::kCalibrating;
   }
 
   // Should be called only after computeMetadata() has been called on 'inputs_'.
@@ -612,6 +677,10 @@ class Expr {
   const std::optional<SpecialFormKind> specialFormKind_;
   const bool supportsFlatNoNullsFastPath_;
   const bool trackCpuUsage_;
+  // Listeners invoked around vectorFunction_->apply() in both applyFunction()
+  // and evalSimplifiedImpl(). Collected from the global listener factory
+  // registry during expression compilation.
+  const std::vector<VectorFunctionListeners> listeners_;
 
   std::vector<VectorPtr> constantInputs_;
   std::vector<bool> inputIsConstant_;
@@ -710,6 +779,34 @@ class Expr {
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
 
+  /// Per-function adaptive CPU sampling state machine.
+  enum class AdaptiveCpuSamplingState : uint8_t {
+    /// First batch: warm up caches, discard timing.
+    kWarmup,
+    /// Next N batches: measure CpuWallTimer overhead and function cost.
+    kCalibrating,
+    /// Calibration complete: overhead is acceptable, always track.
+    kAlwaysTrack,
+    /// Calibration complete: overhead is too high, sample at computed rate.
+    kSampling,
+  };
+
+  /// Number of calibration batches (more batches = less noise).
+  static constexpr uint32_t kCalibrationBatches = 5;
+
+  AdaptiveCpuSamplingState adaptiveState_{AdaptiveCpuSamplingState::kWarmup};
+
+  /// Stopwatch for measuring function execution wall time during calibration.
+  std::optional<DeltaCpuWallTimeStopWatch> calibrationStopWatch_;
+  /// Accumulated function wall time (without timer) during calibration.
+  uint64_t calibrationFunctionWallNanos_{0};
+  /// Counter for calibration batches.
+  uint32_t calibrationBatchCount_{0};
+  /// Computed sampling rate: 0 = always track, N = track every N-th batch.
+  uint32_t adaptiveSamplingRate_{0};
+  /// Counter for sampling cadence.
+  uint32_t adaptiveSamplingCounter_{0};
+
   // If true computeMetaData returns, otherwise meta data is computed and the
   // flag is set to true.
   bool metaDataComputed_ = false;
@@ -717,6 +814,9 @@ class Expr {
   // True if distinctFields_ are identical to at least one of the parent
   // expression's distinct fields.
   bool sameAsParentDistinctFields_ = false;
+
+  // Cached output tracer set up during expression initialization.
+  std::unique_ptr<trace::TraceExprWriter> outputTracer_;
 };
 
 /// Generate a selectivity vector of a single row.
@@ -803,6 +903,13 @@ class ExprSet {
     memoizingExprs_.insert(expr);
   }
 
+  /// Sets up expression-level tracers on all expressions in this set.
+  void maybeSetupTracers(const Operator& op, const trace::TraceCtx& traceCtx);
+
+  /// Finishes expression-level tracers on all expressions in this set.
+  /// Called during operator close.
+  void finishTracers();
+
   /// Returns text representation of the expression set.
   /// @param compact If true, uses one-line representation for each expression.
   /// Otherwise, prints a tree of expressions one node per line.
@@ -818,6 +925,11 @@ class ExprSet {
 
  protected:
   void clearSharedSubexprs();
+
+  /// Initializes adaptive CPU sampling state on the EvalCtx. Sets
+  /// sampling flags, max overhead percentage, and measures CpuWallTimer
+  /// overhead once per ExprSet.
+  void initializeAdaptiveCpuSampling(EvalCtx& context);
 
   std::vector<std::shared_ptr<Expr>> exprs_;
 
@@ -835,6 +947,20 @@ class ExprSet {
   std::unordered_set<Expr*> memoizingExprs_;
   core::ExecCtx* const execCtx_;
   const bool lazyDereference_;
+
+  // Set to true when expression-level tracers are configured for this ExprSet.
+  // Cached to avoid re-querying TraceCtx at close time.
+  bool exprTracingEnabled_{false};
+
+  // Cached from QueryConfig at construction time to avoid repeated map lookups.
+  const bool adaptiveCpuSampling_;
+  const double adaptiveCpuSamplingMaxOverheadPct_;
+
+  // Measured CpuWallTimer overhead (nanos per invocation). Measured once on
+  // the first eval() call and shared across all Expr nodes via EvalCtx.
+  // This is a platform constant — does not vary by expression or data.
+  uint64_t timerOverheadNanos_{0};
+  bool timerOverheadMeasured_{false};
 };
 
 class ExprSetSimplified : public ExprSet {

@@ -166,7 +166,7 @@ struct SpillConfig {
   /// files to avoid using too much memory and causing OOM. Note that this is
   /// only applicable for ordered spill, is not applicable for spill scenarios
   /// that don't need sorting, e.g. HashJoin.
-  uint32_t numMaxMergeFiles;
+  uint32_t numMaxMergeFiles{0};
 
   /// Prefix sort config when spilling, enable prefix sort when this config is
   /// set, otherwise, fallback to timsort.

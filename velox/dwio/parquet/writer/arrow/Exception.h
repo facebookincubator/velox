@@ -27,12 +27,12 @@
 #include "arrow/util/string_builder.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 
-// PARQUET-1085
+// PARQUET-1085.
 #if !defined(ARROW_UNUSED)
 #define ARROW_UNUSED(x) UNUSED(x)
 #endif
 
-// Parquet exception to Arrow Status
+// Parquet exception to Arrow Status.
 
 #define BEGIN_PARQUET_CATCH_EXCEPTIONS try {
 #define END_PARQUET_CATCH_EXCEPTIONS                                           \
@@ -44,51 +44,50 @@
     return ::arrow::Status::IOError(e.what());                                 \
   }
 
-// clang-format off
+// clang-format off.
 
-#define PARQUET_CATCH_NOT_OK(s)    \
-  BEGIN_PARQUET_CATCH_EXCEPTIONS   \
-  (s);                             \
+#define PARQUET_CATCH_NOT_OK(s)      \
+  BEGIN_PARQUET_CATCH_EXCEPTIONS(s); \
   END_PARQUET_CATCH_EXCEPTIONS
 
-// clang-format on
+// clang-format on.
 
 #define PARQUET_CATCH_AND_RETURN(s) \
   BEGIN_PARQUET_CATCH_EXCEPTIONS    \
   return (s);                       \
   END_PARQUET_CATCH_EXCEPTIONS
 
-// Arrow Status to Parquet exception
+// Arrow Status to Parquet exception.
 
-#define PARQUET_IGNORE_NOT_OK(s)                                \
-  do {                                                          \
-    ::arrow::Status _s = ::arrow::internal::GenericToStatus(s); \
-    ARROW_UNUSED(_s);                                           \
+#define PARQUET_IGNORE_NOT_OK(s)                               \
+  do {                                                         \
+    ::arrow::Status S = ::arrow::internal::GenericToStatus(s); \
+    ARROW_UNUSED(S);                                           \
   } while (0)
 
 #define PARQUET_THROW_NOT_OK(s)                                        \
   do {                                                                 \
-    ::arrow::Status _s = ::arrow::internal::GenericToStatus(s);        \
-    if (!_s.ok()) {                                                    \
+    ::arrow::Status S = ::arrow::internal::GenericToStatus(s);         \
+    if (!S.ok()) {                                                     \
       throw ::facebook::velox::parquet::arrow::ParquetStatusException( \
-          std::move(_s));                                              \
+          std::move(S));                                               \
     }                                                                  \
   } while (0)
 
-#define PARQUET_ASSIGN_OR_THROW_IMPL(status_name, lhs, rexpr) \
-  auto status_name = (rexpr);                                 \
-  PARQUET_THROW_NOT_OK(status_name.status());                 \
-  lhs = std::move(status_name).ValueOrDie();
+#define PARQUET_ASSIGN_OR_THROW_IMPL(statusName, lhs, rexpr) \
+  auto statusName = (rexpr);                                 \
+  PARQUET_THROW_NOT_OK(statusName.status());                 \
+  lhs = std::move(statusName).ValueOrDie();
 
 #define PARQUET_ASSIGN_OR_THROW(lhs, rexpr) \
   PARQUET_ASSIGN_OR_THROW_IMPL(             \
-      ARROW_ASSIGN_OR_RAISE_NAME(_error_or_value, __COUNTER__), lhs, rexpr);
+      ARROW_ASSIGN_OR_RAISE_NAME(ErrorOrValue, __COUNTER__), lhs, rexpr);
 
 namespace facebook::velox::parquet::arrow {
 
 class ParquetException : public std::exception {
  public:
-  PARQUET_NORETURN static void EofException(const std::string& msg = "") {
+  PARQUET_NORETURN static void eofException(const std::string& msg = "") {
     static std::string prefix = "Unexpected end of stream";
     if (msg.empty()) {
       throw ParquetException(prefix);
@@ -161,7 +160,7 @@ class ParquetInvalidOrCorruptedFileException : public ParquetStatusException {
 };
 
 template <typename StatusReturnBlock>
-void ThrowNotOk(StatusReturnBlock&& b) {
+void throwNotOk(StatusReturnBlock&& b) {
   PARQUET_THROW_NOT_OK(b());
 }
 

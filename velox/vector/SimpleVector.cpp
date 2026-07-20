@@ -15,6 +15,7 @@
  */
 
 #include "velox/vector/SimpleVector.h"
+#include "velox/functions/lib/string/StringCore.h"
 
 namespace facebook::velox {
 
@@ -28,6 +29,36 @@ void SimpleVector<StringView>::validate(
   if (rlockedAsciiComputedRows->hasSelections()) {
     VELOX_CHECK_GE(rlockedAsciiComputedRows->size(), size());
   }
+}
+
+template <>
+template <>
+bool SimpleVector<StringView>::computeAndSetIsAscii<StringView>(
+    const SelectivityVector& rows) {
+  if (rows.isSubset(*asciiInfo.readLockedAsciiComputedRows())) {
+    return asciiInfo.isAllAscii();
+  }
+  ensureIsAsciiCapacity();
+  bool isAllAscii = true;
+  rows.applyToSelected([&](auto row) {
+    if (!isNullAt(row)) {
+      auto string = valueAt(row);
+      isAllAscii &=
+          functions::stringCore::isAscii(string.data(), string.size());
+    }
+  });
+
+  auto wlockedAsciiComputedRows = asciiInfo.writeLockedAsciiComputedRows();
+  if (!wlockedAsciiComputedRows->hasSelections()) {
+    asciiInfo.setIsAllAscii(isAllAscii);
+  } else {
+    asciiInfo.setIsAllAscii(asciiInfo.isAllAscii() & isAllAscii);
+  }
+
+  wlockedAsciiComputedRows->select(rows);
+  asciiInfo.setAsciiComputedRowsEmpty(
+      !wlockedAsciiComputedRows->hasSelections());
+  return asciiInfo.isAllAscii();
 }
 
 } // namespace facebook::velox

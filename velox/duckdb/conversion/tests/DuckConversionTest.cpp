@@ -91,7 +91,6 @@ TEST(DuckConversionTest, duckValueToVariantUnsupported) {
   /// defined as static constexpr const causing a double definition only in the
   /// debug build.
   std::vector<LogicalType> unsupported = {
-      ::duckdb::TransformStringToLogicalType("time"),
       ::duckdb::TransformStringToLogicalType("interval"),
       LogicalType::LIST({::duckdb::TransformStringToLogicalType("integer")}),
       LogicalType::STRUCT(
@@ -123,6 +122,7 @@ TEST(DuckConversionTest, types) {
 
   testRoundTrip(TIMESTAMP());
   testRoundTrip(DATE());
+  testRoundTrip(TIME());
   testRoundTrip(INTERVAL_DAY_TIME());
 
   testRoundTrip(DECIMAL(22, 5));
@@ -157,7 +157,8 @@ TEST(DuckConversionTest, createTable) {
            DOUBLE()}));
 
   testCreateTable(
-      ROW({"a", "b", "c"}, {TIMESTAMP(), DATE(), INTERVAL_DAY_TIME()}));
+      ROW({"a", "b", "c", "d"},
+          {TIMESTAMP(), DATE(), INTERVAL_DAY_TIME(), TIME()}));
 
   testCreateTable(ROW({"a", "b"}, {DECIMAL(7, 5), DECIMAL(30, 10)}));
 

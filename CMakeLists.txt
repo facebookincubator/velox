@@ -156,7 +156,7 @@ option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
-option(VELOX_ENABLE_GEO "Enable Geospatial support" OFF)
+option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
@@ -173,11 +173,20 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
+option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
+option(VELOX_ENABLE_CXL "Build CXL experimental memory subsystem (Linux only)." OFF)
 
 # Explicitly force compilers to generate colored output. Compilers usually do
 # this by default if they detect the output is a terminal, but this assumption
 # is broken if you use ninja.
 option(VELOX_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." OFF)
+
+# Enable the address and undefined behavior sanitizers. They can run together.
+option(
+  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+  "Builds velox with Clang ASAN and UBSAN sanitizer flags"
+  OFF
+)
 
 if(${VELOX_BUILD_MINIMAL} OR ${VELOX_BUILD_MINIMAL_WITH_DWIO})
   # Enable and disable components for velox base build
@@ -212,7 +221,21 @@ if(VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_BUILD_TEST_UTILS ON)
 endif()
 
+if(VELOX_ENABLE_TORCHWAVE)
+  set(VELOX_ENABLE_WAVE ON)
+  if(DEFINED ENV{TORCH_DIR})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{TORCH_DIR}")
+  endif()
+  find_package(Torch REQUIRED)
+  message(STATUS "Found Torch: ${TORCH_INSTALL_PREFIX}")
+endif()
+
 if(VELOX_ENABLE_CUDF)
+  if(NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+    message(FATAL_ERROR "cuDF requires GCC. Found ${CMAKE_CXX_COMPILER_ID}.")
+  elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.3)
+    message(FATAL_ERROR "cuDF requires GCC >= 13.3. Found GCC ${CMAKE_CXX_COMPILER_VERSION}.")
+  endif()
   message(STATUS "Building curl from source to satisfy cuDF curl version requirement")
   set(CURL_SOURCE BUNDLED)
   velox_resolve_dependency(CURL)
@@ -310,8 +333,17 @@ if(VELOX_ENABLE_S3)
   if(AWSSDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
   endif()
-  find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
+  find_package(AWSSDK 1.11.654 REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
+endif()
+
+if(VELOX_ENABLE_CXL AND NOT (UNIX AND NOT APPLE))
+  # libnuma's numa_tonode_memory page binding is unavailable off Linux.
+  message(STATUS "VELOX_ENABLE_CXL is only supported on Linux; forcing OFF.")
+  set(VELOX_ENABLE_CXL OFF)
+endif()
+if(VELOX_ENABLE_CXL)
+  add_compile_definitions(VELOX_ENABLE_CXL)
 endif()
 
 if(VELOX_ENABLE_ABFS)
@@ -334,8 +366,8 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
-  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
-  # are included in Arrow.
+  # Native Parquet reader requires Arrow Parquet writer, which are
+  # included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
@@ -399,19 +431,12 @@ endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D USE_VELOX_COMMON_BASE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
 if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
-
-# Ensure that we don't bring in headers that might have coroutines enabled. The
-# dependencies turn off coroutines in folly and the other FBOS dependencies. If
-# not explicitly turned off differences in the build using GCC cause libray
-# incompatibilities of the thrift server and the remote functions library
-# causing SEGVs in the tests.
-string(APPEND CMAKE_CXX_FLAGS " -DFOLLY_CFG_NO_COROUTINES")
 
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
@@ -474,6 +499,9 @@ endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   enable_language(CUDA)
+  # Use same C++ standard throughout
+  set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
+  set(CMAKE_CUDA_STANDARD_REQUIRED ${CMAKE_CXX_STANDARD_REQUIRED})
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
@@ -481,9 +509,16 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     message(FATAL_ERROR "-DCMAKE_CUDA_ARCHITECTURES= must be set")
   endif()
   if(CMAKE_BUILD_TYPE MATCHES Debug)
-    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
+    set(VELOX_CUDA_DEBUG_FLAGS "$<$<COMPILE_LANGUAGE:CUDA>:-G>")
   endif()
   find_package(CUDAToolkit REQUIRED)
+  # Suppress deprecated GPU targets warning for CUDA 12.8.x
+  if(
+    CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8.0
+    AND CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 13.0.0
+  )
+    string(APPEND CMAKE_CUDA_FLAGS " -Wno-deprecated-gpu-targets")
+  endif()
   if(VELOX_ENABLE_CUDF)
     foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
       if(arch LESS 70)
@@ -511,12 +546,8 @@ endif()
 
 # Set after the test of the CUDA compiler. Otherwise, the test fails with
 # -latomic not found because it is added right after the compiler exe.
-if(
-  "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang"
-  AND "${CMAKE_CXX_COMPILER_VERSION}" VERSION_GREATER_EQUAL 15
-)
-  set(CMAKE_EXE_LINKER_FLAGS "-latomic")
-endif()
+# Only link libatomic if compiler-rt is not available (compiler-rt provides atomic implementation)
+velox_configure_clang_atomic_linker_flags()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -542,19 +573,31 @@ velox_resolve_dependency(
 )
 
 set(
-  BOOST_INCLUDE_LIBRARIES
+  BOOST_COMPONENTS
   atomic
   context
   date_time
   filesystem
   program_options
   regex
-  system
   thread
+)
+set(
+  BOOST_OPTIONAL_COMPONENTS
+  system # Boost.System is header only since Boost 1.89
 )
 
 velox_set_source(Boost)
-velox_resolve_dependency(Boost 1.77.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
+velox_resolve_dependency(
+  Boost
+  1.77.0
+  MODULE
+  COMPONENTS ${BOOST_COMPONENTS}
+  OPTIONAL_COMPONENTS ${BOOST_OPTIONAL_COMPONENTS}
+)
+if(NOT TARGET Boost::system)
+  add_library(Boost::system ALIAS Boost::headers)
+endif()
 
 velox_set_source(gflags)
 
@@ -569,9 +612,13 @@ if(NOT TARGET gflags::gflags)
 endif()
 
 if(${gflags_SOURCE} STREQUAL "BUNDLED")
-  # we force glog from source to avoid issues with a system version built
-  # against another gflags version (which is likely)
-  set(glog_SOURCE BUNDLED)
+  # Allow explicit glog_SOURCE override (e.g. when system glog is built
+  # against the same gflags version as BUNDLED).
+  if(DEFINED ENV{glog_SOURCE})
+    set(glog_SOURCE $ENV{glog_SOURCE})
+  else()
+    set(glog_SOURCE BUNDLED)
+  endif()
 else()
   set(glog_SOURCE SYSTEM)
 endif()
@@ -644,12 +691,38 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
   # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
   # requires clients to explicitly install fizz and wangle.
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
+
+  # Workaround for a missing edge in the system-installed FBThrift's
+  # exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
+  # `target_link_libraries(thriftmetadata PUBLIC ...)` block does not
+  # declare an xxhash dep on `thriftmetadata` — the conditional
+  # `if(Xxhash_FOUND) target_link_libraries(thriftmetadata PUBLIC
+  # ${Xxhash_LIBRARY})` block was added later in fbthrift mainline.
+  # Meanwhile `libthriftmetadata.a` itself does call XXH3_64bits(),
+  # so the binary needs xxhash but the exported FBThriftTargets.cmake
+  # doesn't declare it. Symptom (only with VELOX_BUILD_SHARED=ON +
+  # VELOX_MONO_LIBRARY=ON, where libvelox.so doesn't drag xxhash in
+  # incidentally): `undefined reference to symbol 'XXH3_64bits'` on
+  # any test executable that links FBThrift through velox.
+  # Tracking: https://github.com/facebook/fbthrift/issues/651,
+  # https://github.com/facebookincubator/velox/issues/13153.
+  # Remove once FB_OS_VERSION is bumped past the commit that adds the
+  # `if(Xxhash_FOUND)` block AND the velox-dev container is rebuilt
+  # against that fixed fbthrift release.
+  if(TARGET FBThrift::thriftmetadata)
+    find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
+    set_property(
+      TARGET FBThrift::thriftmetadata
+      APPEND
+      PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
+    )
+  endif()
 endif()
 
 if(VELOX_ENABLE_GCS)
@@ -659,9 +732,19 @@ if(VELOX_ENABLE_GCS)
 endif()
 
 # GCC needs to link a library to enable std::filesystem.
+# GCC needs to enable co-routines. We only support compiler that
+# support coroutines.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   # Find Threads library
   find_package(Threads REQUIRED)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
+  # Explicitly enable folly coroutines when compiler supports them.
+  # This is required for folly::coro::AsyncGenerator to work correctly.
+  add_compile_definitions(FOLLY_HAS_COROUTINES=1)
+elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "AppleClang")
+  # Handle Apple toolchain Clang change of name of variable.
+  # Remove when upgrading to the latest FBOS version where this has been addressed.
+  add_compile_options(-D_LIBCPP_HAS_NO_ASAN)
 endif()
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
@@ -735,7 +818,27 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
+# Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
+if(
+  VELOX_ENABLE_ASAN_UBSAN_SANITIZERS
+  AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+  AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+)
+  set(
+    CMAKE_CXX_FLAGS
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+  )
+  # Skip alignment errors and member access check for now.
+  # https://github.com/facebookincubator/velox/issues/15811
+  # https://github.com/facebookincubator/velox/issues/15810
+  set(
+    CMAKE_EXE_LINKER_FLAGS
+    "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined -fno-sanitize=alignment -fno-sanitize=vptr"
+  )
+endif()
+
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
+message("FINAL CMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}")
 
 if(VELOX_ENABLE_ARROW)
   velox_set_source(Arrow)
@@ -745,6 +848,12 @@ endif()
 if(VELOX_ENABLE_GEO)
   velox_set_source(geos)
   velox_resolve_dependency(geos)
+endif()
+
+if(VELOX_ENABLE_GEO)
+  list(PREPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules/s2geometry)
+  velox_set_source(s2geometry)
+  velox_resolve_dependency(s2geometry)
 endif()
 
 add_subdirectory(velox)

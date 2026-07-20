@@ -95,8 +95,9 @@ PYBIND11_MODULE(plan_builder, m) {
           "table_scan",
           &velox::py::PyPlanBuilder::tableScan,
           py::arg("output_schema") = velox::py::PyType{},
-          py::arg("aliases") = py::dict{},
-          py::arg("subfields") = py::dict{},
+          py::arg("aliases") = std::unordered_map<std::string, std::string>{},
+          py::arg("subfields") =
+              std::unordered_map<std::string, std::vector<int64_t>>{},
           py::arg("filters") = std::vector<std::string>{},
           py::arg("remaining_filter") = "",
           py::arg("row_index") = "",
@@ -333,6 +334,23 @@ PYBIND11_MODULE(plan_builder, m) {
         Args:
           keys: The sorting keys.
           sources: The list of sources to merge.
+      )"))
+      .def(
+          "mark_sorted",
+          &velox::py::PyPlanBuilder::markSorted,
+          py::arg("marker_key"),
+          py::arg("sorting_keys"),
+          py::doc(R"(
+        Adds a MarkSorted node that validates sortedness of input data.
+        For each input row, adds a boolean column indicating whether the row
+        is in sorted order relative to the previous row.
+
+        Args:
+          marker_key: The name of the output boolean column.
+          sorting_keys: List of columns that define the sort order. The
+                        strings can be column names and optionally contain
+                        the sort orientation and null handling (e.g., "col",
+                        "col DESC", "col NULLS FIRST", "col DESC NULLS FIRST").
       )"))
       .def(
           "tpch_gen",

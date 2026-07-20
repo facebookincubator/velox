@@ -59,7 +59,7 @@ std::optional<SemanticVersion> SemanticVersion::parse(
   }
 }
 
-bool SemanticVersion::shouldIgnoreStatistics(thrift::Type::type type) const {
+bool SemanticVersion::shouldIgnoreStatistics(thrift::Type type) const {
   if (type != thrift::Type::BYTE_ARRAY &&
       type != thrift::Type::FIXED_LEN_BYTE_ARRAY) {
     return false;
@@ -67,7 +67,7 @@ bool SemanticVersion::shouldIgnoreStatistics(thrift::Type::type type) const {
   if (this->application_ != "parquet-mr") {
     return false;
   }
-  static SemanticVersion threshold(1, 8, 1);
+  static SemanticVersion threshold(1, 8, 2);
   return *this < threshold;
 }
 

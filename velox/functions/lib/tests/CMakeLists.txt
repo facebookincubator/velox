@@ -17,8 +17,10 @@ add_executable(
   ArrayRemoveNullsTest.cpp
   CheckNestedNullsTest.cpp
   DateTimeFormatterTest.cpp
+  HllAccumulatorTest.cpp
   IsNullTest.cpp
   IsNotNullTest.cpp
+  KHyperLogLogTest.cpp
   KllSketchTest.cpp
   LambdaFunctionUtilTest.cpp
   MakeRowFromMapTest.cpp
@@ -26,11 +28,13 @@ add_executable(
   QuantileDigestTest.cpp
   Re2FunctionsTest.cpp
   RepeatTest.cpp
+  SetDigestTest.cpp
   TDigestTest.cpp
   TimeUtilsTest.cpp
   Utf8Test.cpp
   ZetaDistributionTest.cpp
 )
+velox_add_test_headers(velox_functions_lib_test QuantileDigestTestBase.h)
 
 add_test(
   NAME velox_functions_lib_test
@@ -51,3 +55,5 @@ target_link_libraries(
   GTest::gtest_main
   GTest::gmock
 )
+
+velox_add_library(velox_functions_lib_slice_test_base INTERFACE HEADERS SliceTestBase.h)

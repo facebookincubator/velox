@@ -46,7 +46,9 @@ using TestRowType = variant;
 class ArraySortTest : public FunctionBaseTest,
                       public testing::WithParamInterface<TypeKind> {
  protected:
-  ArraySortTest() : numValues_(10), numVectors_(5) {}
+  ArraySortTest() : numValues_(10), numVectors_(5) {
+    options_.parseIntegerAsBigint = false;
+  }
 
   void SetUp() override;
 
@@ -612,7 +614,7 @@ TEST_F(ArraySortTest, unsupporteLambda) {
 
 TEST_F(ArraySortTest, failOnMapTypeSort) {
   static const std::string kErrorMessage =
-      "Scalar function signature is not supported"_sv;
+      "Scalar function signature is not supported";
   auto data = makeRowVector({BaseVector::createNullConstant(
       ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool())});
   auto testFail = [&](const std::string& name) {

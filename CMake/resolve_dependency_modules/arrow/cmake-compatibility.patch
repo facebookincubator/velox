@@ -14,7 +14,7 @@
 
 --- a/cpp/cmake_modules/ThirdpartyToolchain.cmake
 +++ b/cpp/cmake_modules/ThirdpartyToolchain.cmake
-@@ -971,7 +971,8 @@
+@@ -979,7 +979,8 @@
      -DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=${CMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY}
      -DCMAKE_INSTALL_LIBDIR=lib
      -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}
@@ -22,9 +22,9 @@
 +    -DCMAKE_VERBOSE_MAKEFILE=${CMAKE_VERBOSE_MAKEFILE}
 +    -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 
- # Enable s/ccache if set by parent.
- if(CMAKE_C_COMPILER_LAUNCHER AND CMAKE_CXX_COMPILER_LAUNCHER)
-@@ -1026,6 +1027,7 @@
+ # if building with a toolchain file, pass that through
+ if(CMAKE_TOOLCHAIN_FILE)
+@@ -1045,6 +1046,7 @@
    set(CMAKE_COMPILE_WARNING_AS_ERROR FALSE)
    set(CMAKE_EXPORT_NO_PACKAGE_REGISTRY TRUE)
    set(CMAKE_MACOSX_RPATH ${ARROW_INSTALL_NAME_RPATH})
@@ -32,3 +32,14 @@
    if(MSVC)
      string(REPLACE "/WX" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
      string(REPLACE "/WX" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+--- a/cpp/cmake_modules/BuildUtils.cmake
++++ b/cpp/cmake_modules/BuildUtils.cmake
+@@ -112,7 +112,7 @@
+     execute_process(COMMAND ${LIBTOOL_MACOS} -V
+                     OUTPUT_VARIABLE LIBTOOL_V_OUTPUT
+                     OUTPUT_STRIP_TRAILING_WHITESPACE)
+-    if(NOT "${LIBTOOL_V_OUTPUT}" MATCHES ".*cctools-([0-9.]+).*")
++    if(NOT "${LIBTOOL_V_OUTPUT}" MATCHES ".*cctools.+([0-9.]+).*")
+       message(FATAL_ERROR "libtool found appears to be the incompatible GNU libtool: ${LIBTOOL_MACOS}"
+       )
+     endif()

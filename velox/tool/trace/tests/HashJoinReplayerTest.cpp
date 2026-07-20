@@ -19,21 +19,21 @@
 
 #include <string>
 
-#include <folly/experimental/EventCount.h>
+#include <folly/synchronization/EventCount.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/HashJoinReplayer.h"
 #include "velox/tool/trace/TraceReplayRunner.h"
@@ -280,8 +280,8 @@ TEST_F(HashJoinReplayerTest, partialDriverIds) {
   assertEqualResults({result}, {traceResult});
 
   const auto taskId = task->taskId();
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto opTraceDir =
       exec::trace::getOpTraceDirectory(taskTraceDir, traceNodeId_, 0, 0);
   const auto opTraceDataFile = exec::trace::getOpTraceInputFilePath(opTraceDir);
@@ -345,8 +345,8 @@ TEST_F(HashJoinReplayerTest, runner) {
   }
   auto traceResult = traceBuilder.copyResults(pool(), task);
 
-  const auto taskTraceDir =
-      exec::trace::getTaskTraceDirectory(traceRoot, *task);
+  const auto taskTraceDir = exec::trace::getTaskTraceDirectory(
+      traceRoot, task->queryCtx()->queryId(), task->taskId());
   const auto probeOperatorTraceDir = exec::trace::getOpTraceDirectory(
       taskTraceDir,
       traceNodeId_,
@@ -455,7 +455,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {
   const auto& stats = taskStats.at(traceNodeId_);
   auto opStats = toOperatorStats(task->taskStats());
   ASSERT_GT(
-      opStats.at("HashBuild").runtimeStats[Operator::kSpillWrites].sum, 0);
+      opStats.at("HashBuild")
+          .runtimeStats[std::string(Operator::kSpillWrites)]
+          .sum,
+      0);
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_GT(stats.spilledFiles, 0);
@@ -537,7 +540,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashProbeSpill) {
   const auto& stats = taskStats.at(traceNodeId_);
   auto opStats = toOperatorStats(task->taskStats());
   ASSERT_GT(
-      opStats.at("HashProbe").runtimeStats[Operator::kSpillWrites].sum, 0);
+      opStats.at("HashProbe")
+          .runtimeStats[std::string(Operator::kSpillWrites)]
+          .sum,
+      0);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);

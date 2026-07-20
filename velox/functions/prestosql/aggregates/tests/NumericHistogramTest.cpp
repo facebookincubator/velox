@@ -629,5 +629,93 @@ TEST_F(NumericHistogramTest, threeArgsFloatFloat) {
   runThreeArgsTests<float, float>();
 }
 
+// Verify all-null input produces null output without crashing.
+// Exercises the mergeSameBuckets fix for nextIndex_ == 0.
+TEST_F(NumericHistogramTest, allNullInputTwoArgs) {
+  disableTestIncremental();
+  auto valuesAndWeights = makeRowVector({
+      makeNullableFlatVector<double>(
+          {std::nullopt, std::nullopt, std::nullopt}),
+  });
+
+  auto expected = makeRowVector({
+      makeNullableMapVector<double, double>({std::nullopt}),
+  });
+  testAggregations(
+      {valuesAndWeights}, {}, {"numeric_histogram(3, c0)"}, {expected});
+}
+
+// Verify all-null input produces null output for 3-arg variant.
+TEST_F(NumericHistogramTest, allNullInputThreeArgs) {
+  disableTestIncremental();
+  auto valuesAndWeights = makeRowVector({
+      makeNullableFlatVector<double>(
+          {std::nullopt, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({1, 2, 3}),
+  });
+
+  auto expected = makeRowVector({
+      makeNullableMapVector<double, double>({std::nullopt}),
+  });
+  testAggregations(
+      {valuesAndWeights}, {}, {"numeric_histogram(3, c0, c1)"}, {expected});
+}
+
+// Verify grouped aggregation where one group has all-null values.
+// Exercises the empty histogram code path in compact().
+TEST_F(NumericHistogramTest, groupedWithEmptyGroup) {
+  disableTestIncremental();
+  auto data = makeRowVector({
+      // group keys: group 0 gets all nulls, group 1 gets real values
+      makeNullableFlatVector<int32_t>({0, 0, 1, 1, 1}),
+      makeNullableFlatVector<double>(
+          {std::nullopt, std::nullopt, 10.0, 20.0, 30.0}),
+  });
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int32_t>({0, 1}),
+      makeNullableMapVector<double, double>(
+          {std::nullopt, {{{10.0, 1}, {20.0, 1}, {30.0, 1}}}}),
+  });
+  testAggregations({data}, {"c0"}, {"numeric_histogram(3, c1)"}, {expected});
+}
+
+// Stress-test with a large number of entries that forces multiple compact
+// cycles. Validates unique_ptr cleanup in mergeAndReduceBuckets.
+TEST_F(NumericHistogramTest, largeInputStressTest) {
+  disableTestIncremental();
+  // Create 200 identical values. This forces multiple compact+reduce cycles
+  // with only 2 buckets, then mergeSameBuckets collapses them all.
+  std::vector<std::optional<double>> values(200, 42.0);
+
+  auto valuesAndWeights = makeRowVector({
+      makeNullableFlatVector<double>(values),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<double, double>({
+          {{42.0, 200}},
+      }),
+  });
+  testAggregations(
+      {valuesAndWeights}, {}, {"numeric_histogram(2, c0)"}, {expected});
+}
+
+// Verify duplicate values are merged correctly by mergeSameBuckets.
+TEST_F(NumericHistogramTest, allDuplicateValues) {
+  disableTestIncremental();
+  auto valuesAndWeights = makeRowVector({
+      makeNullableFlatVector<double>({5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0}),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<double, double>({
+          {{5.0, 8}},
+      }),
+  });
+  testAggregations(
+      {valuesAndWeights}, {}, {"numeric_histogram(3, c0)"}, {expected});
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

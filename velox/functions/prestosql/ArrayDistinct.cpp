@@ -291,7 +291,7 @@ std::shared_ptr<exec::VectorFunction> create(
     const core::QueryConfig& /*config*/) {
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
-  if (elementType->isUnKnown()) {
+  if (elementType->isUnknown()) {
     return std::make_shared<ArrayDistinctFunction<UnknownType>>();
   }
 

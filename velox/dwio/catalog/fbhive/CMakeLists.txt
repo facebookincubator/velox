@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_dwio_catalog_fbhive FileUtils.cpp)
+velox_add_library(velox_dwio_catalog_fbhive FileUtils.cpp HEADERS FileUtils.h)
 velox_link_libraries(velox_dwio_catalog_fbhive velox_exception fmt::fmt Folly::folly)
 
 if(${VELOX_BUILD_TESTING})

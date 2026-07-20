@@ -15,8 +15,8 @@
  */
 #pragma once
 
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/ExchangeQueue.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/vector/ComplexVector.h"
 // #include "velox/vector/VectorStream.h"
 
@@ -25,8 +25,8 @@ namespace facebook::velox::exec::test {
 /// Helper function for serializing RowVector to PrestoPage format.
 std::unique_ptr<SerializedPageBase> toSerializedPage(
     const RowVectorPtr& vector,
-    VectorSerde::Kind serdeKind,
-    const std::shared_ptr<OutputBufferManager>& bufferManager,
+    std::string serdeKind,
+    const std::shared_ptr<DefaultOutputBufferManager>& bufferManager,
     memory::MemoryPool* pool);
 
 } // namespace facebook::velox::exec::test

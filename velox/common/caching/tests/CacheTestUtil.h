@@ -59,6 +59,18 @@ class SsdFileTestHelper {
     return ssdFile_->checksumReadVerificationEnabled_;
   }
 
+  SsdFile::State state() const {
+    return ssdFile_->state_.load();
+  }
+
+  void setState(SsdFile::State state) {
+    ssdFile_->state_ = state;
+  }
+
+  int32_t maxRegions() const {
+    return ssdFile_->maxRegions_;
+  }
+
   /// Deletes the backing file.
   void deleteFile() {
     process::TraceContext trace("SsdFile::testingDeleteFile");
@@ -133,6 +145,14 @@ class AsyncDataCacheEntryTestHelper {
 
   bool firstUse() const {
     return asyncDataCacheEntry_->isFirstUse_;
+  }
+
+  bool isTinyData() const {
+    return !asyncDataCacheEntry_->tinyData_.empty();
+  }
+
+  bool isContiguousData() const {
+    return asyncDataCacheEntry_->contiguousData_ != nullptr;
   }
 
  private:

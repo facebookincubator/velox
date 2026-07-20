@@ -27,6 +27,7 @@ add_executable(
   ArrayShuffleTest.cpp
   ArrayUnionTest.cpp
   ArgTypesGeneratorTest.cpp
+  AssertNotNullTest.cpp
   AtLeastNNonNullsTest.cpp
   Base64Test.cpp
   BitwiseTest.cpp
@@ -36,10 +37,13 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   DecimalCompareTest.cpp
+  DecimalCeilFloorTest.cpp
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
   FactorialTest.cpp
+  FilterTest.cpp
+  FormatNumberTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
   GetArrayStructFieldsTest.cpp
@@ -55,23 +59,31 @@ add_executable(
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
+  MapFromEntriesTest.cpp
   MapTest.cpp
   MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
   RaiseErrorTest.cpp
+  RandStrTest.cpp
   RandTest.cpp
   ReadSidePaddingFunctionTest.cpp
   RegexFunctionsTest.cpp
+  SequenceTest.cpp
   SliceTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
   SparkCastExprTest.cpp
+  XORShiftRandomTest.cpp
   SparkPartitionIdTest.cpp
+  SparkQueryConfigTest.cpp
   SplitTest.cpp
   StringTest.cpp
   StringToMapTest.cpp
   ToJsonTest.cpp
+  ToPrettyStringTest.cpp
+  TransformTest.cpp
+  TransformValuesTest.cpp
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp
@@ -79,6 +91,7 @@ add_executable(
   VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp
 )
+velox_add_test_headers(velox_functions_spark_test JsonTestUtil.h)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 
@@ -106,3 +119,7 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+velox_add_library(velox_array_sort_test_lib INTERFACE HEADERS ArraySortTestData.h)
+
+velox_add_library(velox_spark_function_base INTERFACE HEADERS SparkFunctionBaseTest.h)

@@ -486,6 +486,64 @@ TEST_F(VectorReaderTest, variadicContainsNull) {
   ASSERT_TRUE(reader.containsNull(3, 6));
 }
 
+TEST_F(VectorReaderTest, variadicHasTopLevelNull) {
+  // Test with scalar types: 2 variadic int32_t fields, 4 rows.
+  // [
+  //   [NULL, 0],   row 0: field1 null
+  //   [1, 1],      row 1: no nulls
+  //   [2, NULL],   row 2: field2 null
+  //   [3, 3],      row 3: no nulls
+  // ]
+  vector_size_t size = 4;
+  auto field1 = makeFlatVector<int32_t>(
+      size,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 0; });
+  auto field2 = makeFlatVector<int32_t>(
+      size,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 2; });
+  SelectivityVector rows(size);
+  exec::EvalCtx ctx(&execCtx_);
+  std::vector<std::optional<LocalDecodedVector>> args;
+  for (const auto& vector : {field1, field2}) {
+    args.emplace_back(LocalDecodedVector(ctx, *vector, rows));
+  }
+  exec::VectorReader<Variadic<int32_t>> reader(args, 0);
+
+  ASSERT_TRUE(reader.hasTopLevelNull(0));
+  ASSERT_FALSE(reader.hasTopLevelNull(1));
+  ASSERT_TRUE(reader.hasTopLevelNull(2));
+  ASSERT_FALSE(reader.hasTopLevelNull(3));
+}
+
+TEST_F(VectorReaderTest, variadicHasTopLevelNullComplexType) {
+  // Test with complex types (Array<int32_t>) to verify hasTopLevelNull only
+  // checks top-level nullity.
+  // 2 variadic Array<int32_t> fields, 4 rows:
+  //   row 0: field1=[1,2],     field2=[3,4]
+  //   row 1: field1=NULL,      field2=[5,6]
+  //   row 2: field1=[7,NULL],  field2=[9,10]
+  //   row 3: field1=[11,12],   field2=NULL
+  auto field1 = makeNullableArrayVector<int32_t>(
+      {{{1, 2}}, std::nullopt, {{7, std::nullopt}}, {{11, 12}}});
+  auto field2 = makeNullableArrayVector<int32_t>(
+      {{{3, 4}}, {{5, 6}}, {{9, 10}}, std::nullopt});
+  SelectivityVector rows(4);
+  exec::EvalCtx ctx(&execCtx_);
+  std::vector<std::optional<LocalDecodedVector>> args;
+  for (const auto& vector : {field1, field2}) {
+    args.emplace_back(LocalDecodedVector(ctx, *vector, rows));
+  }
+  exec::VectorReader<Variadic<Array<int32_t>>> reader(args, 0);
+  reader.setChildrenMayHaveNulls();
+
+  ASSERT_FALSE(reader.hasTopLevelNull(0));
+  ASSERT_TRUE(reader.hasTopLevelNull(1));
+  ASSERT_FALSE(reader.hasTopLevelNull(2));
+  ASSERT_TRUE(reader.hasTopLevelNull(3));
+}
+
 TEST_F(VectorReaderTest, dictionaryEncodedVariadicContainsNull) {
   // Vector is:
   // [

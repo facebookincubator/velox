@@ -1,0 +1,133 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Auto-trigger full build on a `/full-build` PR comment.
+#
+# Unlike the approval path (detect-force-full.yml + rerun-on-force-full.yml),
+# this workflow runs inline — no workflow_run hop. issue_comment events
+# always run with the workflow YAML loaded from the default branch (BASE
+# context) and a full GITHUB_TOKEN, even when the comment author is from
+# a fork. The fork-PR token restriction targets pull_request* events only;
+# issue_comment isn't one of them, so we already have `actions: write`
+# here and can do the cancel + rerun directly.
+#
+# Sticky escalation: any /full-build comment on the PR keeps subsequent
+# pushes in full mode too, because selective-build-plan.yml's
+# `Check /full-build comment` step re-evaluates on every plan run.
+#
+# Dedup: only the FIRST /full-build comment fires the rerun. Subsequent
+# /full-build comments on the same PR are no-ops — the in-flight build
+# will already escalate via the first one.
+
+name: Force-Full Build on /full-build Comment
+
+# zizmor:disable:dangerous-triggers -- issue_comment runs in BASE
+# context with the workflow YAML loaded from the default branch; no
+# PR-controlled code is executed here. We never check out the PR head
+# ref; the only on-disk content is the helper script + composite
+# action sparse-checked-out from main.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write # required by /actions/runs/{id}/{cancel,rerun}
+
+jobs:
+  rerun:
+    # Gate to PR comments (issue_comment fires on issues too) whose
+    # body contains `/full-build`. The `contains()` check is a cheap
+    # substring pre-filter; the dedup step below applies the precise
+    # line-start-anchored regex (`^/full-build(\s|$)`) that matches
+    # selective-build-plan.yml's matcher. Restricted to commenters
+    # with a prior relationship to the repo to cap CI-minutes exposure
+    # from drive-by commenters across the repo's open PRs. CONTRIBUTOR
+    # is included because GitHub reports many active Velox maintainers
+    # as CONTRIBUTOR rather than MEMBER when their owning-org
+    # membership is private.
+    if: >
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/full-build') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'),
+               github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/rerun-linux-build
+
+      # `github.event.issue.number` is the PR number directly (PRs are
+      # a flavor of issue in GitHub's data model); no /search/issues
+      # hop needed. head_sha needs an API call because issue_comment
+      # runs against the default branch HEAD, not the PR head.
+      - name: Resolve PR head SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          head_sha=$(gh_api "/repos/$REPO/pulls/$PR" --jq '.head.sha')
+          if [ -z "$head_sha" ]; then
+            echo "could not resolve PR head SHA — exiting"
+            exit 0
+          fi
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      # Dedup: count /full-build comments on the PR from eligible
+      # commenters. == 1 means we are the first; > 1 means an earlier
+      # /full-build already triggered the re-run for this PR. Anchored
+      # regex matches the plan workflow's matcher; the
+      # author_association filter matches the if: gate above
+      # (OWNER/MEMBER/COLLABORATOR/CONTRIBUTOR) so comments outside the
+      # allowlist don't bump the counter and dedup away an eligible
+      # commenter's first /full-build.
+      - name: Dedup
+        if: steps.pr.outputs.head_sha
+        id: dedup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          source .github/scripts/gh-api-retry.sh
+          count=$(gh_api --paginate "/repos/$REPO/issues/$PR/comments" \
+            --jq '[.[]
+                   | select(.body | test("^/full-build(\\s|$)"; "m"))
+                   | select(.author_association == "OWNER"
+                            or .author_association == "MEMBER"
+                            or .author_association == "COLLABORATOR"
+                            or .author_association == "CONTRIBUTOR")
+                  ] | length')
+          echo "eligible /full-build comments on this PR: $count"
+          if [ "$count" -eq 1 ]; then
+            echo "should_rerun=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_rerun=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cancel + rerun latest Linux Build
+        if: steps.dedup.outputs.should_rerun == 'true'
+        uses: ./.github/actions/rerun-linux-build
+        with:
+          repo: ${{ github.repository }}
+          head_sha: ${{ steps.pr.outputs.head_sha }}
+          github_token: ${{ github.token }}

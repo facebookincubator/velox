@@ -14,6 +14,7 @@
 
 add_subdirectory(utils)
 add_library(velox_dwio_faulty_file_sink FaultyFileSink.cpp)
+velox_add_test_headers(velox_dwio_faulty_file_sink FaultyFileSink.h)
 target_link_libraries(velox_dwio_faulty_file_sink velox_file_test_utils velox_dwio_common)
 
 # There is an issue with the VTT symbol for the InlineExecutor from folly when
@@ -33,6 +34,7 @@ add_executable(
   BitConcatenationTest.cpp
   BitPackDecoderTest.cpp
   ChainedBufferTests.cpp
+  ColumnReaderStatisticsTests.cpp
   ColumnSelectorTests.cpp
   DataBufferTests.cpp
   DecoderUtilTest.cpp
@@ -49,19 +51,25 @@ add_executable(
   ReaderTest.cpp
   RetryTests.cpp
   ScanSpecTest.cpp
+  SelectiveColumnReaderTest.cpp
   SortingWriterTest.cpp
-  TestBufferedInput.cpp
+  StreamUtilTest.cpp
+  BufferedInputTest.cpp
+  CachedBufferedInputTest.cpp
+  DirectBufferedInputTest.cpp
   ThrottlerTest.cpp
   TypeTests.cpp
   UnitLoaderToolsTests.cpp
   WriterTest.cpp
   OptionsTests.cpp
 )
+velox_add_test_headers(velox_dwio_common_test UnitLoaderBaseTest.h)
 add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
   velox_dwio_common_test
   velox_dwio_common_test_utils
-  velox_temp_path
+  velox_hive_connector
+  velox_test_util
   velox_vector_test_lib
   velox_link_libs
   Folly::folly
@@ -97,7 +105,7 @@ if(VELOX_ENABLE_BENCHMARKS)
   )
 
   if(VELOX_ENABLE_ARROW)
-    add_subdirectory(Lemire/FastPFor)
+    add_subdirectory(Lemire)
     add_executable(velox_dwio_common_bitpack_decoder_benchmark BitPackDecoderBenchmark.cpp)
 
     target_compile_options(

@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
+#include <numeric>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -29,10 +30,13 @@
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
+#include "velox/functions/remote/client/ThriftClient.h"
+#include "velox/functions/remote/if/GetSerde.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionService.h"
 #include "velox/functions/remote/server/RemoteFunctionService.h"
 #include "velox/functions/remote/utils/RemoteFunctionServiceProvider.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/VectorStream.h"
 
 using ::apache::thrift::ThriftServer;
 using ::facebook::velox::test::assertEqualVectors;
@@ -261,6 +265,232 @@ TEST_P(RemoteFunctionTest, connectionError) {
   } catch (const VeloxRuntimeError& e) {
     EXPECT_THAT(e.message(), testing::HasSubstr("Channel is !good()"));
   }
+}
+
+/// Mock implementation of IRemoteFunctionClient for testing without a real
+/// thrift server.
+class MockRemoteFunctionClient : public IRemoteFunctionClient {
+ public:
+  MOCK_METHOD(
+      void,
+      invokeFunction,
+      (remote::RemoteFunctionResponse&, const remote::RemoteFunctionRequest&),
+      (override));
+};
+
+/// Test fixture that uses mock clients instead of a real thrift server running
+/// in the same process.
+class MockRemoteFunctionTest : public functions::test::FunctionBaseTest {
+ public:
+  void SetUp() override {
+    mockClient_ =
+        std::make_shared<testing::NiceMock<MockRemoteFunctionClient>>();
+  }
+
+  void TearDown() override {
+    mockClient_.reset();
+  }
+
+  /// Registers a remote function with a mock client factory.
+  void registerMockRemoteFunction(
+      const std::string& name,
+      std::vector<exec::FunctionSignaturePtr> signatures) {
+    RemoteThriftVectorFunctionMetadata metadata;
+    metadata.serdeFormat = remote::PageFormat::PRESTO_PAGE;
+    // Location doesn't matter since we're using a mock client.
+    metadata.location = folly::SocketAddress("127.0.0.1", 12345);
+
+    // Capture mockClient_ by value (shared_ptr) so it stays alive.
+    auto mockClientPtr = mockClient_;
+    metadata.clientFactory =
+        [mockClientPtr](const folly::SocketAddress&, folly::EventBase*) {
+          // We need this level of indirection because clientFactory returns a
+          // unique_ptr so we wouldn't have a reference to the mock client.
+          class MockClientWrapper : public IRemoteFunctionClient {
+           public:
+            explicit MockClientWrapper(
+                std::shared_ptr<MockRemoteFunctionClient> mock)
+                : mock_(std::move(mock)) {}
+
+            void invokeFunction(
+                remote::RemoteFunctionResponse& response,
+                const remote::RemoteFunctionRequest& request) override {
+              mock_->invokeFunction(response, request);
+            }
+
+           private:
+            std::shared_ptr<MockRemoteFunctionClient> mock_;
+          };
+          return std::make_unique<MockClientWrapper>(mockClientPtr);
+        };
+
+    registerRemoteFunction(name, std::move(signatures), metadata);
+  }
+
+  /// Helper to set up a mock response with a serialized result vector.
+  void setMockResponse(
+      remote::RemoteFunctionResponse& response,
+      const RowVectorPtr& resultVector) {
+    auto serde = getSerde(remote::PageFormat::PRESTO_PAGE);
+    auto result = response.result();
+    result->rowCount() = resultVector->size();
+    result->pageFormat() = remote::PageFormat::PRESTO_PAGE;
+    result->payload() = rowVectorToIOBuf(resultVector, *pool(), serde.get());
+  }
+
+  /// Registers a mock remote function with signature (bigint, bigint) ->
+  /// bigint.
+  void registerMockRemotePlusFunction(const std::string& name) {
+    auto signatures = {exec::FunctionSignatureBuilder()
+                           .returnType("bigint")
+                           .argumentType("bigint")
+                           .argumentType("bigint")
+                           .build()};
+    registerMockRemoteFunction(name, std::move(signatures));
+  }
+
+ protected:
+  std::shared_ptr<testing::NiceMock<MockRemoteFunctionClient>> mockClient_;
+};
+
+TEST_F(MockRemoteFunctionTest, mockClientIsCalled) {
+  // Register a mock remote function.
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_plus", signatures);
+
+  // Set up the mock to return a valid response.
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([this](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& /*request*/) {
+        // Return doubled values: input {1,2,3} + {1,2,3} = {2,4,6}
+        auto resultVector = makeRowVector({makeFlatVector<int64_t>({2, 4, 6})});
+        setMockResponse(response, resultVector);
+      });
+
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "mock_plus(c0, c0)", makeRowVector({inputVector}));
+
+  // Verify the mock returned our expected values.
+  auto expected = makeFlatVector<int64_t>({2, 4, 6});
+  assertEqualVectors(expected, results);
+}
+
+TEST_F(MockRemoteFunctionTest, mockClientThrowsException) {
+  // Register a mock remote function.
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_throwing", signatures);
+
+  // Set up the mock to throw an exception.
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([](remote::RemoteFunctionResponse&,
+                   const remote::RemoteFunctionRequest&) {
+        throw std::runtime_error("Mock connection error");
+      });
+
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+
+  // Verify the exception is propagated.
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "mock_throwing(c0)", makeRowVector({inputVector})),
+      "Mock connection error");
+}
+
+TEST_F(MockRemoteFunctionTest, mockClientRepeatedCoroutineCalls) {
+  registerMockRemotePlusFunction("mock_repeated");
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .Times(3)
+      .WillRepeatedly([this](
+                          remote::RemoteFunctionResponse& response,
+                          const remote::RemoteFunctionRequest& /*request*/) {
+        auto resultVector =
+            makeRowVector({makeFlatVector<int64_t>({10, 20, 30})});
+        setMockResponse(response, resultVector);
+      });
+
+  for (int i = 0; i < 3; ++i) {
+    auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+    auto results = evaluate<SimpleVector<int64_t>>(
+        "mock_repeated(c0, c0)", makeRowVector({inputVector}));
+    auto expected = makeFlatVector<int64_t>({10, 20, 30});
+    assertEqualVectors(expected, results);
+  }
+}
+
+// Tests that exceptions thrown during the coroutine path don't leave the
+// function in a broken state.
+TEST_F(MockRemoteFunctionTest, coroutineExceptionThenRecovery) {
+  registerMockRemotePlusFunction("mock_recover");
+
+  // First call throws, second call succeeds.
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([](remote::RemoteFunctionResponse&,
+                   const remote::RemoteFunctionRequest&) {
+        throw std::runtime_error("Transient network error");
+      })
+      .WillOnce([this](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& /*request*/) {
+        auto resultVector = makeRowVector({makeFlatVector<int64_t>({2, 4, 6})});
+        setMockResponse(response, resultVector);
+      });
+
+  auto inputVector = makeFlatVector<int64_t>({1, 2, 3});
+
+  // First call should fail.
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "mock_recover(c0, c0)", makeRowVector({inputVector})),
+      "Transient network error");
+
+  // Second call should succeed, verifying the coroutine path recovers.
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "mock_recover(c0, c0)", makeRowVector({inputVector}));
+  auto expected = makeFlatVector<int64_t>({2, 4, 6});
+  assertEqualVectors(expected, results);
+}
+
+// Tests the coroutine path with a larger batch
+TEST_F(MockRemoteFunctionTest, coroutineLargePayload) {
+  auto signatures = {exec::FunctionSignatureBuilder()
+                         .returnType("bigint")
+                         .argumentType("bigint")
+                         .build()};
+  registerMockRemoteFunction("mock_large", signatures);
+
+  constexpr int kSize = 1000;
+  std::vector<int64_t> expectedValues(kSize);
+  for (int i = 0; i < kSize; ++i) {
+    expectedValues[i] = i * 10;
+  }
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([this, &expectedValues](
+                    remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& /*request*/) {
+        auto resultVector =
+            makeRowVector({makeFlatVector<int64_t>(expectedValues)});
+        setMockResponse(response, resultVector);
+      });
+
+  std::vector<int64_t> inputValues(kSize);
+  std::iota(inputValues.begin(), inputValues.end(), 0);
+  auto inputVector = makeFlatVector<int64_t>(inputValues);
+  auto results = evaluate<SimpleVector<int64_t>>(
+      "mock_large(c0)", makeRowVector({inputVector}));
+
+  auto expected = makeFlatVector<int64_t>(expectedValues);
+  assertEqualVectors(expected, results);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

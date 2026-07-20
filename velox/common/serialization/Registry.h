@@ -114,7 +114,7 @@ class Registry {
         }
 
         VELOX_UNSUPPORTED(
-            typeid(ReturnType).name(), " is not nullable return type");
+            "{} is not nullable return type", typeid(ReturnType).name());
       }
       return it->second(types...);
     }

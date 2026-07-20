@@ -15,11 +15,10 @@
  */
 #pragma once
 
-#define XXH_INLINE_ALL
 #include <fast_float/fast_float.h>
 #include <re2/re2.h>
-#include <xxhash.h>
 #include <string_view>
+#include "velox/common/base/XxHashInline.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -602,6 +601,7 @@ class TimeIntervalYearMonthVectorFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VectorPtr& timeVector = args[0]->type()->isTime() ? args[0] : args[1];
+    VELOX_DCHECK(timeVector->type()->equivalent(*TIME()));
 
     // Constant vector case
     // If time input is constant, create constant result - no iteration!
@@ -1822,6 +1822,29 @@ struct CurrentTimezoneFunction {
 };
 
 template <typename T>
+struct CurrentTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  int64_t result_{0};
+  const tz::TimeZone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    Timestamp ts = Timestamp::fromMillis(config.sessionStartTimeMs());
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (timeZone_ == nullptr) {
+      VELOX_USER_FAIL("Timezone cannot be null");
+    }
+    result_ = pack(ts, timeZone_->id());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
+    result = result_;
+  }
+};
+
+template <typename T>
 struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -1866,6 +1889,7 @@ struct ToISO8601Function {
       const core::QueryConfig& config,
       const arg_type<Timestamp>* /*input*/) {
     if (inputTypes[0]->isTimestamp()) {
+      VELOX_DCHECK(inputTypes[0]->equivalent(*TIMESTAMP()));
       timeZone_ = getTimeZoneFromConfig(config);
     }
   }
@@ -2037,10 +2061,11 @@ struct ParseDurationFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
+    VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
     static const LazyRE2 kDurationRegex{
         .pattern_ = R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)",
-        .options_ = {},
     };
+    VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
     // TODO: Remove re2::StringPiece != std::string_view hacks.
     // It's needed because for some systems in CI,
     // re2 and abseil libraries are old.
@@ -2088,6 +2113,59 @@ struct LocalTimeFunction {
 
  private:
   int64_t localTimeSinceMidnight_;
+};
+
+template <typename T>
+struct LocalTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config) {
+    ts_ = Timestamp::fromMillis(config.sessionStartTimeMs());
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Timestamp>& result) {
+    result = ts_;
+  }
+
+ private:
+  Timestamp ts_;
+};
+
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /* type */,
+      const core::QueryConfig& config) {
+    const tz::TimeZone* timeZone = getTimeZoneFromConfig(config);
+    // Java/Presto session always provides a timezone (TimeZoneKey is required).
+    VELOX_CHECK_NOT_NULL(timeZone);
+
+    auto sessionStartTimeMs = config.sessionStartTimeMs();
+
+    auto localMillis =
+        timeZone->to_local(std::chrono::milliseconds{sessionStartTimeMs});
+    auto localMillisSinceMidnight =
+        localMillis - std::chrono::floor<std::chrono::days>(localMillis);
+
+    auto currentOffset = localMillis.count() - sessionStartTimeMs;
+    // Safe since timezone offsets are bounded [-840, 840] minutes
+    auto currentOffsetMinutes =
+        static_cast<int16_t>(currentOffset / (60 * 1000));
+
+    auto encodedOffset = util::biasEncode(currentOffsetMinutes);
+    currentTime_ = util::pack(localMillisSinceMidnight.count(), encodedOffset);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    result = currentTime_;
+  }
+
+ private:
+  int64_t currentTime_{0};
 };
 
 } // namespace facebook::velox::functions

@@ -378,6 +378,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
           dependentTypes,
           true,
           false,
+          false, // hasCountFlag
           1'000,
           tablePools[i].get());
 
@@ -394,6 +395,7 @@ class HashTableListJoinResultBenchmark : public VectorTestBase {
       topTable_->prepareJoinTable(
           std::move(otherTables),
           BaseHashTable::kNoSpillInputStartPartitionBit,
+          1'000'000,
           false,
           executor_.get());
     }

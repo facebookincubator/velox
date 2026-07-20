@@ -16,6 +16,8 @@
 
 #include "velox/expression/ExprToSubfieldFilter.h"
 
+#include <span>
+
 #include "velox/expression/Expr.h"
 
 using namespace facebook::velox;
@@ -50,12 +52,36 @@ T singleValue(const VectorPtr& vector) {
   return simpleVector->valueAt(0);
 }
 
+// True if 'kind' is an IN-list element type for which a subfield filter is
+// built (string BytesValues or widened-int BigintValues).
+bool isSupportedInElementKind(TypeKind kind) {
+  return kind == TypeKind::VARCHAR || kind == TypeKind::TINYINT ||
+      kind == TypeKind::SMALLINT || kind == TypeKind::INTEGER ||
+      kind == TypeKind::BIGINT;
+}
+
 bool isBigintRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintRange);
 }
 
 bool isBigintMultiRange(const std::unique_ptr<common::Filter>& filter) {
   return filter->is(common::FilterKind::kBigintMultiRange);
+}
+
+bool isBytesValues(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBytesValues);
+}
+
+bool isBytesRange(const std::unique_ptr<common::Filter>& filter) {
+  return filter->is(common::FilterKind::kBytesRange);
+}
+
+bool isSingleValueBytesRange(const std::unique_ptr<common::Filter>& filter) {
+  if (!isBytesRange(filter)) {
+    return false;
+  }
+  const auto* bytesRange = filter->as<common::BytesRange>();
+  return bytesRange->isSingleValue();
 }
 
 template <typename T, typename U>
@@ -68,19 +94,171 @@ std::unique_ptr<common::BigintRange> asBigintRange(
   return asUniquePtr<common::BigintRange>(std::move(ptr));
 }
 
+// Builds an IN (or NOT IN) filter from the collected non-NULL 'values'.
+// 'hasNull' records whether the list contained a NULL. An IN over only NULLs,
+// and a NOT IN over any list containing a NULL, can never pass (SQL
+// three-valued logic: `a [NOT] IN (..., NULL)` is NULL), so both become
+// AlwaysFalse. Works for both int64 and string value lists via the overloaded
+// in()/notIn() helpers.
 template <typename T>
-std::vector<int64_t>
-toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
+std::unique_ptr<common::Filter>
+finishInFilter(std::vector<T> values, bool hasNull, bool negated) {
+  if (values.empty()) {
+    return std::make_unique<common::AlwaysFalse>();
+  }
+  if (negated) {
+    if (hasNull) {
+      return std::make_unique<common::AlwaysFalse>();
+    }
+    return notIn(values);
+  }
+  return in(values);
+}
+
+template <typename T>
+std::unique_ptr<common::Filter> toInt64In(
+    const VectorPtr& vector,
+    vector_size_t start,
+    vector_size_t size,
+    bool negated) {
   auto ints = vector->as<SimpleVector<T>>();
   std::vector<int64_t> values;
   values.reserve(size);
-  for (auto i = 0; i < size; i++) {
-    values.push_back(ints->valueAt(start + i));
+  bool hasNull = false;
+  if (!ints->mayHaveNulls()) {
+    for (auto i = 0; i < size; i++) {
+      values.push_back(ints->valueAt(start + i));
+    }
+  } else {
+    for (auto i = 0; i < size; i++) {
+      if (!ints->isNullAt(start + i)) {
+        values.push_back(ints->valueAt(start + i));
+      } else if (!hasNull) {
+        hasNull = true;
+      }
+    }
   }
-  return values;
+
+  return finishInFilter(std::move(values), hasNull, negated);
+}
+
+// Builds an int64 IN filter from a list of single-row constant vectors (the
+// varargs `in(col, a, b, c, ...)` elements), widening from the integral element
+// type 'T'. Counterpart to the range-based toInt64In above.
+template <typename T>
+std::unique_ptr<common::Filter> toInt64In(
+    const std::vector<VectorPtr>& constants,
+    bool negated) {
+  std::vector<int64_t> values;
+  values.reserve(constants.size());
+  bool hasNull = false;
+  for (const auto& constant : constants) {
+    if (constant->isNullAt(0)) {
+      hasNull = true;
+    } else {
+      values.push_back(singleValue<T>(constant));
+    }
+  }
+  return finishInFilter(std::move(values), hasNull, negated);
+}
+
+// Builds a string IN filter from the [start, start + size) slice of 'vector'
+// (the `in(col, <ARRAY(VARCHAR) constant>)` elements).
+std::unique_ptr<common::Filter> toVarcharIn(
+    const VectorPtr& vector,
+    vector_size_t start,
+    vector_size_t size,
+    bool negated) {
+  auto strings = vector->as<SimpleVector<StringView>>();
+  std::vector<std::string> values;
+  values.reserve(size);
+  bool hasNull = false;
+  for (auto i = 0; i < size; i++) {
+    if (strings->isNullAt(start + i)) {
+      hasNull = true;
+    } else {
+      values.push_back(std::string(strings->valueAt(start + i)));
+    }
+  }
+  return finishInFilter(std::move(values), hasNull, negated);
+}
+
+// Builds a string IN filter from a list of single-row constant vectors (the
+// varargs `in(col, a, b, c, ...)` elements). Counterpart to the slice-based
+// toVarcharIn above.
+std::unique_ptr<common::Filter> toVarcharIn(
+    const std::vector<VectorPtr>& constants,
+    bool negated) {
+  std::vector<std::string> values;
+  values.reserve(constants.size());
+  bool hasNull = false;
+  for (const auto& constant : constants) {
+    if (constant->isNullAt(0)) {
+      hasNull = true;
+    } else {
+      values.push_back(std::string(singleValue<StringView>(constant)));
+    }
+  }
+  return finishInFilter(std::move(values), hasNull, negated);
 }
 
 } // namespace
+
+namespace {
+std::unique_ptr<common::Filter> bigintOrImpl(
+    std::vector<std::unique_ptr<common::Filter>> inputs,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  for (auto& input : inputs) {
+    if (input->kind() == common::FilterKind::kIsNull) {
+      nullAllowed = true;
+    } else if (input->kind() != common::FilterKind::kAlwaysFalse) {
+      VELOX_CHECK(
+          isBigintRange(input),
+          "Expected BigintRange filter, got: {}",
+          input->toString());
+      ranges.emplace_back(asBigintRange(input));
+    }
+  }
+  if (ranges.empty()) {
+    if (nullAllowed) {
+      return std::make_unique<common::IsNull>();
+    }
+    return std::make_unique<common::AlwaysFalse>();
+  }
+  if (ranges.size() == 1) {
+    if (nullAllowed) {
+      return std::make_unique<common::BigintRange>(
+          ranges[0]->lower(), ranges[0]->upper(), true);
+    }
+    return std::move(ranges[0]);
+  }
+  return std::make_unique<common::BigintMultiRange>(
+      std::move(ranges), nullAllowed);
+}
+} // namespace
+
+std::unique_ptr<common::Filter> bigintOr(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<common::Filter>> inputs;
+  inputs.emplace_back(std::move(a));
+  inputs.emplace_back(std::move(b));
+  return bigintOrImpl(std::move(inputs), nullAllowed);
+}
+
+std::unique_ptr<common::Filter> bigintOr(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b,
+    std::unique_ptr<common::Filter> c,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<common::Filter>> inputs;
+  inputs.emplace_back(std::move(a));
+  inputs.emplace_back(std::move(b));
+  inputs.emplace_back(std::move(c));
+  return bigintOrImpl(std::move(inputs), nullAllowed);
+}
 
 std::shared_ptr<ExprToSubfieldFilterParser>
     ExprToSubfieldFilterParser::parser_ =
@@ -154,6 +332,12 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
 
   if (typeKind == TypeKind::TINYINT || typeKind == TypeKind::SMALLINT ||
       typeKind == TypeKind::INTEGER || typeKind == TypeKind::BIGINT) {
+    if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse) {
+      return greaterThanFilter;
+    }
+    if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse) {
+      return lessThanFilter;
+    }
     VELOX_CHECK(isBigintRange(lessThanFilter));
     VELOX_CHECK(isBigintRange(greaterThanFilter));
 
@@ -167,6 +351,14 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
   if (typeKind == TypeKind::HUGEINT) {
     VELOX_NYI();
   } else {
+    if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
+        lessThanFilter->kind() == common::FilterKind::kIsNull) {
+      return greaterThanFilter;
+    }
+    if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
+        greaterThanFilter->kind() == common::FilterKind::kIsNull) {
+      return lessThanFilter;
+    }
     std::vector<std::unique_ptr<common::Filter>> filters;
     filters.emplace_back(std::move(lessThanFilter));
     filters.emplace_back(std::move(greaterThanFilter));
@@ -357,9 +549,10 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
     core::ExpressionEvaluator* evaluator,
     bool negated) {
   auto vector = toConstant(expr, evaluator);
-  if (!(vector && vector->type()->isArray())) {
+  if (!vector) {
     return nullptr;
   }
+  VELOX_CHECK(vector->type()->isArray());
 
   auto arrayVector = vector->valueVector()->as<ArrayVector>();
   auto index = vector->as<ConstantVector<ComplexType>>()->index();
@@ -369,36 +562,52 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeInFilter(
 
   auto elementType = arrayVector->type()->asArray().elementType();
   switch (elementType->kind()) {
-    case TypeKind::TINYINT: {
-      auto values = toInt64List<int8_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::SMALLINT: {
-      auto values = toInt64List<int16_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::INTEGER: {
-      auto values = toInt64List<int32_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::BIGINT: {
-      auto values = toInt64List<int64_t>(elements, offset, size);
-      return negated ? notIn(values) : in(values);
-    }
-    case TypeKind::VARCHAR: {
-      auto stringElements = elements->as<SimpleVector<StringView>>();
-      std::vector<std::string> values;
-      values.reserve(size);
-      for (auto i = 0; i < size; i++) {
-        values.push_back(std::string(stringElements->valueAt(offset + i)));
-      }
-      if (negated) {
-        return notIn(values);
-      }
-      return in(values);
-    }
+    case TypeKind::TINYINT:
+      return toInt64In<int8_t>(elements, offset, size, negated);
+    case TypeKind::SMALLINT:
+      return toInt64In<int16_t>(elements, offset, size, negated);
+    case TypeKind::INTEGER:
+      return toInt64In<int32_t>(elements, offset, size, negated);
+    case TypeKind::BIGINT:
+      return toInt64In<int64_t>(elements, offset, size, negated);
+    case TypeKind::VARCHAR:
+      return toVarcharIn(elements, offset, size, negated);
     default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+// static
+std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeVarargsInFilter(
+    std::span<const core::TypedExprPtr> valueExprs,
+    core::ExpressionEvaluator* evaluator,
+    bool negated) {
+  VELOX_CHECK(!valueExprs.empty());
+  const auto kind = valueExprs[0]->type()->kind();
+
+  std::vector<VectorPtr> constants;
+  constants.reserve(valueExprs.size());
+  for (const auto& expr : valueExprs) {
+    auto constant = toConstant(expr, evaluator);
+    if (!constant) {
       return nullptr;
+    }
+    constants.push_back(std::move(constant));
+  }
+
+  switch (kind) {
+    case TypeKind::TINYINT:
+      return toInt64In<int8_t>(constants, negated);
+    case TypeKind::SMALLINT:
+      return toInt64In<int16_t>(constants, negated);
+    case TypeKind::INTEGER:
+      return toInt64In<int32_t>(constants, negated);
+    case TypeKind::BIGINT:
+      return toInt64In<int64_t>(constants, negated);
+    case TypeKind::VARCHAR:
+      return toVarcharIn(constants, negated);
+    default:
+      VELOX_UNREACHABLE();
   }
 }
 
@@ -593,6 +802,8 @@ std::unique_ptr<common::Filter> tryMergeBigintRanges(
       values.emplace_back(filter->as<common::BigintRange>()->lower());
     }
 
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
     return common::createBigintValues(values, isNullAllowed(disjuncts));
   }
 
@@ -677,6 +888,60 @@ std::unique_ptr<common::Filter> tryMergeFloatingPointRanges(
       });
 }
 
+std::unique_ptr<common::Filter> tryMergeBytesRanges(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBytesRange(filter);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+  std::sort(
+      disjuncts.begin(), disjuncts.end(), [](const auto& lhs, const auto& rhs) {
+        const auto* lhsRange = lhs->template as<common::BytesRange>();
+        const auto* rhsRange = rhs->template as<common::BytesRange>();
+        if (lhsRange->isLowerUnbounded() && rhsRange->isLowerUnbounded()) {
+          return false;
+        }
+        if (lhsRange->isLowerUnbounded()) {
+          return true;
+        }
+        if (rhsRange->isLowerUnbounded()) {
+          return false;
+        }
+        return lhsRange->lower() < rhsRange->lower();
+      });
+  return std::make_unique<common::MultiRange>(
+      std::move(disjuncts), nullAllowed);
+}
+
+std::unique_ptr<common::Filter> tryMergeBytesValues(
+    std::vector<std::unique_ptr<common::Filter>>& disjuncts) {
+  if (!std::all_of(disjuncts.begin(), disjuncts.end(), [](const auto& filter) {
+        return isBytesValues(filter) || isSingleValueBytesRange(filter);
+      })) {
+    return nullptr;
+  }
+
+  const bool nullAllowed = isNullAllowed(disjuncts);
+
+  std::vector<std::string> values;
+  for (auto& filter : disjuncts) {
+    if (isBytesValues(filter)) {
+      const auto* bytesValues = filter->as<common::BytesValues>();
+      for (const auto& value : bytesValues->values()) {
+        values.push_back(value);
+      }
+    } else {
+      const auto* bytesRange = filter->as<common::BytesRange>();
+      values.push_back(bytesRange->lower());
+    }
+  }
+
+  return std::make_unique<common::BytesValues>(values, nullAllowed);
+}
+
 } // namespace
 
 // static
@@ -696,10 +961,15 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeOrFilter(
     return merged;
   }
 
-  const bool nullAllowed = isNullAllowed(disjuncts);
+  if (auto merged = tryMergeBytesValues(disjuncts)) {
+    return merged;
+  }
 
-  return std::make_unique<common::MultiRange>(
-      std::move(disjuncts), nullAllowed);
+  if (auto merged = tryMergeBytesRanges(disjuncts)) {
+    return merged;
+  }
+
+  return nullptr;
 }
 
 namespace {
@@ -773,9 +1043,33 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
       return combine(subfield, filter);
     }
   } else if (call.name() == "in") {
-    if (toSubfield(leftSide, subfield)) {
-      auto filter = makeInFilter(call.inputs()[1], evaluator, negated);
-      return combine(subfield, filter);
+    const auto elementKind = leftSide->type()->kind();
+    if (isSupportedInElementKind(elementKind) &&
+        toSubfield(leftSide, subfield)) {
+      const auto& listType = call.inputs()[1]->type();
+
+      // Two encodings. The element kind is a supported scalar, so a second
+      // argument of that same kind is the varargs form `in(col, a, b, c, ...)`;
+      // otherwise it is the `in(col, <ARRAY(colType) constant>)` form.
+      std::unique_ptr<common::Filter> filter;
+      if (listType->kind() == elementKind) {
+        filter = makeVarargsInFilter(
+            std::span<const core::TypedExprPtr>(call.inputs()).subspan(1),
+            evaluator,
+            negated);
+      } else if (listType->isUnknown()) {
+        filter = std::make_unique<common::AlwaysFalse>();
+      } else {
+        VELOX_CHECK(listType->isArray());
+        if (listType->childAt(0)->isUnknown()) {
+          filter = std::make_unique<common::AlwaysFalse>();
+        } else {
+          filter = makeInFilter(call.inputs()[1], evaluator, negated);
+        }
+      }
+      if (filter) {
+        return combine(subfield, filter);
+      }
     }
   } else if (call.name() == "is_null") {
     if (toSubfield(leftSide, subfield)) {

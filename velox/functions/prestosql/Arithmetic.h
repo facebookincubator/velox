@@ -191,6 +191,45 @@ struct ModulusFunction {
   }
 };
 
+// Positive modulo for integral types. Returns NULL for division by zero.
+template <typename T>
+struct PModIntFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
+    if (UNLIKELY(n == 0)) {
+      return false;
+    }
+    if (UNLIKELY(n == 1 || n == -1)) {
+      result = 0;
+      return true;
+    }
+    TInput r = a % n;
+    result = (r > 0) ? r : (r + n) % n;
+    return true;
+  }
+};
+
+// Positive modulo for floating-point types. Returns NULL for division by zero.
+template <typename T>
+struct PModFloatFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(n == static_cast<TInput>(0))) {
+      return false;
+    }
+    TInput r = std::fmod(a, n);
+    result = (r > 0) ? r : std::fmod(r + n, n);
+    return true;
+  }
+};
+
 template <typename T>
 struct CeilFunction {
   template <typename TOutput, typename TInput = TOutput>

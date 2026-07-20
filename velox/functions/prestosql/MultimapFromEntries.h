@@ -31,6 +31,7 @@ struct MultimapFromEntriesFunction {
     // Reuse map and vector between rows to avoid re-allocating memory. The
     // benchmark shows 20-30% performance improvement.
     keyValuesMap_.clear();
+    keyValuesMap_.reserve(inputArray.size());
 
     uniqueKeys_.clear();
     uniqueKeys_.reserve(inputArray.size());

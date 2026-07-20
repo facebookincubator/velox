@@ -13,6 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
+#include "velox/expression/EvalCtx.h"
+#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FunctionVector.h"
@@ -98,4 +102,51 @@ MapVectorPtr flattenMap(
 BufferPtr addNullsForUnselectedRows(
     const VectorPtr& vector,
     const SelectivityVector& rows);
+
+/// Applies a lambda function to all elements of an array or map container.
+/// This is a common pattern used by transform, filter, and similar functions.
+///
+/// @tparam ContainerType Either ArrayVector or MapVector.
+///
+/// @param functionArg The VectorPtr containing the lambda function.
+/// @param rows The top-level rows to process.
+/// @param numElements The total number of elements across all containers.
+/// @param flatContainer The flattened container vector.
+/// @param lambdaArgs The arguments to pass to the lambda function.
+/// @param validRowsInReusedResult SelectivityVector indicating which element
+///        rows are valid in the reused result.
+/// @param context The evaluation context.
+/// @param outputElements Output parameter for the transformed elements.
+template <typename ContainerType>
+void applyLambdaToElements(
+    const VectorPtr& functionArg,
+    const SelectivityVector& rows,
+    vector_size_t numElements,
+    const std::shared_ptr<ContainerType>& flatContainer,
+    const std::vector<VectorPtr>& lambdaArgs,
+    SelectivityVector& validRowsInReusedResult,
+    exec::EvalCtx& context,
+    VectorPtr& outputElements) {
+  auto elementToTopLevelRows = getElementToTopLevelRows(
+      numElements, rows, flatContainer.get(), context.pool());
+
+  // Loop over lambda functions and apply these to elements of the container.
+  auto it = functionArg->asUnchecked<FunctionVector>()->iterator(&rows);
+  while (auto entry = it.next()) {
+    auto elementRows = toElementRows<ContainerType>(
+        numElements, *entry.rows, flatContainer.get());
+    auto wrapCapture = toWrapCapture<ContainerType>(
+        numElements, entry.callable, *entry.rows, flatContainer);
+
+    entry.callable->apply(
+        elementRows,
+        &validRowsInReusedResult,
+        wrapCapture,
+        &context,
+        lambdaArgs,
+        elementToTopLevelRows,
+        &outputElements);
+  }
+}
+
 } // namespace facebook::velox::functions

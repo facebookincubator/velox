@@ -136,6 +136,48 @@ TEST_F(MapTest, duplicateMapKey) {
       "Duplicate map key (20) was found.");
 }
 
+TEST_F(MapTest, duplicateMapKeyThreeOrMoreOccurrences) {
+  // Regression test for the case where the same key appears 3+ times in a
+  // single row under the LAST_WIN policy. The result size was computed by
+  // counting duplicate pairs (C(N,2)), while only N-1 occurrences are actually
+  // dropped, so the map was under-sized (0 for N=3, negative for N>=4), leading
+  // to an out-of-bounds write / crash. See fix in Map.cpp.
+  auto key = makeNullableFlatVector<int64_t>({7, 8});
+  auto value1 = makeNullableFlatVector<double>({1.0, 4.0});
+  auto value2 = makeNullableFlatVector<double>({2.0, 5.0});
+  auto value3 = makeNullableFlatVector<double>({3.0, 6.0});
+  auto value4 = makeNullableFlatVector<double>({3.5, 6.5});
+
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  // Same key 3 times: keep the last value (LAST_WIN).
+  // map(k, v1, k, v2, k, v3) -> {k: v3}
+  const auto expectedThree =
+      makeMapVector<int64_t, double>({{{7, 3.0}}, {{8, 6.0}}});
+  testMap(
+      "map(c0, c1, c0, c2, c0, c3)",
+      {key, value1, value2, value3},
+      expectedThree);
+
+  // Same key 4 times: keep the last value.
+  // map(k, v1, k, v2, k, v3, k, v4) -> {k: v4}
+  const auto expectedFour =
+      makeMapVector<int64_t, double>({{{7, 3.5}}, {{8, 6.5}}});
+  testMap(
+      "map(c0, c1, c0, c2, c0, c3, c0, c4)",
+      {key, value1, value2, value3, value4},
+      expectedFour);
+
+  // EXCEPTION policy is unaffected: still fails on the duplicate key.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+  testMapFails(
+      "map(c0, c1, c0, c2, c0, c3)",
+      {key, value1, value2, value3},
+      "Duplicate map key (7) was found.");
+}
+
 TEST_F(MapTest, wide) {
   auto inputVector1 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVector2 = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
@@ -147,6 +189,69 @@ TEST_F(MapTest, wide) {
       "map(c0, c1, c2, c3)",
       {inputVector1, inputVector2, inputVector11, inputVector22},
       mapVector);
+}
+
+TEST_F(MapTest, tenKeyValuePairs) {
+  // Test map function with 10 key-value pairs (20 arguments).
+  auto key1 = makeFlatVector<int64_t>({1, 11, 21});
+  auto val1 = makeFlatVector<std::string>({"a", "aa", "aaa"});
+  auto key2 = makeFlatVector<int64_t>({2, 12, 22});
+  auto val2 = makeFlatVector<std::string>({"b", "bb", "bbb"});
+  auto key3 = makeFlatVector<int64_t>({3, 13, 23});
+  auto val3 = makeFlatVector<std::string>({"c", "cc", "ccc"});
+  auto key4 = makeFlatVector<int64_t>({4, 14, 24});
+  auto val4 = makeFlatVector<std::string>({"d", "dd", "ddd"});
+  auto key5 = makeFlatVector<int64_t>({5, 15, 25});
+  auto val5 = makeFlatVector<std::string>({"e", "ee", "eee"});
+  auto key6 = makeFlatVector<int64_t>({6, 16, 26});
+  auto val6 = makeFlatVector<std::string>({"f", "ff", "fff"});
+  auto key7 = makeFlatVector<int64_t>({7, 17, 27});
+  auto val7 = makeFlatVector<std::string>({"g", "gg", "ggg"});
+  auto key8 = makeFlatVector<int64_t>({8, 18, 28});
+  auto val8 = makeFlatVector<std::string>({"h", "hh", "hhh"});
+  auto key9 = makeFlatVector<int64_t>({9, 19, 29});
+  auto val9 = makeFlatVector<std::string>({"i", "ii", "iii"});
+  auto key10 = makeFlatVector<int64_t>({10, 20, 30});
+  auto val10 = makeFlatVector<std::string>({"j", "jj", "jjj"});
+
+  auto expectedMap = makeMapVector<int64_t, std::string>(
+      {{{1, "a"},
+        {2, "b"},
+        {3, "c"},
+        {4, "d"},
+        {5, "e"},
+        {6, "f"},
+        {7, "g"},
+        {8, "h"},
+        {9, "i"},
+        {10, "j"}},
+       {{11, "aa"},
+        {12, "bb"},
+        {13, "cc"},
+        {14, "dd"},
+        {15, "ee"},
+        {16, "ff"},
+        {17, "gg"},
+        {18, "hh"},
+        {19, "ii"},
+        {20, "jj"}},
+       {{21, "aaa"},
+        {22, "bbb"},
+        {23, "ccc"},
+        {24, "ddd"},
+        {25, "eee"},
+        {26, "fff"},
+        {27, "ggg"},
+        {28, "hhh"},
+        {29, "iii"},
+        {30, "jjj"}}});
+
+  testMap(
+      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, "
+      "c15, c16, c17, c18, c19)",
+      {key1, val1, key2, val2, key3, val3, key4, val4, key5,  val5,
+       key6, val6, key7, val7, key8, val8, key9, val9, key10, val10},
+      expectedMap);
 }
 
 TEST_F(MapTest, errorCases) {
@@ -164,17 +269,19 @@ TEST_F(MapTest, errorCases) {
       {inputVectorInt64, inputVectorDouble, inputVectorInt64},
       "Scalar function signature is not supported: map(BIGINT, DOUBLE, BIGINT)");
 
+  // Test with 22 arguments (11 pairs) - exceeds the maximum of 10 key-value
+  // pairs supported by the map function.
   testMapFails(
-      "map(c0, c1, c2, c3, c4, c5, c6, c7)",
-      {inputVectorDouble,
-       inputVectorDouble,
-       inputVectorDouble,
-       inputVectorDouble,
-       inputVectorDouble,
-       inputVectorDouble,
-       inputVectorDouble,
+      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21)",
+      {inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
+       inputVectorDouble, inputVectorDouble, inputVectorDouble,
        inputVectorDouble},
-      "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
+      "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
 
   // Types of args.
   testMapFails(
@@ -428,5 +535,6 @@ TEST_F(MapTest, resultSize) {
       {keys, values, condition},
       mapVector);
 }
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

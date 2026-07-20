@@ -18,6 +18,7 @@ add_executable(
   BufferedWriterSinkTest.cpp
   FileReaderUtil.cpp
 )
+velox_add_test_headers(velox_text_writer_test FileReaderUtil.h)
 
 add_test(
   NAME velox_text_writer_test

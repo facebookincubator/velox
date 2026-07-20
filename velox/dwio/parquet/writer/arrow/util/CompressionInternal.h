@@ -24,8 +24,8 @@
 
 namespace facebook::velox::parquet::arrow::util {
 
-// ----------------------------------------------------------------------
-// Internal Codec factories
+// ----------------------------------------------------------------------.
+// Internal Codec factories.
 
 namespace internal {
 
@@ -34,49 +34,49 @@ namespace internal {
 constexpr int kBrotliDefaultCompressionLevel = 8;
 
 // Brotli codec.
-std::unique_ptr<Codec> MakeBrotliCodec(
-    int compression_level = kBrotliDefaultCompressionLevel,
-    std::optional<int> window_bits = std::nullopt);
+std::unique_ptr<Codec> makeBrotliCodec(
+    int compressionLevel = kBrotliDefaultCompressionLevel,
+    std::optional<int> windowBits = std::nullopt);
 
 // BZ2 codec.
 constexpr int kBZ2DefaultCompressionLevel = 9;
 
-std::unique_ptr<Codec> MakeBZ2Codec(
-    int compression_level = kBZ2DefaultCompressionLevel);
+std::unique_ptr<Codec> makeBZ2Codec(
+    int compressionLevel = kBZ2DefaultCompressionLevel);
 
-// GZip
+// GZip.
 constexpr int kGZipDefaultCompressionLevel = 9;
 
-std::unique_ptr<Codec> MakeGZipCodec(
-    int compression_level = kGZipDefaultCompressionLevel,
+std::unique_ptr<Codec> makeGZipCodec(
+    int compressionLevel = kGZipDefaultCompressionLevel,
     GZipFormat format = GZipFormat::GZIP,
-    std::optional<int> window_bits = std::nullopt);
+    std::optional<int> windowBits = std::nullopt);
 
-// Snappy
-std::unique_ptr<Codec> MakeSnappyCodec();
+// Snappy.
+std::unique_ptr<Codec> makeSnappyCodec();
 
-// Lz4 Codecs
+// Lz4 Codecs.
 constexpr int kLz4DefaultCompressionLevel = 1;
 
 // Lz4 frame format codec.
 
-std::unique_ptr<Codec> MakeLz4FrameCodec(
-    int compression_level = kLz4DefaultCompressionLevel);
+std::unique_ptr<Codec> makeLz4FrameCodec(
+    int compressionLevel = kLz4DefaultCompressionLevel);
 
 // Lz4 "raw" format codec.
-std::unique_ptr<Codec> MakeLz4RawCodec(
-    int compression_level = kLz4DefaultCompressionLevel);
+std::unique_ptr<Codec> makeLz4RawCodec(
+    int compressionLevel = kLz4DefaultCompressionLevel);
 
 // Lz4 "Hadoop" format codec (== Lz4 raw codec prefixed with lengths header)
-std::unique_ptr<Codec> MakeLz4HadoopRawCodec();
+std::unique_ptr<Codec> makeLz4HadoopRawCodec();
 
 // ZSTD codec.
 
-// XXX level = 1 probably doesn't compress very much
+// XXX level = 1 probably doesn't compress very much.
 constexpr int kZSTDDefaultCompressionLevel = 1;
 
-std::unique_ptr<Codec> MakeZSTDCodec(
-    int compression_level = kZSTDDefaultCompressionLevel);
+std::unique_ptr<Codec> makeZSTDCodec(
+    int compressionLevel = kZSTDDefaultCompressionLevel);
 
 } // namespace internal
 } // namespace facebook::velox::parquet::arrow::util

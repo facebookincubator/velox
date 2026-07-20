@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_common_hyperloglog_test
-  DenseHllTest.cpp
-  SparseHllTest.cpp
-  HllAccumulatorTest.cpp
-)
+add_executable(velox_common_hyperloglog_test DenseHllTest.cpp SparseHllTest.cpp)
 
 add_test(NAME velox_common_hyperloglog_test COMMAND velox_common_hyperloglog_test)
 

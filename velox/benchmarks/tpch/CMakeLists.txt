@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_library(velox_tpch_benchmark_lib TpchBenchmark.cpp)
+velox_add_test_headers(velox_tpch_benchmark_lib TpchBenchmark.h)
 
 target_link_libraries(
   velox_tpch_benchmark_lib

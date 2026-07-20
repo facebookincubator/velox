@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_library(velox_expression_fuzzer_test_utility ArgTypesGeneratorTestUtils.cpp)
+velox_add_test_headers(velox_expression_fuzzer_test_utility ArgTypesGeneratorTestUtils.h)
 target_link_libraries(
   velox_expression_fuzzer_test_utility
   velox_expression_functions

@@ -168,8 +168,9 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
             std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
         auto evalCtx = std::make_shared<exec::EvalCtx>(execCtx.get());
 
+        SelectivityVector rows(100, true);
         ASSERT_EQ(
-            evalCtx->peelingEnabled(),
+            evalCtx->peelingEnabled(rows),
             !queryConfig.debugDisableExpressionsWithPeeling());
         ASSERT_EQ(
             evalCtx->sharedSubExpressionReuseEnabled(),
@@ -203,6 +204,26 @@ TEST_F(QueryConfigTest, expressionEvaluationRelatedConfigs) {
   testConfig(createConfig(false, true, false, false));
   testConfig(createConfig(false, false, true, false));
   testConfig(createConfig(false, false, false, true));
+
+  // Verify minRowsForPeeling: peeling is suppressed when the number of
+  // selected rows is below the threshold.
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{core::QueryConfig::kMinRowsForPeeling, "50"}});
+    auto queryCtx =
+        core::QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    auto execCtx = std::make_shared<core::ExecCtx>(pool.get(), queryCtx.get());
+    auto evalCtx = std::make_shared<exec::EvalCtx>(execCtx.get());
+
+    SelectivityVector belowThreshold(30, true);
+    ASSERT_FALSE(evalCtx->peelingEnabled(belowThreshold));
+
+    SelectivityVector atThreshold(50, true);
+    ASSERT_TRUE(evalCtx->peelingEnabled(atThreshold));
+
+    SelectivityVector aboveThreshold(100, true);
+    ASSERT_TRUE(evalCtx->peelingEnabled(aboveThreshold));
+  }
 }
 
 TEST_F(QueryConfigTest, sessionStartTime) {
@@ -277,6 +298,56 @@ TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
         QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const QueryConfig& config = queryCtx->queryConfig();
     EXPECT_FALSE(config.singleSourceExchangeOptimizationEnabled());
+  }
+}
+
+TEST_F(QueryConfigTest, operatorSpillFileCreateConfig) {
+  // Test default values (empty strings)
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(config.aggregationSpillFileCreateConfig(), "");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "");
+  }
+
+  // Test with aggregation spill file create config set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kAggregationSpillFileCreateConfig,
+          "aggregation_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(
+        config.aggregationSpillFileCreateConfig(), "aggregation_config_value");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "");
+  }
+
+  // Test with hash join spill file create config set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kHashJoinSpillFileCreateConfig,
+          "hashjoin_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(config.aggregationSpillFileCreateConfig(), "");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "hashjoin_config_value");
+  }
+
+  // Test with both configs set
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kAggregationSpillFileCreateConfig,
+          "aggregation_config_value"},
+         {QueryConfig::kHashJoinSpillFileCreateConfig,
+          "hashjoin_config_value"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_EQ(
+        config.aggregationSpillFileCreateConfig(), "aggregation_config_value");
+    EXPECT_EQ(config.hashJoinSpillFileCreateConfig(), "hashjoin_config_value");
   }
 }
 

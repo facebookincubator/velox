@@ -15,7 +15,6 @@
  */
 #include "velox/functions/prestosql/aggregates/SetAggregates.h"
 #include "velox/functions/lib/aggregates/SetBaseAggregate.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -240,7 +239,7 @@ std::unique_ptr<exec::Aggregate> createCountDistinctAggregate(
 } // namespace
 
 void registerSetAggAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
@@ -251,15 +250,13 @@ void registerSetAggAggregate(
           .argumentType("T")
           .build()};
 
-  auto name = prefix + kSetAgg;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
@@ -318,7 +315,7 @@ void registerSetAggAggregate(
 }
 
 void registerSetUnionAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
@@ -329,15 +326,13 @@ void registerSetUnionAggregate(
           .argumentType("array(T)")
           .build()};
 
-  auto name = prefix + kSetUnion;
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step /*step*/,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
+      [](core::AggregationNode::Step /*step*/,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
@@ -349,7 +344,7 @@ void registerSetUnionAggregate(
 }
 
 void registerCountDistinctAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
@@ -360,9 +355,8 @@ void registerCountDistinctAggregate(
           .argumentType("T")
           .build()};
 
-  auto name = prefix + "$internal$count_distinct";
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
       [](core::AggregationNode::Step step,
          const std::vector<TypePtr>& argTypes,

@@ -83,6 +83,25 @@ TEST_F(UpperLowerTest, lowerGreek) {
   EXPECT_EQ("πασǆ", lower("ΠΑΣǅ"));
   EXPECT_EQ("πασσ", lower("ΠΑΣσ"));
   EXPECT_EQ("πασд", lower("ΠΑΣД"));
+  // Σ not preceded by a cased character.
+  EXPECT_EQ("hello σ", lower("hello Σ"));
+  EXPECT_EQ("hello σ world", lower("hello Σ world"));
+  EXPECT_EQ("ab σ", lower("ab Σ"));
+  EXPECT_EQ("   σ", lower("   Σ"));
+  EXPECT_EQ("σ", lower("Σ"));
+  EXPECT_EQ("中文σ", lower("中文Σ"));
+  EXPECT_EQ("ab中σ中", lower("ab中Σ中"));
+  // Σ preceded by a cased character.
+  EXPECT_EQ("abς中", lower("abΣ中"));
+  EXPECT_EQ("abς<", lower("abΣ<"));
+  EXPECT_EQ("hello'ς", lower("hello'Σ"));
+  EXPECT_EQ("hello.ς", lower("hello.Σ"));
+  EXPECT_EQ("a\u0301ς", lower("a\u0301Σ"));
+  EXPECT_EQ("σσς", lower("ΣΣΣ"));
+  EXPECT_EQ("aσbς", lower("aΣbΣ"));
+  EXPECT_EQ("helloς", lower("helloΣ"));
+  // Σ preceded by CJK character which breaks the cased chain → σ
+  EXPECT_EQ("汉字σ!", lower("汉字Σ!"));
 }
 
 TEST_F(UpperLowerTest, upperAscii) {

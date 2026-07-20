@@ -16,13 +16,15 @@
 #include <re2/re2.h>
 
 #include <fmt/format.h>
-#include "folly/experimental/EventCount.h"
+#include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
@@ -30,7 +32,6 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -42,8 +43,8 @@ using namespace facebook::velox::exec::test;
 namespace facebook::velox::exec::test {
 namespace {
 // Returns aggregated spilled stats by 'task'.
-common::SpillStats spilledStats(const exec::Task& task) {
-  common::SpillStats spilledStats;
+exec::SpillStats spilledStats(const exec::Task& task) {
+  exec::SpillStats spilledStats;
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
@@ -73,11 +74,7 @@ class OrderByTest : public OperatorTestBase {
     filesystems::registerLocalFileSystem();
     rng_.seed(123);
 
-    rowType_ = ROW(
-        {{"c0", INTEGER()},
-         {"c1", INTEGER()},
-         {"c2", VARCHAR()},
-         {"c3", VARCHAR()}});
+    rowType_ = ROW({"c0", "c1", "c2", "c3"}, INTEGER());
     fuzzerOpts_.vectorSize = 1024;
     fuzzerOpts_.nullRatio = 0;
     fuzzerOpts_.stringVariableLength = false;
@@ -194,7 +191,7 @@ class OrderByTest : public OperatorTestBase {
     }
     {
       SCOPED_TRACE("run with spilling");
-      auto spillDirectory = exec::test::TempDirectoryPath::create();
+      auto spillDirectory = TempDirectoryPath::create();
       auto queryCtx = core::QueryCtx::create(executor_.get());
       TestScopedSpillInjection scopedSpillInjection(100);
       queryCtx->testingOverrideConfigUnsafe({
@@ -460,7 +457,7 @@ TEST_F(OrderByTest, outputBatchRows) {
     core::PlanNodeId orderById;
     auto plan = PlanBuilder()
                     .values(rowVectors)
-                    .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                    .orderBy({"c0 ASC NULLS LAST"}, false)
                     .capturePlanNodeId(orderById)
                     .planNode();
     auto queryCtx = core::QueryCtx::create(executor_.get());
@@ -486,16 +483,15 @@ TEST_F(OrderByTest, spill) {
   const auto vectors = createVectors(rowType, 1024, 48 << 20);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(vectors)
-          .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-          .capturePlanNodeId(orderNodeId)
-          .planNode();
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .values(vectors)
+                        .orderBy({"c0 ASC NULLS LAST"}, false)
+                        .capturePlanNodeId(orderNodeId)
+                        .planNode();
 
   const auto expectedResult = AssertQueryBuilder(plan).copyResults(pool_.get());
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task = AssertQueryBuilder(plan)
                   .spillDirectory(spillDirectory->getPath())
@@ -510,32 +506,38 @@ TEST_F(OrderByTest, spill) {
   ASSERT_GT(planStats.spilledInputBytes, 0);
   ASSERT_EQ(planStats.spilledPartitions, 1);
   ASSERT_GT(planStats.spilledFiles, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillRuns].count, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillFillTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillSortTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillExtractVectorTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillSerializationTime].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillFlushTime].sum, 0);
+  ASSERT_GT(planStats.customStats[std::string(Operator::kSpillRuns)].count, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillFillTime)].sum, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillSortTime)].sum, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillExtractVectorTime)].sum,
+      0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillSerializationTime)].sum,
+      0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillFlushTime)].sum, 0);
   ASSERT_EQ(
-      planStats.customStats[Operator::kSpillSerializationTime].count,
-      planStats.customStats[Operator::kSpillFlushTime].count);
-  ASSERT_GT(planStats.customStats[Operator::kSpillWrites].sum, 0);
-  ASSERT_GT(planStats.customStats[Operator::kSpillWriteTime].sum, 0);
+      planStats.customStats[std::string(Operator::kSpillSerializationTime)]
+          .count,
+      planStats.customStats[std::string(Operator::kSpillFlushTime)].count);
+  ASSERT_GT(planStats.customStats[std::string(Operator::kSpillWrites)].sum, 0);
+  ASSERT_GT(
+      planStats.customStats[std::string(Operator::kSpillWriteTime)].sum, 0);
   ASSERT_EQ(
-      planStats.customStats[Operator::kSpillWrites].count,
-      planStats.customStats[Operator::kSpillWriteTime].count);
+      planStats.customStats[std::string(Operator::kSpillWrites)].count,
+      planStats.customStats[std::string(Operator::kSpillWriteTime)].count);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
-  VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
+
   const int32_t numBatches = 10;
-  std::vector<RowVectorPtr> batches;
-  for (int32_t i = 0; i < numBatches; ++i) {
-    batches.push_back(fuzzer.fuzzRow(rowType));
-  }
+  auto batches = createVectors(
+      numBatches, ROW({"c0", "c1", "c2"}, INTEGER()), {.vectorSize = 1000});
 
   struct {
     // 0: trigger reclaim with some input processed.
@@ -556,19 +558,18 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(
             queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
-    auto expectedResult =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .queryCtx(queryCtx)
-            .copyResults(pool_.get());
+    auto expectedResult = AssertQueryBuilder(
+                              PlanBuilder()
+                                  .values(batches)
+                                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                                  .planNode())
+                              .queryCtx(queryCtx)
+                              .copyResults(pool_.get());
 
     folly::EventCount driverWait;
     auto driverWaitKey = driverWait.prepareWait();
@@ -614,7 +615,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
@@ -626,7 +627,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .queryCtx(queryCtx)
             .maxDrivers(1)
@@ -690,7 +691,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringInputProcessing) {
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  auto rowType = ROW({"c0", "c1", "c2"}, INTEGER());
   const int32_t numBatches = 10;
   std::vector<RowVectorPtr> batches;
   for (int32_t i = 0; i < numBatches; ++i) {
@@ -699,19 +700,18 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
     batches.push_back(fuzzer.fuzzRow(rowType));
   }
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(
       memory::memoryManager()->addRootPool(
           queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
-  auto expectedResult =
-      AssertQueryBuilder(
-          PlanBuilder()
-              .values(batches)
-              .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-              .planNode())
-          .queryCtx(queryCtx)
-          .copyResults(pool_.get());
+  auto expectedResult = AssertQueryBuilder(
+                            PlanBuilder()
+                                .values(batches)
+                                .orderBy({"c0 ASC NULLS LAST"}, false)
+                                .planNode())
+                            .queryCtx(queryCtx)
+                            .copyResults(pool_.get());
 
   folly::EventCount driverWait;
   auto driverWaitKey = driverWait.prepareWait();
@@ -757,7 +757,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
     AssertQueryBuilder(
         PlanBuilder()
             .values(batches)
-            .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+            .orderBy({"c0 ASC NULLS LAST"}, false)
             .planNode())
         .queryCtx(queryCtx)
         .spillDirectory(spillDirectory->getPath())
@@ -805,29 +805,25 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringReserve) {
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
-  VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
+  auto rowType = ROW({"c0", "c1", "c2"}, INTEGER());
+
   const int32_t numBatches = 10;
-  std::vector<RowVectorPtr> batches;
-  for (int32_t i = 0; i < numBatches; ++i) {
-    batches.push_back(fuzzer.fuzzRow(rowType));
-  }
+  auto batches = createVectors(numBatches, rowType, {.vectorSize = 1000});
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(queryCtx->queryId(), kMaxBytes));
-    auto expectedResult =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .queryCtx(queryCtx)
-            .copyResults(pool_.get());
+    auto expectedResult = AssertQueryBuilder(
+                              PlanBuilder()
+                                  .values(batches)
+                                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                                  .planNode())
+                              .queryCtx(queryCtx)
+                              .copyResults(pool_.get());
 
     folly::EventCount driverWait;
     auto driverWaitKey = driverWait.prepareWait();
@@ -878,7 +874,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
@@ -890,7 +886,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .queryCtx(queryCtx)
             .maxDrivers(1)
@@ -934,31 +930,27 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringAllocation) {
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
-  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
-  VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
   const int32_t numBatches = 200;
-  std::vector<RowVectorPtr> batches;
-  for (int32_t i = 0; i < numBatches; ++i) {
-    batches.push_back(fuzzer.fuzzRow(rowType));
-  }
+  auto batches = createVectors(
+      numBatches, ROW({"c0", "c1", "c2"}, INTEGER()), {.vectorSize = 1000});
+
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
 
   const std::vector<bool> enableSpillings = {false, true};
   for (const auto enableSpilling : enableSpillings) {
     SCOPED_TRACE(fmt::format("enableSpilling {}", enableSpilling));
-    auto spillDirectory = exec::test::TempDirectoryPath::create();
+    auto spillDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::memoryManager()->addRootPool(
             queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
-    auto expectedResult =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .queryCtx(queryCtx)
-            .copyResults(pool_.get());
+    auto expectedResult = AssertQueryBuilder(
+                              PlanBuilder()
+                                  .values(batches)
+                                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                                  .planNode())
+                              .queryCtx(queryCtx)
+                              .copyResults(pool_.get());
 
     folly::EventCount driverWait;
     auto driverWaitKey = driverWait.prepareWait();
@@ -996,7 +988,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
@@ -1008,7 +1000,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .queryCtx(queryCtx)
             .maxDrivers(1)
@@ -1063,7 +1055,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimDuringOutputProcessing) {
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  auto rowType = ROW({"c0", "c1", "c2"}, INTEGER());
   const auto batches = makeVectors(rowType, 10, 128);
 
   struct {
@@ -1080,13 +1072,12 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto expectedResult =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .copyResults(pool_.get());
+    auto expectedResult = AssertQueryBuilder(
+                              PlanBuilder()
+                                  .values(batches)
+                                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                                  .planNode())
+                              .copyResults(pool_.get());
 
     std::atomic_bool injectOnce{true};
     SCOPED_TESTVALUE_SET(
@@ -1120,7 +1111,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .maxDrivers(1)
             .assertResults(expectedResult),
@@ -1130,7 +1121,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
-  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  auto rowType = ROW({"c0", "c1", "c2"}, INTEGER());
   const auto batches = makeVectors(rowType, 10, 128);
 
   struct {
@@ -1147,13 +1138,12 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    auto expectedResult =
-        AssertQueryBuilder(
-            PlanBuilder()
-                .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-                .planNode())
-            .copyResults(pool_.get());
+    auto expectedResult = AssertQueryBuilder(
+                              PlanBuilder()
+                                  .values(batches)
+                                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                                  .planNode())
+                              .copyResults(pool_.get());
 
     std::atomic_int numInputs{0};
     SCOPED_TESTVALUE_SET(
@@ -1187,7 +1177,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
         AssertQueryBuilder(
             PlanBuilder()
                 .values(batches)
-                .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                .orderBy({"c0 ASC NULLS LAST"}, false)
                 .planNode())
             .maxDrivers(1)
             .assertResults(expectedResult),
@@ -1202,12 +1192,11 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
   const auto vectors = createVectors(rowType, 1024, 4 << 20);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(vectors)
-          .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-          .capturePlanNodeId(orderNodeId)
-          .planNode();
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .values(vectors)
+                        .orderBy({"c0 ASC NULLS LAST"}, false)
+                        .capturePlanNodeId(orderNodeId)
+                        .planNode();
 
   const auto expectedResult = AssertQueryBuilder(plan).copyResults(pool_.get());
 
@@ -1229,7 +1218,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
         ASSERT_EQ(reclaimerStats_.reclaimedBytes, 0);
       })));
 
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  auto spillDirectory = TempDirectoryPath::create();
   auto task =
       AssertQueryBuilder(plan)
           .spillDirectory(spillDirectory->getPath())
@@ -1256,13 +1245,12 @@ TEST_F(OrderByTest, maxSpillBytes) {
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(vectors)
-          .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
-          .capturePlanNodeId(orderNodeId)
-          .planNode();
-  auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto plan = PlanBuilder(planNodeIdGenerator)
+                        .values(vectors)
+                        .orderBy({"c0 ASC NULLS LAST"}, false)
+                        .capturePlanNodeId(orderNodeId)
+                        .planNode();
+  auto spillDirectory = TempDirectoryPath::create();
   auto queryCtx = core::QueryCtx::create(executor_.get());
 
   struct {
@@ -1315,7 +1303,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromOrderBy) {
         memory::testingRunArbitration();
       })));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   core::PlanNodeId orderById;
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
@@ -1355,7 +1343,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {
         testingRunArbitration(op->pool());
       })));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
           .spillDirectory(spillDirectory->getPath())
@@ -1404,7 +1392,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
         }
       })));
 
-  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  const auto spillDirectory = TempDirectoryPath::create();
   auto task =
       AssertQueryBuilder(duckDbQueryRunner_)
           .spillDirectory(spillDirectory->getPath())
@@ -1419,5 +1407,37 @@ DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
 
   ASSERT_TRUE(lazyLoadedInNonReclaimableSection.has_value());
   ASSERT_FALSE(lazyLoadedInNonReclaimableSection.value());
+}
+
+TEST_F(OrderByTest, planNodeStats) {
+  // A LocalMerge node is implemented by the LocalMerge operator plus a
+  // CallbackSink per source pipeline that feeds its merge sources.
+  auto data = makeRowVector({makeFlatVector<int32_t>(50, folly::identity)});
+
+  auto plan = PlanBuilder()
+                  .values({data}, /*parallelizable=*/true)
+                  .localMerge({"c0"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).maxDrivers(4).countResults(task);
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(plan->id());
+
+  // Two operators implement this one plan node.
+  ASSERT_EQ(stats.operatorStats.size(), 2);
+  const auto& merge = stats.operatorStatsFor(OperatorType::kLocalMerge);
+  // Wrong: should equal outputRows.
+  EXPECT_EQ(merge.inputRows, 0);
+  EXPECT_EQ(merge.outputRows, 200);
+
+  const auto& sink = stats.operatorStatsFor(OperatorType::kCallbackSink);
+  EXPECT_EQ(sink.inputRows, 200);
+  // Wrong: should equal inputRows.
+  EXPECT_EQ(sink.outputRows, 0);
+
+  EXPECT_EQ(stats.inputRows, 200);
+  EXPECT_EQ(stats.outputRows, 200);
 }
 } // namespace facebook::velox::exec::test

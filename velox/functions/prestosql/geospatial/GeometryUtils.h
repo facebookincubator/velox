@@ -46,15 +46,15 @@ namespace facebook::velox::functions::geospatial {
 
 /// Utility macro used to wrap GEOS library calls in a try-catch block,
 /// throwing a velox::Status with error message if an exception is caught.
-#define GEOS_RETHROW(func, user_error_message)                             \
-  try {                                                                    \
-    func                                                                   \
-  } catch (const geos::util::UnsupportedOperationException& e) {           \
-    VELOX_USER_FAIL(fmt::format("Internal geometry error: {}", e.what())); \
-  } catch (const geos::util::AssertionFailedException& e) {                \
-    VELOX_FAIL(fmt::format("Internal geometry error: {}", e.what()));      \
-  } catch (const geos::util::GEOSException& e) {                           \
-    VELOX_FAIL(fmt::format("{}: {}", user_error_message, e.what()));       \
+#define GEOS_RETHROW(func, user_error_message)                   \
+  try {                                                          \
+    func                                                         \
+  } catch (const geos::util::UnsupportedOperationException& e) { \
+    VELOX_USER_FAIL("Internal geometry error: {}", e.what());    \
+  } catch (const geos::util::AssertionFailedException& e) {      \
+    VELOX_FAIL("Internal geometry error: {}", e.what());         \
+  } catch (const geos::util::GEOSException& e) {                 \
+    VELOX_FAIL("{}: {}", user_error_message, e.what());          \
   }
 
 class GeometryCollectionIterator {
@@ -66,8 +66,6 @@ class GeometryCollectionIterator {
  private:
   std::deque<const geos::geom::Geometry*> geometriesDeque;
 };
-
-geos::geom::GeometryFactory* getGeometryFactory();
 
 FOLLY_ALWAYS_INLINE const
     std::unordered_map<geos::geom::GeometryTypeId, std::string>&
@@ -135,6 +133,18 @@ FOLLY_ALWAYS_INLINE bool isMultiType(const geos::geom::Geometry& geometry) {
   return std::count(multiTypes.begin(), multiTypes.end(), type);
 }
 
+FOLLY_ALWAYS_INLINE bool isGeometryCollection(
+    const geos::geom::Geometry& geometry) {
+  return geometry.getGeometryTypeId() ==
+      geos::geom::GeometryTypeId::GEOS_GEOMETRYCOLLECTION;
+}
+
+FOLLY_ALWAYS_INLINE bool hasGeometryCollection(
+    const geos::geom::Geometry& left,
+    const geos::geom::Geometry& right) {
+  return isGeometryCollection(left) || isGeometryCollection(right);
+}
+
 FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {
   geos::geom::GeometryTypeId type = geometry.getGeometryTypeId();
 
@@ -148,80 +158,6 @@ FOLLY_ALWAYS_INLINE bool isAtomicType(const geos::geom::Geometry& geometry) {
 
 std::optional<std::string> geometryInvalidReason(
     const geos::geom::Geometry* geometry);
-
-enum ClockwiseResult { CW, CCW, ZERO_AREA };
-
-/// Determines if a ring of coordinates (from `start` to `end`) is oriented
-/// clockwise. A return value of 1 indicates clockwise orientation, 0 indicates
-/// counterclockwise, and -1 represents a polygon which has no orientation due
-/// to having an area of 0.
-FOLLY_ALWAYS_INLINE ClockwiseResult isClockwise(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    size_t start,
-    size_t end) {
-  double sum = 0.0;
-  for (size_t i = start; i < end - 1; i++) {
-    const auto& p1 = coordinates->getAt(i);
-    const auto& p2 = coordinates->getAt(i + 1);
-    sum += (p2.x - p1.x) * (p2.y + p1.y);
-  }
-  if (FOLLY_UNLIKELY(std::abs(sum) < 1e-15)) {
-    return ClockwiseResult::ZERO_AREA;
-  }
-  return sum > 0.0 ? ClockwiseResult::CW : ClockwiseResult::CCW;
-}
-
-/// Reverses the order of coordinates in the sequence between `start` and `end`
-FOLLY_ALWAYS_INLINE void reverse(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    size_t start,
-    size_t end) {
-  for (size_t i = 0; i < (end - start) / 2; ++i) {
-    auto temp = coordinates->getAt(start + i);
-    coordinates->setAt(coordinates->getAt(end - 1 - i), start + i);
-    coordinates->setAt(temp, end - 1 - i);
-  }
-}
-
-/// Ensures that a polygon ring has the canonical orientation:
-/// - Exterior rings (shells) must be clockwise.
-/// - Interior rings (holes) must be counter-clockwise.
-/// A return value of true indicates a zero-area ring was encountered
-FOLLY_ALWAYS_INLINE bool canonicalizePolygonCoordinates(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    size_t start,
-    size_t end,
-    bool isShell) {
-  ClockwiseResult isClockwiseFlag = isClockwise(coordinates, start, end);
-  if (isClockwiseFlag == ClockwiseResult::ZERO_AREA) {
-    return true;
-  }
-
-  if ((isShell && isClockwiseFlag == ClockwiseResult::CCW) ||
-      (!isShell && isClockwiseFlag == ClockwiseResult::CW)) {
-    reverse(coordinates, start, end);
-  }
-  return false;
-}
-
-/// Applies `canonicalizePolygonCoordinates` to all rings in a polygon.
-/// A return value of true indicates at least one zero-area ring was
-/// encountered.
-FOLLY_ALWAYS_INLINE bool canonicalizePolygonCoordinates(
-    const std::unique_ptr<geos::geom::CoordinateSequence>& coordinates,
-    const std::vector<size_t>& partIndexes,
-    const std::vector<bool>& shellPart) {
-  bool zeroAreaRingEncountered = false;
-  for (size_t part = 0; part < partIndexes.size() - 1; part++) {
-    zeroAreaRingEncountered |= canonicalizePolygonCoordinates(
-        coordinates, partIndexes[part], partIndexes[part + 1], shellPart[part]);
-  }
-  if (!partIndexes.empty()) {
-    zeroAreaRingEncountered |= canonicalizePolygonCoordinates(
-        coordinates, partIndexes.back(), coordinates->size(), shellPart.back());
-  }
-  return zeroAreaRingEncountered;
-}
 
 Status validateLatitudeLongitude(double latitude, double longitude);
 

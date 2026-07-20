@@ -20,6 +20,10 @@ add_executable(
   ArbitrationParticipantTest.cpp
   ByteStreamTest.cpp
   CompactDoubleListTest.cpp
+  CustomMemoryEmulationTest.cpp
+  CustomMemoryHierarchyTest.cpp
+  CustomMemoryPoolTest.cpp
+  CustomMemoryRegistrationTest.cpp
   HashStringAllocatorTest.cpp
   MemoryAllocatorTest.cpp
   MemoryArbitratorTest.cpp
@@ -38,11 +42,11 @@ target_link_libraries(
   PRIVATE
     velox_caching
     velox_common_base
+    velox_custom_memory_resource_registry
     velox_exception
     velox_exec
     velox_exec_test_lib
     velox_memory
-    velox_temp_path
     velox_test_util
     velox_vector_fuzzer
     Folly::folly
@@ -69,3 +73,5 @@ if(VELOX_ENABLE_BENCHMARKS)
 
   target_link_libraries(velox_concurrent_allocation_benchmark PRIVATE velox_memory velox_time)
 endif()
+
+velox_add_library(velox_memory_test_util INTERFACE HEADERS SharedArbitratorTestUtil.h)

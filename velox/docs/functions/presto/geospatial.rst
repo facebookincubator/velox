@@ -135,7 +135,9 @@ function you are using.
 
 .. function:: ST_Equals(geometry1: Geometry, geometry2: Geometry) -> boolean
 
-    Returns ``true`` if the given geometries represent the same geometry.
+    Returns ``true`` if the given geometries represent the same geometry
+    according to ISO SQL/MM semantics. Also returns ``true`` if both geometries are empty,
+    regardless of their geometry types.
 
 .. function:: ST_Intersects(geometry1: Geometry, geometry2: Geometry) -> boolean
 
@@ -220,6 +222,50 @@ Spatial Operations
     at the expense of higher memory utilization. Null elements in the input
     array are ignored. Empty array input returns null.
 
+.. function:: geometry_union_agg(geometry: Geometry) -> union: Geometry
+
+    Returns a geometry that represents the point set union of the aggregated
+    input geometries. The result type depends on the input geometries:
+
+    * Geometries of the same type are merged into the corresponding
+      ``MULTI*`` type (e.g., multiple ``POINT`` inputs yield a
+      ``MULTIPOINT``).
+    * Adjacent or overlapping polygons are dissolved into a single
+      ``POLYGON``.
+    * Geometries of different types are combined into a
+      ``GEOMETRYCOLLECTION``.
+    * A geometry that is fully contained within another is absorbed and
+      does not appear separately in the result.
+
+    NULL inputs are ignored. Empty geometry inputs (e.g., ``POINT EMPTY``)
+    contribute nothing to the union; if all inputs are empty geometries the
+    result is ``GEOMETRYCOLLECTION EMPTY``. Returns NULL when there are no
+    rows or all inputs are NULL.
+
+    The union semantics are defined by the underlying GEOS
+    `Geometry::Union() <https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a90ca3e6e3a30ac3e1ed7fb6dd1e52810>`_
+    operation.
+
+.. function:: convex_hull_agg(geometry: Geometry) -> hull: Geometry
+
+    Returns a geometry that represents the convex hull of the combined point
+    set of all aggregated input geometries. The result type depends on the
+    geometry of the inputs:
+
+    * A single point, or multiple identical points, yields a ``POINT``.
+    * Collinear points yield a ``LINESTRING``.
+    * All other non-empty inputs yield a ``POLYGON``.
+    * If all inputs are empty geometries the result is
+      ``GEOMETRYCOLLECTION EMPTY``.
+
+    NULL inputs are ignored. Empty geometry inputs (e.g., ``POINT EMPTY``)
+    contribute no points to the hull computation. Returns NULL when there
+    are no rows or all inputs are NULL.
+
+    The convex hull semantics are defined by the underlying GEOS
+    `Geometry::convexHull() <https://libgeos.org/doxygen/classgeos_1_1geom_1_1Geometry.html#a79b3790fbb2a2df4bde530979e740ad2>`_
+    operation.
+
 Accessors
 ---------
 .. function:: ST_IsValid(geometry: Geometry) -> valid: bool
@@ -255,6 +301,7 @@ Accessors
    return an error if the input geometry is not a LineString or MultiLineString.
 
 .. function:: ST_Length(sphericalgeography: SphericalGeography) -> length: double
+   :noindex:
 
     Returns the length of a ``LineString`` or ``MultiLineString`` on a spherical model of the
     Earth. This is equivalent to the sum of great-circle distances between adjacent points
@@ -298,6 +345,10 @@ Accessors
     reason. If the geometry is valid and simple (or ``NULL``), return ``NULL``.
     This function is relatively expensive.
 
+.. function:: great_circle_distance(latitude1, longitude1, latitude2, longitude2) -> double
+
+    Returns the great-circle distance between two points on Earth's surface in kilometers.
+
 .. function:: ST_Area(geometry: Geometry) -> area: double
 
     Returns the 2D Euclidean area of ``geometry``.
@@ -306,15 +357,17 @@ Accessors
     return 0.
 
 .. function:: ST_Area(sphericalgeography: SphericalGeography) -> area: double
+   :noindex:
 
     Returns the area of a polygon or multi-polygon in square meters using a spherical model for Earth.
 
 .. function:: ST_Centroid(geometry: Geometry) -> geometry: Geometry
 
     Returns the point value that is the mathematical centroid of ``geometry``.
-    Empty geometry inputs result in empty output.
+    Empty geometry inputs result in null output.
 
 .. function:: ST_Centroid(SphericalGeography) -> Point
+   :noindex:
 
     Returns the point value that is the mathematical centroid of a spherical geometry.
     Empty geometry inputs result in null output.
@@ -332,6 +385,7 @@ Accessors
     between two geometries in projected units. Empty geometries result in null output.
 
 .. function:: ST_Distance(sphericalgeography1: SphericalGeography, sphericalgeography2: SphericalGeography) -> distance: double
+   :noindex:
 
     Returns the great-circle distance in meters between two SphericalGeography points.
 
@@ -461,6 +515,7 @@ Accessors
     must be less than or equal to the coordinate dimension.
 
 .. function:: ST_ExteriorRing(geometry: Geometry) -> output: Geometry
+   :noindex:
 
     Returns a line string representing the exterior ring of the input polygon.
 
@@ -536,8 +591,20 @@ for more details.
     described above.  Invalid parameters will return a User Error.
 
 .. function:: bing_tile(quadKey: varchar) -> tile: BingTile
+   :noindex:
 
     Creates a Bing tile object from a quadkey. An invalid quadkey will return a User Error.
+
+.. function:: bing_tiles_around(latitude, longitude, zoom_level) -> array(BingTile)
+
+    Returns a collection of Bing tiles that surround the point specified
+    by the latitude and longitude arguments at a given zoom level.
+
+.. function:: bing_tiles_around(latitude, longitude, zoom_level, radius_in_km) -> array(BingTile)
+   :noindex:
+
+    Returns a minimum set of Bing tiles at specified zoom level that cover a circle of specified
+    radius in km around a specified (latitude, longitude) point.
 
 .. function:: bing_tile_coordinates(tile: BingTile) -> coords: row(integer,integer)
 
@@ -553,6 +620,7 @@ for more details.
     exception if tile is at zoom level 0.
 
 .. function:: bing_tile_parent(tile, parentZoom) -> parent: BingTile
+   :noindex:
 
     Returns the parent of the Bing tile at the specified lower zoom level.
     Throws an exception if parentZoom is less than 0, or parentZoom is greater
@@ -564,11 +632,22 @@ for more details.
     exception if tile is at max zoom level.
 
 .. function:: bing_tile_children(tile, childZoom) -> children: array(BingTile)
+   :noindex:
 
     Returns the children of the Bing tile at the specified higher zoom level.
     Throws an exception if childZoom is greater than the max zoom level, or
     childZoom is less than the tile's zoom.  The order is deterministic but not
     specified.
+
+.. function:: bing_tile_polygon(tile) -> Geometry
+
+    Returns the polygon representation of a given Bing tile.
+
+.. function:: bing_tile_at(latitude, longitude, zoom_level) -> BingTile
+
+    Returns a Bing tile at a given zoom level containing a point at a given latitude
+    and longitude. Latitude must be within ``[-85.05112878, 85.05112878]`` range.
+    Longitude must be within ``[-180, 180]`` range. Zoom levels from 1 to 23 are supported.
 
 .. function:: bing_tile_quadkey() -> quadKey: varchar
 
@@ -587,6 +666,128 @@ for more details.
     This results in a smaller array of tiles of different zoom levels.
     For example, if the non-dissolved covering is [“00”, “01”, “02”, “03”, “10”],
     the dissolved covering would be [“0”, “10”]. Zoom levels from 0 to 23 are supported.
+
+S2 Cell Functions
+-----------------
+
+`S2 Geometry <http://s2geometry.io/>`_ is a library for spherical geometry that
+decomposes the Earth's surface into a hierarchy of cells. Unlike planar tiling
+systems (e.g., Bing Tiles), S2 cells have near-uniform area across all latitudes.
+
+Each cell is identified by a 64-bit **cell ID** (stored as ``BIGINT``), which
+encodes both the cell's position and level in the hierarchy. Cells are organized
+in 31 levels (0–30), where level 0 cells are the largest (covering roughly 1/6
+of Earth's surface) and level 30 cells are the smallest (sub-centimeter).
+
+Cells can also be represented as compact hexadecimal **tokens** (e.g.,
+``'8085808b'``), which are shorter and human-readable. Use
+``s2_cell_from_token`` and ``s2_cell_to_token`` to convert between the two
+representations.
+
+All functions operate on cell IDs (``BIGINT``) rather than tokens because cell
+IDs support direct integer comparison, efficient equi-joins and GROUP BY, and
+compose without casting (e.g., ``s2_cell_contains(s2_cell_parent(id, 10), id)``).
+Tokens are useful for human-readable output and interop with external systems
+that use the token format.
+
+
+.. function:: s2_cell_area_sq_km(cell_id: bigint) -> area: double
+
+    Returns the area of the S2 cell in square kilometers.
+    Returns an error if the cell ID is invalid.
+
+.. function:: s2_cell_contains(parent_cell_id: bigint, child_cell_id: bigint) -> boolean
+
+    Returns ``true`` if the first S2 cell contains the second. Containment is
+    hierarchical: a cell contains all of its descendants at finer levels.
+    Returns an error if either cell ID is invalid.
+
+.. function:: s2_cell_from_token(cell_token: varchar) -> cell_id: bigint
+
+    Returns the 64-bit S2 cell ID for the given cell token. The
+    ``cell_token`` is a compact hexadecimal representation of the S2 cell.
+    Returns an error if the cell token is invalid.
+
+.. function:: s2_cell_level(cell_id: bigint) -> level: integer
+
+    Returns the level of the S2 cell, from 0 (coarsest) to 30 (finest).
+    Returns an error if the cell ID is invalid.
+
+.. function:: s2_cell_parent(cell_id: bigint, level: integer) -> parent_id: bigint
+
+    Returns the parent S2 cell ID at the given ``level``. If the cell is
+    already at or above the given level, returns the same cell ID. The
+    ``level`` must be in the ``[0, 30]`` range. Returns an error if the cell
+    ID is invalid or the level is out of range.
+
+.. function:: s2_cell_to_token(cell_id: bigint) -> cell_token: varchar
+
+    Returns the compact hexadecimal token representation of the S2 cell.
+    Returns an error if the cell ID is invalid.
+
+.. function:: s2_cells(geometry: Geometry, level: integer) -> cell_ids: array(bigint)
+
+    Returns the set of S2 cell IDs that cover the given geometry at a fixed
+    ``level``. All returned cells are at the same level. Supports Point,
+    LineString, Polygon, and their Multi variants. Empty geometries return an
+    empty array, null geometries return null. The ``level`` must be in the
+    ``[0, 30]`` range.
+
+.. function:: s2_cells(geometry: Geometry, min_level: integer, max_level: integer, max_cells: integer) -> cell_ids: array(bigint)
+   :noindex:
+
+    Returns a compact set of S2 cell IDs at mixed levels that cover the given
+    geometry, similar to ``geometry_to_dissolved_bing_tiles``. The coverer uses
+    large cells (at ``min_level``) for interiors and small cells (up to
+    ``max_level``) for boundaries, targeting at most ``max_cells`` cells. This
+    is useful for compact spatial indexing of regions like cities or countries.
+    Both levels must be in the ``[0, 30]`` range with ``min_level <= max_level``,
+    and ``max_cells`` must be >= 1. Empty geometries return an empty array,
+    null geometries return null.
+
+    Note: ``max_cells`` is a soft limit. Up to 6 cells may be returned
+    regardless of ``max_cells`` if the region intersects multiple cube faces
+    of the S2 projection. ``min_level`` takes priority over ``max_cells`` —
+    cells below ``min_level`` are never used even if this causes more cells
+    to be returned. If ``max_cells`` is less than 4, the covering area may be
+    significantly larger than the original region. A value of 8 or higher is
+    recommended for a reasonable approximation.
+
+Google Polyline Functions
+--------------------------
+
+.. function:: google_polyline_decode(encoded: varchar) -> points: array(geometry)
+
+    Decodes a Google Polyline encoded string into an array of Point geometries.
+    Uses a fixed precision of 10^5 (100,000), which assumes coordinates were
+    encoded with 5 decimal places of precision.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
+.. function:: google_polyline_decode(encoded: varchar, precision_exponent: bigint) -> points: array(geometry)
+
+    Decodes a Google Polyline encoded string into an array of Point geometries
+    using the specified precision exponent. The precision exponent must be between
+    1 and 16 (inclusive). The precision used for decoding is 10^precision_exponent.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
+.. function:: google_polyline_encode(points: array(Geometry)) -> encoded: varchar
+
+    Encodes an array of Point geometries into a Google Polyline encoded string.
+    Uses a fixed precision of 10^5 (100,000), which rounds coordinates to
+    5 decimal places.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
+
+
+.. function:: google_polyline_encode(points: array(Geometry), precision_exponent: bigint) -> encoded: varchar
+
+    Encodes an array of Point geometries into a Google Polyline encoded string
+    using the specified precision exponent. The precision exponent must be between
+    1 and 16 (inclusive). The precision used for encoding is 10^precision_exponent.
+    See https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    for details on the encoding format.
 
 .. _OpenGIS Specifications: https://www.ogc.org/standards/ogcapi-features/
 .. _SQL/MM Part 3: Spatial: https://www.iso.org/standard/31369.html

@@ -16,12 +16,15 @@
 
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <optional>
+#include <ostream>
 #include <string>
 
-#include "velox/vector/ComplexVector.h"
+#include <folly/container/F14Map.h>
+
+#include "velox/common/base/Portability.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/dwio/common/FileMetadata.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -70,10 +73,19 @@ class Writer {
   /// NOTE: this must be called before close().
   virtual bool finish() = 0;
 
-  /// Invokes closes the writer. Data can no longer be written.
+  /// Closes the writer. Data can no longer be written. Returns format-specific
+  /// file metadata collected during write operations. The returned pointer can
+  /// be null if no metadata is available, such as for an empty data file.
   ///
   /// NOTE: this must be called after the last finish() which returns true.
-  virtual void close() = 0;
+  virtual std::unique_ptr<FileMetadata> close() = 0;
+
+  /// Returns runtime statistics accumulated by this writer (default: none).
+  /// CPU spent off the driver thread (e.g. parallel encode) is reported under
+  /// the well-known "backgroundCpuTimeNanos" key so the owner can surface it.
+  virtual folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const {
+    return {};
+  }
 
   /// Aborts the writing by closing the writer and dropping everything.
   /// Data can no longer be written.
@@ -91,7 +103,7 @@ class Writer {
   /// Validates the state transition from 'oldState' to 'newState'.
   static void checkStateTransition(State oldState, State newState);
 
-  State state_{State::kInit};
+  tsan_atomic<State> state_{State::kInit};
 };
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(

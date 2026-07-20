@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/coro/Task.h>
+
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
 #include "velox/vector/VectorStream.h"
@@ -26,6 +28,10 @@ struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
   /// The serialization format to be used to send batches of data to the remote
   /// process.
   remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
+
+  /// Whether to preserve the input vector encoding in the request sent to
+  /// remote service.
+  bool preserveEncoding{false};
 };
 
 /// Main vector function logic. Needs to be extended with the transport-specific
@@ -45,9 +51,11 @@ class RemoteVectorFunction : public exec::VectorFunction {
       VectorPtr& result) const override;
 
  protected:
-  // The actual function to communicates with the remote host.
-  virtual std::unique_ptr<remote::RemoteFunctionResponse> invokeRemoteFunction(
-      const remote::RemoteFunctionRequest& request) const = 0;
+  // The actual function that communicates with the remote host.
+  // Returns a coroutine to allow the worker thread to yield while
+  // waiting for the remote response
+  virtual folly::coro::Task<std::unique_ptr<remote::RemoteFunctionResponse>>
+  invokeRemoteFunction(const remote::RemoteFunctionRequest& request) const = 0;
 
   // A string representation of the remote host being connected to. Useful for
   // exception messages.
@@ -64,8 +72,9 @@ class RemoteVectorFunction : public exec::VectorFunction {
   const std::string functionName_;
 
   remote::PageFormat serdeFormat_;
-  std::unique_ptr<VectorSerde::Options> serdeOptions_;
   std::unique_ptr<VectorSerde> serde_;
+  std::unique_ptr<VectorSerde::Options> serdeOptions_;
+  bool preserveEncoding_;
 
   // Structures we construct once to cache:
   RowTypePtr remoteInputType_;

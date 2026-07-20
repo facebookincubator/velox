@@ -72,6 +72,7 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
       /*dependentTypes=*/dependentTypes,
       /*allowDuplicates=*/true,
       /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
       /*minTableSizeForParallelJoinBuild=*/1,
       &pool);
 
@@ -96,7 +97,8 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
   }
 
   // Build the table index.
-  table->prepareJoinTable({}, BaseHashTable::kNoSpillInputStartPartitionBit);
+  table->prepareJoinTable(
+      {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
   return std::make_shared<TestIndexTable>(
       std::move(keyType), std::move(valueType), std::move(table));
 }
@@ -115,6 +117,29 @@ core::TypedExprPtr toJoinConditionExpr(
   std::vector<core::TypedExprPtr> conditionExprs;
   conditionExprs.reserve(joinConditions.size());
   for (const auto& condition : joinConditions) {
+    // Check for EqualIndexLookupCondition first to skip equi-join conditions
+    // before creating indexColumnExpr, since equi-join key names may not exist
+    // in keyType (they are handled by hash table lookup, not filter
+    // evaluation).
+    if (auto equalCondition =
+            std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
+                condition)) {
+      // Skip equi-join conditions (non-constant values) as they are handled
+      // by the hash table lookup, not by filter evaluation.
+      if (!equalCondition->isFilter()) {
+        continue;
+      }
+      // Filter conditions (constant values) need to be evaluated.
+      auto indexColumnExpr = std::make_shared<core::FieldAccessTypedExpr>(
+          keyType->findChild(condition->key->name()), condition->key->name());
+      conditionExprs.push_back(
+          std::make_shared<const core::CallTypedExpr>(
+              BOOLEAN(),
+              "eq",
+              std::move(indexColumnExpr),
+              equalCondition->value));
+      continue;
+    }
     auto indexColumnExpr = std::make_shared<core::FieldAccessTypedExpr>(
         keyType->findChild(condition->key->name()), condition->key->name());
     if (auto inCondition =
@@ -140,21 +165,34 @@ core::TypedExprPtr toJoinConditionExpr(
               betweenCondition->upper));
       continue;
     }
-    if (auto equalCondition =
-            std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
-                condition)) {
-      conditionExprs.push_back(
-          std::make_shared<const core::CallTypedExpr>(
-              BOOLEAN(),
-              "eq",
-              std::move(indexColumnExpr),
-              equalCondition->value));
-      continue;
-    }
     VELOX_FAIL("Invalid index join condition: {}", condition->toString());
+  }
+  if (conditionExprs.empty()) {
+    return nullptr;
+  }
+  if (conditionExprs.size() == 1) {
+    return conditionExprs[0];
   }
   return std::make_shared<core::CallTypedExpr>(
       BOOLEAN(), conditionExprs, "and");
+}
+
+// Counts the number of equi-join keys in the given join conditions.
+// An equi-join key is an EqualIndexLookupCondition where isFilter()
+// returns false (i.e., the value references a probe column, not a constant).
+size_t countEqualJoinKeys(
+    const std::vector<core::IndexLookupConditionPtr>& joinConditions) {
+  size_t count = 0;
+  for (const auto& condition : joinConditions) {
+    if (auto equalCondition =
+            std::dynamic_pointer_cast<core::EqualIndexLookupCondition>(
+                condition)) {
+      if (!equalCondition->isFilter()) {
+        ++count;
+      }
+    }
+  }
+  return count;
 }
 
 // Copy values from 'rows' of 'table' according to 'projections' in
@@ -228,11 +266,16 @@ void TestIndexSource::checkNotFailed() {
   }
 }
 
-std::shared_ptr<connector::IndexSource::LookupResultIterator>
-TestIndexSource::lookup(const LookupRequest& request) {
+std::shared_ptr<connector::IndexSource::ResultIterator> TestIndexSource::lookup(
+    const Request& request) {
   checkNotFailed();
+  VELOX_CHECK(!tableHandle_->needsIndexSplit() || !splits_.empty());
   const auto numInputRows = request.input->size();
-  auto& hashTable = tableHandle_->indexTable()->table;
+  auto* indexTable = tableHandle_->indexTable().get();
+  auto& hashTable = indexTable->table;
+  // Serialize access to the shared hash table. The hashers contain stateful
+  // DecodedVectors that are not thread-safe for concurrent access.
+  std::lock_guard<std::mutex> l(indexTable->mutex);
   auto lookup = std::make_unique<HashLookup>(hashTable->hashers(), pool_.get());
   SelectivityVector activeRows(numInputRows);
   VELOX_CHECK(activeRows.isAllSelected());
@@ -304,13 +347,13 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
   std::lock_guard<std::mutex> l(mutex_);
   if (timing.wallNanos != 0) {
     addOperatorRuntimeStats(
-        IndexLookupJoin::kConnectorLookupWallTime,
+        std::string(IndexLookupJoin::kConnectorLookupWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        IndexLookupJoin::kClientLookupWaitWallTime,
+        std::string(IndexLookupJoin::kClientLookupWaitWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }
@@ -318,7 +361,7 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        IndexLookupJoin::kConnectorResultPrepareTime,
+        std::string(IndexLookupJoin::kConnectorResultPrepareTime),
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }
@@ -331,7 +374,7 @@ std::unordered_map<std::string, RuntimeMetric> TestIndexSource::runtimeStats() {
 
 TestIndexSource::ResultIterator::ResultIterator(
     std::shared_ptr<TestIndexSource> source,
-    const LookupRequest& request,
+    const Request& request,
     std::unique_ptr<HashLookup> lookupResult,
     folly::Executor* executor)
     : source_(std::move(source)),
@@ -354,7 +397,7 @@ bool TestIndexSource::ResultIterator::hasNext() {
   return !lookupResultIter_->atEnd();
 }
 
-std::optional<std::unique_ptr<connector::IndexSource::LookupResult>>
+std::optional<std::unique_ptr<connector::IndexSource::Result>>
 TestIndexSource::ResultIterator::next(
     vector_size_t size,
     ContinueFuture& future) {
@@ -433,7 +476,7 @@ void TestIndexSource::ResultIterator::asyncLookup(
   });
 }
 
-std::unique_ptr<connector::IndexSource::LookupResult>
+std::unique_ptr<connector::IndexSource::Result>
 TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
   VELOX_CHECK(hasPendingRequest_);
   if (lookupResultIter_->atEnd()) {
@@ -492,7 +535,8 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
         lookupOutput_);
     VELOX_CHECK_EQ(lookupOutput_->size(), numHits);
     VELOX_CHECK_EQ(inputHitIndices_->size() / sizeof(vector_size_t), numHits);
-    return std::make_unique<LookupResult>(inputHitIndices_, lookupOutput_);
+    return std::make_unique<connector::IndexSource::Result>(
+        inputHitIndices_, lookupOutput_);
   } catch (const std::exception& e) {
     VELOX_CHECK(source_->error_.empty());
     source_->error_ = e.what();
@@ -562,13 +606,14 @@ TestIndexConnector::TestIndexConnector(
 
 std::shared_ptr<connector::IndexSource> TestIndexConnector::createIndexSource(
     const RowTypePtr& inputType,
-    size_t numJoinKeys,
     const std::vector<core::IndexLookupConditionPtr>& joinConditions,
     const RowTypePtr& outputType,
     const connector::ConnectorTableHandlePtr& tableHandle,
     const connector::ColumnHandleMap& columnHandles,
     connector::ConnectorQueryCtx* connectorQueryCtx) {
-  VELOX_CHECK_GE(inputType->size(), numJoinKeys + joinConditions.size());
+  const size_t numEqualJoinKeys = countEqualJoinKeys(joinConditions);
+  VELOX_CHECK_GE(inputType->size(), numEqualJoinKeys);
+
   auto testIndexTableHandle =
       std::dynamic_pointer_cast<const TestIndexTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(testIndexTableHandle);
@@ -588,7 +633,7 @@ std::shared_ptr<connector::IndexSource> TestIndexConnector::createIndexSource(
   return std::make_shared<TestIndexSource>(
       inputType,
       outputType,
-      numJoinKeys,
+      numEqualJoinKeys,
       joinConditionExpr,
       testIndexTableHandle,
       testColumnHandles,

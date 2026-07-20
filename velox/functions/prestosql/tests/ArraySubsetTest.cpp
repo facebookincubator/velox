@@ -15,6 +15,9 @@
  */
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
+
+#include <random>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -454,6 +457,388 @@ TEST_F(ArraySubsetTest, nullTest) {
   auto result =
       evaluate("array_subset(c0, c1)", makeRowVector({inputArray, indices}));
   assertEqualVectors(expected, result);
+}
+
+// Custom fuzzer tests to compare array_subset with equivalent expression
+// using existing UDFs. The equivalent expression is:
+// transform(
+//   array_sort(array_distinct(filter(indices, i -> i IS NOT NULL AND i > 0 AND
+//   i <= cardinality(arr)))), i -> element_at(arr, i)
+// )
+//
+// Note: We already have explicit tests for NULL handling in ArraySubsetTest.
+// These fuzzer tests focus on comparing behavior with non-null inputs.
+class ArraySubsetFuzzerTest : public test::FunctionBaseTest {
+ protected:
+  // Helper to flatten vectors for consistent comparison across encodings
+  template <typename T>
+  static VectorPtr flatten(const std::shared_ptr<T>& vector) {
+    VectorPtr result = vector;
+    BaseVector::flattenVector(result);
+    return result;
+  }
+
+  // The expression below is equivalent to array_subset(c0, c1) using existing
+  // UDFs.
+  static constexpr const char* kEquivalentExpression =
+      "transform("
+      "  array_sort(array_distinct("
+      "    filter(c1, i -> i IS NOT NULL AND i > 0 AND i <= cardinality(c0))"
+      "  )),"
+      "  i -> element_at(c0, i)"
+      ")";
+
+  // Get a SelectivityVector that excludes rows where either input is null.
+  // This is because array_subset returns NULL when either input is NULL,
+  // but the equivalent expression may return empty array.
+  static SelectivityVector getNonNullRows(const RowVectorPtr& data) {
+    auto inputArray = data->childAt(0);
+    auto indices = data->childAt(1);
+    SelectivityVector nonNullRows(data->size());
+
+    for (vector_size_t i = 0; i < data->size(); ++i) {
+      if (inputArray->isNullAt(i) || indices->isNullAt(i)) {
+        nonNullRows.setValid(i, false);
+      }
+    }
+    nonNullRows.updateBounds();
+    return nonNullRows;
+  }
+
+  void testEquivalence(const RowVectorPtr& data) {
+    auto result = evaluate("array_subset(c0, c1)", data);
+    auto expected = evaluate(kEquivalentExpression, data);
+
+    // Get rows where neither input is null
+    auto nonNullRows = getNonNullRows(data);
+
+    // Compare only non-null rows (null propagation is tested separately)
+    nonNullRows.applyToSelected([&](vector_size_t row) {
+      ASSERT_TRUE(expected->equalValueAt(result.get(), row, row))
+          << "Mismatch at row " << row << ": expected "
+          << expected->toString(row) << ", got " << result->toString(row);
+    });
+  }
+
+  // Generate indices array with values in valid range [1, maxIndex].
+  // This ensures we actually test the subsetting logic, not just filtering.
+  ArrayVectorPtr makeValidIndicesArray(
+      vector_size_t numRows,
+      vector_size_t indicesPerRow,
+      int32_t maxIndex,
+      double nullRatio = 0.0) {
+    std::vector<std::vector<std::optional<int32_t>>> indicesData(numRows);
+    std::mt19937 rng(42); // Fixed seed for reproducibility
+
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      indicesData[row].reserve(indicesPerRow);
+      for (vector_size_t i = 0; i < indicesPerRow; ++i) {
+        if (nullRatio > 0.0 &&
+            (rng() % 100) < static_cast<int>(nullRatio * 100)) {
+          indicesData[row].push_back(std::nullopt);
+        } else {
+          // Generate index in range [1, maxIndex] (1-based)
+          int32_t index = (rng() % maxIndex) + 1;
+          indicesData[row].push_back(index);
+        }
+      }
+    }
+
+    return makeNullableArrayVector(indicesData);
+  }
+
+  // Generate indices with mix of valid, invalid (out of bounds, zero,
+  // negative).
+  ArrayVectorPtr makeMixedIndicesArray(
+      vector_size_t numRows,
+      vector_size_t indicesPerRow,
+      int32_t maxValidIndex,
+      double nullRatio = 0.0) {
+    std::vector<std::vector<std::optional<int32_t>>> indicesData(numRows);
+    std::mt19937 rng(42);
+
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      indicesData[row].reserve(indicesPerRow);
+      for (vector_size_t i = 0; i < indicesPerRow; ++i) {
+        if (nullRatio > 0.0 &&
+            (rng() % 100) < static_cast<int>(nullRatio * 100)) {
+          indicesData[row].push_back(std::nullopt);
+        } else {
+          int choice = rng() % 4;
+          if (choice == 0) {
+            // Valid index [1, maxValidIndex]
+            indicesData[row].push_back((rng() % maxValidIndex) + 1);
+          } else if (choice == 1) {
+            // Out of bounds (too large)
+            indicesData[row].push_back(maxValidIndex + (rng() % 100) + 1);
+          } else if (choice == 2) {
+            // Zero
+            indicesData[row].push_back(0);
+          } else {
+            // Negative
+            indicesData[row].push_back(-static_cast<int32_t>(rng() % 100) - 1);
+          }
+        }
+      }
+    }
+
+    return makeNullableArrayVector(indicesData);
+  }
+};
+
+// Fuzz test with flat vectors, no nulls, fixed-size arrays
+TEST_F(ArraySubsetFuzzerTest, fuzzFlatNoNulls) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.0;
+  options.containerHasNulls = false;
+  options.containerLength = 10;
+  options.containerVariableLength = false;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    // Generate random integer arrays
+    auto inputArray = fuzzer.fuzz(ARRAY(INTEGER()));
+
+    // Generate indices in valid range [1, containerLength] to actually test
+    // the subset extraction logic, not just the index filtering
+    auto indices = makeValidIndicesArray(
+        options.vectorSize, 5, options.containerLength, 0.0);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with nulls in arrays and indices
+TEST_F(ArraySubsetFuzzerTest, fuzzWithNulls) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  options.containerLength = 10;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(INTEGER()));
+    // Use mixed indices (valid, invalid, nulls) to test various edge cases
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 8, options.containerLength, options.nullRatio);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with dictionary-encoded vectors
+TEST_F(ArraySubsetFuzzerTest, fuzzDictionaryEncoded) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  options.containerLength = 10;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    // Generate base vectors
+    auto baseInputArray = fuzzer.fuzz(ARRAY(INTEGER()));
+    auto baseIndices = makeMixedIndicesArray(
+        options.vectorSize, 8, options.containerLength, options.nullRatio);
+
+    // Wrap in dictionary encoding
+    auto inputArray = fuzzer.fuzzDictionary(baseInputArray, options.vectorSize);
+    auto indices = fuzzer.fuzzDictionary(baseIndices, options.vectorSize);
+
+    auto data = makeRowVector({inputArray, indices});
+
+    // Flatten for comparison
+    auto flatData = makeRowVector({flatten(inputArray), flatten(indices)});
+
+    // Verify results match between dictionary and flat encodings
+    auto result = evaluate("array_subset(c0, c1)", data);
+    auto expectedResult = evaluate("array_subset(c0, c1)", flatData);
+    assertEqualVectors(expectedResult, result);
+
+    // Also verify against the equivalent expression
+    testEquivalence(flatData);
+  }
+}
+
+// Fuzz test with variable-length arrays and high null ratio
+TEST_F(ArraySubsetFuzzerTest, fuzzVariableLengthWithHighNullRatio) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.3;
+  options.containerHasNulls = true;
+  options.containerLength = 20;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(INTEGER()));
+    // Use high null ratio in indices to match the test's intent
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 10, options.containerLength, options.nullRatio);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with string arrays
+TEST_F(ArraySubsetFuzzerTest, fuzzStringArrays) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  options.containerLength = 10;
+  options.containerVariableLength = true;
+  options.stringLength = 20;
+  options.stringVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(VARCHAR()));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 8, options.containerLength, options.nullRatio);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with nested arrays (array of arrays)
+TEST_F(ArraySubsetFuzzerTest, fuzzNestedArrays) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 50;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  options.containerLength = 5;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(ARRAY(INTEGER())));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 5, options.containerLength, options.nullRatio);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with empty arrays
+TEST_F(ArraySubsetFuzzerTest, fuzzWithEmptyArrays) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  // Use very small container length to increase likelihood of empty arrays
+  options.containerLength = 2;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(INTEGER()));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 3, options.containerLength, options.nullRatio);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with various numeric types
+TEST_F(ArraySubsetFuzzerTest, fuzzVariousNumericTypes) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  options.containerLength = 10;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  // Test with BIGINT
+  for (auto i = 0; i < 5; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(BIGINT()));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 8, options.containerLength, options.nullRatio);
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+
+  // Test with DOUBLE
+  for (auto i = 0; i < 5; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(DOUBLE()));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 8, options.containerLength, options.nullRatio);
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+
+  // Test with BOOLEAN
+  for (auto i = 0; i < 5; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(BOOLEAN()));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 8, options.containerLength, options.nullRatio);
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Fuzz test with constant vectors
+TEST_F(ArraySubsetFuzzerTest, fuzzConstantVectors) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 100;
+  options.nullRatio = 0.0;
+  options.containerHasNulls = false;
+  options.containerLength = 5;
+  options.containerVariableLength = false;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 10; ++i) {
+    // Create a constant input array
+    auto inputArray = fuzzer.fuzzConstant(ARRAY(INTEGER()), options.vectorSize);
+
+    // Create varying indices with mix of valid and invalid values
+    auto indices =
+        makeMixedIndicesArray(options.vectorSize, 5, options.containerLength);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
+}
+
+// Stress test with large vectors
+TEST_F(ArraySubsetFuzzerTest, fuzzLargeVectors) {
+  VectorFuzzer::Options options;
+  options.vectorSize = 1000;
+  options.nullRatio = 0.1;
+  options.containerHasNulls = true;
+  options.containerLength = 50;
+  options.containerVariableLength = true;
+
+  VectorFuzzer fuzzer(options, pool());
+
+  for (auto i = 0; i < 5; ++i) {
+    auto inputArray = fuzzer.fuzz(ARRAY(INTEGER()));
+    auto indices = makeMixedIndicesArray(
+        options.vectorSize, 20, options.containerLength, options.nullRatio);
+
+    auto data = makeRowVector({inputArray, indices});
+    testEquivalence(data);
+  }
 }
 
 } // namespace

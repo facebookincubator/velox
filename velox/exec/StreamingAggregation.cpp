@@ -15,6 +15,11 @@
  */
 
 #include "velox/exec/StreamingAggregation.h"
+#include "velox/common/testutil/TestValue.h"
+
+using facebook::velox::common::testutil::TestValue;
+
+#include "velox/exec/OperatorType.h"
 
 namespace facebook::velox::exec {
 
@@ -28,8 +33,8 @@ StreamingAggregation::StreamingAggregation(
           operatorId,
           aggregationNode->id(),
           aggregationNode->step() == core::AggregationNode::Step::kPartial
-              ? "PartialAggregation"
-              : "Aggregation"),
+              ? OperatorType::kPartialAggregation
+              : OperatorType::kAggregation),
       maxOutputBatchSize_{outputBatchRows()},
       minOutputBatchSize_{
           operatorCtx_->driverCtx()
@@ -68,6 +73,14 @@ void StreamingAggregation::initialize() {
     auto channel = exprToChannel(key.get(), inputType);
     groupingKeys_.push_back(channel);
     groupingKeyTypes.push_back(inputType->childAt(channel));
+  }
+
+  // Grouping keys pass through unchanged to the output: output channel 'i' is
+  // input channel 'groupingKeys_[i]'. Exposing them as identity projections
+  // lets dynamic filters on grouping keys be pushed down through this operator
+  // to the source.
+  for (column_index_t i = 0; i < groupingKeys_.size(); ++i) {
+    identityProjections_.emplace_back(groupingKeys_[i], i);
   }
 
   std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator;
@@ -113,6 +126,11 @@ void StreamingAggregation::close() {
 }
 
 void StreamingAggregation::addInput(RowVectorPtr input) {
+  // needsInput() returns false while input_ is set, so the driver must drain
+  // the previous batch via getOutput() before feeding another. Fail loudly if
+  // that contract is violated rather than silently overwriting and dropping
+  // input_.
+  VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
 }
 
@@ -183,6 +201,14 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
     } else {
       function->extractValues(groups_.data(), numGroups, &result);
     }
+
+    // Clear any state the aggregations may be holding onto and return them
+    // to a valid initial state.
+    function->destroy(folly::Range<char**>(groups_.data(), numGroups));
+    std::vector<vector_size_t> newGroups;
+    newGroups.resize(numGroups);
+    std::iota(newGroups.begin(), newGroups.end(), 0);
+    function->initializeNewGroups(groups_.data(), newGroups);
   }
 
   if (sortedAggregations_) {
@@ -196,6 +222,9 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
           folly::Range<char**>(groups_.data(), numGroups), output);
     }
   }
+
+  TestValue::adjust(
+      "facebook::velox::exec::StreamingAggregation::createOutput", this);
 
   std::rotate(groups_.begin(), groups_.begin() + numGroups, groups_.end());
   numGroups_ -= numGroups;
@@ -365,11 +394,13 @@ RowVectorPtr StreamingAggregation::getOutput() {
 
   RowVectorPtr output;
 
+  // we do not respect minOutputBatchRows or outputDueToBatchBytes
+  // when noGroupsSpanBatches is set
   const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
   const bool outputDueToBatchBytes =
       numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
-  if ((noGroupsSpanBatches_ || numPrevGroups > 0) &&
-      (outputDueToBatchSize || outputDueToBatchBytes)) {
+  if (noGroupsSpanBatches_ ||
+      (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes))) {
     size_t numOutputGroups{0};
     if (noGroupsSpanBatches_) {
       numOutputGroups = numGroups_;
@@ -424,6 +455,7 @@ std::unique_ptr<RowContainer> StreamingAggregation::makeRowContainer(
       false,
       false,
       false,
+      false, // hasCountFlag
       false,
       false,
       pool());

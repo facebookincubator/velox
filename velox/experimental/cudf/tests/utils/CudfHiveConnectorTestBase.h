@@ -21,14 +21,16 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSink.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 namespace facebook::velox::cudf_velox::exec::test {
+
+using TempFilePath = common::testutil::TempFilePath;
 
 static const std::string kCudfHiveConnectorId = "test-cudf-hive";
 
@@ -47,15 +49,11 @@ class CudfHiveConnectorTestBase
   void resetCudfHiveConnector(
       const std::shared_ptr<const facebook::velox::config::ConfigBase>& config);
 
-  void writeToFile(
-      const std::string& filePath,
-      RowVectorPtr vector,
-      std::string prefix = "c");
+  void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
   void writeToFile(
       const std::string& filePath,
-      const std::vector<RowVectorPtr>& vectors,
-      std::string prefix = "c");
+      const std::vector<RowVectorPtr>& vectors);
 
   std::vector<RowVectorPtr> makeVectors(
       const RowTypePtr& rowType,
@@ -67,9 +65,7 @@ class CudfHiveConnectorTestBase
   /// Assumes plan has a single TableScan node.
   std::shared_ptr<facebook::velox::exec::Task> assertQuery(
       const facebook::velox::core::PlanNodePtr& plan,
-      const std::vector<
-          std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
-          filePaths,
+      const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
       const std::string& duckDbSql);
 
   std::shared_ptr<facebook::velox::exec::Task> assertQuery(
@@ -79,36 +75,46 @@ class CudfHiveConnectorTestBase
       const std::string& duckDbSql,
       const int32_t numPrefetchSplit);
 
-  static std::vector<std::shared_ptr<facebook::velox::exec::test::TempFilePath>>
-  makeFilePaths(int count);
+  static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count);
 
   static std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>
   makeCudfHiveConnectorSplit(
       const std::string& filePath,
+      uint64_t start = 0,
+      uint64_t length =
+          static_cast<uint64_t>(std::numeric_limits<cudf::size_type>::max()),
       int64_t splitWeight = 0);
+
+  static std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>
+  makeCudfHiveConnectorSplit(
+      const std::string& filePath,
+      int64_t fileSize,
+      int64_t fileModifiedTime,
+      uint64_t start,
+      uint64_t length);
 
   static std::vector<
       std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   makeCudfHiveConnectorSplits(
-      const std::vector<
-          std::shared_ptr<facebook::velox::exec::test::TempFilePath>>&
-          filePaths);
+      const std::vector<std::shared_ptr<TempFilePath>>& filePaths);
 
   static std::vector<
       std::shared_ptr<facebook::velox::connector::hive::HiveConnectorSplit>>
-  makeCudfHiveConnectorSplits(const std::string& filePath, uint32_t splitCount);
+  makeCudfHiveConnectorSplits(
+      const std::string& filePath,
+      uint32_t splitCount,
+      const std::optional<std::unordered_map<std::string, std::string>>&
+          infoColumns = {});
 
   static std::shared_ptr<facebook::velox::connector::hive::HiveTableHandle>
   makeTableHandle(
       const std::string& tableName = "parquet_table",
       const RowTypePtr& dataColumns = nullptr,
-      bool filterPushdownEnabled = false,
       common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilterExpr = nullptr) {
     return std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
         kCudfHiveConnectorId,
         tableName,
-        filterPushdownEnabled,
         std::move(subfieldFilters),
         remainingFilterExpr,
         dataColumns);
@@ -121,7 +127,7 @@ class CudfHiveConnectorTestBase
   makeColumnHandle(
       const std::string& name,
       const TypePtr& type,
-      facebook::velox::connector::hive::HiveColumnHandle::ColumnType
+      facebook::velox::connector::hive::FileColumnHandle::ColumnType
           columnType = facebook::velox::connector::hive::HiveColumnHandle::
               ColumnType::kRegular,
       const std::vector<facebook::velox::common::Subfield>& requiredSubfields =

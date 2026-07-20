@@ -58,7 +58,7 @@ std::string HiveTypeSerializer::visit(const Type& type) const {
       return "opaque<" + typeAlias + ">";
     }
     default:
-      VELOX_UNSUPPORTED("unsupported type: " + type.toString());
+      VELOX_UNSUPPORTED("Unsupported type: {}", type.toString());
   }
 }
 

@@ -15,3 +15,14 @@ rules:
   use-trusted-publishing:
     ignore:
       - build_pyvelox.yml
+  adhoc-packages:
+    ignore:
+      - linux-build-base.yml
+  dangerous-triggers:
+    ignore:
+      - selective-build-comment.yml
+      - ci-failure-comment.yml
+      - labeler.yml
+      - detect-force-full.yml
+      - rerun-on-force-full.yml
+      - force-full-on-comment.yml

@@ -14,7 +14,23 @@
 
 # for generated headers
 
-velox_add_library(velox_abfs RegisterAbfsFileSystem.cpp)
+velox_add_library(
+  velox_abfs
+  RegisterAbfsFileSystem.cpp
+  HEADERS
+  AbfsFileSystem.h
+  AbfsPath.h
+  AbfsReadFile.h
+  AbfsUtil.h
+  AbfsWriteFile.h
+  AzureBlobClient.h
+  AzureClientProvider.h
+  AzureClientProviderFactories.h
+  AzureClientProviderImpl.h
+  AzureDataLakeFileClient.h
+  DynamicSasTokenClientProvider.h
+  RegisterAbfsFileSystem.h
+)
 
 if(VELOX_ENABLE_ABFS)
   velox_sources(

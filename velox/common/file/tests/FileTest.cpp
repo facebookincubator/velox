@@ -14,19 +14,16 @@
  * limitations under the License.
  */
 
-#include <fcntl.h>
-#include <folly/executors/CPUThreadPoolExecutor.h>
-
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::common::testutil;
 using facebook::velox::common::Region;
 using namespace facebook::velox::tests::utils;
 
@@ -49,22 +46,15 @@ void writeData(WriteFile* writeFile, bool useIOBuf = false) {
   }
 }
 
-void writeDataWithOffset(WriteFile* writeFile) {
-  ASSERT_EQ(writeFile->size(), 0);
-  writeFile->truncate(15 + kOneMB);
-  std::vector<iovec> iovecs;
-  std::string s1 = "aaaaa";
-  std::string s2 = "bbbbb";
-  std::string s3 = std::string(kOneMB, 'c');
-  std::string s4 = "ddddd";
-  iovecs.push_back({s3.data(), s3.length()});
-  iovecs.push_back({s4.data(), s4.length()});
-  writeFile->write(iovecs, 10, 5 + kOneMB);
-  iovecs.clear();
-  iovecs.push_back({s1.data(), s1.length()});
-  iovecs.push_back({s2.data(), s2.length()});
-  writeFile->write(iovecs, 0, 10);
-  ASSERT_EQ(writeFile->size(), 15 + kOneMB);
+TEST(FileIoContextTest, defaultCacheableIsFalse) {
+  FileIoContext defaultContext;
+  EXPECT_FALSE(defaultContext.cacheable);
+
+  FileIoContext explicitContext(nullptr);
+  EXPECT_FALSE(explicitContext.cacheable);
+
+  FileIoContext cacheableContext(nullptr, {}, nullptr, true);
+  EXPECT_TRUE(cacheableContext.cacheable);
 }
 
 void readData(
@@ -176,306 +166,23 @@ TEST(InMemoryFile, preadv) {
   EXPECT_EQ(expected, values);
 }
 
-class LocalFileTest : public ::testing::TestWithParam<bool> {
- protected:
-  LocalFileTest() : useFaultyFs_(GetParam()) {}
+TEST(InMemoryFile, ownedBuffer) {
+  memory::MemoryManager::Options options;
+  memory::MemoryManager manager{options};
+  auto pool = manager.addLeafPool();
 
-  static void SetUpTestCase() {
-    filesystems::registerLocalFileSystem();
-    tests::utils::registerFaultyFileSystem();
-  }
-
-  const bool useFaultyFs_;
-  const std::unique_ptr<folly::CPUThreadPoolExecutor> executor_ =
-      std::make_unique<folly::CPUThreadPoolExecutor>(
-          std::max(
-              1,
-              static_cast<int32_t>(std::thread::hardware_concurrency() / 2)),
-          std::make_shared<folly::NamedThreadFactory>(
-              "LocalFileReadAheadTest"));
-};
-
-TEST_P(LocalFileTest, writeAndRead) {
-  struct {
-    bool useIOBuf;
-    bool withOffset;
-
-    std::string debugString() const {
-      return fmt::format("useIOBuf {}, withOffset {}", useIOBuf, withOffset);
-    }
-  } testSettings[] = {{false, false}, {true, false}, {false, true}};
-  for (auto testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-
-    auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
-    const auto& filename = tempFile->getPath();
-    auto fs = filesystems::getFileSystem(filename, {});
-    fs->remove(filename);
-    {
-      auto writeFile = fs->openFileForWrite(filename);
-      if (testData.withOffset) {
-        writeDataWithOffset(writeFile.get());
-      } else {
-        writeData(writeFile.get(), testData.useIOBuf);
-      }
-      writeFile->close();
-      ASSERT_EQ(writeFile->size(), 15 + kOneMB);
-    }
-    // Test read async.
-    if (!useFaultyFs_) {
-      auto readFile =
-          std::make_shared<LocalReadFile>(filename, executor_.get());
-      readData(readFile.get(), true, true);
-      auto readFileWithoutExecutor = std::make_shared<LocalReadFile>(filename);
-      readData(readFileWithoutExecutor.get(), true, true);
-    }
-    auto readFile = fs->openFileForRead(filename);
-    readData(readFile.get());
-  }
-}
-
-TEST_P(LocalFileTest, viaRegistry) {
-  auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
-  const auto& filename = tempFile->getPath();
-  auto fs = filesystems::getFileSystem(filename, {});
-  fs->remove(filename);
+  const std::string data = "abcdefghij";
+  std::shared_ptr<InMemoryReadFile> readFile;
   {
-    auto writeFile = fs->openFileForWrite(filename);
-    writeFile->append("snarf");
+    auto buffer = AlignedBuffer::allocate<char>(data.size(), pool.get());
+    memcpy(buffer->asMutable<char>(), data.data(), data.size());
+    readFile = std::make_shared<InMemoryReadFile>(std::move(buffer));
   }
-  auto readFile = fs->openFileForRead(filename);
-  ASSERT_EQ(readFile->size(), 5);
-  char buffer1[5];
-  ASSERT_EQ(readFile->pread(0, 5, &buffer1), "snarf");
-  fs->remove(filename);
+
+  // The file owns the buffer, so reads succeed after the local handle is gone.
+  EXPECT_EQ(readFile->size(), data.size());
+  EXPECT_EQ(readFile->pread(0, data.size()), data);
 }
-
-TEST_P(LocalFileTest, rename) {
-  const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  const auto a = fmt::format("{}/a", tempFolder->getPath());
-  const auto b = fmt::format("{}/b", tempFolder->getPath());
-  const auto newA = fmt::format("{}/newA", tempFolder->getPath());
-  const std::string data("aaaaa");
-  auto localFs = filesystems::getFileSystem(a, nullptr);
-  {
-    auto writeFile = localFs->openFileForWrite(a);
-    writeFile = localFs->openFileForWrite(b);
-    writeFile->append(data);
-    writeFile->close();
-  }
-  ASSERT_TRUE(localFs->exists(a));
-  ASSERT_TRUE(localFs->exists(b));
-  ASSERT_FALSE(localFs->exists(newA));
-  VELOX_ASSERT_USER_THROW(localFs->rename(a, b), "");
-  localFs->rename(a, newA);
-  ASSERT_FALSE(localFs->exists(a));
-  ASSERT_TRUE(localFs->exists(b));
-  ASSERT_TRUE(localFs->exists(newA));
-  localFs->rename(b, newA, true);
-  auto readFile = localFs->openFileForRead(newA);
-  char buffer[5];
-  ASSERT_EQ(readFile->pread(0, 5, &buffer), data);
-}
-
-TEST_P(LocalFileTest, exists) {
-  auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  auto a = fmt::format("{}/a", tempFolder->getPath());
-  auto b = fmt::format("{}/b", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(a, nullptr);
-  {
-    auto writeFile = localFs->openFileForWrite(a);
-    writeFile = localFs->openFileForWrite(b);
-  }
-  ASSERT_TRUE(localFs->exists(a));
-  ASSERT_TRUE(localFs->exists(b));
-  localFs->remove(a);
-  ASSERT_FALSE(localFs->exists(a));
-  ASSERT_TRUE(localFs->exists(b));
-  localFs->remove(b);
-  ASSERT_FALSE(localFs->exists(a));
-  ASSERT_FALSE(localFs->exists(b));
-}
-
-TEST_P(LocalFileTest, isDirectory) {
-  auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  auto a = fmt::format("{}/a", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(a, nullptr);
-  auto writeFile = localFs->openFileForWrite(a);
-  ASSERT_TRUE(localFs->isDirectory(tempFolder->getPath()));
-  ASSERT_FALSE(localFs->isDirectory(a));
-}
-
-TEST_P(LocalFileTest, list) {
-  const auto tempFolder = ::exec::test::TempDirectoryPath::create(useFaultyFs_);
-  const auto a = fmt::format("{}/1", tempFolder->getPath());
-  const auto b = fmt::format("{}/2", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(a, nullptr);
-  {
-    auto writeFile = localFs->openFileForWrite(a);
-    writeFile = localFs->openFileForWrite(b);
-  }
-  auto files = localFs->list(std::string_view(tempFolder->getPath()));
-  std::sort(files.begin(), files.end());
-  ASSERT_EQ(files, std::vector<std::string>({a, b}));
-  localFs->remove(a);
-  ASSERT_EQ(
-      localFs->list(std::string_view(tempFolder->getPath())),
-      std::vector<std::string>({b}));
-  localFs->remove(b);
-  ASSERT_TRUE(localFs->list(std::string_view(tempFolder->getPath())).empty());
-}
-
-TEST_P(LocalFileTest, readFileDestructor) {
-  if (useFaultyFs_) {
-    return;
-  }
-  auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
-  const auto& filename = tempFile->getPath();
-  auto fs = filesystems::getFileSystem(filename, {});
-  fs->remove(filename);
-  {
-    auto writeFile = fs->openFileForWrite(filename);
-    writeData(writeFile.get());
-  }
-
-  {
-    auto readFile = fs->openFileForRead(filename);
-    readData(readFile.get());
-  }
-
-  int32_t readFd;
-  {
-    std::unique_ptr<char[]> buf(new char[tempFile->getPath().size() + 1]);
-    buf[tempFile->getPath().size()] = 0;
-    ::memcpy(
-        buf.get(), tempFile->getPath().c_str(), tempFile->getPath().size());
-    readFd = ::open(buf.get(), O_RDONLY);
-  }
-  {
-    LocalReadFile readFile(readFd);
-    readData(&readFile, false);
-  }
-  {
-    // Can't read again from a closed file descriptor.
-    LocalReadFile readFile(readFd);
-    ASSERT_ANY_THROW(readData(&readFile, false));
-  }
-}
-
-TEST_P(LocalFileTest, mkdirFailIfPresent) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
-  std::string path = tempFolder->getPath();
-  auto localFs = filesystems::getFileSystem(path, nullptr);
-
-  path += "/level1/level2/level3";
-  EXPECT_FALSE(localFs->exists(path));
-  EXPECT_NO_THROW(localFs->mkdir(path));
-  EXPECT_TRUE(localFs->exists(path));
-
-  // Except that if we try to make the directory again,
-  // it will not fail.
-  EXPECT_NO_THROW(localFs->mkdir(path));
-
-  // We fail if the directory is already present
-  DirectoryOptions options;
-  options.failIfExists = true;
-  VELOX_ASSERT_THROW(
-      localFs->mkdir(path, options),
-      fmt::format("Directory: {} already exists", localFs->extractPath(path)));
-}
-
-TEST_P(LocalFileTest, mkdir) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
-
-  std::string path = tempFolder->getPath();
-  auto localFs = filesystems::getFileSystem(path, nullptr);
-
-  // Create 3 levels of directories and ensure they exist.
-  path += "/level1/level2/level3";
-  EXPECT_NO_THROW(localFs->mkdir(path));
-  EXPECT_TRUE(localFs->exists(path));
-
-  // Create a completely existing directory - we should not throw.
-  EXPECT_NO_THROW(localFs->mkdir(path));
-
-  // Write a file to our directory to double check it exist.
-  path += "/a.txt";
-  const std::string data("aaaaa");
-  {
-    auto writeFile = localFs->openFileForWrite(path);
-    writeFile->append(data);
-    writeFile->close();
-  }
-  EXPECT_TRUE(localFs->exists(path));
-}
-
-TEST_P(LocalFileTest, rmdir) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
-
-  std::string path = tempFolder->getPath();
-  auto localFs = filesystems::getFileSystem(path, nullptr);
-
-  // Create 3 levels of directories and ensure they exist.
-  path += "/level1/level2/level3";
-  EXPECT_NO_THROW(localFs->mkdir(path));
-  EXPECT_TRUE(localFs->exists(path));
-
-  // Write a file to our directory to double check it exist.
-  path += "/a.txt";
-  const std::string data("aaaaa");
-  {
-    auto writeFile = localFs->openFileForWrite(path);
-    writeFile->append(data);
-    writeFile->close();
-  }
-  EXPECT_TRUE(localFs->exists(path));
-
-  // Now delete the whole temp folder and ensure it is gone.
-  EXPECT_NO_THROW(localFs->rmdir(tempFolder->getPath()));
-  EXPECT_FALSE(localFs->exists(tempFolder->getPath()));
-
-  // Delete a non-existing directory.
-  path += "/does_not_exist/subdir";
-  EXPECT_FALSE(localFs->exists(path));
-  // The function does not throw, but will return zero files and folders
-  // deleted, which is not an error.
-  EXPECT_NO_THROW(localFs->rmdir(tempFolder->getPath()));
-}
-
-TEST_P(LocalFileTest, fileNotFound) {
-  auto tempFolder = exec::test::TempDirectoryPath::create(useFaultyFs_);
-  auto path = fmt::format("{}/file", tempFolder->getPath());
-  auto localFs = filesystems::getFileSystem(path, nullptr);
-  VELOX_ASSERT_RUNTIME_THROW_CODE(
-      localFs->openFileForRead(path),
-      error_code::kFileNotFound,
-      "No such file or directory");
-}
-
-TEST_P(LocalFileTest, attributes) {
-  auto tempFile = exec::test::TempFilePath::create(useFaultyFs_);
-  const auto& filename = tempFile->getPath();
-  auto fs = filesystems::getFileSystem(filename, {});
-  fs->remove(filename);
-  auto writeFile = fs->openFileForWrite(filename);
-  ASSERT_FALSE(
-      LocalWriteFile::Attributes::cowDisabled(writeFile->getAttributes()));
-  try {
-    writeFile->setAttributes(
-        {{std::string(LocalWriteFile::Attributes::kNoCow), "true"}});
-  } catch (const std::exception& /*e*/) {
-    // Flags like FS_IOC_SETFLAGS might not be supported for certain
-    // file systems (e.g., EXT4, XFS).
-  }
-  ASSERT_TRUE(
-      LocalWriteFile::Attributes::cowDisabled(writeFile->getAttributes()));
-  writeFile->close();
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    LocalFileTestSuite,
-    LocalFileTest,
-    ::testing::Values(false, true));
 
 class FaultyFsTest : public ::testing::Test {
  protected:
@@ -487,7 +194,7 @@ class FaultyFsTest : public ::testing::Test {
   }
 
   void SetUp() {
-    dir_ = exec::test::TempDirectoryPath::create(true);
+    dir_ = TempDirectoryPath::create(true);
     fs_ = std::dynamic_pointer_cast<tests::utils::FaultyFileSystem>(
         filesystems::getFileSystem(dir_->getPath(), {}));
     VELOX_CHECK_NOT_NULL(fs_);
@@ -536,7 +243,7 @@ class FaultyFsTest : public ::testing::Test {
     }
   }
 
-  std::shared_ptr<exec::test::TempDirectoryPath> dir_;
+  std::shared_ptr<TempDirectoryPath> dir_;
   std::string readFilePath_;
   std::string writeFilePath_;
   std::shared_ptr<tests::utils::FaultyFileSystem> fs_;

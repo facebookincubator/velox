@@ -19,7 +19,6 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
-#include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
 namespace facebook::velox::aggregate::prestosql {
 namespace {
@@ -571,6 +570,12 @@ class ReduceAgg : public exec::Aggregate {
       }
     });
 
+    if (rawInput && numNotNull > 0) {
+      // Validate the initial value on the original input rows before group-by
+      // aggregation reorders values for lambda evaluation.
+      verifyInitialValueArg(args[1], rows);
+    }
+
     const auto numGroups = uniqueGroups.size();
 
     std::vector<vector_size_t> groupCounts(numGroups, 0);
@@ -791,7 +796,7 @@ class ReduceAgg : public exec::Aggregate {
 } // namespace
 
 void registerReduceAgg(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -806,16 +811,13 @@ void registerReduceAgg(
           .argumentType("function(S,S,S)")
           .build()};
 
-  const std::string name = prefix + kReduceAgg;
-
   exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<ReduceAgg>(resultType);
       },
       {.orderSensitive = false},

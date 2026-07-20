@@ -51,6 +51,14 @@ void SpecialFormSignatureGenerator::addCastFromFloatingPointSignatures(
   }
 }
 
+void SpecialFormSignatureGenerator::addCastFromDecimalSignatures(
+    const std::string& toType,
+    std::vector<exec::FunctionSignaturePtr>& signatures) const {
+  for (const auto& fromType : kDecimalTypes_) {
+    signatures.push_back(makeCastSignature(fromType, toType));
+  }
+}
+
 void SpecialFormSignatureGenerator::addCastFromVarcharSignature(
     const std::string& toType,
     std::vector<exec::FunctionSignaturePtr>& signatures) const {
@@ -85,6 +93,7 @@ SpecialFormSignatureGenerator::getSignatures() const {
               {"coalesce", getSignaturesForCoalesce()},
               {"if", getSignaturesForIf()},
               {"switch", getSignaturesForSwitch()},
+              {"case", getSignaturesForCase()},
               {"cast", getSignaturesForCast()}};
   return kSpecialForms;
 }
@@ -162,6 +171,26 @@ SpecialFormSignatureGenerator::getSignaturesForSwitch() const {
 }
 
 std::vector<exec::FunctionSignaturePtr>
+SpecialFormSignatureGenerator::getSignaturesForCase() const {
+  // Signature: case (subject, when, then) -> output:
+  // S, S, R -> R
+  // CaseExpr::create resolves 'eq' for the subject type S via the
+  // VectorFunction registry, falling back to the SimpleFunction registry —
+  // the latter has a Generic<T1>, Generic<T1> eq registration so any
+  // comparable type is accepted. The fuzzer binds S to a randomly selected
+  // type and generates the variable number of WHEN/THEN pairs (and optional
+  // ELSE) via an override; this single signature defines the slot types.
+  return {exec::FunctionSignatureBuilder()
+              .typeVariable("S")
+              .typeVariable("R")
+              .argumentType("S")
+              .argumentType("S")
+              .argumentType("R")
+              .returnType("R")
+              .build()};
+}
+
+std::vector<exec::FunctionSignaturePtr>
 SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   std::vector<exec::FunctionSignaturePtr> signatures;
 
@@ -169,6 +198,7 @@ SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   for (const auto& toType : kIntegralTypes_) {
     addCastFromIntegralSignatures(toType, signatures);
     addCastFromFloatingPointSignatures(toType, signatures);
+    addCastFromDecimalSignatures(toType, signatures);
     addCastFromVarcharSignature(toType, signatures);
   }
 
@@ -176,12 +206,22 @@ SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   for (const auto& toType : kFloatingPointTypes_) {
     addCastFromIntegralSignatures(toType, signatures);
     addCastFromFloatingPointSignatures(toType, signatures);
+    addCastFromDecimalSignatures(toType, signatures);
+    addCastFromVarcharSignature(toType, signatures);
+  }
+
+  // To decimal type.
+  for (const auto& toType : kDecimalTypes_) {
+    addCastFromIntegralSignatures(toType, signatures);
+    addCastFromFloatingPointSignatures(toType, signatures);
+    addCastFromDecimalSignatures(toType, signatures);
     addCastFromVarcharSignature(toType, signatures);
   }
 
   // To varchar type.
   addCastFromIntegralSignatures("varchar", signatures);
   addCastFromFloatingPointSignatures("varchar", signatures);
+  addCastFromDecimalSignatures("varchar", signatures);
   addCastFromVarcharSignature("varchar", signatures);
   addCastFromDateSignature("varchar", signatures);
   addCastFromTimestampSignature("varchar", signatures);
@@ -216,6 +256,11 @@ SpecialFormSignatureGenerator::getSignaturesForCast() const {
   for (auto i = 0; i < size; ++i) {
     auto from = signatures[i]->argumentTypes()[0].baseName();
     auto to = signatures[i]->returnType().baseName();
+
+    // Signature parsing of nested decimal type is not supported.
+    if (from == "DECIMAL" || to == "DECIMAL") {
+      continue;
+    }
 
     signatures.push_back(makeCastSignature(
         fmt::format("array({})", from), fmt::format("array({})", to)));

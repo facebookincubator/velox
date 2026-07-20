@@ -18,7 +18,6 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -43,7 +42,8 @@ class SimpleComparisonMatcherTest : public testing::Test,
       const RowTypePtr& rowType) {
     parse::ParseOptions options;
     options.functionPrefix = prefix_;
-    auto untyped = parse::parseExpr(text, options);
+    options.parseIntegerAsBigint = false;
+    auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
@@ -69,7 +69,7 @@ class TestFunction : public exec::VectorFunction {
                 .typeVariable("T")
                 .returnType("array(T)")
                 .argumentType("array(T)")
-                .argumentType("function(T,T,bigint)")
+                .argumentType("function(T,T,integer)")
                 .build()};
   }
 };
@@ -80,8 +80,7 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
       TestFunction::signatures(),
       std::make_unique<TestFunction>());
 
-  const auto inputType =
-      ROW({"a"}, {ARRAY(ROW({"f", "g"}, {BIGINT(), BIGINT()}))});
+  const auto inputType = ROW({"a"}, {ARRAY(ROW({"f", "g"}, INTEGER()))});
 
   auto checker = std::make_unique<SimpleComparisonChecker>();
 

@@ -31,14 +31,14 @@
 
 #if defined(_MSC_VER)
 #pragma warning(push)
-// Disable warning for STL types usage in DLL interface
+// Disable warning for STL types usage in DLL interface.
 // https://web.archive.org/web/20130317015847/http://connect.microsoft.com/VisualStudio/feedback/details/696593/vc-10-vs-2010-basic-string-exports
 #pragma warning(disable : 4275 4251)
-// Disable diamond inheritance warnings
+// Disable diamond inheritance warnings.
 #pragma warning(disable : 4250)
-// Disable macro redefinition warnings
+// Disable macro redefinition warnings.
 #pragma warning(disable : 4005)
-// Disable extern before exported template warnings
+// Disable extern before exported template warnings.
 #pragma warning(disable : 4910)
 #else
 #pragma GCC diagnostic ignored "-Wattributes"
@@ -79,7 +79,7 @@
 #define PARQUET_DEPRECATED ARROW_DEPRECATED
 
 // If ARROW_VALGRIND set when compiling unit tests, also define
-// PARQUET_VALGRIND
+// PARQUET_VALGRIND.
 #ifdef ARROW_VALGRIND
 #define PARQUET_VALGRIND
 #endif
@@ -100,11 +100,11 @@ constexpr int64_t kDefaultOutputStreamSize = 1024;
 constexpr int16_t kNonPageOrdinal = static_cast<int16_t>(-1);
 
 PARQUET_EXPORT
-std::shared_ptr<::arrow::io::BufferOutputStream> CreateOutputStream(
+std::shared_ptr<::arrow::io::BufferOutputStream> createOutputStream(
     ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
 
 PARQUET_EXPORT
-std::shared_ptr<ResizableBuffer> AllocateBuffer(
+std::shared_ptr<ResizableBuffer> allocateBuffer(
     ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
     int64_t size = 0);
 

@@ -19,9 +19,12 @@
 #include "velox/common/base/BloomFilter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
+
+using functions::sparksql::SparkQueryConfig;
 
 namespace {
 
@@ -64,9 +67,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const TypePtr& resultType,
       const core::QueryConfig& config)
       : Aggregate(resultType),
-        defaultExpectedNumItems_(config.sparkBloomFilterExpectedNumItems()),
-        defaultNumBits_(config.sparkBloomFilterNumBits()),
-        maxNumBits_(config.sparkBloomFilterMaxNumBits()) {}
+        defaultExpectedNumItems_(
+            SparkQueryConfig{config}.bloomFilterExpectedNumItems()),
+        defaultNumBits_(SparkQueryConfig{config}.bloomFilterNumBits()),
+        maxNumBits_(SparkQueryConfig{config}.bloomFilterMaxNumBits()),
+        maxNumItems_(SparkQueryConfig{config}.bloomFilterMaxNumItems()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(BloomFilterAccumulator);
@@ -221,7 +226,8 @@ class BloomFilterAggAggregate : public exec::Aggregate {
         DecodedVector decodedNumBits(*args[2], rows);
         setConstantArgument("numBits", numBits_, decodedNumBits);
       } else {
-        numBits_ = estimatedNumItems_ * 8;
+        numBits_ =
+            BloomFilter<>::optimalNumOfBits(estimatedNumItems_, maxNumItems_);
       }
     } else {
       estimatedNumItems_ = defaultExpectedNumItems_;
@@ -277,6 +283,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   const int64_t defaultExpectedNumItems_;
   const int64_t defaultNumBits_;
   const int64_t maxNumBits_;
+  const int64_t maxNumItems_;
 
   // Reusable instance of DecodedVector for decoding input vectors.
   DecodedVector decodedRaw_;

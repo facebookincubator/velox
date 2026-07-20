@@ -27,9 +27,9 @@ folly::dynamic TimeWithTimezoneType::serialize() const {
   return obj;
 }
 
-StringView TimeWithTimezoneType::valueToString(
+std::string_view TimeWithTimezoneType::valueToString(
     int64_t value,
-    char* const startPos) const {
+    char* buffer) const {
   // TIME WITH TIME ZONE is encoded similarly to TIMESTAMP WITH TIME ZONE
   // with the most significnat 52 bits representing the time component and the
   // least 12 bits representing the timezone minutes. This is different from
@@ -78,7 +78,7 @@ StringView TimeWithTimezoneType::valueToString(
   int16_t remainingOffsetMinutes = decodedMinutes % util::kMinutesInHour;
 
   fmt::format_to_n(
-      startPos,
+      buffer,
       kTimeWithTimezoneToVarcharRowSize,
       "{:02d}:{:02d}:{:02d}.{:03d}{}{:02d}:{:02d}",
       hours,
@@ -88,7 +88,7 @@ StringView TimeWithTimezoneType::valueToString(
       isBehindUTCString,
       offsetHours,
       remainingOffsetMinutes);
-  return StringView{startPos, kTimeWithTimezoneToVarcharRowSize};
+  return {buffer, kTimeWithTimezoneToVarcharRowSize};
 }
 
 } // namespace facebook::velox

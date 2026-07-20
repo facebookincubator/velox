@@ -25,6 +25,24 @@ velox_add_library(
   ValueList.cpp
   ValueSet.cpp
   VarianceAggregatesBase.cpp
+  HEADERS
+  ApproxPercentileAggregateBase.h
+  AverageAggregateBase.h
+  BitwiseAggregateBase.h
+  CentralMomentsAggregatesBase.h
+  Compare.h
+  CovarianceAggregatesBase.h
+  DecimalAggregate.h
+  MinMaxAggregateBase.h
+  MinMaxByAggregatesBase.h
+  SetBaseAggregate.h
+  SimpleNumericAggregate.h
+  SingleValueAccumulator.h
+  SumAggregateBase.h
+  ValueList.h
+  ValueSet.h
+  VarianceAggregatesBase.h
+  noisy_aggregation/NoisyCountSumAvgAccumulator.h
 )
 
 velox_link_libraries(velox_functions_aggregates velox_exec velox_presto_serializer Folly::folly)

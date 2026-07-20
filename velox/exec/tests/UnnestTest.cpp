@@ -15,15 +15,19 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::common::testutil;
+
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 class UnnestTest : public HiveConnectorTestBase,
                    public testing::WithParamInterface<vector_size_t> {
@@ -867,32 +871,42 @@ TEST_P(UnnestTest, barrier) {
 
   struct {
     bool barrierExecution;
+    bool serialExecution;
     int numOutputRows;
 
     std::string toString() const {
       return fmt::format(
-          "barrierExecution {}, numOutputRows {}",
+          "barrierExecution {}, serialExecution {}, numOutputRows {}",
           barrierExecution,
+          serialExecution,
           numOutputRows);
     }
-  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
+  } testSettings[] = {
+      {true, true, 23},
+      {true, false, 23},
+      {false, true, 200},
+      {false, false, 200},
+  };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
     const int numExpectedOutputVectors =
         bits::divRoundUp(numRowsPerSplit * 3, testData.numOutputRows) *
         numSplits;
-    auto task = AssertQueryBuilder(plan)
-                    .config(core::QueryConfig::kSparkPartitionId, "0")
-                    .config(
-                        core::QueryConfig::kMaxSplitPreloadPerDriver,
-                        std::to_string(tempFiles.size()))
-                    .splits(makeHiveConnectorSplits(tempFiles))
-                    .serialExecution(true)
-                    .barrierExecution(testData.barrierExecution)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(testData.numOutputRows))
-                    .assertResults(expectedResult);
+    auto task =
+        AssertQueryBuilder(plan)
+            .config(
+                SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId), "0")
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver,
+                std::to_string(tempFiles.size()))
+            .splits(makeHiveConnectorSplits(tempFiles))
+            .serialExecution(testData.serialExecution)
+            .maxDrivers(testData.serialExecution ? 1 : 3)
+            .barrierExecution(testData.barrierExecution)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                std::to_string(testData.numOutputRows))
+            .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
@@ -937,13 +951,13 @@ TEST_P(UnnestTest, spiltOutput) {
 
   struct {
     bool produceSingleOutput;
-    int expectedNumOutputExectors;
+    int expectedNumOutputVectors;
 
     std::string toString() const {
       return fmt::format(
-          "produceSingleOutput {}, expectedNumOutputExectors {}",
+          "produceSingleOutput {}, expectedNumOutputVectors {}",
           produceSingleOutput,
-          expectedNumOutputExectors);
+          expectedNumOutputVectors);
     }
   } testSettings[] = {
       {true, numBatches},
@@ -961,7 +975,100 @@ TEST_P(UnnestTest, spiltOutput) {
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
-        testData.expectedNumOutputExectors);
+        testData.expectedNumOutputVectors);
+  }
+}
+
+// Test that UnnestNode::splitOutput overrides query config.
+TEST_P(UnnestTest, splitOutputNodeOverride) {
+  const auto numBatches = 3;
+  const auto inputBatchSize = 256;
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(inputBatchSize, [](auto row) { return row; }),
+    }));
+  }
+
+  const auto expectedResult = makeRowVector({
+      makeFlatVector<int64_t>(
+          numBatches * 3 * inputBatchSize,
+          [](auto row) { return 1 + row % 3; }),
+  });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Create a plan with project node to generate the sequence.
+  auto projectPlan = PlanBuilder(planNodeIdGenerator)
+                         .values(vectors)
+                         .project({"sequence(1, 3) as s"})
+                         .planNode();
+
+  // Get the output type from the project node.
+  auto projectOutput = projectPlan->outputType();
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> unnestFields;
+  unnestFields.emplace_back(
+      std::make_shared<core::FieldAccessTypedExpr>(
+          projectOutput->childAt(0), "s"));
+
+  struct {
+    std::optional<bool> nodeSplitOutput;
+    bool configSplitOutput{};
+    bool expectSplit{};
+
+    std::string toString() const {
+      return fmt::format(
+          "nodeSplitOutput: {}, configSplitOutput: {}, expectSplit: {}",
+          nodeSplitOutput.has_value()
+              ? (nodeSplitOutput.value() ? "true" : "false")
+              : "nullopt",
+          configSplitOutput,
+          expectSplit);
+    }
+  } testSettings[] = {
+      // Node splitOutput not set, use config.
+      {std::nullopt, true, true},
+      {std::nullopt, false, false},
+      // Node splitOutput=true overrides config.
+      {true, true, true},
+      {true, false, true},
+      // Node splitOutput=false overrides config.
+      {false, true, false},
+      {false, false, false},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.toString());
+
+    core::PlanNodeId unnestPlanNodeId;
+    auto unnestNode = std::make_shared<core::UnnestNode>(
+        planNodeIdGenerator->next(),
+        std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
+        unnestFields,
+        std::vector<std::string>{"s_e"},
+        std::nullopt,
+        std::nullopt,
+        testData.nodeSplitOutput,
+        projectPlan);
+    unnestPlanNodeId = unnestNode->id();
+
+    const int expectedNumOutputVectors = testData.expectSplit
+        ? bits::divRoundUp(inputBatchSize * 3, GetParam()) * numBatches
+        : numBatches;
+
+    auto task = AssertQueryBuilder(unnestNode)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchRows,
+                        std::to_string(GetParam()))
+                    .config(
+                        core::QueryConfig::kUnnestSplitOutput,
+                        testData.configSplitOutput ? "true" : "false")
+                    .assertResults(expectedResult);
+    const auto taskStats = task->taskStats();
+    ASSERT_EQ(
+        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        expectedNumOutputVectors);
   }
 }
 

@@ -28,6 +28,8 @@
 
 #include "velox/common/process/StackTrace.h"
 
+#include "velox/common/base/ExceptionHelper.h"
+
 DECLARE_bool(velox_exception_user_stacktrace_enabled);
 DECLARE_bool(velox_exception_system_stacktrace_enabled);
 
@@ -139,6 +141,8 @@ class VeloxException : public std::exception {
  public:
   enum class Type { kUser = 0, kSystem = 1 };
 
+  /// Construct without an explicit message template. messageTemplate() will
+  /// return the message itself (the message IS the template).
   VeloxException(
       const char* file,
       size_t line,
@@ -148,6 +152,21 @@ class VeloxException : public std::exception {
       std::string_view errorSource,
       std::string_view errorCode,
       bool isRetriable,
+      Type exceptionType = Type::kSystem,
+      std::string_view exceptionName = "VeloxException");
+
+  /// Construct with an explicit message template (the format string before
+  /// fmt::format interpolation).
+  VeloxException(
+      const char* file,
+      size_t line,
+      const char* function,
+      std::string_view expression,
+      std::string_view message,
+      std::string_view errorSource,
+      std::string_view errorCode,
+      bool isRetriable,
+      CompileTimeStringLiteral messageTemplate,
       Type exceptionType = Type::kSystem,
       std::string_view exceptionName = "VeloxException");
 
@@ -202,6 +221,14 @@ class VeloxException : public std::exception {
     return state_->message;
   }
 
+  /// Returns the format template before fmt::format interpolation. Useful for
+  /// grouping exceptions by error category in monitoring systems. When no
+  /// explicit template was provided, returns the message itself.
+  std::string_view messageTemplate() const {
+    return state_->messageTemplate ? std::string_view(state_->messageTemplate)
+                                   : std::string_view(state_->message);
+  }
+
   const std::string& errorCode() const {
     return state_->errorCode;
   }
@@ -248,6 +275,10 @@ class VeloxException : public std::exception {
     const char* function = nullptr;
     std::string failingExpression;
     std::string message;
+    // The format template before fmt::format interpolation. Points to a
+    // string literal (static lifetime) when set explicitly, or nullptr when
+    // the message itself serves as the template.
+    const char* messageTemplate{nullptr};
     std::string errorSource;
     std::string errorCode;
     // The current exception context.
@@ -284,6 +315,8 @@ class VeloxException : public std::exception {
 
 class VeloxUserError : public VeloxException {
  public:
+  static constexpr std::string_view kDefaultName = "VeloxUserError";
+
   VeloxUserError(
       const char* file,
       size_t line,
@@ -293,7 +326,7 @@ class VeloxUserError : public VeloxException {
       std::string_view /* errorSource */,
       std::string_view errorCode,
       bool isRetriable,
-      std::string_view exceptionName = "VeloxUserError")
+      std::string_view exceptionName = kDefaultName)
       : VeloxException(
             file,
             line,
@@ -306,12 +339,36 @@ class VeloxUserError : public VeloxException {
             Type::kUser,
             exceptionName) {}
 
+  VeloxUserError(
+      const char* file,
+      size_t line,
+      const char* function,
+      std::string_view expression,
+      std::string_view message,
+      std::string_view /* errorSource */,
+      std::string_view errorCode,
+      bool isRetriable,
+      CompileTimeStringLiteral messageTemplate,
+      std::string_view exceptionName = kDefaultName)
+      : VeloxException(
+            file,
+            line,
+            function,
+            expression,
+            message,
+            error_source::kErrorSourceUser,
+            errorCode,
+            isRetriable,
+            messageTemplate,
+            Type::kUser,
+            exceptionName) {}
+
   /// Wrap an std::exception.
   VeloxUserError(
       const std::exception_ptr& e,
       std::string_view message,
       bool isRetriable,
-      std::string_view exceptionName = "VeloxUserError")
+      std::string_view exceptionName = kDefaultName)
       : VeloxException(
             e,
             message,
@@ -324,6 +381,8 @@ class VeloxUserError : public VeloxException {
 
 class VeloxRuntimeError final : public VeloxException {
  public:
+  static constexpr std::string_view kDefaultName = "VeloxRuntimeError";
+
   VeloxRuntimeError(
       const char* file,
       size_t line,
@@ -333,7 +392,7 @@ class VeloxRuntimeError final : public VeloxException {
       std::string_view /* errorSource */,
       std::string_view errorCode,
       bool isRetriable,
-      std::string_view exceptionName = "VeloxRuntimeError")
+      std::string_view exceptionName = kDefaultName)
       : VeloxException(
             file,
             line,
@@ -346,12 +405,36 @@ class VeloxRuntimeError final : public VeloxException {
             Type::kSystem,
             exceptionName) {}
 
+  VeloxRuntimeError(
+      const char* file,
+      size_t line,
+      const char* function,
+      std::string_view expression,
+      std::string_view message,
+      std::string_view /* errorSource */,
+      std::string_view errorCode,
+      bool isRetriable,
+      CompileTimeStringLiteral messageTemplate,
+      std::string_view exceptionName = kDefaultName)
+      : VeloxException(
+            file,
+            line,
+            function,
+            expression,
+            message,
+            error_source::kErrorSourceRuntime,
+            errorCode,
+            isRetriable,
+            messageTemplate,
+            Type::kSystem,
+            exceptionName) {}
+
   /// Wrap an std::exception.
   VeloxRuntimeError(
       const std::exception_ptr& e,
       std::string_view message,
       bool isRetriable,
-      std::string_view exceptionName = "VeloxRuntimeError")
+      std::string_view exceptionName = kDefaultName)
       : VeloxException(
             e,
             message,

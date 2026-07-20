@@ -17,8 +17,8 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/TraceUtil.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/trace/TraceUtil.h"
 #include "velox/tool/trace/TableWriterReplayer.h"
 
 using namespace facebook::velox;
@@ -41,6 +41,19 @@ makeHiveInsertTableHandle(
   const auto storageFormat = tracedHandle->storageFormat();
   const auto serdeParameters = tracedHandle->serdeParameters();
   const auto writerOptions = tracedHandle->writerOptions();
+  LOG(INFO) << "Traced serde parameters:";
+  for (const auto& [key, value] : serdeParameters) {
+    LOG(INFO) << fmt::format("\t{}: {}", key, value);
+  }
+  LOG(INFO) << fmt::format(
+      "Traced writer options: {}", writerOptions ? "present" : "null");
+  LOG(INFO) << "Traced storage parameters:";
+  for (const auto& [key, value] : tracedHandle->storageParameters()) {
+    LOG(INFO) << fmt::format("\t{}: {}", key, value);
+  }
+  LOG(INFO) << fmt::format(
+      "Storage format: {}",
+      dwio::common::FileFormatName::toName(storageFormat));
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       inputColumns,
       std::make_shared<connector::hive::LocationHandle>(
@@ -53,8 +66,11 @@ makeHiveInsertTableHandle(
           : std::make_shared<connector::hive::HiveBucketProperty>(
                 *tracedHandle->bucketProperty()),
       compressionKind,
-      std::unordered_map<std::string, std::string>{},
-      writerOptions);
+      serdeParameters,
+      writerOptions,
+      tracedHandle->ensureFiles(),
+      tracedHandle->fileNameGenerator(),
+      tracedHandle->storageParameters());
 }
 
 std::shared_ptr<core::InsertTableHandle> createInsertTableHanlde(

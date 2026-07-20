@@ -50,7 +50,8 @@ Variant variantAt(const VectorPtr& vector, int32_t row) {
 
 template <>
 Variant variantAt<TypeKind::VARBINARY>(const VectorPtr& vector, int32_t row) {
-  return Variant::binary(vector->as<SimpleVector<StringView>>()->valueAt(row));
+  return Variant::binary(
+      std::string(vector->as<SimpleVector<StringView>>()->valueAt(row)));
 }
 
 Variant variantAt(const VectorPtr& vector, vector_size_t row);

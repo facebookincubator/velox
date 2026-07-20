@@ -664,8 +664,8 @@ class RowSizeTracker {
         counter_(counter) {}
 
   ~RowSizeTracker() {
-    auto delta = allocator_->currentBytes() - size_;
-    if (delta) {
+    const auto delta = allocator_->currentBytes() - size_;
+    if (delta != 0) {
       saturatingIncrement(&counter_, delta);
     }
   }
@@ -673,7 +673,7 @@ class RowSizeTracker {
  private:
   // Increments T at *pointer without wrapping around at overflow.
   void saturatingIncrement(T* pointer, int64_t delta) {
-    auto value = *reinterpret_cast<TCounter*>(pointer) + delta;
+    const auto value = *reinterpret_cast<TCounter*>(pointer) + delta;
     *reinterpret_cast<TCounter*>(pointer) =
         std::min<uint64_t>(value, std::numeric_limits<TCounter>::max());
   }

@@ -57,6 +57,6 @@ TEST(HiveTypeSerializer, unregisteredOpaque) {
 TEST(HiveTypeSerializer, unsupported) {
   std::shared_ptr<const Type> type = UNKNOWN();
   VELOX_ASSERT_THROW(
-      HiveTypeSerializer::serialize(type), "unsupported type: UNKNOWN");
+      HiveTypeSerializer::serialize(type), "Unsupported type: UNKNOWN");
 }
 } // namespace facebook::velox::type::fbhive

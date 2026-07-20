@@ -16,12 +16,15 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include <string_view>
+#include <unordered_map>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/OperatorStats.h"
-#include "velox/exec/OperatorTraceWriter.h"
+#include "velox/exec/SpillStats.h"
+#include "velox/exec/trace/TraceWriter.h"
 
 namespace facebook::velox::exec {
 
@@ -43,7 +46,7 @@ class OperatorCtx {
       DriverCtx* driverCtx,
       const core::PlanNodeId& planNodeId,
       int32_t operatorId,
-      const std::string& operatorType = "");
+      std::string_view operatorType = "");
 
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
@@ -62,6 +65,10 @@ class OperatorCtx {
   velox::memory::MemoryPool* pool() const {
     return pool_;
   }
+
+  /// Returns the leaf operator pool under the custom root registered with
+  /// 'tag', or nullptr if no such custom root is registered on this query.
+  velox::memory::MemoryPool* customPool(std::string_view tag) const;
 
   const core::PlanNodeId& planNodeId() const {
     return planNodeId_;
@@ -100,6 +107,11 @@ class OperatorCtx {
   const std::string operatorType_;
   velox::memory::MemoryPool* const pool_;
 
+  // Per-resource-tag leaf pools mirroring 'pool_' under each registered
+  // custom root pool. Empty when no custom pools are registered.
+  const std::unordered_map<std::string, velox::memory::MemoryPool*>
+      customPools_;
+
   // These members are created on demand.
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
 };
@@ -114,11 +126,11 @@ class Operator : public BaseRuntimeStatWriter {
     virtual ~PlanNodeTranslator() = default;
 
     /// Translates plan node to operator. Returns nullptr if the plan node
-    /// cannot be handled by this factory.
+    /// cannot be handled by this factory. Defined out-of-line in Operator.cpp
+    /// because returning `std::unique_ptr<Operator>` here would instantiate
+    /// the unique_ptr destructor while `Operator` is still incomplete.
     virtual std::unique_ptr<Operator>
-    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
-      return nullptr;
-    }
+    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
     /// An overloaded method that should be called when the operator needs an
     /// ExchangeClient.
@@ -126,9 +138,7 @@ class Operator : public BaseRuntimeStatWriter {
         DriverCtx* ctx,
         int32_t id,
         const core::PlanNodePtr& node,
-        std::shared_ptr<ExchangeClient> exchangeClient) {
-      return nullptr;
-    }
+        std::shared_ptr<ExchangeClient> exchangeClient);
 
     /// Translates plan node to join bridge. Returns nullptr if the plan node
     /// cannot be handled by this factory.
@@ -154,7 +164,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// The name for background cpu time metric if operator has background cpu
   /// usages outside its driver thread.
-  static inline const std::string kBackgroundCpuTimeNanos =
+  static constexpr std::string_view kBackgroundCpuTimeNanos =
       "backgroundCpuTimeNanos";
 
   /// The name of the runtime spill stats collected and reported by operators
@@ -163,34 +173,34 @@ class Operator : public BaseRuntimeStatWriter {
   /// This indicates the spill not supported for a spillable operator when the
   /// spill config is enabled. This is due to the spill limitation in certain
   /// plan node config such as unpartition window operator.
-  static inline const std::string kSpillNotSupported{"spillNotSupported"};
+  static constexpr std::string_view kSpillNotSupported{"spillNotSupported"};
   /// The spill write stats.
-  static inline const std::string kSpillFillTime{"spillFillWallNanos"};
-  static inline const std::string kSpillSortTime{"spillSortWallNanos"};
-  static inline const std::string kSpillExtractVectorTime{
+  static constexpr std::string_view kSpillFillTime{"spillFillWallNanos"};
+  static constexpr std::string_view kSpillSortTime{"spillSortWallNanos"};
+  static constexpr std::string_view kSpillExtractVectorTime{
       "spillExtractVectorWallNanos"};
-  static inline const std::string kSpillSerializationTime{
+  static constexpr std::string_view kSpillSerializationTime{
       "spillSerializationWallNanos"};
-  static inline const std::string kSpillFlushTime{"spillFlushWallNanos"};
-  static inline const std::string kSpillWrites{"spillWrites"};
-  static inline const std::string kSpillWriteTime{"spillWriteWallNanos"};
-  static inline const std::string kSpillRuns{"spillRuns"};
-  static inline const std::string kExceededMaxSpillLevel{
+  static constexpr std::string_view kSpillFlushTime{"spillFlushWallNanos"};
+  static constexpr std::string_view kSpillWrites{"spillWrites"};
+  static constexpr std::string_view kSpillWriteTime{"spillWriteWallNanos"};
+  static constexpr std::string_view kSpillRuns{"spillRuns"};
+  static constexpr std::string_view kExceededMaxSpillLevel{
       "exceededMaxSpillLevel"};
   /// The spill read stats.
-  static inline const std::string kSpillReadBytes{"spillReadBytes"};
-  static inline const std::string kSpillReads{"spillReads"};
-  static inline const std::string kSpillReadTime{"spillReadWallNanos"};
-  static inline const std::string kSpillDeserializationTime{
+  static constexpr std::string_view kSpillReadBytes{"spillReadBytes"};
+  static constexpr std::string_view kSpillReads{"spillReads"};
+  static constexpr std::string_view kSpillReadTime{"spillReadWallNanos"};
+  static constexpr std::string_view kSpillDeserializationTime{
       "spillDeserializationWallNanos"};
 
   /// The vector serde kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.
-  static inline const std::string kShuffleSerdeKind{"shuffleSerdeKind"};
+  static constexpr std::string_view kShuffleSerdeKind{"shuffleSerdeKind"};
 
   /// The compression kind used by an operator for shuffle. The recorded
   /// runtime stats value is the corresponding enum value.
-  static inline const std::string kShuffleCompressionKind{
+  static constexpr std::string_view kShuffleCompressionKind{
       "shuffleCompressionKind"};
 
   /// 'operatorId' is the initial index of the 'this' in the Driver's list of
@@ -208,7 +218,7 @@ class Operator : public BaseRuntimeStatWriter {
       RowTypePtr outputType,
       int32_t operatorId,
       std::string planNodeId,
-      std::string operatorType,
+      std::string_view operatorType,
       std::optional<common::SpillConfig> spillConfig = std::nullopt);
 
   virtual ~Operator() = default;
@@ -217,7 +227,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// allocation from memory pool that can't be done under operator constructor.
   ///
   /// NOTE: the default implementation set 'initialized_' to true to ensure we
-  /// never call this more than once. The overload initialize() implementation
+  /// never call this more than once. The overriding initialize() implementation
   /// must call this base implementation first.
   virtual void initialize();
 
@@ -295,7 +305,7 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Traces input batch of the operator.
-  virtual void traceInput(const RowVectorPtr&);
+  virtual bool traceInput(const RowVectorPtr& input, ContinueFuture* future);
 
   /// Finishes tracing of the operator.
   virtual void finishTrace();
@@ -346,9 +356,15 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Add a single runtime stat to the operator stats under the write lock.
   /// This member overrides BaseRuntimeStatWriter's member.
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
       override {
     stats_.wlock()->addRuntimeStat(name, value);
+  }
+
+  /// Sets a runtime metric on operator stats, overriding any existing value.
+  void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
+      override {
+    stats_.wlock()->setRuntimeStat(name, metric);
   }
 
   /// Returns reference to the operator stats synchronized object to gain bulk
@@ -370,6 +386,12 @@ class Operator : public BaseRuntimeStatWriter {
 
   velox::memory::MemoryPool* pool() const {
     return operatorCtx_->pool();
+  }
+
+  /// Returns this operator's leaf pool under the custom root registered with
+  /// 'tag', or nullptr if no such custom root is registered.
+  velox::memory::MemoryPool* customPool(std::string_view tag) const {
+    return operatorCtx_->customPool(tag);
   }
 
   /// Returns true if the operator is reclaimable. Currently, we only support
@@ -521,6 +543,12 @@ class Operator : public BaseRuntimeStatWriter {
     return input_ != nullptr;
   }
 
+  /// Returns the spill config for this operator. This method is only used for
+  /// test.
+  const common::SpillConfig* testingSpillConfig() const {
+    return spillConfig();
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
   friend class NonReclaimableSection;
@@ -633,14 +661,14 @@ class Operator : public BaseRuntimeStatWriter {
   bool initialized_{false};
 
   folly::Synchronized<OperatorStats> stats_;
-  std::shared_ptr<folly::Synchronized<common::SpillStats>> spillStats_ =
-      std::make_shared<folly::Synchronized<common::SpillStats>>();
+  std::shared_ptr<exec::SpillStats> spillStats_ =
+      std::make_shared<exec::SpillStats>();
 
   /// NOTE: only one of the two could be set for an operator for tracing .
   /// 'splitTracer_' is only set for table scan to record the processed split
   /// for now.
-  std::unique_ptr<trace::OperatorTraceInputWriter> inputTracer_{nullptr};
-  std::unique_ptr<trace::OperatorTraceSplitWriter> splitTracer_{nullptr};
+  std::unique_ptr<trace::TraceInputWriter> inputTracer_{nullptr};
+  std::unique_ptr<trace::TraceSplitWriter> splitTracer_{nullptr};
 
   /// Indicates if an operator is under a non-reclaimable execution section.
   /// This prevents the memory arbitrator from reclaiming memory from this
@@ -671,12 +699,6 @@ class Operator : public BaseRuntimeStatWriter {
   bool shouldYield() const {
     return operatorCtx_->driverCtx()->driver->shouldYield();
   }
-
- private:
-  // Setup 'inputTracer_' to record the processed input vectors.
-  void setupInputTracer(const std::string& traceDir);
-  // Setup 'splitTracer_' for table scan to record the processed split.
-  void setupSplitTracer(const std::string& traceDir);
 };
 
 /// Given a row type returns indices for the specified subset of columns.
@@ -703,7 +725,7 @@ class SourceOperator : public Operator {
       RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
-      const std::string& operatorType,
+      std::string_view operatorType,
       const std::optional<common::SpillConfig>& spillConfig = std::nullopt)
       : Operator(
             driverCtx,

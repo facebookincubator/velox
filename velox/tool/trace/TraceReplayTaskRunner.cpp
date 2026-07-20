@@ -74,6 +74,12 @@ TraceReplayTaskRunner& TraceReplayTaskRunner::splits(
   return *this;
 }
 
+TraceReplayTaskRunner& TraceReplayTaskRunner::cursorCopyResult(
+    bool copyResult) {
+  cursorParams_.copyResult = copyResult;
+  return *this;
+}
+
 void TraceReplayTaskRunner::addSplits(exec::Task* task) {
   for (auto& [nodeId, nodeSplits] : splits_) {
     for (auto& split : nodeSplits) {

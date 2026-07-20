@@ -23,6 +23,8 @@
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/parse/ExpressionsParser.h"
+#include "velox/parse/TypeResolver.h"
 #include "velox/python/vector/PyVector.h"
 #include "velox/tpch/gen/TpchGen.h"
 
@@ -96,8 +98,8 @@ PyPlanBuilder& PyPlanBuilder::tableWrite(
 
 PyPlanBuilder& PyPlanBuilder::tableScan(
     const PyType& outputSchema,
-    const py::dict& aliases,
-    const py::dict& subfields,
+    const std::unordered_map<std::string, std::string>& aliases,
+    const std::unordered_map<std::string, std::vector<int64_t>>& subfields,
     const std::vector<std::string>& filters,
     const std::string& remainingFilter,
     const std::string& rowIndexColumnName,
@@ -112,21 +114,6 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
     throw std::runtime_error("Output schema must be a ROW().");
   }
 
-  // If there are any aliases, convert to std container and add to the builder.
-  std::unordered_map<std::string, std::string> aliasMap;
-
-  if (!aliases.empty()) {
-    for (const auto& item : aliases) {
-      if (!py::isinstance<py::str>(item.first) ||
-          !py::isinstance<py::str>(item.second)) {
-        throw std::runtime_error(
-            "Keys and values from aliases map need to be strings.");
-      }
-      aliasMap[item.first.cast<std::string>()] =
-          item.second.cast<std::string>();
-    }
-  }
-
   // If there are subfields, create the appropriate structures and add to the
   // scan.
   if (!subfields.empty() || !rowIndexColumnName.empty()) {
@@ -137,31 +124,22 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
       auto type = outputRowSchema->childAt(i);
       std::vector<common::Subfield> requiredSubfields;
 
-      py::object key = py::cast(name);
-
       // Check if the column was aliased by the user.
-      auto it = aliasMap.find(name);
-      auto hiveName = it == aliasMap.end() ? name : it->second;
+      auto it = aliases.find(name);
+      auto hiveName = it == aliases.end() ? name : it->second;
 
-      if (subfields.contains(key)) {
-        py::handle value = subfields[key];
-        if (!py::isinstance<py::list>(value)) {
-          throw std::runtime_error(
-              "Subfield map value should be a list of integers.");
-        }
-
-        auto values = value.cast<std::vector<int64_t>>();
-
-        // TODO: Assume for now they are fields in a flap map.
-        for (const auto& subfield : values) {
+      auto subfieldIt = subfields.find(name);
+      if (subfieldIt != subfields.end()) {
+        // TODO: Assume for now they are fields in a flat map.
+        for (const auto& subfield : subfieldIt->second) {
           requiredSubfields.emplace_back(
               fmt::format("{}[{}]", hiveName, subfield));
         }
       }
 
       auto columnType = (name == rowIndexColumnName)
-          ? HiveColumnHandle::ColumnType::kRowIndex
-          : HiveColumnHandle::ColumnType::kRegular;
+          ? FileColumnHandle::ColumnType::kRowIndex
+          : FileColumnHandle::ColumnType::kRegular;
 
       auto columnHandle = std::make_shared<HiveColumnHandle>(
           hiveName, columnType, type, type, std::move(requiredSubfields));
@@ -181,7 +159,7 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
   }
 
   builder.outputType(outputRowSchema)
-      .columnAliases(std::move(aliasMap))
+      .columnAliases(aliases)
       .connectorId(connectorId)
       .endTableScan();
 
@@ -341,6 +319,33 @@ PyPlanBuilder& PyPlanBuilder::sortedMerge(
   }
 
   planBuilder_.localMerge(keys, std::move(sources));
+  return *this;
+}
+
+PyPlanBuilder& PyPlanBuilder::markSorted(
+    const std::string& markerKey,
+    const std::vector<std::string>& sortingKeys) {
+  // Parse sorting keys using the DuckDB parser (same as orderBy).
+  std::vector<std::string> keyNames;
+  std::vector<core::SortOrder> sortingOrders;
+
+  for (const auto& key : sortingKeys) {
+    auto orderBy = parse::DuckSqlExpressionsParser().parseOrderByExpr(key);
+    auto typedExpr = core::Expressions::inferTypes(
+        orderBy.expr, planBuilder_.planNode()->outputType(), pool_.get());
+
+    auto fieldExpr =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    if (!fieldExpr) {
+      throw std::runtime_error(
+          "markSorted sorting key must be a column reference: " + key);
+    }
+
+    keyNames.push_back(fieldExpr->name());
+    sortingOrders.emplace_back(orderBy.ascending, orderBy.nullsFirst);
+  }
+
+  planBuilder_.markSorted(markerKey, keyNames, sortingOrders);
   return *this;
 }
 

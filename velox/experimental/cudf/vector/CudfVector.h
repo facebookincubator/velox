@@ -19,18 +19,30 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/TypeAliases.h"
 
+#include <cudf/contiguous_split.hpp>
 #include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
 #include <utility>
+#include <variant>
 
 namespace facebook::velox::cudf_velox {
 
 // Vector class which holds GPU data from cuDF.
+// Can be constructed either from an owned cudf::table or from packed_table.
+// When constructed from packed_table, the data remains packed and tabView_
+// references the table view inside packed_table without copying the underlying
+// GPU data.
+//
+// CudfVector assumes that the input table data is already ready to consume.
+// Constructors and rebindStream() do not insert CUDA stream waits for work that
+// populated the input buffers; callers must establish that ordering before
+// constructing or rebinding a CudfVector.
 class CudfVector : public RowVector {
  public:
+  /// Constructs a CudfVector from an owned cudf::table.
   CudfVector(
       velox::memory::MemoryPool* pool,
       TypePtr type,
@@ -38,23 +50,49 @@ class CudfVector : public RowVector {
       std::unique_ptr<cudf::table>&& table,
       rmm::cuda_stream_view stream);
 
+  /// Constructs a CudfVector from packed_table.
+  /// The packed data is retained and tabView_ references the table view inside
+  /// packed_table. This avoids copying the underlying GPU data.
+  CudfVector(
+      velox::memory::MemoryPool* pool,
+      TypePtr type,
+      vector_size_t size,
+      std::unique_ptr<cudf::packed_table>&& packedTable,
+      rmm::cuda_stream_view stream);
+
   rmm::cuda_stream_view stream() const {
     return stream_;
   }
 
   cudf::table_view getTableView() const {
-    return table_->view();
+    return tabView_;
   }
 
-  std::unique_ptr<cudf::table>&& release() {
-    flatSize_ = 0;
-    return std::move(table_);
-  }
+  /// Releases ownership of the underlying table.
+  /// If constructed from packed_table, materializes a table from the view
+  /// first (which copies the data).
+  std::unique_ptr<cudf::table> release();
+
+  /// Rebinds owned table buffers to use 'stream' for future deallocation.
+  /// This only changes future stream/deallocation association. It does not make
+  /// 'stream' wait on the previous stream or any producer stream.
+  /// Returns false when the storage cannot be rebound without materializing.
+  bool rebindStream(rmm::cuda_stream_view stream);
 
   uint64_t estimateFlatSize() const override;
 
  private:
-  std::unique_ptr<cudf::table> table_;
+  // Storage for either an owned table or packed table.
+  // Only one is active at a time - using variant enforces this at compile time.
+  using TableStorage = std::variant<
+      std::unique_ptr<cudf::table>,
+      std::unique_ptr<cudf::packed_table>>;
+  TableStorage tableStorage_;
+
+  // Table view - always valid, points to either table_->view() or
+  // packedTable_->table.
+  cudf::table_view tabView_;
+
   rmm::cuda_stream_view stream_;
   uint64_t flatSize_;
 };

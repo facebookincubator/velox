@@ -16,6 +16,7 @@
 
 #include "velox/exec/LocalPartition.h"
 #include "velox/common/Casts.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/EncodedVectorCopy.h"
 
@@ -264,7 +265,7 @@ LocalExchange::LocalExchange(
           std::move(outputType),
           operatorId,
           planNodeId,
-          "LocalExchange"),
+          OperatorType::kLocalExchange),
       partition_{partition},
       queue_{operatorCtx_->task()->getLocalExchangeQueue(
           ctx->splitGroupId,
@@ -333,7 +334,7 @@ LocalPartition::LocalPartition(
           planNode->outputType(),
           operatorId,
           planNode->id(),
-          "LocalPartition"),
+          OperatorType::kLocalPartition),
       queues_{
           ctx->task->getLocalExchangeQueues(ctx->splitGroupId, planNode->id())},
       numPartitions_{queues_.size()},
@@ -414,13 +415,14 @@ RowVectorPtr LocalPartition::wrapChildren(
     }
   }
 
-  result->updateContainsLazyNotLoaded();
+  result->invalidateContainsLazyNotLoaded();
   return result;
 }
 
 void LocalPartition::copy(
     const RowVectorPtr& input,
     const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const size_t partition,
     VectorPtr& target) {
   if (ranges.empty()) {
     return;
@@ -433,10 +435,24 @@ void LocalPartition::copy(
   }
 
   if (!target) {
-    target = BaseVector::create<RowVector>(outputType_, 0, pool());
+    target = getOrCreateVector(partition);
   }
   target->resize(target->size() + ranges.size());
   target->copyRanges(input.get(), ranges);
+}
+
+VectorPtr LocalPartition::getOrCreateVector(const size_t partition) {
+  auto reusable = queues_[partition]->getVector();
+  if (reusable) {
+    VELOX_CHECK_EQ(reusable->type(), outputType_);
+    reusable->unsafeResize(0);
+    for (auto i = 0; i < reusable->childrenSize(); ++i) {
+      reusable->childAt(i) = nullptr;
+    }
+    return reusable;
+  } else {
+    return BaseVector::create<RowVector>(outputType_, 0, pool());
+  }
 }
 
 void LocalPartition::populatePartitionBuffer(
@@ -459,7 +475,7 @@ void LocalPartition::populatePartitionBuffer(
     targetIndex++;
   }
 
-  copy(input, copyRanges_, partitionBuffer);
+  copy(input, copyRanges_, partition, partitionBuffer);
 
   if (partitionBuffer) {
     uint64_t stringBufferSize{0};

@@ -15,15 +15,29 @@
  */
 
 #pragma once
+
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
+#include <string>
+
 namespace facebook::velox::cudf_velox {
 
 class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
  protected:
+  void assertExpressionMatchesCpu(
+      const std::string& expr,
+      const RowVectorPtr& input,
+      const RowTypePtr& rowType) {
+    auto exprSet = compileExpression(expr, rowType);
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+    auto actual = evaluate(*exprSet, input);
+    facebook::velox::test::assertEqualVectors(expected, actual);
+  }
+
   VectorPtr evaluate(
       exec::ExprSet& exprSet,
       const RowVectorPtr& input,
@@ -32,17 +46,31 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
 
     VELOX_CHECK(!rows.has_value());
     auto stream = cudf::get_default_stream();
-    auto cudfTable =
-        velox::cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream);
+    auto cudfTable = velox::cudf_velox::with_arrow::toCudfTable(
+        input, pool_.get(), stream, cudf::get_current_device_resource_ref());
     auto filterEvaluator =
         createCudfExpression({exprSet.exprs()[0]}, input->rowType());
-    auto inputColumns = cudfTable->release();
+    auto ownedColumns = cudfTable->release();
+    std::vector<cudf::column_view> inputViews;
+    inputViews.reserve(ownedColumns.size());
+    for (auto& col : ownedColumns) {
+      inputViews.push_back(col->view());
+    }
     auto filterColumn = filterEvaluator->eval(
-        inputColumns, stream, cudf::get_current_device_resource_ref());
+        inputViews, stream, cudf::get_current_device_resource_ref());
     auto filterColumnView = asView(filterColumn);
     cudf::table_view resultTable({filterColumnView});
+    // Preserve logical Velox output types, e.g. VARBINARY, when converting
+    // the cuDF result back through Arrow.
+    auto outputType = ROW({"c0"}, {exprSet.exprs()[0]->type()});
     auto result = velox::cudf_velox::with_arrow::toVeloxColumn(
-        resultTable, pool_.get(), "", stream);
+        resultTable,
+        pool_.get(),
+        outputType,
+        "",
+        stream,
+        cudf::get_current_device_resource_ref());
+    result->setType(outputType);
     return result->childAt(0);
   }
 };

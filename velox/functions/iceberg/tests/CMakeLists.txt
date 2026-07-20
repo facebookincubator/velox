@@ -18,6 +18,7 @@ add_executable(
   Murmur3Hash32Test.cpp
   TruncateTest.cpp
 )
+velox_add_test_headers(velox_functions_iceberg_test IcebergFunctionBaseTest.h)
 
 add_test(
   NAME velox_functions_iceberg_test

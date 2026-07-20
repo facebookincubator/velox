@@ -23,4 +23,8 @@ endif()
 add_subdirectory(utils)
 add_subdirectory(writer)
 
+velox_add_library(velox_dwio_dwrf_register_reader INTERFACE HEADERS RegisterDwrfReader.h)
+
+velox_add_library(velox_dwio_dwrf_register_writer INTERFACE HEADERS RegisterDwrfWriter.h)
+
 velox_install_library_headers()

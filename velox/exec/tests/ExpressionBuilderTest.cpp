@@ -36,7 +36,7 @@ bool is(detail::ExprWrapper in) {
 
 // Parses a SQL expression using DuckDB.
 core::ExprPtr parseSql(const std::string& sql) {
-  return parse::parseExpr(sql, {});
+  return parse::DuckSqlExpressionsParser().parseExpr(sql);
 }
 
 TEST(ExpressionBuilderTest, columnReference) {

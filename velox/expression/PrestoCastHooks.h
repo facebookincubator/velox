@@ -34,7 +34,7 @@ class PrestoCastHooks : public CastHooks {
 
   Expected<Timestamp> castBooleanToTimestamp(bool seconds) const override;
 
-  Expected<int64_t> castTimestampToInt(Timestamp timestamp) const override;
+  Expected<int64_t> castTimestampToBigint(Timestamp timestamp) const override;
 
   Expected<std::optional<Timestamp>> castDoubleToTimestamp(
       double seconds) const override;
@@ -57,6 +57,11 @@ class PrestoCastHooks : public CastHooks {
   // Returns cast options following 'isLegacyCast' and session timezone.
   const TimestampToStringOptions& timestampToStringOptions() const override;
 
+  // Presto does not support TIMESTAMP_UTC casts.
+  TimestampToStringOptions timestampUtcToStringOptions() const override {
+    VELOX_UNSUPPORTED("Cast from TIMESTAMP_UTC to VARCHAR is not supported");
+  }
+
   bool truncate() const override {
     return false;
   }
@@ -66,6 +71,15 @@ class PrestoCastHooks : public CastHooks {
   }
 
   PolicyType getPolicy() const override;
+
+  // Presto does not support TIMESTAMP_UTC casts.
+  bool supportsTimestampUtc() const override {
+    return false;
+  }
+
+  bool isScientific() const override {
+    return false;
+  }
 
  private:
   const bool legacyCast_;

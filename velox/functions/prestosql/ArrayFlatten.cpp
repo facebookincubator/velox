@@ -106,6 +106,8 @@ class ArrayFlattenFunction : public exec::VectorFunction {
       state.arraySizes = arrayVector->rawSizes();
 
       const auto innerArrayVector = arrayVector->elements();
+      state.flattenElementsConsecutive =
+          innerArrayVector->encoding() == VectorEncoding::Simple::ARRAY;
       state.innerArrayRowSelector =
           std::make_unique<exec::LocalSelectivityVector>(
               context, innerArrayVector->size());

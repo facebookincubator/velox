@@ -18,16 +18,23 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/type/Type.h"
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
+
+#include <string>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
@@ -48,12 +55,14 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
+    cudf_velox::registerSparkFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
         {"c", INTEGER()},
         {"name", VARCHAR()},
-        {"date", TIMESTAMP()},
+        {"date", DATE()},
         {"c", INTEGER()},
     });
 
@@ -61,6 +70,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
   }
 
   void TearDown() override {
+    cudf_velox::unregisterFunctions();
     cudf_velox::unregisterCudf();
     execCtx_.reset();
     queryCtx_.reset();
@@ -74,13 +84,19 @@ class CudfExpressionSelectionTest : public ::testing::Test {
 };
 
 TEST_F(CudfExpressionSelectionTest, astRoot) {
-  auto prev = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().astExpressionEnabled = prevAst;
+    CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  };
   CudfConfig::getInstance().astExpressionEnabled = true;
+  CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr("a + c", rowType_, execCtx_.get());
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
-  ASSERT_NE(ast, nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prev;
+  auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
+  ASSERT_TRUE(ast != nullptr || jit != nullptr);
 }
 
 TEST_F(CudfExpressionSelectionTest, functionRoot) {
@@ -92,15 +108,21 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
-  auto prev = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().astExpressionEnabled = prevAst;
+    CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  };
   CudfConfig::getInstance().astExpressionEnabled = true;
+  CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr = compileExecExpr(
       "(year(date) > 2020) AND (length(name) < 10)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/false));
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
-  ASSERT_NE(ast, nullptr);
-  CudfConfig::getInstance().astExpressionEnabled = prev;
+  auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
+  ASSERT_TRUE(ast != nullptr || jit != nullptr);
 }
 
 TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
@@ -112,6 +134,100 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    signatureAllowsRowConstructorAndDereference) {
+  auto row = compileExecExpr("row_constructor(a, b)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(row, /*deep=*/true));
+
+  auto firstField =
+      compileExecExpr("row_constructor(a, b).c1", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(firstField, /*deep=*/true));
+
+  auto secondField =
+      compileExecExpr("row_constructor(a, 1).c2", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(secondField, /*deep=*/true));
+
+  auto nullLiteralField = compileExecExpr(
+      "row_constructor(a, cast(null as bigint)).c2", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(nullLiteralField, /*deep=*/true));
+
+  auto leadingNullField = compileExecExpr(
+      "row_constructor(cast(null as bigint), b).c1", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(leadingNullField, /*deep=*/true));
+
+  auto nestedField = compileExecExpr(
+      "row_constructor(row_constructor(a, cast(null as bigint)), b).c1.c2",
+      rowType_,
+      execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(nestedField, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
+  auto prevAst = CudfConfig::getInstance().astExpressionEnabled;
+  auto prevJit = CudfConfig::getInstance().jitExpressionEnabled;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().astExpressionEnabled = prevAst;
+    CudfConfig::getInstance().jitExpressionEnabled = prevJit;
+  };
+  CudfConfig::getInstance().astExpressionEnabled = true;
+  CudfConfig::getInstance().jitExpressionEnabled = true;
+
+  auto expr = compileExecExpr(
+      "row_constructor(row_constructor(a, b), cast(null as bigint)).c1.c1",
+      rowType_,
+      execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
+
+  auto cudfExpr = createCudfExpression(expr, rowType_);
+  auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
+  ASSERT_NE(functionExpr, nullptr);
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    signatureAllowsRowConstructorDereferenceByIndex) {
+  auto unnamedRowType = ROW({{"", BIGINT()}, {"", BIGINT()}});
+  auto typed = std::make_shared<core::DereferenceTypedExpr>(
+      BIGINT(),
+      std::make_shared<core::CallTypedExpr>(
+          unnamedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"),
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b"),
+          },
+          "row_constructor"),
+      1);
+  exec::ExprSet exprSet(
+      {typed}, execCtx_.get(), /*enableConstantFolding*/ false);
+
+  auto expr = exprSet.expr(0);
+  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
+  ASSERT_NE(createCudfExpression(expr, rowType_), nullptr);
+}
+
+TEST_F(
+    CudfExpressionSelectionTest,
+    signatureAllowsRowConstructorDereferenceByName) {
+  auto namedRowType = ROW({{"left", BIGINT()}, {"right", BIGINT()}});
+  auto typed = std::make_shared<core::FieldAccessTypedExpr>(
+      BIGINT(),
+      std::make_shared<core::CallTypedExpr>(
+          namedRowType,
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a"),
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b"),
+          },
+          "row_constructor"),
+      "right");
+  exec::ExprSet exprSet(
+      {typed}, execCtx_.get(), /*enableConstantFolding=*/false);
+
+  auto expr = exprSet.expr(0);
+  ASSERT_TRUE(canBeEvaluatedByCudf(expr, /*deep=*/true));
+  ASSERT_NE(createCudfExpression(expr, rowType_), nullptr);
 }
 
 // Disabled because this test segfaults in CI in compileExecExpr step which does
@@ -149,17 +265,128 @@ TEST_F(
   ASSERT_FALSE(canBeEvaluatedByCudf(bad, /*deep=*/true));
 }
 
-TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsLike) {
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnPatternLike) {
   // OK: pattern is a constant
   auto ok = compileExecExpr("like(name, '%abc%')", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
 
-  // Bad: pattern is not a constant
-  auto bad = compileExecExpr("like(name, name)", rowType_, execCtx_.get());
-  ASSERT_FALSE(canBeEvaluatedByCudf(bad, /*deep=*/true));
+  // OK: pattern can also come from a column.
+  auto okColumn = compileExecExpr("like(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+
+  // OK: constant input still works when pattern comes from a column.
+  auto okConstantInput =
+      compileExecExpr("like('abc', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: constant null input should also remain on the cuDF path.
+  auto okNullInput = compileExecExpr(
+      "like(cast(null as varchar), name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullInput, /*deep=*/true));
+
+  // OK: escape can be a constant too.
+  auto okWithEscape =
+      compileExecExpr("like(name, '%#_%', '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okWithEscape, /*deep=*/true));
+
+  // OK: pattern column + constant escape is supported.
+  auto okColumnWithEscape =
+      compileExecExpr("like(name, name, '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumnWithEscape, /*deep=*/true));
+
+  // OK: constant input + pattern column + constant escape is supported.
+  auto okConstantInputWithEscape =
+      compileExecExpr("like('a_c', name, '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInputWithEscape, /*deep=*/true));
+
+  // OK: constant null input + pattern column + constant escape is supported.
+  auto okNullInputWithEscape = compileExecExpr(
+      "like(cast(null as varchar), name, '#')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullInputWithEscape, /*deep=*/true));
+
+  // OK: null constants should remain on the cuDF path.
+  auto okNullPattern = compileExecExpr(
+      "like(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullPattern, /*deep=*/true));
+
+  auto okNullEscape = compileExecExpr(
+      "like(name, '%#_%', cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNullEscape, /*deep=*/true));
+
+  // Bad: escape is not a constant.
+  auto badEscape =
+      compileExecExpr("like(name, '%#_%', name)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badEscape, /*deep=*/true));
+
+  // Bad: escape column is still unsupported when pattern comes from a column.
+  auto badColumnEscape =
+      compileExecExpr("like(name, name, name)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badColumnEscape, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("startswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "startswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("startswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsContains) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("contains(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("contains('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "contains(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("contains(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
+  // OK: pattern is a constant
+  auto ok = compileExecExpr("endswith(name, 'ab')", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+
+  // OK: the input can also be a constant.
+  auto okConstantInput =
+      compileExecExpr("endswith('ab', name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okConstantInput, /*deep=*/true));
+
+  // OK: null pattern is still a constant and should remain on the cuDF path.
+  auto okNull = compileExecExpr(
+      "endswith(name, cast(null as varchar))", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okNull, /*deep=*/true));
+
+  // OK: pattern can also come from a column.
+  auto okColumn =
+      compileExecExpr("endswith(name, name)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okColumn, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
+  // The default parser keeps integer literals as BIGINT, which exercises the
+  // existing Presto-compatible `substr` candidate. Spark-specific coverage is
+  // below, using INTEGER literals or INTEGER columns.
+
   // OK: 2-arg substr with constant start
   auto ok2 = compileExecExpr("substr(name, 1)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok2, /*deep=*/true));
@@ -168,9 +395,68 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   auto ok3 = compileExecExpr("substr(name, 1, 5)", rowType_, execCtx_.get());
   ASSERT_TRUE(canBeEvaluatedByCudf(ok3, /*deep=*/true));
 
-  // Bad: start must be constant
-  auto badConst = compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
-  ASSERT_FALSE(canBeEvaluatedByCudf(badConst, /*deep=*/true));
+  // OK: Spark substring registers integer positions and lengths.
+  parse::ParseOptions sparkLiteralOptions;
+  sparkLiteralOptions.parseIntegerAsBigint = false;
+  auto okSparkLiteralArgs = compileExecExpr(
+      "substring(name, 1, 5)", rowType_, execCtx_.get(), sparkLiteralOptions);
+  ASSERT_TRUE(canBeEvaluatedByCudf(okSparkLiteralArgs, /*deep=*/true));
+
+  // OK: Spark substring supports integer start and length columns. This also
+  // verifies that the cuDF `substr` function name routes to Spark semantics
+  // when Spark functions are registered.
+  auto okStartColumn =
+      compileExecExpr("substr(name, c)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okStartColumn, /*deep=*/true));
+
+  auto okStartAndLengthColumns =
+      compileExecExpr("substring(name, c, c)", rowType_, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(okStartAndLengthColumns, /*deep=*/true));
+
+  // Bad: Spark substr accepts integer positions, not bigint positions.
+  auto badBigintStart =
+      compileExecExpr("substr(name, a)", rowType_, execCtx_.get());
+  ASSERT_FALSE(canBeEvaluatedByCudf(badBigintStart, /*deep=*/true));
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
+  auto arrayRowType = ROW({
+      {"arr", ARRAY(INTEGER())},
+      {"idx_bigint", BIGINT()},
+      {"idx_integer", INTEGER()},
+  });
+
+  for (const auto& functionName : {"element_at", "subscript", "get"}) {
+    SCOPED_TRACE(functionName);
+
+    auto bigintExpr = compileExecExpr(
+        std::string(functionName) + "(arr, idx_bigint)",
+        arrayRowType,
+        execCtx_.get());
+    ASSERT_TRUE(canBeEvaluatedByCudf(bigintExpr, /*deep=*/true));
+
+    auto integerExpr = compileExecExpr(
+        std::string(functionName) + "(arr, idx_integer)",
+        arrayRowType,
+        execCtx_.get());
+    ASSERT_TRUE(canBeEvaluatedByCudf(integerExpr, /*deep=*/true));
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureSparkGetSmallIntegralIndices) {
+  auto arrayRowType = ROW({
+      {"arr", ARRAY(INTEGER())},
+      {"idx_tinyint", TINYINT()},
+      {"idx_smallint", SMALLINT()},
+  });
+
+  auto tinyintExpr =
+      compileExecExpr("get(arr, idx_tinyint)", arrayRowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(tinyintExpr, /*deep=*/true));
+
+  auto smallintExpr =
+      compileExecExpr("get(arr, idx_smallint)", arrayRowType, execCtx_.get());
+  ASSERT_TRUE(canBeEvaluatedByCudf(smallintExpr, /*deep=*/true));
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
@@ -182,13 +468,26 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
 
-  // OK: first arg constant seed
-  auto ok = compileExecExpr(
+  // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
+  // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
+  // murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
+  // h(col1, seed)), while Spark hashes iteratively: h(col1, h(col0, seed)).
+  // The cudf API only accepts a scalar seed, so per-row seeding is not
+  // possible without a custom CUDA kernel.
+  auto multiCol = compileExecExpr(
       "hash_with_seed(42, a, b)",
       rowType_,
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_TRUE(canBeEvaluatedByCudf(ok, /*deep=*/true));
+  ASSERT_FALSE(canBeEvaluatedByCudf(multiCol, /*deep=*/true));
+
+  // Single-column hash_with_seed is supported (no column combining needed).
+  auto singleCol = compileExecExpr(
+      "hash_with_seed(42, a)",
+      rowType_,
+      execCtx_.get(),
+      {.parseIntegerAsBigint = false, .functionPrefix = ""});
+  ASSERT_TRUE(canBeEvaluatedByCudf(singleCol, /*deep=*/true));
 
   // Bad: first arg must be constant seed
   try {

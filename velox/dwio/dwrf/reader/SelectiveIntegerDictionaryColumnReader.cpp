@@ -45,7 +45,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
   dataReader_ = createRleDecoder</*isSigned=*/false>(
       stripe.getStream(si, params.streamLabels().label(), true),
       rleVersion_,
-      *memoryPool_,
+      *pool_,
       dataVInts,
       numBytes);
 
@@ -95,7 +95,7 @@ void SelectiveIntegerDictionaryColumnReader::read(
         ? bits::countNonNulls(nullsInReadRange_->as<uint64_t>(), 0, end)
         : end;
     dwio::common::ensureCapacity<uint64_t>(
-        scanState_.inDictionary, bits::nwords(numFlags), memoryPool_);
+        scanState_.inDictionary, bits::nwords(numFlags), pool_);
     // The in dict buffer may have changed. If no change in
     // dictionary, the raw state will not be updated elsewhere.
     scanState_.rawState.inDictionary = scanState_.inDictionary->as<uint64_t>();

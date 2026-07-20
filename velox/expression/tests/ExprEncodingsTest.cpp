@@ -19,7 +19,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorEncoding.h"
@@ -177,7 +176,7 @@ class ExprEncodingsTest
   core::TypedExprPtr parseExpression(
       const std::string& text,
       const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text, options_);
+    auto untyped = parse::DuckSqlExpressionsParser(options_).parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 

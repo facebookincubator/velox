@@ -53,7 +53,7 @@ void AdmissionController::accept(uint64_t resourceUnits) {
   }
   uint64_t waitTimeUs{0};
   {
-    MicrosecondTimer timer(&waitTimeUs);
+    MicrosecondWallTimer timer(&waitTimeUs);
     future.wait();
   }
   if (!config_.resourceQueuedTimeMsHistogramMetric.empty()) {

@@ -28,18 +28,21 @@ class S3InsertTest : public S3Test, public test::InsertTest {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    filesystems::registerS3FileSystem();
+  }
+
+  static void TearDownTestCase() {
+    filesystems::finalizeS3FileSystem();
   }
 
   void SetUp() override {
     S3Test::SetUp();
-    filesystems::registerS3FileSystem();
     InsertTest::SetUp(minioServer_->hiveConfig(), ioExecutor_.get());
   }
 
   void TearDown() override {
     S3Test::TearDown();
     InsertTest::TearDown();
-    filesystems::finalizeS3FileSystem();
   }
 };
 } // namespace
@@ -48,6 +51,22 @@ TEST_F(S3InsertTest, s3InsertTest) {
   const int64_t kExpectedRows = 1'000;
   const std::string_view kOutputDirectory{"s3://writedata/"};
   minioServer_->addBucket("writedata");
+
+  runInsertTest(kOutputDirectory, kExpectedRows, pool());
+}
+
+// Test with data exceeding the default 5MB minPartSize to trigger multipart
+// upload. This test generates enough data to exceed 5MB, which should trigger
+// at least one multipart upload part and a remainder.
+TEST_F(S3InsertTest, s3MultipartUploadTest) {
+  // Generate enough rows to exceed 5MB.
+  // Each row has 4 columns: BIGINT (8 bytes), INTEGER (4 bytes),
+  // SMALLINT (2 bytes), DOUBLE (8 bytes) = 22 bytes per row minimum.
+  // To exceed 5MB (5 * 1024 * 1024 = 5,242,880 bytes), we need at least
+  // 5,242,880 / 22 ≈ 238,313 rows. Let's use 300,000 rows to be safe.
+  const int64_t kExpectedRows = 300'000;
+  const std::string_view kOutputDirectory{"s3://multipartdata/"};
+  minioServer_->addBucket("multipartdata");
 
   runInsertTest(kOutputDirectory, kExpectedRows, pool());
 }

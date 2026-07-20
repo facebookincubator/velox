@@ -15,13 +15,13 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -56,6 +56,7 @@ DEFINE_int32(
     "N=5 means 20% chance, N=2 means 50% chance.");
 
 namespace facebook::velox::exec::test {
+using namespace facebook::velox::common::testutil;
 
 std::ostream& operator<<(
     std::ostream& out,
@@ -146,7 +147,7 @@ bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
     : config_(config), vectorFuzzer_(makeVectorFuzzerOptions(), config.pool) {
   VELOX_CHECK_GT(config_.columnCount, 0);
-  VELOX_CHECK_GT(config_.evolutionCount, 1);
+  VELOX_CHECK_GT(config_.evolutionCount, 0);
 }
 
 const std::string& TableEvolutionFuzzer::connectorId() {
@@ -270,10 +271,9 @@ std::vector<std::vector<RowVectorPtr>> runTaskCursors(
     });
   }
   std::vector<std::vector<RowVectorPtr>> results;
-  constexpr std::chrono::seconds kTaskTimeout(10);
   results.reserve(futures.size());
   for (auto& future : futures) {
-    results.push_back(std::move(future).get(kTaskTimeout));
+    results.push_back(std::move(future).get());
   }
   return results;
 }
@@ -296,7 +296,7 @@ void buildScanSplitFromTableWriteResult(
   auto* fragments =
       writeResult[0]->childAt(1)->asChecked<SimpleVector<StringView>>();
   for (int i = 1; i < writeResult[0]->size(); ++i) {
-    auto fragment = folly::parseJson(fragments->valueAt(i));
+    auto fragment = folly::parseJson(std::string_view(fragments->valueAt(i)));
     auto fileName = fragment["fileWriteInfos"][0]["writeFileName"].asString();
     auto hiveSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
         TableEvolutionFuzzer::connectorId(),
@@ -321,7 +321,7 @@ void buildScanSplitFromTableWriteResult(
       for (auto bucketColumnIndex : bucketColumnIndices) {
         auto handle = std::make_unique<connector::hive::HiveColumnHandle>(
             tableSchema->nameOf(bucketColumnIndex),
-            connector::hive::HiveColumnHandle::ColumnType::kRegular,
+            connector::hive::FileColumnHandle::ColumnType::kRegular,
             tableSchema->childAt(bucketColumnIndex),
             tableSchema->childAt(bucketColumnIndex));
         bucketConversion.bucketColumnHandles.push_back(std::move(handle));
@@ -802,6 +802,13 @@ void TableEvolutionFuzzer::run() {
     }
   }
 
+  // Decide the flatmap-as-struct read schema once and share it across both scan
+  // plans. buildFlatmapAsStructSchema draws an rng coin per compatible map
+  // column; computing it separately per plan would make the two plans disagree
+  // on a column's read mode (MAP vs struct).
+  RowTypePtr fullOutSchema = buildFlatmapAsStructSchema(
+      rowType, globalMapColumnKeys, globallyConsistentColumnIndexVector);
+
   std::vector<std::shared_ptr<TaskCursor>> scanTasks(2);
   // actual: TableScan -> Aggregation (allows pushdown)
   pushdownConfig.aggregationConfig = aggConfig;
@@ -811,8 +818,7 @@ void TableEvolutionFuzzer::run() {
       pushdownConfig,
       false,
       false, // insertProjectToBlockPushdown
-      globalMapColumnKeys,
-      globallyConsistentColumnIndexVector);
+      fullOutSchema);
 
   // expected: TableScan -> Project -> Aggregation (blocks pushdown)
   // Insert a Project node to prevent aggregation pushdown
@@ -823,8 +829,7 @@ void TableEvolutionFuzzer::run() {
       pushdownConfig,
       true,
       true, // insertProjectToBlockPushdown
-      globalMapColumnKeys,
-      globallyConsistentColumnIndexVector);
+      fullOutSchema);
 
   ScopedOOMInjector oomInjectorReadPath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
@@ -1004,7 +1009,8 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
     FuzzerGenerator& rng,
     bool enableFlatMap,
     folly::F14FastMap<int, folly::F14FastSet<std::string>>& globalMapColumnKeys,
-    std::vector<int>& globallyCompatibleFlatmapColumns) {
+    std::vector<int>& globallyCompatibleFlatmapColumns,
+    const std::unordered_map<std::string, std::string>& extraSerdeParams) {
   auto builder = PlanBuilder().values({data});
 
   // Create serdeParameters using proper dwrf::Config for flatmap configuration
@@ -1112,6 +1118,11 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeWriteTask(
       auto configParams = config->toSerdeParams();
       serdeParameters.insert(configParams.begin(), configParams.end());
     }
+  }
+
+  // Driver-injected, format-specific overrides win over the defaults above.
+  for (const auto& [key, value] : extraSerdeParams) {
+    serdeParameters.insert_or_assign(key, value);
   }
 
   if (bucketColumnIndices.empty()) {
@@ -1235,33 +1246,22 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     const PushdownConfig& pushdownConfig,
     bool useFiltersAsNode,
     bool insertProjectToBlockPushdown,
-    const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
-        globalMapColumnKeys,
-    const std::vector<int>& globallyCompatibleFlatmapColumns) {
-  // Build schema for flatmap as struct reading
-  RowTypePtr newSchemaUsingStructReadingFlatMap = buildFlatmapAsStructSchema(
-      tableSchema, globalMapColumnKeys, globallyCompatibleFlatmapColumns);
-
+    const RowTypePtr& fullOutSchema) {
   CursorParameters params;
   params.serialExecution = true;
 
   auto builder = PlanBuilder()
                      .filtersAsNode(useFiltersAsNode)
                      .tableScanWithPushDown(
-                         newSchemaUsingStructReadingFlatMap, // Use struct
-                                                             // schema for
-                                                             // flatmap reading
+                         fullOutSchema,
                          /*pushdownConfig=*/pushdownConfig,
-                         tableSchema, // Original schema as dataColumns
+                         tableSchema,
                          {});
 
-  // If insertProjectToBlockPushdown is set, insert an identity Project node
-  // to prevent Driver::mayPushdownAggregation() from allowing pushdown
   if (insertProjectToBlockPushdown &&
       pushdownConfig.aggregationConfig.has_value()) {
-    // Create identity projection: simply pass through all columns
     std::vector<std::string> projectExprs;
-    for (const auto& name : newSchemaUsingStructReadingFlatMap->names()) {
+    for (const auto& name : fullOutSchema->names()) {
       projectExprs.push_back(name);
     }
     builder.project(projectExprs);
@@ -1374,7 +1374,10 @@ void TableEvolutionFuzzer::createWriteTasks(
         rng_,
         true,
         globalMapColumnKeys,
-        globallyConsistentColumnIndexVector);
+        globallyConsistentColumnIndexVector,
+        config_.extraWriteSerdeParams
+            ? config_.extraWriteSerdeParams(testSetups[i].fileFormat, rng_)
+            : std::unordered_map<std::string, std::string>{});
 
     if (i == config_.evolutionCount - 1) {
       finalExpectedData = std::move(data);
@@ -1393,7 +1396,10 @@ void TableEvolutionFuzzer::createWriteTasks(
         rng_,
         true,
         globalMapColumnKeys,
-        globallyConsistentColumnIndexVector);
+        globallyConsistentColumnIndexVector,
+        config_.extraWriteSerdeParams
+            ? config_.extraWriteSerdeParams(testSetups.back().fileFormat, rng_)
+            : std::unordered_map<std::string, std::string>{});
   }
 }
 

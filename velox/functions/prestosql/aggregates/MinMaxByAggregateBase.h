@@ -1130,8 +1130,8 @@ template <
         bool compareTypeUsesCustomComparison> class Aggregate,
     bool isMaxFunc,
     template <typename U, typename V> class NAggregate>
-exec::AggregateRegistrationResult registerMinMaxBy(
-    const std::string& name,
+std::vector<exec::AggregateRegistrationResult> registerMinMaxBy(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -1186,9 +1186,9 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           .argumentType("bigint")
           .build());
   return exec::registerAggregateFunction(
-      name,
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
@@ -1196,8 +1196,8 @@ exec::AggregateRegistrationResult registerMinMaxBy(
           -> std::unique_ptr<exec::Aggregate> {
         const std::string errorMessage = fmt::format(
             "Unknown input types for {} ({}) aggregation: {}",
-            name,
-            mapAggregationStepToName(step),
+            names.front(),
+            core::AggregationNode::toName(step),
             toString(argTypes));
 
         const bool nAgg = (argTypes.size() == 3) ||

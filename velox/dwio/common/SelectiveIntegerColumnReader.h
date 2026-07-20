@@ -200,6 +200,13 @@ void SelectiveIntegerColumnReader::processFilter(
               velox::common::NegatedBigintValuesUsingBitmask,
               isDense>(filter, rows, extractValues);
       break;
+    case velox::common::FilterKind::kBigintValuesUsingBloomFilter:
+      static_cast<Reader*>(this)
+          ->template readHelper<
+              Reader,
+              velox::common::BigintValuesUsingBloomFilter,
+              isDense>(filter, rows, extractValues);
+      break;
     default:
       static_cast<Reader*>(this)
           ->template readHelper<Reader, velox::common::Filter, isDense>(

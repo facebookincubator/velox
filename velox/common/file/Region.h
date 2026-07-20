@@ -17,7 +17,12 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <string_view>
+
+#include <fmt/format.h>
+
+#include "velox/common/base/SuccinctPrinter.h"
 
 namespace facebook::velox::common {
 
@@ -34,6 +39,14 @@ struct Region {
   bool operator<(const Region& other) const {
     return offset < other.offset ||
         (offset == other.offset && length < other.length);
+  }
+
+  std::string toString() const {
+    return fmt::format(
+        "Region{{offset: {}, length: {}, label: {}}}",
+        offset,
+        succinctBytes(length),
+        label);
   }
 };
 

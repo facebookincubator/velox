@@ -21,6 +21,7 @@ velox_add_library(
   FlatMapVector.cpp
   FlatVector.cpp
   LazyVector.cpp
+  MapConcat.cpp
   SelectivityVector.cpp
   SequenceVector.cpp
   SimpleVector.cpp
@@ -32,6 +33,40 @@ velox_add_library(
   VectorPrinter.cpp
   VectorSaver.cpp
   VectorStream.cpp
+  HEADERS
+  AggregationHook.h
+  BaseVector.h
+  BiasVector-inl.h
+  BiasVector.h
+  BuilderTypeUtils.h
+  ComplexVector.h
+  ConstantVector-inl.h
+  ConstantVector.h
+  DecodedVector.h
+  DictionaryVector-inl.h
+  DictionaryVector.h
+  EncodedVectorCopy.h
+  FlatMapVector.h
+  FlatVector-inl.h
+  FlatVector.h
+  FunctionVector.h
+  LazyVector.h
+  MapConcat.h
+  NullsBuilder.h
+  SelectivityVector.h
+  SequenceVector-inl.h
+  SequenceVector.h
+  SimpleVector.h
+  StringVectorBuffer.h
+  VariantToVector.h
+  VectorEncoding.h
+  VectorMap.h
+  VectorPool.h
+  VectorPrinter.h
+  VectorSaver.h
+  VectorStream.h
+  VectorTypeUtils.h
+  VectorUtil.h
 )
 
 velox_link_libraries(
@@ -56,3 +91,5 @@ endif()
 if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()
+
+velox_add_library(velox_type_aliases INTERFACE HEADERS TypeAliases.h)

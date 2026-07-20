@@ -88,6 +88,10 @@ PrestoVectorSerde::PrestoOptions toPrestoOptions(
       dynamic_cast<const PrestoVectorSerde::PrestoOptions*>(options);
   VELOX_CHECK_NOT_NULL(
       prestoOptions, "Serde options are not Presto-compatible");
+  VELOX_CHECK(
+      !(prestoOptions->useLosslessTimestamp &&
+        prestoOptions->useMicrosecondPrecision),
+      "useLosslessTimestamp and useMicrosecondPrecision are mutually exclusive");
   return *prestoOptions;
 }
 } // namespace
@@ -262,7 +266,16 @@ void PrestoVectorSerde::registerVectorSerde() {
 void PrestoVectorSerde::registerNamedVectorSerde() {
   detail::initBitsToMapOnce();
   velox::registerNamedVectorSerde(
-      VectorSerde::Kind::kPresto, std::make_unique<PrestoVectorSerde>());
+      kSerdeKind, std::make_unique<PrestoVectorSerde>());
+}
+
+// static
+void PrestoVectorSerde::tryRegisterNamedVectorSerde() {
+  if (!velox::isRegisteredNamedVectorSerde(kSerdeKind)) {
+    detail::initBitsToMapOnce();
+    velox::registerNamedVectorSerde(
+        kSerdeKind, std::make_unique<PrestoVectorSerde>());
+  }
 }
 
 /* static */ Status PrestoVectorSerde::lex(

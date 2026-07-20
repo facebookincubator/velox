@@ -136,7 +136,13 @@ class MapFunction : public exec::VectorFunction {
               VELOX_USER_FAIL(
                   "Duplicate map key ({}) was found.", duplicateKey);
             }
+            // The key at position i is superseded by a later occurrence and
+            // will be dropped by setKeysAndValuesResult (LAST_WIN). Count this
+            // occurrence once and stop; otherwise a key repeated N times would
+            // be counted C(N,2) times, under-sizing the result map (0 for N=3,
+            // negative for N>=4) and causing an out-of-bounds write.
             duplicateCnt++;
+            break;
           }
         }
       }
@@ -159,10 +165,10 @@ class MapFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // For the purpose of testing we introduce up to 6 inputs
+    // Support up to 10 key-value pairs (20 arguments) for MAP() function.
     // array(K), array(V) -> map(K,V)
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
-    constexpr int kNumberOfSignatures = 3;
+    constexpr int kNumberOfSignatures = 10;
     signatures.reserve(kNumberOfSignatures);
     for (int i = 1; i <= kNumberOfSignatures; i++) {
       auto builder = exec::FunctionSignatureBuilder()

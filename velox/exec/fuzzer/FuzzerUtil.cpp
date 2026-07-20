@@ -17,6 +17,7 @@
 #include <re2/re2.h>
 #include <filesystem>
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/catalog/fbhive/FileUtils.h"
@@ -24,6 +25,7 @@
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 
 using namespace facebook::velox::dwio::catalog::fbhive;
@@ -247,6 +249,35 @@ bool containsUnsupportedTypes(const TypePtr& type) {
       containsType(type, INTERVAL_DAY_TIME());
 }
 
+bool containsIPAddress(const TypePtr& type) {
+  if (type->isArray()) {
+    const auto& elementType = type->asArray().elementType();
+    if (isIPAddressType(elementType)) {
+      return true;
+    }
+    return containsIPAddress(elementType);
+  }
+
+  if (type->isMap()) {
+    const auto& keyType = type->asMap().keyType();
+    const auto& valueType = type->asMap().valueType();
+    if (isIPAddressType(keyType) || isIPAddressType(valueType)) {
+      return true;
+    }
+    return containsIPAddress(keyType) || containsIPAddress(valueType);
+  }
+
+  if (type->isRow()) {
+    for (auto i = 0; i < type->size(); ++i) {
+      if (containsIPAddress(type->childAt(i))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 // Determine whether type is or contains typeName. typeName should be in lower
 // case.
 bool containTypeName(
@@ -382,7 +413,8 @@ void registerHiveConnector(
   auto hiveConnector = factory.newConnector(
       kHiveConnectorId,
       std::make_shared<config::ConfigBase>(std::move(configs)));
-  connector::registerConnector(hiveConnector);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
 }
 
 std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(

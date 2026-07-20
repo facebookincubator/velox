@@ -383,6 +383,46 @@ TEST_F(SpatialJoinTest, testSimpleNullRowsJoin) {
       {"POINT (1 1)"});
 }
 
+TEST_F(SpatialJoinTest, testGeometryCollection) {
+  runTest(
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 1)"},
+      std::nullopt,
+      "ST_Intersects(left_g, right_g)",
+      core::JoinType::kInner,
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)",
+       "GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)"});
+
+  runTest(
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 2))",
+       "GEOMETRYCOLLECTION EMPTY",
+       "POINT (1 2)"},
+      std::vector<std::optional<double>>{1.0, 1.0, 1.0},
+      "ST_Distance(left_g, right_g) <= radius",
+      core::JoinType::kInner,
+      {"GEOMETRYCOLLECTION (POINT (1 1))",
+       "GEOMETRYCOLLECTION (POINT (1 1))",
+       "POINT (1 1)",
+       "POINT (1 1)"},
+      {"GEOMETRYCOLLECTION (POINT (1 2))",
+       "POINT (1 2)",
+       "GEOMETRYCOLLECTION (POINT (1 2))",
+       "POINT (1 2)"});
+}
+
 TEST_F(SpatialJoinTest, testDistanceJoin) {
   runTest(
       {"POINT (1 2)", "POLYGON ((1 2, 2 2, 2 3, 1 3, 1 2))", std::nullopt},

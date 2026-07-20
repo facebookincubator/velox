@@ -408,6 +408,70 @@ class ColumnVisitor {
   inline void addNull();
   inline void addOutputRow(vector_size_t row);
 
+  /// Bulk variant of process() with SIMD paths for AlwaysTrue and
+  /// deterministic integer filters; otherwise per-row fallback.
+  template <bool hasFilter, bool hasHook, bool scatter>
+  FOLLY_ALWAYS_INLINE void processRun(
+      const T* input,
+      int32_t numInput,
+      const int32_t* scatterRows,
+      int32_t* filterHits,
+      T* values,
+      int32_t& numValues) {
+    DCHECK_EQ(input, values + numValues);
+    if constexpr (
+        !hasFilter && !hasHook && !scatter && isDense &&
+        std::is_same_v<TFilter, velox::common::AlwaysTrue>) {
+      rowIndex_ += numInput;
+      numValues += numInput;
+      return;
+    }
+    if constexpr (
+        hasFilter && !hasHook && !scatter && isDense &&
+        TFilter::deterministic &&
+        (std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+         std::is_same_v<T, int16_t>)) {
+      const int32_t firstRow = currentRow();
+      constexpr int32_t kWidth = xsimd::batch<T>::size;
+      int32_t i = 0;
+      while (i + kWidth <= numInput) {
+        auto batch = xsimd::load_unaligned(input + i);
+        processFixedFilter<
+            T,
+            /*filterOnly=*/false,
+            /*scatter=*/false,
+            /*dense=*/true>(
+            batch,
+            kWidth,
+            firstRow + i,
+            filter_,
+            [&](int32_t /*offset*/) {
+              return simd::loadGatherIndices<T>(rows_ + rowIndex_ + i);
+            },
+            values,
+            filterHits,
+            numValues);
+        i += kWidth;
+      }
+      for (; i < numInput; ++i) {
+        if (velox::common::applyFilter(filter_, input[i])) {
+          values[numValues] = input[i];
+          filterHits[numValues] = firstRow + i;
+          ++numValues;
+        }
+      }
+      rowIndex_ += numInput;
+      return;
+    }
+    bool atEnd = false;
+    for (int32_t i = 0; i < numInput; ++i) {
+      process(input[i], atEnd);
+      if (atEnd) {
+        return;
+      }
+    }
+  }
+
   const TFilter& filter() {
     return filter_;
   }
@@ -552,8 +616,6 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::addOutputRow(
     vector_size_t row) {
   reader_->addOutputRow(row);
 }
-
-enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
 
 namespace detail {
 
@@ -763,6 +825,15 @@ class DictionaryColumnVisitor
                                                                          : 2),
         state_(reader->scanState().rawState) {}
 
+  // Re-reads the cached scan-state snapshot from the reader. Nimble rebuilds
+  // the per-chunk filter dictionary at each chunk boundary during a multi-chunk
+  // dictionary read; the visitor must re-snapshot so valueInDictionary() sees
+  // the current chunk's dictionary rather than the stale copy captured at
+  // construction.
+  void refreshScanState() {
+    state_ = this->reader().scanState().rawState;
+  }
+
   FOLLY_ALWAYS_INLINE bool isInDict() {
     if (inDict()) {
       return bits::isBitSet(inDict(), super::currentRow());
@@ -920,20 +991,10 @@ class DictionaryColumnVisitor
           dictMask,
           reinterpret_cast<const int32_t*>(filterCache() - 3),
           indices);
-#ifdef SVE_BITS
       auto unknowns = simd::toBitMask(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
-          xsimd::batch<uint32_t>(0));
-      auto passed = simd::toBitMask(
-          (simd::reinterpretBatch<uint32_t>(cache) &
-           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
-#else
-      auto unknowns = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
-              (cache & (kUnknown << 24)) << 1)));
-      auto passed = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-#endif
+          (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+          xsimd::batch<int32_t>(0));
+      auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         // Ranges only over inputs that are in dictionary, the not in dictionary
@@ -1176,7 +1237,7 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense, hasBulkPath>::
   }
   auto result = DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>(
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
-  result.numValuesBias_ = numValuesBias_;
+  result.setNumValuesBias(numValuesBias_);
   return result;
 }
 
@@ -1228,7 +1289,14 @@ class StringDictionaryColumnVisitor
     vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
     if constexpr (!DictSuper::hasFilter()) {
-      super::filterPassed(index);
+      // Hooks are LazyVector-level and have no access to the dictionary.
+      // They must receive decoded StringView values, not dictionary indices.
+      if constexpr (super::kHasHook) {
+        super::values_.addValue(
+            super::rowIndex_ + super::numValuesBias_, valueInDictionary(index));
+      } else {
+        super::filterPassed(index);
+      }
     } else {
       // check the dictionary cache
       if (TFilter::deterministic &&
@@ -1307,6 +1375,11 @@ class StringDictionaryColumnVisitor
     }
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
+    // TODO: This inline SIMD loop duplicates the shared
+    // filterDictionaryRunSimd() free function in DecoderUtil.h; rewire
+    // processRun to call it in a follow-up diff. The dedup is split out to keep
+    // this DWRF change separate from the Nimble post-hoc dictionary filter
+    // feature.
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     for (auto i = 0; i < numInput; i += kWidth) {
       auto indices = xsimd::load_unaligned(input + i);
@@ -1322,20 +1395,10 @@ class StringDictionaryColumnVisitor
       } else {
         cache = simd::gather<int32_t, int32_t, 1>(base, indices);
       }
-#ifdef SVE_BITS
       auto unknowns = simd::toBitMask(
-          simd::reinterpretBatch<uint32_t>((cache & (kUnknown << 24)) << 1) !=
-          xsimd::batch<uint32_t>(0));
-      auto passed = simd::toBitMask(
-          (simd::reinterpretBatch<uint32_t>(cache) &
-           xsimd::batch<uint32_t>(1)) != xsimd::batch<uint32_t>(0));
-#else
-      auto unknowns = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(
-              (cache & (kUnknown << 24)) << 1)));
-      auto passed = simd::toBitMask(
-          xsimd::batch_bool<int32_t>(simd::reinterpretBatch<uint32_t>(cache)));
-#endif
+          (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+          xsimd::batch<int32_t>(0));
+      auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
       if (UNLIKELY(unknowns)) {
         uint16_t bits = unknowns;
         while (bits) {

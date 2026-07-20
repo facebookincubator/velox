@@ -21,9 +21,12 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/connectors
     develop/joins
     develop/anti-join
+    develop/hash-table-caching
     develop/operators
     develop/task
+    develop/task-barrier
     develop/simd
+    develop/gpu-acceleration
     develop/memory
     develop/spilling
     develop/serde

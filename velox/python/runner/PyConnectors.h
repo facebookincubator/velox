@@ -16,7 +16,8 @@
 
 #pragma once
 
-#include <pybind11/embed.h>
+#include <string>
+#include <unordered_map>
 
 namespace facebook::velox::py {
 

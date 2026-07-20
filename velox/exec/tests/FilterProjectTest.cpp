@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::exec {
+using namespace facebook::velox::common::testutil;
 namespace {
 
 class FilterProjectTest : public test::HiveConnectorTestBase {
@@ -377,11 +378,11 @@ TEST_F(FilterProjectTest, statsSplitter) {
 
 TEST_F(FilterProjectTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<test::TempFilePath>> tempFiles;
+  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeTestVector());
-    tempFiles.push_back(test::TempFilePath::create());
+    tempFiles.push_back(TempFilePath::create());
   }
   writeToFiles(toFilePaths(tempFiles), vectors);
   createDuckDbTable(vectors);
@@ -394,16 +395,27 @@ TEST_F(FilterProjectTest, barrier) {
                   .capturePlanNodeId(projectPlanNodeId)
                   .planNode();
   struct {
+    bool serialExecution;
     bool barrierExecution;
     int numOutputRows;
 
     std::string toString() const {
       return fmt::format(
-          "barrierExecution {}, numOutputRows {}",
+          "serialExecution {}, barrierExecution {}, numOutputRows {}",
+          serialExecution,
           barrierExecution,
           numOutputRows);
     }
-  } testSettings[] = {{true, 23}, {false, 23}, {true, 200}, {false, 200}};
+  } testSettings[] = {
+      {true, true, 23},
+      {true, false, 23},
+      {false, true, 23},
+      {false, false, 23},
+      {true, true, 200},
+      {true, false, 200},
+      {false, true, 200},
+      {false, false, 200},
+  };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
     auto task =
@@ -415,7 +427,8 @@ TEST_F(FilterProjectTest, barrier) {
                 core::QueryConfig::kPreferredOutputBatchRows,
                 std::to_string(testData.numOutputRows))
             .splits(makeHiveConnectorSplits(tempFiles))
-            .serialExecution(true)
+            .serialExecution(testData.serialExecution)
+            .maxDrivers(testData.serialExecution ? 1 : 3)
             .barrierExecution(testData.barrierExecution)
             .assertResults("SELECT c0, c1, c0 + c1 FROM tmp WHERE c1 % 10 > 0");
     const auto taskStats = task->taskStats();
@@ -441,7 +454,7 @@ TEST_F(FilterProjectTest, lazyDereference) {
       makeRowVector({expected[0], expected[1]}),
       makeRowVector({makeRowVector({expected[2]})}),
   });
-  auto file = test::TempFilePath::create();
+  auto file = TempFilePath::create();
   writeToFile(file->getPath(), vector);
   CursorParameters params;
   params.copyResult = false;

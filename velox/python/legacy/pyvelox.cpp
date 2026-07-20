@@ -19,6 +19,11 @@
 #include "conversion.h"
 #include "serde.h"
 #include "signatures.h"
+#include "velox/external/utf8proc/utf8procImpl.h"
+
+#ifndef PYVELOX_VERSION
+#define PYVELOX_VERSION dev
+#endif
 
 namespace facebook::velox::py {
 using namespace velox;
@@ -88,8 +93,7 @@ static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
     facebook::velox::memory::MemoryPool* pool) {
   using NativeType = typename TypeTraits<T>::NativeType;
-  constexpr bool kNeedsHolder =
-      (T == TypeKind::VARCHAR || T == TypeKind::VARBINARY);
+  constexpr bool kNeedsHolder = is_string_kind(T);
 
   TypePtr type = createScalarType(T);
   auto result =
@@ -291,8 +295,7 @@ static void addExpressionBindings(
           },
           "Evaluates the expression, taking in a map from names to input vectors")
       .def_static("from_string", [](std::string& str) {
-        parse::ParseOptions opts;
-        return IExprWrapper{parse::parseExpr(str, opts)};
+        return IExprWrapper{parse::DuckSqlExpressionsParser().parseExpr(str)};
       });
 }
 

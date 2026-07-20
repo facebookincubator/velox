@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <gtest/gtest.h>
-
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/FixedPointPlanNodes.h"
+#include "velox/parse/PlanNodeIdGenerator.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -213,6 +215,31 @@ class TestIndexTableHandle : public connector::ConnectorTableHandle {
   }
 };
 
+TEST_F(PlanNodeTest, nestedLoopJoin) {
+  auto leftData = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+      });
+
+  auto rightData = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+  });
+
+  core::PlanNodeIdGenerator planNodeIdGenerator;
+  auto nextId = [&planNodeIdGenerator]() { return planNodeIdGenerator.next(); };
+
+  auto leftValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{leftData});
+  auto rightValues = std::make_shared<ValuesNode>(
+      nextId(), std::vector<RowVectorPtr>{rightData});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<NestedLoopJoinNode>(
+          nextId(), leftValues, rightValues, ROW({"a"}, VARCHAR())),
+      "Join output column type must match the input type: VARCHAR vs. INTEGER");
+}
+
 TEST_F(PlanNodeTest, indexLookupJoin) {
   const auto rowType = ROW({"name"}, {BIGINT()});
   const auto valueNode = std::make_shared<ValuesNode>("orderBy", rowData_);
@@ -347,6 +374,21 @@ TEST_F(PlanNodeTest, indexLookupJoin) {
             outputTypeWithDuplicateMatchColumn),
         "");
   }
+  {
+    VELOX_ASSERT_THROW(
+        std::make_shared<IndexLookupJoinNode>(
+            "indexJoinNode",
+            core::JoinType::kLeft,
+            leftKeys,
+            rightKeys,
+            std::vector<IndexLookupConditionPtr>{},
+            /*filter=*/nullptr,
+            /*hasMarker=*/false,
+            probeNode,
+            buildNode,
+            ROW({"c0", "c1"}, {VARCHAR(), BIGINT()})),
+        "Join output column type must match the input type: VARCHAR vs. BIGINT");
+  }
 }
 
 TEST_F(PlanNodeTest, partitionedOutputNode) {
@@ -357,7 +399,7 @@ TEST_F(PlanNodeTest, partitionedOutputNode) {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")};
   const PartitionFunctionSpecPtr partitionFunctionSpec =
       std::make_shared<GatherPartitionFunctionSpec>();
-  const VectorSerde::Kind serdeKind = VectorSerde::Kind::kPresto;
+  const std::string serdeKind = "Presto";
   PlanNodePtr source = std::make_shared<ValuesNode>("source", rowData_);
 
   {
@@ -545,4 +587,346 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
         "-- Aggregation[agg][SINGLE [c0] sum := sum()] -> c0:BIGINT, sum:BIGINT\n");
   }
 }
+TEST_F(PlanNodeTest, rpcNodeSerdePerRowMode) {
+  Type::registerSerDe();
+  core::PlanNode::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  // Create a ValuesNode as the source with a "prompt" column.
+  auto sourceData =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+  auto valuesNode = std::make_shared<core::ValuesNode>(
+      "values-1", std::vector<RowVectorPtr>{sourceData});
+
+  auto rpcNode = std::make_shared<core::RPCNode>(
+      "rpc-1",
+      valuesNode,
+      "test_function",
+      VARCHAR(),
+      "response",
+      ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}),
+      std::vector<std::string>{"prompt"},
+      std::vector<TypePtr>{VARCHAR()},
+      std::vector<VectorPtr>{nullptr},
+      rpc::RPCStreamingMode::kPerRow,
+      0);
+
+  // Serialize and deserialize.
+  const auto serialized = rpcNode->serialize();
+  auto copy =
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get());
+
+  // Compare detailed string representation.
+  ASSERT_EQ(rpcNode->toString(true, true), copy->toString(true, true));
+
+  // Verify deserialized fields.
+  auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
+  ASSERT_NE(copyRpc, nullptr);
+  EXPECT_EQ(copyRpc->functionName(), "test_function");
+  EXPECT_EQ(copyRpc->outputColumn(), "response");
+  EXPECT_EQ(copyRpc->streamingMode(), rpc::RPCStreamingMode::kPerRow);
+  EXPECT_EQ(copyRpc->dispatchBatchSize(), 0);
+  EXPECT_EQ(*copyRpc->rpcResultType(), *VARCHAR());
+  EXPECT_EQ(copyRpc->argumentColumns().size(), 1);
+  EXPECT_EQ(copyRpc->argumentColumns()[0], "prompt");
+  EXPECT_EQ(copyRpc->argumentTypes().size(), 1);
+  EXPECT_EQ(*copyRpc->argumentTypes()[0], *VARCHAR());
+}
+
+TEST_F(PlanNodeTest, rpcNodeSerdeBatchMode) {
+  Type::registerSerDe();
+  core::PlanNode::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  auto sourceData = makeRowVector(
+      {"prompt", "model"},
+      {makeFlatVector<StringView>({"hello"}),
+       makeFlatVector<StringView>({"llama"})});
+  auto valuesNode = std::make_shared<core::ValuesNode>(
+      "values-1", std::vector<RowVectorPtr>{sourceData});
+
+  auto rpcNode = std::make_shared<core::RPCNode>(
+      "rpc-2",
+      valuesNode,
+      "batch_function",
+      VARCHAR(),
+      "result",
+      ROW({"prompt", "model", "result"}, {VARCHAR(), VARCHAR(), VARCHAR()}),
+      std::vector<std::string>{"prompt", "model"},
+      std::vector<TypePtr>{VARCHAR(), VARCHAR()},
+      std::vector<VectorPtr>{nullptr, nullptr},
+      rpc::RPCStreamingMode::kBatch,
+      50);
+
+  const auto serialized = rpcNode->serialize();
+  auto copy =
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get());
+
+  ASSERT_EQ(rpcNode->toString(true, true), copy->toString(true, true));
+
+  auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
+  ASSERT_NE(copyRpc, nullptr);
+  EXPECT_EQ(copyRpc->functionName(), "batch_function");
+  EXPECT_EQ(copyRpc->outputColumn(), "result");
+  EXPECT_EQ(copyRpc->streamingMode(), rpc::RPCStreamingMode::kBatch);
+  EXPECT_EQ(copyRpc->dispatchBatchSize(), 50);
+  EXPECT_EQ(copyRpc->argumentColumns().size(), 2);
+  EXPECT_EQ(copyRpc->argumentColumns()[0], "prompt");
+  EXPECT_EQ(copyRpc->argumentColumns()[1], "model");
+}
+
+TEST_F(PlanNodeTest, rpcNodeSerdeWithConstants) {
+  Type::registerSerDe();
+  core::PlanNode::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+
+  auto sourceData =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+  auto valuesNode = std::make_shared<core::ValuesNode>(
+      "values-1", std::vector<RowVectorPtr>{sourceData});
+
+  // Create constant vectors for model and system_prompt arguments.
+  auto modelConstant = makeConstant("llama3", 1);
+  auto systemPromptConstant = makeConstant("You are helpful.", 1);
+
+  auto rpcNode = std::make_shared<core::RPCNode>(
+      "rpc-3",
+      valuesNode,
+      "test_function",
+      VARCHAR(),
+      "response",
+      ROW({"prompt", "response"}, {VARCHAR(), VARCHAR()}),
+      std::vector<std::string>{"prompt", "model", "system_prompt"},
+      std::vector<TypePtr>{VARCHAR(), VARCHAR(), VARCHAR()},
+      std::vector<VectorPtr>{nullptr, modelConstant, systemPromptConstant});
+
+  // Verify constants before serde.
+  ASSERT_EQ(rpcNode->constantInputs().size(), 3);
+  EXPECT_EQ(rpcNode->constantInputs()[0], nullptr);
+  EXPECT_NE(rpcNode->constantInputs()[1], nullptr);
+  EXPECT_NE(rpcNode->constantInputs()[2], nullptr);
+
+  // Serialize and deserialize.
+  const auto serialized = rpcNode->serialize();
+  auto copy =
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get());
+
+  auto* copyRpc = dynamic_cast<const core::RPCNode*>(copy.get());
+  ASSERT_NE(copyRpc, nullptr);
+  EXPECT_EQ(copyRpc->functionName(), "test_function");
+  EXPECT_EQ(copyRpc->argumentColumns().size(), 3);
+
+  // Verify constants survive the round-trip.
+  ASSERT_EQ(copyRpc->constantInputs().size(), 3);
+  EXPECT_EQ(copyRpc->constantInputs()[0], nullptr);
+  ASSERT_NE(copyRpc->constantInputs()[1], nullptr);
+  ASSERT_NE(copyRpc->constantInputs()[2], nullptr);
+
+  // Verify constant values.
+  auto modelVec = copyRpc->constantInputs()[1];
+  EXPECT_TRUE(modelVec->isConstantEncoding());
+  EXPECT_EQ(
+      modelVec->as<ConstantVector<StringView>>()->valueAt(0).str(), "llama3");
+
+  auto promptVec = copyRpc->constantInputs()[2];
+  EXPECT_TRUE(promptVec->isConstantEncoding());
+  EXPECT_EQ(
+      promptVec->as<ConstantVector<StringView>>()->valueAt(0).str(),
+      "You are helpful.");
+}
+
+// The FixedPointNode constructor and the state declarations validate their
+// inputs up front, so a malformed plan fails at construction rather than at
+// execution.
+TEST_F(PlanNodeTest, fixedPointValidation) {
+  auto vecSchema = ROW("x", BIGINT());
+  auto htSchema = ROW({"k", "v"}, BIGINT());
+
+  // A single body that reads the output entry -- the minimal valid body, reused
+  // as the valid baseline that each case mutates one field of.
+  auto body =
+      std::make_shared<StateSourceNode>("b", "n", vecSchema, /*delta=*/true);
+  auto vectorN = [&] {
+    return std::make_shared<VectorStateDeclaration>(
+        "n", vecSchema, /*initialPlan=*/nullptr, /*append=*/true);
+  };
+
+  // maxIterations must be positive.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 0, .errorWhenMaxIterationReached = false},
+          "n"),
+      "maxIterations must be positive");
+
+  // A hash table needs at least one key column, and every key must be in the
+  // schema -- checked when the declaration is built.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{}),
+      "at least one key column");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{"missing"}),
+      "key column is not in the schema");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{"k", "k"}),
+      "key columns must be unique");
+
+  // StateHashJoin needs a non-null probe source and at least one probe key.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<StateHashJoinNode>(
+          "j", "h", std::vector<std::string>{"k"}, htSchema, nullptr),
+      "non-null probe source");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<StateHashJoinNode>(
+          "j", "h", std::vector<std::string>{}, htSchema, body),
+      "at least one probe key");
+
+  // State declaration names must be unique across all kinds.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<VectorStateDeclaration>("n", vecSchema)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "duplicate state declaration name");
+
+  // A StateSource must reference a declared vector entry.
+  auto typoBody =
+      std::make_shared<StateSourceNode>("b", "typo", vecSchema, /*delta=*/true);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{typoBody},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "StateSource references no declared vector state entry");
+
+  // errorWhenMaxIterationReached requires a convergence plan (a null plan never
+  // converges, so it would always fail).
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = true},
+          "n"),
+      "errorWhenMaxIterationReached requires a convergence plan");
+
+  // A convergence plan must emit exactly one BOOLEAN column.
+  auto nonBoolConvergence =
+      std::make_shared<StateSourceNode>("c", "n", vecSchema, /*delta=*/false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{.plan = nonBoolConvergence, .maxIterations = 5},
+          "n"),
+      "convergence plan output column must be BOOLEAN");
+
+  auto twoColSchema = ROW({"a", "b"}, BOOLEAN());
+  auto twoColConvergence = std::make_shared<StateSourceNode>(
+      "c", "flags", twoColSchema, /*delta=*/false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<VectorStateDeclaration>("flags", twoColSchema)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{.plan = twoColConvergence, .maxIterations = 5},
+          "n"),
+      "exactly one output column");
+
+  // A StateHashJoin output arity must equal probe columns plus the hash table's
+  // payload columns.
+  auto badArityJoin = std::make_shared<StateHashJoinNode>(
+      "j",
+      "h",
+      std::vector<std::string>{"x"},
+      vecSchema,
+      std::make_shared<StateSourceNode>("b", "n", vecSchema, /*delta=*/true));
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<HashTableStateDeclaration>(
+                  "h", htSchema, std::vector<std::string>{"k"})},
+          std::vector<PlanNodePtr>{badArityJoin},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "output arity must equal probe columns plus hash table payload columns");
+
+  // A StateHashJoin's leading probe key column types must match the hash
+  // table's build key types (keys-first on both sides).
+  auto varcharProbe = ROW("k", VARCHAR());
+  auto badKeyTypeJoin = std::make_shared<StateHashJoinNode>(
+      "j",
+      "h",
+      std::vector<std::string>{"k"},
+      ROW({"k", "v"}, {VARCHAR(), BIGINT()}),
+      std::make_shared<StateSourceNode>(
+          "s", "probe", varcharProbe, /*delta=*/true));
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              std::make_shared<VectorStateDeclaration>("probe", varcharProbe),
+              std::make_shared<HashTableStateDeclaration>(
+                  "h", htSchema, std::vector<std::string>{"k"})},
+          std::vector<PlanNodePtr>{badKeyTypeJoin},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "probe"),
+      "probe key column type at channel 0 must match the hash table build key");
+
+  // A null body plan is rejected with a clean error rather than crashing.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{nullptr},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "plan 0 must not be null");
+
+  // Hash table key columns must be the leading schema columns (keys-first).
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", ROW({"v", "k"}, BIGINT()), std::vector<std::string>{"k"}),
+      "leading schema columns in order");
+
+  // An initial plan must not read state -- it runs in Phase 1 before state
+  // exists.
+  auto stateReadingInitial =
+      std::make_shared<StateSourceNode>("s", "n", vecSchema, /*delta=*/true);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              std::make_shared<VectorStateDeclaration>(
+                  "n", vecSchema, stateReadingInitial, /*append=*/true)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "initial plan must not read state");
+}
+
 } // namespace

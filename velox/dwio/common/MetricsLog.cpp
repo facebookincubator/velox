@@ -1,0 +1,81 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/dwio/common/MetricsLog.h"
+
+namespace facebook::velox::dwio::common {
+
+namespace {
+class VoidDwioMetricsLogFactory : public DwioMetricsLogFactory {
+ public:
+  std::shared_ptr<const MetricsLog> create(
+      const std::string& /* unused */,
+      bool /* unused */) override {
+    return MetricsLog::voidLog();
+  }
+};
+
+std::shared_ptr<DwioMetricsLogFactory>& metricsLogFactory() {
+  static std::shared_ptr<DwioMetricsLogFactory> factory =
+      std::make_shared<VoidDwioMetricsLogFactory>();
+  return factory;
+}
+} // namespace
+
+/* static */ std::shared_ptr<const MetricsLog> MetricsLog::voidLog() {
+  static const MetricsLog kInstance{{}};
+  return {std::shared_ptr<const MetricsLog>{}, &kInstance};
+}
+
+/* static */ std::string MetricsLog::getMetricTypeName(Type type) {
+  switch (type) {
+    case Type::HEADER:
+      return "HEADER";
+    case Type::FOOTER:
+      return "FOOTER";
+    case Type::FILE:
+      return "FILE";
+    case Type::STRIPE:
+      return "STRIPE";
+    case Type::STRIPE_INDEX:
+      return "STRIPE_INDEX";
+    case Type::STRIPE_FOOTER:
+      return "STRIPE_FOOTER";
+    case Type::STREAM:
+      return "STREAM";
+    case Type::STREAM_BUNDLE:
+      return "STREAM_BUNDLE";
+    case Type::GROUP:
+      return "GROUP";
+    case Type::GROUP_INDEX:
+      return "GROUP_INDEX";
+    case Type::BLOCK:
+      return "BLOCK";
+    case Type::TEST:
+      return "TEST";
+    default:
+      VELOX_UNREACHABLE("Unknown MetricsLog type: {}", static_cast<int>(type));
+  }
+}
+
+void registerMetricsLogFactory(std::shared_ptr<DwioMetricsLogFactory> factory) {
+  metricsLogFactory() = std::move(factory);
+}
+
+DwioMetricsLogFactory& getMetricsLogFactory() {
+  return *metricsLogFactory();
+}
+} // namespace facebook::velox::dwio::common

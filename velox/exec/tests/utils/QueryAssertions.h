@@ -22,6 +22,9 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
+#ifdef BLOCK_SIZE
+#undef BLOCK_SIZE
+#endif
 #include <duckdb.hpp> // @manual
 
 namespace facebook::velox::exec::test {
@@ -38,9 +41,12 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
 /// Converts a list of 'RowVector's into 'MaterializedRowMultiset'.
 MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors);
 
+/// Runs SQL queries against an in-memory DuckDB to compute expected results in
+/// tests. Not thread-safe: a single instance must be accessed from one thread
+/// at a time.
 class DuckDbQueryRunner {
  public:
-  DuckDbQueryRunner() : db_(nullptr) {}
+  DuckDbQueryRunner() = default;
 
   void createTable(
       const std::string& name,
@@ -76,7 +82,13 @@ class DuckDbQueryRunner {
   }
 
  private:
-  ::duckdb::DuckDB db_;
+  // Returns the in-memory DuckDB, building it on the first call. Construction
+  // is expensive, so it is deferred until the first query.
+  ::duckdb::DuckDB& database();
+
+  // shared_ptr (not unique_ptr) keeps DuckDbQueryRunner copyable; some callers
+  // hold it by value and rely on copy semantics.
+  std::shared_ptr<::duckdb::DuckDB> db_;
 
   void execute(
       const std::string& sql,
@@ -86,7 +98,7 @@ class DuckDbQueryRunner {
 
 /// Scoped abort percentage utility that allows user to trigger abort during the
 ///  query execution.
-/// 'abortPct' specifies the probability of of triggering abort. 100% means
+/// 'abortPct' specifies the probability of triggering abort. 100% means
 /// abort will always be triggered.
 /// 'maxInjections' indicates the max number of actual triggering, e.g. when
 /// 'abortPct' is 20 and 'maxInjections' is 10, continuous calls to
@@ -182,6 +194,19 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
             return;
           }
           taskCursor->setNoMoreSplits();
+        },
+    uint64_t maxWaitMicros = 5'000'000);
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursorAsync(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits =
+        [](TaskCursor* taskCursor) {
+          if (taskCursor->noMoreSplits()) {
+            return ContinueFuture::makeEmpty();
+          }
+          taskCursor->setNoMoreSplits();
+          return ContinueFuture::makeEmpty();
         },
     uint64_t maxWaitMicros = 5'000'000);
 

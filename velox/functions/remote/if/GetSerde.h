@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox {
 class VectorSerde;
@@ -25,5 +26,10 @@ class VectorSerde;
 namespace facebook::velox::functions {
 
 std::unique_ptr<VectorSerde> getSerde(const remote::PageFormat& format);
+
+/// Creates appropriate serde options based on format and configuration.
+std::unique_ptr<VectorSerde::Options> getSerdeOptions(
+    const remote::PageFormat& format,
+    bool preserveEncoding);
 
 } // namespace facebook::velox::functions

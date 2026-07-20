@@ -17,6 +17,8 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergSplitReaderBenchmark.h"
 #include <filesystem>
 
+#include "velox/connectors/hive/HiveConfig.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
@@ -99,8 +101,6 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
     const std::string& dataFilePath,
     const std::vector<IcebergDeleteFile>& deleteFiles) {
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
-  std::unordered_map<std::string, std::string> customSplitInfo;
-  customSplitInfo["table_format"] = "hive-iceberg";
 
   auto readFile = std::make_shared<LocalReadFile>(dataFilePath);
   const int64_t fileSize = readFile->size();
@@ -108,12 +108,12 @@ IcebergSplitReaderBenchmark::makeIcebergSplit(
   return std::make_shared<HiveIcebergSplit>(
       kHiveConnectorId,
       dataFilePath,
-      fileFomat_,
+      fileFormat_,
       0,
       fileSize,
       partitionKeys,
       std::nullopt,
-      customSplitInfo,
+      std::unordered_map<std::string, std::string>{},
       nullptr,
       /*cacheable=*/true,
       deleteFiles);
@@ -175,7 +175,7 @@ IcebergSplitReaderBenchmark::createIcebergSplitsWithPositionalDelete(
       IcebergDeleteFile deleteFile(
           FileContent::kPositionalDeletes,
           deleteFilePath,
-          fileFomat_,
+          fileFormat_,
           deleteRowsCount,
           testing::internal::GetFileSize(
               std::fopen(deleteFilePath.c_str(), "r")));
@@ -284,7 +284,6 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
       std::make_shared<HiveTableHandle>(
           "kHiveConnectorId",
           "tableName",
-          false,
           std::move(filters),
           remainingFilterExpr,
           rowType);
@@ -293,10 +292,11 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
       std::make_shared<HiveConfig>(std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>(), true));
   const RowTypePtr readerOutputType;
-  const std::shared_ptr<io::IoStatistics> ioStats =
+  const std::shared_ptr<io::IoStatistics> ioStatistics =
       std::make_shared<io::IoStatistics>();
-  const std::shared_ptr<filesystems::File::IoStats> fsStats =
-      std::make_shared<filesystems::File::IoStats>();
+  const std::shared_ptr<io::IoStatistics> metadataIoStatistics =
+      std::make_shared<io::IoStatistics>();
+  const std::shared_ptr<IoStats> ioStats = std::make_shared<IoStats>();
 
   std::shared_ptr<memory::MemoryPool> root =
       memory::memoryManager()->addRootPool(
@@ -331,21 +331,24 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
   suspender.dismiss();
 
   uint64_t resultSize = 0;
-  for (std::shared_ptr<HiveConnectorSplit> split : splits) {
+  for (const auto& split : splits) {
     scanSpec->resetCachedValues(true);
+    auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split);
     std::unique_ptr<IcebergSplitReader> icebergSplitReader =
         std::make_unique<IcebergSplitReader>(
-            split,
+            icebergSplit,
             hiveTableHandle,
             nullptr,
             connectorQueryCtx_.get(),
             hiveConfig,
             rowType,
+            ioStatistics,
+            metadataIoStatistics,
             ioStats,
-            fsStats,
             &fileHandleFactory,
             nullptr,
-            scanSpec);
+            scanSpec,
+            nullptr);
 
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
     icebergSplitReader->configureReaderOptions(randomSkip);

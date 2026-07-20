@@ -15,6 +15,8 @@
  */
 #include "velox/exec/Limit.h"
 
+#include "velox/exec/OperatorType.h"
+
 namespace facebook::velox::exec {
 Limit::Limit(
     int32_t operatorId,
@@ -25,7 +27,7 @@ Limit::Limit(
           limitNode->outputType(),
           operatorId,
           limitNode->id(),
-          "Limit"),
+          OperatorType::kLimit),
       remainingOffset_{limitNode->offset()},
       remainingLimit_{limitNode->count()} {
   isIdentityProjection_ = true;

@@ -17,6 +17,7 @@
 #include "velox/benchmarks/QueryBenchmarkBase.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/exec/ToWave.h"
@@ -216,17 +217,21 @@ class WaveBenchmark : public QueryBenchmarkBase {
       }
       writer.close();
     } else if (FLAGS_data_format == "parquet") {
-      facebook::velox::parquet::WriterOptions options;
-      options.memoryPool = childPool.get();
+      dwio::common::WriterOptions writerOptions;
+      writerOptions.memoryPool = childPool.get();
       int32_t flushCounter = 0;
-      options.encoding = parquet::arrow::Encoding::type::BIT_PACKED;
-      options.flushPolicyFactory = [&]() {
+      facebook::velox::parquet::ParquetWriterOptions parquetOptions;
+      parquetOptions.encoding = parquet::arrow::Encoding::type::kBitPacked;
+      writerOptions.flushPolicyFactory = [&]() {
         return std::make_unique<facebook::velox::parquet::LambdaFlushPolicy>(
             1000000, 1000000000, [&]() { return (++flushCounter % 1 == 0); });
       };
-      options.compressionKind = common::CompressionKind_NONE;
+      writerOptions.compressionKind = common::CompressionKind_NONE;
+      writerOptions.formatSpecificOptions =
+          std::make_shared<facebook::velox::parquet::ParquetWriterOptions>(
+              parquetOptions);
       auto writer = std::make_unique<facebook::velox::parquet::Writer>(
-          std::move(sink), options, asRowType(schema));
+          std::move(sink), writerOptions, asRowType(schema));
       for (auto& batch : vectors) {
         writer->write(batch);
       }
@@ -413,7 +418,8 @@ class WaveBenchmark : public QueryBenchmarkBase {
       int64_t rawInputBytes = 0;
       for (auto& pipeline : stats.pipelineStats) {
         auto& first = pipeline.operatorStats[0];
-        if (first.operatorType == "TableScan" || first.operatorType == "Wave") {
+        if (first.operatorType == OperatorType::kTableScan ||
+            first.operatorType == "Wave") {
           rawInputBytes += first.rawInputBytes;
         }
       }

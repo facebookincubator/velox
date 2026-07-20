@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/base64.h>
+#include <gmock/gmock.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/TDigest.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
@@ -589,6 +590,48 @@ TEST_F(TDigestFunctionsTest, testDestructureTDigest) {
   ASSERT_EQ(resultCount->valueAt(0), 10);
 }
 
+TEST_F(TDigestFunctionsTest, testDestructureTDigestByName) {
+  std::vector<std::vector<double>> means = {
+      {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0}};
+  auto meansArg = makeArrayVector<double>(means);
+  std::vector<std::vector<double>> weights = {
+      {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+  auto weightsArg = makeArrayVector<double>(weights);
+  auto compressionArg = makeFlatVector<double>(std::vector<double>{100.0});
+  auto minArg = makeFlatVector<double>(std::vector<double>{0.0});
+  auto maxArg = makeFlatVector<double>(std::vector<double>{9.0});
+  auto sumArg = makeFlatVector<double>(std::vector<double>{45.0});
+  auto countArg = makeFlatVector<int64_t>(std::vector<int64_t>{10});
+
+  auto tdigest = evaluate(
+      "construct_tdigest(c0, c1, c2, c3, c4, c5, c6)",
+      makeRowVector(
+          {meansArg,
+           weightsArg,
+           compressionArg,
+           minArg,
+           maxArg,
+           sumArg,
+           countArg}));
+
+  auto result = evaluate("destructure_tdigest(c0)", makeRowVector({tdigest}));
+
+  EXPECT_THAT(
+      result->type()->asRow().names(),
+      ::testing::ElementsAre(
+          "centroid_means",
+          "centroid_weights",
+          "compression",
+          "min",
+          "max",
+          "sum",
+          "count"));
+
+  auto max =
+      evaluate("(destructure_tdigest(c0)).max", makeRowVector({tdigest}));
+  ASSERT_NEAR(max->as<FlatVector<double>>()->valueAt(0), 9.0, 0.001);
+}
+
 TEST_F(TDigestFunctionsTest, testDestructureTDigestLarge) {
   // Create the TDigest
   facebook::velox::functions::TDigest<> tDigest;
@@ -745,4 +788,130 @@ TEST_F(TDigestFunctionsTest, testTrimmedMean) {
         12); // Uniform distribution variance is (b-a)^2/12
     ASSERT_TRUE(abs(result.value() - expectedMean) / standardDeviation <= 0.05);
   }
+}
+
+TEST_F(TDigestFunctionsTest, testWinsorizedMean) {
+  const auto winsorizedMean = [&](const std::optional<std::string>& input,
+                                  const std::optional<double>& lowQuantile,
+                                  const std::optional<double>& highQuantile) {
+    return evaluateOnce<double>(
+        "winsorized_mean(c0, c1, c2)",
+        TDIGEST_DOUBLE,
+        input,
+        lowQuantile,
+        highQuantile);
+  };
+
+  // Create TDigest with uniform distribution.
+  facebook::velox::functions::TDigest<> tDigest;
+  std::vector<int16_t> positions;
+  std::vector<double> values;
+
+  std::mt19937 gen(42);
+  std::uniform_real_distribution<double> distribution(0.0, NUMBER_OF_ENTRIES);
+
+  for (int i = 0; i < NUMBER_OF_ENTRIES; i++) {
+    double value{distribution(gen)};
+    tDigest.add(positions, value);
+    values.push_back(value);
+  }
+  tDigest.compress(positions);
+  std::sort(values.begin(), values.end());
+
+  // Serialize TDigest.
+  auto serializedSize{tDigest.serializedByteSize()};
+  std::vector<char> buffer(serializedSize);
+  tDigest.serialize(buffer.data());
+  std::string serializedDigest(buffer.begin(), buffer.end());
+
+  // Full range (0, 1) should equal regular mean.
+  auto fullRangeResult{winsorizedMean(serializedDigest, 0.0, 1.0)};
+  double expectedFullMean{tDigest.sum() / tDigest.totalWeight()};
+  ASSERT_NEAR(
+      fullRangeResult.value(), expectedFullMean, expectedFullMean * 0.01);
+
+  // Test quantile pairs with computed expected values.
+  std::vector<std::pair<double, double>> quantilePairs = {
+      {0.1, 0.9},
+      {0.25, 0.75},
+      {0.01, 0.99},
+  };
+
+  for (const auto& [lowQuantile, highQuantile] : quantilePairs) {
+    int lowIndex{static_cast<int>(NUMBER_OF_ENTRIES * lowQuantile)};
+    int highIndex{static_cast<int>(NUMBER_OF_ENTRIES * highQuantile)};
+    double lowBound{values[lowIndex]};
+    double highBound{values[highIndex]};
+    double exactSum{0};
+    for (const auto& value : values) {
+      exactSum += std::max(lowBound, std::min(highBound, value));
+    }
+    double expectedMean{exactSum / NUMBER_OF_ENTRIES};
+
+    auto result{winsorizedMean(serializedDigest, lowQuantile, highQuantile)};
+    double standardDeviation{
+        std::sqrt(distribution.max() * distribution.max() / 12)};
+    ASSERT_TRUE(abs(result.value() - expectedMean) / standardDeviation <= 0.05);
+  }
+}
+
+TEST_F(TDigestFunctionsTest, testWinsorizedMeanEmptyDigest) {
+  // Empty TDigest should return NULL.
+  facebook::velox::functions::TDigest<> tDigest;
+  std::vector<int16_t> positions;
+  tDigest.compress(positions);
+  auto serializedSize{tDigest.serializedByteSize()};
+  std::vector<char> buffer(serializedSize);
+  tDigest.serialize(buffer.data());
+  std::string serializedDigest(buffer.begin(), buffer.end());
+
+  auto result = evaluateOnce<double>(
+      "winsorized_mean(c0, c1, c2)",
+      TDIGEST_DOUBLE,
+      std::optional<std::string>(serializedDigest),
+      std::optional<double>(0.1),
+      std::optional<double>(0.9));
+  ASSERT_FALSE(result.has_value());
+}
+
+TEST_F(TDigestFunctionsTest, testWinsorizedMeanInvalidBounds) {
+  // Create a simple TDigest.
+  facebook::velox::functions::TDigest<> tDigest;
+  std::vector<int16_t> positions;
+  tDigest.add(positions, 1.0);
+  tDigest.compress(positions);
+  auto serializedSize{tDigest.serializedByteSize()};
+  std::vector<char> buffer(serializedSize);
+  tDigest.serialize(buffer.data());
+  std::string serializedDigest(buffer.begin(), buffer.end());
+
+  // Out-of-range lower bound.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<double>(
+          "winsorized_mean(c0, c1, c2)",
+          TDIGEST_DOUBLE,
+          std::optional<std::string>(serializedDigest),
+          std::optional<double>(-0.1),
+          std::optional<double>(0.5)),
+      "between 0 and 1");
+
+  // Out-of-range upper bound.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<double>(
+          "winsorized_mean(c0, c1, c2)",
+          TDIGEST_DOUBLE,
+          std::optional<std::string>(serializedDigest),
+          std::optional<double>(0.0),
+          std::optional<double>(1.1)),
+      "between 0 and 1");
+
+  // Lower > upper.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<double>(
+          "winsorized_mean(c0, c1, c2)",
+          TDIGEST_DOUBLE,
+          std::optional<std::string>(serializedDigest),
+          std::optional<double>(0.9),
+          std::optional<double>(0.1)),
+      "less than or equal");
 }

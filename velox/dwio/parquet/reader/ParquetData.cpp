@@ -53,6 +53,14 @@ void ParquetData::filterRowGroups(
   }
   if (scanSpec.filter() || scanSpec.numMetadataFilters() > 0) {
     for (auto i = 0; i < fileMetaDataPtr_.numRowGroups(); ++i) {
+      // Already excluded by another column or by the caller (e.g. row group
+      // outside the split range, empty row group). Skip statistics build and
+      // testFilter. The MetadataFilter::eval call ORs into filterResult, so
+      // leaving the per-leaf metadata bits at 0 here is harmless: filterResult
+      // already has the bit set.
+      if (bits::isBitSet(result.filterResult.data(), i)) {
+        continue;
+      }
       if (scanSpec.filter() && !rowGroupMatches(i, scanSpec.filter())) {
         bits::setBit(result.filterResult.data(), i);
         continue;
@@ -84,8 +92,11 @@ bool ParquetData::rowGroupMatches(
 
   auto columnChunk = rowGroup.columnChunk(column);
   if (columnChunk.hasStatistics()) {
-    auto columnStats =
-        columnChunk.getColumnStatistics(type, rowGroup.numRows());
+    auto columnStats = columnChunk.getColumnStatistics(
+        type_->type(),
+        rowGroup.numRows(),
+        type_->convertedType_,
+        type_->logicalType_);
     return testFilter(filter, columnStats.get(), rowGroup.numRows(), type);
   }
   return true;
@@ -138,7 +149,8 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
   auto rowGroup = fileMetaDataPtr_.rowGroup(index);
 
   VELOX_CHECK_GT(rowGroup.numColumns(), 0);
-  auto fileOffset = rowGroup.hasFileOffset() ? rowGroup.fileOffset()
+  auto fileOffset = (rowGroup.hasFileOffset() && rowGroup.fileOffset() != 0)
+      ? rowGroup.fileOffset()
       : rowGroup.columnChunk(0).hasDictionaryPageOffset()
       ? rowGroup.columnChunk(0).dictionaryPageOffset()
       : rowGroup.columnChunk(0).dataPageOffset();

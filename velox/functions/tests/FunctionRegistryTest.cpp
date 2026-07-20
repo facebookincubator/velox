@@ -104,7 +104,8 @@ class FunctionRegistryTest : public testing::Test {
     VELOX_EXPECT_EQ_TYPES(type, expected);
 
     std::vector<TypePtr> coercions;
-    type = resolveFunctionWithCoercions(functionName, types, coercions);
+    type = resolveFunctionWithCoercions(
+        functionName, types, coercions, TypeCoercer::defaults());
     VELOX_EXPECT_EQ_TYPES(type, expected);
 
     if (expected != nullptr) {
@@ -128,7 +129,12 @@ class FunctionRegistryTest : public testing::Test {
     static ResolveFuncs function() {
       return {
           .resolveFunc = resolveFunction,
-          .resolveWithCoercionsFunc = resolveFunctionWithCoercions,
+          .resolveWithCoercionsFunc = [](const auto& name,
+                                         const auto& argTypes,
+                                         auto& coercions) -> TypePtr {
+            return resolveFunctionWithCoercions(
+                name, argTypes, coercions, TypeCoercer::defaults());
+          },
       };
     }
 
@@ -146,7 +152,7 @@ class FunctionRegistryTest : public testing::Test {
                                          auto& coercions) -> TypePtr {
             try {
               return resolveCallableSpecialFormWithCoercions(
-                  name, argTypes, coercions);
+                  name, argTypes, coercions, TypeCoercer::defaults());
             } catch (const VeloxException&) {
               return nullptr;
             }
@@ -204,6 +210,21 @@ class FunctionRegistryTest : public testing::Test {
     }
   }
 
+  // Asserts resolution to 'expectedReturnType' with a coercion applied, without
+  // pinning the coerced types. Use when the overload choice is immaterial.
+  void testCoercionResolvesInt(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const ResolveFuncs& resolveFuncs,
+      const TypePtr& expectedReturnType) {
+    std::vector<TypePtr> coercions;
+    auto type =
+        resolveFuncs.resolveWithCoercionsFunc(name, argTypes, coercions);
+    VELOX_EXPECT_EQ_TYPES(type, expectedReturnType);
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    EXPECT_THAT(coercions, testing::Contains(testing::Ne(nullptr)));
+  }
+
   void testCannotResolveInt(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
@@ -234,6 +255,14 @@ class FunctionRegistryTest : public testing::Test {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& expectedReturnType) {
     testNoCoercionsInt(
+        name, argTypes, ResolveFuncs::function(), expectedReturnType);
+  }
+
+  void testCoercionResolves(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType) {
+    testCoercionResolvesInt(
         name, argTypes, ResolveFuncs::function(), expectedReturnType);
   }
 
@@ -281,6 +310,60 @@ class FunctionRegistryTest : public testing::Test {
     }
 
     return builder.build();
+  }
+
+  void testVectorFunctionWithMetadataCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      const std::vector<TypePtr>& expectedCoercions,
+      bool expectedDeterministic) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    ASSERT_TRUE(result.has_value());
+    VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
+    EXPECT_EQ(result->second.deterministic, expectedDeterministic);
+
+    EXPECT_EQ(coercions.size(), expectedCoercions.size());
+    for (auto i = 0; i < coercions.size(); ++i) {
+      if (expectedCoercions[i] == nullptr) {
+        EXPECT_EQ(coercions[i], nullptr) << "Expected no coercion at " << i
+                                         << ": " << coercions[i]->toString();
+      } else {
+        ASSERT_NE(coercions[i], nullptr) << "at " << i;
+        EXPECT_EQ(*coercions[i], *expectedCoercions[i])
+            << "Expected: " << expectedCoercions[i]->toString()
+            << ", but got: " << coercions[i]->toString();
+      }
+    }
+  }
+
+  void testVectorFunctionWithMetadataNoCoercions(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturnType,
+      bool expectedDeterministic) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    ASSERT_TRUE(result.has_value());
+    VELOX_EXPECT_EQ_TYPES(result->first, expectedReturnType);
+    EXPECT_EQ(result->second.deterministic, expectedDeterministic);
+
+    EXPECT_EQ(coercions.size(), argTypes.size());
+    for (const auto& coercion : coercions) {
+      EXPECT_EQ(coercion, nullptr);
+    }
+  }
+
+  void testVectorFunctionWithMetadataCannotResolve(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes) {
+    std::vector<TypePtr> coercions;
+    auto result = resolveVectorFunctionWithMetadataWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    EXPECT_FALSE(result.has_value());
   }
 };
 
@@ -601,6 +684,23 @@ TEST_F(FunctionRegistryTest, isDeterministic) {
   ASSERT_FALSE(isDeterministic("not_found_function").has_value());
 }
 
+TEST_F(FunctionRegistryTest, isDefaultNullBehavior) {
+  functions::prestosql::registerAllScalarFunctions();
+
+  // Functions with default null behavior.
+  ASSERT_TRUE(isDefaultNullBehavior("eq").value());
+  ASSERT_TRUE(isDefaultNullBehavior("plus").value());
+  ASSERT_TRUE(isDefaultNullBehavior("substr").value());
+
+  // Functions with non-default null behavior.
+  ASSERT_FALSE(isDefaultNullBehavior("distinct_from").value());
+  ASSERT_FALSE(isDefaultNullBehavior("in").value());
+
+  // Not found functions.
+  ASSERT_FALSE(isDefaultNullBehavior("cast").has_value());
+  ASSERT_FALSE(isDefaultNullBehavior("not_found_function").has_value());
+}
+
 TEST_F(FunctionRegistryTest, companionFunction) {
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
@@ -619,6 +719,39 @@ TEST_F(FunctionRegistryTest, companionFunction) {
   }
   for (const auto& function : companionFunctions) {
     ASSERT_TRUE(exec::getVectorFunctionMetadata(function)->companionFunction);
+  }
+}
+
+TEST_F(FunctionRegistryTest, getFunctionSignaturesAndMetadata) {
+  registerFunction<MetadataTestFuncAllSet, int32_t, int32_t>(
+      {"metadata_test_all_set"});
+  registerFunction<MetadataTestFuncDefaults, int32_t, int32_t>(
+      {"metadata_test_defaults"});
+
+  const auto& registry = exec::simpleFunctions();
+
+  {
+    auto result =
+        registry.getFunctionSignaturesAndMetadata("metadata_test_all_set");
+    ASSERT_EQ(result.size(), 1);
+    const auto& metadata = result[0].first;
+    EXPECT_FALSE(metadata.supportsFlattening);
+    EXPECT_FALSE(metadata.deterministic);
+    EXPECT_FALSE(metadata.defaultNullBehavior);
+    EXPECT_FALSE(metadata.companionFunction);
+    EXPECT_EQ(metadata.owner, "test-owner-team");
+  }
+
+  {
+    auto result =
+        registry.getFunctionSignaturesAndMetadata("metadata_test_defaults");
+    ASSERT_EQ(result.size(), 1);
+    const auto& metadata = result[0].first;
+    EXPECT_FALSE(metadata.supportsFlattening);
+    EXPECT_TRUE(metadata.deterministic);
+    EXPECT_TRUE(metadata.defaultNullBehavior);
+    EXPECT_FALSE(metadata.companionFunction);
+    EXPECT_TRUE(metadata.owner.empty());
   }
 }
 
@@ -695,6 +828,23 @@ struct DummySimpleFunction {
   void call(T&, const T&, const T&) {}
 };
 
+// Two overloads that tie on a bare UNKNOWN argument but return different
+// types.
+template <typename TExec>
+struct TiedComplexReturnFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  void call(int64_t& out, const arg_type<Array<Generic<T1>>>&) {
+    out = 0;
+  }
+
+  void call(
+      out_type<Varchar>& out,
+      const arg_type<Map<Generic<T1>, Generic<T2>>>&) {
+    out.copy_from("0"_sv);
+  }
+};
+
 TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
   removeFunction("foo");
 
@@ -707,6 +857,8 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     registerFunction<DummySimpleFunction, int64_t, int64_t, int64_t>({"foo"});
     registerFunction<DummySimpleFunction, float, float, float>({"foo"});
     registerFunction<DummySimpleFunction, double, double, double>({"foo"});
+    registerFunction<DummySimpleFunction, Timestamp, Timestamp, Timestamp>(
+        {"foo"});
 
     testCoercions(
         "foo", {TINYINT(), TINYINT()}, INTEGER(), {INTEGER(), INTEGER()});
@@ -718,6 +870,11 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
 
     testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
     testCoercions("foo", {REAL(), TINYINT()}, REAL(), {nullptr, REAL()});
+
+    testCoercions(
+        "foo", {TIMESTAMP(), DATE()}, {TIMESTAMP()}, {nullptr, TIMESTAMP()});
+    testCoercions(
+        "foo", {DATE(), DATE()}, {TIMESTAMP()}, {TIMESTAMP(), TIMESTAMP()});
 
     testNoCoercions("foo", {INTEGER(), INTEGER()}, INTEGER());
     testNoCoercions("foo", {REAL(), REAL()}, REAL());
@@ -757,7 +914,7 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
     testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 
-  // Coercions with complex types are not supported yet.
+  // Coercions with complex types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -772,10 +929,18 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         },
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {ARRAY(TINYINT()), SMALLINT()});
+    testCoercions(
+        "foo",
+        {ARRAY(TINYINT()), SMALLINT()},
+        INTEGER(),
+        {ARRAY(INTEGER()), INTEGER()});
+
+    testNoCoercions("foo", {ARRAY(INTEGER()), INTEGER()}, INTEGER());
+
+    testCannotResolve("foo", {ARRAY(VARCHAR()), SMALLINT()});
   }
 
-  // Coercions with variable number of arguments are not supported yet.
+  // Coercions with variable number of arguments.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -786,21 +951,27 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
         {velox::exec::FunctionSignatureBuilder()
              .returnType("bigint")
              .argumentType("bigint")
-             .argumentType("bigint")
-             .variableArity()
+             .variableArity("bigint")
              .build(),
          velox::exec::FunctionSignatureBuilder()
              .returnType("double")
              .argumentType("double")
-             .argumentType("double")
-             .variableArity()
+             .variableArity("double")
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), SMALLINT(), INTEGER()});
+    testCoercions(
+        "foo",
+        {TINYINT(), SMALLINT(), INTEGER()},
+        BIGINT(),
+        {BIGINT(), BIGINT(), BIGINT()});
+
+    testNoCoercions("foo", {BIGINT(), BIGINT(), BIGINT()}, BIGINT());
+
+    testCannotResolve("foo", {TINYINT(), SMALLINT(), VARCHAR()});
   }
 
-  // Coercions with generic types are not supported yet.
+  // Coercions with generic types.
   {
     SCOPE_EXIT {
       removeFunction("foo");
@@ -816,7 +987,11 @@ TEST_F(FunctionRegistryTest, resolveFunctionWithCoercions) {
              .build()},
         std::make_unique<DummyVectorFunction>());
 
-    testCannotResolve("foo", {TINYINT(), REAL()});
+    testCoercions("foo", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr});
+
+    testNoCoercions("foo", {INTEGER(), INTEGER()}, INTEGER());
+
+    testCannotResolve("foo", {TINYINT(), VARCHAR()});
   }
 }
 
@@ -928,11 +1103,116 @@ TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
       {BIGINT(), BIGINT(), nullptr, BIGINT()});
 }
 
+TEST_F(FunctionRegistryTest, unknownArgToParameterizedFunction) {
+  functions::prestosql::registerAllScalarFunctions();
+
+  // cardinality(UNKNOWN) resolves to bigint. The array(T) and map(K,V)
+  // overloads are interchangeable, so the coerced container is immaterial.
+  testCoercionResolves("cardinality", {UNKNOWN()}, BIGINT());
+
+  // map_keys(UNKNOWN) — bare NULL to map(K,V) -> array(K).
+  testCoercions(
+      "map_keys", {UNKNOWN()}, ARRAY(UNKNOWN()), {MAP(UNKNOWN(), UNKNOWN())});
+
+  // A scalar overload outranks a complex one on a bare null. varbinary (the
+  // highest-cost scalar UNKNOWN coercion) still beats array(T) because
+  // unknownFallbackCost is one above it.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {makeSignature("varbinary", {"varbinary"}),
+         exec::FunctionSignatureBuilder()
+             .typeVariable("T")
+             .returnType("bigint")
+             .argumentType("array(T)")
+             .build()},
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions("foo", {UNKNOWN()}, VARBINARY(), {VARBINARY()});
+  }
+
+  // A plain-scalar overload outranks a parameterized-scalar one on a bare null.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {makeSignature("bigint", {"bigint"}),
+         makeSignature("bigint", {"decimal(10, 2)"})},
+        std::make_unique<DummyVectorFunction>());
+
+    testCoercions("foo", {UNKNOWN()}, BIGINT(), {BIGINT()});
+  }
+
+  // Vector resolver: differing return types stay ambiguous.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    exec::registerVectorFunction(
+        "foo",
+        {exec::FunctionSignatureBuilder()
+             .typeVariable("T")
+             .returnType("bigint")
+             .argumentType("array(T)")
+             .build(),
+         exec::FunctionSignatureBuilder()
+             .typeVariable("K")
+             .typeVariable("V")
+             .returnType("varchar")
+             .argumentType("map(K,V)")
+             .build()},
+        std::make_unique<DummyVectorFunction>());
+
+    testCannotResolve("foo", {UNKNOWN()});
+  }
+
+  // Simple-function resolver: differing return types stay ambiguous.
+  {
+    SCOPE_EXIT {
+      removeFunction("foo");
+    };
+
+    registerFunction<TiedComplexReturnFunction, int64_t, Array<Generic<T1>>>(
+        {"foo"});
+    registerFunction<
+        TiedComplexReturnFunction,
+        Varchar,
+        Map<Generic<T1>, Generic<T2>>>({"foo"});
+
+    testCannotResolve("foo", {UNKNOWN()});
+  }
+}
+
+TEST_F(FunctionRegistryTest, nonUnknownTieStaysAmbiguous) {
+  // A cost tie not caused by UNKNOWN arguments stays ambiguous even when the
+  // tied overloads share a return type and are null-on-null.
+  SCOPE_EXIT {
+    removeFunction("foo");
+  };
+
+  exec::registerVectorFunction(
+      "foo",
+      {
+          makeSignature("bigint", {"tinyint", "bigint"}),
+          makeSignature("bigint", {"bigint", "tinyint"}),
+      },
+      std::make_unique<DummyVectorFunction>());
+
+  testCannotResolve("foo", {TINYINT(), TINYINT()});
+}
+
 TEST_F(FunctionRegistryTest, resolveRowConstructor) {
   auto result = resolveFunctionOrCallableSpecialForm(
       "row_constructor", {INTEGER(), BOOLEAN(), DOUBLE()});
-  ASSERT_EQ(
-      *result, *ROW({"c1", "c2", "c3"}, {INTEGER(), BOOLEAN(), DOUBLE()}));
+  ASSERT_EQ(*result, *ROW({"", "", ""}, {INTEGER(), BOOLEAN(), DOUBLE()}));
 }
 
 TEST_F(FunctionRegistryTest, resolveFunctionNotSpecialForm) {
@@ -1007,6 +1287,64 @@ TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
   EXPECT_TRUE(result->second.defaultNullBehavior);
   EXPECT_TRUE(result->second.deterministic);
   EXPECT_FALSE(result->second.supportsFlattening);
+}
+
+TEST_F(FunctionRegistryTest, resolveVectorFunctionWithMetadataWithCoercions) {
+  removeFunction("bar");
+
+  SCOPE_EXIT {
+    removeFunction("bar");
+    removeFunction("bar_nondet");
+  };
+
+  exec::registerVectorFunction(
+      "bar",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+          makeSignature("real", {"real", "real"}),
+      },
+      std::make_unique<DummyVectorFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(true).build());
+
+  // Register a non-deterministic function to verify metadata is correctly
+  // returned (not just default metadata).
+  exec::registerVectorFunction(
+      "bar_nondet",
+      {
+          makeSignature("integer", {"integer", "integer"}),
+          makeSignature("bigint", {"bigint", "bigint"}),
+      },
+      std::make_unique<DummyVectorFunction>(),
+      exec::VectorFunctionMetadataBuilder().deterministic(false).build());
+
+  // Test exact match - no coercions needed.
+  testVectorFunctionWithMetadataNoCoercions(
+      "bar", {INTEGER(), INTEGER()}, INTEGER(), true);
+
+  // Test coercions are applied.
+  testVectorFunctionWithMetadataCoercions(
+      "bar", {TINYINT(), TINYINT()}, INTEGER(), {INTEGER(), INTEGER()}, true);
+
+  // Test partial coercions - one arg needs coercion, the other doesn't.
+  testVectorFunctionWithMetadataCoercions(
+      "bar", {TINYINT(), REAL()}, REAL(), {REAL(), nullptr}, true);
+
+  // Test that metadata is correctly returned for non-deterministic function.
+  // This verifies we're returning actual function metadata, not defaults.
+  testVectorFunctionWithMetadataCoercions(
+      "bar_nondet",
+      {TINYINT(), TINYINT()},
+      INTEGER(),
+      {INTEGER(), INTEGER()},
+      false);
+
+  // Test function not found.
+  testVectorFunctionWithMetadataCannotResolve(
+      "non_existent_function", {INTEGER(), INTEGER()});
+
+  // Test incompatible types - cannot resolve.
+  testVectorFunctionWithMetadataCannotResolve("bar", {TINYINT(), VARCHAR()});
 }
 
 } // namespace

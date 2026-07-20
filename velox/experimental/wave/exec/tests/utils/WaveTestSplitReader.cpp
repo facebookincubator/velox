@@ -96,7 +96,7 @@ void WaveTestSplitReader::schedule(WaveStream& waveStream, int32_t maxRows) {
     exe = std::make_unique<ReadStream>(
         reinterpret_cast<StructColumnReader*>(columnReader_.get()),
         waveStream,
-        params_.ioStats.get(),
+        params_.ioStatistics.get(),
         fileInfo_);
   }
   ReadStream::launch(std::move(exe), nextRow_, rowSet);

@@ -35,9 +35,9 @@ class PARQUET_EXPORT RowGroupBloomFilterReader {
   ///
   /// \param[in] i column ordinal of the column chunk.
   /// \returns bloom filter of the column or nullptr if it does not exist.
-  /// \throws ParquetException if the index is out of bound, or read bloom
-  /// filter failed.
-  virtual std::unique_ptr<BloomFilter> GetColumnBloomFilter(int i) = 0;
+  /// \throws ParquetException if the index is out of bound, or read bloom.
+  /// Filter failed.
+  virtual std::unique_ptr<BloomFilter> getColumnBloomFilter(int i) = 0;
 };
 
 /// \brief Interface for reading the bloom filter for a Parquet file.
@@ -47,25 +47,25 @@ class PARQUET_EXPORT BloomFilterReader {
 
   /// \brief Create a BloomFilterReader instance.
   /// \returns a BloomFilterReader instance.
-  /// WARNING: The returned BloomFilterReader references to all the input
-  /// parameters, so it must not outlive all of the input parameters. Usually
-  /// these input parameters come from the same ParquetFileReader object, so it
-  /// must not outlive the reader that creates this BloomFilterReader.
-  static std::unique_ptr<BloomFilterReader> Make(
+  /// WARNING: The returned BloomFilterReader references to all the input.
+  /// Parameters, so it must not outlive all of the input parameters. Usually.
+  /// These input parameters come from the same ParquetFileReader object, so it.
+  /// Must not outlive the reader that creates this BloomFilterReader.
+  static std::unique_ptr<BloomFilterReader> make(
       std::shared_ptr<::arrow::io::RandomAccessFile> input,
-      std::shared_ptr<FileMetaData> file_metadata,
+      std::shared_ptr<FileMetaData> fileMetadata,
       const ReaderProperties& properties,
-      std::shared_ptr<InternalFileDecryptor> file_decryptor = NULLPTR);
+      std::shared_ptr<InternalFileDecryptor> fileDecryptor = NULLPTR);
 
   /// \brief Get the bloom filter reader of a specific row group.
   /// \param[in] i row group ordinal to get bloom filter reader.
-  /// \returns RowGroupBloomFilterReader of the specified row group. A nullptr
-  /// may or may
-  ///          not be returned if the bloom filter for the row group is
-  ///          unavailable. It is the caller's responsibility to check the
-  ///          return value of follow-up calls to the RowGroupBloomFilterReader.
+  /// \returns RowGroupBloomFilterReader of the specified row group. A nullptr.
+  /// May or may.
+  ///          Not be returned if the bloom filter for the row group is.
+  ///          Unavailable. It is the caller's responsibility to check the.
+  ///          Return value of follow-up calls to the RowGroupBloomFilterReader.
   /// \throws ParquetException if the index is out of bound.
-  virtual std::shared_ptr<RowGroupBloomFilterReader> RowGroup(int i) = 0;
+  virtual std::shared_ptr<RowGroupBloomFilterReader> rowGroup(int i) = 0;
 };
 
 } // namespace facebook::velox::parquet::arrow

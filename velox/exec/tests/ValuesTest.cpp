@@ -47,7 +47,9 @@ class ValuesTest : public OperatorTestBase {
 
 TEST_F(ValuesTest, empty) {
   // Base case: no vectors.
-  AssertQueryBuilder(PlanBuilder().values({}).planNode()).assertEmptyResults();
+  AssertQueryBuilder(
+      PlanBuilder().values(std::vector<RowVectorPtr>{}).planNode())
+      .assertEmptyResults();
 
   // Empty input vector.
   auto emptyInput = makeRowVector({});

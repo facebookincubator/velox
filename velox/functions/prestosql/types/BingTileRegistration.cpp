@@ -19,6 +19,7 @@
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/prestosql/types/BingTileType.h"
+#include "velox/type/CastRegistry.h"
 
 namespace facebook::velox {
 
@@ -31,24 +32,6 @@ class BingTileCastOperator final : public exec::CastOperator {
   static std::shared_ptr<const CastOperator> get() {
     VELOX_CONSTEXPR_SINGLETON BingTileCastOperator kInstance;
     return {std::shared_ptr<const CastOperator>{}, &kInstance};
-  }
-
-  bool isSupportedFromType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  bool isSupportedToType(const TypePtr& other) const override {
-    switch (other->kind()) {
-      case TypeKind::BIGINT:
-        return true;
-      default:
-        return false;
-    }
   }
 
   void castTo(
@@ -137,7 +120,11 @@ class BingTileTypeFactory : public CustomTypeFactory {
 } // namespace
 
 void registerBingTileType() {
-  registerCustomType("bingtile", std::make_unique<const BingTileTypeFactory>());
+  registerCustomType("BINGTILE", std::make_unique<const BingTileTypeFactory>());
+  registerCastRules({
+      {.fromType = "BIGINT", .toType = "BINGTILE"},
+      {.fromType = "BINGTILE", .toType = "BIGINT"},
+  });
 }
 
 } // namespace facebook::velox

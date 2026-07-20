@@ -116,12 +116,13 @@ void TableScan::updateStats(
 BlockingReason TableScan::nextSplit(ContinueFuture* future) {
   exec::Split split;
   blockingReason_ = driverCtx_->task->getSplitOrFuture(
+      driverCtx_->driverId,
       driverCtx_->splitGroupId,
       planNodeId_,
-      split,
-      blockingFuture_,
       maxPreloadedSplits_,
-      splitPreloader_);
+      splitPreloader_,
+      split,
+      blockingFuture_);
   if (blockingReason_ != BlockingReason::kNotBlocked) {
     return blockingReason_;
   }

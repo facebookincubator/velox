@@ -84,7 +84,7 @@ struct CompareFlags {
     ///       ex: (null, 1) = (null, 1) is indeterminate.
     ///
     ///       - If all fields compare results are true, then result is true.
-    ///       ex: (1, 1) = (1, 1) is indeterminate.
+    ///       ex: (1, 1) = (1, 1) is true.
     ///
     ///   4. Maps:
     ///     - Keys are compared first, if keys are not equal values are not

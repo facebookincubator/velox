@@ -44,9 +44,9 @@ class ScaleWriterPartitioningLocalPartition : public LocalPartition {
 
   /// The name of the runtime stats of writer scaling.
   /// The number of times that we triggers the rebalance of table partitions.
-  static inline const std::string kRebalanceTriggers{"rebalanceTriggers"};
+  static constexpr std::string_view kRebalanceTriggers{"rebalanceTriggers"};
   /// The number of times that we scale a partition processing.
-  static inline const std::string kScaledPartitions{"scaledPartitions"};
+  static constexpr std::string_view kScaledPartitions{"scaledPartitions"};
 
  private:
   void prepareForWriterAssignments(vector_size_t numInput);
@@ -98,7 +98,7 @@ class ScaleWriterLocalPartition : public LocalPartition {
 
   /// The name of the runtime stats of writer scaling.
   /// The number of scaled writers.
-  static inline const std::string kScaledWriters{"scaledWriters"};
+  static constexpr std::string_view kScaledWriters{"scaledWriters"};
 
  private:
   // Gets the writer id to process the next input in a round-robin manner.
