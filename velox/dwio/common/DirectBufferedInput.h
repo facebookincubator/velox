@@ -24,11 +24,25 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
+#include "velox/common/memory/AllocationPool.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/InputStream.h"
 
 namespace facebook::velox::dwio::common {
+
+/// Loaded bytes for one region; exactly one representation is live.
+struct LoadedBuffer {
+  /// Borrowed read-only slice in the load's arena. The consumer keeps the
+  /// load alive while reading it.
+  char* arenaData{nullptr};
+  /// Owned non-contiguous allocation, moved to the consumer.
+  memory::Allocation ownedData{};
+  /// Owned bytes for a tiny region, moved to the consumer.
+  std::string tinyData{};
+  /// Number of valid bytes, or 0 if the region was not found.
+  int32_t numBytes{0};
+};
 
 struct LoadRequest {
   LoadRequest() = default;
@@ -46,14 +60,10 @@ struct LoadRequest {
 
   const SeekableInputStream* stream;
 
-  /// Buffers to be handed to 'stream' after load.
-  memory::Allocation data;
-  std::string tinyData;
-  /// Number of bytes in 'data/tinyData'.
-  int32_t loadSize{0};
-  // Set after getData() moves 'data/tinyData' to the owning stream. Duplicate
-  // regions share an offset, so getData() skips consumed buffers to find the
-  // next duplicate buffer.
+  /// Loaded bytes for this request; see LoadedBuffer.
+  LoadedBuffer buffer;
+
+  /// Set once getData() moved 'buffer' out; lets it skip consumed duplicates.
   bool bufferConsumed{false};
 };
 
@@ -73,7 +83,8 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
         ioStats_(ioStats),
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
-        pool_(pool) {
+        pool_(pool),
+        arena_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
         std::is_sorted(
@@ -96,10 +107,9 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return false;
   }
 
-  /// Returns the buffer for 'region' in either 'data' or 'tinyData'. 'region'
-  /// must match a region given to DirectBufferedInput::enqueue().
-  int32_t
-  getData(int64_t offset, memory::Allocation& data, std::string& tinyData);
+  /// Returns the loaded buffer for the request at 'offset'. 'offset' must match
+  /// a region given to DirectBufferedInput::enqueue().
+  LoadedBuffer getData(uint64_t offset);
 
   const std::vector<LoadRequest>& requests() {
     return requests_;
@@ -114,11 +124,29 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   }
 
  private:
+  // Sets each request's 'buffer.numBytes' and returns the bytes the baseline
+  // (one page-rounded allocation per request) would waste on page padding.
+  int64_t computeLoadSizes();
+
+  // Allocates each non-duplicate request's buffer and returns the file-ordered
+  // ranges for the coalesced read. Adds read bytes to 'size', gap bytes to
+  // 'overread'; uses the arena for non-tiny buffers when 'useArena' is set.
+  std::vector<folly::Range<char*>>
+  buildReadRanges(bool useArena, int64_t& size, int64_t& overread);
+
+  // Gives each duplicate region its buffer after the read: a copy of the source
+  // for tiny and non-arena duplicates; arena duplicates share the source's
+  // slice and are left untouched.
+  void fillDuplicates(bool useArena);
+
   const std::shared_ptr<IoStatistics> ioStatistics_;
   const std::shared_ptr<velox::IoStats> ioStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
   memory::MemoryPool* const pool_;
+  // Arena backing all non-tiny request buffers; bump-packs them into a few
+  // allocations, freed as a unit on destruction.
+  memory::AllocationPool arena_;
   std::vector<LoadRequest> requests_;
 };
 
