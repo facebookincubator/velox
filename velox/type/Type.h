@@ -1794,9 +1794,8 @@ class TimeMicroPrecisionUtcType final
   /// Parses a time string in H:m[:s[.SSSSSS]] format and returns microseconds
   /// since midnight.
   /// @param requireSeconds If true, the seconds component is mandatory and
-  /// strings like "10:30" are rejected. Callers pass the policy of their
-  /// engine (e.g. Spark requires an explicit seconds component).
-  int64_t valueToTime(const StringView& timeStr, bool requireSeconds) const;
+  /// strings like "10:30" are rejected. Callers supply the parsing policy.
+  int64_t valueToTime(StringView timeStr, bool requireSeconds) const;
 
  private:
   constexpr TimeMicroPrecisionUtcType() = default;

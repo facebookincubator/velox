@@ -26,6 +26,7 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {
+
 SparkCastHooks::SparkCastHooks(
     const velox::core::QueryConfig& config,
     bool allowOverflow)

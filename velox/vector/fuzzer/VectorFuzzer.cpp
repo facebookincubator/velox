@@ -141,8 +141,6 @@ VectorPtr fuzzConstantPrimitiveImpl(
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
   } else if (type->isTime()) {
-    VELOX_DCHECK(
-        type->equivalent(*TIME()) || type->equivalent(*TIME_MICRO_UTC()));
     return std::make_shared<ConstantVector<int64_t>>(
         pool, size, false, type, randTime(rng, type));
   } else {
@@ -179,9 +177,6 @@ void fuzzFlatPrimitiveImpl(
       } else if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
       } else if (vector->type()->isTime()) {
-        VELOX_DCHECK(
-            vector->type()->equivalent(*TIME()) ||
-            vector->type()->equivalent(*TIME_MICRO_UTC()));
         flatVector->set(i, randTime(rng, vector->type()));
       } else {
         flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));

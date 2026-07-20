@@ -1770,10 +1770,13 @@ int64_t TimeMilliPrecisionType::valueToTime(
 }
 
 int64_t TimeMicroPrecisionUtcType::valueToTime(
-    const StringView& timeStr,
+    StringView timeStr,
     bool requireSeconds) const {
   auto componentsResult = util::parseTimeComponents(
-      timeStr.data(), timeStr.size(), requireSeconds, 6);
+      timeStr.data(),
+      timeStr.size(),
+      requireSeconds,
+      /*fractionalPrecision=*/6);
   if (componentsResult.hasError()) {
     VELOX_USER_FAIL("{}", componentsResult.error().message());
   }

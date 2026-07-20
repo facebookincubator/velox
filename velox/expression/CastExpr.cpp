@@ -353,30 +353,19 @@ VectorPtr CastExpr::castToTime(
 
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         bool wrapException = true;
-        try {
-          const auto inputString =
-              hooks_->removeWhiteSpaces(inputVector->valueAt(row));
-          const auto result = hooks_->castStringToTime(
-              inputString, timeZone, sessionStartTimeMs);
-          setResultOrError(
-              row,
-              result,
-              [&](const std::string& details) {
-                return makeErrorMessage(input, row, toType, details);
-              },
-              context,
-              resultFlatVector,
-              wrapException);
-        } catch (const VeloxUserError& ue) {
-          if (!wrapException) {
-            throw;
-          }
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + ue.message());
-        } catch (const std::exception& e) {
-          VELOX_USER_FAIL(
-              makeErrorMessage(input, row, toType) + " " + e.what());
-        }
+        const auto inputString =
+            hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+        const auto result =
+            hooks_->castStringToTime(inputString, timeZone, sessionStartTimeMs);
+        setResultOrError(
+            row,
+            result,
+            [&](const std::string& details) {
+              return makeErrorMessage(input, row, toType, details);
+            },
+            context,
+            resultFlatVector,
+            wrapException);
       });
 
       return castResult;

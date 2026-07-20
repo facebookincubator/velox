@@ -160,10 +160,12 @@ Expected<TimeComponents> parseTimeComponents(
         Status::UserError("Invalid time format: failed to parse minute"));
   }
 
+  // Parse seconds when present. If requireSeconds is true, reject inputs that
+  // do not have a seconds component.
   if (pos < len && buf[pos] == ':') {
     pos++; // Skip the ':'
 
-    // Parse second (optional, 1-2 digits)
+    // Parse second (1-2 digits).
     if (!parseNumber(buf, len, pos, components.second)) {
       return folly::makeUnexpected(
           Status::UserError("Invalid time format: failed to parse second"));
@@ -180,7 +182,7 @@ Expected<TimeComponents> parseTimeComponents(
     return folly::makeUnexpected(
         Status::UserError("Invalid time format: expected ':' after minute"));
   }
-  // If no second ':', seconds and millis remain at 0 (default)
+  // When seconds are optional and omitted, seconds and millis remain at 0.
 
   // Check for trailing characters
   if (pos < len) {
