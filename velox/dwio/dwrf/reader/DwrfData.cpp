@@ -31,16 +31,20 @@ DwrfData::DwrfData(
       stripeRows_{stripe.stripeRows()},
       rowsPerRowGroup_{stripe.rowsPerRowGroup()} {
   EncodingKey encodingKey{fileType_->id(), flatMapContext_.sequence};
-  std::unique_ptr<dwio::common::SeekableInputStream> stream = stripe.getStream(
-      StripeStreamsUtil::getStreamForKind(
-          stripe,
-          encodingKey,
-          proto::Stream_Kind_PRESENT,
-          proto::orc::Stream_Kind_PRESENT),
-      streamLabels.label(),
-      false);
-  if (stream) {
-    notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
+  // For kSize extraction only the IN_MAP presence stream is needed, so do not
+  // open or enqueue the value column's PRESENT stream.
+  if (!flatMapContext_.inMapOnly) {
+    std::unique_ptr<dwio::common::SeekableInputStream> stream = stripe.getStream(
+        StripeStreamsUtil::getStreamForKind(
+            stripe,
+            encodingKey,
+            proto::Stream_Kind_PRESENT,
+            proto::orc::Stream_Kind_PRESENT),
+        streamLabels.label(),
+        false);
+    if (stream) {
+      notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
+    }
   }
 
   // We always initialize indexStream_ because indices are needed as soon as
