@@ -426,7 +426,7 @@ VectorPtr BaseVector::createInternal(
       children.reserve(rowType.size());
       // Children are reserved the parent size and accessible for those rows.
       for (int32_t i = 0; i < rowType.size(); ++i) {
-        children.push_back(create(rowType.childAt(i), size, pool));
+        children.push_back(createInternal(rowType.childAt(i), size, pool));
       }
       return std::make_shared<RowVector>(
           pool, type, nullptr, size, std::move(children));
@@ -435,7 +435,7 @@ VectorPtr BaseVector::createInternal(
       BufferPtr sizes = allocateSizes(size, pool);
       BufferPtr offsets = allocateOffsets(size, pool);
       const auto& elementType = type->as<TypeKind::ARRAY>().elementType();
-      auto elements = create(elementType, 0, pool);
+      auto elements = createInternal(elementType, 0, pool);
       return std::make_shared<ArrayVector>(
           pool,
           type,
@@ -448,10 +448,9 @@ VectorPtr BaseVector::createInternal(
     case TypeKind::MAP: {
       BufferPtr sizes = allocateSizes(size, pool);
       BufferPtr offsets = allocateOffsets(size, pool);
-      const auto& keyType = type->as<TypeKind::MAP>().keyType();
-      const auto& valueType = type->as<TypeKind::MAP>().valueType();
-      auto keys = create(keyType, 0, pool);
-      auto values = create(valueType, 0, pool);
+      const auto& mapType = type->as<TypeKind::MAP>();
+      auto keys = createInternal(mapType.keyType(), 0, pool);
+      auto values = createInternal(mapType.valueType(), 0, pool);
       return std::make_shared<MapVector>(
           pool,
           type,
