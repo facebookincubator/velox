@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
+#include "velox/common/base/Nulls.h"
+#include "velox/common/base/SimdUtil.h"
+
 namespace facebook::velox::parquet {
 
 class StringDecoder {
@@ -34,8 +40,16 @@ class StringDecoder {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
-    for (auto i = 0; i < numValues; ++i) {
-      bufferStart_ += lengthAt(bufferStart_) + sizeof(int32_t);
+    if (fixedLength_ > 0) {
+      // FIXED_LEN_BYTE_ARRAY values carry no length prefix, so the byte
+      // offset is a constant multiple of the fixed width. This is both an
+      // O(1) skip and a correctness fix: the variable-length branch below
+      // would read the value bytes as a bogus 4-byte length.
+      bufferStart_ += static_cast<int64_t>(numValues) * fixedLength_;
+    } else {
+      for (auto i = 0; i < numValues; ++i) {
+        bufferStart_ += lengthAt(bufferStart_) + sizeof(int32_t);
+      }
     }
   }
 
