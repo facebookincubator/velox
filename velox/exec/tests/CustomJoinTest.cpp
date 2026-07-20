@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 #include "velox/exec/JoinBridge.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -340,4 +343,84 @@ TEST_F(CustomJoinTest, parallelism) {
       "(SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90)");
+}
+
+/// Tests that custom join bridges work correctly with mixed grouped execution,
+/// where the build pipeline runs ungrouped and the probe pipeline runs in
+/// grouped split groups.  This exercises the cross-mode bridge handling in
+/// DriverFactory::needsCustomJoinBridges() and
+/// Task::addCustomJoinBridgesLocked().
+class CustomJoinGroupedExecutionTest : public HiveConnectorTestBase {
+ protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    Operator::registerOperator(std::make_unique<CustomJoinBridgeTranslator>());
+  }
+};
+
+TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto vectors = makeVectors(rowType, 4, 20);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId probeScanNodeId;
+  core::PlanNodeId buildScanNodeId;
+
+  auto probeNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .tableScan(rowType)
+                       .capturePlanNodeId(probeScanNodeId)
+                       .planNode();
+  auto buildNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .tableScan(rowType)
+                       .capturePlanNodeId(buildScanNodeId)
+                       .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .addNode([&](std::string id, core::PlanNodePtr /* input */) {
+                    return std::make_shared<CustomJoinNode>(
+                        id, probeNode, std::move(buildNode));
+                  })
+                  .planNode();
+
+  // Only the probe scan is grouped; the build scan runs ungrouped (mixed mode).
+  auto planFragment = core::PlanFragment{
+      plan, core::ExecutionStrategy::kGrouped, 2, {probeScanNodeId}};
+
+  std::vector<RowVectorPtr> results;
+  auto queryCtx = core::QueryCtx::create(executor_.get());
+  auto task = exec::Task::create(
+      "0",
+      std::move(planFragment),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel,
+      [&results](RowVectorPtr result, bool, ContinueFuture*) {
+        if (result) {
+          results.push_back(std::move(result));
+        }
+        return BlockingReason::kNotBlocked;
+      });
+
+  task->start(3, 1);
+
+  // Add ungrouped build split.
+  task->addSplit(
+      buildScanNodeId,
+      exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+  // Add grouped probe splits.
+  task->addSplit(
+      probeScanNodeId,
+      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 0));
+  task->addSplit(
+      probeScanNodeId,
+      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 1));
+
+  task->noMoreSplits(buildScanNodeId);
+  task->noMoreSplitsForGroup(probeScanNodeId, 0);
+  task->noMoreSplitsForGroup(probeScanNodeId, 1);
+  task->noMoreSplits(probeScanNodeId);
+
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
+  ASSERT_EQ(task->state(), exec::TaskState::kFinished);
 }

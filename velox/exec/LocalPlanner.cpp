@@ -74,6 +74,32 @@ bool eagerFlush(const core::PlanNode& node) {
   return eagerFlush(*node.sources()[0]);
 }
 
+// Collects plan node IDs whose join bridges this factory must create.
+// In mixed execution mode some joins span ungrouped (build) and grouped (probe)
+// pipelines.  The bridges for those joins must be created by the ungrouped
+// factory and skipped by grouped factories.  'mixedNodeIds' identifies those
+// cross-mode joins; 'match' selects plan nodes that use the bridge type.
+template <typename MatchFn>
+std::vector<core::PlanNodeId> collectJoinBridgeNodeIds(
+    const std::vector<core::PlanNodePtr>& planNodes,
+    bool groupedExecution,
+    const folly::F14FastSet<core::PlanNodeId>& mixedNodeIds,
+    MatchFn&& match) {
+  std::vector<core::PlanNodeId> planNodeIds;
+  if (!groupedExecution && !mixedNodeIds.empty()) {
+    planNodeIds.insert(
+        planNodeIds.end(), mixedNodeIds.begin(), mixedNodeIds.end());
+  }
+  for (const auto& planNode : planNodes) {
+    if (match(planNode)) {
+      if (!groupedExecution || !mixedNodeIds.contains(planNode->id())) {
+        planNodeIds.emplace_back(planNode->id());
+      }
+    }
+  }
+  return planNodeIds;
+}
+
 } // namespace
 
 namespace detail {
@@ -781,50 +807,26 @@ std::vector<std::unique_ptr<Operator>> DriverFactory::replaceOperators(
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
-  std::vector<core::PlanNodeId> planNodeIds;
-  // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedExecutionModeHashJoinNodeIds.empty()) {
-    planNodeIds.insert(
-        planNodeIds.end(),
-        mixedExecutionModeHashJoinNodeIds.begin(),
-        mixedExecutionModeHashJoinNodeIds.end());
-  }
-  for (const auto& planNode : planNodes) {
-    if (auto joinNode =
-            std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
-      // Grouped execution pipelines should not create cross-mode bridges.
-      if (!groupedExecution ||
-          !mixedExecutionModeHashJoinNodeIds.contains(joinNode->id())) {
-        planNodeIds.emplace_back(joinNode->id());
-      }
-    }
-  }
-  return planNodeIds;
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedExecutionModeHashJoinNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return std::dynamic_pointer_cast<const core::HashJoinNode>(node) !=
+            nullptr;
+      });
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
     const {
-  std::vector<core::PlanNodeId> planNodeIds;
-  // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedExecutionModeNestedLoopJoinNodeIds.empty()) {
-    planNodeIds.insert(
-        planNodeIds.end(),
-        mixedExecutionModeNestedLoopJoinNodeIds.begin(),
-        mixedExecutionModeNestedLoopJoinNodeIds.end());
-  }
-  for (const auto& planNode : planNodes) {
-    if (auto joinNode =
-            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
-                planNode)) {
-      // Grouped execution pipelines should not create cross-mode bridges.
-      if (!groupedExecution ||
-          !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
-        planNodeIds.emplace_back(joinNode->id());
-      }
-    }
-  }
-
-  return planNodeIds;
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedExecutionModeNestedLoopJoinNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                   node) != nullptr;
+      });
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsSpatialJoinBridges() const {
@@ -856,7 +858,6 @@ std::vector<core::PlanNodeId> DriverFactory::needsIndexLookupJoinBridges()
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsCustomJoinBridges() const {
-  std::vector<core::PlanNodeId> planNodeIds;
   folly::F14FastSet<core::PlanNodeId> mixedNodeIds;
   mixedNodeIds.insert(
       mixedExecutionModeHashJoinNodeIds.begin(),
@@ -864,22 +865,13 @@ std::vector<core::PlanNodeId> DriverFactory::needsCustomJoinBridges() const {
   mixedNodeIds.insert(
       mixedExecutionModeNestedLoopJoinNodeIds.begin(),
       mixedExecutionModeNestedLoopJoinNodeIds.end());
-
-  // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedNodeIds.empty()) {
-    planNodeIds.insert(
-        planNodeIds.end(), mixedNodeIds.begin(), mixedNodeIds.end());
-  }
-
-  for (const auto& planNode : planNodes) {
-    if (Operator::joinBridgeFromPlanNode(planNode)) {
-      // Grouped execution pipelines should not create cross-mode bridges.
-      if (!groupedExecution || !mixedNodeIds.contains(planNode->id())) {
-        planNodeIds.push_back(planNode->id());
-      }
-    }
-  }
-  return planNodeIds;
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return Operator::joinBridgeFromPlanNode(node) != nullptr;
+      });
 }
 
 // static

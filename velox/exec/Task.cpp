@@ -2498,20 +2498,29 @@ void Task::addCustomJoinBridgesLocked(
     const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNodeId : planNodeIds) {
-    for (const auto& factory : driverFactories_) {
-      for (const auto& planNode : factory->planNodes) {
-        if (planNode->id() != planNodeId) {
-          continue;
+    // Unlike built-in bridges (hash, NLJ, etc.) custom bridges need the plan
+    // node to call Operator::joinBridgeFromPlanNode().  The node may belong to
+    // a different factory: in mixed execution mode the ungrouped build factory
+    // must create the bridge, but the plan node lives in the grouped probe
+    // factory.  Search all factories to find it.
+    auto findNode = [&]() -> core::PlanNodePtr {
+      for (const auto& factory : driverFactories_) {
+        for (const auto& planNode : factory->planNodes) {
+          if (planNode->id() == planNodeId) {
+            return planNode;
+          }
         }
-        if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
-          auto const inserted = splitGroupState.customBridges
-                                    .emplace(planNodeId, std::move(joinBridge))
-                                    .second;
-          VELOX_CHECK(
-              inserted,
-              "Join bridge for node {} is already present",
-              planNodeId);
-        }
+      }
+      return nullptr;
+    };
+    auto planNode = findNode();
+    if (planNode) {
+      if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
+        auto const inserted = splitGroupState.customBridges
+                                  .emplace(planNodeId, std::move(joinBridge))
+                                  .second;
+        VELOX_CHECK(
+            inserted, "Join bridge for node {} is already present", planNodeId);
       }
     }
   }
