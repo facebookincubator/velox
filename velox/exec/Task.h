@@ -538,8 +538,8 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  const std::shared_ptr<LocalExchangeMemoryManager>&
-  getLocalExchangeMemoryManager(
+  // Returns by copy because the copy must be made under the task lock.
+  std::shared_ptr<LocalExchangeMemoryManager> getLocalExchangeMemoryManager(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
