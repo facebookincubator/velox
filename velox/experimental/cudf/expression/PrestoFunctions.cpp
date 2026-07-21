@@ -212,7 +212,9 @@ void registerPrestoFunctions(const std::string& prefix) {
       {FunctionSignatureBuilder()
            .returnType("double")
            .argumentType("timestamp")
-           .build()});
+           .build()},
+      true,
+      prestosql::ToUnixtimeFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox

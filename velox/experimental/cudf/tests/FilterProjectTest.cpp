@@ -2504,6 +2504,29 @@ TEST_F(CudfSimpleFilterProjectTest, dateDiffWeekTruncatesTowardZero) {
   EXPECT_EQ(result, 0);
 }
 
+TEST_F(CudfSimpleFilterProjectTest, dateDiffMonthRespectsTimeOfDayPreEpoch) {
+  // TIMESTAMP '1969-12-31 20:00:00' (pre-epoch, day -1) to TIMESTAMP
+  // '1970-01-31 10:00:00' = 0 months on Presto CPU: the naive diff is 1
+  // month (Dec -> Jan), but fromDay(31) == toDay(31) and fromTime(20:00) >
+  // toTime(10:00), so it decrements to 0.
+  //
+  // Exercises the time-of-day tie-break with a pre-epoch operand, covering
+  // timeOfDayMicros()'s day-flooring for negative timestamps (see
+  // DateTruncFunction's floorToDay for the related pattern this guards
+  // against; not currently observed to regress on this cudf version, but
+  // worth pinning down given day-flooring rounding direction is otherwise
+  // unspecified for pre-epoch inputs).
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>({Timestamp(-14400, 0)}),
+      makeFlatVector<Timestamp>({Timestamp(2628000, 0)}),
+  });
+  auto exprSet =
+      compileExpression("date_diff('month', c0, c1)", asRowType(data->type()));
+  auto result = evaluate(*exprSet, data);
+  auto expected = makeFlatVector<int64_t>({0});
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(CudfSimpleFilterProjectTest, dateDiffSecondTimestamp) {
   // 86400 seconds apart
   auto data = makeRowVector({
