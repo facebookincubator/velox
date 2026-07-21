@@ -68,6 +68,15 @@ core::PlanNodePtr CompileState::getPlanNode(const core::PlanNodeId& id) const {
   return driverFactory_.consumerNode;
 }
 
+core::PlanNodePtr CompileState::resolveOperatorPlanNode(
+    const exec::Operator* op) const {
+  const auto& id = op->planNodeId();
+  if (!id.empty() && id != "N/A") {
+    return getPlanNode(id);
+  }
+  return driverFactory_.consumerNode;
+}
+
 bool CompileState::compile(bool allowCpuFallback) {
   auto operators = driver_.operators();
 
@@ -85,12 +94,6 @@ bool CompileState::compile(bool allowCpuFallback) {
   bool replacementsMade = false;
   auto ctx = driver_.driverCtx();
 
-  // Helper to check if planNodeId is valid (some operators like CallbackSink
-  // have "N/A")
-  auto isValidPlanNodeId = [](const core::PlanNodeId& id) {
-    return !id.empty() && id != "N/A";
-  };
-
   // Use adapter registry for GPU Operator Replacement
   auto& registry = OperatorAdapterRegistry::getInstance();
 
@@ -100,13 +103,16 @@ bool CompileState::compile(bool allowCpuFallback) {
   };
 
   auto getOperatorProperties =
-      [&registry, this, &isValidPlanNodeId, ctx](const exec::Operator* op) {
+      [&registry, this, ctx](const exec::Operator* op) {
         OperatorProperties props;
         auto adapter = registry.findAdapter(op);
         props.adapter = adapter;
-        if (adapter && isValidPlanNodeId(op->planNodeId())) {
-          static_cast<OperatorAdapter::Properties&>(props) =
-              adapter->properties(op, getPlanNode(op->planNodeId()), ctx);
+        if (adapter) {
+          auto planNode = resolveOperatorPlanNode(op);
+          if (planNode) {
+            static_cast<OperatorAdapter::Properties&>(props) =
+                adapter->properties(op, planNode, ctx);
+          }
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
@@ -146,11 +152,7 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     auto id = oper->operatorId();
 
-    // Cache planNode for this operator (avoid multiple lookups)
-    core::PlanNodePtr planNode = nullptr;
-    if (isValidPlanNodeId(oper->planNodeId())) {
-      planNode = getPlanNode(oper->planNodeId());
-    }
+    auto planNode = resolveOperatorPlanNode(oper);
 
     if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
       replaceOp.push_back(
