@@ -83,6 +83,19 @@ target_link_libraries(
 )
 
 if(VELOX_ENABLE_BENCHMARKS)
+  add_executable(
+    velox_dwio_common_async_prefetch_benchmark
+    AsyncPrefetchBenchmark.cpp
+  )
+
+  target_link_libraries(
+    velox_dwio_common_async_prefetch_benchmark
+    velox_dwio_common
+    velox_memory
+    Folly::folly
+    glog::glog
+  )
+
   add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
   target_link_libraries(

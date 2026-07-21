@@ -18,10 +18,15 @@
 
 #include <fmt/core.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <thread>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/tests/TestUtils.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
@@ -779,6 +784,63 @@ class CustomBufferedInputTest : public testing::Test {
       std::make_shared<facebook::velox::io::IoStatistics>()};
 };
 
+// Regression test scaffolding for the async-release use-after-free fix.
+//
+// The async prefetch path (BufferedInput::submitAsyncLoad) submits a coalesced
+// load to a native-async backend and attaches a continuation that releases the
+// reserved prefetch budget on completion. An earlier version captured the
+// BufferedInput by raw `this` and ran the continuation fire-and-forget, so a
+// completion that fired after the BufferedInput was destroyed dereferenced
+// freed memory. The fix captures the PrefetchBudget by shared_ptr and retains
+// the continuation Future in inflightAsyncReleases_, which the destructor
+// drains before releasing captured state. These helpers let the test drive a
+// load whose completion is controlled by the test thread.
+
+// A CoalescedLoad whose async completion is gated by a promise the test holds.
+class GatedCoalescedLoad : public facebook::velox::cache::CoalescedLoad {
+ public:
+  GatedCoalescedLoad(
+      int64_t size,
+      folly::Promise<std::vector<facebook::velox::cache::CachePin>> promise)
+      : CoalescedLoad(/*keys=*/{}, /*sizes=*/{}),
+        size_(size),
+        promise_(std::move(promise)) {}
+
+  int64_t size() const override {
+    return size_;
+  }
+
+  // Completes the in-flight async load (drives it to kLoaded and runs the
+  // attached release continuation). Called by the test thread to release the
+  // load that submitAsyncLoad left pending.
+  void complete() {
+    promise_.setValue(std::vector<facebook::velox::cache::CachePin>{});
+  }
+
+ protected:
+  std::vector<facebook::velox::cache::CachePin> loadData(
+      bool /*prefetch*/) override {
+    // Not exercised: the async path goes through loadDataAsync.
+    return {};
+  }
+
+  folly::SemiFuture<std::vector<facebook::velox::cache::CachePin>>
+  loadDataAsync(bool /*prefetch*/) override {
+    return promise_.getSemiFuture();
+  }
+
+ private:
+  const int64_t size_;
+  folly::Promise<std::vector<facebook::velox::cache::CachePin>> promise_;
+};
+
+// Exposes the protected submitAsyncLoad entry point for testing.
+class TestableBufferedInput : public BufferedInput {
+ public:
+  using BufferedInput::BufferedInput;
+  using BufferedInput::submitAsyncLoad;
+};
+
 } // namespace
 
 TEST_F(CustomBufferedInputTest, basic) {
@@ -841,6 +903,59 @@ TEST_F(BufferedInputTest, readGapTracking) {
     EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
     EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
   }
+}
+
+// Regression: destroying a BufferedInput while an async coalesced load is still
+// in flight must not use freed memory and must release the reserved prefetch
+// budget exactly once. With the pre-fix code (continuation captured raw `this`
+// and ran detached) this would dereference the destroyed input on completion;
+// under ASAN it surfaced as a heap-use-after-free. The fixed code captures the
+// PrefetchBudget by shared_ptr and drains the retained continuation in the
+// destructor.
+TEST_F(BufferedInputTest, DestroyWhileAsyncLoadInflight) {
+  auto readFile =
+      std::make_shared<facebook::velox::InMemoryReadFile>(std::string(16, 'x'));
+  auto input = std::make_unique<TestableBufferedInput>(readFile, *pool_);
+
+  // Hold a copy of the shared budget so we can observe it after the input is
+  // gone, proving the release path does not depend on the input's lifetime.
+  auto budget = input->prefetchBudget();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_EQ(
+      budget->outstandingBytes.load(std::memory_order_relaxed), int64_t{0});
+
+  constexpr int64_t kLoadBytes = 4096;
+  folly::Promise<std::vector<facebook::velox::cache::CachePin>> loadPromise;
+  auto load =
+      std::make_shared<GatedCoalescedLoad>(kLoadBytes, std::move(loadPromise));
+
+  // Submit as a prefetch load. This reserves kLoadBytes against the budget and
+  // attaches the release continuation; the load stays in flight because its
+  // promise is not yet fulfilled.
+  input->submitAsyncLoad(
+      load,
+      /*prefetch=*/true,
+      /*ssdSavable=*/false,
+      &folly::InlineExecutor::instance());
+  EXPECT_EQ(
+      budget->outstandingBytes.load(std::memory_order_relaxed), kLoadBytes);
+
+  // Complete the load from another thread so the destructor's drain (which
+  // blocks until in-flight continuations finish) can make progress. The
+  // release continuation runs inline on whichever thread completes the load;
+  // it must release the budget via the shared_ptr, never via the (possibly
+  // destroyed) input.
+  std::thread completer([&] { load->complete(); });
+
+  // Tear down the input while the load may still be in flight. This drains the
+  // retained continuation Future; with the fix it is lifetime-safe.
+  input.reset();
+  completer.join();
+
+  // Budget was released exactly once and the shared budget object outlived the
+  // input.
+  EXPECT_EQ(
+      budget->outstandingBytes.load(std::memory_order_relaxed), int64_t{0});
 }
 
 namespace {

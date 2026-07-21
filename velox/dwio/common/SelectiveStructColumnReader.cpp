@@ -428,6 +428,20 @@ void SelectiveStructColumnReaderBase::read(
   if (columnReaderOptions_.columnMappingMode_ != ColumnMappingMode::kName) {
     VELOX_CHECK(!childSpecs.empty());
   }
+  // Pass 1: handle constants, deltas, lazy-deferred, skip-not-from-file,
+  // and FILTER columns in declaration order. Filter columns must run
+  // sequentially because each one narrows `activeRows` for the next,
+  // and Velox already orders childSpecs by selectivity — reordering
+  // filter columns would lose that tuning. Eager non-filter columns
+  // are batched into `eagerReaders` and processed in pass 2 by IO
+  // completion order.
+  //
+  // `eagerReaders` caches the resolved SelectiveColumnReader*
+  // directly (skips the per-probe `childSpecs[i] -> subscript() ->
+  // children_.at(...)` indirection chain in pass 2's hot loop). At
+  // wide schemas (N=1000 cols × O(N) sweeps per batch) this matters.
+  std::vector<SelectiveColumnReader*> eagerReaders;
+  eagerReaders.reserve(childSpecs.size());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     const auto& childSpec = childSpecs[i];
 
@@ -475,7 +489,94 @@ void SelectiveStructColumnReaderBase::read(
         break;
       }
     } else {
+      // Defer to pass 2. advanceFieldReader has already wired the
+      // PageReader, so `reader->isInputReady()` is meaningful below.
+      eagerReaders.push_back(reader);
+    }
+  }
+  // Pass 2: eager non-filter columns, in IO completion order.
+  //
+  // Each child gets the same `activeRows` (set by the final filter in
+  // pass 1) and they are mutually independent — no read mutates
+  // `activeRows` or any other child's state. So we can read them in
+  // any order. Picking the one whose underlying coalesced load has
+  // already landed lets us overlap the CPU cost of one read with the
+  // remaining tail IO of the others, instead of blocking on whichever
+  // happens to be first in declaration order while a faster-arriving
+  // column sits idle ready.
+  //
+  // Loop shape mirrors the page-index finalize pop-as-ready:
+  // re-sweep after each read for any pending that *just* became
+  // ready (likely landed during the previous read's decode CPU);
+  // only fall through to a blocking read of the lowest-indexed
+  // remaining when nothing is ready, which lets other columns'
+  // IO finish during the block.
+  //
+  // Skipped when activeRows is empty (pass 1's last filter rejected
+  // everything) — preserves the original early-out behavior.
+  //
+  // Algorithmic note: naive nested `for (k = 0..N)` would be O(N^2)
+  // per call (scanning the done-prefix every iteration). For wide
+  // schemas (N=1000) this turns into seconds of pure scan overhead
+  // across a scan. The `firstNotDone` hint advances monotonically
+  // past the contiguous done-prefix at the top of each iteration
+  // (amortized O(N) total), so the common case (IO landing roughly
+  // in submission order) collapses to O(N).
+  //
+  // `done[]` is `uint8_t` not `bool` so loads are plain bytes (no
+  // bitpack mask/branch); cache footprint at N=1000 is ~1 KB.
+  //
+  // Known limitation: for page-pruned columns (Parquet PageIndex
+  // path with surviving-page sub-streams), isInputReady() requires
+  // *all* surviving page streams to be loaded, so a column with
+  // many small surviving runs may stay 'not ready' longer than
+  // necessary and fall through to the block path. Acceptable: that
+  // is the correct fallback. Refining to per-page-stream readiness
+  // would require partial decode state per page and is deferred.
+  if (!activeRows.empty() && !eagerReaders.empty()) {
+    std::vector<uint8_t> done(eagerReaders.size(), 0);
+    size_t remaining = eagerReaders.size();
+    size_t firstNotDone = 0;
+    while (remaining > 0) {
+      // Defensive invariant: outer guard `remaining > 0` and the
+      // strictly-monotone advance below imply at least one not-done
+      // entry exists at or past `firstNotDone`.
+      DCHECK_LT(firstNotDone, eagerReaders.size());
+      // Amortized O(N) across the whole pass: firstNotDone is
+      // strictly monotone.
+      while (firstNotDone < eagerReaders.size() && done[firstNotDone]) {
+        ++firstNotDone;
+      }
+      bool foundReady = false;
+      for (size_t k = firstNotDone; k < eagerReaders.size(); ++k) {
+        if (done[k]) {
+          continue;
+        }
+        auto* reader = eagerReaders[k];
+        if (reader->isInputReady()) {
+          reader->readWithTiming(offset, activeRows, structNulls);
+          done[k] = 1;
+          --remaining;
+          foundReady = true;
+          break; // re-sweep from the top
+        }
+      }
+      if (foundReady) {
+        continue;
+      }
+      // Nothing ready — block on firstNotDone. Guaranteed to point
+      // at a not-done entry by the advance loop above (and remaining
+      // > 0 means there is at least one). While we block, other
+      // columns' IO continues in parallel and the next iteration's
+      // sweep will likely find several newly-ready columns.
+      DCHECK_LT(firstNotDone, eagerReaders.size());
+      DCHECK_EQ(done[firstNotDone], 0);
+      auto* reader = eagerReaders[firstNotDone];
       reader->readWithTiming(offset, activeRows, structNulls);
+      done[firstNotDone] = 1;
+      --remaining;
+      // Don't manually advance firstNotDone here; the next iteration's
+      // while-loop does it (uniform invariant maintenance).
     }
   }
 

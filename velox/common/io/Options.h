@@ -66,6 +66,12 @@ class ReaderOptions {
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
   static constexpr int32_t kDefaultCoalesceBytes = 128 << 20; // 128M
   static constexpr int32_t kDefaultPrefetchRowGroups = 1;
+  /// Default outstanding-prefetch-bytes budget. Bounds resident IO buffer
+  /// memory across all in-flight async prefetch loads of a single
+  /// BufferedInput. 256 MB bounds resident prefetch memory for a wide
+  /// schema across a multi-row-group prefetch window while leaving
+  /// headroom for the query's working set.
+  static constexpr int64_t kDefaultMaxOutstandingPrefetchBytes = 256 << 20;
 
   explicit ReaderOptions(velox::memory::MemoryPool* pool) : pool_{pool} {
     VELOX_CHECK_NOT_NULL(pool_);
@@ -119,6 +125,15 @@ class ReaderOptions {
     return *this;
   }
 
+  /// Modifies the maximum total bytes of in-flight async prefetch loads
+  /// allowed per BufferedInput. A value <= 0 disables the cap (treated as
+  /// unbounded) which matches pre-budget behavior for backends that do not
+  /// expose hasPreadvAsync()=true.
+  ReaderOptions& setMaxOutstandingPrefetchBytes(int64_t bytes) {
+    maxOutstandingPrefetchBytes_ = bytes;
+    return *this;
+  }
+
   /// Modifies the number of row groups to prefetch.
   ReaderOptions& setPrefetchRowGroups(int32_t numPrefetch) {
     prefetchRowGroups_ = numPrefetch;
@@ -148,6 +163,10 @@ class ReaderOptions {
 
   int64_t maxCoalesceBytes() const {
     return maxCoalesceBytes_;
+  }
+
+  int64_t maxOutstandingPrefetchBytes() const {
+    return maxOutstandingPrefetchBytes_;
   }
 
   int64_t prefetchRowGroups() const {
@@ -199,6 +218,7 @@ class ReaderOptions {
   int32_t loadQuantum_{kDefaultLoadQuantum};
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
+  int64_t maxOutstandingPrefetchBytes_{kDefaultMaxOutstandingPrefetchBytes};
   int32_t prefetchRowGroups_{kDefaultPrefetchRowGroups};
   bool cacheable_{true};
 };

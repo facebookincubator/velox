@@ -474,7 +474,7 @@ class CachePin {
 /// to load multiple entries in most IOs. The IO is either done by a background
 /// prefetch thread or if the query thread gets there first, then the query
 /// thread will do the IO. The IO is also cancelled as a unit.
-class CoalescedLoad {
+class CoalescedLoad : public std::enable_shared_from_this<CoalescedLoad> {
  public:
   /// State of a CoalescedLoad
   enum class State { kPlanned, kLoading, kCancelled, kLoaded };
@@ -493,6 +493,17 @@ class CoalescedLoad {
   /// the other thread to be done. If 'ssdSavable' is true, marks the loaded
   /// entries as ssdsavable.
   bool loadOrFuture(folly::SemiFuture<bool>* wait, bool ssdSavable = true);
+
+  /// Asynchronous variant of loadOrFuture for backends that implement
+  /// ReadFile::preadvAsync natively. Returns a SemiFuture that completes when
+  /// the load is done (true) or fails with the underlying read exception. If
+  /// the load is already kLoaded/kCancelled, returns a ready future. If
+  /// already kLoading (e.g. another thread/IO submission), returns a future
+  /// chained off the shared promise. Otherwise transitions kPlanned -> kLoading
+  /// and submits via loadDataAsync. The returned future MUST be kept alive
+  /// (e.g. .via(executor).detach()) until completion so the cache pin
+  /// transition runs.
+  folly::SemiFuture<bool> loadOrFutureAsync(bool ssdSavable = true);
 
   State state() const {
     tsan_lock_guard<std::mutex> l(mutex_);
@@ -522,6 +533,16 @@ class CoalescedLoad {
   // made will be destructed in their exclusive state so that they do not become
   // visible to other users of the cache.
   virtual std::vector<CachePin> loadData(bool prefetch) = 0;
+
+  // Asynchronous variant of loadData. Default implementation falls back to the
+  // synchronous loadData and wraps the result in a ready SemiFuture. Backends
+  // that issue IO via ReadFile::preadvAsync should override this to submit all
+  // coalesced reads in parallel and return a future that completes when all
+  // reads have finished. Same exception/pin-lifetime contract as loadData.
+  virtual folly::SemiFuture<std::vector<CachePin>> loadDataAsync(
+      bool prefetch) {
+    return folly::makeSemiFuture(loadData(prefetch));
+  }
 
   // Sets a final state and resumes waiting threads.
   void setEndState(State endState);

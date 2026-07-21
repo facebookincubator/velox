@@ -152,6 +152,16 @@ class SelectiveColumnReader {
     return *formatData_;
   }
 
+  /// Readiness probe — true if a subsequent read() call on this column
+  /// will not block on async IO. Delegates to the FormatData's
+  /// isInputReady(). Used by SelectiveStructColumnReader to order
+  /// eager non-filter child reads by IO completion rather than
+  /// declaration order. Safe to return true conservatively (the read
+  /// will block as today).
+  bool isInputReady() const {
+    return formatData_->isInputReady();
+  }
+
   /// Returns list of child readers, empty for leaf readers.
   virtual const std::vector<SelectiveColumnReader*>& children() const;
 

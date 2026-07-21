@@ -16,7 +16,11 @@
 
 #pragma once
 
+#include <list>
+
 #include <folly/Executor.h>
+#include <folly/Synchronized.h>
+#include <folly/futures/Future.h>
 
 #include "velox/common/caching/FileGroupStats.h"
 #include "velox/common/caching/ScanTracker.h"
@@ -84,6 +88,7 @@ class CachedBufferedInput : public BufferedInput {
         fileSize_(input_->getLength()),
         options_(readerOptions) {
     VELOX_CHECK_NOT_NULL(cache_, "CachedBufferedInput requires a cache");
+    setMaxOutstandingPrefetchBytes(readerOptions.maxOutstandingPrefetchBytes());
     checkLoadQuantum();
   }
 
@@ -108,10 +113,21 @@ class CachedBufferedInput : public BufferedInput {
         fileSize_(input_->getLength()),
         options_(readerOptions) {
     VELOX_CHECK_NOT_NULL(cache_, "CachedBufferedInput requires a cache");
+    setMaxOutstandingPrefetchBytes(readerOptions.maxOutstandingPrefetchBytes());
     checkLoadQuantum();
   }
 
   ~CachedBufferedInput() override {
+    // Cancel first, drain second. Today cancel() only flips
+    // CoalescedLoad state to kCancelled (signals dedup-awaiters via
+    // SharedPromise); it does NOT abort in-flight backend IO, so the
+    // base BufferedInput destructor's drain of inflightAsyncReleases_
+    // still waits the natural completion time. When
+    // ReadFile::preadvAsync grows folly::CancellationToken support, the
+    // cancel will short-circuit pending preadvAsync promises with
+    // error state, turning the drain into a near-instant sweep instead
+    // of waiting on backend hardware timeouts. Reordering costs nothing
+    // today and is the right shape for tomorrow.
     for (auto& load : coalescedLoads_) {
       load->cancel();
     }
@@ -155,7 +171,7 @@ class CachedBufferedInput : public BufferedInput {
   }
 
   virtual std::unique_ptr<BufferedInput> clone() const override {
-    return std::make_unique<CachedBufferedInput>(
+    auto cloned = std::make_unique<CachedBufferedInput>(
         input_,
         fileNum_,
         cache_,
@@ -165,6 +181,13 @@ class CachedBufferedInput : public BufferedInput {
         ioStats_,
         executor_,
         options_);
+    // Share the outstanding-prefetch-bytes budget across all clones of
+    // this BufferedInput so the cap is enforced globally per file, not
+    // per-RG clone (otherwise prefetch-rowgroups=8 would multiply the
+    // effective budget by 8). The shared budget carries both the cap and
+    // counters.
+    cloned->setPrefetchBudget(prefetchBudget());
+    return cloned;
   }
 
   /// Creates a clone that reads through the cache but marks entries as
@@ -210,6 +233,13 @@ class CachedBufferedInput : public BufferedInput {
   /// since the load is to be triggered by the first access.
   std::shared_ptr<cache::CoalescedLoad> coalescedLoad(
       const SeekableInputStream* stream);
+
+  /// Non-destructive variant of coalescedLoad(). Returns the CoalescedLoad
+  /// associated with 'stream' (if any) without removing the mapping. Safe
+  /// to call repeatedly; intended for readiness polling (e.g. isLoaded()
+  /// on CacheInputStream).
+  std::shared_ptr<cache::CoalescedLoad> peekCoalescedLoad(
+      const SeekableInputStream* stream) const;
 
   folly::Executor* executor() const override {
     return executor_;

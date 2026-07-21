@@ -80,6 +80,22 @@ class FormatData {
   /// not exclude nulls coming from enclosing null structs.
   virtual bool hasNulls() const = 0;
 
+  /// Readiness probe for the underlying IO backing this column's
+  /// current row-group data. Used by SelectiveStructColumnReader to
+  /// reorder eager non-filter child reads in IO-completion order
+  /// rather than declaration order, reducing per-batch wait when
+  /// column-chunk loads complete out of order.
+  ///
+  /// Default true (conservative): formats that don't expose readiness
+  /// behave as today (read in declaration order). Override in formats
+  /// that participate in async IO (e.g. Parquet, where the underlying
+  /// coalesced load has a readiness signal). Returning true when the
+  /// IO is not actually ready is safe — the read just blocks as
+  /// before; returning false unnecessarily costs us a sweep iteration.
+  virtual bool isInputReady() const {
+    return true;
+  }
+
   /// Seeks the position to the 'index'th row group for the streams
   /// managed by 'this'. Returns a PositionProvider for streams not
   /// managed by 'this'. In a format like Parquet where all the reading

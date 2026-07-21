@@ -16,6 +16,10 @@
 
 #include "velox/dwio/common/DirectBufferedInput.h"
 
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
+#include <chrono>
+
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DirectInputStream.h"
@@ -215,6 +219,7 @@ void DirectBufferedInput::readRegions(
     const std::vector<LoadRequest*>& requests,
     bool prefetch,
     const std::vector<int32_t>& groupEnds) {
+  const size_t coalescedLoadsBegin = coalescedLoads_.size();
   int i = 0;
   std::vector<LoadRequest*> group;
   for (auto end : groupEnds) {
@@ -224,17 +229,60 @@ void DirectBufferedInput::readRegions(
     readRegion(group, prefetch);
     group.clear();
   }
-  if (prefetch && executor_) {
-    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
-      auto& load = coalescedLoads_[i];
-      if (load->state() == CoalescedLoad::State::kPlanned) {
-        AsyncLoadHolder loadHolder{
-            .load = load, .pool = pool_->shared_from_this()};
-        executor_->add([asyncLoad = std::move(loadHolder)]() {
-          VELOX_CHECK_NOT_NULL(asyncLoad.load);
-          asyncLoad.load->loadOrFuture(nullptr);
-        });
-      }
+  // Submit kPlanned coalesced loads to the backend as async IO when we have
+  // an executor and/or the backend supports preadvAsync.
+  //
+  // prefetch=true scans ALL coalescedLoads_ so budget-skipped prefetch loads
+  // from prior ticks can be retried (skip-not-queue). prefetch=false scans
+  // only loads created in this call, avoiding a budget bypass where
+  // prefetch-skipped loads would be immediately submitted on-demand without
+  // enforcement in the same load() tick. The per-request budget gate
+  // (tryReservePrefetchBytes, inside submitAsyncLoad) applies ONLY to
+  // prefetch; on-demand reads are committed by the caller and always submit.
+  //
+  // Executor selection: prefer the Velox IO executor for the release
+  // continuation; when none is registered, fall back to InlineExecutor so
+  // the continuation runs on the backend's IO completion thread. In the
+  // InlineExecutor case the returned Future MUST be retained in
+  // inflightAsyncReleases_ (done by submitAsyncLoad) because InlineExecutor
+  // has no queue -- dropping it would drop the deferred release chain.
+  const bool useAsync = input_->hasReadAsync();
+  if (!useAsync && !executor_) {
+    return;
+  }
+  // Prune completed releases before pushing new ones to keep the retention
+  // list bounded across many load() cycles on the same BufferedInput.
+  pruneReadyAsyncReleases();
+  folly::Executor* const continuationExec =
+      executor_ ? executor_ : &folly::InlineExecutor::instance();
+  const size_t submitBegin = prefetch ? 0 : coalescedLoadsBegin;
+  for (size_t i = submitBegin; i < coalescedLoads_.size(); ++i) {
+    auto& load = coalescedLoads_[i];
+    if (load->state() != CoalescedLoad::State::kPlanned) {
+      // Already kLoading/kLoaded -- fired by a prior readRegions() call in
+      // the same load() or by a concurrent consumer thread.
+      continue;
+    }
+    if (useAsync) {
+      // Native async backend: submit preadvAsync directly via
+      // loadOrFutureAsync -> DirectCoalescedLoad::loadDataAsync. The
+      // skip-not-queue prefetch-bytes gate, budget-release continuation, and
+      // inflightAsyncReleases_ retention all live in
+      // BufferedInput::submitAsyncLoad (shared with
+      // CachedBufferedInput::readRegions). ssdSavable is false here:
+      // DirectBufferedInput does not populate the SSD cache.
+      submitAsyncLoad(load, prefetch, /*ssdSavable=*/false, continuationExec);
+    } else if (prefetch && executor_) {
+      // Sync (non-async backend) prefetch path. Intentionally NOT
+      // budget-tracked: executor thread count implicitly bounds it. For
+      // on-demand on a sync backend we don't dispatch to the executor -- the
+      // consumer reads on its own thread anyway.
+      AsyncLoadHolder loadHolder{
+          .load = load, .pool = pool_->shared_from_this()};
+      executor_->add([asyncLoad = std::move(loadHolder)]() {
+        VELOX_CHECK_NOT_NULL(asyncLoad.load);
+        asyncLoad.load->loadOrFuture(nullptr);
+      });
     }
   }
 }
@@ -250,6 +298,18 @@ std::shared_ptr<DirectCoalescedLoad> DirectBufferedInput::coalescedLoad(
         auto load = std::move(it->second);
         loads.erase(it);
         return load;
+      });
+}
+
+std::shared_ptr<DirectCoalescedLoad> DirectBufferedInput::peekCoalescedLoad(
+    const SeekableInputStream* stream) const {
+  return streamToCoalescedLoad_.withRLock(
+      [&](const auto& loads) -> std::shared_ptr<DirectCoalescedLoad> {
+        auto it = loads.find(stream);
+        if (it == loads.cend()) {
+          return nullptr;
+        }
+        return it->second;
       });
 }
 
@@ -445,6 +505,85 @@ std::vector<cache::CachePin> DirectCoalescedLoad::loadData(bool prefetch) {
   TestValue::adjust(
       "facebook::velox::cache::DirectCoalescedLoad::loadData", this);
   return {};
+}
+
+folly::SemiFuture<std::vector<cache::CachePin>>
+DirectCoalescedLoad::loadDataAsync(bool prefetch) {
+  // Build the coalesced buffer set the same way the sync path does. The
+  // resulting (offset, buffers) are then issued via a single
+  // ReadFileInputStream::readAsync() -> ReadFile::preadvAsync().
+  //
+  // Encoding note (matches sync loadData): a buffer with `data() == nullptr`
+  // and a size encoded by stuffing the gap length into the pointer field is
+  // how preadv signals "skip these bytes from the storage stream without
+  // copying them anywhere" (overread filler between non-contiguous regions).
+  std::vector<folly::Range<char*>> buffers;
+  int64_t lastEnd = requests_[0].region.offset;
+  int64_t size = 0;
+  int64_t overread = 0;
+
+  for (auto& request : requests_) {
+    const auto& region = request.region;
+    if (region.offset > lastEnd) {
+      buffers.push_back(
+          folly::Range<char*>(
+              nullptr,
+              reinterpret_cast<char*>(
+                  static_cast<uint64_t>(region.offset - lastEnd))));
+      overread += buffers.back().size();
+    }
+
+    if (region.length > DirectBufferedInput::kTinySize) {
+      if (&request != &requests_.back()) {
+        request.loadSize = region.length;
+      } else {
+        request.loadSize = std::min<int32_t>(region.length, loadQuantum_);
+      }
+      const auto numPages =
+          memory::AllocationTraits::numPages(request.loadSize);
+      pool_->allocateNonContiguous(numPages, request.data);
+      appendRanges(request.data, request.loadSize, buffers);
+    } else {
+      request.loadSize = region.length;
+      request.tinyData.resize(region.length);
+      buffers.push_back(folly::Range(request.tinyData.data(), region.length));
+    }
+    lastEnd = region.offset + request.loadSize;
+    size += request.loadSize;
+  }
+
+  const uint64_t startOffset = requests_[0].region.offset;
+  const auto startTime = std::chrono::steady_clock::now();
+  auto self = std::static_pointer_cast<DirectCoalescedLoad>(shared_from_this());
+  auto buffersPtr =
+      std::make_shared<std::vector<folly::Range<char*>>>(std::move(buffers));
+  return input_->readAsync(*buffersPtr, startOffset, LogType::FILE)
+      .deferValue(
+          [self, buffersPtr, size, overread, startTime, prefetch](
+              uint64_t /*bytesRead*/) -> std::vector<cache::CachePin> {
+            const auto usecs =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - startTime)
+                    .count();
+            self->ioStatistics_->read().increment(size + overread);
+            self->ioStatistics_->incRawBytesRead(size);
+            self->ioStatistics_->incTotalScanTimeNs(usecs * 1'000);
+            // Do NOT increment queryThreadIoLatency here: this continuation
+            // runs on the IO executor in parallel with the consumer thread,
+            // but queryThreadIoLatency is exposed as ioWaitWallNanos ->
+            // OperatorWaitOnIOTime, a consumer-blocking metric. Attributing
+            // async preadv wall time to it overcounts consumer wait. The sync
+            // loadData() path still increments it, which is correct (sync
+            // runs on the consumer thread).
+            self->ioStatistics_->incRawOverreadBytes(overread);
+            if (prefetch) {
+              self->ioStatistics_->prefetch().increment(size + overread);
+            }
+            TestValue::adjust(
+                "facebook::velox::cache::DirectCoalescedLoad::loadDataAsync",
+                self.get());
+            return {};
+          });
 }
 
 int32_t DirectCoalescedLoad::getData(

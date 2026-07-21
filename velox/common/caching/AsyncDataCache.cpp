@@ -412,6 +412,16 @@ bool CoalescedLoad::loadOrFuture(
     state_ = State::kLoading;
   }
 
+  // NOTE: We intentionally do NOT route on-demand consumer reads through
+  // loadDataAsync here. The consumer calling loadOrFuture(wait != nullptr)
+  // immediately blocks on *wait, so async dispatch buys us nothing in
+  // pipelining — and adds substantial per-call overhead (SharedPromise
+  // alloc, cross-thread wakeup, executor hop). For small-IO workloads
+  // (page-cache hits in microseconds) this overhead dominates real IO
+  // time and produces a large regression. The prefetch path (wait ==
+  // nullptr, called from readRegions) is the right place for async
+  // dispatch — and it already does so via loadOrFutureAsync().
+
   // Outside of 'mutex_'.
   common::testutil::TestValue::adjust(
       "facebook::velox::cache::CoalescedLoad::loadOrFuture::loading", this);
@@ -445,6 +455,44 @@ void CoalescedLoad::setEndState(State endState) {
   if (promise != nullptr) {
     promise->setValue(true);
   }
+}
+
+folly::SemiFuture<bool> CoalescedLoad::loadOrFutureAsync(bool ssdSavable) {
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (state_ == State::kCancelled || state_ == State::kLoaded) {
+      return folly::makeSemiFuture(true);
+    }
+    if (state_ == State::kLoading) {
+      if (promise_ == nullptr) {
+        promise_ = std::make_unique<folly::SharedPromise<bool>>();
+      }
+      return promise_->getSemiFuture();
+    }
+    VELOX_CHECK_EQ(State::kPlanned, state_);
+    state_ = State::kLoading;
+  }
+
+  auto self = shared_from_this();
+  return loadDataAsync(/*prefetch=*/true)
+      .deferValue([self, ssdSavable](std::vector<CachePin>&& pins) {
+        for (auto& pin : pins) {
+          auto* entry = pin.checkedEntry();
+          VELOX_CHECK(entry->key().fileNum.hasValue());
+          VELOX_CHECK(entry->isExclusive());
+          entry->setExclusiveToShared(ssdSavable);
+        }
+        self->setEndState(State::kLoaded);
+        return true;
+      })
+      .deferError([self](folly::exception_wrapper&& e) -> bool {
+        try {
+          self->setEndState(State::kCancelled);
+        } catch (const std::exception&) {
+          // May not throw from inside catch.
+        }
+        e.throw_exception();
+      });
 }
 
 std::unique_ptr<folly::SharedPromise<bool>> CacheShard::removeEntry(

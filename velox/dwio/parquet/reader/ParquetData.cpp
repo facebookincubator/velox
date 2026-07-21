@@ -106,7 +106,10 @@ void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
-  streams_.resize(fileMetaDataPtr_.numRowGroups());
+  // No resize() here: streams_ is pre-sized to numRowGroups at
+  // construction and must stay non-reallocating. Resizing here would be
+  // a non-const vector op racing concurrent async-prefetch enqueue/seek
+  // on the same shared ParquetData.
   VELOX_CHECK(
       chunk.hasMetadata(),
       "ColumnMetaData does not exist for schema Id ",
@@ -161,6 +164,14 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
       : rowGroup.totalByteSize();
 
   return {fileOffset, length};
+}
+
+int64_t ParquetData::projectedRowGroupSize(uint32_t index) const {
+  auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
+  if (!chunk.hasMetadata()) {
+    return 0;
+  }
+  return chunk.totalCompressedSize();
 }
 
 } // namespace facebook::velox::parquet

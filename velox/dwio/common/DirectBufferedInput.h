@@ -16,8 +16,14 @@
 
 #pragma once
 
+#include <list>
+
 #include <folly/Executor.h>
 #include <folly/Range.h>
+#include <folly/Synchronized.h>
+#include <folly/futures/Future.h>
+
+#include "velox/common/io/IoExecutorThreadRegistry.h"
 
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileGroupStats.h"
@@ -96,6 +102,13 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return false;
   }
 
+  /// Async sibling of loadData(). Issues a single preadvAsync over the
+  /// coalesced buffer set and returns a SemiFuture that completes when the
+  /// IO settles. Used by DirectBufferedInput::readRegions when the
+  /// underlying ReadFile reports hasPreadvAsync() / hasReadAsync() = true.
+  folly::SemiFuture<std::vector<cache::CachePin>> loadDataAsync(
+      bool prefetch) override;
+
   /// Returns the buffer for 'region' in either 'data' or 'tinyData'. 'region'
   /// must match a region given to DirectBufferedInput::enqueue().
   int32_t
@@ -111,6 +124,22 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
       size += request.region.length;
     }
     return size;
+  }
+
+  void cancel() {
+    // DirectBufferedInput calls cancel() during teardown on the consumer
+    // thread. If destruction moves onto an executor thread, this DCHECK catches
+    // the self-deadlock risk.
+    DCHECK(!::facebook::velox::io::isOnIoExecutorThread())
+        << "DirectCoalescedLoad::cancel called on IO executor thread";
+    folly::SemiFuture<bool> waitFuture(false);
+    if (state() == State::kLoading && !loadOrFuture(&waitFuture)) {
+      waitFuture.wait();
+    }
+    for (auto& request : requests_) {
+      pool_->freeNonContiguous(request.data);
+    }
+    CoalescedLoad::cancel();
   }
 
  private:
@@ -153,12 +182,22 @@ class DirectBufferedInput : public BufferedInput {
         ioStats_(std::move(ioStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
-        options_(readerOptions) {}
+        options_(readerOptions) {
+    setMaxOutstandingPrefetchBytes(readerOptions.maxOutstandingPrefetchBytes());
+  }
 
   ~DirectBufferedInput() override {
+    // Cancel first, drain second. See CachedBufferedInput::~ for
+    // rationale: cancel today only signals dedup-awaiters, but with
+    // future CancellationToken plumbing through preadvAsync it will
+    // short-circuit in-flight backend IO, turning the drain into a
+    // near-instant sweep.
     for (auto& load : coalescedLoads_) {
       load->cancel();
     }
+    // The base BufferedInput destructor drains inflightAsyncReleases_ after
+    // this runs, preserving the cancel-first / drain-second order. See the
+    // matching note in CachedBufferedInput::~.
   }
 
   std::unique_ptr<SeekableInputStream> enqueue(
@@ -189,7 +228,7 @@ class DirectBufferedInput : public BufferedInput {
   }
 
   virtual std::unique_ptr<BufferedInput> clone() const override {
-    return std::unique_ptr<DirectBufferedInput>(new DirectBufferedInput(
+    auto cloned = std::unique_ptr<DirectBufferedInput>(new DirectBufferedInput(
         input_,
         fileNum_,
         tracker_,
@@ -198,6 +237,13 @@ class DirectBufferedInput : public BufferedInput {
         ioStats_,
         executor_,
         options_));
+    // Share the outstanding-prefetch-bytes budget across all clones of
+    // this BufferedInput (per-RG clones via StructColumnReader::loadRowGroup
+    // share one budget state; otherwise the cap would be multiplied by the
+    // prefetch-rowgroups fan-out). The shared budget carries both cap and
+    // counters.
+    cloned->setPrefetchBudget(prefetchBudget());
+    return cloned;
   }
 
   memory::MemoryPool* pool() const {
@@ -216,6 +262,13 @@ class DirectBufferedInput : public BufferedInput {
   /// access.
   std::shared_ptr<DirectCoalescedLoad> coalescedLoad(
       const SeekableInputStream* stream);
+
+  /// Non-destructive variant of coalescedLoad(). Returns the
+  /// DirectCoalescedLoad associated with 'stream' (if any) without
+  /// removing the mapping. Safe to call repeatedly; intended for
+  /// readiness polling from DirectInputStream::isLoaded().
+  std::shared_ptr<DirectCoalescedLoad> peekCoalescedLoad(
+      const SeekableInputStream* stream) const;
 
   std::unique_ptr<SeekableInputStream>
   read(uint64_t offset, uint64_t length, LogType logType) const override;
@@ -261,7 +314,9 @@ class DirectBufferedInput : public BufferedInput {
         ioStats_(std::move(ioStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
-        options_(readerOptions) {}
+        options_(readerOptions) {
+    setMaxOutstandingPrefetchBytes(readerOptions.maxOutstandingPrefetchBytes());
+  }
 
   // Regions that are candidates for loading.
   const StringIdLease fileNum_;

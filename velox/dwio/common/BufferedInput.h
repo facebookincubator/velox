@@ -16,6 +16,12 @@
 
 #pragma once
 
+#include <atomic>
+#include <list>
+
+#include <folly/Executor.h>
+#include <folly/futures/Future.h>
+
 #include "folly/io/IOBuf.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
@@ -25,6 +31,10 @@
 
 // Use WS VRead API to load
 DECLARE_bool(wsVRLoad);
+
+namespace facebook::velox::cache {
+class CoalescedLoad;
+}
 
 namespace facebook::velox::dwio::common {
 
@@ -57,6 +67,43 @@ class CachedRegion {
   // Cached data size in bytes.
   uint64_t size_{0};
   std::vector<folly::Range<const char*>> ranges_;
+};
+
+/// Shared bookkeeping for the outstanding-prefetch-bytes budget.
+///
+/// One instance is created by the root `BufferedInput`; clones (per-RG
+/// inputs created by `BufferedInput::clone()` and used by
+/// `StructColumnReader::loadRowGroup`) share the same instance via
+/// `shared_ptr`. Without sharing, each cloned input would enforce the
+/// 256 MB cap independently, multiplying the effective budget by the
+/// number of prefetched row groups (e.g. 8 × 256 MB = 2 GB resident).
+struct PrefetchBudget {
+  // Per-file prefetch cap. <= 0 disables budget checks.
+  // Stored in shared state so clones inherit the same cap automatically.
+  std::atomic<int64_t> maxBytes{256 << 20};
+  std::atomic<int64_t> outstandingBytes{0};
+  std::atomic<int64_t> peakBytes{0};
+  std::atomic<uint64_t> skipsAtCap{0};
+
+  // Self-contained release: matches `BufferedInput::releasePrefetchBytes`
+  // but takes no dependency on a BufferedInput instance. Async
+  // continuations that need to release a reservation capture this
+  // struct by `shared_ptr` value (see BufferedInput::prefetchBudget()),
+  // so they remain safe to fire even if the originating BufferedInput
+  // has already been destroyed. This is what makes the async-release
+  // chains in CachedBufferedInput/DirectBufferedInput lifetime-safe
+  // without requiring the destructor to drain every in-flight
+  // continuation.
+  void release(int64_t bytes) {
+    if (maxBytes.load(std::memory_order_relaxed) <= 0 || bytes <= 0) {
+      return;
+    }
+    const int64_t prev =
+        outstandingBytes.fetch_sub(bytes, std::memory_order_acq_rel);
+    DCHECK_GE(prev, bytes) << "PrefetchBudget::release underflow: prev=" << prev
+                           << " release=" << bytes
+                           << " (double-release or release-without-reserve)";
+  }
 };
 
 class BufferedInput {
@@ -97,7 +144,7 @@ class BufferedInput {
         allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
 
   BufferedInput(BufferedInput&&) = default;
-  virtual ~BufferedInput() = default;
+  virtual ~BufferedInput();
 
   BufferedInput(const BufferedInput&) = delete;
   BufferedInput& operator=(const BufferedInput&) = delete;
@@ -172,9 +219,14 @@ class BufferedInput {
 
   // Create a new (clean) instance of BufferedInput sharing the same
   // underlying file and memory pool.  The enqueued regions are NOT copied.
+  // Subclass overrides MUST propagate `prefetchBudget_` so per-RG clones
+  // share one budget state (cap + counters) instead of multiplying
+  // effective budget by prefetch fan-out.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(
+    auto cloned = std::make_unique<BufferedInput>(
         input_, *pool_, maxMergeDistance_, wsVRLoad_);
+    cloned->setPrefetchBudget(prefetchBudget_);
+    return cloned;
   }
 
   std::unique_ptr<SeekableInputStream> loadCompleteFile() {
@@ -240,7 +292,150 @@ class BufferedInput {
   /// needs to reset the buffered input state between lookups.
   virtual void reset();
 
+  /// Outstanding-prefetch-bytes budget (Velox async-IO redesign step 5).
+  ///
+  /// Bounds the total resident bytes of in-flight async prefetch loads
+  /// dispatched through this BufferedInput. The cap exists so that wide
+  /// schemas / large RG fan-outs cannot blow memory by speculatively
+  /// scheduling far ahead of the consumer.
+  ///
+  /// Usage contract for async paths (e.g. CachedBufferedInput's
+  /// preadvAsync submission, future DirectBufferedInput async path):
+  ///
+  ///   if (tryReservePrefetchBytes(coalescedLoad.size())) {
+  ///     // submit preadvAsync; release in continuation.
+  ///   } else {
+  ///     // leave load in kPlanned; consumer's first read() / next
+  ///     // scheduleRowGroups tick re-attempts (skip-not-queue).
+  ///   }
+  ///
+  /// Implementation uses CAS-style fetch_add then check, with rollback
+  /// (fetch_sub) on failure. This makes the gate safe under concurrent
+  /// submission: two threads cannot both observe "under cap" pre-add and
+  /// both submit.
+  ///
+  /// A maxOutstandingPrefetchBytes <= 0 disables the cap entirely,
+  /// preserving pre-budget behavior. The default is set in
+  /// io::ReaderOptions::kDefaultMaxOutstandingPrefetchBytes.
+  bool tryReservePrefetchBytes(int64_t bytes) {
+    const int64_t maxBytes = maxOutstandingPrefetchBytes();
+    if (maxBytes <= 0) {
+      return true;
+    }
+    if (bytes <= 0) {
+      return true;
+    }
+    auto& outstanding = prefetchBudget_->outstandingBytes;
+    // Single-oversize-request safety: if nothing is in flight, allow a
+    // request larger than the cap through. Without this, a misconfiguration
+    // where max-coalesced-bytes > max-outstanding-prefetch-bytes would
+    // silently stop the prefetch path forever (every load fails the gate,
+    // stays kPlanned, never gets re-issued — only the on-demand consumer
+    // path could pick them up, defeating prefetch entirely).
+    //
+    // CAS rather than load-then-add: the bypass must admit exactly one
+    // oversize load at a time. A naive `load() == 0 && fetch_add(bytes)`
+    // races — two threads both observe 0, both fetch_add, both submit,
+    // and the cap is silently doubled (or worse). Use compare_exchange
+    // to atomically transition 0 → bytes; if another thread won the race
+    // we fall through to the normal under-cap path (which will correctly
+    // reject and roll back this oversize request).
+    if (bytes > maxBytes) {
+      int64_t expected = 0;
+      if (outstanding.compare_exchange_strong(
+              expected,
+              bytes,
+              std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        updatePeakOutstandingPrefetchBytes(bytes);
+        return true;
+      }
+      // Lost the race; fall through. The normal path below will roll
+      // back since `after` will exceed the cap.
+    }
+    const int64_t after =
+        outstanding.fetch_add(bytes, std::memory_order_acq_rel) + bytes;
+    if (after > maxBytes) {
+      // Roll back: another submitter may have raced us over the cap.
+      outstanding.fetch_sub(bytes, std::memory_order_acq_rel);
+      prefetchBudget_->skipsAtCap.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    updatePeakOutstandingPrefetchBytes(after);
+    return true;
+  }
+
+  void releasePrefetchBytes(int64_t bytes) {
+    // Forwards to PrefetchBudget::release; semantics identical to the
+    // prior in-line implementation. Async continuations that outlive
+    // `this` should instead capture the shared_ptr from
+    // `prefetchBudget()` and call `->release(bytes)` directly — that
+    // path has no `this` dependency.
+    prefetchBudget_->release(bytes);
+  }
+
+  int64_t outstandingPrefetchBytes() const {
+    return prefetchBudget_->outstandingBytes.load(std::memory_order_acquire);
+  }
+
+  int64_t peakOutstandingPrefetchBytes() const {
+    return prefetchBudget_->peakBytes.load(std::memory_order_relaxed);
+  }
+
+  uint64_t prefetchSkipsAtCap() const {
+    return prefetchBudget_->skipsAtCap.load(std::memory_order_relaxed);
+  }
+
+  /// Subclass hook: set the prefetch byte cap (default copied from
+  /// io::ReaderOptions::kDefaultMaxOutstandingPrefetchBytes). Subclasses
+  /// (e.g. CachedBufferedInput) call this from their constructor after
+  /// reading the cap from io::ReaderOptions.
+  void setMaxOutstandingPrefetchBytes(int64_t bytes) {
+    prefetchBudget_->maxBytes.store(bytes, std::memory_order_relaxed);
+  }
+
+  int64_t maxOutstandingPrefetchBytes() const {
+    return prefetchBudget_->maxBytes.load(std::memory_order_relaxed);
+  }
+
+  /// Returns the shared prefetch-budget bookkeeping. Subclasses propagate
+  /// this to clones so per-RG cloned inputs share one counter rather than
+  /// each enforcing the cap independently.
+  const std::shared_ptr<PrefetchBudget>& prefetchBudget() const {
+    return prefetchBudget_;
+  }
+
+  void setPrefetchBudget(std::shared_ptr<PrefetchBudget> budget) {
+    VELOX_CHECK_NOT_NULL(budget);
+    prefetchBudget_ = std::move(budget);
+  }
+
  protected:
+  /// Submits a single planned coalesced load to a native-async backend
+  /// (preadvAsync) and registers the budget-release continuation in
+  /// `inflightAsyncReleases_`. For prefetch loads this first reserves the
+  /// outstanding-prefetch-bytes budget; if the budget is exhausted the load
+  /// is left untouched (kPlanned) and NOT submitted (skip-not-queue), so a
+  /// later tick can retry it. The release continuation captures the
+  /// `PrefetchBudget` by `shared_ptr` (never `this`), so it is lifetime-safe
+  /// even if this BufferedInput is destroyed before the backend IO completes;
+  /// the Future is retained here and drained by the destructor. Shared by
+  /// CachedBufferedInput::readRegions and DirectBufferedInput::readRegions.
+  ///
+  /// `ssdSavable` is forwarded to CoalescedLoad::loadOrFutureAsync and is the
+  /// only value that differs between the two callers (Cached passes
+  /// `!noCacheRetention()`, Direct passes `false`).
+  void submitAsyncLoad(
+      const std::shared_ptr<cache::CoalescedLoad>& load,
+      bool prefetch,
+      bool ssdSavable,
+      folly::Executor* continuationExec);
+
+  /// Drops already-completed entries from `inflightAsyncReleases_` to keep the
+  /// retention list bounded across many load() cycles on the same instance.
+  /// Call at the start of each readRegions() pass.
+  void pruneReadyAsyncReleases();
+
   static int adjustedReadPct(const cache::TrackingData& trackingData) {
     // Exclude the references made since the last read (lastReferencedBytes) so
     // the percentage counts only bytes that have already had a chance to be
@@ -316,6 +511,17 @@ class BufferedInput {
   memory::MemoryPool* const pool_;
 
  private:
+  // Bump prefetchBudget_->peakBytes to `value` if it's the new high.
+  // Lock-free CAS loop; tolerates concurrent updaters.
+  void updatePeakOutstandingPrefetchBytes(int64_t value) {
+    auto& peak = prefetchBudget_->peakBytes;
+    int64_t prev = peak.load(std::memory_order_relaxed);
+    while (
+        value > prev &&
+        !peak.compare_exchange_weak(prev, value, std::memory_order_relaxed)) {
+    }
+  }
+
   std::unique_ptr<SeekableInputStream> readBuffer(
       uint64_t offset,
       uint64_t length) const;
@@ -351,6 +557,33 @@ class BufferedInput {
   uint64_t maxMergeDistance_;
   std::optional<bool> wsVRLoad_;
   std::unique_ptr<memory::AllocationPool> allocPool_;
+
+  // Shared bookkeeping for the budget (cap + counters). Constructed by the root
+  // BufferedInput; subclass clone() implementations propagate this same
+  // shared_ptr so per-RG cloned inputs share one budget state and the cap
+  // is enforced globally, not per-clone.
+  std::shared_ptr<PrefetchBudget> prefetchBudget_{
+      std::make_shared<PrefetchBudget>()};
+
+  // Holds the Future returned by `.via(continuationExec)` for each async
+  // coalesced load submitted by submitAsyncLoad(). Folly drops a deferred
+  // chain at `.detach()` time unless the chosen executor owns the work in its
+  // task queue; with the InlineExecutor fallback (no Velox IO executor
+  // registered) we instead retain the Future here so the budget-release
+  // continuation actually fires when the backend's preadvAsync promise
+  // resolves on its IO completion thread. The destructor drains this list
+  // before destroying captured state; pruneReadyAsyncReleases() trims
+  // completed entries at the start of each readRegions() call.
+  //
+  // Unsynchronized by design: the only mutators are submitAsyncLoad(),
+  // pruneReadyAsyncReleases() and ~BufferedInput(), all driven by the single
+  // reader thread that owns this per-split BufferedInput (readRegions() is
+  // never called concurrently on one instance, and destruction happens-after
+  // all readRegions() calls). The async release continuations never touch
+  // this list -- they only release the PrefetchBudget via its own atomic --
+  // so there is no cross-thread list mutation to guard. Completions race only
+  // on each Future's own (thread-safe) core.
+  std::list<folly::Future<folly::Unit>> inflightAsyncReleases_;
 
   // Regions enqueued for reading
   std::vector<velox::common::Region> regions_;
