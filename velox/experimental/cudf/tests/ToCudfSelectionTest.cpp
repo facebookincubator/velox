@@ -194,7 +194,9 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
+TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneUsesCudf) {
+  // date_trunc(timestamp) is timezone-aware on GPU, so it runs on cuDF even
+  // when adjust_timestamp_to_session_timezone is enabled.
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -212,8 +214,8 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
       .countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
@@ -242,7 +244,7 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
 
 TEST_F(
     ToCudfSelectionTest,
-    nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
+    nestedPrestoDateTruncTimestampAdjustTimezoneUsesCudf) {
   auto input = makeRowVector(
       {"event_ts"},
       {makeFlatVector<Timestamp>(
@@ -259,15 +261,17 @@ TEST_F(
   ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
 
-  std::shared_ptr<Task> fallbackTask;
+  // A nested timezone-sensitive date_trunc(timestamp) also stays on cuDF under
+  // adjust_timestamp_to_session_timezone now that it is timezone-aware.
+  std::shared_ptr<Task> adjustTask;
   AssertQueryBuilder(plan)
       .config("cudf.enabled", true)
       .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
       .config(QueryConfig::kAdjustTimestampToTimezone, "true")
-      .countResults(fallbackTask);
+      .countResults(adjustTask);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(adjustTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(adjustTask));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {

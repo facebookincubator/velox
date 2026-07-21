@@ -353,4 +353,48 @@ TEST_F(TimezoneExtractionTest, allComponentsMatchUnderUtc) {
   }
 }
 
+// date_trunc(timestamp) must truncate on the session-local wall clock, matching
+// the CPU truncateTimestamp, rather than on the raw UTC epoch. day-and-above
+// and hour differ from UTC under a non-UTC session: these fail while the GPU
+// truncates in UTC and pass once DateTruncFunction converts to local,
+// truncates, then converts back.
+TEST_F(TimezoneExtractionTest, dateTruncDayHonorsSessionTimezone) {
+  // 2021-01-01 02:00 UTC is 2020-12-31 18:00 in America/Los_Angeles, so the
+  // truncated day is the previous local day, not the UTC day.
+  assertGpuMatchesCpu(
+      timestampInput(kJan2021At0200Utc), "date_trunc('day', ts)", kLosAngeles);
+}
+
+TEST_F(
+    TimezoneExtractionTest,
+    dateTruncWeekMonthQuarterYearHonorSessionTimezone) {
+  auto boundary = timestampInput(kJan2021At0200Utc);
+  for (const auto& projection :
+       {"date_trunc('month', ts)",
+        "date_trunc('quarter', ts)",
+        "date_trunc('year', ts)"}) {
+    SCOPED_TRACE(projection);
+    assertGpuMatchesCpu(boundary, projection, kLosAngeles);
+  }
+  // 2021-01-04 02:00 UTC is a Monday; 2021-01-03 18:00 in America/Los_Angeles
+  // is the preceding Sunday, so the local week starts the prior Monday.
+  assertGpuMatchesCpu(
+      timestampInput(kJan2021MondayUtc), "date_trunc('week', ts)", kLosAngeles);
+}
+
+TEST_F(TimezoneExtractionTest, dateTruncHourHonorsHalfHourOffsetZone) {
+  // Asia/Kolkata is +05:30, so the local hour boundary is offset by 30 minutes
+  // from the UTC hour boundary; the DST-safe UTC delta must reproduce it.
+  assertGpuMatchesCpu(
+      timestampInput(kJan2021MidnightUtc), "date_trunc('hour', ts)", kKolkata);
+}
+
+TEST_F(TimezoneExtractionTest, dateTruncSecondMinuteUnaffectedByTimezone) {
+  // second/minute truncate the UTC epoch directly (offsets are whole minutes),
+  // so they match CPU under any session timezone.
+  auto input = timestampInput(kJan2021At0200Utc, 123'000'000);
+  assertGpuMatchesCpu(input, "date_trunc('second', ts)", kKolkata);
+  assertGpuMatchesCpu(input, "date_trunc('minute', ts)", kKolkata);
+}
+
 } // namespace
