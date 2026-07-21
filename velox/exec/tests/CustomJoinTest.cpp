@@ -393,7 +393,8 @@ TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
   auto results =
       AssertQueryBuilder(plan)
           .splits(probeScanNodeId, std::move(probeSplits))
-          .splits(buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .splits(
+              buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
           .executionStrategy(core::ExecutionStrategy::kGrouped)
           .groupedExecutionLeafNodeIds({probeScanNodeId})
           .numSplitGroups(numSplitGroups)
