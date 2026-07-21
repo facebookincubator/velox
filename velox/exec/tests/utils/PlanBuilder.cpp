@@ -2246,14 +2246,14 @@ PlanBuilder& PlanBuilder::unnest(
     unnestFields.emplace_back(field(name));
   }
 
-  std::vector<std::string> unnestNames;
+  std::vector<std::optional<std::string>> unnestNames;
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
     if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
+      unnestNames.emplace_back(name + "_e");
     } else if (input->isMap()) {
-      unnestNames.push_back(name + "_k");
-      unnestNames.push_back(name + "_v");
+      unnestNames.emplace_back(name + "_k");
+      unnestNames.emplace_back(name + "_v");
     } else {
       VELOX_NYI(
           "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",

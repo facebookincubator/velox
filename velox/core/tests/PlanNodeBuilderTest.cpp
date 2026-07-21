@@ -1004,7 +1004,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a")};
   std::vector<FieldAccessTypedExprPtr> unnestVariables{
       std::make_shared<FieldAccessTypedExpr>(ARRAY(BIGINT()), "b")};
-  std::vector<std::string> unnestNames{"b"};
+  std::vector<std::optional<std::string>> unnestNames{"b"};
   std::optional<std::string> ordinalityName =
       std::make_optional<std::string>("ord");
   std::optional<bool> splitOutput = false;
@@ -1027,7 +1027,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
       expectedNames.push_back(variable->name());
     }
     for (const auto& name : unnestNames) {
-      expectedNames.push_back(name);
+      expectedNames.push_back(name.value());
     }
     if (ordinalityName.has_value()) {
       expectedNames.push_back(ordinalityName.value());
