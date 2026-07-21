@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <fmt/core.h>
+#include <fmt/format.h>
 #include <optional>
 #include <sstream>
 #include <string>
