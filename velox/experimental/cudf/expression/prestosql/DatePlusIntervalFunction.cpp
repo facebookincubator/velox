@@ -20,43 +20,13 @@
 #include "velox/type/Time.h"
 #include "velox/vector/ConstantVector.h"
 
-#include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/reduction.hpp>
 #include <cudf/unary.hpp>
 
-#include <string_view>
+namespace facebook::velox::cudf_velox {
 
-namespace facebook::velox::cudf_velox::prestosql {
-
-namespace {
-
-// Throws a VeloxUserError with userMessage if any non-null entry of cond is
-// false. cond must be a BOOL8 column. Does nothing for empty or all-null
-// columns.
-void checkAllTrue(
-    cudf::column_view cond,
-    std::string_view userMessage,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  if (cond.is_empty() || cond.null_count() == cond.size()) {
-    return;
-  }
-
-  const auto boolType = cudf::data_type(cudf::type_id::BOOL8);
-  auto allTrue = cudf::reduce(
-      cond,
-      *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
-      boolType,
-      stream,
-      mr);
-  auto* result = static_cast<cudf::scalar_type_t<bool>*>(allTrue.get());
-  VELOX_USER_CHECK(
-      result->is_valid(stream) && result->value(stream), "{}", userMessage);
-}
-
-} // namespace
+namespace prestosql {
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -173,4 +143,5 @@ ColumnOrView DatePlusIntervalFunction::eval(
   return cudf::make_column_from_scalar(nullDate, dateCol.size(), stream, mr);
 }
 
-} // namespace facebook::velox::cudf_velox::prestosql
+} // namespace prestosql
+} // namespace facebook::velox::cudf_velox
