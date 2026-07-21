@@ -198,8 +198,9 @@ TEST_F(CudfExpressionSelectionTest, sparkDateFormatSessionTimezone) {
 
   auto expressionWithoutDateFormat =
       parseAndInferTypedExpr("lower(name)", rowType_, execCtx_.get());
-  EXPECT_TRUE(cudf_velox::canBeEvaluatedByCudf(
-      {expressionWithoutDateFormat}, queryCtx_.get()));
+  EXPECT_TRUE(
+      cudf_velox::canBeEvaluatedByCudf(
+          {expressionWithoutDateFormat}, queryCtx_.get()));
 
   queryCtx_->testingOverrideConfigUnsafe({
       {core::QueryConfig::kSessionTimezone, ""},
@@ -224,8 +225,9 @@ TEST_F(CudfExpressionSelectionTest, sparkDateFormatSessionTimezone) {
 
   auto emptyFormatExpression = parseAndInferTypedExpr(
       "date_format(cast(date as timestamp), '')", rowType_, execCtx_.get());
-  EXPECT_FALSE(cudf_velox::canBeEvaluatedByCudf(
-      {emptyFormatExpression}, queryCtx_.get()));
+  EXPECT_FALSE(
+      cudf_velox::canBeEvaluatedByCudf(
+          {emptyFormatExpression}, queryCtx_.get()));
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
