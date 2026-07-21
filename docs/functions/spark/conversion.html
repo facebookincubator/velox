@@ -492,6 +492,23 @@ epoch. When no session timezone is configured the cast is an identity operation.
 </pre></div>
 </div>
 </section>
+<section id="id12">
+<h3>From VARCHAR<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<p>Casting a string to timestamp_utc parses the input as a local timestamp,
+not subject to session timezone adjustment.
+Any timezone suffix in the string is accepted but ignored — only the
+parsed timestamp is stored.
+Leading and trailing whitespace is stripped before parsing.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2000-01-01 12:21:56&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2000</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">12</span><span class="p">:</span><span class="mi">21</span><span class="p">:</span><span class="mi">56</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2015-03-18T12:03:17&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2015</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">18</span> <span class="mi">12</span><span class="p">:</span><span class="mi">03</span><span class="p">:</span><span class="mi">17</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2015-03-18 12:03:17.123&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2015</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">18</span> <span class="mi">12</span><span class="p">:</span><span class="mi">03</span><span class="p">:</span><span class="mf">17.123</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00-08:00&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2015-03-18T12:03:17Z&#39;</span> <span class="k">as</span> <span class="n">timestamp_ntz</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2015</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">18</span> <span class="mi">12</span><span class="p">:</span><span class="mi">03</span><span class="p">:</span><span class="mi">17</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -551,6 +568,7 @@ epoch. When no session timezone is configured the cast is an identity operation.
 </li>
 <li><a class="reference internal" href="#cast-to-timestamp-utc">Cast to TIMESTAMP UTC</a><ul>
 <li><a class="reference internal" href="#id11">From TIMESTAMP</a></li>
+<li><a class="reference internal" href="#id12">From VARCHAR</a></li>
 </ul>
 </li>
 </ul>
