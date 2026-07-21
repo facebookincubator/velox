@@ -112,6 +112,7 @@ const cudf::ast::expression* dispatchAddTimestampLiteral(
 const cudf::ast::expression& createTimestampRangeExpr(
     const common::Filter& filter,
     cudf::data_type timestampType,
+    const tz::TimeZone* sessionTimezone,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
@@ -143,6 +144,19 @@ const cudf::ast::expression& createTimestampRangeExpr(
     }
     default:
       VELOX_FAIL("Expected a timestamp range filter");
+  }
+
+  // TimestampRange bounds are session-local wall-clock values. Parquet
+  // timestamp values are UTC, so convert the bounded literals before creating
+  // cuDF scalars. Packed TIMESTAMP WITH TIME ZONE bounds are already UTC.
+  if (filter.kind() == common::FilterKind::kTimestampRange and
+      sessionTimezone != nullptr) {
+    if (not isLowerUnbounded) {
+      lower.toGMT(*sessionTimezone);
+    }
+    if (not isUpperUnbounded) {
+      upper.toGMT(*sessionTimezone);
+    }
   }
 
   using Op = cudf::ast::ast_operator;
@@ -494,7 +508,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::optional<cudf::data_type> timestampType) {
+    std::optional<cudf::data_type> timestampType,
+    const tz::TimeZone* sessionTimezone) {
   // First, create column reference from subfield
   // For now, only support simple field references
   if (subfield.path().empty() ||
@@ -528,7 +543,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
             timestampType.has_value(),
             "Timestamp filter requires a reader timestamp type");
         return createTimestampRangeExpr(
-            filter, *timestampType, tree, scalars, columnRef, stream, mr);
+            filter,
+            *timestampType,
+            sessionTimezone,
+            tree,
+            scalars,
+            columnRef,
+            stream,
+            mr);
       }
       auto result = VELOX_DYNAMIC_TYPE_DISPATCH(
           buildBigintRangeExpr,
@@ -609,7 +631,14 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           timestampType.has_value(),
           "Timestamp filter requires a reader timestamp type");
       return createTimestampRangeExpr(
-          filter, *timestampType, tree, scalars, columnRef, stream, mr);
+          filter,
+          *timestampType,
+          sessionTimezone,
+          tree,
+          scalars,
+          columnRef,
+          stream,
+          mr);
     }
 
     case common::FilterKind::kBoolValue: {
@@ -657,7 +686,13 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       exprRefs.reserve(subFilters.size());
       for (const auto* subFilter : subFilters) {
         auto const& subExpr = createAstFromSubfieldFilter(
-            subfield, *subFilter, tree, scalars, inputRowSchema, timestampType);
+            subfield,
+            *subFilter,
+            tree,
+            scalars,
+            inputRowSchema,
+            timestampType,
+            sessionTimezone);
         exprRefs.push_back(&subExpr);
       }
 
@@ -683,7 +718,8 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    std::optional<cudf::data_type> timestampType) {
+    std::optional<cudf::data_type> timestampType,
+    const tz::TimeZone* sessionTimezone) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -695,7 +731,13 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
       continue;
     }
     auto const& expr = createAstFromSubfieldFilter(
-        subfield, *filterPtr, tree, scalars, inputRowSchema, timestampType);
+        subfield,
+        *filterPtr,
+        tree,
+        scalars,
+        inputRowSchema,
+        timestampType,
+        sessionTimezone);
     exprRefs.push_back(&expr);
   }
 

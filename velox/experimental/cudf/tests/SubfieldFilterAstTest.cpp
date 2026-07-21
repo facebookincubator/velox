@@ -23,6 +23,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
@@ -233,6 +234,39 @@ TEST_F(SubfieldFilterAstTest, timestampRangeUsesReaderTimestampUnit) {
             cudf::data_type{timestampUnit});
 
     testFilterExecution(rowType, columnName, filter, vector, expression);
+  }
+}
+
+TEST_F(SubfieldFilterAstTest, timestampRangeConvertsSessionTimezoneBounds) {
+  const std::string columnName{"timestamp"};
+  const auto localCutoff = Timestamp{1'735'689'600, 0};
+  const auto* sessionTimezone = tz::locateZone("America/Los_Angeles");
+  auto expectedCutoff = localCutoff;
+  expectedCutoff.toGMT(*sessionTimezone);
+
+  const auto rowType = ROW({{columnName, TIMESTAMP()}});
+  const common::TimestampRange filter{
+      localCutoff, localCutoff, /*nullAllowed=*/false};
+  const common::Subfield subfield{columnName};
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  createAstFromSubfieldFilter(
+      subfield,
+      filter,
+      tree,
+      scalars,
+      rowType,
+      cudf::data_type{cudf::type_id::TIMESTAMP_MICROSECONDS},
+      sessionTimezone);
+
+  ASSERT_EQ(scalars.size(), 2);
+  const auto stream = cudf::get_default_stream();
+  for (const auto& scalar : scalars) {
+    const auto& timestampScalar =
+        static_cast<const cudf::timestamp_scalar<cudf::timestamp_us>&>(*scalar);
+    EXPECT_EQ(
+        timestampScalar.value(stream).time_since_epoch().count(),
+        expectedCutoff.toMicros());
   }
 }
 
