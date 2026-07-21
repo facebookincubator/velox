@@ -423,4 +423,13 @@ TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
 
   ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
   ASSERT_EQ(task->state(), exec::TaskState::kFinished);
+
+  // The build side reads 80 rows and posts that count to the bridge.
+  // Each split group's probe reads 80 rows and emits at most 80 (the build
+  // count).  With 2 split groups, total output should be 160 rows.
+  int64_t totalRows = 0;
+  for (const auto& result : results) {
+    totalRows += result->size();
+  }
+  ASSERT_EQ(totalRows, 160);
 }
