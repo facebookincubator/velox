@@ -203,6 +203,28 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   /// Ensures build-stream data is visible on the given probe stream.
   void syncBuildStream(rmm::cuda_stream_view probeStream);
 
+  /// Computes matching (probeIndex, buildIndex) pairs for a join condition
+  /// that has a sub-expression which isn't natively representable in cuDF
+  /// AST and references columns from both probe and build (e.g.
+  /// `probe.col LIKE build.pattern`). Such a condition can't be precomputed
+  /// on either side before the join, and can't be turned into a single
+  /// cuDF AST tree at all, so it can't drive cudf::conditional_inner_join /
+  /// cudf::conditional_left_semi_join the way an AST-representable
+  /// condition can (see useAstFilter_).
+  ///
+  /// Instead, this materializes the full probe x build cross product as
+  /// explicit row-index columns, evaluates the condition generally via
+  /// filterEvaluator_ against the gathered rows, and returns only the index
+  /// pairs where it's true - the same shape of result
+  /// cudf::conditional_inner_join would produce, so callers can feed it into
+  /// the same downstream gather/matched-flags logic used for the
+  /// AST-representable case.
+  std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
+  crossJoinConditionalIndices(
+      cudf::table_view probeTableView,
+      cudf::table_view buildView,
+      rmm::cuda_stream_view stream);
+
   bool isLeftOrFullJoin() const {
     return joinType_ == core::JoinType::kLeft ||
         joinType_ == core::JoinType::kFull;
@@ -226,6 +248,14 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // each table view before it is passed to cuDF join APIs.
   std::vector<PrecomputeInstruction> leftPrecomputeInstructions_;
   std::vector<PrecomputeInstruction> rightPrecomputeInstructions_;
+
+  // False when the join condition has a non-AST-representable
+  // sub-expression spanning both sides (see crossJoinConditionalIndices).
+  // In that case tree_/scalars_/*PrecomputeInstructions_ above are unused
+  // (left empty) and filterEvaluator_ below evaluates the whole condition
+  // instead.
+  bool useAstFilter_{true};
+  std::shared_ptr<CudfExpression> filterEvaluator_;
 
   // Output column mapping resolved by name from the output type.
   // Handles arbitrary column ordering (e.g., {"b0", "p0"}).
