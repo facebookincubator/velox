@@ -80,6 +80,22 @@ DateDiffFunction::DateDiffFunction(
     rightScalar_ = makeScalarFromConstantExpr(c);
     rightIsConst_ = true;
   }
+
+  // These scalars are used unconditionally by diffByComponent()/eval()
+  // regardless of unit_ or input data; cache them once here instead of
+  // reallocating on every eval() call (see DateTruncFunction for the same
+  // pattern).
+  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto mr = get_temp_mr();
+  threeScalar_ =
+      std::make_unique<cudf::numeric_scalar<int64_t>>(3, true, stream, mr);
+  twelveScalar_ =
+      std::make_unique<cudf::numeric_scalar<int64_t>>(12, true, stream, mr);
+  plusOneScalar_ =
+      std::make_unique<cudf::numeric_scalar<int64_t>>(1, true, stream, mr);
+  minusOneScalar_ =
+      std::make_unique<cudf::numeric_scalar<int64_t>>(-1, true, stream, mr);
+  stream.synchronize();
 }
 
 ColumnOrView DateDiffFunction::eval(
@@ -113,10 +129,9 @@ ColumnOrView DateDiffFunction::eval(
   } else if (unit_ == "quarter") {
     auto months = diffByComponent(left, right, /*isYear=*/false, stream, mr);
     auto monthsView = asView(months);
-    auto three = cudf::numeric_scalar<int64_t>(3, true, stream, mr);
     return cudf::binary_operation(
         monthsView,
-        three,
+        *threeScalar_,
         cudf::binary_operator::DIV,
         cudf::data_type(cudf::type_id::INT64),
         stream,
@@ -276,9 +291,13 @@ std::unique_ptr<cudf::column> DateDiffFunction::timeOfDayMicros(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   const bool isNanos = ts.type().id() == cudf::type_id::TIMESTAMP_NANOSECONDS;
-  auto dayFloor = cudf::cast(
-      ts, cudf::data_type(cudf::type_id::TIMESTAMP_DAYS), stream, mr);
-  auto dayFloorSameRes = cudf::cast(dayFloor->view(), ts.type(), stream, mr);
+  // Floor to day precision via floor_datetimes() rather than a round-trip
+  // cast through TIMESTAMP_DAYS: it's a documented, explicit floor (matching
+  // DateTruncFunction's floorToDay for the same reason) and avoids depending
+  // on cudf::cast()'s unspecified rounding direction for timestamp
+  // resolution changes, and it also collapses the two casts into one call.
+  auto dayFloorSameRes = cudf::datetime::floor_datetimes(
+      ts, cudf::datetime::rounding_frequency::DAY, stream, mr);
   auto durationType = cudf::data_type(
       isNanos ? cudf::type_id::DURATION_NANOSECONDS
               : cudf::type_id::DURATION_MICROSECONDS);
@@ -334,10 +353,8 @@ ColumnOrView DateDiffFunction::diffByComponent(
       cudf::copy_if_else(rightCol, leftCol, leftLessEqual->view(), stream, mr);
   // sign = (left <= right) ? +1 : -1. When left == right the magnitude
   // below is always 0, so the sign choice for ties is immaterial.
-  auto plusOne = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-  auto minusOne = cudf::numeric_scalar<int64_t>(-1, true, stream, mr);
-  auto sign =
-      cudf::copy_if_else(plusOne, minusOne, leftLessEqual->view(), stream, mr);
+  auto sign = cudf::copy_if_else(
+      *plusOneScalar_, *minusOneScalar_, leftLessEqual->view(), stream, mr);
 
   auto y1 = extractComponentAsInt64(
       loCol->view(), datetime_component::YEAR, stream, mr);
@@ -487,10 +504,9 @@ ColumnOrView DateDiffFunction::diffByComponent(
       cudf::data_type(cudf::type_id::INT64),
       stream,
       mr);
-  auto twelve = cudf::numeric_scalar<int64_t>(12, true, stream, mr);
   auto yearMonths = cudf::binary_operation(
       yearDiff->view(),
-      twelve,
+      *twelveScalar_,
       cudf::binary_operator::MUL,
       cudf::data_type(cudf::type_id::INT64),
       stream,

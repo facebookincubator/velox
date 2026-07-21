@@ -25,6 +25,13 @@ namespace facebook::velox::cudf_velox::prestosql {
 /// data as INT64 (zero-copy) and divide by 1e6 in a single binary operation.
 class ToUnixtimeFunction : public CudfFunction {
  public:
+  /// Rejects a constant timestamp argument so a to_unixtime call that
+  /// somehow reaches cuDF function selection without being constant-folded
+  /// falls back to CPU cleanly, instead of eval() indexing into an empty
+  /// inputColumns. See DateAddFunction::canEvaluate / DateTruncFunction::
+  /// canEvaluate for the same defensive pattern.
+  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+
   explicit ToUnixtimeFunction(const std::shared_ptr<velox::exec::Expr>& expr);
 
   ColumnOrView eval(

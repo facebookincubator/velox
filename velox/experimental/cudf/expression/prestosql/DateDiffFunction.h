@@ -136,6 +136,15 @@ class DateDiffFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> rightScalar_;
   bool leftIsConst_ = false;
   bool rightIsConst_ = false;
+
+  // Scalars used unconditionally by diffByComponent()/eval() regardless of
+  // unit_ or input data; cached once at construction instead of
+  // reallocating on every eval() call. See DateTruncFunction for the same
+  // pattern.
+  std::unique_ptr<cudf::scalar> threeScalar_; // quarter = months / 3
+  std::unique_ptr<cudf::scalar> twelveScalar_; // years -> months
+  std::unique_ptr<cudf::scalar> plusOneScalar_; // sign when left <= right
+  std::unique_ptr<cudf::scalar> minusOneScalar_; // sign when left > right
 };
 
 } // namespace facebook::velox::cudf_velox::prestosql

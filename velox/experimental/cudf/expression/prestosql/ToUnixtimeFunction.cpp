@@ -15,10 +15,21 @@
  */
 #include "velox/experimental/cudf/expression/prestosql/ToUnixtimeFunction.h"
 
+#include "velox/expression/ConstantExpr.h"
+
 #include <cudf/binaryop.hpp>
 #include <cudf/unary.hpp>
 
 namespace facebook::velox::cudf_velox::prestosql {
+
+bool ToUnixtimeFunction::canEvaluate(
+    const std::shared_ptr<velox::exec::Expr>& expr) {
+  if (expr->inputs().size() != 1) {
+    return false;
+  }
+  return std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
+             expr->inputs()[0]) == nullptr;
+}
 
 ToUnixtimeFunction::ToUnixtimeFunction(
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -30,6 +41,7 @@ ColumnOrView ToUnixtimeFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
+  VELOX_CHECK(!inputColumns.empty(), "to_unixtime expects a column input");
   auto inputCol = asView(inputColumns[0]);
 
   // Cast to TIMESTAMP_MICROSECONDS if the input has a different resolution.
