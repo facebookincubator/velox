@@ -127,8 +127,7 @@ Expected<int64_t> SparkCastHooks::castStringToTime(
     const tz::TimeZone* /*timeZone*/,
     int64_t /*sessionStartTimeMs*/) const {
   try {
-    // Spark requires an explicit seconds component in TIME strings.
-    return TIME_MICRO_UTC()->valueToTime(timeString, /*requireSeconds=*/true);
+    return TIME_MICRO_UTC()->valueToTime(timeString, /*requireSeconds=*/false);
   } catch (const VeloxException& e) {
     return folly::makeUnexpected(Status::UserError(e.message()));
   } catch (const std::exception& e) {

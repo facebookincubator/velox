@@ -1474,13 +1474,14 @@ TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
-  auto validInput = makeRowVector(
-      {makeFlatVector<std::string>({"12:03:17.123456", " 12:30:45 "})});
+  auto validInput = makeRowVector({makeFlatVector<std::string>(
+      {"12:03:17.123456", " 12:30:45 ", "12:30"})});
   auto validResult = evaluateCast(VARCHAR(), TIME_MICRO_UTC(), validInput);
   ASSERT_TRUE(validResult->type()->equivalent(*TIME_MICRO_UTC()));
   assertEqualVectors(
       makeFlatVector<int64_t>(
-          {43'397'123'456LL, 45'045'000'000LL}, TIME_MICRO_UTC()),
+          {43'397'123'456LL, 45'045'000'000LL, 45'000'000'000LL},
+          TIME_MICRO_UTC()),
       validResult);
 
   auto testInvalidString = [this](const std::string& value) {
@@ -1492,7 +1493,6 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
   testInvalidString("24:00:00");
   testInvalidString("12:60:00");
   testInvalidString("12:30:60");
-  testInvalidString("12:30");
   testInvalidString("abc");
   testInvalidString("");
 }
@@ -1805,7 +1805,7 @@ TEST_F(SparkCastExprTestAnsiOff, stringToTime) {
        std::nullopt,
        std::nullopt,
        std::nullopt,
-       std::nullopt,
+       45'000'000'000LL,
        std::nullopt,
        std::nullopt},
       TIME_MICRO_UTC());

@@ -342,16 +342,16 @@ From strings
 
 *(ANSI compliant)*
 
-Supported format is ``H:m:s[.SSSSSS]`` where:
+Supported format is ``H:m[:s[.SSSSSS]]`` where:
 
   * ``H`` is hour (0-23)
   * ``m`` is minute (0-59)
-  * ``s`` is second (0-59)
+  * ``s`` is an optional second (0-59); omitted seconds default to zero
   * ``SSSSSS`` is optional fractional seconds (0-999999, up to microseconds)
 
 All leading and trailing UTF8 white-spaces are trimmed before casting.
-TIME values are represented as microseconds since midnight (0 to 86,399,999,999).
-Spark `TIME` uses `TIME MICRO UTC` internally.
+Velox represents Spark ``TIME`` using ``TIME MICRO UTC``, whose values are
+stored as microseconds since midnight (0 to 86,399,999,999).
 
 **ANSI mode behavior:**
 
@@ -363,6 +363,7 @@ Valid examples
 ::
 
   SELECT cast('00:00:00' as time); -- 0 (midnight)
+  SELECT cast('12:30' as time); -- 45000000000 (seconds default to zero)
   SELECT cast('12:30:45' as time); -- 45045000000 (12:30:45 in microseconds)
   SELECT cast('23:59:59' as time); -- 86399000000
   SELECT cast('12:03:17.123' as time); -- 43397123000 (with milliseconds)
@@ -376,7 +377,6 @@ Invalid examples
   SELECT cast('24:00:00' as time); -- NULL / throws error (hour out of range)
   SELECT cast('12:60:00' as time); -- NULL / throws error (minute out of range)
   SELECT cast('12:30:60' as time); -- NULL / throws error (second out of range)
-  SELECT cast('12:30' as time); -- NULL / throws error (missing seconds component)
 
 Cast to Decimal
 ---------------
