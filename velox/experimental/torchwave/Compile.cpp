@@ -840,6 +840,26 @@ static bool isSizeArg(std::string_view inputName, const Metadata* meta) {
   return false;
 }
 
+// True if 'producer' is a non-elementwise op that computes (part of) its output
+// size on device (shapeSetOnDevice). Such an op cannot fuse into an elementwise
+// consumer whose shape depends on that size without a kernel boundary in
+// between: the elementwise loop bound would read the size before the producer's
+// kernel writes it, giving a wrong (too-long) result. The multi-kernel
+// masked_select_final reserves its size from a host scalar (shapeSetOnDevice is
+// false there), so it is not caught here and still fuses.
+static bool setsSizeOnDevice(NodeCP producer) {
+  const auto* meta = nodeMeta(producer);
+  if (!meta || meta->elementwise) {
+    return false;
+  }
+  for (const auto& ret : meta->returnMeta) {
+    if (ret.shapeSetOnDevice) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   if (node->target() == "prim.ListUnpack" && !node->inputs().empty()) {
     auto* inputValue = node->inputs()[0].value;
@@ -873,7 +893,16 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     auto inputContext = placeKernels(producer, thisContext);
     if (inputContext == Context::kFused) {
-      if (isScalarSize) {
+      // A non-elementwise producer that sets its output size on device (e.g.
+      // masked_select's single-block/cg form) must not fuse into an elementwise
+      // consumer whose loop bound is that size: the elementwise would read the
+      // size before the producer's kernel writes it, giving a too-long result.
+      // Force a kernel boundary so the size is materialized first. The
+      // multi-kernel masked_select_final reserves its size from a host scalar
+      // (shapeSetOnDevice is false), so it still fuses with the elementwise.
+      bool consumerIsElementwise = meta && meta->elementwise != nullptr;
+      if (isScalarSize ||
+          (consumerIsElementwise && setsSizeOnDevice(producer))) {
         pushdownFused(producer);
       } else {
         fusedInputs.push_back(producer);
@@ -1880,16 +1909,13 @@ void CompileCtx::emitBarrier() {
 }
 
 bool CompileCtx::callNeedsBarrier(NodeCP node) {
-  auto* meta = nodeMeta(node);
-  if (!meta) {
-    return false;
-  }
-  const auto& inputs = node->inputs();
-  for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size(); ++i) {
-    if (!meta->argumentMeta[i].randomAccess) {
-      continue;
-    }
-    auto* value = inputs[i].value;
+  // A call reads its inputs from memory, so if a producer ran earlier in this
+  // same kernel with no barrier since, that producer's writes from other blocks
+  // may not yet be visible. Barrier for any such unsynchronized intra-kernel
+  // producer, regardless of whether the input is flagged random access -- a
+  // sequential read of an in-flight tensor is just as unsafe.
+  for (const auto& input : node->inputs()) {
+    auto* value = input.value;
     auto* producer = value->producer();
     if (producer && generatingOp_->allNodes().count(producer) &&
         !preBarrierValues_.count(value)) {

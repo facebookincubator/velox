@@ -1410,6 +1410,21 @@ UnnestNode::UnnestNode(
     types.emplace_back(variable->type());
   }
 
+  // Validate that unnestNames provides exactly one name per array (element) and
+  // two per map (key and value) before indexing into it below.
+  size_t expectedUnnestNames{0};
+  for (const auto& variable : unnestVariables_) {
+    if (variable->type()->isArray()) {
+      ++expectedUnnestNames;
+    } else if (variable->type()->isMap()) {
+      expectedUnnestNames += 2;
+    }
+  }
+  VELOX_USER_CHECK_EQ(
+      unnestNames_.size(),
+      expectedUnnestNames,
+      "UnnestNode requires one name per array column and two per map column");
+
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {

@@ -1657,6 +1657,31 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
 }
 
+// Test that loadFileMetaData rejects a Parquet trailer whose 4-byte
+// footerLength is near UINT32_MAX. The validation footerLength + 12 must be
+// computed in 64-bit; a 32-bit computation wraps to a tiny value that passes
+// the file-length check and drives an out-of-bounds read while reassembling
+// the footer.
+TEST_F(ParquetReaderTest, corruptFooterLengthWraps) {
+  // Trailer layout: [padding][4-byte footerLength][PAR1]. Choosing a
+  // footerLength close to UINT32_MAX makes footerLength + 12 wrap to 4 in
+  // 32-bit arithmetic, which trivially satisfies the wrapped guard.
+  std::string dataBuf(8, '\0');
+  const uint32_t corruptFooterLength = 0xFFFFFFF8;
+  dataBuf.append(
+      reinterpret_cast<const char*>(&corruptFooterLength), sizeof(uint32_t));
+  dataBuf.append("PAR1");
+
+  auto readerOptions = makeDefaultReaderOptions();
+  auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
+  auto buffer = std::make_unique<dwio::common::BufferedInput>(
+      file, readerOptions.memoryPool());
+
+  VELOX_ASSERT_THROW(
+      ParquetReader(std::move(buffer), readerOptions),
+      "is inconsistent with file length");
+}
+
 TEST_F(ParquetReaderTest, columnStatistics) {
   auto data = makeRowVector(
       {"a", "b", "c"},

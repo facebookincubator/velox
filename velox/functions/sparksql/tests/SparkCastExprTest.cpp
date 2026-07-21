@@ -1219,6 +1219,29 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     testCast<std::string, int64_t>(
         "decimal(12, 2)", {" -3E+2"}, {-30000}, VARCHAR(), DECIMAL(12, 2));
   }
+
+  template <typename T>
+  void testIntegralToDecimal() {
+    // Integral to short decimal.
+    auto input = makeFlatVector<T>({-3, -2, -1, 0, 55, 69, 72});
+    testCast(
+        input,
+        makeFlatVector<int64_t>(
+            {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(6, 2)));
+
+    // Integral to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {-30'000'000'000,
+             -20'000'000'000,
+             -10'000'000'000,
+             0,
+             550'000'000'000,
+             690'000'000'000,
+             720'000'000'000},
+            DECIMAL(20, 10)));
+  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -1383,8 +1406,56 @@ TEST_F(SparkCastExprTestAnsiOn, stringToBoolean) {
   testInvalidString("nan");
 }
 
-TEST_F(SparkCastExprTestAnsiOn, stringToTimestamp) {
+TEST_F(SparkCastExprTest, stringToTimestampAdditionalValidForms) {
+  for (auto ansiEnabled : {false, true}) {
+    setAnsiSupport(ansiEnabled);
+
+    auto input = makeRowVector({makeFlatVector<std::string>({
+        "2000-01-01 12:21:56",
+        "2000-01-01T12:21:56",
+        " 2000-01-01 12:21:56 ",
+    })});
+
+    auto result =
+        evaluate<SimpleVector<Timestamp>>("cast(c0 as timestamp)", input);
+
+    ASSERT_FALSE(result->isNullAt(0));
+    ASSERT_FALSE(result->isNullAt(1));
+    ASSERT_FALSE(result->isNullAt(2));
+    EXPECT_EQ(result->valueAt(0), result->valueAt(1));
+    EXPECT_EQ(result->valueAt(0), result->valueAt(2));
+  }
+}
+
+TEST_F(SparkCastExprTest, tryCastStringToTimestampInvalid) {
+  for (auto ansiEnabled : {false, true}) {
+    setAnsiSupport(ansiEnabled);
+
+    auto input = makeRowVector(
+        {makeFlatVector<std::string>({"INVALID", "2012-Oct-01"})});
+
+    auto result =
+        evaluate<SimpleVector<Timestamp>>("try_cast(c0 as timestamp)", input);
+
+    ASSERT_TRUE(result->isNullAt(0));
+    ASSERT_TRUE(result->isNullAt(1));
+  }
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampValid) {
   testStringToTimestamp();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToTimestampInvalidThrows) {
+  auto testInvalidTimestamp = [this](const std::string& value) {
+    auto input = makeRowVector({makeFlatVector<std::string>({value})});
+    VELOX_ASSERT_THROW(
+        (evaluate<SimpleVector<Timestamp>>("cast(c0 as timestamp)", input)),
+        "Unable to parse timestamp value");
+  };
+
+  testInvalidTimestamp("INVALID");
+  testInvalidTimestamp("2012-Oct-01");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToDate) {
@@ -1667,7 +1738,8 @@ TEST_F(SparkCastExprTestAnsiOff, stringToBoolean) {
 
 TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
   testStringToTimestamp();
-  testCast<std::string, Timestamp>("timestamp", {"INVALID"}, {std::nullopt});
+  testCast<std::string, Timestamp>(
+      "timestamp", {"INVALID", "2012-Oct-01"}, {std::nullopt, std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, stringToDate) {
@@ -2082,6 +2154,44 @@ TEST_F(SparkCastExprTestAnsiOn, varcharToDecimal) {
       "Cannot cast VARCHAR '09{xi+yD' to DECIMAL(12, 2). Value is not a number. Chars are invalid.");
 }
 
+TEST_F(SparkCastExprTestAnsiOn, integralToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testIntegralToDecimal<int8_t>();
+  testIntegralToDecimal<int16_t>();
+  testIntegralToDecimal<int32_t>();
+  testIntegralToDecimal<int64_t>();
+
+  // Under ANSI ON, inputs that overflow the target precision/scale throw.
+  // The value does not fit in the allowed integer digits (precision - scale)
+  // of the target.
+  auto testOverflowThrow = [&]<typename T>() {
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(3, 1),
+        {std::numeric_limits<T>::min()},
+        fmt::format(
+            "Cannot cast {} '{}' to DECIMAL(3, 1)",
+            CppToType<T>::name,
+            std::to_string(std::numeric_limits<T>::min())));
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(17, 16),
+        {-100},
+        fmt::format(
+            "Cannot cast {} '-100' to DECIMAL(17, 16)", CppToType<T>::name));
+    testThrow<T>(
+        CppToType<T>::create(),
+        DECIMAL(17, 16),
+        {100},
+        fmt::format(
+            "Cannot cast {} '100' to DECIMAL(17, 16)", CppToType<T>::name));
+  };
+  testOverflowThrow.operator()<int8_t>();
+  testOverflowThrow.operator()<int16_t>();
+  testOverflowThrow.operator()<int32_t>();
+  testOverflowThrow.operator()<int64_t>();
+}
+
 TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testVarcharToDecimal();
@@ -2168,6 +2278,32 @@ TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
       {std::nullopt},
       VARCHAR(),
       DECIMAL(12, 2));
+}
+
+TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testIntegralToDecimal<int8_t>();
+  testIntegralToDecimal<int16_t>();
+  testIntegralToDecimal<int32_t>();
+  testIntegralToDecimal<int64_t>();
+
+  // Under ANSI OFF, the same overflowing inputs return NULL instead of
+  // throwing.
+  auto testOverflowNull = [&]<typename T>() {
+    testCast<T, int64_t>(
+        CppToType<T>::create(),
+        DECIMAL(3, 1),
+        {std::numeric_limits<T>::min()},
+        {std::nullopt});
+    testCast<T, int64_t>(
+        CppToType<T>::create(), DECIMAL(17, 16), {-100}, {std::nullopt});
+    testCast<T, int64_t>(
+        CppToType<T>::create(), DECIMAL(17, 16), {100}, {std::nullopt});
+  };
+  testOverflowNull.operator()<int8_t>();
+  testOverflowNull.operator()<int16_t>();
+  testOverflowNull.operator()<int32_t>();
+  testOverflowNull.operator()<int64_t>();
 }
 
 } // namespace

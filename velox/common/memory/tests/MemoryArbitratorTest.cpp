@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <deque>
@@ -47,6 +48,53 @@ class MemoryArbitrationTest : public testing::Test {
     SharedArbitrator::unregisterFactory();
   }
 };
+
+TEST_F(MemoryArbitrationTest, errorMessageTemplate) {
+  // The memory throw macros must record the format string as the exception's
+  // message template (not "{}") so similar failures group together in
+  // downstream monitoring instead of collapsing to a single "{}" template.
+  auto arbitrationFailed = []() {
+    VELOX_MEM_ARBITRATION_FAILED("Local arbitration failure. {}", 42);
+  };
+  EXPECT_THAT(
+      arbitrationFailed,
+      Throws<VeloxRuntimeError>(AllOf(
+          Property(
+              &VeloxException::messageTemplate,
+              StrEq("Local arbitration failure. {}")),
+          Property(
+              &VeloxException::message, StrEq("Local arbitration failure. 42")),
+          Property(
+              &VeloxException::errorCode,
+              Eq(error_code::kMemArbitrationFailure)))));
+
+  auto capExceeded = []() {
+    VELOX_MEM_POOL_CAP_EXCEEDED("Exceeded memory pool capacity. {}", 7);
+  };
+  EXPECT_THAT(
+      capExceeded,
+      Throws<VeloxRuntimeError>(AllOf(
+          Property(
+              &VeloxException::messageTemplate,
+              StrEq("Exceeded memory pool capacity. {}")),
+          Property(
+              &VeloxException::message,
+              StrEq("Exceeded memory pool capacity. 7")),
+          Property(
+              &VeloxException::errorCode, Eq(error_code::kMemCapExceeded)))));
+
+  auto poolAborted = []() {
+    VELOX_MEM_POOL_ABORTED("Memory pool aborted: {}", "p0");
+  };
+  EXPECT_THAT(
+      poolAborted,
+      Throws<VeloxRuntimeError>(AllOf(
+          Property(
+              &VeloxException::messageTemplate,
+              StrEq("Memory pool aborted: {}")),
+          Property(&VeloxException::message, StrEq("Memory pool aborted: p0")),
+          Property(&VeloxException::errorCode, Eq(error_code::kMemAborted)))));
+}
 
 TEST_F(MemoryArbitrationTest, stats) {
   MemoryArbitrator::Stats stats;

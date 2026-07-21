@@ -154,6 +154,15 @@ class RowReader {
   }
 
   /**
+   * Returns the index of the currently loaded stripe. Throws an error for
+   * readers without override.
+   */
+  virtual uint32_t currentStripe() const {
+    VELOX_UNSUPPORTED(
+        "RowReader::currentStripe() is not supported by this reader");
+  }
+
+  /**
    * Result of projectColumnsWithSelection. 'output' is the projected
    * RowVector. 'selectedRows' maps each output row back to its input row
    * index: selectedRows[i] is the input row that produced output row i.
