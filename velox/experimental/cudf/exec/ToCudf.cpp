@@ -16,16 +16,13 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
-#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
-#include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
-#include "velox/experimental/cudf/exec/CudfReduce.h"
-#include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
@@ -35,6 +32,7 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/HashAggregation.h"
@@ -43,6 +41,7 @@
 #include "velox/exec/Limit.h"
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/Values.h"
 
@@ -50,13 +49,6 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda.h>
-
-#include <experimental/cudf/exec/CudfDistinct.h>
-#include <experimental/cudf/exec/CudfFilterProject.h>
-#include <experimental/cudf/exec/CudfLimit.h>
-#include <experimental/cudf/exec/CudfLocalPartition.h>
-
-#include <iostream>
 
 static const std::string kCudfAdapterName = "cuDF";
 static const std::string kCudfLocalPartitionAdapterName = "cuDF-LocalPartition";
@@ -315,19 +307,31 @@ struct CudfDriverAdapter {
 };
 
 struct CudfLocalPartitionAdapter {
-  bool producesGpuOutput(const exec::Operator* op) const {
-    return dynamic_cast<const CudfFromVelox*>(op) != nullptr ||
-        dynamic_cast<const CudfGroupby*>(op) != nullptr ||
-        dynamic_cast<const CudfReduce*>(op) != nullptr ||
-        dynamic_cast<const CudfDistinct*>(op) != nullptr ||
-        dynamic_cast<const CudfFilterProject*>(op) != nullptr ||
-        dynamic_cast<const CudfOrderBy*>(op) != nullptr ||
-        dynamic_cast<const CudfTopN*>(op) != nullptr ||
-        dynamic_cast<const CudfLimit*>(op) != nullptr ||
-        dynamic_cast<const CudfHashJoinBuild*>(op) != nullptr ||
-        dynamic_cast<const CudfHashJoinProbe*>(op) != nullptr ||
-        dynamic_cast<const CudfAssignUniqueId*>(op) != nullptr ||
-        dynamic_cast<const CudfLocalPartition*>(op) != nullptr;
+  bool producesGpuOutput(
+      const exec::Operator* op,
+      const exec::DriverFactory& factory) const {
+    // All built-in cuDF operators output CudfVectors except CudfToVelox.
+    if (dynamic_cast<const CudfOperatorBase*>(op) != nullptr) {
+      return dynamic_cast<const CudfToVelox*>(op) == nullptr;
+    }
+
+    if (dynamic_cast<const exec::TableScan*>(op) == nullptr) {
+      return false;
+    }
+
+    auto scanNode = std::dynamic_pointer_cast<const core::TableScanNode>(
+        findPlanNode(factory, op->planNodeId()));
+    if (!scanNode) {
+      return false;
+    }
+
+    const auto connector =
+        facebook::velox::connector::ConnectorRegistry::tryGet(
+            scanNode->tableHandle()->connectorId());
+    return dynamic_cast<connector::hive::CudfHiveConnector*>(connector.get()) !=
+        nullptr ||
+        dynamic_cast<connector::hive::iceberg::CudfIcebergConnector*>(
+            connector.get()) != nullptr;
   }
 
   std::shared_ptr<const core::PlanNode> findPlanNode(
@@ -368,7 +372,7 @@ struct CudfLocalPartitionAdapter {
         continue;
       }
 
-      if (i == 0 || !producesGpuOutput(operators[i - 1])) {
+      if (i == 0 || !producesGpuOutput(operators[i - 1], factory)) {
         continue;
       }
 
@@ -395,8 +399,12 @@ void registerCudf() {
     return;
   }
 
-  // Register operator adapters
-  registerAllOperatorAdapters();
+  // The physical-plan path does not depend on the legacy operator-adapter
+  // registry. Keep it entirely out of that path so missing plan-node coverage
+  // cannot be hidden by post-planning replacement.
+  if (CudfConfig::getInstance().enableDriverAdapter) {
+    registerAllOperatorAdapters();
+  }
 
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);

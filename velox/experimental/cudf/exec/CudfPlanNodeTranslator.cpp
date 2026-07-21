@@ -17,10 +17,15 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfDistinct.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfLimit.h"
+#include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CudfTopN.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
 
@@ -62,12 +67,17 @@ std::unique_ptr<exec::Operator> CudfPlanNodeTranslator::toOperator(
         id, toVelox->outputType(), ctx, toVelox->id());
   }
 
+  if (auto filterProject =
+          std::dynamic_pointer_cast<const CudfFilterProjectNode>(node)) {
+    return std::make_unique<CudfFilterProject>(
+        id, ctx, filterProject->filterNode(), filterProject->projectNode());
+  }
+
   if (auto gpuAgg =
           std::dynamic_pointer_cast<const CudfAggregationNode>(node)) {
     const auto& aggregationNode = gpuAgg->aggregationNode();
     const bool isGlobal = aggregationNode->groupingKeys().empty();
-    const bool isDistinct =
-        !isGlobal && aggregationNode->aggregates().empty();
+    const bool isDistinct = !isGlobal && aggregationNode->aggregates().empty();
     if (isGlobal) {
       return std::make_unique<CudfReduce>(id, ctx, aggregationNode);
     }
@@ -75,6 +85,18 @@ std::unique_ptr<exec::Operator> CudfPlanNodeTranslator::toOperator(
       return std::make_unique<CudfDistinct>(id, ctx, aggregationNode);
     }
     return std::make_unique<CudfGroupby>(id, ctx, aggregationNode);
+  }
+
+  if (auto orderBy = std::dynamic_pointer_cast<const CudfOrderByNode>(node)) {
+    return std::make_unique<CudfOrderBy>(id, ctx, orderBy->planNode());
+  }
+
+  if (auto topN = std::dynamic_pointer_cast<const CudfTopNNode>(node)) {
+    return std::make_unique<CudfTopN>(id, ctx, topN->planNode());
+  }
+
+  if (auto limit = std::dynamic_pointer_cast<const CudfLimitNode>(node)) {
+    return std::make_unique<CudfLimit>(id, ctx, limit->planNode());
   }
 
   return nullptr;
@@ -89,6 +111,28 @@ std::optional<uint32_t> CudfPlanNodeTranslator::maxDrivers(
 
   if (auto gpuJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
     return gpuJoin->preferredProbeDriverCount();
+  }
+
+  if (auto filterProject =
+          std::dynamic_pointer_cast<const CudfFilterProjectNode>(node)) {
+    return filterProject->preferredDriverCount();
+  }
+
+  if (auto nestedLoopJoin =
+          std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+    return nestedLoopJoin->preferredDriverCount();
+  }
+
+  if (auto orderBy = std::dynamic_pointer_cast<const CudfOrderByNode>(node)) {
+    return orderBy->preferredDriverCount();
+  }
+
+  if (auto topN = std::dynamic_pointer_cast<const CudfTopNNode>(node)) {
+    return topN->preferredDriverCount();
+  }
+
+  if (auto limit = std::dynamic_pointer_cast<const CudfLimitNode>(node)) {
+    return limit->preferredDriverCount();
   }
 
   if (auto tableScan =

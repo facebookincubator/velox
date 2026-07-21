@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -1002,8 +1003,16 @@ std::unique_ptr<exec::Operator> CudfNestedLoopJoinBridgeTranslator::toOperator(
     exec::DriverCtx* ctx,
     int32_t id,
     const core::PlanNodePtr& node) {
-  if (auto joinNode =
+  std::shared_ptr<const core::NestedLoopJoinNode> joinNode;
+  if (auto rawJoin =
           std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
+    joinNode = rawJoin;
+  } else if (
+      auto cudfJoin =
+          std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+    joinNode = cudfJoin->planNode();
+  }
+  if (joinNode) {
     return std::make_unique<CudfNestedLoopJoinProbe>(id, ctx, joinNode);
   }
   return nullptr;
@@ -1011,14 +1020,26 @@ std::unique_ptr<exec::Operator> CudfNestedLoopJoinBridgeTranslator::toOperator(
 
 std::unique_ptr<exec::JoinBridge>
 CudfNestedLoopJoinBridgeTranslator::toJoinBridge(
-    const core::PlanNodePtr& /* node */) {
-  return std::make_unique<CudfNestedLoopJoinBridge>();
+    const core::PlanNodePtr& node) {
+  if (std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node) ||
+      std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+    return std::make_unique<CudfNestedLoopJoinBridge>();
+  }
+  return nullptr;
 }
 
 exec::OperatorSupplier CudfNestedLoopJoinBridgeTranslator::toOperatorSupplier(
     const core::PlanNodePtr& node) {
   if (auto joinNode =
           std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
+    return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
+      return std::make_unique<CudfNestedLoopJoinBuild>(
+          operatorId, ctx, joinNode);
+    };
+  }
+  if (auto cudfJoin =
+          std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+    auto joinNode = cudfJoin->planNode();
     return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
       return std::make_unique<CudfNestedLoopJoinBuild>(
           operatorId, ctx, joinNode);

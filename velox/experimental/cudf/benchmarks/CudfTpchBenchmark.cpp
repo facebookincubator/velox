@@ -194,6 +194,8 @@ exec::test::TpchPlan CudfTpchBenchmark::getQueryPlanForExecution(
     cudf_velox::CudfPlanRewriter::Config rewriteConfig;
     rewriteConfig.gpuDriverCount = FLAGS_gpu_driver_count;
     rewriteConfig.cpuDriverCount = FLAGS_num_drivers;
+    rewriteConfig.queryCtx =
+        core::QueryCtx::create(nullptr, core::QueryConfig(queryConfigs_));
 
     std::cout << "Rewriting plan for cudf" << std::endl;
     std::cout << "  GPU drivers: " << FLAGS_gpu_driver_count << std::endl;

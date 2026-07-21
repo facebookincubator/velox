@@ -15,7 +15,10 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter2.h"
 
@@ -47,7 +50,9 @@ struct RewriteResult {
 class Rewriter {
  public:
   explicit Rewriter(const CudfPlanRewriter2::Config& config)
-      : config_(config) {}
+      : config_(config),
+        queryCtx_(
+            config.queryCtx ? config.queryCtx : core::QueryCtx::create()) {}
 
   core::PlanNodePtr rewrite(const core::PlanNodePtr& root) {
     return rewriteNode(root, Mode::kCpu).node;
@@ -74,26 +79,6 @@ class Rewriter {
       return rewriteLocalPartition(localPartition, requestedMode);
     }
 
-    if (auto cudfAgg =
-            std::dynamic_pointer_cast<const CudfAggregationNode>(node)) {
-      return rewriteCudfAggregation(cudfAgg);
-    }
-
-    if (auto cudfFrom =
-            std::dynamic_pointer_cast<const CudfFromVeloxNode>(node)) {
-      auto child = rewriteNode(cudfFrom->sources()[0], Mode::kCpu);
-      return {
-          std::make_shared<CudfFromVeloxNode>(cudfFrom->id(), child.node),
-          Mode::kGpu};
-    }
-
-    if (auto cudfTo = std::dynamic_pointer_cast<const CudfToVeloxNode>(node)) {
-      auto child = rewriteNode(cudfTo->sources()[0], Mode::kGpu);
-      return {
-          std::make_shared<CudfToVeloxNode>(cudfTo->id(), child.node),
-          Mode::kCpu};
-    }
-
     if (auto aggregate =
             std::dynamic_pointer_cast<const core::AggregationNode>(node)) {
       if (canUseGpuAggregation(aggregate)) {
@@ -101,10 +86,45 @@ class Rewriter {
       }
     }
 
+    if (auto project =
+            std::dynamic_pointer_cast<const core::ProjectNode>(node)) {
+      if (canUseGpuProject(project)) {
+        return rewriteProject(project);
+      }
+    }
+
+    if (auto filter = std::dynamic_pointer_cast<const core::FilterNode>(node)) {
+      if (canUseGpuFilter(filter)) {
+        return rewriteFilter(filter);
+      }
+    }
+
     if (auto join = std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
       if (canUseGpuHashJoin(join)) {
         return rewriteHashJoin(join);
       }
+    }
+
+    if (auto join =
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
+      if (canUseGpuNestedLoopJoin(join)) {
+        return rewriteNestedLoopJoin(join);
+      }
+    }
+
+    if (auto orderBy =
+            std::dynamic_pointer_cast<const core::OrderByNode>(node)) {
+      return rewriteUnaryNode<core::OrderByNode, CudfOrderByNode>(
+          orderBy, "CudfOrderBy");
+    }
+
+    if (auto topN = std::dynamic_pointer_cast<const core::TopNNode>(node)) {
+      return rewriteUnaryNode<core::TopNNode, CudfTopNNode>(topN, "CudfTopN");
+    }
+
+    if (auto limit = std::dynamic_pointer_cast<const core::LimitNode>(node)) {
+      return rewriteUnaryNode<core::LimitNode, CudfLimitNode>(
+          limit, "CudfLimit");
     }
 
     if (auto scan =
@@ -128,15 +148,47 @@ class Rewriter {
         Mode::kGpu};
   }
 
-  RewriteResult rewriteCudfAggregation(
-      const std::shared_ptr<const CudfAggregationNode>& node) {
-    auto source = node->sources().empty() ? nullptr : node->sources().front();
-    auto rewrittenSource = rewriteNode(source, Mode::kGpu);
-    auto rebuiltAgg =
-        cloneAggregationNode(node->aggregationNode(), rewrittenSource.node);
+  RewriteResult rewriteProject(
+      const std::shared_ptr<const core::ProjectNode>& projectNode) {
+    VELOX_CHECK_EQ(projectNode->sources().size(), 1);
+
+    if (auto filterNode = std::dynamic_pointer_cast<const core::FilterNode>(
+            projectNode->sources()[0]);
+        filterNode && canUseGpuFilter(filterNode)) {
+      VELOX_CHECK_EQ(filterNode->sources().size(), 1);
+      auto rewrittenSource = rewriteNode(filterNode->sources()[0], Mode::kGpu);
+      auto rebuiltFilter = core::FilterNode::Builder(*filterNode)
+                               .source(rewrittenSource.node)
+                               .build();
+      auto rebuiltProject = core::ProjectNode::Builder(*projectNode)
+                                .source(rebuiltFilter)
+                                .build();
+      return {
+          std::make_shared<CudfFilterProjectNode>(
+              rebuiltFilter, rebuiltProject, config_.gpuDriverCount),
+          Mode::kGpu};
+    }
+
+    auto rewrittenSource = rewriteNode(projectNode->sources()[0], Mode::kGpu);
+    auto rebuiltProject = core::ProjectNode::Builder(*projectNode)
+                              .source(rewrittenSource.node)
+                              .build();
     return {
-        std::make_shared<CudfAggregationNode>(
-            rebuiltAgg, node->preferredDriverCount()),
+        std::make_shared<CudfFilterProjectNode>(
+            nullptr, rebuiltProject, config_.gpuDriverCount),
+        Mode::kGpu};
+  }
+
+  RewriteResult rewriteFilter(
+      const std::shared_ptr<const core::FilterNode>& filterNode) {
+    VELOX_CHECK_EQ(filterNode->sources().size(), 1);
+    auto rewrittenSource = rewriteNode(filterNode->sources()[0], Mode::kGpu);
+    auto rebuiltFilter = core::FilterNode::Builder(*filterNode)
+                             .source(rewrittenSource.node)
+                             .build();
+    return {
+        std::make_shared<CudfFilterProjectNode>(
+            rebuiltFilter, nullptr, config_.gpuDriverCount),
         Mode::kGpu};
   }
 
@@ -155,6 +207,32 @@ class Rewriter {
     return {
         std::make_shared<CudfHashJoinNode>(
             rebuiltJoin, config_.gpuDriverCount, config_.gpuDriverCount),
+        Mode::kGpu};
+  }
+
+  RewriteResult rewriteNestedLoopJoin(
+      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode) {
+    VELOX_CHECK_EQ(joinNode->sources().size(), 2);
+    auto rewrittenProbe = rewriteNode(joinNode->sources()[0], Mode::kGpu);
+    auto rewrittenBuild = rewriteNode(joinNode->sources()[1], Mode::kGpu);
+    auto rebuiltJoin = cloneNestedLoopJoinNode(
+        joinNode, rewrittenProbe.node, rewrittenBuild.node);
+    return {
+        std::make_shared<CudfNestedLoopJoinNode>(
+            rebuiltJoin, "CudfNestedLoopJoin", config_.gpuDriverCount),
+        Mode::kGpu};
+  }
+
+  template <typename CoreNode, typename CudfNode>
+  RewriteResult rewriteUnaryNode(
+      const std::shared_ptr<const CoreNode>& node,
+      const char* name) {
+    VELOX_CHECK_EQ(node->sources().size(), 1);
+    auto rewrittenSource = rewriteNode(node->sources()[0], Mode::kGpu);
+    typename CoreNode::Builder builder(*node);
+    auto rebuilt = builder.source(rewrittenSource.node).build();
+    return {
+        std::make_shared<CudfNode>(rebuilt, name, config_.gpuDriverCount),
         Mode::kGpu};
   }
 
@@ -179,7 +257,11 @@ class Rewriter {
 
     core::PlanNodePtr rebuilt = node;
     if (newSources.size() == 1) {
-      if (auto cloned =
+      if (auto aggregation =
+              std::dynamic_pointer_cast<const core::AggregationNode>(node)) {
+        rebuilt = cloneAggregationNode(aggregation, newSources[0]);
+      } else if (
+          auto cloned =
               cloneWithNewSource<core::ProjectNode>(node, newSources[0])) {
         rebuilt = cloned;
       } else if (
@@ -207,6 +289,16 @@ class Rewriter {
               node, newSources[0])) {
         rebuilt = cloned;
       }
+    } else if (newSources.size() == 2) {
+      if (auto hashJoin =
+              std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+        rebuilt = cloneHashJoinNode(hashJoin, newSources[0], newSources[1]);
+      } else if (
+          auto nestedLoopJoin =
+              std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
+        rebuilt = cloneNestedLoopJoinNode(
+            nestedLoopJoin, newSources[0], newSources[1]);
+      }
     }
 
     return {rebuilt, Mode::kCpu};
@@ -223,15 +315,31 @@ class Rewriter {
     return result;
   }
 
-  static bool canUseGpuAggregation(
-      const std::shared_ptr<const core::AggregationNode>& aggNode) {
-    if (!aggNode) {
+  bool canUseGpuProject(
+      const std::shared_ptr<const core::ProjectNode>& projectNode) const {
+    if (!projectNode) {
       return false;
     }
-    return true;
+    VELOX_CHECK_EQ(projectNode->sources().size(), 1);
+    if (projectNode->sources()[0]->outputType()->size() == 0 &&
+        !projectNode->projections().empty()) {
+      return false;
+    }
+    return canBeEvaluatedByCudf(projectNode->projections(), queryCtx_.get());
   }
 
-  static bool canUseGpuHashJoin(
+  bool canUseGpuFilter(
+      const std::shared_ptr<const core::FilterNode>& filterNode) const {
+    return filterNode &&
+        canBeEvaluatedByCudf({filterNode->filter()}, queryCtx_.get());
+  }
+
+  bool canUseGpuAggregation(
+      const std::shared_ptr<const core::AggregationNode>& aggNode) {
+    return aggNode && canBeEvaluatedByCudf(*aggNode, queryCtx_.get());
+  }
+
+  bool canUseGpuHashJoin(
       const std::shared_ptr<const core::HashJoinNode>& joinNode) {
     if (!joinNode) {
       return false;
@@ -246,7 +354,22 @@ class Rewriter {
       return false;
     }
 
+    if (joinNode->filter() &&
+        !canBeEvaluatedByCudf({joinNode->filter()}, queryCtx_.get())) {
+      return false;
+    }
+
     return true;
+  }
+
+  bool canUseGpuNestedLoopJoin(
+      const std::shared_ptr<const core::NestedLoopJoinNode>& joinNode) const {
+    if (!joinNode ||
+        !CudfNestedLoopJoinProbe::isSupportedJoinType(joinNode->joinType())) {
+      return false;
+    }
+    return !joinNode->joinCondition() ||
+        canBeEvaluatedByCudf({joinNode->joinCondition()}, queryCtx_.get());
   }
 
   static bool isGpuTableScan(
@@ -290,6 +413,17 @@ class Rewriter {
     return builder.build();
   }
 
+  static std::shared_ptr<const core::NestedLoopJoinNode>
+  cloneNestedLoopJoinNode(
+      const std::shared_ptr<const core::NestedLoopJoinNode>& node,
+      const core::PlanNodePtr& leftSource,
+      const core::PlanNodePtr& rightSource) {
+    core::NestedLoopJoinNode::Builder builder(*node);
+    builder.left(leftSource);
+    builder.right(rightSource);
+    return builder.build();
+  }
+
   core::PlanNodePtr addBoundary(core::PlanNodePtr node, Mode from, Mode to) {
     if (!node || from == to) {
       return node;
@@ -322,6 +456,7 @@ class Rewriter {
   }
 
   const CudfPlanRewriter2::Config& config_;
+  const std::shared_ptr<core::QueryCtx> queryCtx_;
 };
 
 } // namespace

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -27,6 +28,7 @@ class CudfPlanRewriter2 {
   struct Config {
     int gpuDriverCount = 4;
     int cpuDriverCount = 32;
+    std::shared_ptr<core::QueryCtx> queryCtx;
   };
 
   static core::PlanNodePtr rewrite(
@@ -35,4 +37,3 @@ class CudfPlanRewriter2 {
 };
 
 } // namespace facebook::velox::cudf_velox
-
