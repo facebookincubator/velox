@@ -17,12 +17,14 @@ add_library(
   ArrayAccessFunctions.cpp
   AstExpression.cpp
   CommonFunctions.cpp
+  DateTruncFunction.cpp
   DecimalExpressionKernels.cpp
   DecimalExpressionKernelsGpu.cu
   ExpressionEvaluator.cpp
   JitExpression.cpp
   NullMask.cpp
   PrestoFunctions.cpp
+  prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp

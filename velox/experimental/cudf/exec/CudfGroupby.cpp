@@ -37,6 +37,7 @@
 #include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
 namespace {
@@ -587,6 +588,22 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
             cudf_velox::veloxToCudfDataType(resultType),
             stream,
             mr);
+        // Null out groups where count == 0 (empty groups).
+        // SQL semantics require avg of an empty group to be NULL, but
+        // cudf's 0/0 division produces NaN.  We mask on count rather
+        // than using column_nans_to_nulls so that legitimate NaN
+        // results (from NaN inputs) are preserved.
+        cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
+        auto validMask = cudf::binary_operation(
+            *count,
+            zero,
+            cudf::binary_operator::GREATER,
+            cudf::data_type{cudf::type_id::BOOL8},
+            stream,
+            get_temp_mr());
+        auto [mask, nullCount] =
+            cudf::bools_to_mask(*validMask, stream, get_temp_mr());
+        avg->set_null_mask(std::move(*mask), nullCount);
         return avg;
       }
       default:

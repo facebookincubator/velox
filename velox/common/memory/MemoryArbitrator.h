@@ -30,32 +30,29 @@ namespace facebook::velox::memory {
 class MemoryPool;
 class ArbitrationOperation;
 
-#define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
+#define VELOX_MEM_POOL_CAP_EXCEEDED(...)                            \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
       ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
       ::facebook::velox::error_code::kMemCapExceeded.c_str(),       \
       /* isRetriable */ true,                                       \
-      "{}",                                                         \
-      errorMessage);
+      ##__VA_ARGS__);
 
-#define VELOX_MEM_ARBITRATION_FAILED(errorMessage)                   \
+#define VELOX_MEM_ARBITRATION_FAILED(...)                            \
   _VELOX_THROW(                                                      \
       ::facebook::velox::VeloxRuntimeError,                          \
       ::facebook::velox::error_source::kErrorSourceRuntime.c_str(),  \
       ::facebook::velox::error_code::kMemArbitrationFailure.c_str(), \
       /* isRetriable */ true,                                        \
-      "{}",                                                          \
-      errorMessage);
+      ##__VA_ARGS__);
 
-#define VELOX_MEM_POOL_ABORTED(errorMessage)                        \
+#define VELOX_MEM_POOL_ABORTED(...)                                 \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
       ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
       ::facebook::velox::error_code::kMemAborted.c_str(),           \
       /* isRetriable */ true,                                       \
-      "{}",                                                         \
-      errorMessage);
+      ##__VA_ARGS__);
 
 using MemoryArbitrationStateCheckCB = std::function<void(MemoryPool&)>;
 

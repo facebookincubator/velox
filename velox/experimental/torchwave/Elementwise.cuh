@@ -823,6 +823,19 @@ __index_elt_one(Tensor* source, int32_t idx0, BlockInfo& block) {
   return T();
 }
 
+// Like __index_elt_one but returns 'deflt' for an out-of-range index instead of
+// flagging an error. 'deflt' has its own template type U (a second type
+// template parameter after the source element type T) so a scalar constant of a
+// possibly different type is converted to the element type T on return.
+template <typename T, typename U>
+__device__ inline T
+__index_elt_one_default(Tensor* source, int32_t idx0, U deflt) {
+  if (idx0 >= 0 && idx0 < source->dims[0]) {
+    return storage<T>(source)[indexOffset(source, idx0)];
+  }
+  return static_cast<T>(deflt);
+}
+
 template <typename T>
 __device__ inline T
 __index_elt_two(Tensor* source, int32_t idx0, int32_t idx1, BlockInfo& block) {
@@ -914,6 +927,70 @@ __device__ void __indexgather(
       dst[i] = src[offset];
     }
   }
+}
+
+// Fused elementwise index_select along 'dim' (functional/out-of-place). The
+// enclosing elementwise loop iterates every element of the whole expression's
+// output 'out'; 'idx' is the logical row-major index of one output element. The
+// index_select result has 'source's shape with dimension 'dim' resized to the
+// index length; that result broadcasts to 'out'. Decompose idx into per-dim
+// coordinates using out's dims, right-align the result within out
+// ('dimOffset'), broadcast any size-1 result dimension to coordinate 0, replace
+// the coordinate along 'dim' with the selected index value, and read 'source'
+// at the resulting offset. This mirrors ATen's advanced-indexing kernel:
+//   offset = sum(coord[d] * source->strides[d], d != dim)
+//          + index[coord[dim]] * source->strides[dim]
+// (see ATen native/cuda/IndexKernel.cu). 'source' and 'index' are whole tensors
+// read at computed offsets (so they carry randomAccess and are materialized
+// before this op). An out-of-range index is reported like __index_elt_*.
+template <typename T, int32_t kDim>
+__device__ inline T __index_select(
+    uint32_t idx,
+    Tensor* source,
+    Tensor* index,
+    Tensor* out,
+    BlockInfo& block) {
+  int32_t dim = kDim < 0 ? kDim + source->rank : kDim;
+  // Decompose the logical output index into per-dim coordinates using the
+  // enclosing expression's output shape (innermost dim first).
+  int32_t coord[kMaxDims];
+  uint32_t rem = idx;
+  for (int d = out->rank - 1; d >= 0; --d) {
+    auto dimSize = static_cast<uint32_t>(out->dims[d]);
+    coord[d] = static_cast<int32_t>(rem % dimSize);
+    rem /= dimSize;
+  }
+  int32_t dimOffset = out->rank - source->rank;
+  // int64 offset (like ATen's IndexKernel) so coord*stride accumulation does
+  // not overflow for large tensors.
+  int64_t offset = 0;
+  int32_t pos = 0;
+  for (int d = 0; d < source->rank; ++d) {
+    int32_t oDimSize = d == dim ? index->dims[0] : source->dims[d];
+    int32_t c = oDimSize == 1 ? 0 : coord[d + dimOffset];
+    if (d == dim) {
+      pos = c;
+    } else {
+      offset += static_cast<int64_t>(c) * source->strides[d];
+    }
+  }
+  int64_t selected = index->elementType == kScalarTypeLong
+      ? storage<int64_t>(index)[pos * index->strides[0]]
+      : static_cast<int64_t>(storage<int32_t>(index)[pos * index->strides[0]]);
+  if (selected < 0) {
+    selected += source->dims[dim];
+  }
+  if (selected < 0 || selected >= source->dims[dim]) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = dim;
+      block.debugInfo->extra[1] = selected;
+      SET_MSG(block.debugInfo, "Bad idx\0");
+    }
+    return T();
+  }
+  offset += selected * source->strides[dim];
+  return storage<T>(source)[offset];
 }
 
 } // namespace torch::wave
