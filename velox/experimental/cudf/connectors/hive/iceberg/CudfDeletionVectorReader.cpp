@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/FileSystems.h"
@@ -330,7 +331,23 @@ void CudfDeletionVectorReader::applyDeletes(
     bitmap_->contains_async(rowIndex, deleteMask, stream);
   } else {
     auto castedRowIndex = cudf::cast(rowIndex, bitmapKeyType, stream, temp_mr);
-    bitmap_->contains_async(castedRowIndex->view(), deleteMask, stream);
+    // For uint64_t casted row indices, apply the DV directly.
+    if (bitmap_->type() == cudf::roaring_bitmap_type::BITS_64) {
+      bitmap_->contains_async(castedRowIndex->view(), deleteMask, stream);
+      return;
+    }
+    // For uint64_t -> uint32_t casted row indices, compute DV matches in an
+    // intermediate and scatter only valid ones into the deletion mask.
+    auto dvMatches = cudf::make_numeric_column(
+        cudf::data_type{cudf::type_id::BOOL8},
+        rowIndex.size(),
+        cudf::mask_state::UNALLOCATED,
+        stream,
+        temp_mr);
+    bitmap_->contains_async(
+        castedRowIndex->view(), dvMatches->mutable_view(), stream);
+    scatter32BitDVMatchesToMask(
+        rowIndex, dvMatches->view(), deleteMask, stream, temp_mr);
   }
 }
 
