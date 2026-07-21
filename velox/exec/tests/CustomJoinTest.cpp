@@ -16,7 +16,6 @@
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
@@ -273,10 +272,10 @@ class CustomJoinBridgeTranslator : public Operator::PlanNodeTranslator {
 /// This test will show the CustomJoinBuild passing count of input rows to
 /// CustomJoinProbe via CustomJoinBridge, then probe will emit corresponding
 /// number of rows, like a Limit operator.
-class CustomJoinTest : public OperatorTestBase {
+class CustomJoinTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
-    OperatorTestBase::SetUp();
+    HiveConnectorTestBase::SetUp();
     Operator::registerOperator(std::make_unique<CustomJoinBridgeTranslator>());
   }
 
@@ -346,18 +345,8 @@ TEST_F(CustomJoinTest, parallelism) {
 
 /// Tests that custom join bridges work correctly with mixed grouped execution,
 /// where the build pipeline runs ungrouped and the probe pipeline runs in
-/// grouped split groups.  This exercises the cross-mode bridge handling in
-/// DriverFactory::needsCustomJoinBridges() and
-/// Task::addCustomJoinBridgesLocked().
-class CustomJoinGroupedExecutionTest : public HiveConnectorTestBase {
- protected:
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    Operator::registerOperator(std::make_unique<CustomJoinBridgeTranslator>());
-  }
-};
-
-TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
+/// grouped split groups.
+TEST_F(CustomJoinTest, mixedGroupedExecution) {
   auto rowType = ROW({"c0"}, {INTEGER()});
   auto vectors = makeVectors(rowType, 4, 20);
   auto filePath = TempFilePath::create();
@@ -390,7 +379,7 @@ TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
         Split(makeHiveConnectorSplit(filePath->getPath()), i));
   }
 
-  auto results =
+  auto numRows =
       AssertQueryBuilder(plan)
           .splits(probeScanNodeId, std::move(probeSplits))
           .splits(
@@ -399,7 +388,7 @@ TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
           .groupedExecutionLeafNodeIds({probeScanNodeId})
           .numSplitGroups(numSplitGroups)
           .numConcurrentSplitGroups(1)
-          .copyResults(pool_.get());
+          .countResults();
 
-  ASSERT_EQ(results->size(), 160);
+  ASSERT_EQ(numRows, 160);
 }
