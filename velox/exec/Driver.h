@@ -823,6 +823,8 @@ struct DriverFactory {
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeHashJoinNodeIds;
   /// Same as 'mixedExecutionModeHashJoinNodeIds' but for Nested Loop Joins.
   folly::F14FastSet<core::PlanNodeId> mixedExecutionModeNestedLoopJoinNodeIds;
+  /// Same as 'mixedExecutionModeHashJoinNodeIds' but for custom join bridges.
+  folly::F14FastSet<core::PlanNodeId> mixedExecutionModeCustomJoinNodeIds;
 
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
