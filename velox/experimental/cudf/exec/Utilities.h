@@ -27,8 +27,21 @@
 
 namespace facebook::velox::cudf_velox {
 
+/// Returns the maximum number of rows allowed in a single cudf table.
+/// Defaults to cudf::size_type max (~2.1B); overridable via
+/// CudfConfig::batchSizeMaxThreshold.
+size_t maxBatchRows();
+
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
+    std::vector<std::unique_ptr<cudf::table>> tables,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+/// Batched variant of concatenateTables that splits output to respect
+/// cudf::size_type row limits. All input tables must be on the same stream.
+[[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
+concatenateTablesBatched(
     std::vector<std::unique_ptr<cudf::table>> tables,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);

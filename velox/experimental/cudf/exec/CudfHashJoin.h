@@ -30,10 +30,12 @@
 #include <cudf/copying.hpp>
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
+#include <cudf/utilities/span.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 
 #include <memory>
+#include <queue>
 
 namespace facebook::velox::cudf_velox {
 
@@ -221,6 +223,10 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   std::vector<size_t> rightColumnOutputIndices_;
   bool finished_{false};
 
+  /// Queue of output batches when a single probe produces results exceeding
+  /// cudf::size_type limits. Drained before accepting new input.
+  std::queue<CudfVectorPtr> outputQueue_;
+
   /// True if any build table has NULL values in join key columns.
   /// Used for null-aware LEFT SEMI PROJECT to determine match column
   /// nullability.
@@ -274,82 +280,65 @@ class CudfHashJoinProbe : public CudfOperatorBase {
     vector_size_t numRows;
   };
 
+  /// Deferred join index pair for lazy gather in doGetOutput().
+  /// gatherPendingBatch advances offset and pops the entry when fully consumed.
+  struct PendingIndices {
+    std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftIndices;
+    std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightIndices;
+    size_t offset{0};
+    size_t buildChunkIndex;
+    size_t remaining() const {
+      return leftIndices->size() - offset;
+    }
+  };
+
+  /// Queue of deferred index pairs awaiting gather in doGetOutput().
+  std::queue<PendingIndices> pendingIndices_;
+
   /**
    * @brief Performs inner join between probe table and all build tables.
-   * @param leftTable Probe-side table to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * Populates pendingIndices_ (lazy gather) or outputQueue_ (non-AST filter).
    */
-  std::vector<JoinOutput> innerJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void innerJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs left join between probe table and all build tables.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * Populates pendingIndices_ (lazy gather) or outputQueue_ (non-AST filter).
    */
-  std::vector<JoinOutput> leftJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void leftJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs right join between probe table and all build tables.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * Populates pendingIndices_ for matched rows. Updates rightMatchedFlags_
+   * eagerly. Uses outputQueue_ for non-AST filtered right joins.
    */
-  std::vector<JoinOutput> rightJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void rightJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Performs full outer join between probe table and all build tables.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * Populates pendingIndices_ for matched rows. Updates rightMatchedFlags_
+   * eagerly. Full join requires AST filter support.
    */
-  std::vector<JoinOutput> fullJoin(
+  void fullJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
+  /**
+   * @brief Performs left semi filter join. Pushes results to outputQueue_.
+   */
+  void leftSemiFilterJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
-   * @brief Performs left semi filter join between probe table and all build
-   * tables.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * @brief Performs left semi project join. Pushes results to outputQueue_.
    */
-  std::vector<JoinOutput> leftSemiFilterJoin(
+  void leftSemiProjectJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
-   * @brief Performs left semi project join between probe table and all build
-   * tables. Returns all probe rows with a boolean match column indicating
-   * whether each row has a match on the build side.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * @brief Performs right semi filter join. Pushes results to outputQueue_.
    */
-  std::vector<JoinOutput> leftSemiProjectJoin(
+  void rightSemiFilterJoin(
       cudf::table_view leftTableView,
       rmm::cuda_stream_view stream);
   /**
-   * @brief Performs right semi filter join between probe table and all build
-   * tables.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
+   * @brief Performs anti join. Pushes results to outputQueue_.
    */
-  std::vector<JoinOutput> rightSemiFilterJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
-  /**
-   * @brief Performs anti join between probe table and all build tables.
-   * @param leftTableView Probe-side table view to join
-   * @param stream CUDA stream for operations
-   * @return Vector of result tables (multiple if build data was batched)
-   */
-  std::vector<JoinOutput> antiJoin(
-      cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+  void antiJoin(cudf::table_view leftTableView, rmm::cuda_stream_view stream);
   /**
    * @brief Constructs join output table without applying filter conditions.
    * @param leftTableView Input probe table view
@@ -393,6 +382,44 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       cudf::table_view extendedLeftView,
       cudf::table_view extendedRightView,
       cudf::join_kind joinKind,
+      rmm::cuda_stream_view stream);
+
+  /// Enqueues a pair of join index vectors into pendingIndices_ for lazy
+  /// gather. Sub-chunking is handled in gatherPendingBatch via offset.
+  void enqueuePendingIndices(
+      std::unique_ptr<rmm::device_uvector<cudf::size_type>> leftIndices,
+      std::unique_ptr<rmm::device_uvector<cudf::size_type>> rightIndices,
+      size_t buildChunkIndex);
+
+  /// Gather one batch from pendingIndices_ and return as CudfVector.
+  RowVectorPtr gatherPendingBatch(rmm::cuda_stream_view stream);
+
+  /// Updates rightMatchedFlags_[chunkIndex] by OR-ing in which build rows
+  /// appear in rightIndicesCol. Synchronizes the stream before move-assigning
+  /// the updated flags to avoid a race with cudaFreeAsync.
+  void updateRightMatchedFlags(
+      size_t chunkIndex,
+      cudf::column_view rightIndicesCol,
+      cudf::size_type numBuildRows,
+      rmm::cuda_stream_view stream);
+
+  /// Applies AST filter_join_indices to join index pairs in sub-maxBatchRows
+  /// chunks and enqueues the filtered results into pendingIndices_.
+  void filterAndEnqueueAstIndices(
+      cudf::table_view leftTableView,
+      size_t rightTableIndex,
+      rmm::device_uvector<cudf::size_type>& leftJoinIndices,
+      rmm::device_uvector<cudf::size_type>& rightJoinIndices,
+      cudf::join_kind joinKind,
+      rmm::cuda_stream_view stream);
+
+  /// Eagerly gathers, applies non-AST filter, and pushes results to
+  /// outputQueue_. Splits oversized index spans into sub-maxBatchRows chunks.
+  void gatherFilterAndEnqueue(
+      cudf::table_view leftTableView,
+      cudf::table_view rightTableView,
+      rmm::device_uvector<cudf::size_type>& leftJoinIndices,
+      rmm::device_uvector<cudf::size_type>& rightJoinIndices,
       rmm::cuda_stream_view stream);
 };
 
