@@ -53,14 +53,14 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 33320d6 from 2026-06-04
+# cuDF Velox Iceberg backports commit d0e01c2 from 2026-07-09.
 set(VELOX_cudf_VERSION 26.06 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT 33320d64c94a64c94bccc5e2c522721e4d275858)
+set(VELOX_cudf_COMMIT d0e01c2e49bcedaced1e32073e3535947c08b43c)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  b3d855a70e62435e038f39559cc2d99711737e1f8db2b91c9792408bfdfe4614
+  295b6934594ce9ef95722912cac309df9e42d6043381f4ad693c88d48c503afd
 )
-set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
+set(VELOX_cudf_SOURCE_URL "https://github.com/mhaseeb123/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
 # Probe for a system UCX install. The variables are used only to gate ucxx
