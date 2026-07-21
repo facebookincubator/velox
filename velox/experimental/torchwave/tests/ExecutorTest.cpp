@@ -247,6 +247,14 @@ TEST_F(ExecutorTest, logitTest) {
   runTest("data/logit_test.pt2", "data/logit_test_results.pt");
 }
 
+// bucketize / searchsorted as fused elementwise binary searches: float and int
+// value dtypes, right=False/True, side="right", int32/int64 output, a bucketize
+// fused with a downstream add, and a 2-D (multi-row) searchsorted where each
+// query row searches the matching sorted row.
+TEST_F(ExecutorTest, searchOpsTest) {
+  runTest("data/search_ops_test.pt2", "data/search_ops_test_results.pt");
+}
+
 TEST_F(ExecutorTest, maskedSelectTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest(
@@ -269,6 +277,33 @@ TEST_F(ExecutorTest, maskedSelectTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+// masked_select over a dynamically-empty input: the graph slices data/flags to
+// [:end] where end is a runtime scalar, so the sliced tensors reserve the full
+// length but are empty at runtime (end=0). The output must be [0], not the
+// reserved capacity. Regression for all three modes leaving the output size
+// unset when the element loop runs zero iterations.
+TEST_F(ExecutorTest, maskedSelectEmptyTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/masked_select_empty_test.pt2",
+      "data/masked_select_empty_test_results.pt",
+      "multi-kernel");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/masked_select_empty_test.pt2",
+      "data/masked_select_empty_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(
+      "data/masked_select_empty_test.pt2",
+      "data/masked_select_empty_test_results.pt",
+      "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
 TEST_F(ExecutorTest, sumTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest("data/sum_test.pt2", "data/sum_test_results.pt", "multi-block");
@@ -279,6 +314,23 @@ TEST_F(ExecutorTest, sumTest) {
   WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = true;
   runTest("data/sum_test.pt2", "data/sum_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+}
+
+TEST_F(ExecutorTest, bincountTest) {
+  WaveConfig::get().useSingleBlock = false;
+  runTest(
+      "data/bincount_test.pt2", "data/bincount_test_results.pt", "multi-block");
+
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/bincount_test.pt2",
+      "data/bincount_test_results.pt",
+      "single-block");
+
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest("data/bincount_test.pt2", "data/bincount_test_results.pt", "cg");
   WaveConfig::get().isCg = std::nullopt;
 }
 
@@ -467,6 +519,10 @@ TEST_F(ExecutorTest, repeatInterleaveTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+TEST_F(ExecutorTest, repeatTest) {
+  runTest("data/repeat_test.pt2", "data/repeat_test_results.pt");
+}
+
 TEST_F(ExecutorTest, catTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "multi-block");
@@ -616,6 +672,14 @@ TEST_F(ExecutorTest, cat2dReuseTest) {
 
 TEST_F(ExecutorTest, arangeTest) {
   runTest("data/arange_test.pt2", "data/arange_test_results.pt");
+}
+
+// Exercises _local_scalar_dense (Tensor.item()) feeding dynamic sizes: an
+// arange whose end is item(sum(lengths)), and a ones whose size dims are
+// item(lengths[i]). Validates that item() produces a scalar (fused like
+// aten.item), not a zero-dim tensor, so the fused arange/ones size correctly.
+TEST_F(ExecutorTest, dynamicShapeTest) {
+  runTest("data/dynamic_shape_test.pt2", "data/dynamic_shape_test_results.pt");
 }
 
 TEST_F(ExecutorTest, indexTest) {

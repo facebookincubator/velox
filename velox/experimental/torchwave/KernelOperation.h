@@ -335,6 +335,19 @@ class KernelOperation {
     return elementExprs_;
   }
 
+  /// Records that the tensor param at 'offset' needs an own-dims index
+  /// calculator (sizes[]) force-initialized in the block prologue. Set for the
+  /// output and whole-tensor operands of gather ops (index_select, repeat)
+  /// whose device functions decompose the linear index by own dims.
+  void addOwnDimsCalcOffset(int32_t offset) {
+    ownDimsCalcOffsets_.insert(offset);
+  }
+
+  /// Param offsets of tensors needing an own-dims index calculator.
+  const std::unordered_set<int32_t>& ownDimsCalcOffsets() const {
+    return ownDimsCalcOffsets_;
+  }
+
   const std::unordered_set<NodeCP>& allNodes() const {
     return allNodes_;
   }
@@ -489,6 +502,11 @@ class KernelOperation {
   std::vector<int32_t> barrierCounters_;
 
   std::vector<ElementExpr> elementExprs_;
+
+  // Param offsets of tensors whose sizes[] must be force-initialized for their
+  // own dims (gather-op output and whole-tensor operands). See
+  // ownDimsCalcOffsets().
+  std::unordered_set<int32_t> ownDimsCalcOffsets_;
 
   std::unordered_set<NodeCP> allNodes_;
 
