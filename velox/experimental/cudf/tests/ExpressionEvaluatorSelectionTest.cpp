@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -23,11 +24,13 @@
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/type/Type.h"
 
@@ -105,6 +108,124 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto cudfExpr = createCudfExpression(expr, rowType_);
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+TEST_F(CudfExpressionSelectionTest, sparkDateFormat) {
+  auto supported = compileExecExpr(
+      "date_format(cast(date as timestamp), 'yyyyMMdd')",
+      rowType_,
+      execCtx_.get());
+  EXPECT_TRUE(FunctionExpression::canEvaluate(supported));
+
+  auto unsupportedTokenWidth = compileExecExpr(
+      "date_format(cast(date as timestamp), 'M')", rowType_, execCtx_.get());
+  EXPECT_FALSE(FunctionExpression::canEvaluate(unsupportedTokenWidth));
+
+  auto unsupportedYearWidth = compileExecExpr(
+      "date_format(cast(date as timestamp), 'yyy')", rowType_, execCtx_.get());
+  EXPECT_FALSE(FunctionExpression::canEvaluate(unsupportedYearWidth));
+
+  auto unsupportedToken = compileExecExpr(
+      "date_format(cast(date as timestamp), 'EEE')", rowType_, execCtx_.get());
+  EXPECT_FALSE(FunctionExpression::canEvaluate(unsupportedToken));
+
+  // A two-character token unsupported by cuDF reaches the switch default
+  // after passing the token-width check.
+  auto unsupportedTwoCharacterToken = compileExecExpr(
+      "date_format(cast(date as timestamp), 'EE')", rowType_, execCtx_.get());
+  EXPECT_FALSE(FunctionExpression::canEvaluate(unsupportedTwoCharacterToken));
+
+  auto unclosedQuotedLiteral = compileExecExpr(
+      "date_format(cast(date as timestamp), 'yyyy''Q')",
+      rowType_,
+      execCtx_.get());
+  VELOX_ASSERT_THROW(
+      FunctionExpression::canEvaluate(unclosedQuotedLiteral),
+      "No closing single quote for literal");
+
+  auto emptyFormat = compileExecExpr(
+      "date_format(cast(date as timestamp), '')", rowType_, execCtx_.get());
+  VELOX_ASSERT_THROW(
+      FunctionExpression::canEvaluate(emptyFormat),
+      "Invalid pattern specification");
+
+  auto nullFormat = compileExecExpr(
+      "date_format(cast(date as timestamp), cast(null as varchar))",
+      rowType_,
+      execCtx_.get());
+  EXPECT_FALSE(FunctionExpression::canEvaluate(nullFormat));
+
+  auto columnFormat = compileExecExpr(
+      "date_format(cast(date as timestamp), name)", rowType_, execCtx_.get());
+  EXPECT_FALSE(FunctionExpression::canEvaluate(columnFormat));
+}
+
+TEST_F(CudfExpressionSelectionTest, sparkDateFormatSessionTimezone) {
+  auto expression = parseAndInferTypedExpr(
+      "lower(date_format(cast(date as timestamp), 'yyyyMMdd'))",
+      rowType_,
+      execCtx_.get());
+  std::vector<core::TypedExprPtr> projections{expression};
+
+  EXPECT_TRUE(cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+
+  // A non-UTC session timezone only affects date_format when timestamp
+  // adjustment is enabled.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
+  });
+  EXPECT_TRUE(cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  EXPECT_FALSE(cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+
+  // Function detection must not depend on the independently configurable
+  // cuDF registry prefix.
+  {
+    auto& cudfConfig = CudfConfig::getInstance();
+    const auto originalFunctionPrefix = cudfConfig.functionNamePrefix;
+    SCOPE_EXIT {
+      cudfConfig.functionNamePrefix = originalFunctionPrefix;
+    };
+    cudfConfig.functionNamePrefix = "gpu.";
+    EXPECT_FALSE(
+        cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+  }
+
+  auto expressionWithoutDateFormat =
+      parseAndInferTypedExpr("lower(name)", rowType_, execCtx_.get());
+  EXPECT_TRUE(cudf_velox::canBeEvaluatedByCudf(
+      {expressionWithoutDateFormat}, queryCtx_.get()));
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, ""},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  EXPECT_TRUE(cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "UTC"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+  });
+  EXPECT_TRUE(cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+
+  // The legacy formatter returns null for malformed patterns and can differ
+  // from the Joda-compatible GPU parser, so all date_format calls stay on CPU.
+  queryCtx_->testingOverrideConfigUnsafe({
+      {functions::sparksql::SparkQueryConfig::qualify(
+           functions::sparksql::SparkQueryConfig::kLegacyDateFormatter),
+       "true"},
+  });
+  EXPECT_FALSE(cudf_velox::canBeEvaluatedByCudf(projections, queryCtx_.get()));
+
+  auto emptyFormatExpression = parseAndInferTypedExpr(
+      "date_format(cast(date as timestamp), '')", rowType_, execCtx_.get());
+  EXPECT_FALSE(cudf_velox::canBeEvaluatedByCudf(
+      {emptyFormatExpression}, queryCtx_.get()));
 }
 
 TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {

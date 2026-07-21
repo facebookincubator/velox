@@ -16,9 +16,23 @@
 
 #pragma once
 
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
+
 #include <string>
+#include <vector>
 
 namespace facebook::velox::cudf_velox {
+
+/// Returns true when an expression contains a Spark date_format call.
+bool containsSparkDateFormat(
+    const std::vector<core::TypedExprPtr>& expressions);
+
+/// Returns true when an expression contains Spark date_format whose configured
+/// CPU semantics cannot be reproduced by cuDF.
+bool requiresCpuSparkDateFormat(
+    const std::vector<core::TypedExprPtr>& expressions,
+    const core::QueryConfig& queryConfig);
 
 /// Register Spark-specific CUDF functions.
 void registerSparkFunctions(const std::string& prefix);

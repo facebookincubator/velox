@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/memory/Memory.h"
@@ -134,6 +135,11 @@ bool canBeEvaluatedByCudf(
     core::QueryCtx* queryCtx) {
   if (exprs.empty()) {
     return true;
+  }
+  // Preserve formatter-mode and timezone semantics before selecting the GPU
+  // operator.
+  if (requiresCpuSparkDateFormat(exprs, queryCtx->queryConfig())) {
+    return false;
   }
 
   auto precompilePool =

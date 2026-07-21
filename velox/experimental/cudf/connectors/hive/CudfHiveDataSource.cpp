@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -103,6 +104,11 @@ CudfHiveDataSource::CudfHiveDataSource(
     }
   }
   if (remainingFilter) {
+    // Table-scan remaining filters bypass operator expression selection. Keep
+    // date_format on CPU so formatter mode and session-timezone semantics are
+    // preserved.
+    evaluateRemainingFilterOnCpu_ = containsSparkDateFormat({remainingFilter});
+
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
     for (const auto& field : remainingFilterExprSet_->distinctFields()) {
       // Add fields in the filter to the columns to read if not there
@@ -113,8 +119,10 @@ CudfHiveDataSource::CudfHiveDataSource(
     }
 
     auto const remainingFilterType = getTableRowType();
-    cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
-        remainingFilterExprSet_->exprs()[0], remainingFilterType);
+    if (!evaluateRemainingFilterOnCpu_) {
+      cudfExpressionEvaluator_ = velox::cudf_velox::createCudfExpression(
+          remainingFilterExprSet_->exprs()[0], remainingFilterType);
+    }
     // TODO(kn): Get column names and subfields from remaining filter and add to
     // readColumnNames_
   }
@@ -235,18 +243,45 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   uint64_t filterTimeUs{0};
   if (remainingFilterExprSet_) {
     MicrosecondWallTimer filterTimer(&filterTimeUs);
-    auto cudfTableColumns = cudfTable->release();
-    std::vector<cudf::column_view> inputViews;
-    inputViews.reserve(cudfTableColumns.size());
-    for (auto& col : cudfTableColumns) {
-      inputViews.push_back(col->view());
+    if (evaluateRemainingFilterOnCpu_) {
+      auto filterInput = with_arrow::toVeloxColumn(
+          cudfTable->view(), pool_, getTableRowType(), stream, get_temp_mr());
+      stream.synchronize();
+
+      SelectivityVector rows(filterInput->size());
+      expressionEvaluator_->evaluate(
+          remainingFilterExprSet_.get(),
+          rows,
+          *filterInput,
+          remainingFilterResult_);
+
+      auto filterResult = std::make_shared<RowVector>(
+          pool_,
+          ROW({"filter"}, {BOOLEAN()}),
+          /*nulls=*/nullptr,
+          filterInput->size(),
+          std::vector<VectorPtr>{remainingFilterResult_});
+      auto cudfFilterResult =
+          with_arrow::toCudfTable(filterResult, pool_, stream, get_temp_mr());
+      cudfTable = cudf::apply_boolean_mask(
+          *cudfTable,
+          cudfFilterResult->view().column(0),
+          stream,
+          get_output_mr());
+    } else {
+      auto cudfTableColumns = cudfTable->release();
+      std::vector<cudf::column_view> inputViews;
+      inputViews.reserve(cudfTableColumns.size());
+      for (auto& column : cudfTableColumns) {
+        inputViews.push_back(column->view());
+      }
+      auto filterResult =
+          cudfExpressionEvaluator_->eval(inputViews, stream, get_temp_mr());
+      auto originalTable =
+          std::make_unique<cudf::table>(std::move(cudfTableColumns));
+      cudfTable = cudf::apply_boolean_mask(
+          *originalTable, asView(filterResult), stream, get_output_mr());
     }
-    auto filterResult =
-        cudfExpressionEvaluator_->eval(inputViews, stream, get_temp_mr());
-    auto originalTable =
-        std::make_unique<cudf::table>(std::move(cudfTableColumns));
-    cudfTable = cudf::apply_boolean_mask(
-        *originalTable, asView(filterResult), stream, get_output_mr());
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);

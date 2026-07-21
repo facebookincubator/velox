@@ -128,6 +128,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
 
+  // Evaluates a remaining filter on CPU when cuDF cannot preserve its
+  // semantics.
+  bool evaluateRemainingFilterOnCpu_{false};
+
+  // Reuses the CPU remaining-filter result vector across input batches.
+  VectorPtr remainingFilterResult_;
+
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 
   std::unordered_set<std::string> readColumnSet_;
