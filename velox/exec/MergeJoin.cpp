@@ -282,6 +282,7 @@ int32_t MergeJoin::compare(
 bool MergeJoin::findEndOfMatch(
     const RowVectorPtr& input,
     const std::vector<column_index_t>& keys,
+    uint64_t inputBatchId,
     Match& match) {
   if (match.complete) {
     return true;
@@ -299,6 +300,7 @@ bool MergeJoin::findEndOfMatch(
 
   if (endRow == numInputRows) {
     match.inputs.push_back(input);
+    match.inputBatchIds.push_back(inputBatchId);
     match.endRowIndex = endRow;
     return false;
   }
@@ -306,6 +308,7 @@ bool MergeJoin::findEndOfMatch(
   if (endRow > 0) {
     // Match ends here, no need to pre-load lazies.
     match.inputs.push_back(input);
+    match.inputBatchIds.push_back(inputBatchId);
     match.endRowIndex = endRow;
   }
   match.complete = true;
@@ -346,7 +349,7 @@ bool MergeJoin::tryAddOutputRowForLeftJoin() {
   rawLeftOutputIndices_[outputSize_] = leftRowIndex_++;
   if (rawRightRowIds_ != nullptr) {
     rawRightRowIds_[outputSize_] = 0;
-    rawRightRowIsCandidate_[outputSize_] = 0;
+    rawIsProvisionalRightRow_[outputSize_] = 0;
   }
 
   for (const auto& projection : rightProjections_) {
@@ -376,7 +379,7 @@ bool MergeJoin::tryAddOutputRowForRightJoin() {
 
   if (rawRightRowIds_ != nullptr) {
     rawRightRowIds_[outputSize_] = 0;
-    rawRightRowIsCandidate_[outputSize_] = 0;
+    rawIsProvisionalRightRow_[outputSize_] = 0;
   }
 
   if (!isRightFlattened_) {
@@ -417,7 +420,20 @@ void MergeJoin::flattenRightProjections() {
     newFlat->copy(currentVector.get(), 0, 0, outputSize_);
     children[projection.outputChannel] = std::move(newFlat);
   }
+
+  if (filterInput_ != nullptr) {
+    for (const auto& [filterChannel, outputChannel] :
+         filterInputToOutputChannel_) {
+      filterInput_->childAt(filterChannel) = children[outputChannel];
+    }
+  }
   isRightFlattened_ = true;
+}
+
+uint64_t MergeJoin::rightRowId(
+    uint64_t rightBatchId,
+    vector_size_t rightRowIndex) const {
+  return (rightBatchId << 32) | static_cast<uint32_t>(rightRowIndex);
 }
 
 bool MergeJoin::tryAddOutputRow(
@@ -425,16 +441,14 @@ bool MergeJoin::tryAddOutputRow(
     vector_size_t leftRow,
     const RowVectorPtr& rightBatch,
     vector_size_t rightRow,
-    size_t rightBatchIndex) {
+    uint64_t rightBatchId) {
   if (outputSize_ == outputBatchSize_) {
     return false;
   }
 
   if (rawRightRowIds_ != nullptr) {
-    rawRightRowIds_[outputSize_] =
-        (static_cast<uint64_t>(rightBatchIndex) << 32) |
-        static_cast<uint32_t>(rightRow);
-    rawRightRowIsCandidate_[outputSize_] = 0;
+    rawRightRowIds_[outputSize_] = rightRowId(rightBatchId, rightRow);
+    rawIsProvisionalRightRow_[outputSize_] = 0;
   }
 
   // All left side projections share the same dictionary indices (leftIndices_).
@@ -570,14 +584,14 @@ bool MergeJoin::prepareOutput(
   if (isFullJoin(joinType_) && filter_) {
     rightRowIds_ = AlignedBuffer::allocate<uint64_t>(outputBatchSize_, pool());
     rawRightRowIds_ = rightRowIds_->asMutable<uint64_t>();
-    rightRowIsCandidate_ =
-        AlignedBuffer::allocate<uint64_t>(outputBatchSize_, pool());
-    rawRightRowIsCandidate_ = rightRowIsCandidate_->asMutable<uint64_t>();
+    isProvisionalRightRow_ =
+        AlignedBuffer::allocate<uint8_t>(outputBatchSize_, pool());
+    rawIsProvisionalRightRow_ = isProvisionalRightRow_->asMutable<uint8_t>();
   } else {
     rightRowIds_.reset();
     rawRightRowIds_ = nullptr;
-    rightRowIsCandidate_.reset();
-    rawRightRowIsCandidate_ = nullptr;
+    isProvisionalRightRow_.reset();
+    rawIsProvisionalRightRow_ = nullptr;
   }
 
   if (filterInput_ != nullptr) {
@@ -638,11 +652,12 @@ bool MergeJoin::addToOutput() {
 template <bool IsLeftJoin>
 bool MergeJoin::addToOutputImpl() {
   if constexpr (IsLeftJoin) {
-    if (isFullJoin(joinType_) && filter_ && rightCandidateCursor_.has_value()) {
-      if (appendRightCandidates()) {
+    if (isFullJoin(joinType_) && filter_ &&
+        provisionalRightOutputCursor_.has_value()) {
+      if (appendProvisionalRightRows()) {
         return true;
       }
-      passedRightRows_.clear();
+      matchedRightRowIds_.clear();
       leftMatch_.reset();
       rightMatch_.reset();
       return outputSize_ == outputBatchSize_;
@@ -723,6 +738,7 @@ bool MergeJoin::addToOutputImpl() {
         }
 
         if (IsLeftJoin) {
+          VELOX_CHECK_LT(innerBatchIndex, innerMatch->inputBatchIds.size());
           for (auto innerRow = innerStartRow; innerRow < innerEndRow;
                ++innerRow) {
             if (!tryAddOutputRow(
@@ -730,7 +746,7 @@ bool MergeJoin::addToOutputImpl() {
                     outerRow,
                     rightBatch,
                     innerRow,
-                    innerBatchIndex)) {
+                    innerMatch->inputBatchIds[innerBatchIndex])) {
               outerMatch->setCursor(outerBatchIndex, outerRow);
               innerMatch->setCursor(innerBatchIndex, innerRow);
               return true;
@@ -740,7 +756,11 @@ bool MergeJoin::addToOutputImpl() {
           for (auto innerRow = innerStartRow; innerRow < innerEndRow;
                ++innerRow) {
             if (!tryAddOutputRow(
-                    leftBatch, innerRow, rightBatch, outerRow, 0)) {
+                    leftBatch,
+                    innerRow,
+                    rightBatch,
+                    outerRow,
+                    0 /* rightBatchId */)) {
               outerMatch->setCursor(outerBatchIndex, outerRow);
               innerMatch->setCursor(innerBatchIndex, innerRow);
               return true;
@@ -753,10 +773,10 @@ bool MergeJoin::addToOutputImpl() {
 
   if constexpr (IsLeftJoin) {
     if (isFullJoin(joinType_) && filter_) {
-      if (appendRightCandidates()) {
+      if (appendProvisionalRightRows()) {
         return true;
       }
-      passedRightRows_.clear();
+      matchedRightRowIds_.clear();
     }
   }
 
@@ -765,7 +785,39 @@ bool MergeJoin::addToOutputImpl() {
   return outputSize_ == outputBatchSize_;
 }
 
-bool MergeJoin::appendRightCandidates() {
+void MergeJoin::appendProvisionalRightRow(
+    const RowVectorPtr& rightBatch,
+    vector_size_t rightRowIndex,
+    uint64_t rightRowId) {
+  if (!isRightFlattened_) {
+    rawRightOutputIndices_[outputSize_] = rightRowIndex;
+  } else {
+    copyRow(rightBatch, rightRowIndex, output_, outputSize_, rightProjections_);
+  }
+
+  rawLeftOutputIndices_[outputSize_] = 0;
+  for (const auto& projection : leftProjections_) {
+    auto& target = output_->childAt(projection.outputChannel);
+    addNull(
+        target,
+        outputSize_,
+        leftOutputIndices_,
+        outputBatchSize_,
+        currentLeft_);
+  }
+
+  if (joinTracker_) {
+    joinTracker_->addMiss(outputSize_);
+  }
+
+  VELOX_CHECK_NOT_NULL(rawRightRowIds_);
+  rawRightRowIds_[outputSize_] = rightRowId;
+  rawIsProvisionalRightRow_[outputSize_] = 1;
+
+  ++outputSize_;
+}
+
+bool MergeJoin::appendProvisionalRightRows() {
   VELOX_CHECK(isFullJoin(joinType_));
   VELOX_CHECK_NOT_NULL(filter_);
   VELOX_CHECK(rightMatch_);
@@ -773,12 +825,13 @@ bool MergeJoin::appendRightCandidates() {
 
   const size_t numRightBatches = rightMatch_->inputs.size();
   VELOX_CHECK_GT(numRightBatches, 0);
+  VELOX_CHECK_EQ(numRightBatches, rightMatch_->inputBatchIds.size());
 
-  size_t rightBatchIndex = rightCandidateCursor_.has_value()
-      ? rightCandidateCursor_->rightBatchIndex
+  size_t rightBatchIndex = provisionalRightOutputCursor_.has_value()
+      ? provisionalRightOutputCursor_->rightBatchIndex
       : 0;
-  vector_size_t rightRowIndex = rightCandidateCursor_.has_value()
-      ? rightCandidateCursor_->rightRowIndex
+  vector_size_t rightRowIndex = provisionalRightOutputCursor_.has_value()
+      ? provisionalRightOutputCursor_->rightRowIndex
       : rightMatch_->startRowIndex;
 
   for (; rightBatchIndex < numRightBatches; ++rightBatchIndex) {
@@ -791,56 +844,32 @@ bool MergeJoin::appendRightCandidates() {
 
     for (auto row = std::max(batchStartRow, rightRowIndex); row < batchEndRow;
          ++row) {
-      const uint64_t rightRowId =
-          (static_cast<uint64_t>(rightBatchIndex) << 32) |
-          static_cast<uint32_t>(row);
-      if (!passedRightRows_.empty() && passedRightRows_.contains(rightRowId)) {
+      const uint64_t rightRowIdValue =
+          rightRowId(rightMatch_->inputBatchIds[rightBatchIndex], row);
+      if (!matchedRightRowIds_.empty() &&
+          matchedRightRowIds_.contains(rightRowIdValue)) {
         continue;
       }
 
       if (prepareOutput(currentLeft_, rightBatch)) {
         output_->resize(outputSize_);
-        rightCandidateCursor_ = RightCandidateCursor{rightBatchIndex, row};
+        provisionalRightOutputCursor_ =
+            ProvisionalRightOutputCursor{rightBatchIndex, row};
         return true;
       }
 
       if (outputSize_ == outputBatchSize_) {
-        rightCandidateCursor_ = RightCandidateCursor{rightBatchIndex, row};
+        provisionalRightOutputCursor_ =
+            ProvisionalRightOutputCursor{rightBatchIndex, row};
         return true;
       }
-
-      if (!isRightFlattened_) {
-        rawRightOutputIndices_[outputSize_] = row;
-      } else {
-        copyRow(rightBatch, row, output_, outputSize_, rightProjections_);
-      }
-
-      rawLeftOutputIndices_[outputSize_] = 0;
-      for (const auto& projection : leftProjections_) {
-        auto& target = output_->childAt(projection.outputChannel);
-        addNull(
-            target,
-            outputSize_,
-            leftOutputIndices_,
-            outputBatchSize_,
-            currentLeft_);
-      }
-
-      if (joinTracker_) {
-        joinTracker_->addMiss(outputSize_);
-      }
-
-      VELOX_CHECK_NOT_NULL(rawRightRowIds_);
-      rawRightRowIds_[outputSize_] = rightRowId;
-      rawRightRowIsCandidate_[outputSize_] = 1;
-
-      ++outputSize_;
+      appendProvisionalRightRow(rightBatch, row, rightRowIdValue);
     }
 
     rightRowIndex = 0;
   }
 
-  rightCandidateCursor_.reset();
+  provisionalRightOutputCursor_.reset();
   return false;
 }
 
@@ -1000,6 +1029,7 @@ bool MergeJoin::getNextFromRightSide() {
     }
 
     if (rightInput_) {
+      currentRightInputBatchId_ = nextRightInputBatchId_++;
       if (isFullJoin(joinType_) || isRightJoin(joinType_)) {
         rightRowIndex_ = 0;
       } else {
@@ -1153,6 +1183,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
       }
       leftMatch_ = Match{
           {input_},
+          {0},
           leftRowIndex_,
           leftEndRow,
           leftEndRow < input_->size(),
@@ -1166,14 +1197,15 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
       rightMatch_ = Match{
           {rightInput_},
+          {currentRightInputBatchId_},
           rightRowIndex_,
           rightEndRow,
           rightEndRow < rightInput_->size(),
           std::nullopt};
 
       if (isFullJoin(joinType_) && filter_) {
-        passedRightRows_.clear();
-        rightCandidateCursor_.reset();
+        matchedRightRowIds_.clear();
+        provisionalRightOutputCursor_.reset();
       }
 
       // Track matched rows for this key match.
@@ -1375,7 +1407,11 @@ bool MergeJoin::advanceMatchImpl() {
 
   if (input) {
     // Look for continuation of a match.
-    if (!findEndOfMatch(input, keyChannels, match.value())) {
+    if (!findEndOfMatch(
+            input,
+            keyChannels,
+            IsLeft ? 0 : currentRightInputBatchId_,
+            match.value())) {
       VELOX_CHECK(!match->complete);
       // Continue looking for the end of the match.
       if constexpr (IsLeft) {
@@ -1436,6 +1472,7 @@ void MergeJoin::clearLeftInput() {
 
 void MergeJoin::clearRightInput() {
   rightInput_ = nullptr;
+  currentRightInputBatchId_ = 0;
 }
 
 void MergeJoin::updateOutputBatchSize(const RowVectorPtr& output) {
@@ -1478,10 +1515,11 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     if (!filterRows.hasSelections()) {
       if (isFullJoin(joinType_) && filter_ &&
-          rawRightRowIsCandidate_ != nullptr && !passedRightRows_.empty()) {
+          rawIsProvisionalRightRow_ != nullptr &&
+          !matchedRightRowIds_.empty()) {
         for (auto i = 0; i < numRows; ++i) {
-          if (rawRightRowIsCandidate_[i] == 1 &&
-              passedRightRows_.contains(rawRightRowIds_[i])) {
+          if (rawIsProvisionalRightRow_[i] == 1 &&
+              matchedRightRowIds_.contains(rawRightRowIds_[i])) {
             continue;
           }
           rawIndices[numPassed++] = i;
@@ -1501,7 +1539,7 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
 
     if (isFullJoin(joinType_) && filter_) {
       VELOX_CHECK_NOT_NULL(rawRightRowIds_);
-      VELOX_CHECK_NOT_NULL(rawRightRowIsCandidate_);
+      VELOX_CHECK_NOT_NULL(rawIsProvisionalRightRow_);
     }
 
     evaluateFilter(filterRows);
@@ -1542,15 +1580,15 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
             decodedFilterResult_.valueAt<bool>(i);
 
         if (passed && isFullJoin(joinType_) && filter_) {
-          passedRightRows_.insert(rawRightRowIds_[i]);
+          matchedRightRowIds_.insert(rawRightRowIds_[i]);
         }
 
         joinTracker_->processFilterResult(i, passed, onMiss, onMatch);
       } else {
         if (isFullJoin(joinType_) && filter_ &&
-            rawRightRowIsCandidate_ != nullptr &&
-            rawRightRowIsCandidate_[i] == 1) {
-          if (passedRightRows_.contains(rawRightRowIds_[i])) {
+            rawIsProvisionalRightRow_ != nullptr &&
+            rawIsProvisionalRightRow_[i] == 1) {
+          if (matchedRightRowIds_.contains(rawRightRowIds_[i])) {
             continue;
           }
         }
@@ -1663,10 +1701,11 @@ void MergeJoin::finishDrain() {
   rightHasDrained_ = false;
   clearLeftInput();
   clearRightInput();
+  nextRightInputBatchId_ = 1;
   leftMatch_.reset();
   rightMatch_.reset();
-  rightCandidateCursor_.reset();
-  passedRightRows_.clear();
+  provisionalRightOutputCursor_.reset();
+  matchedRightRowIds_.clear();
   if (joinTracker_.has_value()) {
     joinTracker_->reset();
   }
