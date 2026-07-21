@@ -30,8 +30,10 @@ WriterContext::WriterContext(
     const tz::TimeZone* sessionTimezone,
     const bool adjustTimestampToTimezone,
     std::unique_ptr<encryption::EncryptionHandler> handler,
-    int64_t memoryBudget)
+    int64_t memoryBudget,
+    DwrfFormat format)
     : config_{config},
+      format_{format},
       pool_{std::move(pool)},
       memoryBudget_{memoryBudget},
       dictionaryPool_{

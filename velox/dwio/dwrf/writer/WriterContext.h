@@ -48,7 +48,8 @@ class WriterContext : public CompressionBufferPool {
       const tz::TimeZone* sessionTimezone = nullptr,
       const bool adjustTimestampToTimezone = false,
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr,
-      int64_t memoryBudget = std::numeric_limits<int64_t>::max());
+      int64_t memoryBudget = std::numeric_limits<int64_t>::max(),
+      DwrfFormat format = DwrfFormat::kDwrf);
 
   ~WriterContext() override;
 
@@ -142,7 +143,7 @@ class WriterContext : public CompressionBufferPool {
       std::unique_ptr<BufferedOutputStream> stream) const {
     return indexBuilderFactory_
         ? indexBuilderFactory_(std::move(stream))
-        : std::make_unique<IndexBuilder>(std::move(stream));
+        : std::make_unique<IndexBuilder>(std::move(stream), format_);
   }
 
   void suppressStream(const DwrfStreamIdentifier& stream) {
@@ -391,6 +392,10 @@ class WriterContext : public CompressionBufferPool {
     return compression_;
   }
 
+  DwrfFormat format() const {
+    return format_;
+  }
+
   uint64_t compressionBlockSize() const {
     return compressionBlockSize_;
   }
@@ -623,6 +628,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   const std::shared_ptr<const Config> config_;
+  const DwrfFormat format_;
   const std::shared_ptr<memory::MemoryPool> pool_;
   const int64_t memoryBudget_;
   const std::shared_ptr<memory::MemoryPool> dictionaryPool_;

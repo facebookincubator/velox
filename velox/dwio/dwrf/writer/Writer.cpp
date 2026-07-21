@@ -157,7 +157,8 @@ Writer::Writer(
     std::unique_ptr<dwio::common::FileSink> sink,
     const WriterOptions& options,
     std::shared_ptr<memory::MemoryPool> pool)
-    : writerBase_(std::make_unique<WriterBase>(std::move(sink))),
+    : writerBase_(
+          std::make_unique<WriterBase>(std::move(sink), options.format)),
       schema_{dwio::common::TypeWithId::create(options.schema)},
       spillConfig_{options.spillConfig},
       nonReclaimableSection_(options.nonReclaimableSection) {
@@ -202,7 +203,8 @@ Writer::Writer(
   }
 
   if (options.columnWriterFactory == nullptr) {
-    writer_ = BaseColumnWriter::create(writerBase_->getContext(), *schema_);
+    writer_ = BaseColumnWriter::create(
+        writerBase_->getContext(), *schema_, 0, nullptr, options.format);
   } else {
     writer_ = options.columnWriterFactory(writerBase_->getContext(), *schema_);
   }
@@ -522,7 +524,7 @@ void Writer::flushStripe(bool close) {
   TestValue::adjust("facebook::velox::dwrf::Writer::flushStripe", this);
 
   const auto& handler = context.getEncryptionHandler();
-  EncodingManager encodingManager{handler};
+  EncodingManager encodingManager{handler, context.format()};
 
   writer_->flush([&](uint32_t nodeId) -> ColumnEncodingWriteWrapper {
     return encodingManager.addEncodingToFooter(nodeId);
@@ -566,11 +568,16 @@ void Writer::flushStripe(bool close) {
     writerBase_->validateStreamSize(stream, out.size());
 
     s.setKind(stream.kind());
-    s.setNode(nodeId);
-    s.setColumn(stream.column());
-    s.setSequence(stream.encodingKey().sequence());
+    if (context.format() == DwrfFormat::kDwrf) {
+      s.setNode(nodeId);
+      s.setColumn(stream.column());
+      s.setSequence(stream.encodingKey().sequence());
+      s.setUseVints(context.getConfig(Config::USE_VINTS));
+    } else {
+      // ORC identifies streams by the schema node id in its column field.
+      s.setColumn(nodeId);
+    }
     s.setLength(out.size());
-    s.setUseVints(context.getConfig(Config::USE_VINTS));
     offset += out.size();
 
     context.recordPhysicalSize(stream, out.size());
@@ -580,7 +587,8 @@ void Writer::flushStripe(bool close) {
   // deals with streams
   uint64_t indexLength = 0;
   sink.setMode(WriterSink::Mode::Index);
-  auto result = layoutPlanner_->plan(encodingManager, getStreamList(context));
+  auto result = layoutPlanner_->plan(
+      encodingManager, getStreamList(context), context.format());
   result.iterateIndexStreams(
       [&](const DwrfStreamIdentifier& streamId, DataBufferHolder& content) {
         VELOX_CHECK(

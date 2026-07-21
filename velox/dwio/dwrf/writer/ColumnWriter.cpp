@@ -659,6 +659,64 @@ void IntegerColumnWriter<T>::convertToDirectEncoding() {
           std::placeholders::_1));
 }
 
+template <typename T>
+class OrcIntegerColumnWriter : public BaseColumnWriter {
+ public:
+  OrcIntegerColumnWriter(
+      WriterContext& context,
+      const TypeWithId& type,
+      uint32_t sequence,
+      std::function<void(IndexBuilder&)> onRecordPosition)
+      : BaseColumnWriter{context, type, sequence, onRecordPosition},
+        data_{createRleEncoder</* isSigned = */ true>(
+            RleVersion_1,
+            newStream(StreamKind::StreamKind_DATA),
+            context.getConfig(Config::USE_VINTS),
+            sizeof(T))} {
+    reset();
+  }
+
+  uint64_t write(const VectorPtr& slice, const common::Ranges& ranges)
+      override {
+    auto localDecoded = decode(slice, ranges);
+    auto& decodedVector = localDecoded.get();
+    writeNulls(decodedVector, ranges);
+
+    uint64_t count = 0;
+    for (auto pos : ranges) {
+      if (!decodedVector.isNullAt(pos)) {
+        data_->writeValue(decodedVector.template valueAt<T>(pos));
+        ++count;
+      }
+    }
+
+    StatisticsBuilderUtils::addValues<T>(
+        dynamic_cast<IntegerStatisticsBuilder&>(*indexStatsBuilder_),
+        decodedVector,
+        ranges);
+    const auto rawSize =
+        count * sizeof(T) + (ranges.size() - count) * NULL_SIZE;
+    indexStatsBuilder_->increaseRawSize(rawSize);
+    return rawSize;
+  }
+
+  void flush(
+      std::function<ColumnEncodingWriteWrapper(uint32_t)> encodingFactory,
+      std::function<void(ColumnEncodingWriteWrapper&)> encodingOverride)
+      override {
+    BaseColumnWriter::flush(encodingFactory, encodingOverride);
+    data_->flush();
+  }
+
+  void recordPosition() override {
+    BaseColumnWriter::recordPosition();
+    data_->recordPosition(*indexBuilder_);
+  }
+
+ private:
+  std::unique_ptr<IntEncoder<true>> data_;
+};
+
 class TimestampColumnWriter : public BaseColumnWriter {
  public:
   TimestampColumnWriter(
@@ -1176,7 +1234,8 @@ class StringColumnWriter : public BaseColumnWriter {
   }
 
   bool useDictionaryEncoding() const override {
-    return getConfig(Config::STRING_DICTIONARY_ENCODING_ENABLED) &&
+    return context_.format() == DwrfFormat::kDwrf &&
+        getConfig(Config::STRING_DICTIONARY_ENCODING_ENABLED) &&
         (sequence_ == 0 ||
          !getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
         !context_.isLowMemoryMode();
@@ -2160,14 +2219,26 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
       return std::make_unique<ByteRleColumnWriter<int8_t>>(
           context, type, sequence, &createByteRleEncoder, onRecordPosition);
     case TypeKind::SMALLINT:
+      if (format == DwrfFormat::kOrc) {
+        return std::make_unique<OrcIntegerColumnWriter<int16_t>>(
+            context, type, sequence, onRecordPosition);
+      }
       return std::make_unique<IntegerColumnWriter<int16_t>>(
           context, type, sequence, onRecordPosition);
     case TypeKind::INTEGER:
+      if (format == DwrfFormat::kOrc) {
+        return std::make_unique<OrcIntegerColumnWriter<int32_t>>(
+            context, type, sequence, onRecordPosition);
+      }
       return std::make_unique<IntegerColumnWriter<int32_t>>(
           context, type, sequence, onRecordPosition);
     case TypeKind::BIGINT: {
       if (format == DwrfFormat::kOrc && type.type()->isDecimal()) {
         return std::make_unique<DecimalColumnWriter>(
+            context, type, sequence, onRecordPosition);
+      }
+      if (format == DwrfFormat::kOrc) {
+        return std::make_unique<OrcIntegerColumnWriter<int64_t>>(
             context, type, sequence, onRecordPosition);
       }
       return std::make_unique<IntegerColumnWriter<int64_t>>(
@@ -2199,7 +2270,8 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           context, type, sequence, onRecordPosition);
       ret->children_.reserve(type.size());
       for (int32_t i = 0; i < type.size(); ++i) {
-        ret->children_.push_back(create(context, *type.childAt(i), sequence));
+        ret->children_.push_back(
+            create(context, *type.childAt(i), sequence, nullptr, format));
       }
       return ret;
     }
@@ -2215,15 +2287,18 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
       }
       auto ret = std::make_unique<MapColumnWriter>(
           context, type, sequence, onRecordPosition);
-      ret->children_.push_back(create(context, *type.childAt(0), sequence));
-      ret->children_.push_back(create(context, *type.childAt(1), sequence));
+      ret->children_.push_back(
+          create(context, *type.childAt(0), sequence, nullptr, format));
+      ret->children_.push_back(
+          create(context, *type.childAt(1), sequence, nullptr, format));
       return ret;
     }
     case TypeKind::ARRAY: {
       VELOX_CHECK_EQ(type.size(), 1, "Array should have exactly one child");
       auto ret = std::make_unique<ListColumnWriter>(
           context, type, sequence, onRecordPosition);
-      ret->children_.push_back(create(context, *type.childAt(0), sequence));
+      ret->children_.push_back(
+          create(context, *type.childAt(0), sequence, nullptr, format));
       return ret;
     }
     default:

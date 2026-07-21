@@ -28,7 +28,7 @@ void WriterBase::writeFooter(const Type& type) {
 
   // write cache when available
   auto cacheSize = writerSink_->getCacheSize();
-  if (cacheSize > 0) {
+  if (format_ == DwrfFormat::kDwrf && cacheSize > 0) {
     writerSink_->writeCache();
     for (auto& i : writerSink_->getCacheOffsets()) {
       footer_->addStripeCacheOffsets(i);
@@ -60,19 +60,30 @@ void WriterBase::writeFooter(const Type& type) {
     // rawSize.
     footer_->setRawDataSize(context_->fileRawSize());
   }
-  auto* checksum = writerSink_->getChecksum();
-  footer_->setCheckSumAlgorithm(
-      (checksum != nullptr) ? checksum->getType()
-                            : proto::ChecksumAlgorithm::NULL_);
-  writeProto(footer_->getDwrfPtr());
+  std::unique_ptr<PostScriptWriteWrapper> ps;
+  if (format_ == DwrfFormat::kDwrf) {
+    auto* checksum = writerSink_->getChecksum();
+    footer_->setCheckSumAlgorithm(
+        (checksum != nullptr) ? checksum->getType()
+                              : proto::ChecksumAlgorithm::NULL_);
+    writeProto(footer_->getDwrfPtr());
+    auto dwrfPostScript = ArenaCreate<proto::PostScript>(arena_.get());
+    ps = std::make_unique<PostScriptWriteWrapper>(dwrfPostScript);
+    ps->setCacheMode(writerSink_->getCacheMode());
+    ps->setCacheSize(cacheSize);
+  } else {
+    footer_->setWriter(1);
+    writeProto(footer_->getOrcPtr());
+    auto orcPostScript = ArenaCreate<proto::orc::PostScript>(arena_.get());
+    ps = std::make_unique<PostScriptWriteWrapper>(orcPostScript);
+  }
   const auto footerLength = writerSink_->size() - pos;
 
   // write postscript
   pos = writerSink_->size();
-  auto dwrfPostScript = ArenaCreate<proto::PostScript>(arena_.get());
-  std::unique_ptr<PostScriptWriteWrapper> ps =
-      std::make_unique<PostScriptWriteWrapper>(dwrfPostScript);
   ps->setWriterVersion(writerVersion);
+  ps->addVersion(0);
+  ps->addVersion(12);
   ps->setFooterLength(footerLength);
   ps->setCompression(context_->compression());
   if (context_->compression() !=
@@ -80,8 +91,7 @@ void WriterBase::writeFooter(const Type& type) {
     ps->setCompressionBlockSize(context_->compressionBlockSize());
   }
 
-  ps->setCacheMode(writerSink_->getCacheMode());
-  ps->setCacheSize(cacheSize);
+  ps->setMetaDataLength(0);
   writeProto(ps, common::CompressionKind::CompressionKind_NONE);
   auto psLength = writerSink_->size() - pos;
   DWIO_ENSURE_LE(psLength, 0xff, "PostScript is too large: ", psLength);
