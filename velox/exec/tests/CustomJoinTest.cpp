@@ -360,14 +360,15 @@ TEST_F(CustomJoinTest, mixedGroupedExecution) {
                        .tableScan(rowType)
                        .capturePlanNodeId(buildScanNodeId)
                        .planNode();
-  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(rowType)
-                  .capturePlanNodeId(probeScanNodeId)
-                  .addNode([&](const std::string& id, core::PlanNodePtr probeNode) {
-                    return std::make_shared<CustomJoinNode>(
-                        id, std::move(probeNode), std::move(buildNode));
-                  })
-                  .planNode();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator, pool_.get())
+          .tableScan(rowType)
+          .capturePlanNodeId(probeScanNodeId)
+          .addNode([&](const std::string& id, core::PlanNodePtr probeNode) {
+            return std::make_shared<CustomJoinNode>(
+                id, std::move(probeNode), std::move(buildNode));
+          })
+          .planNode();
 
   // The build side reads 80 rows and posts that count to the bridge.
   // Each split group's probe reads 80 rows and emits at most 80 (the build
