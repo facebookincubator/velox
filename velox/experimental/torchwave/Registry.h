@@ -61,6 +61,13 @@ struct ElementwiseOp {
 
   /// If true, blockInfo is passed as the last argument.
   bool hasBlockInfo{false};
+
+  /// If true, the enclosing elementwise expression's output tensor (the
+  /// subgraph root output the loop writes) is passed as a whole-tensor argument
+  /// after the schema arguments and before blockInfo. Lets a fused op such as
+  /// index_select know the shape it is iterating over, distinct from its own
+  /// (possibly broadcast) output shape.
+  bool hasOutputArg{false};
 };
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
@@ -132,6 +139,18 @@ struct ArgumentMeta {
   /// exists only to create an ordering dependency between kernels that depend
   /// on device side results from another.
   bool linkOnly{false};
+
+  /// Set for an output produced by a non-last part of a root op that was split
+  /// into several kernel ops (e.g. tw.group_length_guard_head, whose length
+  /// outputs are consumed by tw.group_length_guard_final). Such an output is a
+  /// real output of the original op, so it must never be released as a per-op
+  /// freeable intermediate, even though its producing node is not the kernel
+  /// op's root expr. We flag this statically at registration rather than
+  /// deciding from downstream uses on purpose: a ProjectOperation is
+  /// deduplicated and reused across actual subgraphs, some of which reference
+  /// this value externally and some of which do not, so a use-based decision
+  /// would be wrong for the shared op.
+  bool nonRootOutput{false};
 
   /// Marks that for an elementwise operation, we want the whole tensor as
   /// opposed to its element for this lane.
@@ -240,6 +259,15 @@ struct Metadata {
   /// The input can be overwritten and used as output if there are no concurrent
   /// or subsequent uses of input. True for example of elementwise arithmetic.
   bool inPlaceIfLastUse{false};
+
+  /// If true, this elementwise op's output shape is not derivable from its
+  /// operands' shapes (e.g. index_select, whose output resizes one dim to the
+  /// index length), so the enclosing expression cannot size its own output by
+  /// broadcasting this op's inputs. When set, the op's output is materialized
+  /// as a shape-only tensor even when fused into another elementwise, and the
+  /// size machinery uses that output's shape (not the op's inputs) as a
+  /// broadcast leaf.
+  bool sizeFromOutput{false};
 
   /// True if must be launched as its own kernel sequence  with no fusion.
   bool isStandalone_{false};
@@ -514,6 +542,7 @@ class MetadataBuilder {
   MetadataBuilder& numBarriers(int32_t val);
   MetadataBuilder& arithmeticPromotion(bool val = true);
   MetadataBuilder& inPlaceIfLastUse(bool val = true);
+  MetadataBuilder& sizeFromOutput(bool val = true);
   MetadataBuilder& isStandalone(bool val = true);
   MetadataBuilder& only1d(bool val = true);
   MetadataBuilder& metadataOnly(bool val = true);
@@ -566,6 +595,7 @@ class MetadataBuilder {
   MetadataBuilder& hasIdxArg(bool val = true);
   MetadataBuilder& hasSizeArg(bool val = true);
   MetadataBuilder& hasBlockInfo(bool val = true);
+  MetadataBuilder& hasOutputArg(bool val = true);
   MetadataBuilder& isScalarElementwise(bool val = true);
 
   Metadata build();

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include "velox/experimental/torchwave/Project.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
@@ -231,6 +232,13 @@ void NodePrinter::printValueRef(std::stringstream& ss, ValueCP value) const {
   }
   if (options_.showTypes && options_.valueTypes) {
     formatTypeAnnotation(ss, value, *options_.valueTypes);
+  }
+  // Mark a reusable last use: the operand is a boundary input of only one expr
+  // in this ProjectNode and never read again (directly or via alias), so its
+  // buffer is free to mutate in place.
+  if (options_.projectNode != nullptr &&
+      options_.projectNode->isReusableInput(value)) {
+    ss << "& ";
   }
   if (options_.useGraphNames && options_.graph) {
     ss << leafValueString(value->name(), *options_.graph);

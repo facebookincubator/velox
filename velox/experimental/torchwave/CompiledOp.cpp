@@ -23,6 +23,7 @@
 #include "velox/experimental/wave/common/KernelFsCache.h"
 
 #include <ATen/ATen.h>
+#include <c10/core/CachingDeviceAllocator.h>
 #include <c10/util/StringUtil.h>
 #include <folly/ScopeGuard.h>
 #include <gflags/gflags.h>
@@ -31,6 +32,7 @@
 #include <iostream>
 #include <sstream>
 #include <type_traits>
+#include <unordered_set>
 
 #include "velox/experimental/wave/common/GpuArena.h"
 
@@ -50,6 +52,18 @@ DEFINE_bool(
 // binary. PyTorch dispatches eager standalone ops to the default stream.
 extern "C" int cudaStreamSynchronize(void* stream);
 
+// Forward-declared (not via <c10/cuda/...>) for the same reason as
+// cudaStreamSynchronize above: this TU is CPU-configured and has no CUDA
+// headers. current_device() is a non-inline C10_CUDA_API symbol resolved at
+// final link. Allocator stats go through the CPU-safe, device-agnostic
+// c10::getDeviceAllocator(CUDA) base interface
+// (<c10/core/CachingDeviceAllocator.h>), whose getDeviceStats is a virtual
+// dispatched to libc10_cuda's registered allocator, so no CUDA-header (or new
+// build) dependency is needed.
+namespace c10::cuda {
+c10::DeviceIndex current_device();
+} // namespace c10::cuda
+
 namespace torch::wave {
 
 namespace {
@@ -59,6 +73,17 @@ namespace {
 // composite invocation returns.
 void syncTorchDefaultStream() {
   cudaStreamSynchronize(nullptr);
+}
+
+// Bytes currently held in live tensors by the torch CUDA caching allocator on
+// the active device. Sampled per step for the kTiming trace's "GPU RAM" field.
+int64_t currentAllocatedBytes() {
+  auto* allocator = c10::getDeviceAllocator(c10::DeviceType::CUDA);
+  auto stats = allocator->getDeviceStats(c10::cuda::current_device());
+  return stats
+      .allocated_bytes[static_cast<size_t>(
+          c10::CachingAllocator::StatType::AGGREGATE)]
+      .current;
 }
 
 facebook::velox::wave::CompiledKernel& patchOpcodesKernel() {
@@ -239,6 +264,16 @@ at::Tensor paramTensor(
       "Input value %",
       value->id(),
       " not found in FormalToActual map");
+  const auto& iv = frame.getIValue(it->second);
+  TORCH_CHECK(
+      iv.isTensor(),
+      "paramTensor: actual value %",
+      it->second,
+      " (formal %",
+      value->id(),
+      ") is not a tensor (tag=",
+      iv.tagKind(),
+      ") -- freed while still needed?");
   return frame.getTensor(it->second);
 }
 
@@ -701,11 +736,15 @@ CompositeInvocation::CompositeInvocation(
     std::unique_ptr<CompositeKernel> kernel,
     std::vector<OpInvocation> ops,
     std::deque<c10::IValue> ivalueStorage,
-    int32_t sequenceNumber)
+    int32_t sequenceNumber,
+    std::vector<nativert::ValueId> lastUseIds,
+    std::vector<Launch> prePassStandalones)
     : kernel_(std::move(kernel)),
       ops_(std::move(ops)),
       ivalueStorage_(std::move(ivalueStorage)),
-      sequenceNumber_(sequenceNumber) {}
+      sequenceNumber_(sequenceNumber),
+      lastUseIds_(std::move(lastUseIds)),
+      prePassStandalones_(std::move(prePassStandalones)) {}
 
 namespace {
 
@@ -1366,8 +1405,19 @@ void fillTensorListParam(
     tlp.elementOffsets.push_back(elemOffset);
     tlp.elementIds.push_back(actualId);
     if (filledOffsets.insert(elemOffset).second) {
-      fillTensorParam(
-          frame.getIValue(actualId).toTensor(), paramBase + elemOffset);
+      const auto& elemIv = frame.getIValue(actualId);
+      TORCH_CHECK(
+          elemIv.isTensor(),
+          "fillTensorListParam: list %",
+          listValue->id(),
+          " element actual %",
+          actualId,
+          " (formal %",
+          elemId,
+          ") is not a tensor (tag=",
+          elemIv.tagKind(),
+          ") -- freed while still needed?");
+      fillTensorParam(elemIv.toTensor(), paramBase + elemOffset);
       launch.tensorsInFrame.push_back(actualId);
       launch.tensorOffsets.push_back(elemOffset);
     }
@@ -2113,7 +2163,7 @@ void verifyAgainstReference(
   // This checks both fused outputs (produced on the wave stream) and standalone
   // outputs (produced by eager ops on the default stream), so sync both: the
   // wave stream and the default stream where eager standalones run.
-  state.stream->wait();
+  syncWaveStream(state);
   syncTorchDefaultStream();
   // The reference stores scalars and scalar lists as 1-D tensors; fold the
   // actual frame value into a tensor the same way so it can be compared
@@ -2431,6 +2481,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
   bool ranStandalones = false;
 
   int32_t blockSize;
+  int32_t lastExecStep = -1;
   for (int32_t stepIdx = 0;; ++stepIdx) {
     auto& sv = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
     // Re-fetch since the resize above may have invalidated the reference.
@@ -2459,6 +2510,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.shortcutStandalones.empty()) {
       break;
     }
+    lastExecStep = stepIdx;
 
     if (sv.kernels.empty()) {
       if (WaveConfig::get().trace &
@@ -2477,7 +2529,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
       // unordered. Shortcut ops only touch host-side tensor metadata, so they
       // need no sync.
       if (sv.hasGpuStandalones) {
-        state.stream->wait();
+        syncWaveStream(state);
       }
       auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
       runStandalones(
@@ -2489,6 +2541,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
           doTiming);
       if (doTiming) {
         sv.standaloneUs = elapsed(tStandalone);
+        sv.currentBytes = currentAllocatedBytes();
       }
       ranStandalones = true;
       state.launchDebugInfos.push_back(
@@ -2498,7 +2551,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
         // belongs in e2e); time only the device-to-host copy and comparison.
         bool timeRefCheck = doTiming && WaveConfig::get().referenceFrame;
         if (timeRefCheck) {
-          state.stream->wait();
+          syncWaveStream(state);
           syncTorchDefaultStream();
         }
         auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
@@ -2508,6 +2561,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
           sv.refCheckUs += elapsed(tRefCheck);
         }
       }
+      // Standalone-only step issued; the next wave-stream wait advances it to
+      // kSynced (and frees its lastUseIds if freeIntermediates is on).
+      sv.executionStage = ExecutionStage::kAllocated;
       continue;
     }
 
@@ -2684,7 +2740,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     // unordered. Shortcut standalones only touch host-side tensor metadata, so
     // they need no sync.
     if (sv.hasGpuStandalones) {
-      state.stream->wait();
+      syncWaveStream(state);
     }
 
     {
@@ -2711,12 +2767,13 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.standaloneUs = standaloneElapsed;
         sv.standaloneBound = standaloneElapsed > sv.kernelUs;
         sv.noDtoH = (returnBegin < 0);
+        sv.currentBytes = currentAllocatedBytes();
       }
     }
 
     // Trace outputs of kernel launches after execution.
     if (!state.traceState.empty()) {
-      state.stream->wait();
+      syncWaveStream(state);
       for (const auto& launch : sv.kernels) {
         traceFrameValues(
             "output", launch.actualOutputs, frame, state.traceState);
@@ -2734,7 +2791,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
       // only the device-to-host copy and comparison.
       bool timeRefCheck = doTiming && WaveConfig::get().referenceFrame;
       if (timeRefCheck) {
-        state.stream->wait();
+        syncWaveStream(state);
         syncTorchDefaultStream();
       }
       auto tRefCheck = timeRefCheck ? Clock::now() : Clock::time_point{};
@@ -2745,6 +2802,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
         sv.refCheckUs += elapsed(tRefCheck);
       }
     }
+    // Kernel launched and its outputs allocated; the next wave-stream wait
+    // advances this step to kSynced.
+    sv.executionStage = ExecutionStage::kAllocated;
   }
 
   // If any eager standalone op ran, synchronize the default CUDA stream before
@@ -2760,6 +2820,15 @@ void CompositeInvocation::execute(ExecutionState& state) {
     // async tail to the first standalone step and over-reported standalone time
     // past e2e.
     syncTorchDefaultStream();
+  }
+
+  // Stamp this node's last-use values onto its last executed step so they are
+  // released by the wave-stream sync that advances that step to kSynced, with
+  // no dedicated sync of their own. advanceSyncedStages performs the release.
+  if (WaveConfig::get().freeIntermediates && lastExecStep >= 0 &&
+      !lastUseIds_.empty()) {
+    getStepVectors(state.stepVectors, sequenceNumber_, lastExecStep)
+        .lastUseIds = lastUseIds_;
   }
 }
 

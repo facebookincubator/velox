@@ -168,6 +168,17 @@ TEST_F(TestReader, testWriterVersions) {
       "future - 99", writerVersionToString(static_cast<WriterVersion>(99)));
 }
 
+TEST_F(TestReader, currentStripe) {
+  dwio::common::ReaderOptions readerOpts{pool()};
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
+      readerOpts);
+  auto rowReader = reader->createRowReader();
+  VectorPtr batch;
+  ASSERT_GT(rowReader->next(1000, batch), 0);
+  EXPECT_LT(rowReader->currentStripe(), reader->getNumberOfStripes());
+}
+
 // This relies on schema and data inside of our fm_small and fm_large orc files,
 // and is not composeable with other schema/datas
 void verifyFlatMapReading(
