@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/JoinBridge.h"
-#include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -368,68 +367,38 @@ TEST_F(CustomJoinGroupedExecutionTest, mixedGroupedExecution) {
   core::PlanNodeId probeScanNodeId;
   core::PlanNodeId buildScanNodeId;
 
-  auto probeNode = PlanBuilder(planNodeIdGenerator, pool_.get())
-                       .tableScan(rowType)
-                       .capturePlanNodeId(probeScanNodeId)
-                       .planNode();
   auto buildNode = PlanBuilder(planNodeIdGenerator, pool_.get())
                        .tableScan(rowType)
                        .capturePlanNodeId(buildScanNodeId)
                        .planNode();
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .addNode([&](std::string id, core::PlanNodePtr /* input */) {
+                  .tableScan(rowType)
+                  .capturePlanNodeId(probeScanNodeId)
+                  .addNode([&](std::string id, core::PlanNodePtr probeNode) {
                     return std::make_shared<CustomJoinNode>(
-                        id, probeNode, std::move(buildNode));
+                        id, std::move(probeNode), std::move(buildNode));
                   })
                   .planNode();
 
-  // Only the probe scan is grouped; the build scan runs ungrouped (mixed mode).
-  auto planFragment = core::PlanFragment{
-      plan, core::ExecutionStrategy::kGrouped, 2, {probeScanNodeId}};
-
-  std::vector<RowVectorPtr> results;
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  auto task = exec::Task::create(
-      "0",
-      std::move(planFragment),
-      0,
-      std::move(queryCtx),
-      Task::ExecutionMode::kParallel,
-      [&results](RowVectorPtr result, bool, ContinueFuture*) {
-        if (result) {
-          results.push_back(std::move(result));
-        }
-        return BlockingReason::kNotBlocked;
-      });
-
-  task->start(3, 1);
-
-  // Add ungrouped build split.
-  task->addSplit(
-      buildScanNodeId,
-      exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  // Add grouped probe splits.
-  task->addSplit(
-      probeScanNodeId,
-      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 0));
-  task->addSplit(
-      probeScanNodeId,
-      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 1));
-
-  task->noMoreSplits(buildScanNodeId);
-  task->noMoreSplitsForGroup(probeScanNodeId, 0);
-  task->noMoreSplitsForGroup(probeScanNodeId, 1);
-  task->noMoreSplits(probeScanNodeId);
-
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
-  ASSERT_EQ(task->state(), exec::TaskState::kFinished);
-
   // The build side reads 80 rows and posts that count to the bridge.
   // Each split group's probe reads 80 rows and emits at most 80 (the build
-  // count).  With 2 split groups, total output should be 160 rows.
-  int64_t totalRows = 0;
-  for (const auto& result : results) {
-    totalRows += result->size();
+  // count).  With 2 split groups we expect 160 rows total.
+  constexpr int32_t numSplitGroups = 2;
+  std::vector<Split> probeSplits;
+  for (int32_t i = 0; i < numSplitGroups; ++i) {
+    probeSplits.push_back(
+        Split(makeHiveConnectorSplit(filePath->getPath()), i));
   }
-  ASSERT_EQ(totalRows, 160);
+
+  auto results =
+      AssertQueryBuilder(plan)
+          .splits(probeScanNodeId, std::move(probeSplits))
+          .splits(buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .executionStrategy(core::ExecutionStrategy::kGrouped)
+          .groupedExecutionLeafNodeIds({probeScanNodeId})
+          .numSplitGroups(numSplitGroups)
+          .numConcurrentSplitGroups(1)
+          .copyResults(pool_.get());
+
+  ASSERT_EQ(results->size(), 160);
 }

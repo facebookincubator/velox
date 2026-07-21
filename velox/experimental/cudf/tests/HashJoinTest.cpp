@@ -9120,8 +9120,8 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
   core::PlanNodeId probeScanNodeId;
   core::PlanNodeId buildScanNodeId;
 
-  PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
-  auto plan = planBuilder.tableScan(probeType_)
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(probeType_)
                   .capturePlanNodeId(probeScanNodeId)
                   .project({"t_k1 as x"})
                   .hashJoin(
@@ -9136,46 +9136,25 @@ TEST_F(HashJoinTest, mixedGroupedExecution) {
                       {"x", "y"})
                   .planNode();
 
-  auto planFragment = core::PlanFragment{
-      plan, core::ExecutionStrategy::kGrouped, 2, {probeScanNodeId}};
+  constexpr int32_t numSplitGroups = 2;
+  std::vector<exec::Split> probeSplits;
+  for (int32_t i = 0; i < numSplitGroups; ++i) {
+    probeSplits.push_back(
+        exec::Split(makeHiveConnectorSplit(filePath->getPath()), i));
+  }
 
-  std::vector<RowVectorPtr> results;
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  auto task = exec::Task::create(
-      "0",
-      std::move(planFragment),
-      0,
-      std::move(queryCtx),
-      Task::ExecutionMode::kParallel,
-      [&results](RowVectorPtr result, bool, ContinueFuture*) {
-        if (result) {
-          results.push_back(std::move(result));
-        }
-        return BlockingReason::kNotBlocked;
-      });
+  auto results =
+      AssertQueryBuilder(plan)
+          .splits(probeScanNodeId, std::move(probeSplits))
+          .splits(
+              buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .executionStrategy(core::ExecutionStrategy::kGrouped)
+          .groupedExecutionLeafNodeIds({probeScanNodeId})
+          .numSplitGroups(numSplitGroups)
+          .numConcurrentSplitGroups(1)
+          .copyResults(pool_.get());
 
-  task->start(3, 1);
-
-  // Add ungrouped build split.
-  task->addSplit(
-      buildScanNodeId,
-      exec::Split(makeHiveConnectorSplit(filePath->getPath())));
-  // Add grouped probe splits.
-  task->addSplit(
-      probeScanNodeId,
-      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 0));
-  task->addSplit(
-      probeScanNodeId,
-      exec::Split(makeHiveConnectorSplit(filePath->getPath()), 1));
-
-  task->noMoreSplits(buildScanNodeId);
-  task->noMoreSplitsForGroup(probeScanNodeId, 0);
-  task->noMoreSplitsForGroup(probeScanNodeId, 1);
-  task->noMoreSplits(probeScanNodeId);
-
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
-  ASSERT_EQ(task->state(), exec::TaskState::kFinished);
-  ASSERT_FALSE(results.empty());
+  ASSERT_GT(results->size(), 0);
 }
 
 } // namespace
