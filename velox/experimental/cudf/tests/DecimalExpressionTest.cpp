@@ -1331,6 +1331,43 @@ TEST_F(CudfDecimalTest, decimalDivideNullScalar) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
+// A null scalar operand must yield an all-null result for ADD/SUB/MUL/MOD in
+// both operand positions (the scalar's validity, not its payload, drives the
+// output). Verified against CPU results.
+TEST_F(CudfDecimalTest, decimalArithmeticNullScalar) {
+  auto input = makeRowVector(
+      {"a"},
+      {
+          makeFlatVector<int64_t>({500, -250, 100}, DECIMAL(10, 2)),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .project({
+                      "a + CAST(NULL AS DECIMAL(10, 2)) AS add_r",
+                      "CAST(NULL AS DECIMAL(10, 2)) + a AS add_l",
+                      "a - CAST(NULL AS DECIMAL(10, 2)) AS sub_r",
+                      "CAST(NULL AS DECIMAL(10, 2)) - a AS sub_l",
+                      "a * CAST(NULL AS DECIMAL(10, 2)) AS mul_r",
+                      "CAST(NULL AS DECIMAL(10, 2)) * a AS mul_l",
+                      "a % CAST(NULL AS DECIMAL(10, 2)) AS mod_r",
+                      "CAST(NULL AS DECIMAL(10, 2)) % a AS mod_l",
+                  })
+                  .planNode();
+
+  unregisterCudf();
+  auto cpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  registerCudf();
+
+  auto gpuResult =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 // Velox comparison functions require both arguments to have the same type
 // (Generic<T1>, Generic<T1>), so raw different-scale comparisons fail at the
 // type-resolution stage before cuDF evaluation.

@@ -798,6 +798,11 @@ decimalBinaryOperationWithOverflow(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
+  if (!rhs.is_valid(stream)) {
+    auto result = cudf::make_fixed_width_column(
+        outputType, lhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
+    return {std::move(result), false};
+  }
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
   auto result = makeResultColumn(
       lhs.size(),
@@ -854,6 +859,11 @@ decimalBinaryOperationWithOverflow(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
+  if (!lhs.is_valid(stream)) {
+    auto result = cudf::make_fixed_width_column(
+        outputType, rhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
+    return {std::move(result), false};
+  }
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
   auto result = makeResultColumn(
       rhs.size(),
