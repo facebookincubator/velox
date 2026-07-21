@@ -105,6 +105,11 @@ void CudfSplitReader::setupReader() {
   }
 }
 
+void CudfSplitReader::prepareSplitInternal(
+    dwio::common::RuntimeStatistics& /*runtimeStats*/) {
+  setupReader();
+}
+
 void CudfSplitReader::prepareSplit(
     dwio::common::RuntimeStatistics& runtimeStats) {
   // Reset existing split and split readers, if any
@@ -113,8 +118,8 @@ void CudfSplitReader::prepareSplit(
   // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
 
-  // Setup a cuDF split reader
-  setupReader();
+  // Perform split-specific setup.
+  prepareSplitInternal(runtimeStats);
 
   // Update runtime stats
   runtimeStats.processedSplits++;

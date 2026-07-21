@@ -22,6 +22,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -35,8 +36,11 @@
 #include "velox/type/TimestampConversion.h"
 
 #include <folly/Random.h>
+#include <folly/ScopeGuard.h>
 #include <folly/String.h>
 #include <folly/lang/Bits.h>
+
+#include <atomic>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::exec;
@@ -46,6 +50,48 @@ using facebook::velox::common::testutil::TempFilePath;
 using facebook::velox::connector::hive::HiveColumnHandle;
 
 namespace facebook::velox::cudf_velox::exec::test {
+
+namespace {
+
+class CountingBufferedInputBuilder final
+    : public ::facebook::velox::connector::hive::BufferedInputBuilder {
+ public:
+  explicit CountingBufferedInputBuilder(
+      std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
+          delegate)
+      : delegate_(std::move(delegate)) {}
+
+  std::unique_ptr<dwio::common::BufferedInput> create(
+      const FileHandle& fileHandle,
+      const dwio::common::ReaderOptions& readerOptions,
+      const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<io::IoStatistics> ioStatistics,
+      std::shared_ptr<IoStats> ioStats,
+      folly::Executor* executor,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+      override {
+    createCount_.fetch_add(1, std::memory_order_relaxed);
+    return delegate_->create(
+        fileHandle,
+        readerOptions,
+        connectorQueryCtx,
+        std::move(ioStatistics),
+        std::move(ioStats),
+        executor,
+        fileReadOps);
+  }
+
+  uint64_t createCount() const {
+    return createCount_.load(std::memory_order_relaxed);
+  }
+
+ private:
+  std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
+      delegate_;
+  std::atomic_uint64_t createCount_{0};
+};
+
+} // namespace
 
 class CudfIcebergReadTest : public CudfIcebergTestBase {
  protected:
@@ -423,6 +469,34 @@ TEST_F(CudfIcebergReadTest, basicRead) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
   AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+TEST_F(CudfIcebergReadTest, reusesFooterMetadataDuringReaderSetup) {
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto originalBuilder =
+      ::facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
+  auto countingBuilder =
+      std::make_shared<CountingBufferedInputBuilder>(originalBuilder);
+  ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+      countingBuilder);
+  SCOPE_EXIT {
+    ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+        originalBuilder);
+  };
+
+  AssertQueryBuilder(makeTableScanPlan(rowType))
+      .connectorSessionProperty(
+          kCudfIcebergConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInputSession,
+          "true")
+      .splits(makeIcebergSplits(dataFile->getPath()))
+      .assertResults({data});
+
+  EXPECT_EQ(countingBuilder->createCount(), 1);
 }
 
 /// Read with multiple columns.

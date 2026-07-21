@@ -139,7 +139,7 @@ cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
   return deferSubfieldFilter_ ? nullptr : subfieldFilter();
 }
 
-void CudfIcebergSplitReader::prepareSplit(
+void CudfIcebergSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStatistics& runtimeStats) {
   // Reset delete readers and column injection
   resetSplit();
@@ -177,8 +177,7 @@ void CudfIcebergSplitReader::prepareSplit(
         << "Subfield filter is deferred to post table read due to missing column references.";
   }
 
-  // Base prepare split. Call at the very end.
-  CudfSplitReader::prepareSplit(runtimeStats);
+  setupReader();
 }
 
 rmm::device_async_resource_ref
