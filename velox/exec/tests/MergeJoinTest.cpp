@@ -2607,6 +2607,50 @@ TEST_F(MergeJoinTest, fullOuterJoinWithDuplicateMatch) {
       .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
 }
 
+TEST_F(MergeJoinTest, fullOuterJoinRightRowIdCollisionAcrossBatches) {
+  auto left = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int32_t>({1, 2}),
+          makeFlatVector<int32_t>({5, 5}),
+      });
+
+  auto rightBatch1 = makeRowVector(
+      {"c", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 1, 1}),
+          makeFlatVector<int32_t>({10, 10, 10, 10}),
+      });
+
+  auto rightBatch2 = makeRowVector(
+      {"c", "d"},
+      {
+          makeFlatVector<int32_t>({2, 2, 2, 2}),
+          makeFlatVector<int32_t>({0, 0, 0, 0}),
+      });
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {rightBatch1, rightBatch2});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({left})
+                  .mergeJoin(
+                      {"a"},
+                      {"c"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({rightBatch1, rightBatch2})
+                          .planNode(),
+                      "b < d",
+                      {"a", "b", "c", "d"},
+                      core::JoinType::kFull)
+                  .planNode();
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "32")
+      .assertResults("SELECT * from t FULL OUTER JOIN u ON a = c AND b < d");
+}
+
 TEST_F(MergeJoinTest, flatMapVectorInnerJoin) {
   auto left = makeRowVector(
       {"t_c0", "t_c1"},

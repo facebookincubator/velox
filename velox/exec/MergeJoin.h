@@ -176,6 +176,11 @@ class MergeJoin : public Operator {
     // One or more batches of inputs that contain rows with matching keys.
     std::vector<RowVectorPtr> inputs;
 
+    // Stable ids of the corresponding input batches. For right-side matches,
+    // these ids are used to construct globally unique right row ids across
+    // different key matches.
+    std::vector<uint64_t> inputBatchIds;
+
     // Row number in the first batch pointing to the first row with matching
     // keys.
     vector_size_t startRowIndex{0};
@@ -219,6 +224,7 @@ class MergeJoin : public Operator {
   bool findEndOfMatch(
       const RowVectorPtr& input,
       const std::vector<column_index_t>& keys,
+      uint64_t inputBatchId,
       Match& match);
 
   // Ensures `output_` is ready to receive records via `addOutput()` or
@@ -263,14 +269,45 @@ class MergeJoin : public Operator {
       vector_size_t leftRow,
       const RowVectorPtr& rightBatch,
       vector_size_t rightRow,
-      size_t rightBatchIndex);
+      uint64_t rightBatchId);
 
-  struct RightCandidateCursor {
+  // Encodes a stable identity for a physical right-side row using the
+  // right-side batch id and the row index within that batch. This id is used
+  // to recognize when a provisional right-only row corresponds to a right row
+  // that already has a passing match.
+  uint64_t rightRowId(uint64_t rightBatchId, vector_size_t rightRowIndex) const;
+
+  struct ProvisionalRightOutputCursor {
+    // Position to resume appending provisional right-only rows from when the
+    // previous output batch filled up before all right rows for the current
+    // match were processed.
     size_t rightBatchIndex{0};
     vector_size_t rightRowIndex{0};
   };
 
-  bool appendRightCandidates();
+  // Appends one provisional right-only row for full join + filter: copies the
+  // right-side values, fills the left-side projections with nulls, records the
+  // row as a miss in JoinTracker, and stores the encoded rightRowId so that
+  // applyFilter() can later decide whether to keep or drop this row.
+  void appendProvisionalRightRow(
+      const RowVectorPtr& rightBatch,
+      vector_size_t rightRowIndex,
+      uint64_t rightRowId);
+
+  // Full join + filter needs to produce unmatched rows from both sides. For
+  // the right side, a row is "unmatched" only if none of its left-side matches
+  // passed the filter.
+  //
+  // This method appends such right-side rows as provisional output rows: it
+  // writes the right projections, sets left projections to null, and marks the
+  // row via rawIsProvisionalRightRow_. Rows whose ids are present in
+  // matchedRightRowIds_ are skipped.
+  //
+  // Returns true if the current output vector needs to be returned first
+  // (e.g. output buffer switch or output batch full). In that case it records
+  // a restart position in provisionalRightOutputCursor_ and can be resumed on
+  // the next getOutput() call.
+  bool appendProvisionalRightRows();
 
   // If the right side projected columns in the current output vector happen to
   // span more than one vector from the right side, they cannot be simply
@@ -572,10 +609,15 @@ class MergeJoin : public Operator {
   vector_size_t* rawLeftOutputIndices_;
   vector_size_t* rawRightOutputIndices_;
 
+  // Per-output-row metadata used by full join + filter to decide whether a
+  // provisional right-only row should be kept or dropped after filter
+  // evaluation.
   BufferPtr rightRowIds_;
+  // Encoded stable identity of the corresponding right-side row.
   uint64_t* rawRightRowIds_{nullptr};
-  BufferPtr rightRowIsCandidate_;
-  uint64_t* rawRightRowIsCandidate_{nullptr};
+  BufferPtr isProvisionalRightRow_;
+  // 1 if the output row is a provisional right-only row, 0 otherwise.
+  uint8_t* rawIsProvisionalRightRow_{nullptr};
 
   // Stores the current left and right vectors being used by the output
   // dictionaries.
@@ -648,6 +690,11 @@ class MergeJoin : public Operator {
   // Latest batch of input from the right side.
   RowVectorPtr rightInput_;
 
+  // Stable id of the current physical right input batch. Incremented whenever
+  // a new right batch is pulled from the source.
+  uint64_t currentRightInputBatchId_{0};
+  uint64_t nextRightInputBatchId_{1};
+
   // Row number on the left side (input_) to process next.
   vector_size_t leftRowIndex_{0};
 
@@ -659,8 +706,14 @@ class MergeJoin : public Operator {
 
   // A set of rows with matching keys on the right side.
   std::optional<Match> rightMatch_;
-  std::optional<RightCandidateCursor> rightCandidateCursor_;
-  folly::F14FastSet<uint64_t> passedRightRows_;
+
+  // Resume position for emitting provisional right-only rows for the current
+  // rightMatch_ when the output batch fills up mid-way.
+  std::optional<ProvisionalRightOutputCursor> provisionalRightOutputCursor_;
+  // Set of encoded rightRowId values that have at least one passing match in
+  // the current equal-key window. Used to drop provisional right-only rows for
+  // right-side rows that are already matched after filter evaluation.
+  folly::F14FastSet<uint64_t> matchedRightRowIds_;
 
   RowVectorPtr output_;
 
