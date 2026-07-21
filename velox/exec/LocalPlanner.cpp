@@ -464,7 +464,7 @@ void LocalPlanner::markMixedJoinBridges(
     // both factories so the bridge is created in the ungrouped pipeline and
     // skipped in the grouped pipeline.
     auto markIfMixed = [&](const core::PlanNodePtr& planNode,
-                           auto DriverFactory::*memberSet) {
+                           auto DriverFactory::* memberSet) {
       auto& buildSourceNode = planNode->sources()[1];
       for (auto& factoryOther : driverFactories) {
         if (!factoryOther->groupedExecution &&
