@@ -1510,6 +1510,16 @@ class PlanBuilder {
       const std::optional<std::string>& ordinalColumn = std::nullopt,
       const std::optional<std::string>& markerName = std::nullopt);
 
+  /// Same as above, but with caller-provided unnest output names: one per array
+  /// column, two per map column (key then value), in the same order as
+  /// 'unnestColumns'. A std::nullopt name prunes that output column.
+  PlanBuilder& unnest(
+      const std::vector<std::string>& replicateColumns,
+      const std::vector<std::string>& unnestColumns,
+      const std::vector<std::optional<std::string>>& unnestNames,
+      const std::optional<std::string>& ordinalColumn = std::nullopt,
+      const std::optional<std::string>& markerName = std::nullopt);
+
   /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
   /// strings to be computed by this windowNode.

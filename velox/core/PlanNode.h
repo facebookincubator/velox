@@ -4704,7 +4704,9 @@ class UnnestNode : public PlanNode {
   /// or MAP.
   /// @param unnestNames Names to use for unnested outputs: one name for each
   /// array (element); two names for each map (key and value). The output
-  /// names must appear in the same order as unnestVariables.
+  /// names must appear in the same order as unnestVariables. A std::nullopt
+  /// entry prunes the corresponding output column (not emitted, not
+  /// materialized).
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
   /// @param markerName Optional name for column which indicates whether an

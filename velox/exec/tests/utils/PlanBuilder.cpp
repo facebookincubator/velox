@@ -2233,19 +2233,6 @@ PlanBuilder& PlanBuilder::unnest(
     const std::optional<std::string>& ordinalColumn,
     const std::optional<std::string>& markerName) {
   VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
-      replicateFields;
-  replicateFields.reserve(replicateColumns.size());
-  for (const auto& name : replicateColumns) {
-    replicateFields.emplace_back(field(name));
-  }
-
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> unnestFields;
-  unnestFields.reserve(unnestColumns.size());
-  for (const auto& name : unnestColumns) {
-    unnestFields.emplace_back(field(name));
-  }
-
   std::vector<std::optional<std::string>> unnestNames;
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
@@ -2259,6 +2246,29 @@ PlanBuilder& PlanBuilder::unnest(
           "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",
           input->toString());
     }
+  }
+  return unnest(
+      replicateColumns, unnestColumns, unnestNames, ordinalColumn, markerName);
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<std::string>& replicateColumns,
+    const std::vector<std::string>& unnestColumns,
+    const std::vector<std::optional<std::string>>& unnestNames,
+    const std::optional<std::string>& ordinalColumn,
+    const std::optional<std::string>& markerName) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
+      replicateFields;
+  replicateFields.reserve(replicateColumns.size());
+  for (const auto& name : replicateColumns) {
+    replicateFields.emplace_back(field(name));
+  }
+
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> unnestFields;
+  unnestFields.reserve(unnestColumns.size());
+  for (const auto& name : unnestColumns) {
+    unnestFields.emplace_back(field(name));
   }
 
   planNode_ = std::make_shared<core::UnnestNode>(
