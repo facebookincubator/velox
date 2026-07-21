@@ -580,13 +580,15 @@ KernelOperation::KernelOperation(
   numConstants_ = static_cast<int32_t>(attrOffsets_.size());
   altParamOffset_ = offset;
 
-  // For all-elementwise kernel ops, mark the output as byLargestInput,
-  // unless any input is wholeTensor (its size should not affect the output).
+  // For all-elementwise kernel ops, size the memory-backed output(s) by the
+  // largest input, unless an input is wholeTensor (its size should not affect
+  // the output). A pure elementwise op has a single output. A fused op that
+  // reads a wholeTensor operand (e.g. index_select) also materializes that
+  // operand's producer, so it may have more than one memory-backed output; each
+  // is then sized from its own shape expression rather than byLargestInput, and
+  // callNeedsBarrier orders the producer before the random-access read.
   std::unordered_set<NodeCP> ewVisited;
   if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited)) {
-    TORCH_CHECK(
-        outputDescs_.size() == 1,
-        "All-elementwise op should have exactly one output");
     auto* meta = Registry::metadata(sg.root->target());
     bool hasWholeTensor = false;
     if (meta) {
@@ -598,7 +600,11 @@ KernelOperation::KernelOperation(
       }
     }
     if (!hasWholeTensor) {
-      outputDescs_[0].byLargestInput = true;
+      for (size_t i = 0; i < outputDescs_.size(); ++i) {
+        if (!outputDescs_[i].shapeOnly) {
+          outputDescs_[i].byLargestInput = true;
+        }
+      }
     }
   }
 
@@ -813,7 +819,15 @@ void collectElementwiseLeaves(
     }
     auto* producerMeta = Registry::metadata(producer->target());
     if (producerMeta && producerMeta->elementwise) {
-      collectElementwiseLeaves(producer, subgraphInputs, seen, leafIds);
+      // An op whose output shape is not derivable from its operands
+      // (sizeFromOutput, e.g. index_select) contributes its own output shape to
+      // the broadcast, not its (whole-tensor) operands. Its output is a
+      // shape-only tensor available at launch, so use it as the size leaf.
+      if (producerMeta->sizeFromOutput) {
+        leafIds.push_back(value->id());
+      } else {
+        collectElementwiseLeaves(producer, subgraphInputs, seen, leafIds);
+      }
     } else {
       leafIds.push_back(value->id());
     }
@@ -972,6 +986,9 @@ void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
   if (src.isList) {
     dst.isList = true;
   }
+  if (src.nonRootOutput) {
+    dst.nonRootOutput = true;
+  }
   if (src.byLargestInput) {
     dst.byLargestInput = true;
   }
@@ -1008,6 +1025,10 @@ bool addOrUpdateOutput(
         OutputDesc elemDesc;
         elemDesc.delegated = true;
         elemDesc.shapeSetOnDevice = desc.shapeSetOnDevice;
+        // Propagate nonRootOutput so a list result of a split root op (e.g.
+        // tw.group_length_guard_head) keeps its unpacked elements out of the
+        // freeable intermediates list as well, not just the list value.
+        elemDesc.nonRootOutput = desc.nonRootOutput;
         outputValues.push_back(elem);
         outputDescs.push_back(std::move(elemDesc));
       }
@@ -1025,6 +1046,7 @@ OutputDesc KernelOperation::makeOutputDesc(
   OutputDesc desc;
   desc.shapeSetOnDevice = returnMeta.shapeSetOnDevice;
   desc.neededOnHost = returnMeta.neededOnHost;
+  desc.nonRootOutput = returnMeta.nonRootOutput;
   desc.sizeExpr.op = returnMeta.sizeShortcut;
 
   // Expand sizeArgs ordinals to ValueIds from the node's inputs.
@@ -1060,6 +1082,17 @@ OutputDesc KernelOperation::makeOutputDesc(
   }
 
   return desc;
+}
+
+bool KernelOperation::isMultiUseInput(nativert::ValueId id) const {
+  // Read from the WaveGraph (persists to execution), not compileCtx_, which is
+  // a stack temporary destroyed after compilation. LaunchData calls this while
+  // gathering launches at execution time.
+  return waveGraph_ != nullptr && waveGraph_->isMultiUseInput(id);
+}
+
+bool KernelOperation::isGraphOutput(nativert::ValueId id) const {
+  return waveGraph_ != nullptr && waveGraph_->isGraphOutput(id);
 }
 
 void KernelOperation::setOutputs(
@@ -1165,12 +1198,25 @@ void KernelOperation::setOutputs(
     bool isListOutput =
         outputs[i]->type().kind() == nativert::Type::Kind::TensorList;
     bool needsShapeOnly = !inMemory && isEw && !callerIsElementwise;
+    // An op whose output shape is not derivable from its operands
+    // (sizeFromOutput, e.g. index_select) must expose a shape-only tensor even
+    // when fused into another elementwise, so the enclosing expression can size
+    // its output from this op's shape rather than from its (whole-tensor)
+    // operands.
+    if (!inMemory && isEw && meta->sizeFromOutput &&
+        meta->returnMeta[i].isRegister) {
+      needsShapeOnly = true;
+    }
     if (!meta->returnMeta[i].isRegister || inMemory || needsShapeOnly) {
       OutputDesc desc;
       if (needsShapeOnly && meta->returnMeta[i].isRegister) {
+        if (meta->returnMeta[i].reserveShape) {
+          desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
+        } else {
+          desc.sizeExpr =
+              makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
+        }
         desc.shapeOnly = true;
-        desc.sizeExpr =
-            makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
       } else if (meta->returnMeta[i].reserveShape) {
         desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
       } else {

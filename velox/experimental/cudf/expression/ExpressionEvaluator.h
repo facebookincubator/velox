@@ -26,6 +26,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -61,6 +62,15 @@ inline std::vector<cudf::column_view> tableViewToColumnViews(
   return result;
 }
 
+// Throws a VeloxUserError with userMessage if any non-null entry of cond is
+// false. cond must be a BOOL8 column. Does nothing for empty or all-null
+// columns.
+void checkAllTrue(
+    cudf::column_view cond,
+    std::string_view userMessage,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
 class CudfFunction {
  public:
   virtual ~CudfFunction() = default;
@@ -74,22 +84,33 @@ using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
     const std::shared_ptr<velox::exec::Expr>& expr)>;
 
+// Optional function-specific eligibility check applied after signature
+// matching. Use this for semantic restrictions that cannot be expressed by a
+// FunctionSignature. Both FunctionExpression::canEvaluate and
+// createCudfFunction apply this filter.
+using CudfCanEvaluate =
+    std::function<bool(const std::shared_ptr<velox::exec::Expr>& expr)>;
+
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
   std::vector<exec::FunctionSignaturePtr> signatures;
+  // If set, this must return true before the factory is selected.
+  CudfCanEvaluate canEvaluate;
 };
 
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
+    bool overwrite = true,
+    CudfCanEvaluate canEvaluate = nullptr);
 
 void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
-    bool overwrite = true);
+    bool overwrite = true,
+    CudfCanEvaluate canEvaluate = nullptr);
 
 /// Create a CudfFunction for the given name and expression.
 /// Returns nullptr if no registered function matches the expression's

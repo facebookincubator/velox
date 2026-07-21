@@ -28,7 +28,8 @@ class PrestoCastHooks : public CastHooks {
 
   // Uses the default implementation of 'castFromDateString'.
   Expected<Timestamp> castStringToTimestamp(
-      const StringView& view) const override;
+      const StringView& view,
+      bool adjustTimezone) const override;
 
   Expected<Timestamp> castIntToTimestamp(int64_t seconds) const override;
 

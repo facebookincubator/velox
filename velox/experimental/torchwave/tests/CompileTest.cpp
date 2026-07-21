@@ -32,6 +32,7 @@
 #include "velox/experimental/torchwave/Pt2Load.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
+#include "velox/experimental/torchwave/tests/CompiledPlan.h"
 
 namespace torch::wave {
 namespace {
@@ -268,6 +269,64 @@ TEST_F(CompileTest, maskedSelectTest) {
 
   // No step 2 in single block grid.
   EXPECT_FALSE(checkGenerated(".", *noRemGraph, 0, 2, true));
+}
+
+// The same facts as maskedSelectTest, expressed with the relationship matchers:
+// what fuses and where the boundaries fall is visible without per-index
+// bookkeeping or toString regexes.
+TEST_F(CompileTest, planMatchers) {
+  auto graph = loadAndCompile("data/masked_select_test.pt2");
+  ASSERT_NE(graph, nullptr);
+
+  // Multi-block: the head kernel fuses the elementwise prefix with
+  // masked_select_head; the size scan and final compaction run in later steps
+  // (kernel boundaries after the head).
+  auto multi = CompiledPlan::from(*graph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(multi.fuses(
+      {"tw.masked_select_head",
+       "aten.add.Tensor",
+       "aten.lt.Scalar",
+       "aten.remainder.Scalar"}));
+  EXPECT_TRUE(multi.inLaterStep("tw.add_sizes", "tw.masked_select_head"));
+  EXPECT_TRUE(multi.inLaterStep("tw.masked_select_final", "tw.add_sizes"));
+
+  // Single-block: the whole masked_select fuses into one kernel.
+  auto single = CompiledPlan::from(*graph, CompiledPlan::Mode::kSingleBlock);
+  EXPECT_TRUE(single.fuses(
+      {"aten.masked_select.default", "aten.add.Tensor", "aten.lt.Scalar"}));
+
+  // Drop remainder.Scalar: it can no longer fuse, so it falls to a standalone
+  // launch with a boundary before -- and hence a step earlier than -- the
+  // elementwise head, which still fuses add + lt.
+  auto remainderMeta = Registry::unregister("torch.ops.aten.remainder.Scalar");
+  auto noRem = loadAndCompile("data/masked_select_test.pt2");
+  Registry::restoreRegistry(
+      "torch.ops.aten.remainder.Scalar", std::move(remainderMeta));
+  ASSERT_NE(noRem, nullptr);
+
+  auto noRemMulti =
+      CompiledPlan::from(*noRem, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(noRemMulti.standalone("aten.remainder.Scalar"));
+  EXPECT_TRUE(noRemMulti.kernelBoundaryBetween(
+      "aten.remainder.Scalar", "tw.masked_select_head"));
+  EXPECT_TRUE(
+      noRemMulti.inLaterStep("tw.masked_select_head", "aten.remainder.Scalar"));
+  EXPECT_TRUE(noRemMulti.fuses(
+      {"tw.masked_select_head", "aten.add.Tensor", "aten.lt.Scalar"}));
+}
+
+// tw.index_select is an all-elementwise op; an elementwise producer of its
+// source/index fuses INTO its kernel and is ordered by an intra-kernel barrier
+// (a barrier within one kernel, not a kernel boundary between two).
+TEST_F(CompileTest, planBarrier) {
+  auto graph = loadAndCompile("data/index_select_test.pt2");
+  ASSERT_NE(graph, nullptr);
+
+  auto multi = CompiledPlan::from(*graph, CompiledPlan::Mode::kMultiKernel);
+  LOG(INFO) << multi.describe();
+
+  EXPECT_TRUE(multi.fuses({"tw.index_select", "aten.add.Tensor"}));
+  EXPECT_TRUE(multi.barrierBetween("tw.index_select", "aten.add.Tensor"));
 }
 
 } // namespace

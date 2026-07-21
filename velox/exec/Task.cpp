@@ -3452,8 +3452,7 @@ Task::getScaleWriterPartitionBalancer(
   return it->second.scaleWriterPartitionBalancer;
 }
 
-const std::shared_ptr<LocalExchangeMemoryManager>&
-Task::getLocalExchangeMemoryManager(
+std::shared_ptr<LocalExchangeMemoryManager> Task::getLocalExchangeMemoryManager(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
   std::lock_guard<std::timed_mutex> l(mutex_);

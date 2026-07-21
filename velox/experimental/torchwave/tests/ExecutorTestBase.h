@@ -32,6 +32,7 @@
 
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
+#include "velox/experimental/torchwave/tests/CompiledPlan.h"
 #include "velox/experimental/torchwave/tests/DataGen.h"
 
 namespace torch::wave {
@@ -293,6 +294,19 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& outputs,
       const std::vector<c10::IValue>& expected,
       const std::string& label);
+
+  /// A CompiledPlan per grid variant, for asserting how ops are placed into
+  /// kernels and steps and how that placement differs across modes.
+  struct ModePlans {
+    CompiledPlan multiKernel;
+    CompiledPlan singleBlock;
+    CompiledPlan cg;
+  };
+
+  /// Compiles 'pt2File' and returns a CompiledPlan for each grid variant. Only
+  /// the multi-kernel grid contains every op; the single-block and cg grids
+  /// hold only the ops that have such a variant (e.g. masked_select).
+  ModePlans compilePlans(const std::string& pt2File);
 };
 
 } // namespace torch::wave

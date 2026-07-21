@@ -113,7 +113,7 @@ struct WordStemFunction {
  private:
   folly::F14FastMap<std::string, std::unique_ptr<detail::Stemmer>> stemmers_;
 
-  // Get a detail::Stemmer from the the map using the lang as the key or create
+  // Get a detail::Stemmer from the map using the lang as the key or create
   // a new one if it doesn't exist. Return nullptr if the specified lang is not
   // supported.
   detail::Stemmer* getStemmer(const std::string& lang) {

@@ -148,6 +148,10 @@ DEFINE_bool(
     enable_reuse,
     false,
     "Reuse a value's buffer in place when an op is its unique last use (turn copying ops into in-place ops)");
+DEFINE_bool(
+    free_intermediates,
+    false,
+    "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
 
 namespace torch::wave {
 
@@ -644,6 +648,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
+  WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -695,12 +700,18 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
       if (output) {
         // Capture a deep copy of each output the instant its node ran, so a
         // later in-place overwrite of its storage cannot corrupt the reference.
-        // Skip scratch self-args of index_put (see inPlaceSelfIds above).
+        // Copy straight to CPU: on a GPU nativert run this keeps the whole
+        // reference frame off the GPU, so capturing every intermediate does not
+        // exhaust GPU memory (a full-graph frame at large batch otherwise
+        // OOMs). copy=true forces a fresh tensor even when the value is already
+        // on CPU. Skip scratch self-args of index_put (see inPlaceSelfIds
+        // above).
         if (!FLAGS_save_reference_frame.empty() &&
             !inPlaceSelfIds.count(output->id())) {
           const auto& iv = frame.getIValue(output->id());
           if (iv.isTensor() && iv.toTensor().numel() > 0) {
-            capturedRefOutputs_[output->id()] = iv.toTensor().detach().clone();
+            capturedRefOutputs_[output->id()] = iv.toTensor().detach().to(
+                at::kCPU, /*non_blocking=*/false, /*copy=*/true);
           }
         }
         std::vector<nativert::ValueId> ids = {output->id()};
@@ -777,7 +788,10 @@ RunTiming ExecutorTestBase::runSerial(
             << " non-none slots of " << graph.numValues();
 
   if (!FLAGS_save_reference_frame.empty()) {
-    saveReferenceFrame(*frame, graph, FLAGS_save_reference_frame);
+    // Prefer the per-node CPU copies (capturedRefOutputs_) over the live frame,
+    // so a GPU serial run never has to hold every intermediate on the device.
+    saveReferenceFrame(
+        *frame, graph, capturedRefOutputs_, FLAGS_save_reference_frame);
     LOG(INFO) << "Saved reference frame to " << FLAGS_save_reference_frame;
   }
 
@@ -970,6 +984,26 @@ void ExecutorTestBase::runTest(
 
   runTestWithFixture(
       std::move(fixture), expected, label.empty() ? pt2File : label);
+}
+
+ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
+    const std::string& pt2File) {
+  auto baseDir = dataDir();
+  auto pt2Path =
+      pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
+  auto fixture = ModelFixture::load(pt2Path);
+  TORCH_CHECK(fixture != nullptr, "compilePlans: failed to load ", pt2Path);
+  setGraphDevice(fixture->model.graph.get(), true);
+  // Constructing the executor compiles and places the graph, populating the
+  // grids CompiledPlan reads. CompiledPlan::from copies out plain strings, so
+  // the executor and its WaveGraph need not outlive this call.
+  WaveGraphExecutor waveExec(fixture->makeModelContext());
+  auto* wave = waveExec.waveGraph();
+  return {
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kMultiKernel),
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kSingleBlock),
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kCG),
+  };
 }
 
 void ExecutorTestBase::runTestWithFixture(
