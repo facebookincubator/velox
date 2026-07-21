@@ -1242,6 +1242,153 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              720'000'000'000},
             DECIMAL(20, 10)));
   }
+
+  std::string zeros(uint32_t numZeros) {
+    return std::string(numZeros, '0');
+  }
+
+  // Valid double-to-decimal cases. Results are identical regardless of ANSI
+  // mode, so they are shared between the ANSI ON and ANSI OFF tests.
+  void testDoubleToDecimal() {
+    const auto input = makeFlatVector<double>(
+        {-3333.03,
+         -2222.02,
+         -1.0,
+         0.00,
+         100,
+         99999.99,
+         10.03,
+         10.05,
+         9.95,
+         -2.123456789});
+    // Double to short decimal.
+    testCast(
+        input,
+        makeFlatVector<int64_t>(
+            {-33'330'300,
+             -22'220'200,
+             -10'000,
+             0,
+             1'000'000,
+             999'999'900,
+             100'300,
+             100'500,
+             99'500,
+             -21'235},
+            DECIMAL(10, 4)));
+
+    // Double to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {
+                HugeInt::parse("-333303" + zeros(16)),
+                HugeInt::parse("-222202" + zeros(16)),
+                -1'000'000'000'000'000'000,
+                0,
+                HugeInt::parse("100" + zeros(18)),
+                HugeInt::parse("9999999" + zeros(16)),
+                HugeInt::parse("1003" + zeros(16)),
+                HugeInt::parse("1005" + zeros(16)),
+                HugeInt::parse("995" + zeros(16)),
+                HugeInt::parse("-2123456789" + zeros(9)),
+            },
+            DECIMAL(38, 18)));
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {-33'330, -22'220, -10, 0, 1'000, 1'000'000, 100, 101, 100, -21},
+            DECIMAL(20, 1)));
+    testCast(
+        makeNullableFlatVector<double>(
+            {0.13456789,
+             0.00000015,
+             0.000000000000001,
+             0.999999999999999,
+             0.123456789123123,
+             std::nullopt}),
+        makeNullableFlatVector<int128_t>(
+            {134'567'890'000'000'000,
+             150'000'000'000,
+             1'000,
+             999'999'999'999'999'000,
+             123'456'789'123'123'000,
+             std::nullopt},
+            DECIMAL(38, 18)));
+
+    // The smallest positive double rounds to zero.
+    testCast(
+        makeConstant<double>(std::numeric_limits<double>::min(), 1),
+        makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
+  }
+
+  // Valid real-to-decimal cases. Results are identical regardless of ANSI
+  // mode, so they are shared between the ANSI ON and ANSI OFF tests.
+  void testRealToDecimal() {
+    const auto input = makeFlatVector<float>(
+        {-3333.03,
+         -2222.02,
+         -1.0,
+         0.00,
+         100,
+         99999.9,
+         10.03,
+         10.05,
+         9.95,
+         -2.12345});
+    // Real to short decimal.
+    testCast(
+        input,
+        makeFlatVector<int64_t>(
+            {-33'330'300,
+             -22'220'200,
+             -10'000,
+             0,
+             1'000'000,
+             999'999'000,
+             100'300,
+             100'500,
+             99'500,
+             -212'35},
+            DECIMAL(10, 4)));
+
+    // Real to long decimal.
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {HugeInt::parse("-333303" + zeros(16)),
+             HugeInt::parse("-222202" + zeros(16)),
+             -1'000'000'000'000'000'000,
+             0,
+             HugeInt::parse("100" + zeros(18)),
+             HugeInt::parse("999999" + zeros(17)),
+             HugeInt::parse("1003" + zeros(16)),
+             HugeInt::parse("1005" + zeros(16)),
+             HugeInt::parse("995" + zeros(16)),
+             -2'123'450'000'000'000'000},
+            DECIMAL(38, 18)));
+    testCast(
+        input,
+        makeFlatVector<int128_t>(
+            {-33'330, -22'220, -10, 0, 1'000, 999'999, 100, 101, 100, -21},
+            DECIMAL(20, 1)));
+    testCast(
+        makeNullableFlatVector<float>(
+            {0.134567, 0.000015, 0.000001, 0.999999, 0.123456, std::nullopt}),
+        makeNullableFlatVector<int128_t>(
+            {134'567'000'000'000'000,
+             15'000'000'000'000,
+             1'000'000'000'000,
+             999'999'000'000'000'000,
+             123'456'000'000'000'000,
+             std::nullopt},
+            DECIMAL(38, 18)));
+
+    // The smallest positive float rounds to zero.
+    testCast(
+        makeConstant<float>(std::numeric_limits<float>::min(), 1),
+        makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
+  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -2192,6 +2339,115 @@ TEST_F(SparkCastExprTestAnsiOn, integralToDecimal) {
   testOverflowThrow.operator()<int64_t>();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, doubleToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testDoubleToDecimal();
+
+  // Under ANSI ON, inputs that overflow the target precision/scale throw.
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(10, 2),
+      {9999999999999999999999.99},
+      "Cannot cast DOUBLE '1E22' to DECIMAL(10, 2). Result overflows.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(10, 2),
+      {static_cast<double>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
+      "Cannot cast DOUBLE '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(10, 2),
+      {static_cast<double>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
+      "Cannot cast DOUBLE '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(20, 2),
+      {static_cast<double>(DecimalUtil::kLongDecimalMax)},
+      "Cannot cast DOUBLE '1E38' to DECIMAL(20, 2). Result overflows.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(20, 2),
+      {static_cast<double>(DecimalUtil::kLongDecimalMin)},
+      "Cannot cast DOUBLE '-1E38' to DECIMAL(20, 2). Result overflows.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(38, 2),
+      {std::numeric_limits<double>::max()},
+      "Cannot cast DOUBLE '1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(38, 2),
+      {std::numeric_limits<double>::lowest()},
+      "Cannot cast DOUBLE '-1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+
+  // Under ANSI ON, non-finite inputs throw.
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(38, 2),
+      {INFINITY},
+      "Cannot cast DOUBLE 'Infinity' to DECIMAL(38, 2). The input value should be finite.");
+  testThrow<double>(
+      DOUBLE(),
+      DECIMAL(38, 2),
+      {NAN},
+      "Cannot cast DOUBLE 'NaN' to DECIMAL(38, 2). The input value should be finite.");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, realToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testRealToDecimal();
+
+  // Under ANSI ON, inputs that overflow the target precision/scale throw.
+  testThrow<float>(
+      REAL(), DECIMAL(10, 2), {9999999999999999999999.99}, "Result overflows.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(10, 2),
+      {static_cast<float>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
+      "Cannot cast REAL '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(10, 2),
+      {static_cast<float>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
+      "Cannot cast REAL '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(20, 2),
+      {static_cast<float>(DecimalUtil::kLongDecimalMax)},
+      "Cannot cast REAL '9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(20, 2),
+      {static_cast<float>(DecimalUtil::kLongDecimalMin)},
+      "Cannot cast REAL '-9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(38, 2),
+      {std::numeric_limits<float>::max()},
+      "Cannot cast REAL '3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(38, 2),
+      {std::numeric_limits<float>::lowest()},
+      "Cannot cast REAL '-3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+
+  // Under ANSI ON, non-finite inputs throw.
+  testThrow<float>(
+      REAL(),
+      DECIMAL(38, 2),
+      {INFINITY},
+      "Cannot cast REAL 'Infinity' to DECIMAL(38, 2). The input value should be finite.");
+  testThrow<float>(
+      REAL(),
+      DECIMAL(38, 2),
+      {NAN},
+      "Cannot cast REAL 'NaN' to DECIMAL(38, 2). The input value should be finite.");
+}
+
 TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
   // Regular cases produce the same results regardless of ANSI mode.
   testVarcharToDecimal();
@@ -2304,6 +2560,51 @@ TEST_F(SparkCastExprTestAnsiOff, integralToDecimal) {
   testOverflowNull.operator()<int16_t>();
   testOverflowNull.operator()<int32_t>();
   testOverflowNull.operator()<int64_t>();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, doubleToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testDoubleToDecimal();
+
+  // Under ANSI OFF, overflowing inputs return NULL instead of throwing.
+  auto testOverflowNull = [&](const TypePtr& toType, double value) {
+    testCast<double, int128_t>(DOUBLE(), toType, {value}, {std::nullopt});
+  };
+  testOverflowNull(
+      DECIMAL(20, 2), static_cast<double>(DecimalUtil::kLongDecimalMax));
+  testOverflowNull(
+      DECIMAL(20, 2), static_cast<double>(DecimalUtil::kLongDecimalMin));
+  testOverflowNull(DECIMAL(38, 2), std::numeric_limits<double>::max());
+  testOverflowNull(DECIMAL(38, 2), std::numeric_limits<double>::lowest());
+  testCast<double, int64_t>(
+      DOUBLE(), DECIMAL(10, 2), {9999999999999999999999.99}, {std::nullopt});
+
+  // Under ANSI OFF, non-finite inputs return NULL.
+  testCast<double, int128_t>(
+      DOUBLE(), DECIMAL(38, 2), {INFINITY}, {std::nullopt});
+  testCast<double, int128_t>(DOUBLE(), DECIMAL(38, 2), {NAN}, {std::nullopt});
+}
+
+TEST_F(SparkCastExprTestAnsiOff, realToDecimal) {
+  // Regular cases produce the same results regardless of ANSI mode.
+  testRealToDecimal();
+
+  // Under ANSI OFF, overflowing inputs return NULL instead of throwing.
+  auto testOverflowNull = [&](const TypePtr& toType, float value) {
+    testCast<float, int128_t>(REAL(), toType, {value}, {std::nullopt});
+  };
+  testOverflowNull(
+      DECIMAL(20, 2), static_cast<float>(DecimalUtil::kLongDecimalMax));
+  testOverflowNull(
+      DECIMAL(20, 2), static_cast<float>(DecimalUtil::kLongDecimalMin));
+  testOverflowNull(DECIMAL(38, 2), std::numeric_limits<float>::max());
+  testOverflowNull(DECIMAL(38, 2), std::numeric_limits<float>::lowest());
+  testCast<float, int64_t>(
+      REAL(), DECIMAL(10, 2), {9999999999999999999999.99}, {std::nullopt});
+
+  // Under ANSI OFF, non-finite inputs return NULL.
+  testCast<float, int128_t>(REAL(), DECIMAL(38, 2), {INFINITY}, {std::nullopt});
+  testCast<float, int128_t>(REAL(), DECIMAL(38, 2), {NAN}, {std::nullopt});
 }
 
 } // namespace
