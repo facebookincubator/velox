@@ -395,6 +395,35 @@ Invalid examples
   SELECT cast(cast(100 as integer) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
   SELECT cast(cast(-100 as bigint) as decimal(17, 16)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value too large
 
+From floating-point types
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a floating-point value to a decimal of given precision and scale is
+allowed. Supported types are real and double.
+
+When ANSI mode is enabled, casting a value that overflows the target precision
+and scale or is not finite throws an error. Otherwise, such casts return NULL.
+
+Valid examples
+
+::
+
+  SELECT cast(cast(99999.99 as double) as decimal(10, 4)); -- 99999.9900
+  SELECT cast(cast(-1.0 as double) as decimal(10, 4)); -- -1.0000
+  SELECT cast(cast(10.03 as real) as decimal(10, 4)); -- 10.0300
+  SELECT cast(cast(0.0 as real) as decimal(10, 4)); -- 0.0000
+
+Invalid examples
+
+::
+
+  SELECT cast(cast(1e22 as double) as decimal(10, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Result overflows
+  SELECT cast(cast(1e38 as double) as decimal(20, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Result overflows
+  SELECT cast(cast('inf' as double) as decimal(38, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not finite
+  SELECT cast(cast('nan' as double) as decimal(38, 2)); -- NULL (ANSI OFF) / ERROR (ANSI ON) // Value is not finite
+
 Cast to Varbinary
 -----------------
 
