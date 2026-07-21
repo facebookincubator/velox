@@ -73,6 +73,21 @@ void scatterDeletesToMask(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref temp_mr);
 
+/// Scatters only the 32-bit DV matches to the output deletion mask whose
+/// original row index fits in a 32-bit bitmap. Existing deletion mask values
+/// are preserved otherwise.
+/// @param rowIndex Row index column
+/// @param dvMatches DV membership column
+/// @param deleteMask Mutable boolean deletion mask column
+/// @param stream CUDA stream to use
+/// @param temp_mr Memory resource for temporary allocations
+void scatter32BitDVMatchesToMask(
+    cudf::column_view const& rowIndex,
+    cudf::column_view const& dvMatches,
+    cudf::mutable_column_view const& deleteMask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref temp_mr);
+
 /// Fills a sequence of row indices into a column.
 /// @param rowIndices Mutable view of row indices column
 /// @param startRow Starting row index

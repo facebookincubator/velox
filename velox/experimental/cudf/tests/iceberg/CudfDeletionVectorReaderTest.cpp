@@ -33,6 +33,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <limits>
 #include <numeric>
 
@@ -611,6 +612,39 @@ TEST_F(CudfDeletionVectorReaderTest, applyDeletesByRowIndex) {
   auto setBits =
       getSetBits<IndexType>(deleteMask->view(), rowIndexHost.size(), stream());
   EXPECT_EQ(setBits, (std::vector<IndexType>{1, 2, 4}));
+}
+
+// uint64_t row indices larger than uint32_max may truncate to a valid 32-bit DV
+// key. It must be ignored by the reader and the existing deletion mask values
+// must remain preserved.
+TEST_F(CudfDeletionVectorReaderTest, deleteOverflowing64BitRowIndices) {
+  auto bitmapData = serializeRoaringBitmapNoRun<int64_t>(
+      {7, std::numeric_limits<uint32_t>::max()});
+  auto tempFile = writeDvFile(bitmapData);
+  auto dvFile = makeDvDeleteFile(tempFile->getPath(), bitmapData.size());
+  CudfDeletionVectorReader reader(dvFile);
+
+  std::vector<uint64_t> rowIndexHost = {
+      7,
+      std::numeric_limits<uint32_t>::max(),
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 7,
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 8,
+  };
+  auto rowIndex = makeRowIndexColumn(rowIndexHost, stream(), mr());
+  auto deleteMask = makeDeletionColumn(rowIndex->size(), stream(), mr());
+  const std::array<bool, 4> initialMask = {false, false, true, false};
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      deleteMask->mutable_view().data<bool>(),
+      initialMask.data(),
+      initialMask.size() * sizeof(bool),
+      cudaMemcpyHostToDevice,
+      stream().value()));
+  reader.applyDeletes(
+      deleteMask->mutable_view(), rowIndex->view(), stream(), mr());
+
+  EXPECT_EQ(
+      getSetBits<int64_t>(deleteMask->view(), rowIndexHost.size(), stream()),
+      (std::vector<int64_t>{0, 1, 2}));
 }
 
 TEST_F(CudfDeletionVectorReaderTest, emptyRowIndex) {
