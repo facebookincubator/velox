@@ -23,20 +23,18 @@
 
 namespace facebook::velox::memory {
 
-/// Key under which a MemoryTier is stored on QueryCtx or OperatorCtx via
-/// setRegistry / registry. Operators use this key to look up the effective
-/// memory-tier hierarchy when choosing a relocation target.
+/// Key under which a MemoryTier is stored in the query registry via
+/// setRegistry / registry.
 inline constexpr std::string_view kMemoryTierKey{"memoryTier"};
 
 /// Immutable description of a memory-tier hierarchy. Each level lists the
 /// resource tags considered equivalent at that tier, ordered from fastest
 /// (level 0) to slowest, and within a level from most to least preferred.
-/// Tags name custom memory resources (see CustomMemoryResource) or the default
-/// pool. For a GPU setup, level 0 might be {"rmm"}, level 1 {"pinnedHost"}, and
-/// level 2 {"cxl", "dram"}.
+/// Tags name custom memory resources (see CustomMemoryResource). For a GPU
+/// setup, level 0 might be {"rmm"}, level 1 {"pinnedHost"}, and level 2
+/// {"cxl", "dram"}.
 ///
-/// Tags are not validated against any resource registry; a tag with no
-/// registered resource never resolves to a pool during relocation lookup.
+/// Tags are not validated against any resource registry.
 class MemoryTier {
  public:
   /// Creates a hierarchy where tiers[level] lists the tags at that level in
