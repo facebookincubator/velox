@@ -79,6 +79,7 @@ velox_add_library(
   CountAggregate.h
   CountIfAggregate.h
   CovarianceAggregates.h
+  DifferentialEntropyAggregate.h
   EntropyAggregates.h
   GeometricMeanAggregate.h
   GeometryAggregate.h
