@@ -65,13 +65,11 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr);
 
-  /// Override to setup delete file readers and column projection.
-  /// @param runtimeStats Reference to the DataSource's runtime statistics,
-  /// passed through to delete file readers so they can accumulate stats
-  /// directly into the DataSource's stats object.
-  void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats) override;
-
  protected:
+  // Sets up delete file readers and column projection after base state reset.
+  void prepareSplitInternal(
+      dwio::common::RuntimeStatistics& runtimeStats) override;
+
   // Override to only setup cuDF reader if we have columns to read.
   void setupReader() override;
 
