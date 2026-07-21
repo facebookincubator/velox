@@ -84,7 +84,7 @@ std::vector<core::PlanNodeId> collectJoinBridgeNodeIds(
     const std::vector<core::PlanNodePtr>& planNodes,
     bool groupedExecution,
     const folly::F14FastSet<core::PlanNodeId>& mixedNodeIds,
-    MatchFn&& match) {
+    const MatchFn& match) {
   std::vector<core::PlanNodeId> planNodeIds;
   if (!groupedExecution && !mixedNodeIds.empty()) {
     planNodeIds.insert(

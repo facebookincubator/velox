@@ -363,7 +363,7 @@ TEST_F(CustomJoinTest, mixedGroupedExecution) {
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
                   .tableScan(rowType)
                   .capturePlanNodeId(probeScanNodeId)
-                  .addNode([&](std::string id, core::PlanNodePtr probeNode) {
+                  .addNode([&](const std::string& id, core::PlanNodePtr probeNode) {
                     return std::make_shared<CustomJoinNode>(
                         id, std::move(probeNode), std::move(buildNode));
                   })
@@ -374,9 +374,9 @@ TEST_F(CustomJoinTest, mixedGroupedExecution) {
   // count).  With 2 split groups we expect 160 rows total.
   constexpr int32_t numSplitGroups = 2;
   std::vector<Split> probeSplits;
+  probeSplits.reserve(numSplitGroups);
   for (int32_t i = 0; i < numSplitGroups; ++i) {
-    probeSplits.push_back(
-        Split(makeHiveConnectorSplit(filePath->getPath()), i));
+    probeSplits.emplace_back(makeHiveConnectorSplit(filePath->getPath()), i);
   }
 
   auto numRows =
