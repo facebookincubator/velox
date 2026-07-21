@@ -39,14 +39,20 @@ class IndexBuilder : public PositionRecorder {
  public:
   IndexBuilder(
       std::unique_ptr<BufferedOutputStream> out,
-      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF)
+      DwrfFormat format = DwrfFormat::kDwrf)
       : out_{std::move(out)},
         arena_(std::make_unique<google::protobuf::Arena>()) {
-    auto rowIndex = ArenaCreate<proto::RowIndex>(arena_.get());
-    auto rowIndexEntry = ArenaCreate<proto::RowIndexEntry>(arena_.get());
-
-    index_ = std::make_unique<RowIndexWriteWrapper>(rowIndex);
-    entry_ = std::make_unique<RowIndexEntryWriteWrapper>(rowIndexEntry);
+    if (format == DwrfFormat::kDwrf) {
+      auto rowIndex = ArenaCreate<proto::RowIndex>(arena_.get());
+      auto rowIndexEntry = ArenaCreate<proto::RowIndexEntry>(arena_.get());
+      index_ = std::make_unique<RowIndexWriteWrapper>(rowIndex);
+      entry_ = std::make_unique<RowIndexEntryWriteWrapper>(rowIndexEntry);
+    } else {
+      auto rowIndex = ArenaCreate<proto::orc::RowIndex>(arena_.get());
+      auto rowIndexEntry = ArenaCreate<proto::orc::RowIndexEntry>(arena_.get());
+      index_ = std::make_unique<RowIndexWriteWrapper>(rowIndex);
+      entry_ = std::make_unique<RowIndexEntryWriteWrapper>(rowIndexEntry);
+    }
   }
 
   virtual ~IndexBuilder() = default;

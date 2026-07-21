@@ -128,12 +128,21 @@ EncodingIter::pointer EncodingIter::operator->() const {
 }
 
 EncodingManager::EncodingManager(
-    const encryption::EncryptionHandler& encryptionHandler)
+    const encryption::EncryptionHandler& encryptionHandler,
+    DwrfFormat format)
     : encryptionHandler_{encryptionHandler},
       arena_{std::make_unique<google::protobuf::Arena>()} {
   initEncryptionGroups();
-  auto dwrfStripeFooter = ArenaCreate<proto::StripeFooter>(arena_.get());
-  footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
+  if (format == DwrfFormat::kDwrf) {
+    auto dwrfStripeFooter = ArenaCreate<proto::StripeFooter>(arena_.get());
+    footer_ = std::make_unique<StripeFooterWriteWrapper>(dwrfStripeFooter);
+  } else {
+    VELOX_CHECK(
+        !encryptionHandler_.isEncrypted(),
+        "Encryption is not supported by the ORC writer");
+    auto orcStripeFooter = ArenaCreate<proto::orc::StripeFooter>(arena_.get());
+    footer_ = std::make_unique<StripeFooterWriteWrapper>(orcStripeFooter);
+  }
 }
 
 ColumnEncodingWriteWrapper EncodingManager::addEncodingToFooter(
@@ -245,13 +254,17 @@ LayoutPlanner::LayoutPlanner(const dwio::common::TypeWithId& schema) {
 
 LayoutResult LayoutPlanner::plan(
     const EncodingContainer& encoding,
-    StreamList streams) const {
+    StreamList streams,
+    DwrfFormat format) const {
   // place index before data
   auto iter = std::partition(streams.begin(), streams.end(), [](auto& stream) {
     return isIndexStream(stream.first->kind());
   });
   const size_t indexCount = iter - streams.begin();
-  auto flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
+  folly::F14FastSet<uint32_t> flatMapCols;
+  if (format == DwrfFormat::kDwrf) {
+    flatMapCols = getFlatMapColumns(encoding, nodeToColumnMap_);
+  }
 
   // sort streams
   sortBySize(streams.begin(), iter, flatMapCols);

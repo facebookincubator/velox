@@ -27,6 +27,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/common/tests/utils/MapBuilder.h"
 #include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/dwrf/common/wrap/orc-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -383,6 +384,206 @@ TEST_F(E2EWriterTest, FieldIdMappingNestedStruct) {
   ASSERT_EQ(nested.size(), 2);
   EXPECT_EQ(nested.nameOf(0), "x");
   EXPECT_EQ(nested.nameOf(1), "y2");
+}
+
+TEST_F(E2EWriterTest, OrcWriterRoundTrip) {
+  constexpr vector_size_t kRowCount = 257;
+  VectorMaker maker{leafPool_.get()};
+  const auto isNullAt = [](vector_size_t row) { return row % 11 == 0; };
+
+  auto batch = maker.rowVector(
+      {"boolean_val",
+       "tinyint_val",
+       "smallint_val",
+       "integer_val",
+       "bigint_val",
+       "string_val",
+       "timestamp_val",
+       "date_val",
+       "short_decimal_val",
+       "long_decimal_val",
+       "array_val",
+       "map_val",
+       "struct_val"},
+      {maker.flatVector<bool>(
+           kRowCount, [](auto row) { return row % 2 == 0; }, isNullAt),
+       maker.flatVector<int8_t>(
+           kRowCount, [](auto row) { return row - 100; }, isNullAt),
+       maker.flatVector<int16_t>(
+           kRowCount, [](auto row) { return row * 7 - 500; }, isNullAt),
+       maker.flatVector<int32_t>(
+           kRowCount,
+           [](auto row) { return row * 10'003 - 1'000'000; },
+           isNullAt),
+       maker.flatVector<int64_t>(
+           kRowCount,
+           [](auto row) { return row * 10'000'000'019L - 2'000'000'000L; },
+           isNullAt),
+       maker.flatVector<std::string>(
+           kRowCount,
+           [](auto row) { return fmt::format("orc-string-{}", row % 17); },
+           isNullAt),
+       maker.flatVector<Timestamp>(
+           kRowCount,
+           [](auto row) {
+             return Timestamp{
+                 1'700'000'000 + row, static_cast<uint64_t>(row) * 1'000};
+           },
+           isNullAt),
+       maker.flatVector<int32_t>(
+           kRowCount, [](auto row) { return row - 10'000; }, isNullAt, DATE()),
+       maker.flatVector<int64_t>(
+           kRowCount,
+           [](auto row) { return row * 123 - 10'000; },
+           isNullAt,
+           DECIMAL(10, 2)),
+       maker.flatVector<int128_t>(
+           kRowCount,
+           [](auto row) { return static_cast<int128_t>(row) * 123'456'789; },
+           isNullAt,
+           DECIMAL(20, 4)),
+       maker.arrayVector<int32_t>(
+           kRowCount,
+           [](auto row) { return row % 4; },
+           [](auto row, auto index) { return row * 10 + index; },
+           isNullAt),
+       maker.mapVector<std::string, int64_t>(
+           kRowCount,
+           [](auto row) { return row % 3; },
+           [](auto row, auto index) {
+             return fmt::format("key-{}-{}", row, index);
+           },
+           [](auto row, auto index) { return row * 100 + index; },
+           isNullAt),
+       maker.rowVector(
+           {"nested_int", "nested_string"},
+           {maker.flatVector<int32_t>(
+                kRowCount, [](auto row) { return -row; }, isNullAt),
+            maker.flatVector<std::string>(
+                kRowCount,
+                [](auto row) { return fmt::format("nested-{}", row); },
+                isNullAt)})});
+
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(
+      dwrf::Config::COMPRESSION, common::CompressionKind::CompressionKind_NONE);
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, uint32_t{1'000});
+  // These DWRF encodings aren't wire-compatible with ORC. Keep the options
+  // enabled to verify that ORC output still selects compatible encodings.
+  config->set(dwrf::Config::INTEGER_DICTIONARY_ENCODING_ENABLED, true);
+  config->set(dwrf::Config::STRING_DICTIONARY_ENCODING_ENABLED, true);
+
+  auto sink = std::make_unique<MemorySink>(
+      4 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
+  auto* sinkPtr = sink.get();
+
+  dwrf::WriterOptions options;
+  options.config = config;
+  options.schema = batch->type();
+  options.memoryPool = rootPool_.get();
+  options.format = dwrf::DwrfFormat::kOrc;
+  dwrf::Writer writer{std::move(sink), options};
+  writer.write(batch);
+  writer.close();
+
+  const std::string_view file{sinkPtr->data(), sinkPtr->size()};
+  constexpr size_t kOrcMagicLength = 3;
+  ASSERT_GT(file.size(), kOrcMagicLength + 1);
+  EXPECT_EQ(file.substr(0, kOrcMagicLength), "ORC");
+
+  const auto postScriptLength = static_cast<uint8_t>(file.back());
+  ASSERT_GT(postScriptLength, 0);
+  ASSERT_LT(postScriptLength + 1, file.size());
+  const auto postScriptOffset = file.size() - postScriptLength - 1;
+  dwrf::proto::orc::PostScript postScript;
+  ASSERT_TRUE(postScript.ParseFromArray(
+      file.data() + postScriptOffset, postScriptLength));
+  ASSERT_EQ(postScript.version_size(), 2);
+  EXPECT_EQ(postScript.version(0), 0);
+  EXPECT_EQ(postScript.version(1), 12);
+  EXPECT_EQ(postScript.compression(), dwrf::proto::orc::CompressionKind::NONE);
+  EXPECT_EQ(postScript.metadatalength(), 0);
+
+  ASSERT_LE(postScript.footerlength(), postScriptOffset);
+  const auto footerOffset = postScriptOffset - postScript.footerlength();
+  dwrf::proto::orc::Footer footer;
+  ASSERT_TRUE(footer.ParseFromArray(
+      file.data() + footerOffset, postScript.footerlength()));
+  EXPECT_EQ(footer.numberofrows(), kRowCount);
+  EXPECT_EQ(footer.writer(), 1);
+  ASSERT_EQ(footer.stripes_size(), 1);
+
+  const auto topLevelTypeId = [&](const std::string& name) {
+    const auto& root = footer.types(0);
+    for (int32_t i = 0; i < root.fieldnames_size(); ++i) {
+      if (root.fieldnames(i) == name) {
+        return root.subtypes(i);
+      }
+    }
+    VELOX_FAIL("Missing field in ORC footer: {}", name);
+  };
+  const auto dateTypeId = topLevelTypeId("date_val");
+  EXPECT_EQ(
+      footer.types(dateTypeId).kind(),
+      dwrf::proto::orc::Type_Kind::Type_Kind_DATE);
+  const auto shortDecimalTypeId = topLevelTypeId("short_decimal_val");
+  EXPECT_EQ(
+      footer.types(shortDecimalTypeId).kind(),
+      dwrf::proto::orc::Type_Kind::Type_Kind_DECIMAL);
+  EXPECT_EQ(footer.types(shortDecimalTypeId).precision(), 10);
+  EXPECT_EQ(footer.types(shortDecimalTypeId).scale(), 2);
+  const auto longDecimalTypeId = topLevelTypeId("long_decimal_val");
+  EXPECT_EQ(
+      footer.types(longDecimalTypeId).kind(),
+      dwrf::proto::orc::Type_Kind::Type_Kind_DECIMAL);
+  EXPECT_EQ(footer.types(longDecimalTypeId).precision(), 20);
+  EXPECT_EQ(footer.types(longDecimalTypeId).scale(), 4);
+
+  const auto& stripe = footer.stripes(0);
+  const auto stripeFooterOffset =
+      stripe.offset() + stripe.indexlength() + stripe.datalength();
+  ASSERT_LE(stripeFooterOffset + stripe.footerlength(), footerOffset);
+  dwrf::proto::orc::StripeFooter stripeFooter;
+  ASSERT_TRUE(stripeFooter.ParseFromArray(
+      file.data() + stripeFooterOffset, stripe.footerlength()));
+  ASSERT_EQ(stripeFooter.columns_size(), footer.types_size());
+  for (const auto& encoding : stripeFooter.columns()) {
+    EXPECT_EQ(encoding.kind(), dwrf::proto::orc::ColumnEncoding_Kind_DIRECT);
+  }
+  uint64_t streamOffset = stripe.offset();
+  size_t rowIndexStreamCount = 0;
+  for (const auto& stream : stripeFooter.streams()) {
+    EXPECT_LT(stream.column(), footer.types_size());
+    if (stream.kind() == dwrf::proto::orc::Stream_Kind_ROW_INDEX) {
+      dwrf::proto::orc::RowIndex rowIndex;
+      ASSERT_TRUE(
+          rowIndex.ParseFromArray(file.data() + streamOffset, stream.length()));
+      EXPECT_GT(rowIndex.entry_size(), 0);
+      ++rowIndexStreamCount;
+    }
+    streamOffset += stream.length();
+  }
+  EXPECT_GT(rowIndexStreamCount, 0);
+  EXPECT_EQ(streamOffset, stripeFooterOffset);
+
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setFileFormat(FileFormat::ORC);
+  auto reader = createReader(*sinkPtr, readerOptions);
+  EXPECT_EQ(reader->testingReaderBase()->format(), dwrf::DwrfFormat::kOrc);
+
+  auto rowReader = reader->createRowReader({});
+  VectorPtr actual;
+  vector_size_t row = 0;
+  while (rowReader->next(73, actual)) {
+    for (vector_size_t i = 0; i < actual->size(); ++i) {
+      ASSERT_TRUE(batch->equalValueAt(actual.get(), row, i))
+          << "Mismatch at row " << row << ": expected " << batch->toString(row)
+          << ", actual " << actual->toString(i);
+      ++row;
+    }
+  }
+  EXPECT_EQ(row, kRowCount);
 }
 
 // This test can be run to generate test files. Run it with following command

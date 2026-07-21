@@ -32,8 +32,11 @@ using dwio::common::ArenaCreate;
 
 class WriterBase {
  public:
-  explicit WriterBase(std::unique_ptr<dwio::common::FileSink> sink)
+  explicit WriterBase(
+      std::unique_ptr<dwio::common::FileSink> sink,
+      DwrfFormat format = DwrfFormat::kDwrf)
       : sink_{std::move(sink)},
+        format_{format},
         arena_(std::make_unique<google::protobuf::Arena>()) {
     VELOX_CHECK_NOT_NULL(sink_);
   }
@@ -103,13 +106,20 @@ class WriterBase {
         sessionTimezone,
         adjustTimestampToTimezone,
         std::move(handler),
-        memoryBudget);
+        memoryBudget,
+        format_);
     writerSink_ = std::make_unique<WriterSink>(
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
-        context_->getConfigs());
-    auto dwrfFooter_ = ArenaCreate<proto::Footer>(arena_.get());
-    footer_ = std::make_unique<FooterWriteWrapper>(dwrfFooter_);
+        context_->getConfigs(),
+        format_);
+    if (format_ == DwrfFormat::kDwrf) {
+      auto dwrfFooter = ArenaCreate<proto::Footer>(arena_.get());
+      footer_ = std::make_unique<FooterWriteWrapper>(dwrfFooter);
+    } else {
+      auto orcFooter = ArenaCreate<proto::orc::Footer>(arena_.get());
+      footer_ = std::make_unique<FooterWriteWrapper>(orcFooter);
+    }
   }
 
   void initBuffers();
@@ -193,6 +203,7 @@ class WriterBase {
   std::unique_ptr<dwio::common::FileSink> sink_;
   std::unique_ptr<WriterSink> writerSink_;
   std::unique_ptr<FooterWriteWrapper> footer_;
+  const DwrfFormat format_;
   proto::orc::Metadata metadata_;
   std::unordered_map<std::string, std::string> userMetadata_;
   std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
