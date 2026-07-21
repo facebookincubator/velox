@@ -16,6 +16,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
+#include "velox/experimental/cudf/expression/TimezoneConversion.h"
 
 #include "velox/expression/ConstantExpr.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -28,6 +29,29 @@
 namespace facebook::velox::cudf_velox {
 
 using functions::DateTimeUnit;
+
+namespace {
+
+// Maps a timestamp data type to the duration type of the same resolution, used
+// to subtract the hour-truncation remainder from the UTC instant.
+cudf::data_type durationTypeForTimestamp(cudf::data_type timestampType) {
+  switch (timestampType.id()) {
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      return cudf::data_type(cudf::type_id::DURATION_SECONDS);
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return cudf::data_type(cudf::type_id::DURATION_MILLISECONDS);
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return cudf::data_type(cudf::type_id::DURATION_MICROSECONDS);
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return cudf::data_type(cudf::type_id::DURATION_NANOSECONDS);
+    default:
+      VELOX_FAIL(
+          "date_trunc hour requires a timestamp column, got cudf type id: {}",
+          static_cast<int32_t>(timestampType.id()));
+  }
+}
+
+} // namespace
 
 bool DateTruncFunction::canEvaluate(
     const std::shared_ptr<velox::exec::Expr>& expr) {
@@ -61,19 +85,6 @@ bool DateTruncFunction::canEvaluate(
     return true;
   }
   return false;
-}
-
-bool DateTruncFunction::isTimezoneSensitive(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
-  if (!canEvaluate(expr) || !expr->inputs()[1]->type()->isTimestamp()) {
-    return false;
-  }
-
-  const auto unitString = constantVarcharValue(expr->inputs()[0]);
-  const auto unit = functions::fromDateTimeUnitString(*unitString, false);
-  return *unit == DateTimeUnit::kHour || *unit == DateTimeUnit::kDay ||
-      *unit == DateTimeUnit::kWeek || *unit == DateTimeUnit::kMonth ||
-      *unit == DateTimeUnit::kQuarter || *unit == DateTimeUnit::kYear;
 }
 
 DateTruncFunction::DateTruncFunction(
@@ -111,13 +122,10 @@ DateTruncFunction::DateTruncFunction(
   stream.synchronize();
 }
 
-ColumnOrView DateTruncFunction::eval(
-    std::vector<ColumnOrView>& inputColumns,
-    [[maybe_unused]] cudf::size_type numRows,
+ColumnOrView DateTruncFunction::truncateOnColumn(
+    cudf::column_view inputCol,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
-  VELOX_CHECK_EQ(inputColumns.size(), 1, "date_trunc expects one column input");
-  auto inputCol = asView(inputColumns[0]);
   auto outputType = inputCol.type();
   auto dayType = cudf::data_type(cudf::type_id::TIMESTAMP_DAYS);
   auto intType = cudf::data_type(cudf::type_id::INT32);
@@ -251,6 +259,60 @@ ColumnOrView DateTruncFunction::eval(
       break;
   }
   VELOX_UNREACHABLE();
+}
+
+ColumnOrView DateTruncFunction::eval(
+    std::vector<ColumnOrView>& inputColumns,
+    [[maybe_unused]] cudf::size_type numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
+  VELOX_CHECK_EQ(inputColumns.size(), 1, "date_trunc expects one column input");
+  auto inputCol = asView(inputColumns[0]);
+  const auto outputType = inputCol.type();
+
+  // DATE (TIMESTAMP_DAYS) is zone-free, and under a UTC session no conversion
+  // is needed; both use the raw truncation directly.
+  const bool applyTimezone = outputType.id() != cudf::type_id::TIMESTAMP_DAYS &&
+      context_.appliesSessionTimezone();
+  if (!applyTimezone || unit_ == DateTimeUnit::kSecond ||
+      unit_ == DateTimeUnit::kMinute) {
+    // second/minute truncate the UTC epoch directly (every zone offset is a
+    // whole number of minutes), matching CPU truncateTimestamp.
+    return truncateOnColumn(inputCol, stream, mr);
+  }
+
+  const std::string& zone = context_.sessionTimezone;
+
+  if (unit_ == DateTimeUnit::kHour) {
+    // Compute the local-to-truncated-hour delta and subtract it from the UTC
+    // instant. This reproduces CPU truncateTimestamp's DST-safe hour branch
+    // (which avoids the ambiguous local->UTC roundtrip) and handles
+    // fractional-offset zones such as Asia/Kolkata (+05:30).
+    auto local = toLocalTimestamp(inputCol, zone, stream, mr);
+    auto flooredLocal = cudf::datetime::floor_datetimes(
+        local->view(), cudf::datetime::rounding_frequency::HOUR, stream, mr);
+    auto delta = cudf::binary_operation(
+        local->view(),
+        flooredLocal->view(),
+        cudf::binary_operator::SUB,
+        durationTypeForTimestamp(outputType),
+        stream,
+        mr);
+    return cudf::binary_operation(
+        inputCol,
+        delta->view(),
+        cudf::binary_operator::SUB,
+        outputType,
+        stream,
+        mr);
+  }
+
+  // day and above: truncate on the local wall clock, then convert back to UTC.
+  // Matches CPU truncateTimestamp (truncate local, then toGMT); a local time in
+  // a spring-forward gap raises in toUtcTimestamp, which is the correct parity.
+  auto local = toLocalTimestamp(inputCol, zone, stream, mr);
+  ColumnOrView truncatedLocal = truncateOnColumn(local->view(), stream, mr);
+  return toUtcTimestamp(asView(truncatedLocal), zone, stream, mr);
 }
 
 } // namespace facebook::velox::cudf_velox
