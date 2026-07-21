@@ -854,10 +854,25 @@ std::vector<core::PlanNodeId> DriverFactory::needsIndexLookupJoinBridges()
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsCustomJoinBridges() const {
+  // Include all mixed-mode join IDs.  Driver adapters can replace built-in
+  // operators with ones that use custom bridges (e.g. cuDF replaces HashProbe
+  // with an operator that calls getCustomJoinBridge instead of
+  // getHashJoinBridge), so the plan node is still a HashJoinNode but the
+  // bridge lookup goes through customBridges.
+  folly::F14FastSet<core::PlanNodeId> mixedNodeIds;
+  mixedNodeIds.insert(
+      mixedExecutionModeHashJoinNodeIds.begin(),
+      mixedExecutionModeHashJoinNodeIds.end());
+  mixedNodeIds.insert(
+      mixedExecutionModeNestedLoopJoinNodeIds.begin(),
+      mixedExecutionModeNestedLoopJoinNodeIds.end());
+  mixedNodeIds.insert(
+      mixedExecutionModeCustomJoinNodeIds.begin(),
+      mixedExecutionModeCustomJoinNodeIds.end());
   return collectJoinBridgeNodeIds(
       planNodes,
       groupedExecution,
-      mixedExecutionModeCustomJoinNodeIds,
+      mixedNodeIds,
       [](const core::PlanNodePtr& node) {
         return Operator::joinBridgeFromPlanNode(node) != nullptr;
       });
