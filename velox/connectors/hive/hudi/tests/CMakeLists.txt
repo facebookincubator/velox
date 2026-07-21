@@ -24,4 +24,18 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest
     GTest::gtest_main
   )
+
+  add_executable(velox_hive_hudi_delete_block_decoder_test HudiDeleteBlockDecoderTest.cpp)
+  add_test(velox_hive_hudi_delete_block_decoder_test velox_hive_hudi_delete_block_decoder_test)
+
+  target_link_libraries(
+    velox_hive_hudi_delete_block_decoder_test
+    velox_hive_connector
+    velox_hive_hudi_splitreader
+    velox_exec_test_lib
+    velox_dwio_common_test_utils
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+  )
 endif()

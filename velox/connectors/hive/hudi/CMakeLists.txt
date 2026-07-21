@@ -13,9 +13,11 @@
 # limitations under the License.
 velox_add_library(
   velox_hive_hudi_splitreader
+  HudiDeleteBlockDecoder.cpp
   HudiLogBlock.cpp
   HudiLogFileReader.cpp
   HEADERS
+  HudiDeleteBlockDecoder.h
   HudiLogBlock.h
   HudiLogFileReader.h
 )
