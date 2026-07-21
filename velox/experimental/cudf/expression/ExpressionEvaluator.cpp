@@ -650,22 +650,13 @@ class BinaryFunction : public CudfFunction {
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
             op_ == cudf::binary_operator::SUB ||
+            op_ == cudf::binary_operator::MUL ||
             op_ == cudf::binary_operator::MOD) {
-          std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::column> rhsCast;
-          if (lhsView.type() != type_) {
-            lhsCast = cudf::cast(lhsView, type_, stream, mr);
-            lhsView = lhsCast->view();
-          }
-          if (rhsView.type() != type_) {
-            rhsCast = cudf::cast(rhsView, type_, stream, mr);
-            rhsView = rhsCast->view();
-          }
-          // @TODO Check for divide-by-zero as in the DECIMAL case above?
-          return decimalBinaryOperation(
-              lhsView, rhsView, op_, type_, decimalPrecision_, stream, mr);
-        }
-        if (op_ == cudf::binary_operator::MUL) {
+          // Widen operand storage to the result storage type but keep each
+          // operand's own scale. The overflow-checked kernel rescales
+          // ADD/SUB/MOD operands to the output scale itself, so scale
+          // conversion stays inside the fail-fast path instead of an unchecked
+          // cudf::cast here (MUL keeps operands at their natural scales).
           std::unique_ptr<cudf::column> lhsCast;
           std::unique_ptr<cudf::column> rhsCast;
           if (type_.id() == cudf::type_id::DECIMAL128) {
@@ -728,21 +719,10 @@ class BinaryFunction : public CudfFunction {
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
             op_ == cudf::binary_operator::SUB ||
+            op_ == cudf::binary_operator::MUL ||
             op_ == cudf::binary_operator::MOD) {
-          std::unique_ptr<cudf::column> lhsCast;
-          if (lhsView.type() != type_) {
-            lhsCast = cudf::cast(lhsView, type_, stream, mr);
-            lhsView = lhsCast->view();
-          }
-          if (right_->type() != type_) {
-            auto rhsScalar = castDecimalScalar(*right_, type_, stream, mr);
-            return decimalBinaryOperation(
-                lhsView, *rhsScalar, op_, type_, decimalPrecision_, stream, mr);
-          }
-          return decimalBinaryOperation(
-              lhsView, *right_, op_, type_, decimalPrecision_, stream, mr);
-        }
-        if (op_ == cudf::binary_operator::MUL) {
+          // Storage-only widening; the checked kernel rescales ADD/SUB/MOD
+          // operands to the output scale (see column/column path above).
           std::unique_ptr<cudf::column> lhsCast;
           std::unique_ptr<cudf::scalar> rhsScalar;
           if (type_.id() == cudf::type_id::DECIMAL128) {
@@ -806,21 +786,10 @@ class BinaryFunction : public CudfFunction {
     if (cudf::is_fixed_point(type_)) {
       if (op_ == cudf::binary_operator::ADD ||
           op_ == cudf::binary_operator::SUB ||
+          op_ == cudf::binary_operator::MUL ||
           op_ == cudf::binary_operator::MOD) {
-        std::unique_ptr<cudf::column> rhsCast;
-        if (rhsView.type() != type_) {
-          rhsCast = cudf::cast(rhsView, type_, stream, mr);
-          rhsView = rhsCast->view();
-        }
-        if (left_->type() != type_) {
-          auto lhsScalar = castDecimalScalar(*left_, type_, stream, mr);
-          return decimalBinaryOperation(
-              *lhsScalar, rhsView, op_, type_, decimalPrecision_, stream, mr);
-        }
-        return decimalBinaryOperation(
-            *left_, rhsView, op_, type_, decimalPrecision_, stream, mr);
-      }
-      if (op_ == cudf::binary_operator::MUL) {
+        // Storage-only widening; the checked kernel rescales ADD/SUB/MOD
+        // operands to the output scale (see column/column path above).
         std::unique_ptr<cudf::column> rhsCast;
         std::unique_ptr<cudf::scalar> lhsScalar;
         if (type_.id() == cudf::type_id::DECIMAL128) {

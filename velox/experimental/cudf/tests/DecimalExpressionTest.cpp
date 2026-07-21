@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -1712,6 +1713,36 @@ INSTANTIATE_TEST_SUITE_P(
             DECIMAL(38, 0),
             {std::numeric_limits<int128_t>::min()},
             {-1},
+            "Decimal overflow in modulo"},
+        // Mixed-scale ADD/SUB/MOD: the scale-0 operand is rescaled to the
+        // output scale (10) before the kernel op, and 9e37 * 1e10 = 9e47
+        // overflows int128. This exercises the overflow-checked pre-kernel
+        // scale conversion (equal-scale cases above never rescale operands).
+        // Velox CPU rescales the same way via checkedMultiply, so both engines
+        // fail fast.
+        DecimalOverflowParam{
+            "addMixedScale",
+            "a + b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 10),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {1},
+            "Decimal overflow in add"},
+        DecimalOverflowParam{
+            "subtractMixedScale",
+            "a - b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 10),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {1},
+            "Decimal overflow in subtract"},
+        DecimalOverflowParam{
+            "moduloMixedScale",
+            "a % b",
+            DECIMAL(38, 0),
+            DECIMAL(38, 10),
+            {9 * DecimalUtil::kPowersOfTen[37]},
+            {1},
             "Decimal overflow in modulo"}),
     [](const testing::TestParamInfo<DecimalOverflowParam>& info) {
       return info.param.name;
@@ -1976,6 +2007,69 @@ TEST_F(CudfDecimalTest, decimalScalarOverflow) {
               .planNode())
           .copyResults(pool()),
       "Decimal overflow in divide");
+}
+
+// Mixed-scale ADD/SUB/MOD operands are rescaled to the output scale before the
+// kernel op. That widening must be overflow-checked and stay consistent with
+// Velox CPU (which rescales via checkedMultiply). This covers both column and
+// scalar operands and verifies CPU/GPU agree (the equal-scale overflow cases
+// never rescale operands, so they miss this path).
+TEST_F(CudfDecimalTest, decimalMixedScaleOverflowCpuGpuParity) {
+  const auto nineE37 = 9 * DecimalUtil::kPowersOfTen[37];
+  // A scale-0 literal whose rescale to scale 10 (x10^10) overflows int128.
+  const std::string big =
+      "CAST('90000000000000000000000000000000000000' AS DECIMAL(38, 0))";
+
+  auto colCol = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>({nineE37}, DECIMAL(38, 0)),
+          makeFlatVector<int128_t>({1}, DECIMAL(38, 10)),
+      });
+  auto colOnly =
+      makeRowVector({"a"}, {makeFlatVector<int128_t>({1}, DECIMAL(38, 10))});
+
+  struct Case {
+    RowVectorPtr input;
+    std::string projection;
+  };
+  const std::vector<Case> cases = {
+      // Column/column, coarse-scale lhs.
+      {colCol, "a + b"},
+      {colCol, "a - b"},
+      {colCol, "a % b"},
+      // Column/scalar and scalar/column (coarse-scale scalar).
+      {colOnly, "a + " + big},
+      {colOnly, big + " + a"},
+      {colOnly, "a - " + big},
+      {colOnly, big + " - a"},
+      {colOnly, "a % " + big},
+      {colOnly, big + " % a"},
+  };
+
+  auto overflows = [&](const Case& c) {
+    auto plan = exec::test::PlanBuilder()
+                    .values({c.input})
+                    .project({c.projection + " AS result"})
+                    .planNode();
+    try {
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+      return false;
+    } catch (const VeloxException&) {
+      return true;
+    }
+  };
+
+  for (const auto& c : cases) {
+    unregisterCudf();
+    const bool cpuOverflow = overflows(c);
+    registerCudf();
+    const bool gpuOverflow = overflows(c);
+    EXPECT_TRUE(cpuOverflow)
+        << "expected CPU overflow for projection: " << c.projection;
+    EXPECT_EQ(cpuOverflow, gpuOverflow)
+        << "CPU/GPU overflow mismatch for projection: " << c.projection;
+  }
 }
 
 } // namespace

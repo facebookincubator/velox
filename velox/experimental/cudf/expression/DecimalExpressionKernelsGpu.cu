@@ -470,6 +470,27 @@ __device__ void evalDecimalBinaryRow(
     OutRep* out,
     int32_t idx,
     int32_t* overflowFlag) {
+  // ADD/SUB/MOD require both operands at a common scale (the output scale).
+  // cuDF's *_overflow operators reach that scale via fixed_point::rescaled,
+  // whose widening multiply is unchecked and can silently overflow Rep for
+  // mixed-scale operands. Pre-rescale the operands here with overflow
+  // detection so the conversion is covered by the same fail-fast path. MUL is
+  // excluded: it adds operand scales and its product is rescaled to outScale
+  // by the checkedRescale below.
+  if (op == cudf::binary_operator::ADD ||
+      op == cudf::binary_operator::SUB ||
+      op == cudf::binary_operator::MOD) {
+    auto lhsRescaled = checkedRescale<Rep>(lhsDec, outScale);
+    auto rhsRescaled = checkedRescale<Rep>(rhsDec, outScale);
+    if (!lhsRescaled.has_value() || !rhsRescaled.has_value()) {
+      markDecimalOverflow(overflowFlag);
+      out[idx] = OutRep{0};
+      return;
+    }
+    lhsDec = lhsRescaled.value();
+    rhsDec = rhsRescaled.value();
+  }
+
   auto opResult = applyCheckedBinOp<Rep>(op, lhsDec, rhsDec);
   if (!opResult.has_value()) {
     markDecimalOverflow(overflowFlag);
