@@ -189,14 +189,12 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             0.0,
             1727181032.0,
             -1727181032.0,
-            std::numeric_limits<float>::max(),
             std::numeric_limits<float>::min(),
         }),
         makeNullableFlatVector<Timestamp>({
             Timestamp(0, 0),
             Timestamp(1727181056, 0),
             Timestamp(-1727181056, 0),
-            Timestamp(9223372036854, 775'807'000),
             Timestamp(0, 0),
         }));
   }
@@ -207,22 +205,12 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             0.0,
             1727181032.0,
             -1727181032.0,
-            9223372036855.999,
-            -9223372036856.999,
-            1.79769e+308,
-            std::numeric_limits<double>::max(),
-            -std::numeric_limits<double>::max(),
             std::numeric_limits<double>::min(),
         }),
         makeNullableFlatVector<Timestamp>({
             Timestamp(0, 0),
             Timestamp(1727181032, 0),
             Timestamp(-1727181032, 0),
-            Timestamp(9223372036854, 775'807'000),
-            Timestamp(-9223372036855, 224'192'000),
-            Timestamp(9223372036854, 775'807'000),
-            Timestamp(9223372036854, 775'807'000),
-            Timestamp(-9223372036855, 224'192'000),
             Timestamp(0, 0),
         }));
   }
@@ -1373,12 +1361,83 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
   testDecimalToIntegral();
 }
 
+TEST_F(SparkCastExprTestAnsiOn, tryCastBigintToTimestampOverflow) {
+  testTryCast<int64_t, Timestamp>(
+      "timestamp",
+      {9223372036855, -9223372036856},
+      {std::nullopt, std::nullopt});
+}
+
 TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
   testFloatToTimestamp();
+
+  auto overflowInput = makeRowVector({makeFlatVector<float>({
+      std::numeric_limits<float>::max(),
+  })});
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as timestamp)", overflowInput), "Cannot cast");
+
+  auto nonFiniteInput = makeRowVector({makeFlatVector<float>({
+      kInf,
+      kNan,
+      -kInf,
+  })});
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as timestamp)", nonFiniteInput), "Cannot cast");
+
+  assertEqualVectors(
+      makeNullableFlatVector<Timestamp>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+      evaluate("try_cast(c0 as timestamp)", nonFiniteInput));
+
+  assertEqualVectors(
+      makeNullableFlatVector<Timestamp>({
+          std::nullopt,
+      }),
+      evaluate("try_cast(c0 as timestamp)", overflowInput));
 }
 
 TEST_F(SparkCastExprTestAnsiOn, doubleToTimestamp) {
   testDoubleToTimestamp();
+
+  auto overflowInput = makeRowVector({makeFlatVector<double>({
+      9223372036855.999,
+      -9223372036856.999,
+      1.79769e+308,
+      std::numeric_limits<double>::max(),
+      -std::numeric_limits<double>::max(),
+  })});
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as timestamp)", overflowInput), "Cannot cast");
+
+  auto nonFiniteInput = makeRowVector({makeFlatVector<double>({
+      kInf,
+      kNan,
+      -kInf,
+  })});
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as timestamp)", nonFiniteInput), "Cannot cast");
+
+  assertEqualVectors(
+      makeNullableFlatVector<Timestamp>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+      evaluate("try_cast(c0 as timestamp)", nonFiniteInput));
+
+  assertEqualVectors(
+      makeNullableFlatVector<Timestamp>({
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+      }),
+      evaluate("try_cast(c0 as timestamp)", overflowInput));
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToInt) {
@@ -1690,9 +1749,16 @@ TEST_F(SparkCastExprTestAnsiOff, decimalToString) {
 
 TEST_F(SparkCastExprTestAnsiOff, floatToTimestamp) {
   testFloatToTimestamp();
+
   testCast(
-      makeFlatVector<float>({kInf, kNan, -kInf}),
+      makeFlatVector<float>({
+          std::numeric_limits<float>::max(),
+          kInf,
+          kNan,
+          -kInf,
+      }),
       makeNullableFlatVector<Timestamp>({
+          Timestamp(9223372036854, 775'807'000),
           std::nullopt,
           std::nullopt,
           std::nullopt,
@@ -1701,13 +1767,24 @@ TEST_F(SparkCastExprTestAnsiOff, floatToTimestamp) {
 
 TEST_F(SparkCastExprTestAnsiOff, doubleToTimestamp) {
   testDoubleToTimestamp();
+
   testCast(
       makeFlatVector<double>({
+          9223372036855.999,
+          -9223372036856.999,
+          1.79769e+308,
+          std::numeric_limits<double>::max(),
+          -std::numeric_limits<double>::max(),
           kInf,
           kNan,
           -kInf,
       }),
       makeNullableFlatVector<Timestamp>({
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(-9223372036855, 224'192'000),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(9223372036854, 775'807'000),
+          Timestamp(-9223372036855, 224'192'000),
           std::nullopt,
           std::nullopt,
           std::nullopt,
