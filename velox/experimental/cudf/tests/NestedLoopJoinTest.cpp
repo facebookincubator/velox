@@ -1335,11 +1335,12 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinMultiDriver) {
 // zero-column table returned 0 rows, silently dropping mismatch rows.
 TEST_F(CudfNestedLoopJoinTest, fullJoinOneSidedOutput) {
   auto probeVectors = makeRowVector(
-      {"p0", "p1"}, {makeFlatVector<int32_t>({1, 2, 3}),
-                      makeFlatVector<int32_t>({10, 20, 30})});
+      {"p0", "p1"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({10, 20, 30})});
   auto buildVectors = makeRowVector(
-      {"b0", "b1"}, {makeFlatVector<int32_t>({2, 4}),
-                      makeFlatVector<int32_t>({200, 400})});
+      {"b0", "b1"},
+      {makeFlatVector<int32_t>({2, 4}), makeFlatVector<int32_t>({200, 400})});
 
   createDuckDbTable("t", {probeVectors});
   createDuckDbTable("u", {buildVectors});
@@ -1348,17 +1349,16 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinOneSidedOutput) {
 
   // Output only probe columns — build mismatch rows should still appear
   // with null values for the probe columns.
-  auto probeOnlyPlan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVectors})
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator)
-                  .values({buildVectors})
-                  .planNode(),
-              "p0 = b0",
-              {"p0", "p1"},
-              core::JoinType::kFull)
-          .planNode();
+  auto probeOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"p0", "p1"},
+                               core::JoinType::kFull)
+                           .planNode();
 
   assertQuery(
       probeOnlyPlan,
@@ -1368,17 +1368,16 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinOneSidedOutput) {
 
   // Output only build columns — probe mismatch rows should still appear
   // with null values for the build columns.
-  auto buildOnlyPlan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVectors})
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator)
-                  .values({buildVectors})
-                  .planNode(),
-              "p0 = b0",
-              {"b0", "b1"},
-              core::JoinType::kFull)
-          .planNode();
+  auto buildOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"b0", "b1"},
+                               core::JoinType::kFull)
+                           .planNode();
 
   assertQuery(
       buildOnlyPlan,

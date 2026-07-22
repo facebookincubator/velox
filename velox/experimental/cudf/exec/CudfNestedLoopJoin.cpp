@@ -703,8 +703,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
     // No flags means all probe rows are unmatched (empty build case).
     numUnmatched = static_cast<cudf::size_type>(probeTableView.num_rows());
     if (!probeColumnIndicesToGather_.empty()) {
-      auto probeGatherView =
-          probeTableView.select(probeColumnIndicesToGather_);
+      auto probeGatherView = probeTableView.select(probeColumnIndicesToGather_);
       unmatchedProbe = std::make_unique<cudf::table>(
           probeGatherView, stream, get_output_mr());
     }
@@ -715,12 +714,10 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
         stream,
         get_temp_mr());
     if (!probeColumnIndicesToGather_.empty()) {
-      auto probeGatherView =
-          probeTableView.select(probeColumnIndicesToGather_);
+      auto probeGatherView = probeTableView.select(probeColumnIndicesToGather_);
       unmatchedProbe = cudf::apply_boolean_mask(
           probeGatherView, unmatchedMask->view(), stream, get_output_mr());
-      numUnmatched =
-          static_cast<cudf::size_type>(unmatchedProbe->num_rows());
+      numUnmatched = static_cast<cudf::size_type>(unmatchedProbe->num_rows());
     } else {
       // No probe columns in output — count unmatched rows from the mask.
       auto countTable = cudf::apply_boolean_mask(
@@ -728,8 +725,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
           unmatchedMask->view(),
           stream,
           get_temp_mr());
-      numUnmatched =
-          static_cast<cudf::size_type>(countTable->num_rows());
+      numUnmatched = static_cast<cudf::size_type>(countTable->num_rows());
     }
   }
 
@@ -789,8 +785,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
         buildTable->view().select(buildColumnIndicesToGather_);
     unmatchedBuild = cudf::apply_boolean_mask(
         buildGatherView, unmatchedMask->view(), stream, get_output_mr());
-    numUnmatched =
-        static_cast<cudf::size_type>(unmatchedBuild->num_rows());
+    numUnmatched = static_cast<cudf::size_type>(unmatchedBuild->num_rows());
   } else {
     // No build columns in output — count unmatched rows from the mask.
     auto countTable = cudf::apply_boolean_mask(
@@ -798,8 +793,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
         unmatchedMask->view(),
         stream,
         get_temp_mr());
-    numUnmatched =
-        static_cast<cudf::size_type>(countTable->num_rows());
+    numUnmatched = static_cast<cudf::size_type>(countTable->num_rows());
   }
 
   finished_ = true;
